@@ -1,9 +1,10 @@
 """FastAPI service application."""
 
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import AsyncGenerator
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +20,45 @@ from personal_agent.telemetry.es_handler import ElasticsearchHandler
 
 log = get_logger(__name__)
 settings = get_settings()
+
+
+def _sanitize_error_message(error: Exception) -> str:
+    """Create a user-friendly error message without exposing sensitive details.
+
+    Args:
+        error: The exception that occurred
+
+    Returns:
+        A sanitized, user-friendly error message
+    """
+    error_type = type(error).__name__
+    error_str = str(error)
+
+    # Filter out sensitive patterns (file paths, stack traces, etc.)
+    # Remove absolute paths
+    error_str = re.sub(r"/[^\s]+", "[path]", error_str)
+    # Remove common sensitive patterns
+    error_str = re.sub(r"0x[0-9a-fA-F]+", "[address]", error_str)
+    error_str = re.sub(r"line \d+", "[line]", error_str)
+
+    # Categorize errors and provide helpful messages
+    if "Connection" in error_type or "connection" in error_str.lower():
+        return "Unable to connect to the language model service. Please try again in a moment."
+    elif "Timeout" in error_type or "timeout" in error_str.lower():
+        return "The request took too long to process. Please try again with a simpler request."
+    elif "Permission" in error_type or "permission" in error_str.lower():
+        return "Permission denied. Please check your configuration."
+    elif "Validation" in error_type or "validation" in error_str.lower():
+        return "Invalid request format. Please check your input and try again."
+    elif "NotFound" in error_type or "not found" in error_str.lower():
+        return "The requested resource was not found."
+    elif "RateLimit" in error_type or "rate limit" in error_str.lower():
+        return "Too many requests. Please wait a moment and try again."
+    elif "Configuration" in error_type or "config" in error_str.lower():
+        return "Service configuration error. Please contact support."
+    else:
+        # Generic message for unknown errors
+        return "An error occurred while processing your request. Please try again."
 
 # Global instances (initialized in lifespan)
 es_handler: ElasticsearchHandler | None = None
@@ -273,8 +313,18 @@ async def chat(
             scheduler.record_request()
 
     except Exception as e:
-        log.error("orchestrator_call_failed", error=str(e), exc_info=True)
-        response_content = f"Error processing request: {str(e)}"
+        # Generate error reference ID for log correlation
+        error_id = str(uuid4())[:8]
+        log.error(
+            "orchestrator_call_failed",
+            error_id=error_id,
+            error=str(e),
+            error_type=type(e).__name__,
+            exc_info=True,
+        )
+        # Provide user-friendly message with error reference
+        sanitized_msg = _sanitize_error_message(e)
+        response_content = f"{sanitized_msg} (Error ID: {error_id})"
 
     # Append assistant message
     await repo.append_message(

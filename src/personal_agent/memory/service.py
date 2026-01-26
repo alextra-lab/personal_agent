@@ -296,7 +296,7 @@ class MemoryService:
                 if query.recency_days:
                     params["cutoff_date"] = cutoff_date
 
-                result = await session.run(base_query, **params)
+                result = await session.run(base_query, parameters=params)
                 records = await result.values()
 
                 # Parse results

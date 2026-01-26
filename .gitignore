@@ -41,10 +41,11 @@ telemetry/logs/
 *.jsonl
 
 # Captain's Log entries (runtime artifacts, not source code)
-telemetry/captains_log/*.json
+telemetry/captains_log/**/*.json
 
 # Evaluation results and reports (runtime artifacts, regeneratable)
 telemetry/evaluation/evaluation_report*.md
+telemetry/evaluation/evaluation_results*.md
 telemetry/evaluation/evaluation_results*.json
 # Note: EVALUATION_TOOLS_USAGE.md is documentation and should be tracked
 

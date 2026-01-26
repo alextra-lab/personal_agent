@@ -1,0 +1,48 @@
+{
+  "trace_id": "9d8fe04d-a50e-4cc2-a26f-33960ebb5975",
+  "session_id": "efa37892-50dd-4cca-9d2e-1572fa2c8e0d",
+  "timestamp": "2026-01-23T17:44:32.108499+00:00",
+  "user_message": "Where does the expression The Price of Tea in China come from. Search the internet if you do not know. Use Perlexity\n",
+  "assistant_response": "I cannot search the internet or use Perplexity, as no such tool is available in my current capabilities. Additionally, I cannot perform external searches or retrieve information from the internet. If you have any other questions or need assistance with something else, let me know!",
+  "steps": [
+    {
+      "type": "llm_call",
+      "description": "LLM call with router model",
+      "metadata": {
+        "model_role": "router",
+        "span_id": "52245ae4-44f7-49d9-9761-a4e14a962ca1",
+        "duration_ms": 684,
+        "tokens": 1316
+      }
+    },
+    {
+      "type": "llm_call",
+      "description": "LLM call with standard model",
+      "metadata": {
+        "model_role": "standard",
+        "span_id": "16563050-4317-4c91-ad74-d501a7ac6865",
+        "duration_ms": 890,
+        "tokens": 89
+      }
+    }
+  ],
+  "tools_used": [],
+  "duration_ms": 5180.0,
+  "metrics_summary": {
+    "duration_seconds": 5.18,
+    "samples_collected": 1,
+    "threshold_violations": [],
+    "cpu_min": 8.3,
+    "cpu_max": 8.3,
+    "cpu_avg": 8.3,
+    "memory_min": 49.7,
+    "memory_max": 49.7,
+    "memory_avg": 49.7,
+    "gpu_min": 3.3,
+    "gpu_max": 3.3,
+    "gpu_avg": 3.3
+  },
+  "outcome": "completed",
+  "memory_context_used": false,
+  "memory_conversations_found": 0
+}

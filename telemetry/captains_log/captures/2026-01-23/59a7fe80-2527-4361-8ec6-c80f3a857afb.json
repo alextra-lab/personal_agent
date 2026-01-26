@@ -1,0 +1,48 @@
+{
+  "trace_id": "59a7fe80-2527-4361-8ec6-c80f3a857afb",
+  "session_id": "8ea9f42b-96d3-4abb-8c6a-f03c5578b414",
+  "timestamp": "2026-01-23T17:38:51.079255+00:00",
+  "user_message": "Where does the expression The Price of Tea in China come from. Search the internet if you do not know",
+  "assistant_response": "I cannot search the internet or access external information. However, I can provide general knowledge based on existing information in my training data. \n\n\"The Price of Tea in China\" is a well-known English expression often used metaphorically to represent the idea that something is priced or valued in a way that seems unreasonable or exaggerated. It is not directly tied to a specific historical origin, but rather it has become a cultural idiom in English-speaking contexts.\n\nIt is often used humorously or ironically to highlight the absurdity of a price, such as when something is priced very high for a seemingly small or simple item. The phrase may have originated from a misunderstanding or misquotation of an actual Chinese proverb or expression, but there is no definitive source linking it directly to China's tea culture or historical pricing.\n\nIf you'd like, I can help explore more about the cultural or linguistic background of such expressions. Let me know!",
+  "steps": [
+    {
+      "type": "llm_call",
+      "description": "LLM call with router model",
+      "metadata": {
+        "model_role": "router",
+        "span_id": "271d455e-7e87-4293-89d5-00a635583f56",
+        "duration_ms": 763,
+        "tokens": 1327
+      }
+    },
+    {
+      "type": "llm_call",
+      "description": "LLM call with standard model",
+      "metadata": {
+        "model_role": "standard",
+        "span_id": "f488b94a-cb91-4a4a-b76d-968f6cc88300",
+        "duration_ms": 2328,
+        "tokens": 214
+      }
+    }
+  ],
+  "tools_used": [],
+  "duration_ms": 6670.0,
+  "metrics_summary": {
+    "duration_seconds": 6.67,
+    "samples_collected": 1,
+    "threshold_violations": [],
+    "cpu_min": 15.0,
+    "cpu_max": 15.0,
+    "cpu_avg": 15.0,
+    "memory_min": 49.1,
+    "memory_max": 49.1,
+    "memory_avg": 49.1,
+    "gpu_min": 1.2,
+    "gpu_max": 1.2,
+    "gpu_avg": 1.2
+  },
+  "outcome": "completed",
+  "memory_context_used": false,
+  "memory_conversations_found": 0
+}

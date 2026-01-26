@@ -1,0 +1,67 @@
+.qodo
+
+.DS_Store
+
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Testing & type checking cache
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+.hypothesis/
+
+# Coverage reports
+.coverage
+.coverage.*
+htmlcov/
+cover/
+
+# Distribution / packaging
+*.egg-info/
+**/*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+*.code-workspace
+
+# Logs
+telemetry/logs/
+*.log
+*.jsonl
+
+# Captain's Log entries (runtime artifacts, not source code)
+telemetry/captains_log/*.json
+
+# Evaluation results and reports (runtime artifacts, regeneratable)
+telemetry/evaluation/evaluation_report*.md
+telemetry/evaluation/evaluation_results*.json
+# Note: EVALUATION_TOOLS_USAGE.md is documentation and should be tracked
+
+# IDE files (additional)
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment variables (secrets, local configuration)
+# Per ADR-0007: Unified Configuration Management
+.env
+.env.local
+.env.*.local
+.env.development
+.env.staging
+.env.production
+.env.test
+# Note: .env.example is tracked as a template

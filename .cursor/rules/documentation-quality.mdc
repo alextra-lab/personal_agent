@@ -1,0 +1,61 @@
+---
+description: Quality standards for AI-generated documentation - ADRs, specs, plans
+alwaysApply: false
+globs: docs/**/*.md
+---
+
+# Documentation Quality Standards
+
+## Quick Reference Checklist
+
+### Universal Checks (All Docs)
+- [ ] **Purpose** stated explicitly in introduction
+- [ ] **Scope** defined (what's in/out)
+- [ ] **Version/date** present
+- [ ] **Consistent** with existing docs (no contradictions)
+- [ ] **Decisions justified** (not just "what" but "why")
+- [ ] **Tradeoffs explicit** (acknowledges costs)
+- [ ] **Next steps clear** (actionable)
+- [ ] **No personal info** (use "project owner" not names)
+
+### ADR Requirements
+- [ ] **Status** (Proposed/Accepted/Deprecated/Superseded)
+- [ ] **Context** (problem/need driving decision)
+- [ ] **Decision** (chosen solution clearly stated)
+- [ ] **At least 2 alternatives** considered (not just one option)
+- [ ] **Consequences** (positive and negative impacts)
+- [ ] **Acceptance criteria** (how to know it's done)
+
+### Spec Requirements
+- [ ] **Interfaces documented** (APIs, protocols, data formats)
+- [ ] **Error handling** strategy specified
+- [ ] **Observability** integrated (telemetry, logging)
+- [ ] **MVP scope boundary** stated (what's in/out for Phase 1)
+- [ ] **Open questions** listed (honest about unknowns)
+
+### Experiment Requirements
+- [ ] **Hypothesis** stated as testable claim
+- [ ] **Metrics** defined (how success/failure measured)
+- [ ] **Baseline** established (current state)
+- [ ] **Success criteria** quantified (threshold for adoption)
+- [ ] **Results section** exists (populated after run)
+
+## Red Flags (Reject if Present)
+
+- ❌ **No alternatives** (only one option presented)
+- ❌ **No tradeoffs** (decision presented as pure win)
+- ❌ **Vague decision** (can't extract clear "we will do X")
+- ❌ **No rationale** (decision without "why")
+- ❌ **Contradicts existing ADRs** (without acknowledging supersession)
+
+## Quality Tiers
+
+- **Tier 1 (Publishable)**: Passes all checks, no red flags, external contributor could implement
+- **Tier 2 (Internal Use)**: Passes most checks, minor gaps acceptable
+- **Tier 3 (Draft)**: Fails multiple checks, needs revision
+
+**Aim for Tier 1 for all ADRs and core specs.**
+
+## Reference
+
+For comprehensive checklist, see `docs/VALIDATION_CHECKLIST.md`

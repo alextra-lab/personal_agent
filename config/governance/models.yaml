@@ -1,0 +1,57 @@
+# Model behavior constraints per mode
+# See ADR-0005 for detailed semantics
+
+mode_constraints:
+  NORMAL:
+    allowed_roles: ["router", "reasoning", "coding"]
+    max_tokens:
+      router: 1024
+      reasoning: 8192
+      coding: 8192
+    temperature:
+      router: 0.3
+      reasoning: 0.7
+      coding: 0.5
+    timeout_seconds:
+      router: 10
+      reasoning: 120
+      coding: 90
+
+  ALERT:
+    allowed_roles: ["router", "reasoning"]
+    max_tokens:
+      router: 512
+      reasoning: 4096
+    temperature:
+      router: 0.2
+      reasoning: 0.5
+    timeout_seconds:
+      router: 8
+      reasoning: 60
+
+  DEGRADED:
+    allowed_roles: ["router"]
+    max_tokens:
+      router: 512
+    temperature:
+      router: 0.1
+    timeout_seconds:
+      router: 5
+
+  LOCKDOWN:
+    allowed_roles: []
+    max_tokens: {}
+    temperature: {}
+    timeout_seconds: {}
+
+  RECOVERY:
+    allowed_roles: ["router", "reasoning"]
+    max_tokens:
+      router: 512
+      reasoning: 2048
+    temperature:
+      router: 0.2
+      reasoning: 0.4
+    timeout_seconds:
+      router: 10
+      reasoning: 45

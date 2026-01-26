@@ -1,0 +1,163 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+# This project is designed to be friendly with `uv` for environment and
+# dependency management. A typical workflow would be:
+#   uv sync   # install runtime + dev dependencies
+#   uv run ...  # run CLI or scripts
+
+[project]
+name = "personal-ai-agent"
+version = "0.1.0"
+description = "Research project: Personal local AI collaborator exploring cognitive architectures and agentic systems (learning/research, not production-ready)."
+readme = "README.md"
+requires-python = ">=3.12"
+
+license = { text = "MIT" }
+
+authors = [
+  { name = "Alex Afflerbach" }
+]
+
+dependencies = [
+  # Core building blocks for the personal agent runtime
+  "pydantic>=2.8.0",      # structured config and typed data models
+  "pydantic-settings>=2.0.0",  # environment variable integration for Pydantic
+  "python-dotenv>=1.0.0",  # .env file loading
+  "httpx>=0.27.0",        # async-capable HTTP client for web-augmented reasoning
+  "structlog>=24.0.0",    # structured logging (works well with metrics/observability later)
+  "typer>=0.12.0",        # ergonomic CLI/command entrypoints
+  "rich>=13.9.0",         # nice terminal output for local UI / status views
+  "pyyaml>=6.0.0",        # YAML parsing for governance configs
+  "orjson>=3.9.0",        # fast JSON serialization (replaces stdlib json in performance-critical paths)
+  "typing-extensions>=4.8.0",  # extended type hints (TypedDict, etc.) for compatibility
+  "psutil>=5.9.0",        # system metrics for sensor polling
+  "macmon-python>=0.1.0",  # Apple Silicon GPU metrics (no sudo required)
+  "dspy>=3.1.0",          # DSPy framework for Captain's Log reflection (ChainOfThought) - ADR-0010
+  "mcp>=1.0.0,<2.0.0",    # Model Context Protocol SDK for MCP Gateway integration - ADR-0011
+  "pre-commit>=3.5.0",    # git hooks (required for all contributors)
+
+  # Service layer (Phase 2.1)
+  "fastapi>=0.109.0",     # async web framework for service API
+  "uvicorn[standard]>=0.27.0",  # ASGI server for FastAPI
+
+  # Database (PostgreSQL with async support)
+  "sqlalchemy[asyncio]>=2.0.25",  # async ORM for database operations
+  "asyncpg>=0.29.0",      # async PostgreSQL driver
+  "alembic>=1.13.0",      # database migrations
+
+  # Elasticsearch (async logging and search)
+  "elasticsearch[async]>=8.11.0,<9.0.0",  # async Elasticsearch client (8.x for ES 8.19)
+
+  # Neo4j (Phase 2.2 - memory graph)
+  "neo4j>=5.15.0",        # Neo4j driver for knowledge graph
+
+  # Claude API (Phase 2.2 - second brain)
+  "anthropic>=0.18.0",    # Anthropic API for Claude
+]
+
+[project.optional-dependencies]
+# Development tooling stack: linting, typing, and tests.
+dev = [
+  "pytest>=8.3.0",
+  "pytest-asyncio>=0.23.0",
+  "pytest-cov>=5.0.0",        # coverage reporting
+  "mypy>=1.11.0",
+  "ruff>=0.6.0",
+  "ipython>=8.27.0",
+  "bandit>=1.7.0",            # security linting
+  "hypothesis>=6.0.0"         # property-based testing (optional)
+]
+
+# Note: Backend inference servers (MLX, llama.cpp) have been moved to the slm_server project.
+# Install them there: git clone https://github.com/alextra-lab/slm_server.git && cd slm_server && uv sync --extra mlx --extra llamacpp
+
+# -----------------------------
+# Testing configuration
+# -----------------------------
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = [
+  "-ra",
+  "--strict-markers",
+  "--strict-config",
+]
+markers = [
+  "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+  "requires_llm_server: marks tests that require LLM server running",
+]
+
+# -----------------------------
+# Type checking (mypy)
+# -----------------------------
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_configs = true
+
+# Common strictness flags (can be relaxed per-module later)
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+warn_unreachable = true
+
+exclude = [
+  "venv",
+  ".venv",
+  "build",
+  "dist"
+]
+
+# -----------------------------
+# Ruff (linting + formatting)
+# -----------------------------
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src"]
+exclude = ["venv", ".venv", "build", "dist"]
+
+[tool.ruff.lint]
+# Core rule families: errors, warnings, bugbear, imports, and docstrings.
+select = ["E", "F", "B", "I", "D"]
+# Ignore some stylistic rules that are often noisy.
+ignore = ["E501", "D203", "D213"]
+# Avoid auto-fixing potentially risky bugbear rules.
+unfixable = ["B"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+# -----------------------------
+# Setuptools package discovery
+# -----------------------------
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["personal_agent*"]
+
+# -----------------------------
+# Bandit (security linting)
+# -----------------------------
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "build", "dist"]
+skips = ["B101"]  # Skip assert_used (fine in tests)

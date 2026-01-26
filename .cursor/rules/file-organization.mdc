@@ -1,0 +1,54 @@
+---
+description: File placement rules - what's allowed at root, where files should go
+alwaysApply: true
+---
+
+# File Organization Rules
+
+## Root Level Policy
+
+### ✅ Allowed at Root
+- Project config: `pyproject.toml`, `uv.lock`, `.gitignore`
+- Essential docs: `README.md`, `ROADMAP.md`
+- Essential directories: `src/`, `tests/`, `docs/`, `config/`
+
+### ❌ Not Allowed at Root
+- Session logs → `docs/plans/sessions/`
+- Action items → `docs/plans/`
+- Validation checklists → `docs/`
+- PR review rubrics → `docs/`
+- Vision documents → `docs/`
+- Directory structure docs → `docs/`
+- Temporary files → Delete or move to appropriate location
+
+## File Placement Guide
+
+| File Type | Location |
+|-----------|----------|
+| Session logs | `docs/plans/sessions/` |
+| Action items | `docs/plans/` |
+| Implementation plans | `docs/plans/` |
+| Architecture specs | `docs/architecture/` |
+| ADRs | `docs/architecture_decisions/` |
+| Research notes | `docs/research/` |
+| Process docs | `docs/` |
+| Source code | `src/personal_agent/` |
+| Tests | `tests/` |
+| Runtime config | `config/` (gitignored except templates) |
+| Telemetry data | `telemetry/` (gitignored) |
+
+## When Unsure
+
+1. **Is it essential for project setup?** (config files) → Root
+2. **Is it the first thing newcomers need?** (README) → Root
+3. **Is it process/quality documentation?** → `docs/`
+4. **Is it planning/tracking?** → `docs/plans/`
+5. **Is it architecture/design?** → `docs/architecture/` or `docs/architecture_decisions/`
+6. **Is it code?** → `src/`
+7. **Is it research?** → `docs/research/`
+
+**When in doubt, NOT at root.**
+
+## Reference
+
+For complete policy, see `docs/ROOT_LEVEL_POLICY.md`

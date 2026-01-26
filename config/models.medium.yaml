@@ -1,0 +1,87 @@
+# Model configuration for Local LLM Client
+#
+# This file defines model configurations for different roles (router, reasoning, coding).
+# Each role maps to a model identifier and configuration.
+#
+# The client automatically tries /v1/responses first, then falls back to /v1/chat/completions
+# if the responses endpoint is unavailable.
+#
+# Configuration options:
+# - id: Model identifier (required)
+# - endpoint: Base URL for this model (optional, defaults to settings.llm_base_url)
+#   Examples:
+#     - "http://localhost:1234/v1" (same provider, uses base_url if omitted)
+#     - "http://localhost:8001/v1" (different provider/port)
+#     - "http://ollama:11434/v1" (different provider entirely)
+# - context_length, quantization, max_concurrency, default_timeout: Model-specific settings
+
+models:
+  router:
+    #id: "qwen/qwen3-4b-2507"
+    id: "qwen/qwen3-1.7b"
+    # endpoint: "http://localhost:1234/v1"  # Optional: override base URL for this model
+    context_length: 8192
+    quantization: "8bit"
+    max_concurrency: 4
+    default_timeout: 10  # seconds (1.7B model is fast, typical routing ~3-4s)
+    supports_function_calling: true  # Qwen3 has native function calling support
+
+  standard:
+    # Default "workhorse" model: general answers + tool orchestration, but avoid long "thinking".
+    # This role is intended to be a non-thinking / fast model (or future MoE) that can still use tools.
+    #id: "qwen/qwen3-30b-a3b"
+    id: "qwen/qwen3-next-80b"
+    context_length: 40960
+    quantization: "8bit"
+    max_concurrency: 2
+    default_timeout: 45  # seconds
+    supports_function_calling: true  # Use /v1/responses (native tools); /no_think supported via prompt suffix
+
+  reasoning:
+    # BASELINE: Memory-optimized stack (ADR-0008)
+    # 14B @ 8bit = 14-20GB VRAM (vs 80B @ 5bit = 50-60GB)
+    #id: "qwen/qwen3-30b-a3b"
+    id: "qwen/qwen3-next-80b"
+    # endpoint: "http://localhost:8002/v1"  # Optional: different provider/port
+    context_length: 40960  # Optimized from 128K for MVP
+    quantization: "8bit"
+    max_concurrency: 2  # Increased from 1 (smaller footprint enables parallelism)
+    default_timeout: 60  # seconds
+    supports_function_calling: true  # Use /v1/responses (native tools); /no_think supported via prompt suffix
+
+  coding:
+    #id: "qwen/qwen3-coder-30b"
+    id: "mistralai/devstral-small-2-2512"
+    # endpoint: "http://localhost:8003/v1"  # Optional: different provider/port
+    context_length: 32768
+    quantization: "8bit"
+    max_concurrency: 2
+    default_timeout: 45  # seconds
+    supports_function_calling: false  # Use /v1/chat/completions (LM Studio /responses can be slow for some models)
+
+  # EXPERIMENTAL: Alternative models for A/B testing (not loaded by default)
+  reasoning_heavy:
+    # For complex reasoning tasks requiring more capacity
+    #id: "qwen/qwen3-30b-a3b"
+    id: "qwen/qwen3-next-80b"
+    context_length: 32768
+    quantization: "4bit"
+    max_concurrency: 1
+    default_timeout: 90
+    supports_function_calling: false  # Uses text-based tool calls (ADR-0008)
+
+  reasoning_baseline:
+    # Original baseline for comparison experiments
+    id: "qwen/qwen3-next-80b"
+    context_length: 128000
+    quantization: "5bit"
+    max_concurrency: 1
+    default_timeout: 60
+
+  coding_large_context:
+    # For large codebase analysis (future evaluation)
+    id: "mistralai/devstral-small-2-2512"
+    context_length: 128000
+    quantization: "8bit"  # Per ADR-0008 and research recommendations (not 6bit)
+    max_concurrency: 1
+    default_timeout: 60

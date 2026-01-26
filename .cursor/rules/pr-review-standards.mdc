@@ -1,0 +1,50 @@
+---
+description: Review criteria for architectural changes - ADRs, specs, governance configs
+alwaysApply: false
+globs: docs/architecture_decisions/**/*.md, docs/architecture/**/*.md
+---
+
+# PR Review Standards
+
+## Quick Reference
+
+### Blocking Issues (Must Fix)
+- 🚨 Problem unclear or non-existent
+- 🚨 Solution technically unsound (score < 3)
+- 🚨 Security risk identified
+- 🚨 No observability plan (for system components)
+- 🚨 Violates core principles
+
+### High Priority (Fix Before Merge)
+- 🔴 No alternatives listed (ADRs)
+- 🔴 Consequences incomplete
+- 🔴 Testing strategy vague
+- 🔴 Scope too large
+
+### Medium Priority (Can Fix Post-Approval)
+- ⚠️ Documentation needs polish
+- ⚠️ Minor consistency issues
+
+## Review Categories
+
+1. **Problem Clarity** - Is the problem/need clearly stated?
+2. **Solution Quality** - Is it sound, implementable, aligned with principles? (0-5 scale)
+3. **Alternatives** - At least 2 alternatives considered with tradeoffs?
+4. **Consequences** - Positive and negative impacts identified?
+5. **Observability** - How will this be monitored/debugged?
+6. **Security & Safety** - Governance integrated, safe failure modes?
+7. **Testing Strategy** - How will this be tested? Acceptance criteria?
+8. **Documentation** - Well-documented, clear, consistent?
+9. **Scope & Complexity** - Reasonable scope, not over-engineered?
+10. **Consistency** - Aligns with project principles?
+
+## Decision Thresholds
+
+- **Auto-Approve**: All blocking items Pass, Solution Quality ≥ 4
+- **Approve with Conditions**: 1-2 High Priority items need fixes
+- **Request Revisions**: Multiple High Priority failures OR Solution Quality < 3
+- **Reject**: Any Blocking item fails OR fundamental principle violation
+
+## Reference
+
+For complete rubric with examples, see `docs/PR_REVIEW_RUBRIC.md`

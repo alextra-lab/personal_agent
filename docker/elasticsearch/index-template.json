@@ -1,0 +1,50 @@
+{
+  "index_patterns": ["agent-logs-*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.lifecycle.name": "agent-logs-policy",
+      "index.lifecycle.rollover_alias": "agent-logs"
+    },
+    "mappings": {
+      "properties": {
+        "@timestamp": { "type": "date" },
+        "event_type": { "type": "keyword" },
+        "trace_id": { "type": "keyword" },
+        "span_id": { "type": "keyword" },
+        "session_id": { "type": "keyword" },
+        "component": { "type": "keyword" },
+        "level": { "type": "keyword" },
+        "message": { "type": "text" },
+        "duration_ms": { "type": "float" },
+        "success": { "type": "boolean" },
+        "error": {
+          "type": "text",
+          "fields": {
+            "keyword": { "type": "keyword", "ignore_above": 256 }
+          }
+        },
+        "user_message": { "type": "text" },
+        "tool_name": { "type": "keyword" },
+        "model_role": { "type": "keyword" },
+        "model_name": { "type": "keyword" },
+        "tokens_used": { "type": "integer" },
+        "input_tokens": { "type": "integer" },
+        "output_tokens": { "type": "integer" },
+        "cost_usd": { "type": "float" },
+        "metrics": {
+          "type": "object",
+          "properties": {
+            "cpu_percent": { "type": "float" },
+            "memory_percent": { "type": "float" },
+            "gpu_percent": { "type": "float" },
+            "disk_percent": { "type": "float" }
+          }
+        },
+        "tags": { "type": "keyword" }
+      }
+    }
+  }
+}

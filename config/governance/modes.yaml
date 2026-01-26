@@ -1,0 +1,84 @@
+# Operational mode definitions and transition thresholds
+# See ADR-0005 for detailed semantics
+
+modes:
+  NORMAL:
+    description: "Default healthy operation"
+    max_concurrent_tasks: 5
+    background_monitoring_enabled: true
+    allowed_tool_categories: []
+    require_approval_for: []
+    thresholds:
+      cpu_load_percent: 85.0
+      memory_used_percent: 80.0
+      tool_error_rate: 0.15
+      policy_violations_per_10min: 3
+
+  ALERT:
+    description: "Elevated risk or resource pressure"
+    max_concurrent_tasks: 3
+    background_monitoring_enabled: true
+    allowed_tool_categories: []
+    require_approval_for:
+      - "high_risk_tools"
+      - "config_changes"
+    thresholds:
+      cpu_load_percent: 90.0
+      repeated_high_risk_calls: 5
+
+  DEGRADED:
+    description: "Partial failure, limited capabilities"
+    max_concurrent_tasks: 1
+    background_monitoring_enabled: false
+    allowed_tool_categories:
+      - "read_only"
+      - "essential_health_check"
+    require_approval_for:
+      - "all_actions"
+
+  LOCKDOWN:
+    description: "Critical safety event, minimal operation"
+    max_concurrent_tasks: 0
+    background_monitoring_enabled: false
+    allowed_tool_categories:
+      - "read_only"
+    require_approval_for:
+      - "everything"
+
+  RECOVERY:
+    description: "Stabilizing after incident"
+    max_concurrent_tasks: 2
+    background_monitoring_enabled: true
+    allowed_tool_categories:
+      - "read_only"
+      - "self_check"
+      - "health_check"
+    require_approval_for:
+      - "high_risk_tools"
+      - "any_write_operation"
+
+transition_rules:
+  NORMAL_to_ALERT:
+    conditions:
+      - metric: "perf_system_cpu_load"
+        operator: ">"
+        value: 85
+        duration_seconds: 30
+      - metric: "safety_tool_high_risk_calls"
+        operator: ">"
+        value: 5
+        window_seconds: 60
+    logic: "any"
+
+  ALERT_to_NORMAL:
+    conditions:
+      - metric: "perf_system_cpu_load"
+        operator: "<"
+        value: 70
+        duration_seconds: 120
+      - metric: "safety_policy_violations"
+        operator: "=="
+        value: 0
+        window_seconds: 300
+    logic: "all"
+    requires_human_approval: true

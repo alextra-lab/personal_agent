@@ -1,0 +1,546 @@
+# Tool permissions and risk classifications
+# See ADR-0005 for detailed semantics
+
+tool_categories:
+  read_only:
+    description: "Tools that only observe, never modify"
+    risk_level: "low"
+    examples: ["read_file", "list_directory", "system_metrics_snapshot"]
+
+  system_write:
+    description: "Tools that modify system state"
+    risk_level: "high"
+    requires_approval_in_modes: ["ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"]
+    examples: ["write_file", "execute_shell_command", "modify_config"]
+
+  network:
+    description: "Tools that access the network"
+    risk_level: "medium"
+    requires_outbound_gateway: true
+    examples: ["web_search", "http_request"]
+
+  essential_health_check:
+    description: "Minimal health checks, always allowed"
+    risk_level: "low"
+    examples: ["check_disk_space", "check_process_health"]
+
+tools:
+  read_file:
+    category: "read_only"
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"]
+    max_file_size_mb: 10
+
+  write_file:
+    category: "system_write"
+    allowed_in_modes: ["NORMAL"]
+    requires_approval_in_modes: ["ALERT", "DEGRADED", "RECOVERY"]
+    forbidden_in_modes: ["LOCKDOWN"]
+    allowed_paths:
+      - "$HOME/Dev/personal_agent/**"
+      - "$HOME/Documents/agent_workspace/**"
+    forbidden_paths:
+      - "/System/**"
+      - "/Library/**"
+      - "$HOME/.ssh/**"
+
+  system_metrics_snapshot:
+    category: "read_only"
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"]
+
+  # Auto-discovered: 2026-01-18T20:34:06.850323
+  # Perform click on a web page
+  mcp_browser_click:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.852142
+  # Close the page
+  mcp_browser_close:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.853955
+  # Returns all console messages
+  mcp_browser_console_messages:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.855959
+  # Perform drag and drop between two elements
+  mcp_browser_drag:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.858182
+  # Evaluate JavaScript expression on page or element
+  mcp_browser_evaluate:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.860438
+  # Upload one or multiple files
+  mcp_browser_file_upload:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.863494
+  # Fill multiple form fields
+  mcp_browser_fill_form:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.866697
+  # Handle a dialog
+  mcp_browser_handle_dialog:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.870358
+  # Hover over element on page
+  mcp_browser_hover:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.874093
+  # Install the browser specified in the config. Call this if you get an e...
+  mcp_browser_install:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.878079
+  # Navigate to a URL
+  mcp_browser_navigate:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.882597
+  # Go back to the previous page
+  mcp_browser_navigate_back:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.886969
+  # Returns all network requests since loading the page
+  mcp_browser_network_requests:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.891341
+  # Press a key on the keyboard
+  mcp_browser_press_key:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.895810
+  # Resize the browser window
+  mcp_browser_resize:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.900310
+  # Run Playwright code snippet
+  mcp_browser_run_code:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.904820
+  # Select an option in a dropdown
+  mcp_browser_select_option:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.909325
+  # Capture accessibility snapshot of the current page, this is better tha...
+  mcp_browser_snapshot:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.913909
+  # List, create, close, or select a browser tab.
+  mcp_browser_tabs:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.918548
+  # Take a screenshot of the current page. You can't perform actions based...
+  mcp_browser_take_screenshot:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.923352
+  # Type text into editable element
+  mcp_browser_type:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.928147
+  # Wait for text to appear or disappear or a specified time to pass
+  mcp_browser_wait_for:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.933102
+  # Create a JavaScript-enabled tool that combines multiple MCP server too...
+  mcp_code-mode:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.938155
+  # use the docker cli
+  mcp_docker:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.943694
+  # Perform an Elasticsearch ES|QL query.
+  mcp_esql:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.948747
+  # Fetch and parse content from a webpage URL.      Args:         url: Th...
+  mcp_fetch_content:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.954183
+  # Fetches up-to-date documentation for a library. You must call 'resolve...
+  mcp_get-library-docs:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.959873
+  # Get field mappings for a specific Elasticsearch index
+  mcp_get_mappings:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.965793
+  # Get shard information for all or specific indices.
+  mcp_get_shards:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.971814
+  # List all available Elasticsearch indices
+  mcp_list_indices:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.978042
+  # Add a new MCP server to the session.  The server must exist in the cat...
+  mcp_mcp-add:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.984435
+  # Set configuration for an MCP server.  The config object will be valida...
+  mcp_mcp-config-set:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.991047
+  # Execute a tool that exists in the current session. This allows calling...
+  mcp_mcp-exec:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:06.997763
+  # Find MCP servers in the current catalog by name, title, or description...
+  mcp_mcp-find:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:07.004667
+  # Remove an MCP server from the registry and reload the configuration. T...
+  mcp_mcp-remove:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL']
+    risk_level: "high"
+    requires_approval: true
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:07.011780
+  # Engages in a conversation using the Sonar API. Accepts an array of mes...
+  mcp_perplexity_ask:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Override description for better LLM tool selection
+    description_override: "Search the internet using Perplexity AI and get answers with citations. Use for factual questions, current events, or when you need sourced information. Input: messages array with {role: 'user', content: 'your question'}."
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:07.019115
+  # Performs reasoning tasks using the Perplexity API. Accepts an array of...
+  mcp_perplexity_reason:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Override description for better LLM tool selection
+    description_override: "Use Perplexity AI for complex reasoning tasks that require internet research and logical analysis. Returns well-reasoned answers with citations. Input: messages array with {role: 'user', content: 'your question'}."
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:07.026615
+  # Performs deep research using the Perplexity API. Accepts an array of m...
+  mcp_perplexity_research:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    risk_level: "low"
+    requires_approval: false
+    # Override description for better LLM tool selection
+    description_override: "Perform deep internet research using Perplexity AI. Best for comprehensive analysis of topics requiring multiple sources, academic research, or detailed investigation. Returns thorough answers with citations. Input: messages array with {role: 'user', content: 'your research question'}."
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:07.034247
+  # Resolves a package/product name to a Context7-compatible library ID an...
+  mcp_resolve-library-id:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:07.042145
+  # Search DuckDuckGo and return formatted results.      Args:         que...
+  mcp_search:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-01-18T20:34:07.050153
+  # A detailed tool for dynamic and reflective problem-solving through tho...
+  mcp_sequentialthinking:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30

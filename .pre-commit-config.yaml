@@ -1,0 +1,54 @@
+# Pre-commit hooks - gentle configuration
+# Install: pre-commit install
+# Run manually: pre-commit run --all-files
+# Update hooks: pre-commit autoupdate
+
+repos:
+  # Ruff - fast Python linter and formatter
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      # Linter
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      # Formatter
+      - id: ruff-format
+
+  # Basic file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: [--maxkb=1000]
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  # MyPy type checking (optional - can be slow)
+  # Uncomment if you want type checking in pre-commit
+  # - repo: https://github.com/pre-commit/mirrors-mypy
+  #   rev: v1.11.0
+  #   hooks:
+  #     - id: mypy
+  #       args: [--strict, --ignore-missing-imports]
+  #       additional_dependencies:
+  #         - pydantic>=2.8.0
+  #         - structlog>=24.0.0
+
+# Exclude patterns
+exclude: |
+  (?x)^(
+      \.venv/.*|
+      \.mypy_cache/.*|
+      \.pytest_cache/.*|
+      \.ruff_cache/.*|
+      __pycache__/.*|
+      .*\.egg-info/.*|
+      telemetry/.*|
+      uv\.lock
+  )$
+
+# Configuration
+fail_fast: false  # Continue running other hooks even if one fails

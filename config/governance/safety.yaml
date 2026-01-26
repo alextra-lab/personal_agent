@@ -1,0 +1,65 @@
+# Safety policies: content filtering, output policies, rate limits
+# See ADR-0005 for detailed semantics
+
+content_filtering:
+  enabled: true
+  secret_patterns:
+    - regex: "-----BEGIN .* PRIVATE KEY-----"
+      action: "block"
+      redaction: "[REDACTED: PRIVATE KEY]"
+    - regex: "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}"
+      action: "warn"
+    - regex: "sk-[a-zA-Z0-9]{32,}"
+      action: "block"
+      redaction: "[REDACTED: API KEY]"
+  forbidden_content_patterns:
+    - pattern: "delete_all"
+      context: "shell_command"
+      action: "block"
+    - pattern: "rm -rf /"
+      context: "shell_command"
+      action: "block"
+
+outbound_gateway:
+  enabled: true
+  allowed_domains:
+    - "*.wikipedia.org"
+    - "*.stackexchange.com"
+    - "docs.python.org"
+    - "github.com"
+  blocked_domains:
+    - "*.onion"
+  require_approval_for_new_domains: true
+  max_request_size_kb: 1024
+
+rate_limits:
+  NORMAL:
+    tool_calls_per_minute: 30
+    llm_calls_per_minute: 60
+    outbound_requests_per_hour: 100
+  ALERT:
+    tool_calls_per_minute: 15
+    llm_calls_per_minute: 30
+    outbound_requests_per_hour: 20
+  DEGRADED:
+    tool_calls_per_minute: 5
+    llm_calls_per_minute: 10
+    outbound_requests_per_hour: 0
+  LOCKDOWN:
+    tool_calls_per_minute: 0
+    llm_calls_per_minute: 0
+    outbound_requests_per_hour: 0
+  RECOVERY:
+    tool_calls_per_minute: 10
+    llm_calls_per_minute: 20
+    outbound_requests_per_hour: 5
+
+human_approval:
+  timeout_seconds: 300
+  require_approval_for:
+    - category: "system_write"
+      modes: ["ALERT", "DEGRADED", "RECOVERY"]
+    - category: "network"
+      modes: ["ALERT"]
+    - risk_level: "high"
+      modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]

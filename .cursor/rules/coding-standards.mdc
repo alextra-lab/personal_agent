@@ -1,0 +1,156 @@
+---
+description: Core Python coding standards - type hints, docstrings, error handling, logging, async, configuration access
+alwaysApply: true
+---
+
+# Coding Standards
+
+## Type Hints
+
+- **Mandatory** for all public APIs (functions, classes, methods)
+- Use modern syntax: `str | None` not `Union[str, None]`
+- Always annotate return types, including `-> None`
+- Use `collections.abc` for generics: `Sequence[str]` not `list[str]` when appropriate
+
+```python
+# ✅ Good
+def process_message(msg: str | None) -> dict[str, Any]: ...
+
+# ❌ Bad
+from typing import Union, Dict, Any
+def process_message(msg: Union[str, None]) -> Dict[str, Any]: ...
+```
+
+## Docstrings
+
+- **Google style** for all public classes/functions
+- Include: Args, Returns, Raises, Examples (for complex logic)
+- Mandatory for public APIs
+
+```python
+def execute_tool(name: str, args: dict[str, Any], ctx: TraceContext) -> dict[str, Any]:
+    """Execute tool with governance checks.
+
+    Args:
+        name: Tool name (must be registered)
+        args: Tool-specific arguments
+        ctx: Trace context
+
+    Returns:
+        {success: bool, output: Any, error: str | None}
+
+    Raises:
+        ToolNotFoundError: Tool not registered
+        PermissionDeniedError: Governance denied
+    """
+```
+
+## Error Handling
+
+- Use project-specific exceptions from `personal_agent.exceptions`
+- **Never** use bare `except:`
+- Always log errors with context before raising
+
+```python
+# ✅ Good
+from personal_agent.exceptions import ToolExecutionError
+try:
+    result = execute_tool(name, args, ctx)
+except ToolExecutionError as e:
+    log.error("tool_failed", tool=name, error=str(e), trace_id=ctx.trace_id)
+    raise
+
+# ❌ Bad
+try:
+    result = execute_tool(name, args, ctx)
+except:  # Catches KeyboardInterrupt!
+    return {"error": "Failed"}
+```
+
+## Logging
+
+- **Always** use structured logging (structlog)
+- **Never** use `print()`
+- Always include `trace_id` in logs
+- **Never** log secrets/PII - redact first
+
+```python
+# ✅ Good
+from personal_agent.telemetry import get_logger
+log = get_logger(__name__)
+log.info("tool_executed", tool=name, success=True, trace_id=ctx.trace_id)
+
+# ❌ Bad
+print(f"Tool {name} executed")  # Never do this
+log.info(f"Tool {name} executed")  # No structure, no trace_id
+```
+
+## Configuration Access
+
+- **NEVER** use `os.getenv()` or `os.environ`
+- **ALWAYS** use `from personal_agent.config import settings`
+- All config is type-safe and validated via Pydantic
+
+```python
+# ✅ Good
+from personal_agent.config import settings
+log_level = settings.log_level
+base_url = settings.llm_base_url
+
+# ❌ Bad
+import os
+log_level = os.getenv("LOG_LEVEL")  # Never do this
+log_level = os.environ.get("LOG_LEVEL", "INFO")  # Never do this
+```
+
+## Async/Await
+
+- Use async for I/O-bound operations
+- Always pass `TraceContext` through async call chains
+- Use `asyncio.to_thread()` for sync functions in async context
+
+```python
+# ✅ Good
+async def execute_tool(name: str, args: dict[str, Any], ctx: TraceContext) -> ToolResult:
+    log.info("tool_start", tool=name, trace_id=ctx.trace_id)
+    return await tool_registry.execute(name, args)
+
+# For sync in async context
+import asyncio
+result = await asyncio.to_thread(blocking_function, data)
+```
+
+## Naming Conventions
+
+- Modules: `snake_case.py`
+- Classes: `PascalCase`
+- Functions: `snake_case`
+- Constants: `UPPER_SNAKE_CASE`
+- Private members: `_single_underscore` (not `__double__`)
+
+## Data Models
+
+- Use **Pydantic** for config, API payloads, validated data
+- Use **dataclass** for simple immutable internal structures
+- Prefer Pydantic over TypedDict
+
+```python
+# ✅ Good
+from pydantic import BaseModel, Field
+class TaskConfig(BaseModel):
+    max_iterations: int = Field(default=10, ge=1)
+    timeout_seconds: float = Field(default=30.0, gt=0)
+```
+
+## Anti-Patterns
+
+- ❌ Bare `except:` clauses
+- ❌ `print()` statements
+- ❌ `os.getenv()` or `os.environ` access
+- ❌ Global mutable state
+- ❌ Magic strings (use enums)
+- ❌ God objects (single responsibility)
+
+## Reference
+
+For complete details, see `docs/CODING_STANDARDS.md`

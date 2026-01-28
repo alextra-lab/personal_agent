@@ -3,7 +3,7 @@
 import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator, cast
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -115,7 +115,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             log.warning(
                 "mcp_gateway_init_failed",
-                error=str(e),
+                error=_sanitize_error_message(e),
                 error_type=type(e).__name__,
                 exc_info=True,
             )
@@ -135,7 +135,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         try:
             await mcp_adapter.shutdown()
         except Exception as e:
-            log.error("mcp_gateway_shutdown_error", error=str(e), exc_info=True)
+            log.error("mcp_gateway_shutdown_error", error=_sanitize_error_message(e), exc_info=True)
 
     if es_handler:
         await es_handler.disconnect()
@@ -158,9 +158,11 @@ app = FastAPI(
 # Health Check
 # ============================================================================
 
+HealthResponse = dict[str, Any]
+
 
 @app.get("/health")
-async def health_check():
+async def health_check() -> HealthResponse:
     """Service health check endpoint."""
     return {
         "status": "healthy",
@@ -187,7 +189,7 @@ async def health_check():
 async def create_session(
     data: SessionCreate,
     db: AsyncSession = Depends(get_db_session),  # noqa: B008
-):
+) -> SessionResponse:
     """Create a new session."""
     repo = SessionRepository(db)
     session = await repo.create(data)
@@ -207,7 +209,7 @@ async def create_session(
 async def get_session(
     session_id: str,
     db: AsyncSession = Depends(get_db_session),  # noqa: B008
-):
+) -> SessionResponse:
     """Get session by ID."""
     repo = SessionRepository(db)
     session = await repo.get(UUID(session_id))
@@ -223,7 +225,7 @@ async def update_session(
     session_id: str,
     data: SessionUpdate,
     db: AsyncSession = Depends(get_db_session),  # noqa: B008
-):
+) -> SessionResponse:
     """Update session."""
     repo = SessionRepository(db)
     session = await repo.update(UUID(session_id), data)
@@ -238,10 +240,11 @@ async def update_session(
 async def list_sessions(
     limit: int = 50,
     db: AsyncSession = Depends(get_db_session),  # noqa: B008
-):
+) -> list[SessionResponse]:
     """List recent sessions."""
     repo = SessionRepository(db)
-    return await repo.list_recent(limit)
+    sessions = await repo.list_recent(limit)
+    return cast(list[SessionResponse], sessions)
 
 
 # ============================================================================
@@ -254,7 +257,7 @@ async def chat(
     message: str,
     session_id: str | None = None,
     db: AsyncSession = Depends(get_db_session),  # noqa: B008
-):
+) -> dict[str, str]:
     """Process a chat message.
 
     This is the main entry point for user interactions.
@@ -278,7 +281,7 @@ async def chat(
         session = await repo.create(SessionCreate())
 
     # Append user message
-    await repo.append_message(session.session_id, {"role": "user", "content": message})
+    await repo.append_message(cast(UUID, session.session_id), {"role": "user", "content": message})
 
     # Call orchestrator (Phase 2.2: with memory enrichment)
     try:
@@ -318,7 +321,7 @@ async def chat(
         log.error(
             "orchestrator_call_failed",
             error_id=error_id,
-            error=str(e),
+            error=_sanitize_error_message(e),
             error_type=type(e).__name__,
             exc_info=True,
         )
@@ -328,15 +331,13 @@ async def chat(
 
     # Append assistant message
     await repo.append_message(
-        session.session_id, {"role": "assistant", "content": response_content}
+        cast(UUID, session.session_id), {"role": "assistant", "content": response_content}
     )
 
     # Store conversation in memory graph (Phase 2.2) - basic version
     # Full entity extraction happens in second brain consolidation
     if memory_service and memory_service.connected:
         try:
-            from uuid import uuid4
-
             from personal_agent.memory.models import ConversationNode
 
             # Create a basic conversation node (entities will be extracted by second brain)
@@ -353,7 +354,7 @@ async def chat(
             )
             await memory_service.create_conversation(conversation)
         except Exception as e:
-            log.warning("memory_conversation_storage_failed", error=str(e), exc_info=True)
+            log.warning("memory_conversation_storage_failed", error=_sanitize_error_message(e), exc_info=True)
 
     return {"session_id": str(session.session_id), "response": response_content}
 
@@ -364,7 +365,7 @@ async def chat(
 
 
 @app.get("/memory/interests")
-async def get_user_interests(limit: int = 20):
+async def get_user_interests(limit: int = 20) -> dict[str, Any]:
     """Get user interest profile (frequently mentioned entities).
 
     Args:
@@ -381,7 +382,7 @@ async def get_user_interests(limit: int = 20):
 
 
 @app.post("/memory/query")
-async def query_memory(query: dict):
+async def query_memory(query: dict[str, Any]) -> dict[str, Any]:
     """Query memory graph for related conversations and entities.
 
     Args:

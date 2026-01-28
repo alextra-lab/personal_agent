@@ -17,7 +17,7 @@ engine = create_async_engine(
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
-async def init_db():
+async def init_db() -> None:
     """Initialize database (create tables if needed)."""
     from personal_agent.service.models import Base
 

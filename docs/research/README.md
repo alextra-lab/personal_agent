@@ -54,6 +54,12 @@ This directory contains research findings, external system analyses, and archite
 - **mac-local-models.md** — Running LLMs locally on Apple Silicon
 - **temp_perplexity_research.md** — Latest model benchmarks and routing research
 
+#### Structured Extraction & Frameworks
+
+- **langextract_library_review_2026-01-28.md** — LangExtract (Google) review for entity extraction and reflection; experiment E-018
+- **dspy_framework_analysis_2026-01-15.md** — DSPy framework analysis (E-008a complete)
+- **dspy_quick_reference_2026-01-15.md** — DSPy quick reference
+
 ---
 
 ## 🎯 How to Use This Knowledge Base
@@ -143,6 +149,11 @@ Research Discovery → Analysis Document → Architecture Doc → ADR → Implem
 ---
 
 ## 🚀 Recent Updates
+
+### January 28, 2026
+- **Added:** LangExtract library review (`langextract_library_review_2026-01-28.md`)
+- **Added:** E-018 experiment spec and hypothesis-driven design (entity extraction parse rate, code size, latency, grounding)
+- **Status:** Review documented; experiments in `experiments/langextract_evaluation/`
 
 ### December 31, 2025
 - **Added:** Model orchestration research analysis
@@ -252,5 +263,5 @@ Add research documents when:
 
 ---
 
-**Last Updated:** 2025-12-31
+**Last Updated:** 2026-01-28
 **Next Review:** After Phase 2 model evaluation (Month 2-3)

@@ -49,8 +49,9 @@
 |----|-------|-------|--------|----------|----------|
 | E-007a | Inference Server Evaluation | Phase 2-3 | 📋 Planned | MEDIUM | 1 week |
 | E-008a | DSPy Prototype Evaluation | Week 5 | ✅ **COMPLETE** | - | 2 days |
+| E-018 | LangExtract Evaluation | Phase 2.2 | 📋 Planned | MEDIUM | 2 days |
 
-**Note on Numbering:** E-007a and E-008a were originally numbered E-007 and E-008 but were renumbered to avoid conflicts with the main model optimization track. These experiments focus on infrastructure (inference servers) and framework adoption (DSPy) rather than model selection/routing.
+**Note on Numbering:** E-007a and E-008a were originally numbered E-007 and E-008 but were renumbered to avoid conflicts with the main model optimization track. E-018 evaluates Google's LangExtract library for structured extraction (entity extraction, optionally reflection); see `docs/research/langextract_library_review_2026-01-28.md` and `experiments/langextract_evaluation/`.
 
 ---
 

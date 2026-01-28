@@ -1,19 +1,21 @@
 """Second Brain Consolidator: Background memory consolidation (Phase 2.2).
 
 This component processes recent task captures, extracts entities and relationships
-using Claude 4.5, and updates the Neo4j memory graph.
+using Claude 4.5 or local SLMs, and updates the Neo4j memory graph.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from personal_agent.captains_log.capture import TaskCapture, read_captures
 from personal_agent.config.settings import get_settings
-from personal_agent.llm_client.claude import ClaudeClient
 from personal_agent.memory.models import ConversationNode, Entity, Relationship
 from personal_agent.memory.service import MemoryService
 from personal_agent.second_brain.entity_extraction import extract_entities_and_relationships
 from personal_agent.telemetry import get_logger
+
+if TYPE_CHECKING:
+    from personal_agent.llm_client.claude import ClaudeClient
 
 log = get_logger(__name__)
 settings = get_settings()
@@ -36,7 +38,7 @@ class SecondBrainConsolidator:
     def __init__(
         self,
         memory_service: MemoryService | None = None,
-        claude_client: ClaudeClient | None = None,
+        claude_client: "ClaudeClient | None" = None,
     ) -> None:  # noqa: D107
         """Initialize consolidator with optional dependencies.
 
@@ -92,14 +94,16 @@ class SecondBrainConsolidator:
         # Initialize Claude client only if using Claude for extraction
         if not self.claude_client and settings.entity_extraction_model == "claude":
             try:
+                from personal_agent.llm_client.claude import ClaudeClient
+
                 self.claude_client = ClaudeClient()
-            except ValueError as e:
+            except (ImportError, ValueError) as e:
                 log.warning(
                     "claude_client_unavailable_fallback_to_local",
                     error=str(e),
                     fallback_model=settings.entity_extraction_model or "qwen3-8b",
                 )
-                # Will use local SLM instead
+                # Will use local SLM instead; claude_client stays None
 
         # Process each capture
         conversations_created = 0

@@ -8,7 +8,7 @@ import json
 import time
 from copy import deepcopy
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from personal_agent.config import settings
 from personal_agent.llm_client import LocalLLMClient, ModelRole
@@ -22,6 +22,7 @@ from personal_agent.orchestrator.types import (
     RoutingResult,
     TaskState,
 )
+from personal_agent.security import sanitize_error_message
 from personal_agent.telemetry import (
     MODEL_CALL_COMPLETED,
     MODEL_CALL_ERROR,
@@ -680,7 +681,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                     timestamp=datetime.now(timezone.utc),
                     user_message=ctx.user_message,
                     assistant_response=ctx.final_reply,
-                    steps=ctx.steps,
+                    steps=cast(list[dict[str, Any]], ctx.steps),
                     tools_used=list(set(tools_used)),  # Deduplicate
                     duration_ms=duration_ms,
                     metrics_summary=ctx.metrics_summary,
@@ -1218,10 +1219,11 @@ async def step_llm_call(
             error_type=type(e).__name__,
         )
         ctx.error = e
+        sanitized_error = sanitize_error_message(e)
         error_step: OrchestratorStep = {
             "type": "warning",
-            "description": f"LLM call failed: {str(e)}",
-            "metadata": {"error": str(e), "error_type": type(e).__name__, "span_id": span_id},
+            "description": f"LLM call failed: {sanitized_error}",
+            "metadata": {"error": sanitized_error, "error_type": type(e).__name__, "span_id": span_id},
         }
         ctx.steps.append(error_step)
         return TaskState.FAILED
@@ -1337,13 +1339,14 @@ async def step_tool_execution(
                 tool_call_id=tool_call_id,
                 error=str(e),
             )
-            # Create error result
+            # Create error result with sanitized message
+            sanitized_error = sanitize_error_message(e)
             tool_results.append(
                 {
                     "tool_call_id": tool_call_id,
                     "role": "tool",
                     "name": tool_name,
-                    "content": json.dumps({"error": f"Invalid arguments JSON: {e}"}),
+                    "content": json.dumps({"error": f"Invalid arguments JSON: {sanitized_error}"}),
                 }
             )
             continue
@@ -1479,13 +1482,14 @@ async def step_tool_execution(
                 error=str(e),
                 exc_info=True,
             )
-            # Create error result
+            # Create error result with sanitized message
+            sanitized_error = sanitize_error_message(e)
             tool_results.append(
                 {
                     "tool_call_id": tool_call_id,
                     "role": "tool",
                     "name": tool_name,
-                    "content": json.dumps({"error": str(e)}),
+                    "content": json.dumps({"error": sanitized_error}),
                 }
             )
 
@@ -1567,11 +1571,12 @@ async def execute_task_safe(
         }
 
         if ctx.error:
-            result["reply"] = f"Error: {str(ctx.error)}"
+            sanitized_error = sanitize_error_message(ctx.error)
+            result["reply"] = f"Error: {sanitized_error}"
             result["steps"].append(
                 {
                     "type": "error",
-                    "description": f"Task failed: {str(ctx.error)}",
+                    "description": f"Task failed: {sanitized_error}",
                     "metadata": {"error_type": type(ctx.error).__name__},
                 }
             )
@@ -1584,13 +1589,14 @@ async def execute_task_safe(
             trace_id=ctx.trace_id,
             exc_info=True,
         )
-        # Return error result
+        # Return error result with sanitized message
+        sanitized_error = sanitize_error_message(e)
         return {
             "reply": "Critical error occurred. The agent is recovering.",
             "steps": [
                 {
                     "type": "error",
-                    "description": f"Fatal error: {str(e)}",
+                    "description": f"Fatal error: {sanitized_error}",
                     "metadata": {"error_type": type(e).__name__},
                 }
             ],

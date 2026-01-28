@@ -7,7 +7,6 @@ This module provides the LocalLLMClient for interacting with local LLM servers
 import warnings
 from typing import TYPE_CHECKING
 
-from personal_agent.llm_client.claude import ClaudeClient
 from personal_agent.llm_client.cost_tracker import CostTrackerService
 from personal_agent.llm_client.tool_call_parser import parse_text_tool_calls
 from personal_agent.llm_client.types import (
@@ -25,12 +24,17 @@ from personal_agent.llm_client.types import (
 if TYPE_CHECKING:
     # Type checking only - avoid circular import
     from personal_agent.config import ModelConfigError, load_model_config
+    from personal_agent.llm_client.claude import ClaudeClient
     from personal_agent.llm_client.client import LocalLLMClient
 else:
     # Lazy import to avoid circular dependency at runtime
     # Re-export from config module with deprecation warning
     # TODO: Remove in v0.2.0 - use `from personal_agent.config import load_model_config` instead
     def __getattr__(name: str):
+        if name == "ClaudeClient":
+            from personal_agent.llm_client.claude import ClaudeClient
+
+            return ClaudeClient
         if name == "LocalLLMClient":
             from personal_agent.llm_client.client import LocalLLMClient
 

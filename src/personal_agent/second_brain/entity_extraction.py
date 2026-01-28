@@ -4,14 +4,16 @@ This module provides structured entity and relationship extraction from
 conversation text using local reasoning models (Qwen 8B, LFM 1.2B) or Claude 4.5.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import orjson
 
 from personal_agent.config.settings import get_settings
 from personal_agent.llm_client import LocalLLMClient, ModelRole
-from personal_agent.llm_client.claude import ClaudeClient
 from personal_agent.telemetry import get_logger
+
+if TYPE_CHECKING:
+    from personal_agent.llm_client.claude import ClaudeClient
 
 log = get_logger(__name__)
 settings = get_settings()
@@ -20,7 +22,7 @@ settings = get_settings()
 async def extract_entities_and_relationships(
     user_message: str,
     assistant_response: str,
-    claude_client: ClaudeClient | None = None,
+    claude_client: "ClaudeClient | None" = None,
 ) -> dict[str, Any]:
     """Extract entities and relationships from conversation using SLM or Claude.
 

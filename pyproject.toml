@@ -53,8 +53,8 @@ dependencies = [
   # Neo4j (Phase 2.2 - memory graph)
   "neo4j>=5.15.0",        # Neo4j driver for knowledge graph
 
-  # Claude API (Phase 2.2 - second brain)
-  "anthropic>=0.18.0",    # Anthropic API for Claude
+  # Claude API (Phase 2.2 - second brain). Optional at runtime: only loaded when using Claude.
+  "anthropic>=0.18.0",
 ]
 
 [project.optional-dependencies]

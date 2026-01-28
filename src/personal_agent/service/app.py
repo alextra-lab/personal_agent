@@ -1,6 +1,5 @@
 """FastAPI service application."""
 
-import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, cast
@@ -12,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from personal_agent.brainstem.scheduler import BrainstemScheduler
 from personal_agent.config.settings import get_settings
 from personal_agent.memory.service import MemoryService
+from personal_agent.security import sanitize_error_message
 from personal_agent.service.database import get_db_session, init_db
 from personal_agent.service.models import SessionCreate, SessionResponse, SessionUpdate
 from personal_agent.service.repositories.session_repository import SessionRepository
@@ -20,45 +20,6 @@ from personal_agent.telemetry.es_handler import ElasticsearchHandler
 
 log = get_logger(__name__)
 settings = get_settings()
-
-
-def _sanitize_error_message(error: Exception) -> str:
-    """Create a user-friendly error message without exposing sensitive details.
-
-    Args:
-        error: The exception that occurred
-
-    Returns:
-        A sanitized, user-friendly error message
-    """
-    error_type = type(error).__name__
-    error_str = str(error)
-
-    # Filter out sensitive patterns (file paths, stack traces, etc.)
-    # Remove absolute paths
-    error_str = re.sub(r"/[^\s]+", "[path]", error_str)
-    # Remove common sensitive patterns
-    error_str = re.sub(r"0x[0-9a-fA-F]+", "[address]", error_str)
-    error_str = re.sub(r"line \d+", "[line]", error_str)
-
-    # Categorize errors and provide helpful messages
-    if "Connection" in error_type or "connection" in error_str.lower():
-        return "Unable to connect to the language model service. Please try again in a moment."
-    elif "Timeout" in error_type or "timeout" in error_str.lower():
-        return "The request took too long to process. Please try again with a simpler request."
-    elif "Permission" in error_type or "permission" in error_str.lower():
-        return "Permission denied. Please check your configuration."
-    elif "Validation" in error_type or "validation" in error_str.lower():
-        return "Invalid request format. Please check your input and try again."
-    elif "NotFound" in error_type or "not found" in error_str.lower():
-        return "The requested resource was not found."
-    elif "RateLimit" in error_type or "rate limit" in error_str.lower():
-        return "Too many requests. Please wait a moment and try again."
-    elif "Configuration" in error_type or "config" in error_str.lower():
-        return "Service configuration error. Please contact support."
-    else:
-        # Generic message for unknown errors
-        return "An error occurred while processing your request. Please try again."
 
 # Global instances (initialized in lifespan)
 es_handler: ElasticsearchHandler | None = None
@@ -115,7 +76,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             log.warning(
                 "mcp_gateway_init_failed",
-                error=_sanitize_error_message(e),
+                error=sanitize_error_message(e),
                 error_type=type(e).__name__,
                 exc_info=True,
             )
@@ -135,7 +96,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         try:
             await mcp_adapter.shutdown()
         except Exception as e:
-            log.error("mcp_gateway_shutdown_error", error=_sanitize_error_message(e), exc_info=True)
+            log.error("mcp_gateway_shutdown_error", error=sanitize_error_message(e), exc_info=True)
 
     if es_handler:
         await es_handler.disconnect()
@@ -321,12 +282,12 @@ async def chat(
         log.error(
             "orchestrator_call_failed",
             error_id=error_id,
-            error=_sanitize_error_message(e),
+            error=sanitize_error_message(e),
             error_type=type(e).__name__,
             exc_info=True,
         )
         # Provide user-friendly message with error reference
-        sanitized_msg = _sanitize_error_message(e)
+        sanitized_msg = sanitize_error_message(e)
         response_content = f"{sanitized_msg} (Error ID: {error_id})"
 
     # Append assistant message
@@ -354,7 +315,7 @@ async def chat(
             )
             await memory_service.create_conversation(conversation)
         except Exception as e:
-            log.warning("memory_conversation_storage_failed", error=_sanitize_error_message(e), exc_info=True)
+            log.warning("memory_conversation_storage_failed", error=sanitize_error_message(e), exc_info=True)
 
     return {"session_id": str(session.session_id), "response": response_content}
 

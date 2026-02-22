@@ -255,3 +255,46 @@ class TestCaptainLogManager:
         assert len(content["telemetry_refs"]) == 2
         assert content["telemetry_refs"][0]["trace_id"] == "trace-123"
         assert content["telemetry_refs"][1]["metric_name"] == "cpu_load"
+
+    def test_write_entry_reflection_indexes_to_es_when_enabled(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """Writing a reflection entry calls schedule_es_index with correct index and doc (Phase 2.3)."""
+        log_dir = tmp_path / "captains_log"
+        manager = CaptainLogManager(log_dir=log_dir)
+        entry = CaptainLogEntry(
+            entry_id="CL-2026-02-22-001",
+            type=CaptainLogEntryType.REFLECTION,
+            title="Test Reflection",
+            rationale="Test rationale",
+            timestamp=datetime(2026, 2, 22, 12, 0, 0, tzinfo=timezone.utc),
+        )
+        with patch(
+            "personal_agent.captains_log.manager.schedule_es_index"
+        ) as mock_schedule:
+            manager.write_entry(entry)
+            mock_schedule.assert_called_once()
+            call_args = mock_schedule.call_args[0]
+            assert call_args[0] == "agent-captains-reflections-2026-02-22"
+            assert isinstance(call_args[1], dict)
+            assert call_args[1]["entry_id"] == "CL-2026-02-22-001"
+            assert call_args[1]["type"] == "reflection"
+            assert call_args[1]["title"] == "Test Reflection"
+
+    def test_write_entry_non_reflection_does_not_call_es_index(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """Writing a non-reflection entry does not call schedule_es_index."""
+        log_dir = tmp_path / "captains_log"
+        manager = CaptainLogManager(log_dir=log_dir)
+        entry = CaptainLogEntry(
+            entry_id="CL-2026-02-22-001",
+            type=CaptainLogEntryType.CONFIG_PROPOSAL,
+            title="Config proposal",
+            rationale="Test",
+        )
+        with patch(
+            "personal_agent.captains_log.manager.schedule_es_index"
+        ) as mock_schedule:
+            manager.write_entry(entry)
+            mock_schedule.assert_not_called()

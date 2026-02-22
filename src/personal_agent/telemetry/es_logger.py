@@ -60,6 +60,26 @@ class ElasticsearchLogger:
         date_str = datetime.utcnow().strftime("%Y.%m.%d")
         return f"{self.index_prefix}-{date_str}"
 
+    async def index_document(self, index_name: str, document: dict[str, Any]) -> str | None:
+        """Index a document into a named index (e.g. Captain's Log indices).
+
+        Args:
+            index_name: Full index name (e.g. 'agent-captains-captures-2026-02-22').
+            document: Document to index (must be JSON-serializable).
+
+        Returns:
+            Document ID if successful, None if failed or not connected.
+        """
+        if not self.client:
+            log.warning("elasticsearch_not_connected", index=index_name)
+            return None
+        try:
+            result = await self.client.index(index=index_name, document=document)
+            return result["_id"]
+        except Exception as e:
+            log.warning("elasticsearch_index_failed", index=index_name, error=str(e))
+            return None
+
     async def log_event(
         self,
         event_type: str,

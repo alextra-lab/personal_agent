@@ -4,7 +4,9 @@ import pathlib
 import re
 import subprocess
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
+from personal_agent.captains_log.es_indexer import schedule_es_index
 from personal_agent.captains_log.models import (
     CaptainLogEntry,
     CaptainLogEntryType,
@@ -13,6 +15,12 @@ from personal_agent.captains_log.models import (
 from personal_agent.telemetry import CAPTAINS_LOG_ENTRY_CREATED, get_logger
 
 log = get_logger(__name__)
+
+# Index name pattern for Captain's Log reflections (Phase 2.3)
+REFLECTIONS_INDEX_PREFIX = "agent-captains-reflections"
+
+if TYPE_CHECKING:
+    from personal_agent.telemetry.es_handler import ElasticsearchHandler
 
 
 def _get_captains_log_dir() -> pathlib.Path:
@@ -99,20 +107,42 @@ class CaptainLogManager:
     Handles creation, writing, and git committing of agent reflection entries.
     """
 
-    def __init__(self, log_dir: pathlib.Path | None = None):
+    _default_es_handler: "ElasticsearchHandler | None" = None
+
+    @classmethod
+    def set_default_es_handler(cls, es_handler: "ElasticsearchHandler | None") -> None:
+        """Set default ES handler used by manager instances.
+
+        Args:
+            es_handler: Elasticsearch handler or None.
+        """
+        cls._default_es_handler = es_handler
+
+    def __init__(
+        self,
+        log_dir: pathlib.Path | None = None,
+        es_handler: "ElasticsearchHandler | None" = None,
+    ):
         """Initialize Captain's Log Manager.
 
         Args:
             log_dir: Optional custom log directory (defaults to ../../docs/architecture_decisions/captains_log).
+            es_handler: Optional Elasticsearch handler for reflection indexing.
         """
         self.log_dir = log_dir or _get_captains_log_dir()
+        self.es_handler = es_handler or self.__class__._default_es_handler
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
-    def write_entry(self, entry: CaptainLogEntry) -> pathlib.Path:
-        """Write a Captain's Log entry to a JSON file.
+    def save_entry(
+        self,
+        entry: CaptainLogEntry,
+        es_handler: "ElasticsearchHandler | None" = None,
+    ) -> pathlib.Path:
+        """Save a Captain's Log entry to a JSON file.
 
         Args:
             entry: The entry to write.
+            es_handler: Optional Elasticsearch handler override.
 
         Returns:
             Path to the written file.
@@ -146,7 +176,23 @@ class CaptainLogManager:
             file_path=str(file_path),
         )
 
+        # Optional ES indexing for reflections (Phase 2.3): non-blocking, best-effort
+        if entry.type == CaptainLogEntryType.REFLECTION:
+            date_str = entry.timestamp.strftime("%Y-%m-%d")
+            index_name = f"{REFLECTIONS_INDEX_PREFIX}-{date_str}"
+            doc = entry.model_dump(mode="json")
+            handler = es_handler or self.es_handler
+            schedule_es_index(index_name, doc, es_handler=handler)
+
         return file_path
+
+    def write_entry(
+        self,
+        entry: CaptainLogEntry,
+        es_handler: "ElasticsearchHandler | None" = None,
+    ) -> pathlib.Path:
+        """Write entry compatibility wrapper (delegates to save_entry)."""
+        return self.save_entry(entry, es_handler=es_handler)
 
     def commit_to_git(
         self, entry_id: str, message: str | None = None, file_path: pathlib.Path | None = None

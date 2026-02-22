@@ -46,6 +46,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         add_elasticsearch_handler(es_handler)
         log.info("elasticsearch_logging_enabled")
 
+        # Captain's Log → ES indexing (Phase 2.3): pass handler during lifespan
+        from personal_agent.captains_log.capture import set_default_es_handler as set_capture_es_handler
+        from personal_agent.captains_log.manager import CaptainLogManager
+
+        set_capture_es_handler(es_handler)
+        CaptainLogManager.set_default_es_handler(es_handler)
+        log.info("captains_log_es_indexing_enabled")
+
     # Connect to Neo4j (if enabled)
     if settings.enable_memory_graph:
         memory_service = MemoryService()
@@ -99,6 +107,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             log.error("mcp_gateway_shutdown_error", error=sanitize_error_message(e), exc_info=True)
 
     if es_handler:
+        from personal_agent.captains_log.capture import set_default_es_handler as set_capture_es_handler
+        from personal_agent.captains_log.manager import CaptainLogManager
+
+        set_capture_es_handler(None)
+        CaptainLogManager.set_default_es_handler(None)
         await es_handler.disconnect()
 
     if memory_service:

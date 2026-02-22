@@ -7,14 +7,33 @@ the second brain for deep reflection.
 
 import pathlib
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import orjson
 from pydantic import BaseModel, Field
 
+from personal_agent.captains_log.es_indexer import schedule_es_index
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
+
+# Index name pattern for Captain's Log captures (Phase 2.3)
+CAPTURES_INDEX_PREFIX = "agent-captains-captures"
+
+if TYPE_CHECKING:
+    from personal_agent.telemetry.es_handler import ElasticsearchHandler
+
+_default_es_handler: "ElasticsearchHandler | None" = None
+
+
+def set_default_es_handler(es_handler: "ElasticsearchHandler | None") -> None:
+    """Set default ES handler used by write_capture when one is not provided.
+
+    Args:
+        es_handler: Elasticsearch handler or None.
+    """
+    global _default_es_handler
+    _default_es_handler = es_handler
 
 
 class TaskCapture(BaseModel):
@@ -50,11 +69,15 @@ def _get_captures_dir() -> pathlib.Path:
     return captures_dir
 
 
-def write_capture(capture: TaskCapture) -> pathlib.Path:
+def write_capture(
+    capture: TaskCapture,
+    es_handler: "ElasticsearchHandler | None" = None,
+) -> pathlib.Path:
     """Write a fast capture to disk (structured JSON, no LLM).
 
     Args:
         capture: Task capture to write
+        es_handler: Optional Elasticsearch handler for indexing.
 
     Returns:
         Path to the written capture file
@@ -83,6 +106,12 @@ def write_capture(capture: TaskCapture) -> pathlib.Path:
         file_path=str(file_path),
         outcome=capture.outcome,
     )
+
+    # Optional ES indexing (Phase 2.3): non-blocking, best-effort
+    doc = capture.model_dump(mode="json")
+    index_name = f"{CAPTURES_INDEX_PREFIX}-{date_str}"
+    handler = es_handler or _default_es_handler
+    schedule_es_index(index_name, doc, es_handler=handler)
 
     return file_path
 

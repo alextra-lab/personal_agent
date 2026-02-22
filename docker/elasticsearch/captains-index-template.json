@@ -1,0 +1,55 @@
+{
+  "index_patterns": [
+    "agent-captains-captures-*",
+    "agent-captains-reflections-*"
+  ],
+  "priority": 110,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.lifecycle.name": "agent-logs-policy"
+    },
+    "mappings": {
+      "dynamic": true,
+      "properties": {
+        "timestamp": { "type": "date" },
+        "trace_id": { "type": "keyword" },
+        "session_id": { "type": "keyword" },
+        "entry_id": { "type": "keyword" },
+        "type": { "type": "keyword" },
+        "status": { "type": "keyword" },
+        "title": {
+          "type": "text",
+          "fields": {
+            "keyword": { "type": "keyword", "ignore_above": 256 }
+          }
+        },
+        "rationale": { "type": "text" },
+        "user_message": { "type": "text" },
+        "assistant_response": { "type": "text" },
+        "outcome": { "type": "keyword" },
+        "tools_used": { "type": "keyword" },
+        "duration_ms": { "type": "float" },
+        "memory_context_used": { "type": "boolean" },
+        "memory_conversations_found": { "type": "integer" },
+        "proposed_change": {
+          "properties": {
+            "what": { "type": "text" },
+            "why": { "type": "text" },
+            "how": { "type": "text" }
+          }
+        },
+        "supporting_metrics": { "type": "keyword" },
+        "telemetry_refs": {
+          "type": "nested",
+          "properties": {
+            "trace_id": { "type": "keyword" },
+            "metric_name": { "type": "keyword" },
+            "value": { "type": "keyword" }
+          }
+        }
+      }
+    }
+  }
+}

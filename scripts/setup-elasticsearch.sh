@@ -33,6 +33,14 @@ curl -X PUT "$ES_URL/_index_template/agent-logs-template" \
 echo ""
 echo "✓ Index template created"
 
+# Create Captain's Log index template
+echo "Creating Captain's Log index template..."
+curl -X PUT "$ES_URL/_index_template/agent-captains-template" \
+  -H 'Content-Type: application/json' \
+  -d @"$PROJECT_ROOT/docker/elasticsearch/captains-index-template.json"
+echo ""
+echo "✓ Captain's Log index template created"
+
 # Create initial index with alias
 echo "Creating initial index..."
 curl -X PUT "$ES_URL/agent-logs-000001" \

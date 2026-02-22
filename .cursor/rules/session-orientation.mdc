@@ -1,0 +1,32 @@
+# Session Orientation Protocol
+
+## When Starting a Development Session
+
+Before beginning any implementation work, orient yourself:
+
+1. **Read `docs/plans/DEV_TRACKER.md`** — Quick status, active work items, documentation debt
+2. **Read the relevant phase plan** (e.g., `docs/plans/PHASE_2.3_PLAN.md`) for current implementation details
+3. **Check recent session logs** in `docs/plans/sessions/` for context from the last session
+
+## When Completing Work
+
+1. **Update `docs/plans/DEV_TRACKER.md`** — Move items between sections, update completion percentages
+2. **Update ADR statuses** if an architectural decision was implemented or superseded
+3. **Log significant sessions** following the template in `docs/plans/sessions/SESSION_TEMPLATE.md`
+
+## When Making Architectural Decisions
+
+1. Check existing ADRs in `docs/architecture_decisions/` for prior decisions
+2. Create new ADRs following the established format (see ADR-0016 as exemplar)
+3. Update the Decision Log in `docs/plans/DEV_TRACKER.md`
+
+## Key Files for Context Recovery
+
+| File | Purpose |
+|------|---------|
+| `docs/plans/DEV_TRACKER.md` | Where are we? What's active? |
+| `docs/plans/IMPLEMENTATION_ROADMAP.md` | Full phase breakdown and history |
+| `docs/research/ARCHITECTURE_ASSESSMENT_2026-02-22.md` | Strategic direction, multi-agent evolution |
+| `docs/plans/PHASE_2.3_PLAN.md` | Current phase implementation details |
+| `docs/architecture_decisions/ADR-0017*.md` | Multi-agent orchestration decision |
+| `docs/architecture_decisions/ADR-0018*.md` | Seshat memory librarian decision |

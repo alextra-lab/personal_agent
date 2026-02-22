@@ -67,11 +67,22 @@ dev = [
   "ruff>=0.6.0",
   "ipython>=8.27.0",
   "bandit>=1.7.0",            # security linting
-  "hypothesis>=6.0.0"         # property-based testing (optional)
+  "hypothesis>=6.0.0",        # property-based testing (optional)
+  "pip-audit>=2.0.0"          # dependency vulnerability scanning
 ]
 
 # Note: Backend inference servers (MLX, llama.cpp) have been moved to the slm_server project.
 # Install them there: git clone https://github.com/alextra-lab/slm_server.git && cd slm_server && uv sync --extra mlx --extra llamacpp
+
+# -----------------------------
+# Dependency overrides (security)
+# -----------------------------
+# Force minimum secure versions for transitive dependencies (see pip-audit).
+# diskcache CVE-2025-69872: no fix on PyPI yet; tracked in docs/DEPENDENCY_SECURITY.md.
+[tool.uv]
+override-dependencies = [
+  "cryptography>=46.0.5",  # CVE-2026-26007: EC key validation
+]
 
 # -----------------------------
 # Testing configuration

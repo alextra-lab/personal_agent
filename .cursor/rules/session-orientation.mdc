@@ -1,16 +1,29 @@
+---
+description: Session orientation for development work. Use when starting implementation, working on Linear issues, making architectural decisions, or when the user asks about project status or what to work on.
+alwaysApply: false
+---
 # Session Orientation Protocol
 
 ## When Starting a Development Session
 
 Before beginning any implementation work, orient yourself:
 
-1. **Read `docs/plans/DEV_TRACKER.md`** — Quick status, active work items, documentation debt
-2. **Read the relevant phase plan** (e.g., `docs/plans/PHASE_2.3_PLAN.md`) for current implementation details
+1. **Query Linear** via MCP (`plugin-linear-linear`) — call `list_projects` for stream status, `list_issues` for current work items
+2. **Read the relevant spec** (e.g., `docs/plans/PHASE_2.3_PLAN.md`) for implementation details
 3. **Check recent session logs** in `docs/plans/sessions/` for context from the last session
+
+If Linear MCP is unavailable, fall back to `docs/plans/DEV_TRACKER.md` for project links and completed phases.
+
+## When Implementing a Linear Issue
+
+1. **Read the issue** via `get_issue` — the description contains: spec path, files to modify, acceptance criteria
+2. **Read the linked spec** for full implementation details
+3. **Reference ADRs** in `docs/architecture_decisions/` for architectural constraints
+4. **Implement, test, and update** the issue status via `update_issue`
 
 ## When Completing Work
 
-1. **Update `docs/plans/DEV_TRACKER.md`** — Move items between sections, update completion percentages
+1. **Update the Linear issue** — move to Done via `update_issue` with `state: "Done"`
 2. **Update ADR statuses** if an architectural decision was implemented or superseded
 3. **Log significant sessions** following the template in `docs/plans/sessions/SESSION_TEMPLATE.md`
 
@@ -18,15 +31,27 @@ Before beginning any implementation work, orient yourself:
 
 1. Check existing ADRs in `docs/architecture_decisions/` for prior decisions
 2. Create new ADRs following the established format (see ADR-0016 as exemplar)
-3. Update the Decision Log in `docs/plans/DEV_TRACKER.md`
+3. Create a Linear issue to track the decision
 
-## Key Files for Context Recovery
+## Key References
 
-| File | Purpose |
-|------|---------|
-| `docs/plans/DEV_TRACKER.md` | Where are we? What's active? |
-| `docs/plans/IMPLEMENTATION_ROADMAP.md` | Full phase breakdown and history |
-| `docs/research/ARCHITECTURE_ASSESSMENT_2026-02-22.md` | Strategic direction, multi-agent evolution |
-| `docs/plans/PHASE_2.3_PLAN.md` | Current phase implementation details |
-| `docs/architecture_decisions/ADR-0017*.md` | Multi-agent orchestration decision |
-| `docs/architecture_decisions/ADR-0018*.md` | Seshat memory librarian decision |
+| Source | Purpose |
+|--------|---------|
+| **Linear** (via MCP) | What to work on — issues, status, priorities, blocking |
+| `docs/plans/PHASE_*.md` | How to build it — implementation specs |
+| `docs/architecture_decisions/ADR-*.md` | Why we decided — architectural constraints |
+| `docs/plans/IMPLEMENTATION_ROADMAP.md` | Full phase history and module structure |
+| `docs/research/ARCHITECTURE_ASSESSMENT_2026-02-22.md` | Strategic direction |
+
+## Linear MCP Quick Reference
+
+```
+Server: plugin-linear-linear
+Team: FrenchForest
+
+list_projects          → stream status overview
+list_issues            → current work items  
+get_issue id:"FRE-8"   → issue details + spec path
+update_issue id:"FRE-8" state:"Done"  → mark complete
+create_issue team:"FrenchForest" project:"2.3 Homeostasis & Feedback"  → new work
+```

@@ -15,6 +15,7 @@ Markdown docs (`PHASE_*.md`, ADRs, `IMPLEMENTATION_ROADMAP.md`) are the specs â€
 | **2.3 Homeostasis & Feedback** | In Progress | [View](https://linear.app/frenchforest/project/23-homeostasis-and-feedback-dbce3b171536) |
 | **2.4 Multi-Agent Orchestration** | Planned | [View](https://linear.app/frenchforest/project/24-multi-agent-orchestration-4c9ee23c6f51) |
 | **2.5 Seshat Memory Librarian** | Planned | [View](https://linear.app/frenchforest/project/25-seshat-memory-librarian-3d30e7d2d24f) |
+| **2.6 Conversational Agent MVP** | Planned | [View](https://linear.app/frenchforest/project/26-conversational-agent-mvp-40fbc8c41510) |
 | **3.0 Daily-Use Interface** | Planned | [View](https://linear.app/frenchforest/project/30-daily-use-interface-60a517bd90f6) |
 
 ## Completed Phases

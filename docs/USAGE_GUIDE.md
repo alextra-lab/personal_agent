@@ -52,6 +52,24 @@ open http://localhost:9000/docs
 
 ## Basic Usage
 
+### Command-line chat
+
+To ask a question or send a request from the terminal, run the CLI with **`uv run`** so the project environment (and dependencies like `typer`) is used:
+
+```bash
+# From the project root, after: uv sync
+uv run python -m personal_agent.ui.cli "Your question or request here"
+```
+
+You can omit the `chat` subcommand; a single argument is treated as a chat message. For explicit `chat` and options:
+
+```bash
+uv run python -m personal_agent.ui.cli chat "Your question or request here"
+uv run python -m personal_agent.ui.cli chat "Follow-up" --session-id my-session
+```
+
+**Note:** Do not use `python -m ...` alone (system Python may miss dependencies) or `uv python -m ...` (`uv python` is for managing Python versions). Use **`uv run python -m personal_agent.ui.cli`**.
+
 ### Create a Session
 
 ```bash

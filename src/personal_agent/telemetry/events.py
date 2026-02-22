@@ -55,3 +55,11 @@ MCP_GATEWAY_STOPPED = "mcp_gateway_stopped"
 MCP_GATEWAY_INIT_FAILED = "mcp_gateway_init_failed"
 MCP_TOOL_DISCOVERED = "mcp_tool_discovered"
 MCP_TOOL_GOVERNANCE_ADDED = "mcp_tool_governance_added"
+
+# Data lifecycle events (Phase 2.3)
+LIFECYCLE_DISK_CHECK = "lifecycle_disk_check"
+LIFECYCLE_ARCHIVE = "lifecycle_archive"
+LIFECYCLE_PURGE = "lifecycle_purge"
+LIFECYCLE_ES_CLEANUP = "lifecycle_es_cleanup"
+LIFECYCLE_REPORT = "lifecycle_report"
+LIFECYCLE_DISK_ALERT = "lifecycle_disk_alert"

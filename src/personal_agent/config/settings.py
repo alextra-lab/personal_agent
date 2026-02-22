@@ -247,6 +247,18 @@ class AppConfig(BaseSettings):
         default=3600.0, description="Minimum time between consolidations (1 hour)"
     )
 
+    # Data Lifecycle (Phase 2.3)
+    disk_usage_alert_percent: float = Field(
+        default=80.0,
+        ge=0,
+        le=100,
+        description="Alert when disk usage exceeds this percent",
+    )
+    data_lifecycle_enabled: bool = Field(
+        default=True,
+        description="Enable automated retention, archive, and purge",
+    )
+
 
 _settings: AppConfig | None = None
 

@@ -1,0 +1,12 @@
+# Kibana config: ES connection + no data to Elastic (telemetry & newsfeed off)
+# Mounted over default so we control all settings that touch Elastic's services.
+
+server.host: "0.0.0.0"
+elasticsearch.hosts: ["http://elasticsearch:9200"]
+
+# No usage/telemetry sent to Elastic; lock so UI cannot re-enable
+telemetry.optIn: false
+telemetry.allowChangingOptInStatus: false
+
+# Disable newsfeed (stops connections to feeds.elastic.*)
+newsfeed.enabled: false

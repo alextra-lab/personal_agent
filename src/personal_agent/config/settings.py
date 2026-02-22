@@ -7,6 +7,7 @@ from pathlib import Path
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+import structlog
 
 from personal_agent.config.env_loader import Environment, get_environment, load_env_files
 from personal_agent.config.validators import (
@@ -14,9 +15,7 @@ from personal_agent.config.validators import (
     validate_log_format,
     validate_log_level,
 )
-from personal_agent.telemetry import get_logger
-
-log = get_logger(__name__)
+log = structlog.get_logger(__name__)
 
 
 class AppConfig(BaseSettings):

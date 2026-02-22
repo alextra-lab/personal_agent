@@ -8,10 +8,9 @@ from enum import Enum
 from pathlib import Path
 
 from dotenv import load_dotenv
+import structlog
 
-from personal_agent.telemetry import get_logger
-
-log = get_logger(__name__)
+log = structlog.get_logger(__name__)
 
 
 class Environment(str, Enum):

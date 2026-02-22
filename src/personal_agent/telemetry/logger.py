@@ -39,10 +39,10 @@ def _get_log_dir() -> pathlib.Path:
     """
     # Try to get from settings, otherwise use project root
     try:
-        from personal_agent.config import settings  # type: ignore[attr-defined]
+        from personal_agent.config.settings import get_settings  # noqa: PLC0415
 
-        return pathlib.Path(str(settings.log_dir))
-    except ImportError:
+        return pathlib.Path(str(get_settings().log_dir))
+    except Exception:
         # Config module not yet implemented, use default
         # Assume we're in src/personal_agent/telemetry, go up to project root
         project_root = pathlib.Path(__file__).parent.parent.parent.parent

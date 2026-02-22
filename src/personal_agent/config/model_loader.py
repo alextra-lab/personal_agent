@@ -11,12 +11,12 @@ All configuration loaders live in the config/ module per ADR-0007.
 from pathlib import Path
 
 from pydantic import ValidationError
+import structlog
 
 from personal_agent.config.loader import ConfigLoadError, load_yaml_file
 from personal_agent.llm_client.models import ModelConfig
-from personal_agent.telemetry import get_logger
 
-log = get_logger(__name__)
+log = structlog.get_logger(__name__)
 
 
 class ModelConfigError(ConfigLoadError):

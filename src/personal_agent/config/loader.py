@@ -7,11 +7,10 @@ domain-specific config loaders (governance, models, etc.).
 from pathlib import Path
 from typing import Any
 
+import structlog
 import yaml
 
-from personal_agent.telemetry import get_logger
-
-log = get_logger(__name__)
+log = structlog.get_logger(__name__)
 
 
 class ConfigLoadError(Exception):

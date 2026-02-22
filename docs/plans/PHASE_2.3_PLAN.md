@@ -345,15 +345,15 @@ class ThresholdOptimizer:
 ```
 
 **Metrics to Optimize:**
-- [ ] Second Brain CPU threshold (currently 50%)
-- [ ] Second Brain memory threshold (currently 70%)
-- [ ] Second Brain idle time (currently 300s)
-- [ ] Consolidation min interval (currently 3600s)
+- [x] Second Brain CPU threshold (currently 50%)
+- [x] Second Brain memory threshold (currently 70%)
+- [x] Second Brain idle time (currently 300s)
+- [x] Consolidation min interval (currently 3600s)
 
 **Captain's Log Integration:**
-- [ ] Generate Captain's Log proposal for threshold changes
-- [ ] Include supporting metrics from ES queries
-- [ ] Add A/B test results to proposal
+- [x] Generate Captain's Log proposal for threshold changes
+- [x] Include supporting metrics from ES queries
+- [x] Add A/B test results to proposal
 
 #### 3.2 Pattern Analysis Queries
 
@@ -385,10 +385,10 @@ class TelemetryQueries:
 ```
 
 **Testing:**
-- [ ] Test resource percentile calculations
-- [ ] Test mode transition queries
-- [ ] Test pattern detection accuracy
-- [ ] Test proposal generation
+- [x] Test resource percentile calculations
+- [x] Test mode transition queries
+- [x] Test pattern detection accuracy
+- [x] Test proposal generation
 
 ---
 
@@ -504,8 +504,8 @@ class InsightsEngine:
 
 **New Test Files:**
 - [ ] `tests/test_telemetry/test_lifecycle_manager.py`
-- [ ] `tests/test_telemetry/test_queries.py`
-- [ ] `tests/test_brainstem/test_optimizer.py`
+- [x] `tests/test_telemetry/test_queries.py`
+- [x] `tests/test_brainstem/test_optimizer.py`
 - [ ] `tests/test_second_brain/test_quality_monitor.py`
 - [ ] `tests/test_insights/test_engine.py`
 

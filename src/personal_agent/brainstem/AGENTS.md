@@ -16,8 +16,10 @@ Autonomic control layer - manages operational modes and transitions.
 
 ```
 brainstem/
-├── __init__.py          # Exports: ModeManager, get_current_mode
+├── __init__.py          # Exports: ModeManager, get_current_mode, ThresholdOptimizer
 ├── mode_manager.py      # ModeManager (state machine)
+├── scheduler.py         # Second brain consolidation + lifecycle (Phase 2.2/2.3)
+├── optimizer.py         # Adaptive threshold tuning (Phase 2.3, FRE-11)
 └── sensors.py           # Sensor polling
 ```
 
@@ -60,6 +62,23 @@ mode_mgr.check_transition(sensor_data)  # May change mode
 
 See `../../docs/architecture/HOMEOSTASIS_MODEL.md` for transition diagram.
 
+## Adaptive Threshold Tuning (Phase 2.3, FRE-11)
+
+`ThresholdOptimizer` analyzes ES telemetry and proposes data-backed threshold changes:
+
+```python
+from personal_agent.brainstem import ThresholdOptimizer
+
+optimizer = ThresholdOptimizer()
+analysis = await optimizer.analyze_resource_patterns(days=7)
+report = await optimizer.detect_false_positives()
+proposal = await optimizer.propose_threshold_adjustment("cpu_threshold")
+result = await optimizer.run_ab_test(proposal)
+# proposal.captains_log_payload for Captain's Log config_proposal entry
+```
+
+Metrics: `cpu_threshold`, `memory_threshold`, `idle_time_seconds`, `min_consolidation_interval_seconds`. Depends on `telemetry.queries.TelemetryQueries`.
+
 ## Dependencies
 
 - `governance`: Mode configuration (thresholds)
@@ -87,6 +106,7 @@ rg -n "OperationalMode\.(NORMAL|ALERT|DEGRADED|LOCKDOWN|RECOVERY)" src/
 - Test sensor threshold evaluation
 - Test mode affects governance permissions
 - Test LOCKDOWN → RECOVERY → NORMAL flow
+- Test ThresholdOptimizer analysis and proposals (`tests/test_brainstem/test_optimizer.py`)
 
 ## Pre-PR
 

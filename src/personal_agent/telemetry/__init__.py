@@ -46,6 +46,12 @@ from personal_agent.telemetry.metrics import (
     get_trace_events,
     query_events,
 )
+from personal_agent.telemetry.queries import (
+    ConsolidationEvent,
+    ModeTransition,
+    TaskPatternReport,
+    TelemetryQueries,
+)
 from personal_agent.telemetry.trace import TraceContext
 
 __all__ = [
@@ -59,6 +65,10 @@ __all__ = [
     "get_recent_cpu_load",
     "get_trace_events",
     "query_events",
+    "TelemetryQueries",
+    "ModeTransition",
+    "ConsolidationEvent",
+    "TaskPatternReport",
     # Event constants
     "TASK_STARTED",
     "TASK_COMPLETED",

@@ -15,11 +15,12 @@ Observability infrastructure with structured logging and tracing.
 
 ```
 telemetry/
-├── __init__.py      # Exports: get_logger, TraceContext
+├── __init__.py      # Exports: get_logger, TraceContext, TelemetryQueries
 ├── logger.py        # structlog configuration
 ├── trace.py         # TraceContext dataclass
 ├── events.py        # Event name constants
-└── metrics.py       # Log query utilities (Phase 2)
+├── metrics.py       # Log query utilities (Phase 2)
+└── queries.py       # ES analytics for threshold tuning (Phase 2.3, FRE-11)
 ```
 
 ## Get Logger
@@ -99,11 +100,28 @@ rg -n "^[A-Z_]+ = \"" src/personal_agent/telemetry/events.py
 - **Never log PII/secrets** - redact before logging
 - Use constants for events, not magic strings
 
+## Elasticsearch Analytics (Phase 2.3)
+
+`TelemetryQueries` provides async ES queries for adaptive threshold tuning:
+
+```python
+from personal_agent.telemetry import TelemetryQueries
+
+queries = TelemetryQueries(es_client=optional_client)
+percentiles = await queries.get_resource_percentiles("cpu", days=7)
+transitions = await queries.get_mode_transitions(days=7)
+triggers = await queries.get_consolidation_triggers(days=7)
+patterns = await queries.get_task_patterns(days=7)
+```
+
+Typed models: `ModeTransition`, `ConsolidationEvent`, `TaskPatternReport`. Requires `elasticsearch[async]` when creating a client (lazy import).
+
 ## Testing
 
 - Test logger configuration (JSON output, fields present)
 - Test TraceContext immutability
 - Verify trace_id propagates through call chains
+- Test TelemetryQueries with mocked ES (`tests/test_telemetry/test_queries.py`)
 
 ## Pre-PR
 

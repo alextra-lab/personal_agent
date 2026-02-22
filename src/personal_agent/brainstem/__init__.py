@@ -8,6 +8,7 @@ system stability and enforcing operational modes.
 """
 
 from personal_agent.brainstem.mode_manager import ModeManager, ModeManagerError
+from personal_agent.brainstem.optimizer import ThresholdOptimizer
 from personal_agent.brainstem.sensors import get_system_metrics_snapshot, poll_system_metrics
 from personal_agent.governance.models import Mode
 
@@ -49,6 +50,7 @@ def get_current_mode() -> Mode:
 __all__ = [
     "ModeManager",
     "ModeManagerError",
+    "ThresholdOptimizer",
     "Mode",
     "get_mode_manager",
     "get_current_mode",

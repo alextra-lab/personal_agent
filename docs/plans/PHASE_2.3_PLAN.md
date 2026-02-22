@@ -184,27 +184,27 @@ Build a **self-regulating system** with intelligent feedback loops and data life
 #### 1.2 Kibana Dashboards
 
 **Dashboards to Create:**
-- [ ] **Task Analytics Dashboard**
+- [x] **Task Analytics Dashboard**
   - Task outcome distribution (completed/failed/timeout)
   - Average duration by tool usage
   - Most frequent tools
   - Memory context usage rate
 
-- [ ] **Reflection Insights Dashboard**
+- [x] **Reflection Insights Dashboard**
   - Proposed changes over time
   - Top improvement categories
   - Impact assessment distribution
   - Metrics trending
 
-- [ ] **System Health Dashboard**
+- [x] **System Health Dashboard**
   - CPU/memory metrics timeline
   - Mode transitions
   - Consolidation triggers
   - Resource threshold violations
 
 **Export Configuration:**
-- [ ] Export dashboard JSON to `config/kibana/dashboards/`
-- [ ] Document import instructions
+- [x] Export dashboard JSON to `config/kibana/dashboards/`
+- [x] Document import instructions (see `docs/KIBANA_DASHBOARDS.md`)
 
 ---
 
@@ -747,7 +747,7 @@ AGENT_INSIGHTS_WEEKLY_DAY=0         # Sunday
 
 ### Should Have 🎯
 
-- [ ] All 3 Kibana dashboards
+- [x] All 3 Kibana dashboards
 - [ ] A/B testing framework
 - [ ] Insights engine generating proposals
 - [ ] Disk usage monitoring and alerts

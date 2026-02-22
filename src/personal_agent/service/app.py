@@ -372,5 +372,9 @@ async def query_memory(query: dict[str, Any]) -> dict[str, Any]:
     from personal_agent.memory.models import MemoryQuery
 
     memory_query = MemoryQuery(**query)
-    result = await memory_service.query_memory(memory_query)
+    result = await memory_service.query_memory(
+        memory_query,
+        feedback_key=query.get("session_id"),
+        query_text=query.get("query_text"),
+    )
     return result.model_dump()

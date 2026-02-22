@@ -815,7 +815,11 @@ async def step_init(
                         limit=5,  # Get top 5 related conversations
                         recency_days=30,  # Only recent conversations
                     )
-                    result = await memory_service.query_memory(query)
+                    result = await memory_service.query_memory(
+                        query,
+                        feedback_key=ctx.session_id,
+                        query_text=ctx.user_message,
+                    )
 
                     # Format memory context for LLM
                     ctx.memory_context = []

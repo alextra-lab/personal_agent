@@ -5,7 +5,11 @@ from typing import Any
 
 import orjson
 import structlog
-from neo4j import AsyncGraphDatabase
+
+try:
+    from neo4j import AsyncGraphDatabase
+except ModuleNotFoundError:  # pragma: no cover - optional dependency in test environments
+    AsyncGraphDatabase = None  # type: ignore[assignment]
 
 from personal_agent.config.settings import get_settings
 from personal_agent.memory.models import (
@@ -36,6 +40,7 @@ class MemoryService:
         """Initialize memory service with Neo4j connection settings."""
         self.driver: Any | None = None
         self.connected = False
+        self._query_feedback_by_key: dict[str, dict[str, Any]] = {}
 
     async def connect(self) -> bool:
         """Connect to Neo4j database.
@@ -43,6 +48,11 @@ class MemoryService:
         Returns:
             True if connected successfully, False otherwise
         """
+        if AsyncGraphDatabase is None:
+            log.error("neo4j_dependency_missing")
+            self.connected = False
+            return False
+
         try:
             uri = settings.neo4j_uri
             user = settings.neo4j_user
@@ -219,11 +229,18 @@ class MemoryService:
             log.error("relationship_creation_failed", error=str(e), exc_info=True)
             return False
 
-    async def query_memory(self, query: MemoryQuery) -> MemoryQueryResult:
+    async def query_memory(
+        self,
+        query: MemoryQuery,
+        feedback_key: str | None = None,
+        query_text: str | None = None,
+    ) -> MemoryQueryResult:
         """Query memory graph for relevant conversations and entities.
 
         Args:
             query: Query parameters
+            feedback_key: Optional session/user key for implicit feedback tracking.
+            query_text: Optional original user query text for rephrase detection.
 
         Returns:
             MemoryQueryResult with conversations, entities, and relationships
@@ -331,6 +348,13 @@ class MemoryService:
                     result_count=len(conversations),
                 )
 
+                self._log_query_quality_metrics(
+                    query=query,
+                    relevance_scores=relevance_scores,
+                    feedback_key=feedback_key,
+                    query_text=query_text,
+                )
+
                 return MemoryQueryResult(
                     conversations=conversations,
                     relevance_scores=relevance_scores,
@@ -339,6 +363,90 @@ class MemoryService:
         except Exception as e:
             log.error("memory_query_failed", error=str(e), exc_info=True)
             return MemoryQueryResult()
+
+    def _log_query_quality_metrics(
+        self,
+        query: MemoryQuery,
+        relevance_scores: dict[str, float],
+        feedback_key: str | None,
+        query_text: str | None,
+    ) -> None:
+        """Emit memory query quality metrics and implicit feedback signal."""
+        result_count = len(relevance_scores)
+        avg_relevance = sum(relevance_scores.values()) / result_count if result_count > 0 else 0.0
+        max_relevance = max(relevance_scores.values(), default=0.0)
+        min_relevance = min(relevance_scores.values(), default=0.0)
+        query_signature = self._build_query_signature(query, query_text)
+        state_key = feedback_key or "global"
+        previous_state = self._query_feedback_by_key.get(state_key)
+        implicit_rephrase = self._detect_implicit_rephrase(previous_state, query_signature)
+
+        log.info(
+            "memory_query_quality_metrics",
+            query_type=self._classify_query_type(query),
+            result_count=result_count,
+            avg_relevance_score=round(avg_relevance, 4),
+            max_relevance_score=round(max_relevance, 4),
+            min_relevance_score=round(min_relevance, 4),
+            entity_filter_count=len(query.entity_names),
+            entity_type_filter_count=len(query.entity_types),
+            trace_filter_count=len(query.trace_ids),
+            conversation_filter_count=len(query.conversation_ids),
+            recency_days=query.recency_days,
+            implicit_rephrase_detected=implicit_rephrase,
+            previous_result_count=(previous_state or {}).get("result_count"),
+        )
+        self._query_feedback_by_key[state_key] = {
+            "signature": query_signature,
+            "result_count": result_count,
+            "timestamp": datetime.now(timezone.utc),
+        }
+
+    def _classify_query_type(self, query: MemoryQuery) -> str:
+        """Classify query shape for analytics aggregation."""
+        if query.entity_names:
+            return "entity_name_lookup"
+        if query.entity_types:
+            return "entity_type_lookup"
+        if query.conversation_ids:
+            return "conversation_lookup"
+        if query.trace_ids:
+            return "trace_lookup"
+        return "recent_conversations"
+
+    def _build_query_signature(self, query: MemoryQuery, query_text: str | None) -> str:
+        """Create normalized signature for implicit feedback tracking."""
+        normalized_text = (query_text or "").strip().lower()
+        entity_names = ",".join(sorted(name.lower() for name in query.entity_names))
+        entity_types = ",".join(sorted(entity_type.lower() for entity_type in query.entity_types))
+        conversation_ids = ",".join(sorted(query.conversation_ids))
+        trace_ids = ",".join(sorted(query.trace_ids))
+        return (
+            f"text={normalized_text}|entities={entity_names}|types={entity_types}|"
+            f"conversations={conversation_ids}|traces={trace_ids}|recency={query.recency_days}"
+        )
+
+    def _detect_implicit_rephrase(
+        self,
+        previous_state: dict[str, Any] | None,
+        current_signature: str,
+    ) -> bool:
+        """Detect likely rephrase from sequential query behavior."""
+        if not previous_state:
+            return False
+
+        previous_signature = str(previous_state.get("signature", ""))
+        previous_result_count = int(previous_state.get("result_count", 0) or 0)
+        previous_timestamp = previous_state.get("timestamp")
+        if not isinstance(previous_timestamp, datetime):
+            return False
+
+        recency_seconds = (datetime.now(timezone.utc) - previous_timestamp).total_seconds()
+        if recency_seconds > 600:  # 10 minutes
+            return False
+        if previous_signature == current_signature:
+            return False
+        return previous_result_count <= 1
 
     async def _calculate_relevance_scores(
         self, conversations: list[ConversationNode], query: MemoryQuery

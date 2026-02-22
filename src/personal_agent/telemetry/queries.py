@@ -101,6 +101,76 @@ class TelemetryQueries:
             await self._es_client.close()
             self._es_client = None
 
+    async def get_event_count(self, event_type: str, days: int) -> int:
+        """Count telemetry events of a given type in a time window.
+
+        Args:
+            event_type: Event type (structlog event name).
+            days: Number of days to analyze.
+
+        Returns:
+            Matching event count.
+        """
+        client = await self._get_client()
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(days=days)
+        response = await client.search(
+            index=f"{self._logs_index_prefix}-*",
+            query={
+                "bool": {
+                    "filter": [
+                        {"term": {"event_type": event_type}},
+                        {"range": {"@timestamp": {"gte": start.isoformat(), "lte": now.isoformat()}}},
+                    ]
+                }
+            },
+            size=0,
+        )
+        return int(response.get("hits", {}).get("total", {}).get("value", 0) or 0)
+
+    async def get_daily_event_counts(self, event_type: str, days: int) -> dict[str, int]:
+        """Get daily buckets for a telemetry event type.
+
+        Args:
+            event_type: Event type (structlog event name).
+            days: Number of days to analyze.
+
+        Returns:
+            Dict keyed by `YYYY-MM-DD` to event count.
+        """
+        client = await self._get_client()
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(days=days)
+        response = await client.search(
+            index=f"{self._logs_index_prefix}-*",
+            query={
+                "bool": {
+                    "filter": [
+                        {"term": {"event_type": event_type}},
+                        {"range": {"@timestamp": {"gte": start.isoformat(), "lte": now.isoformat()}}},
+                    ]
+                }
+            },
+            size=0,
+            aggs={
+                "daily": {
+                    "date_histogram": {
+                        "field": "@timestamp",
+                        "calendar_interval": "day",
+                        "min_doc_count": 0,
+                    }
+                }
+            },
+        )
+        daily_counts: dict[str, int] = {}
+        for bucket in response.get("aggregations", {}).get("daily", {}).get("buckets", []):
+            key_as_string = bucket.get("key_as_string")
+            if not key_as_string:
+                continue
+            day = str(key_as_string).split("T")[0]
+            daily_counts[day] = int(bucket.get("doc_count", 0) or 0)
+        return daily_counts
+
     async def get_resource_percentiles(self, metric: str, days: int) -> dict[str, float]:
         """Get p50, p75, p90, p95, and p99 for a resource metric.
 

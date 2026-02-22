@@ -131,3 +131,39 @@ class TestTelemetryQueries:
         assert report.hourly_distribution == {9: 3, 10: 5}
         assert report.avg_cpu_percent == 14.2
         assert report.avg_memory_percent == 33.6
+
+    async def test_get_event_count_returns_total_hits(self) -> None:
+        """Event-count query returns total hit count."""
+        mock_client = AsyncMock()
+        mock_client.search.return_value = {
+            "hits": {
+                "total": {"value": 17},
+            }
+        }
+        queries = TelemetryQueries(es_client=mock_client)
+
+        count = await queries.get_event_count(event_type="entity_extraction_failed", days=7)
+
+        assert count == 17
+
+    async def test_get_daily_event_counts_maps_histogram_buckets(self) -> None:
+        """Daily event counts map date histogram buckets to YYYY-MM-DD keys."""
+        mock_client = AsyncMock()
+        mock_client.search.return_value = {
+            "aggregations": {
+                "daily": {
+                    "buckets": [
+                        {"key_as_string": "2026-02-20T00:00:00.000Z", "doc_count": 2},
+                        {"key_as_string": "2026-02-21T00:00:00.000Z", "doc_count": 5},
+                    ]
+                }
+            }
+        }
+        queries = TelemetryQueries(es_client=mock_client)
+
+        daily_counts = await queries.get_daily_event_counts(
+            event_type="entity_extraction_started",
+            days=7,
+        )
+
+        assert daily_counts == {"2026-02-20": 2, "2026-02-21": 5}

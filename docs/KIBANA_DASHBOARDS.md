@@ -19,7 +19,7 @@ Task analytics, reflection insights, and system health visibility in Kibana. Thi
 | ---------------------- | ------------------------------- | ----------------------------------------------------------------------- |
 | Task Analytics         | `agent-captains-captures-*`     | Task outcomes, duration by tool, tool frequency, memory usage          |
 | Reflection Insights   | `agent-captains-reflections-*`  | Proposed changes over time, improvement categories, impact, metrics      |
-| System Health         | `agent-logs-*`                  | CPU/memory over time, mode transitions, consolidation, threshold events |
+| System Health         | `agent-logs-*`                  | CPU/memory over time, mode transitions, consolidation, thresholds, memory quality signals |
 
 Dashboard JSON lives in **`config/kibana/dashboards/`**. Import the data views first, then import the dashboards to get complete pre-built visualizations.
 
@@ -145,6 +145,10 @@ The shipped NDJSON already contains these panels. Use this section as the source
 
 - Agent-logs events include `event_type`, `@timestamp`, and event-specific fields (e.g. `from_mode`, `to_mode`, `cpu_load`, `memory_used`). Adjust field names to match your ES logger payload.
 - For CPU/memory over time, use the same event_type filter and average numeric fields; Lens will suggest date histogram on `@timestamp`.
+- FRE-23 quality events available in logs:
+  - `memory_query_quality_metrics` (result counts + relevance + implicit rephrase)
+  - `quality_monitor_entity_report`, `quality_monitor_graph_report`, `quality_monitor_anomalies_detected`
+  - Note: quality monitor events appear when monitor methods are executed by runtime wiring or manual invocation.
 
 ---
 
@@ -206,6 +210,10 @@ Quick reference for building Lens panels and KQL filters.
   Data view `agent-logs-*`, KQL: `event_type: mode_transition`, time range: Last 24 hours
 - **Consolidation events:**  
   Data view `agent-logs-*`, KQL: `event_type: consolidation_*`
+- **Memory query quality events:**  
+  Data view `agent-logs-*`, KQL: `event_type: memory_query_quality_metrics`
+- **Consolidation quality monitor events:**  
+  Data view `agent-logs-*`, KQL: `event_type: (quality_monitor_entity_report or quality_monitor_graph_report or quality_monitor_anomalies_detected)`
 
 ---
 

@@ -76,12 +76,13 @@ See the [`docs/research/`](docs/research/) directory for research notes and anal
 - **MCP Gateway**: Tool discovery and execution
 - **Health Monitoring**: Brainstem sensors for homeostasis
 
-### Phase 2.3 (Planned)
+### Phase 2.3 (In Progress)
 
-- **Homeostasis Loop**: Adaptive threshold adjustment
-- **Feedback Learning**: Quality-based consolidation improvement
-- **Memory-Based Context**: Proactive conversation suggestions
-- **Topic Clustering**: Automatic conversation threading
+- **Homeostasis Loop**: Adaptive threshold adjustment (FRE-11 complete)
+- **Consolidation Quality Monitoring**: Entity extraction and graph health metrics (FRE-23 core complete)
+- **Memory Query Feedback Metrics**: Result-count/relevance telemetry with implicit rephrase detection
+- **Kibana Dashboards**: Task/Reflection/System dashboards available and importable
+- **Remaining work**: Scheduler wiring for automatic quality monitor runs and E2E runtime validation
 
 ## Quick Start
 
@@ -180,6 +181,21 @@ curl http://localhost:9000/sessions
 ```bash
 curl http://localhost:9000/health
 ```
+
+### Query Memory with Feedback Telemetry
+
+```bash
+curl -X POST http://localhost:9000/memory/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "session_id": "YOUR_SESSION_ID",
+    "query_text": "python frameworks",
+    "entity_names": ["Python", "FastAPI"],
+    "limit": 5
+  }'
+```
+
+This emits `memory_query_quality_metrics` events to Elasticsearch (`agent-logs-*`) for Kibana analysis.
 
 ## Configuration
 

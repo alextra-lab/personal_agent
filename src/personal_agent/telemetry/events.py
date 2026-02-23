@@ -49,6 +49,12 @@ ROUTING_PARSE_ERROR = "routing_parse_error"
 CAPTAINS_LOG_ENTRY_CREATED = "captains_log_entry_created"
 CAPTAINS_LOG_ENTRY_COMMITTED = "captains_log_entry_committed"
 
+# Captain's Log ES backfill (FRE-30)
+CAPTAINS_LOG_BACKFILL_STARTED = "captains_log_backfill_started"
+CAPTAINS_LOG_BACKFILL_COMPLETED = "captains_log_backfill_completed"
+CAPTAINS_LOG_BACKFILL_FILE_FAILED = "captains_log_backfill_file_failed"
+CAPTAINS_LOG_BACKFILL_CHECKPOINT_UPDATED = "captains_log_backfill_checkpoint_updated"
+
 # MCP Gateway events
 MCP_GATEWAY_STARTED = "mcp_gateway_started"
 MCP_GATEWAY_STOPPED = "mcp_gateway_stopped"

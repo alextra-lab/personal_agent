@@ -107,11 +107,11 @@ def write_capture(
         outcome=capture.outcome,
     )
 
-    # Optional ES indexing (Phase 2.3): non-blocking, best-effort
+    # Optional ES indexing (Phase 2.3): non-blocking, best-effort; doc_id for idempotent backfill
     doc = capture.model_dump(mode="json")
     index_name = f"{CAPTURES_INDEX_PREFIX}-{date_str}"
     handler = es_handler or _default_es_handler
-    schedule_es_index(index_name, doc, es_handler=handler)
+    schedule_es_index(index_name, doc, es_handler=handler, doc_id=capture.trace_id)
 
     return file_path
 

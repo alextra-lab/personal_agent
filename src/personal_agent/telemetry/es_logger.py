@@ -60,12 +60,22 @@ class ElasticsearchLogger:
         date_str = datetime.utcnow().strftime("%Y.%m.%d")
         return f"{self.index_prefix}-{date_str}"
 
-    async def index_document(self, index_name: str, document: dict[str, Any]) -> str | None:
+    async def index_document(
+        self,
+        index_name: str,
+        document: dict[str, Any],
+        *,
+        id: str | None = None,
+    ) -> str | None:
         """Index a document into a named index (e.g. Captain's Log indices).
+
+        When id is provided, indexing is idempotent: repeated index calls
+        overwrite the same document (used for backfill replay).
 
         Args:
             index_name: Full index name (e.g. 'agent-captains-captures-2026-02-22').
             document: Document to index (must be JSON-serializable).
+            id: Optional document ID for idempotent upsert (e.g. trace_id, entry_id).
 
         Returns:
             Document ID if successful, None if failed or not connected.
@@ -74,7 +84,10 @@ class ElasticsearchLogger:
             log.warning("elasticsearch_not_connected", index=index_name)
             return None
         try:
-            result = await self.client.index(index=index_name, document=document)
+            kwargs: dict[str, Any] = {"index": index_name, "document": document}
+            if id is not None:
+                kwargs["id"] = id
+            result = await self.client.index(**kwargs)
             return result["_id"]
         except Exception as e:
             log.warning("elasticsearch_index_failed", index=index_name, error=str(e))

@@ -43,6 +43,8 @@ telemetry/logs/
 
 # Captain's Log entries (runtime artifacts, not source code)
 telemetry/captains_log/**/*.json
+# Captain's Log ES backfill checkpoint (FRE-30)
+telemetry/captains_log/es_backfill_checkpoint.json
 
 # Evaluation results and reports (runtime artifacts, regeneratable)
 telemetry/evaluation/evaluation_report*.md

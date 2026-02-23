@@ -177,13 +177,13 @@ class CaptainLogManager:
         )
 
         # Optional ES indexing for reflections and config proposals (Phase 2.3/FRE-24):
-        # non-blocking, best-effort.
+        # non-blocking, best-effort; doc_id for idempotent backfill (FRE-30).
         if entry.type in {CaptainLogEntryType.REFLECTION, CaptainLogEntryType.CONFIG_PROPOSAL}:
             date_str = entry.timestamp.strftime("%Y-%m-%d")
             index_name = f"{REFLECTIONS_INDEX_PREFIX}-{date_str}"
             doc = entry.model_dump(mode="json")
             handler = es_handler or self.es_handler
-            schedule_es_index(index_name, doc, es_handler=handler)
+            schedule_es_index(index_name, doc, es_handler=handler, doc_id=entry.entry_id)
 
         return file_path
 

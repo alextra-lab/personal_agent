@@ -39,3 +39,4 @@ class TestWriteCapture:
             assert call_args[0] == "agent-captains-captures-2026-02-22"
             assert call_args[1]["trace_id"] == "trace-123"
             assert call_args[1]["outcome"] == "completed"
+            assert mock_schedule.call_args[1].get("doc_id") == "trace-123"

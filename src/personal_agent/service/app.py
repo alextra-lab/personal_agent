@@ -1,5 +1,6 @@
 """FastAPI service application."""
 
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, cast
@@ -9,7 +10,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from personal_agent.brainstem.scheduler import BrainstemScheduler
-from personal_agent.captains_log.es_indexer import set_es_indexer
+from personal_agent.captains_log.es_indexer import build_es_indexer_from_handler, set_es_indexer
 from personal_agent.config.settings import get_settings
 from personal_agent.memory.service import MemoryService
 from personal_agent.security import sanitize_error_message
@@ -45,7 +46,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     es_handler = ElasticsearchHandler(settings.elasticsearch_url)
     if await es_handler.connect():
         add_elasticsearch_handler(es_handler)
-        set_es_indexer(es_handler.es_logger.index_document)
+        set_es_indexer(build_es_indexer_from_handler(es_handler))
         log.info("elasticsearch_logging_enabled")
 
         # Captain's Log → ES indexing (Phase 2.3): pass handler during lifespan
@@ -58,6 +59,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         CaptainLogManager.set_default_es_handler(es_handler)
         log.info("captains_log_es_indexing_enabled")
 
+        # Captain's Log ES backfill (FRE-30): one replay pass on startup
+        try:
+            from personal_agent.captains_log.backfill import run_backfill
+
+            asyncio.create_task(run_backfill(es_handler.es_logger))
+        except Exception as e:
+            log.warning("captains_log_backfill_startup_failed", error=str(e))
+
     # Connect to Neo4j (if enabled)
     if settings.enable_memory_graph:
         memory_service = MemoryService()
@@ -67,7 +76,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Start Brainstem scheduler for second brain, lifecycle, and/or insights tasks.
     if settings.enable_second_brain or settings.data_lifecycle_enabled or settings.insights_enabled:
         es_client = es_handler.es_logger.client if (es_handler and getattr(es_handler, "_connected", False)) else None
-        scheduler = BrainstemScheduler(lifecycle_es_client=es_client)
+        backfill_logger = es_handler.es_logger if (es_handler and getattr(es_handler, "_connected", False)) else None
+        scheduler = BrainstemScheduler(lifecycle_es_client=es_client, backfill_es_logger=backfill_logger)
         await scheduler.start()
         log.info("brainstem_scheduler_started")
 

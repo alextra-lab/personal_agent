@@ -281,6 +281,7 @@ class TestCaptainLogManager:
             assert call_args[1]["entry_id"] == "CL-2026-02-22-001"
             assert call_args[1]["type"] == "reflection"
             assert call_args[1]["title"] == "Test Reflection"
+            assert mock_schedule.call_args[1].get("doc_id") == "CL-2026-02-22-001"
 
     def test_write_entry_config_proposal_calls_es_index(
         self, tmp_path: pathlib.Path
@@ -304,3 +305,4 @@ class TestCaptainLogManager:
             assert call_args[0] == "agent-captains-reflections-2026-02-22"
             assert isinstance(call_args[1], dict)
             assert call_args[1]["type"] == "config_proposal"
+            assert mock_schedule.call_args[1].get("doc_id") == "CL-2026-02-22-001"

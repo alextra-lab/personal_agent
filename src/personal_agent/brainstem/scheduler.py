@@ -27,6 +27,7 @@ DISK_CHECK_INTERVAL_SECONDS = 3600     # Hourly disk check
 ARCHIVE_HOUR_UTC = 2                   # Daily archive at 2 AM UTC
 PURGE_WEEKDAY = 6                      # Sunday
 PURGE_HOUR_UTC = 3                     # Weekly purge at 3 AM UTC Sunday
+BACKFILL_INTERVAL_SECONDS = 600        # Captain's Log ES backfill every 10 minutes (FRE-30)
 
 
 class BrainstemScheduler:
@@ -44,7 +45,11 @@ class BrainstemScheduler:
         await scheduler.stop()
     """
 
-    def __init__(self, lifecycle_es_client: object | None = None) -> None:  # noqa: D107
+    def __init__(
+        self,
+        lifecycle_es_client: object | None = None,
+        backfill_es_logger: object | None = None,
+    ) -> None:  # noqa: D107
         """Initialize scheduler with consolidation thresholds and optional lifecycle ES client."""
         self.running = False
         self.consolidator: SecondBrainConsolidator | None = None
@@ -56,6 +61,8 @@ class BrainstemScheduler:
         self._last_disk_check: datetime | None = None
         self._last_archive_date: date | None = None
         self._last_purge_week: tuple[int, int] | None = None  # (year, week)
+        self._backfill_es_logger = backfill_es_logger
+        self._last_backfill_run: datetime | None = None
         self.insights_engine = InsightsEngine()
         self._last_insights_daily_date: datetime | None = None
         self._last_insights_week: tuple[int, int] | None = None  # (year, week)
@@ -215,6 +222,23 @@ class BrainstemScheduler:
                 ):
                     await self.lifecycler.check_disk_usage()
                     self._last_disk_check = now
+
+                # Captain's Log ES backfill (FRE-30): periodic replay when ES available
+                if self._backfill_es_logger and (
+                    self._last_backfill_run is None
+                    or (now - self._last_backfill_run).total_seconds() >= BACKFILL_INTERVAL_SECONDS
+                ):
+                    try:
+                        from personal_agent.captains_log.backfill import run_backfill
+
+                        await run_backfill(self._backfill_es_logger)
+                        self._last_backfill_run = now
+                    except Exception as backfill_err:
+                        log.warning(
+                            "captains_log_backfill_failed",
+                            error=str(backfill_err),
+                            exc_info=True,
+                        )
 
                 # Daily at 2 AM UTC: archive old data
                 today = now.date()

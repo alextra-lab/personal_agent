@@ -1,3 +1,4 @@
 {"type":"index-pattern","id":"agent-captains-captures-pattern","attributes":{"title":"agent-captains-captures-*","timeFieldName":"timestamp","fields":"[]"},"references":[],"coreMigrationVersion":"8.8.0"}
 {"type":"index-pattern","id":"agent-captains-reflections-pattern","attributes":{"title":"agent-captains-reflections-*","timeFieldName":"timestamp","fields":"[]"},"references":[],"coreMigrationVersion":"8.8.0"}
 {"type":"index-pattern","id":"agent-logs-pattern","attributes":{"title":"agent-logs-*","timeFieldName":"@timestamp","fields":"[]"},"references":[],"coreMigrationVersion":"8.8.0"}
+{"type":"index-pattern","id":"agent-insights-pattern","attributes":{"title":"agent-insights-*","timeFieldName":"timestamp","fields":"[]"},"references":[],"coreMigrationVersion":"8.8.0"}

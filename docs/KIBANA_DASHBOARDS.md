@@ -20,6 +20,7 @@ Task analytics, reflection insights, and system health visibility in Kibana. Thi
 | Task Analytics         | `agent-captains-captures-*`     | Task outcomes, duration by tool, tool frequency, memory usage          |
 | Reflection Insights   | `agent-captains-reflections-*`  | Proposed changes over time, improvement categories, impact, metrics      |
 | System Health         | `agent-logs-*`                  | CPU/memory over time, mode transitions, consolidation, thresholds, memory quality signals |
+| Insights Engine       | `agent-insights-*`              | Insight count by type, confidence trend, anomalies, weekly proposals created |
 
 Dashboard JSON lives in **`config/kibana/dashboards/`**. Import the data views first, then import the dashboards to get complete pre-built visualizations.
 
@@ -75,21 +76,21 @@ curl -X POST "http://localhost:5601/api/saved_objects/_import?overwrite=true" \
   --form file=@config/kibana/dashboards/data_views.ndjson
 ```
 
-After import you should see data views: `agent-captains-captures-*`, `agent-captains-reflections-*`, `agent-logs-*`.
+After import you should see data views: `agent-captains-captures-*`, `agent-captains-reflections-*`, `agent-logs-*`, `agent-insights-*`.
 
 ### 2. Import dashboards
 
 #### Dashboards import (UI)
 
 1. **Stack Management** → **Saved Objects** → **Import**.
-2. Select one or more of: `task_analytics.ndjson`, `reflection_insights.ndjson`, `system_health.ndjson`.
+2. Select one or more of: `task_analytics.ndjson`, `reflection_insights.ndjson`, `system_health.ndjson`, `insights_engine.ndjson`.
 3. Complete the import (overwrite if updating).
 
 #### Dashboards import (API)
 
 ```bash
 # Example: import all three
-for f in task_analytics reflection_insights system_health; do
+for f in task_analytics reflection_insights system_health insights_engine; do
   curl -X POST "http://localhost:5601/api/saved_objects/_import?overwrite=true" \
     -H "kbn-xsrf: true" \
     --form file=@config/kibana/dashboards/${f}.ndjson
@@ -150,6 +151,17 @@ The shipped NDJSON already contains these panels. Use this section as the source
   - `quality_monitor_entity_report`, `quality_monitor_graph_report`, `quality_monitor_anomalies_detected`
   - Note: quality monitor events appear when monitor methods are executed by runtime wiring or manual invocation.
 
+### Insights Engine dashboard
+
+**Data view:** `agent-insights-*`
+
+| Panel title                | Chart type | X / Bucket | Y / Metric | Breakdown / filters | Notes |
+|---------------------------|-----------|-----------|------------|---------------------|--------|
+| Insight count by type     | Bar       | `insight_type` (terms) | Count | Filter: `record_type: insight` | Correlation/trend/optimization/anomaly volume |
+| Confidence trend          | Line      | `timestamp` (date histogram) | Avg of `confidence` | Filter: `record_type: insight` | Tracks insight quality over time |
+| Anomalies                 | Pie       | `title` (terms) | Count | Filter: `record_type: insight and insight_type: anomaly` | Highlights anomaly classes |
+| Weekly proposals created  | Line      | `timestamp` (date histogram) | Sum of `proposals_created` | Filter: `record_type: weekly_summary` | Weekly Captain's Log proposal output |
+
 ---
 
 ## Customizing panels in Kibana
@@ -197,6 +209,9 @@ Quick reference for building Lens panels and KQL filters.
 
 **agent-logs-\***  
 `@timestamp`, `event_type`, `trace_id`, `level`, `message`, and event-specific fields: `from_mode`, `to_mode`, `reason`, `cpu_load`, `memory_used`, `sensor_data`, …
+
+**agent-insights-\***  
+`timestamp`, `record_type`, `insight_type`, `title`, `summary`, `confidence`, `actionable`, `evidence`, `analysis_window_days`, `insights_count`, `proposals_created`, …
 
 ---
 

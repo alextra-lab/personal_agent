@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from personal_agent.brainstem.scheduler import BrainstemScheduler
+from personal_agent.captains_log.es_indexer import set_es_indexer
 from personal_agent.config.settings import get_settings
 from personal_agent.memory.service import MemoryService
 from personal_agent.security import sanitize_error_message
@@ -44,10 +45,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     es_handler = ElasticsearchHandler(settings.elasticsearch_url)
     if await es_handler.connect():
         add_elasticsearch_handler(es_handler)
+        set_es_indexer(es_handler.es_logger.index_document)
         log.info("elasticsearch_logging_enabled")
 
         # Captain's Log → ES indexing (Phase 2.3): pass handler during lifespan
-        from personal_agent.captains_log.capture import set_default_es_handler as set_capture_es_handler
+        from personal_agent.captains_log.capture import (
+            set_default_es_handler as set_capture_es_handler,
+        )
         from personal_agent.captains_log.manager import CaptainLogManager
 
         set_capture_es_handler(es_handler)
@@ -60,8 +64,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await memory_service.connect()
         log.info("memory_service_initialized")
 
-    # Start Brainstem scheduler for second brain (Phase 2.2) and/or data lifecycle (Phase 2.3)
-    if settings.enable_second_brain or settings.data_lifecycle_enabled:
+    # Start Brainstem scheduler for second brain, lifecycle, and/or insights tasks.
+    if settings.enable_second_brain or settings.data_lifecycle_enabled or settings.insights_enabled:
         es_client = es_handler.es_logger.client if (es_handler and getattr(es_handler, "_connected", False)) else None
         scheduler = BrainstemScheduler(lifecycle_es_client=es_client)
         await scheduler.start()
@@ -108,11 +112,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             log.error("mcp_gateway_shutdown_error", error=sanitize_error_message(e), exc_info=True)
 
     if es_handler:
-        from personal_agent.captains_log.capture import set_default_es_handler as set_capture_es_handler
+        from personal_agent.captains_log.capture import (
+            set_default_es_handler as set_capture_es_handler,
+        )
         from personal_agent.captains_log.manager import CaptainLogManager
 
         set_capture_es_handler(None)
         CaptainLogManager.set_default_es_handler(None)
+        set_es_indexer(None)
         await es_handler.disconnect()
 
     if memory_service:

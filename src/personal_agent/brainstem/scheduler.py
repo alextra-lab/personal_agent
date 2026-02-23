@@ -6,10 +6,14 @@ lifecycle tasks (Phase 2.3): hourly disk check, daily archive, weekly purge.
 """
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from personal_agent.brainstem.sensors.sensors import poll_system_metrics
+from personal_agent.captains_log.es_indexer import schedule_es_index
+from personal_agent.captains_log.manager import CaptainLogManager
 from personal_agent.config.settings import get_settings
+from personal_agent.insights import InsightsEngine
+from personal_agent.insights.engine import INSIGHTS_INDEX_PREFIX
 from personal_agent.second_brain.consolidator import SecondBrainConsolidator
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.lifecycle_manager import DataLifecycleManager
@@ -50,8 +54,11 @@ class BrainstemScheduler:
         # Data lifecycle (Phase 2.3)
         self.lifecycler = DataLifecycleManager(es_client=lifecycle_es_client)
         self._last_disk_check: datetime | None = None
-        self._last_archive_date: datetime | None = None
+        self._last_archive_date: date | None = None
         self._last_purge_week: tuple[int, int] | None = None  # (year, week)
+        self.insights_engine = InsightsEngine()
+        self._last_insights_daily_date: datetime | None = None
+        self._last_insights_week: tuple[int, int] | None = None  # (year, week)
 
         # Configuration from settings
         self.idle_time_seconds = getattr(
@@ -65,6 +72,9 @@ class BrainstemScheduler:
         self.min_consolidation_interval_seconds = getattr(
             settings, "second_brain_min_interval_seconds", 3600
         )  # 1 hour
+        self.insights_daily_run_hour_utc = getattr(settings, "insights_daily_run_hour_utc", 6)
+        self.insights_weekly_day = getattr(settings, "insights_weekly_day", 6)
+        self.insights_weekly_run_hour_utc = getattr(settings, "insights_weekly_run_hour_utc", 9)
 
     async def start(self) -> None:
         """Start the scheduler background task."""
@@ -194,13 +204,12 @@ class BrainstemScheduler:
         while self.running:
             try:
                 await asyncio.sleep(LIFECYCLE_CHECK_INTERVAL_SECONDS)
-                if not getattr(settings, "data_lifecycle_enabled", True):
-                    continue
 
                 now = datetime.now(timezone.utc)
+                lifecycle_enabled = getattr(settings, "data_lifecycle_enabled", True)
 
                 # Hourly: disk check (and alert if >80%)
-                if (
+                if lifecycle_enabled and (
                     self._last_disk_check is None
                     or (now - self._last_disk_check).total_seconds() >= DISK_CHECK_INTERVAL_SECONDS
                 ):
@@ -209,14 +218,16 @@ class BrainstemScheduler:
 
                 # Daily at 2 AM UTC: archive old data
                 today = now.date()
-                if now.hour == ARCHIVE_HOUR_UTC and (self._last_archive_date is None or self._last_archive_date != today):
+                if lifecycle_enabled and now.hour == ARCHIVE_HOUR_UTC and (
+                    self._last_archive_date is None or self._last_archive_date != today
+                ):
                     for data_type in ("file_logs", "captains_log_captures", "captains_log_reflections"):
                         await self.lifecycler.archive_old_data(data_type)
                     self._last_archive_date = today
 
                 # Weekly Sunday 3 AM UTC: purge expired + ES cleanup
                 year, week, _ = now.isocalendar()
-                if (
+                if lifecycle_enabled and (
                     now.weekday() == PURGE_WEEKDAY
                     and now.hour == PURGE_HOUR_UTC
                     and (self._last_purge_week is None or self._last_purge_week != (year, week))
@@ -225,6 +236,57 @@ class BrainstemScheduler:
                         await self.lifecycler.purge_expired_data(data_type)
                     await self.lifecycler.cleanup_elasticsearch_indices()
                     self._last_purge_week = (year, week)
+
+                # Daily insights analysis (default 6 AM UTC)
+                if (
+                    getattr(settings, "insights_enabled", True)
+                    and now.hour == self.insights_daily_run_hour_utc
+                    and (
+                        self._last_insights_daily_date is None
+                        or self._last_insights_daily_date.date() != today
+                    )
+                ):
+                    insights = await self.insights_engine.analyze_patterns(days=7)
+                    self._last_insights_daily_date = now
+                    log.info("insights_daily_analysis_completed", insights_count=len(insights))
+
+                # Weekly insights -> Captain's Log proposals (default Sunday 9 AM UTC)
+                if (
+                    getattr(settings, "insights_enabled", True)
+                    and now.weekday() == self.insights_weekly_day
+                    and now.hour == self.insights_weekly_run_hour_utc
+                    and (
+                        self._last_insights_week is None
+                        or self._last_insights_week != (year, week)
+                    )
+                ):
+                    insights = await self.insights_engine.analyze_patterns(days=7)
+                    proposals = await self.insights_engine.create_captain_log_proposals(insights)
+                    manager = CaptainLogManager()
+                    for proposal in proposals:
+                        manager.save_entry(proposal)
+                    summary_doc = {
+                        "timestamp": now.isoformat(),
+                        "record_type": "weekly_summary",
+                        "insight_type": "weekly_proposals",
+                        "title": "Weekly insights proposal batch",
+                        "summary": "Weekly insights converted into Captain's Log config proposals.",
+                        "confidence": 1.0,
+                        "actionable": True,
+                        "insights_count": len(insights),
+                        "proposals_created": len(proposals),
+                        "analysis_window_days": 7,
+                    }
+                    schedule_es_index(
+                        index_name=f"{INSIGHTS_INDEX_PREFIX}-{now.strftime('%Y-%m-%d')}",
+                        document=summary_doc,
+                    )
+                    self._last_insights_week = (year, week)
+                    log.info(
+                        "insights_weekly_proposals_created",
+                        insights_count=len(insights),
+                        proposal_count=len(proposals),
+                    )
 
             except Exception as e:
                 log.error(

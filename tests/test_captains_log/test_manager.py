@@ -25,41 +25,42 @@ class TestEntryIDGeneration:
         """Test that entry IDs follow the correct format."""
         entry_id = _generate_entry_id()
         assert entry_id.startswith("CL-")
-        # Format: CL-YYYY-MM-DD-NNN (5 parts when split by "-")
+        # Format: CL-YYYYMMDD-HHMMSS-NNN (4 parts when split by "-")
         parts = entry_id.split("-")
-        assert len(parts) == 5  # CL, YYYY, MM, DD, NNN
+        assert len(parts) == 4  # CL, YYYYMMDD, HHMMSS, NNN
         assert parts[0] == "CL"
-        assert len(parts[1]) == 4  # Year
-        assert len(parts[4]) == 3  # Sequence number
+        assert len(parts[1]) == 8  # YYYYMMDD
+        assert len(parts[2]) == 6  # HHMMSS
+        assert len(parts[3]) == 3  # Sequence number
 
     def test_generate_entry_id_sequence(self, tmp_path: pathlib.Path) -> None:
         """Test that entry IDs increment correctly."""
         log_dir = tmp_path / "captains_log"
         log_dir.mkdir()
 
-        # Create some existing entries
-        (log_dir / "CL-2025-12-28-001-test.yaml").write_text("test")
-        (log_dir / "CL-2025-12-28-002-test.yaml").write_text("test")
+        # Create some existing entries for the same timestamp prefix
+        (log_dir / "CL-20251228-000000-001-test.json").write_text("test")
+        (log_dir / "CL-20251228-000000-002-test.json").write_text("test")
 
         with patch(
             "personal_agent.captains_log.manager._get_captains_log_dir", return_value=log_dir
         ):
             entry_id = _generate_entry_id(datetime(2025, 12, 28, tzinfo=timezone.utc))
-            assert entry_id == "CL-2025-12-28-003"
+            assert entry_id == "CL-20251228-000000-003"
 
     def test_generate_entry_id_new_date(self, tmp_path: pathlib.Path) -> None:
         """Test that entry IDs reset for new dates."""
         log_dir = tmp_path / "captains_log"
         log_dir.mkdir()
 
-        # Create entries for previous date
-        (log_dir / "CL-2025-12-27-999-test.yaml").write_text("test")
+        # Create entries for previous date prefix
+        (log_dir / "CL-20251227-000000-999-test.json").write_text("test")
 
         with patch(
             "personal_agent.captains_log.manager._get_captains_log_dir", return_value=log_dir
         ):
             entry_id = _generate_entry_id(datetime(2025, 12, 28, tzinfo=timezone.utc))
-            assert entry_id == "CL-2025-12-28-001"
+            assert entry_id == "CL-20251228-000000-001"
 
 
 class TestFilenameSanitization:
@@ -281,10 +282,10 @@ class TestCaptainLogManager:
             assert call_args[1]["type"] == "reflection"
             assert call_args[1]["title"] == "Test Reflection"
 
-    def test_write_entry_non_reflection_does_not_call_es_index(
+    def test_write_entry_config_proposal_calls_es_index(
         self, tmp_path: pathlib.Path
     ) -> None:
-        """Writing a non-reflection entry does not call schedule_es_index."""
+        """Writing a config proposal entry also calls schedule_es_index."""
         log_dir = tmp_path / "captains_log"
         manager = CaptainLogManager(log_dir=log_dir)
         entry = CaptainLogEntry(
@@ -292,9 +293,14 @@ class TestCaptainLogManager:
             type=CaptainLogEntryType.CONFIG_PROPOSAL,
             title="Config proposal",
             rationale="Test",
+            timestamp=datetime(2026, 2, 22, 12, 0, 0, tzinfo=timezone.utc),
         )
         with patch(
             "personal_agent.captains_log.manager.schedule_es_index"
         ) as mock_schedule:
             manager.write_entry(entry)
-            mock_schedule.assert_not_called()
+            mock_schedule.assert_called_once()
+            call_args = mock_schedule.call_args[0]
+            assert call_args[0] == "agent-captains-reflections-2026-02-22"
+            assert isinstance(call_args[1], dict)
+            assert call_args[1]["type"] == "config_proposal"

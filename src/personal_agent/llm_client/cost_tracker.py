@@ -20,7 +20,7 @@ class CostTrackerService:
     def __init__(self) -> None:
         """Initialize cost tracker service."""
         self.pool: asyncpg.Pool | None = None
-        self.db_url = settings.database_url
+        self.db_url = _normalize_asyncpg_dsn(settings.database_url)
 
     async def connect(self) -> None:
         """Connect to PostgreSQL database."""
@@ -243,3 +243,19 @@ class CostTrackerService:
         except Exception as e:
             log.error("purpose_cost_fetch_failed", error=str(e), exc_info=True)
             return {}
+
+
+def _normalize_asyncpg_dsn(database_url: str) -> str:
+    """Normalize SQLAlchemy-style URLs to asyncpg-compatible DSNs.
+
+    Args:
+        database_url: Raw database URL from app settings.
+
+    Returns:
+        DSN accepted by asyncpg.
+    """
+    if database_url.startswith("postgresql+asyncpg://"):
+        return database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    if database_url.startswith("postgres+asyncpg://"):
+        return database_url.replace("postgres+asyncpg://", "postgres://", 1)
+    return database_url

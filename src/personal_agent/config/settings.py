@@ -5,9 +5,9 @@ This module provides the AppConfig class and settings singleton.
 
 from pathlib import Path
 
+import structlog
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-import structlog
 
 from personal_agent.config.env_loader import Environment, get_environment, load_env_files
 from personal_agent.config.validators import (
@@ -15,6 +15,7 @@ from personal_agent.config.validators import (
     validate_log_format,
     validate_log_level,
 )
+
 log = structlog.get_logger(__name__)
 
 
@@ -256,6 +257,30 @@ class AppConfig(BaseSettings):
     data_lifecycle_enabled: bool = Field(
         default=True,
         description="Enable automated retention, archive, and purge",
+    )
+
+    # Insights Engine (Phase 2.3, FRE-24)
+    insights_enabled: bool = Field(
+        default=True,
+        description="Enable proactive insights analysis and proposal generation",
+    )
+    insights_daily_run_hour_utc: int = Field(
+        default=6,
+        ge=0,
+        le=23,
+        description="UTC hour for daily insights analysis",
+    )
+    insights_weekly_day: int = Field(
+        default=6,
+        ge=0,
+        le=6,
+        description="Weekday for weekly proposals (0=Monday, 6=Sunday)",
+    )
+    insights_weekly_run_hour_utc: int = Field(
+        default=9,
+        ge=0,
+        le=23,
+        description="UTC hour for weekly Captain's Log insight proposals",
     )
 
 

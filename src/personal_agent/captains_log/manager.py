@@ -176,8 +176,9 @@ class CaptainLogManager:
             file_path=str(file_path),
         )
 
-        # Optional ES indexing for reflections (Phase 2.3): non-blocking, best-effort
-        if entry.type == CaptainLogEntryType.REFLECTION:
+        # Optional ES indexing for reflections and config proposals (Phase 2.3/FRE-24):
+        # non-blocking, best-effort.
+        if entry.type in {CaptainLogEntryType.REFLECTION, CaptainLogEntryType.CONFIG_PROPOSAL}:
             date_str = entry.timestamp.strftime("%Y-%m-%d")
             index_name = f"{REFLECTIONS_INDEX_PREFIX}-{date_str}"
             doc = entry.model_dump(mode="json")

@@ -36,6 +36,7 @@ build/
 *.code-workspace
 
 # Logs
+telemetry/archive/
 telemetry/logs/
 *.log
 *.jsonl

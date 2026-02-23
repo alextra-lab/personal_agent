@@ -143,6 +143,7 @@ The shipped NDJSON already contains these panels. Use this section as the source
 | Mode transitions        | Table or Timeline | @timestamp                 | —                       | Filter: mode_transition    | Columns: from_mode, to_mode, reason    |
 | Consolidation triggers  | Count / Table     | event_type (terms)         | Count                   | Filter: consolidation_*    | Or one panel per event_type            |
 | Threshold violations    | Count or Table    | —                          | Count                   | Filter: threshold/violations | Or use reflections metrics_structured  |
+| Quality monitor events  | Bar or Table      | event_type (terms)         | Count                   | Filter: `quality_monitor_*` | Daily quality pass + anomaly detections |
 
 - Agent-logs events include `event_type`, `@timestamp`, and event-specific fields (e.g. `from_mode`, `to_mode`, `cpu_load`, `memory_used`). Adjust field names to match your ES logger payload.
 - For CPU/memory over time, use the same event_type filter and average numeric fields; Lens will suggest date histogram on `@timestamp`.

@@ -7,6 +7,7 @@ lifecycle tasks (Phase 2.3): hourly disk check, daily archive, weekly purge.
 
 import asyncio
 from datetime import date, datetime, timezone
+from typing import TYPE_CHECKING, cast
 
 from personal_agent.brainstem.sensors.sensors import poll_system_metrics
 from personal_agent.captains_log.es_indexer import schedule_es_index
@@ -14,9 +15,15 @@ from personal_agent.captains_log.manager import CaptainLogManager
 from personal_agent.config.settings import get_settings
 from personal_agent.insights import InsightsEngine
 from personal_agent.insights.engine import INSIGHTS_INDEX_PREFIX
+from personal_agent.memory.service import MemoryService
 from personal_agent.second_brain.consolidator import SecondBrainConsolidator
+from personal_agent.second_brain.quality_monitor import ConsolidationQualityMonitor
 from personal_agent.telemetry import get_logger
+from personal_agent.telemetry.queries import TelemetryQueries
 from personal_agent.telemetry.lifecycle_manager import DataLifecycleManager
+
+if TYPE_CHECKING:
+    from elasticsearch import AsyncElasticsearch
 
 log = get_logger(__name__)
 settings = get_settings()
@@ -49,12 +56,16 @@ class BrainstemScheduler:
         self,
         lifecycle_es_client: object | None = None,
         backfill_es_logger: object | None = None,
+        memory_service: MemoryService | None = None,
+        quality_monitor: ConsolidationQualityMonitor | None = None,
     ) -> None:  # noqa: D107
         """Initialize scheduler with consolidation thresholds and optional lifecycle ES client."""
         self.running = False
         self.consolidator: SecondBrainConsolidator | None = None
         self.last_consolidation: datetime | None = None
         self.last_request_time: datetime | None = None
+        self._monitoring_task: asyncio.Task[None] | None = None
+        self._lifecycle_task: asyncio.Task[None] | None = None
 
         # Data lifecycle (Phase 2.3)
         self.lifecycler = DataLifecycleManager(es_client=lifecycle_es_client)
@@ -66,6 +77,13 @@ class BrainstemScheduler:
         self.insights_engine = InsightsEngine()
         self._last_insights_daily_date: datetime | None = None
         self._last_insights_week: tuple[int, int] | None = None  # (year, week)
+        self._last_quality_check_date: date | None = None
+        self.quality_monitor = quality_monitor or ConsolidationQualityMonitor(
+            memory_service=memory_service,
+            telemetry_queries=TelemetryQueries(
+                es_client=cast("AsyncElasticsearch | None", lifecycle_es_client)
+            ),
+        )
 
         # Configuration from settings
         self.idle_time_seconds = getattr(
@@ -82,6 +100,13 @@ class BrainstemScheduler:
         self.insights_daily_run_hour_utc = getattr(settings, "insights_daily_run_hour_utc", 6)
         self.insights_weekly_day = getattr(settings, "insights_weekly_day", 6)
         self.insights_weekly_run_hour_utc = getattr(settings, "insights_weekly_run_hour_utc", 9)
+        self.quality_monitor_enabled = getattr(settings, "quality_monitor_enabled", True)
+        self.quality_monitor_daily_run_hour_utc = getattr(
+            settings, "quality_monitor_daily_run_hour_utc", 5
+        )
+        self.quality_monitor_anomaly_window_days = getattr(
+            settings, "quality_monitor_anomaly_window_days", 7
+        )
 
     async def start(self) -> None:
         """Start the scheduler background task."""
@@ -93,13 +118,28 @@ class BrainstemScheduler:
         log.info("brainstem_scheduler_started")
 
         # Start background monitoring loop
-        asyncio.create_task(self._monitoring_loop())
+        self._monitoring_task = asyncio.create_task(self._monitoring_loop())
         # Data lifecycle loop (hourly disk check, daily archive, weekly purge)
-        asyncio.create_task(self._lifecycle_loop())
+        self._lifecycle_task = asyncio.create_task(self._lifecycle_loop())
 
     async def stop(self) -> None:
         """Stop the scheduler."""
         self.running = False
+        pending_tasks = [
+            task
+            for task in (self._monitoring_task, self._lifecycle_task)
+            if task is not None and not task.done()
+        ]
+        for task in pending_tasks:
+            task.cancel()
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
+        self._monitoring_task = None
+        self._lifecycle_task = None
+
+        queries = getattr(self.quality_monitor, "_queries", None)
+        if isinstance(queries, TelemetryQueries):
+            await queries.disconnect()
         log.info("brainstem_scheduler_stopped")
 
     def record_request(self) -> None:
@@ -122,6 +162,8 @@ class BrainstemScheduler:
                 if await self._should_consolidate():
                     await self._trigger_consolidation()
 
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 log.error(
                     "scheduler_monitoring_loop_error",
@@ -312,9 +354,51 @@ class BrainstemScheduler:
                         proposal_count=len(proposals),
                     )
 
+                # Daily quality monitoring (FRE-32)
+                if self.quality_monitor_enabled and (
+                    now.hour == self.quality_monitor_daily_run_hour_utc
+                    and (
+                        self._last_quality_check_date is None
+                        or self._last_quality_check_date != today
+                    )
+                ):
+                    await self._run_quality_monitoring()
+                    self._last_quality_check_date = today
+
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 log.error(
                     "lifecycle_loop_error",
                     error=str(e),
                     exc_info=True,
                 )
+
+    async def _run_quality_monitoring(self) -> None:
+        """Run quality monitor checks without breaking scheduler loops."""
+        try:
+            await self.quality_monitor.check_entity_extraction_quality(
+                days=self.quality_monitor_anomaly_window_days
+            )
+        except Exception as e:
+            log.warning("quality_monitor_entity_check_failed", error=str(e), exc_info=True)
+
+        try:
+            await self.quality_monitor.check_graph_health()
+        except Exception as e:
+            log.warning("quality_monitor_graph_check_failed", error=str(e), exc_info=True)
+
+        anomalies_count = 0
+        try:
+            anomalies = await self.quality_monitor.detect_anomalies(
+                days=self.quality_monitor_anomaly_window_days
+            )
+            anomalies_count = len(anomalies)
+        except Exception as e:
+            log.warning("quality_monitor_anomaly_check_failed", error=str(e), exc_info=True)
+
+        log.info(
+            "quality_monitor_run_completed",
+            anomalies_count=anomalies_count,
+            days=self.quality_monitor_anomaly_window_days,
+        )

@@ -74,10 +74,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         log.info("memory_service_initialized")
 
     # Start Brainstem scheduler for second brain, lifecycle, and/or insights tasks.
-    if settings.enable_second_brain or settings.data_lifecycle_enabled or settings.insights_enabled:
+    if (
+        settings.enable_second_brain
+        or settings.data_lifecycle_enabled
+        or settings.insights_enabled
+        or getattr(settings, "quality_monitor_enabled", True)
+    ):
         es_client = es_handler.es_logger.client if (es_handler and getattr(es_handler, "_connected", False)) else None
         backfill_logger = es_handler.es_logger if (es_handler and getattr(es_handler, "_connected", False)) else None
-        scheduler = BrainstemScheduler(lifecycle_es_client=es_client, backfill_es_logger=backfill_logger)
+        scheduler = BrainstemScheduler(
+            lifecycle_es_client=es_client,
+            backfill_es_logger=backfill_logger,
+            memory_service=memory_service,
+        )
         await scheduler.start()
         log.info("brainstem_scheduler_started")
 

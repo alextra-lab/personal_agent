@@ -339,3 +339,48 @@ class TestMonitoringLoop:
 
                     # Should trigger at least once
                     assert mock_trigger.call_count >= 1
+
+
+@pytest.mark.asyncio
+class TestQualityMonitorScheduling:
+    """Test quality monitor scheduling and error handling."""
+
+    async def test_lifecycle_loop_triggers_quality_monitor_daily(self, scheduler):
+        """Lifecycle loop runs quality monitor once per configured day/hour."""
+        scheduler.running = True
+        scheduler._last_quality_check_date = None
+        scheduler.quality_monitor_daily_run_hour_utc = datetime.now(timezone.utc).hour
+        scheduler._backfill_es_logger = None
+        scheduler._last_disk_check = datetime.now(timezone.utc)
+
+        async def stop_after_first_sleep(_: float) -> None:
+            scheduler.running = False
+
+        with (
+            patch("personal_agent.brainstem.scheduler.asyncio.sleep", new=stop_after_first_sleep),
+            patch("personal_agent.brainstem.scheduler.settings") as mock_settings,
+            patch.object(scheduler, "_run_quality_monitoring", new=AsyncMock()) as mock_quality,
+        ):
+            mock_settings.data_lifecycle_enabled = False
+            mock_settings.insights_enabled = False
+
+            await scheduler._lifecycle_loop()
+            mock_quality.assert_awaited_once()
+
+    async def test_run_quality_monitoring_continues_after_component_failure(self, scheduler):
+        """Quality monitor failures are isolated and do not crash scheduler execution."""
+        scheduler.quality_monitor.check_entity_extraction_quality = AsyncMock(
+            side_effect=Exception("entity check failed")
+        )
+        scheduler.quality_monitor.check_graph_health = AsyncMock(
+            return_value=object()
+        )
+        scheduler.quality_monitor.detect_anomalies = AsyncMock(
+            return_value=[object(), object()]
+        )
+
+        await scheduler._run_quality_monitoring()
+
+        scheduler.quality_monitor.check_entity_extraction_quality.assert_awaited_once()
+        scheduler.quality_monitor.check_graph_health.assert_awaited_once()
+        scheduler.quality_monitor.detect_anomalies.assert_awaited_once()

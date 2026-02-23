@@ -259,6 +259,24 @@ class AppConfig(BaseSettings):
         description="Enable automated retention, archive, and purge",
     )
 
+    # Consolidation Quality Monitor (Phase 2.3, FRE-32)
+    quality_monitor_enabled: bool = Field(
+        default=True,
+        description="Enable scheduled consolidation quality monitoring",
+    )
+    quality_monitor_daily_run_hour_utc: int = Field(
+        default=5,
+        ge=0,
+        le=23,
+        description="UTC hour for daily quality monitor pass",
+    )
+    quality_monitor_anomaly_window_days: int = Field(
+        default=7,
+        ge=1,
+        le=30,
+        description="Window in days used for quality anomaly detection",
+    )
+
     # Insights Engine (Phase 2.3, FRE-24)
     insights_enabled: bool = Field(
         default=True,

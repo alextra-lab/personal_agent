@@ -37,6 +37,7 @@ class Orchestrator:
         user_message: str,
         mode: Mode | None = None,
         channel: Channel | None = None,
+        trace_id: str | None = None,
     ) -> OrchestratorResult:
         """Top-level entrypoint for a single user turn.
 
@@ -49,6 +50,8 @@ class Orchestrator:
             mode: Optional operational mode. If None, queries brainstem
                 for current mode.
             channel: Optional communication channel. If None, defaults to CHAT.
+            trace_id: Optional trace ID from the entry point (e.g. service/CLI).
+                If provided, used for request-to-reply latency tracing.
 
         Returns:
             OrchestratorResult with reply, steps, and trace_id.
@@ -69,8 +72,11 @@ class Orchestrator:
             self.session_manager.create_session(mode, channel, session_id=session_id)
             session = self.session_manager.get_session(session_id)
 
-        # Create trace context
-        trace_ctx = TraceContext.new_trace()
+        # Use provided trace_id for request-to-reply tracing, or create new
+        if trace_id is not None:
+            trace_ctx = TraceContext(trace_id=trace_id)
+        else:
+            trace_ctx = TraceContext.new_trace()
 
         # Create execution context
         ctx = ExecutionContext(

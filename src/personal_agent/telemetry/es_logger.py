@@ -285,7 +285,40 @@ class ElasticsearchLogger:
                 document=doc,
                 id=trace_id,
             )
-            return str(result["_id"])
+            doc_id = str(result["_id"])
+
+            # Index one flat doc per phase so Kibana can aggregate without nested agg
+            ts = datetime.utcnow().isoformat()
+            for row in phases_payload:
+                phase_name = row.get("phase")
+                dur = row.get("duration_ms")
+                if phase_name is None:
+                    continue
+                flat_doc: dict[str, Any] = {
+                    "@timestamp": ts,
+                    "event_type": "request_latency_phase",
+                    "trace_id": trace_id,
+                    "session_id": session_id,
+                    "phase": phase_name,
+                    "duration_ms": dur,
+                }
+                flat_id = f"{trace_id}_{phase_name}"
+                try:
+                    await self.client.index(
+                        index=index_name,
+                        document=flat_doc,
+                        id=flat_id,
+                    )
+                except Exception as flat_e:
+                    log.warning(
+                        "elasticsearch_index_failed",
+                        index=index_name,
+                        event="request_latency_phase",
+                        phase=phase_name,
+                        error=str(flat_e),
+                    )
+
+            return doc_id
         except Exception as e:
             log.warning(
                 "elasticsearch_index_failed",

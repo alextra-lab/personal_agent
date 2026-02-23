@@ -29,6 +29,7 @@ from personal_agent.telemetry import (
     MODEL_CALL_ERROR,
     MODEL_CALL_STARTED,
     ORCHESTRATOR_FATAL_ERROR,
+    REPLY_READY,
     STATE_TRANSITION,
     STEP_EXECUTED,
     TASK_COMPLETED,
@@ -1644,6 +1645,12 @@ async def execute_task_safe(
                 }
             )
 
+        log.info(
+            REPLY_READY,
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            reply_length=len(result["reply"]),
+        )
         return result
 
     except Exception as e:
@@ -1654,6 +1661,13 @@ async def execute_task_safe(
         )
         # Return error result with sanitized message
         sanitized_error = sanitize_error_message(e)
+        log.info(
+            REPLY_READY,
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            reply_length=0,
+            fatal_error=True,
+        )
         return {
             "reply": "Critical error occurred. The agent is recovering.",
             "steps": [

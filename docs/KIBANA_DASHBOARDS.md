@@ -21,6 +21,7 @@ Task analytics, reflection insights, and system health visibility in Kibana. Thi
 | Reflection Insights   | `agent-captains-reflections-*`  | Proposed changes over time, improvement categories, impact, metrics      |
 | System Health         | `agent-logs-*`                  | CPU/memory over time, mode transitions, consolidation, thresholds, memory quality signals |
 | Insights Engine       | `agent-insights-*`              | Insight count by type, confidence trend, anomalies, weekly proposals created |
+| Request Latency       | `agent-logs-*`                  | Request-to-reply latency by phase, total/P95 over time, trace table     |
 
 Dashboard JSON lives in **`config/kibana/dashboards/`**. Import the data views first, then import the dashboards to get complete pre-built visualizations.
 
@@ -83,14 +84,14 @@ After import you should see data views: `agent-captains-captures-*`, `agent-capt
 #### Dashboards import (UI)
 
 1. **Stack Management** → **Saved Objects** → **Import**.
-2. Select one or more of: `task_analytics.ndjson`, `reflection_insights.ndjson`, `system_health.ndjson`, `insights_engine.ndjson`.
+2. Select one or more of: `task_analytics.ndjson`, `reflection_insights.ndjson`, `system_health.ndjson`, `insights_engine.ndjson`, `request_latency.ndjson`.
 3. Complete the import (overwrite if updating).
 
 #### Dashboards import (API)
 
 ```bash
 # Example: import all three
-for f in task_analytics reflection_insights system_health insights_engine; do
+for f in task_analytics reflection_insights system_health insights_engine request_latency; do
   curl -X POST "http://localhost:5601/api/saved_objects/_import?overwrite=true" \
     -H "kbn-xsrf: true" \
     --form file=@config/kibana/dashboards/${f}.ndjson
@@ -162,6 +163,23 @@ The shipped NDJSON already contains these panels. Use this section as the source
 | Confidence trend          | Line      | `timestamp` (date histogram) | Avg of `confidence` | Filter: `record_type: insight` | Tracks insight quality over time |
 | Anomalies                 | Pie       | `title` (terms) | Count | Filter: `record_type: insight and insight_type: anomaly` | Highlights anomaly classes |
 | Weekly proposals created  | Line      | `timestamp` (date histogram) | Sum of `proposals_created` | Filter: `record_type: weekly_summary` | Weekly Captain's Log proposal output |
+
+### Request Latency dashboard
+
+**Data view:** `agent-logs-*` (filter: `event_type: request_latency_breakdown`)
+
+Request-to-reply latency is indexed by the service after each `/chat` request completes (see telemetry latency breakdown). Each document has `total_duration_ms` and a nested `phases` array (phase name, `duration_ms`, description) so you can see which step (init, planning, llm_call, tool_execution, synthesis, etc.) dominates.
+
+| Panel title                    | Chart type | X / Bucket | Y / Metric | Notes |
+|--------------------------------|-----------|------------|------------|--------|
+| Avg duration by phase          | Bar       | `phases.phase` (nested terms) | Avg of `phases.duration_ms` | Which phase takes the most time on average |
+| Total request-to-reply over time | Line    | @timestamp (date histogram) | Avg of `total_duration_ms` | Trend of mean latency |
+| Request count                  | Metric    | —          | Count      | Completed requests in range |
+| P95 request-to-reply over time | Line     | @timestamp (date histogram) | 95th percentile of `total_duration_ms` | Tail latency trend |
+| Latency by trace               | Table     | `trace_id` (terms) | Avg of `total_duration_ms` | Drill down by trace |
+
+- **Getting data:** Run the Personal Agent service with Elasticsearch enabled; send chat requests to `/chat`. Each completed request writes one `request_latency_breakdown` document to `agent-logs-*`. Use the global time picker to scope the dashboard.
+- **Index mapping:** The `agent-logs-*` index template includes `total_duration_ms` (float) and `phases` (nested). If you added the dashboard before updating the template, run `./scripts/setup-elasticsearch.sh` so new indices get the mapping; existing indices keep the old mapping until the next day’s index is created.
 
 ---
 

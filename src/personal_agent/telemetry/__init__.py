@@ -24,6 +24,8 @@ from personal_agent.telemetry.events import (
     MODEL_CALL_STARTED,
     ORCHESTRATOR_FATAL_ERROR,
     POLICY_VIOLATION,
+    REPLY_READY,
+    REQUEST_RECEIVED,
     SENSOR_POLL,
     SESSION_CLOSED,
     SESSION_CREATED,
@@ -43,6 +45,7 @@ from personal_agent.telemetry.logger import add_elasticsearch_handler, configure
 from personal_agent.telemetry.metrics import (
     get_recent_cpu_load,
     get_recent_event_count,
+    get_request_latency_breakdown,
     get_trace_events,
     query_events,
 )
@@ -63,6 +66,7 @@ __all__ = [
     # Metrics and queries
     "get_recent_event_count",
     "get_recent_cpu_load",
+    "get_request_latency_breakdown",
     "get_trace_events",
     "query_events",
     "TelemetryQueries",
@@ -70,6 +74,8 @@ __all__ = [
     "ConsolidationEvent",
     "TaskPatternReport",
     # Event constants
+    "REQUEST_RECEIVED",
+    "REPLY_READY",
     "TASK_STARTED",
     "TASK_COMPLETED",
     "TASK_FAILED",

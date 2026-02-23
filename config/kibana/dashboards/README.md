@@ -8,6 +8,8 @@ This folder holds Kibana saved objects for Phase 2.3 dashboards.
 - **task_analytics.ndjson** — Task Analytics dashboard (task outcomes, duration by tool, tool frequency, memory usage).
 - **reflection_insights.ndjson** — Reflection Insights dashboard (proposed changes over time, improvement categories, impact, metrics).
 - **system_health.ndjson** — System Health dashboard (CPU/memory timeline, mode transitions, consolidation, threshold violations).
+- **insights_engine.ndjson** — Insights Engine dashboard (insight count by type, confidence trend, anomalies).
+- **request_latency.ndjson** — Request Latency dashboard (request-to-reply latency by phase, total/P95 over time, trace table).
 
 ## Import
 

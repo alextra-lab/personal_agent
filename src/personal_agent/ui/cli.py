@@ -15,10 +15,18 @@ from rich.markdown import Markdown
 from rich.table import Table
 
 from personal_agent.orchestrator import Channel, Orchestrator, OrchestratorResult
-from personal_agent.telemetry import get_trace_events, query_events
+from personal_agent.telemetry import (
+    REQUEST_RECEIVED,
+    get_logger,
+    get_request_latency_breakdown,
+    get_trace_events,
+    query_events,
+)
+from personal_agent.telemetry.trace import TraceContext
 
 app = typer.Typer(help="Personal AI Agent - Local AI collaborator")
 console = Console()
+log = get_logger(__name__)
 
 # Create telemetry subcommand group
 telemetry_app = typer.Typer(help="Telemetry analysis and query tools")
@@ -78,6 +86,15 @@ async def _handle_request(
     # Initialize MCP gateway once (idempotent - won't re-initialize if already connected)
     await _initialize_mcp_gateway()
 
+    trace_ctx = TraceContext.new_trace()
+    log.info(
+        REQUEST_RECEIVED,
+        trace_id=trace_ctx.trace_id,
+        entry="cli",
+        session_id=session_id,
+        message_length=len(user_message),
+    )
+
     orchestrator = Orchestrator()
     # Query current mode from brainstem (orchestrator will query if None)
     result = await orchestrator.handle_user_request(
@@ -85,6 +102,7 @@ async def _handle_request(
         user_message=user_message,
         mode=None,  # Will query brainstem automatically
         channel=channel,
+        trace_id=trace_ctx.trace_id,
     )
 
     # Check if there are background tasks (like Captain's Log reflection)
@@ -237,6 +255,66 @@ def telemetry_trace(
 
             console.print(table)
 
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
+
+@telemetry_app.command("trace-breakdown")
+def telemetry_trace_breakdown(
+    trace_id: str = typer.Argument(..., help="Trace ID for latency breakdown"),
+    json_output: bool = typer.Option(
+        False, "--json", help="Output as JSON instead of table"
+    ),
+) -> None:
+    """Show request-to-reply latency breakdown for a trace_id.
+
+    Traces from request_received to reply_ready and breaks down time by phase:
+    entry_to_task, init, planning, llm_call, tool_execution, synthesis,
+    task_to_reply. Use this to see which step is taking the most time.
+
+    Examples:
+        agent telemetry trace-breakdown abc-123-def-456
+        agent telemetry trace-breakdown abc-123-def-456 --json
+    """
+    try:
+        breakdown = get_request_latency_breakdown(trace_id)
+
+        if not breakdown:
+            console.print(
+                f"[yellow]No latency breakdown for trace_id: {trace_id}. "
+                "Ensure the trace has request_received and reply_ready events "
+                "(run a request after this change), or use 'agent telemetry trace' "
+                "to inspect raw log entries.[/yellow]"
+            )
+            raise typer.Exit(0)
+
+        if json_output:
+            console.print(json.dumps(breakdown, indent=2))
+        else:
+            console.print(
+                f"\n[bold blue]Request-to-reply latency breakdown: {trace_id}[/bold blue]\n"
+            )
+            table = Table(title="Phase durations")
+            table.add_column("Phase", style="cyan")
+            table.add_column("Duration (ms)", style="green")
+            table.add_column("Description", style="white", overflow="fold")
+            for row in breakdown:
+                phase = row.get("phase", "")
+                dur = row.get("duration_ms")
+                desc = row.get("description", "")
+                dur_str = f"{dur:.2f}" if dur is not None else "—"
+                table.add_row(phase, dur_str, desc)
+            console.print(table)
+            total = next(
+                (r["duration_ms"] for r in breakdown if r.get("phase") == "total_request_to_reply"),
+                None,
+            )
+            if total is not None:
+                console.print(f"\n[bold]Total request → reply: {total:.2f} ms[/bold]")
+
+    except typer.Exit:
+        raise
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e

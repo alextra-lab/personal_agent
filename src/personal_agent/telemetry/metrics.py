@@ -216,6 +216,166 @@ def get_recent_cpu_load(window_seconds: int) -> list[float]:
     return cpu_loads
 
 
+def _parse_ts(entry: dict[str, Any]) -> datetime | None:
+    """Parse timestamp from a log entry. Returns None if missing or invalid."""
+    ts = entry.get("timestamp")
+    if not ts:
+        return None
+    try:
+        if isinstance(ts, datetime):
+            return ts
+        if isinstance(ts, str):
+            # ISO format with optional Z or +00:00
+            if ts.endswith("Z"):
+                ts = ts[:-1] + "+00:00"
+            return datetime.fromisoformat(ts)
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+def get_request_latency_breakdown(trace_id: str) -> list[dict[str, Any]]:
+    """Compute request-to-reply latency breakdown from trace logs.
+
+    Uses events: request_received, task_started, state_transition (from_state),
+    task_completed/task_failed, reply_ready to build a phased timeline. Each
+    phase has start_time, end_time, and duration_ms so you can see what took
+    the most time.
+
+    Args:
+        trace_id: Trace identifier (from a completed request).
+
+    Returns:
+        List of phase dicts with keys: phase, start_time (ISO str), end_time
+        (ISO str or None for point events), duration_ms (float or None for
+        point events). Phases: entry_to_task, init, planning, llm_call,
+        tool_execution, synthesis, task_to_reply, and optionally request_received
+        / reply_ready as markers.
+    """
+    from personal_agent.telemetry.events import (
+        REPLY_READY,
+        REQUEST_RECEIVED,
+        TASK_COMPLETED,
+        TASK_FAILED,
+        TASK_STARTED,
+        STATE_TRANSITION,
+    )
+
+    entries = get_trace_events(trace_id)
+    if not entries:
+        return []
+
+    breakdown: list[dict[str, Any]] = []
+
+    def ts_str(d: datetime | None) -> str:
+        return d.isoformat() if d else ""
+
+    # Find key events (first occurrence each)
+    request_ts: datetime | None = None
+    task_start_ts: datetime | None = None
+    task_end_ts: datetime | None = None
+    reply_ts: datetime | None = None
+    state_starts: list[tuple[str, datetime]] = []  # (from_state, ts)
+
+    for e in entries:
+        ev = e.get("event")
+        t = _parse_ts(e)
+        if not t:
+            continue
+        if ev == REQUEST_RECEIVED and request_ts is None:
+            request_ts = t
+        elif ev == TASK_STARTED and task_start_ts is None:
+            task_start_ts = t
+        elif ev == STATE_TRANSITION:
+            from_state = e.get("from_state")
+            if from_state:
+                state_starts.append((str(from_state), t))
+        elif ev in (TASK_COMPLETED, TASK_FAILED) and task_end_ts is None:
+            task_end_ts = t
+        elif ev == REPLY_READY and reply_ts is None:
+            reply_ts = t
+
+    # Build entry_to_task phase (request_received -> task_started)
+    if request_ts and task_start_ts:
+        dur = (task_start_ts - request_ts).total_seconds() * 1000
+        breakdown.append(
+            {
+                "phase": "entry_to_task",
+                "start_time": ts_str(request_ts),
+                "end_time": ts_str(task_start_ts),
+                "duration_ms": round(dur, 2),
+                "description": "Request received until task started (session/mode setup)",
+            }
+        )
+    elif request_ts:
+        breakdown.append(
+            {
+                "phase": "request_received",
+                "start_time": ts_str(request_ts),
+                "end_time": None,
+                "duration_ms": None,
+                "description": "Request received (no task_started in trace)",
+            }
+        )
+
+    # Build per-state phases from consecutive state_transition events
+    for i, (from_state, start_dt) in enumerate(state_starts):
+        end_dt: datetime | None = None
+        if i + 1 < len(state_starts):
+            end_dt = state_starts[i + 1][1]
+        elif task_end_ts:
+            end_dt = task_end_ts
+        if end_dt is not None:
+            dur = (end_dt - start_dt).total_seconds() * 1000
+            breakdown.append(
+                {
+                    "phase": from_state,
+                    "start_time": ts_str(start_dt),
+                    "end_time": ts_str(end_dt),
+                    "duration_ms": round(dur, 2),
+                    "description": f"State: {from_state}",
+                }
+            )
+        else:
+            breakdown.append(
+                {
+                    "phase": from_state,
+                    "start_time": ts_str(start_dt),
+                    "end_time": None,
+                    "duration_ms": None,
+                    "description": f"State: {from_state} (in progress or no end event)",
+                }
+            )
+
+    # task_to_reply: task_completed -> reply_ready
+    if task_end_ts and reply_ts:
+        dur = (reply_ts - task_end_ts).total_seconds() * 1000
+        breakdown.append(
+            {
+                "phase": "task_to_reply",
+                "start_time": ts_str(task_end_ts),
+                "end_time": ts_str(reply_ts),
+                "duration_ms": round(dur, 2),
+                "description": "Task ended until reply ready (result build)",
+            }
+        )
+
+    # Total: request_received -> reply_ready
+    if request_ts and reply_ts:
+        total_ms = (reply_ts - request_ts).total_seconds() * 1000
+        breakdown.append(
+            {
+                "phase": "total_request_to_reply",
+                "start_time": ts_str(request_ts),
+                "end_time": ts_str(reply_ts),
+                "duration_ms": round(total_ms, 2),
+                "description": "Total: request received to reply ready",
+            }
+        )
+
+    return breakdown
+
+
 def get_trace_events(trace_id: str) -> list[dict[str, Any]]:
     """Reconstruct all log entries for a given trace_id.
 

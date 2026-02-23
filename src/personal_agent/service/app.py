@@ -272,6 +272,15 @@ async def chat(
     Returns:
         Response with assistant message and session_id
     """
+    from personal_agent.telemetry.events import REQUEST_RECEIVED
+
+    trace_id = str(uuid4())
+    log.info(
+        REQUEST_RECEIVED,
+        trace_id=trace_id,
+        entry="service",
+        message_length=len(message),
+    )
     repo = SessionRepository(db)
 
     # Get or create session
@@ -318,6 +327,7 @@ async def chat(
             user_message=message,
             mode=None,  # Will query brainstem
             channel=None,  # Defaults to CHAT
+            trace_id=trace_id,
         )
 
         response_content = result.get("reply", "No response generated")
@@ -335,6 +345,22 @@ async def chat(
             messages_truncated=max(0, len(db_messages) - len(prior_messages)),
             estimated_tokens=estimate_messages_tokens(prior_messages),
         )
+
+        # Index latency breakdown to Elasticsearch for dashboard (non-blocking)
+        if es_handler and getattr(es_handler, "_connected", False):
+            from personal_agent.telemetry.metrics import get_request_latency_breakdown
+
+            res_trace_id = result.get("trace_id")
+            if res_trace_id:
+                breakdown = get_request_latency_breakdown(res_trace_id)
+                if breakdown:
+                    asyncio.create_task(
+                        es_handler.es_logger.index_latency_breakdown(
+                            res_trace_id,
+                            breakdown,
+                            session_id=str(session.session_id),
+                        )
+                    )
 
     except Exception as e:
         # Generate error reference ID for log correlation

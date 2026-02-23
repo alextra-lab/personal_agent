@@ -10,13 +10,18 @@ import pytest
 
 from personal_agent.telemetry.events import (
     MODEL_CALL_COMPLETED,
+    REPLY_READY,
+    REQUEST_RECEIVED,
+    STATE_TRANSITION,
     SYSTEM_METRICS_SNAPSHOT,
+    TASK_COMPLETED,
     TASK_STARTED,
 )
 from personal_agent.telemetry.metrics import (
     _parse_time_window,
     get_recent_cpu_load,
     get_recent_event_count,
+    get_request_latency_breakdown,
     get_trace_events,
     query_events,
 )
@@ -321,3 +326,77 @@ class TestLogQueryFunctions:
         # Query for non-existent trace
         results = get_trace_events("non-existent-trace")
         assert len(results) == 0
+
+    @patch("personal_agent.telemetry.metrics._get_log_file_path")
+    def test_get_request_latency_breakdown(
+        self, mock_get_log_file: Any, tmp_path: pathlib.Path
+    ) -> None:
+        """Test request-to-reply latency breakdown from trace events."""
+        log_file = tmp_path / "current.jsonl"
+        mock_get_log_file.return_value = log_file
+
+        trace_id = "trace-latency-123"
+        # Timeline: t0=request_received, t0+100ms=task_started, then state_transition
+        # from_state=init at t0+100, from_state=llm_call at t0+500, task_completed at t0+2000,
+        # reply_ready at t0+2010
+        t0 = datetime.now(timezone.utc)
+        entries = [
+            self._create_log_entry(
+                REQUEST_RECEIVED, trace_id=trace_id, timestamp=t0
+            ),
+            self._create_log_entry(
+                TASK_STARTED, trace_id=trace_id, timestamp=t0 + timedelta(milliseconds=100)
+            ),
+            self._create_log_entry(
+                STATE_TRANSITION,
+                trace_id=trace_id,
+                timestamp=t0 + timedelta(milliseconds=100),
+                from_state="init",
+            ),
+            self._create_log_entry(
+                STATE_TRANSITION,
+                trace_id=trace_id,
+                timestamp=t0 + timedelta(milliseconds=500),
+                from_state="llm_call",
+            ),
+            self._create_log_entry(
+                TASK_COMPLETED,
+                trace_id=trace_id,
+                timestamp=t0 + timedelta(milliseconds=2000),
+            ),
+            self._create_log_entry(
+                REPLY_READY,
+                trace_id=trace_id,
+                timestamp=t0 + timedelta(milliseconds=2010),
+            ),
+        ]
+        self._write_log_file(log_file, entries)
+
+        breakdown = get_request_latency_breakdown(trace_id)
+
+        phases = [r["phase"] for r in breakdown]
+        assert "entry_to_task" in phases
+        assert "init" in phases
+        assert "llm_call" in phases
+        assert "task_to_reply" in phases
+        assert "total_request_to_reply" in phases
+
+        entry_to_task = next(r for r in breakdown if r["phase"] == "entry_to_task")
+        assert entry_to_task["duration_ms"] == 100.0
+
+        init_phase = next(r for r in breakdown if r["phase"] == "init")
+        assert init_phase["duration_ms"] == 400.0  # 500 - 100
+
+        total = next(r for r in breakdown if r["phase"] == "total_request_to_reply")
+        assert total["duration_ms"] == 2010.0
+
+    @patch("personal_agent.telemetry.metrics._get_log_file_path")
+    def test_get_request_latency_breakdown_empty_trace(
+        self, mock_get_log_file: Any, tmp_path: pathlib.Path
+    ) -> None:
+        """Test latency breakdown returns empty list for unknown trace."""
+        log_file = tmp_path / "current.jsonl"
+        mock_get_log_file.return_value = log_file
+        self._write_log_file(log_file, [])
+
+        assert get_request_latency_breakdown("no-such-trace") == []

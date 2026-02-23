@@ -5,6 +5,8 @@ consistency and enable reliable querying and analysis.
 """
 
 # Orchestrator events
+REQUEST_RECEIVED = "request_received"
+REPLY_READY = "reply_ready"
 TASK_STARTED = "task_started"
 TASK_COMPLETED = "task_completed"
 TASK_FAILED = "task_failed"

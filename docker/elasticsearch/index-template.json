@@ -43,7 +43,19 @@
             "disk_percent": { "type": "float" }
           }
         },
-        "tags": { "type": "keyword" }
+        "tags": { "type": "keyword" },
+        "phase": { "type": "keyword" },
+        "total_duration_ms": { "type": "float" },
+        "phases": {
+          "type": "nested",
+          "properties": {
+            "phase": { "type": "keyword" },
+            "duration_ms": { "type": "float" },
+            "start_time": { "type": "keyword" },
+            "end_time": { "type": "keyword" },
+            "description": { "type": "text" }
+          }
+        }
       }
     }
   }

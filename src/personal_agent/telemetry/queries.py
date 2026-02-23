@@ -92,7 +92,7 @@ class TelemetryQueries:
                 raise RuntimeError(
                     "elasticsearch package is required to create a telemetry query client"
                 ) from exc
-            self._es_client = ESClient([settings.elasticsearch_url], request_timeout=10)
+            self._es_client = ESClient([settings.elasticsearch_url], request_timeout=30)
         return self._es_client
 
     async def disconnect(self) -> None:

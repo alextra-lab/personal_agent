@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 from personal_agent.telemetry.es_logger import ElasticsearchLogger
@@ -27,6 +28,30 @@ class ElasticsearchHandler(logging.Handler):
         self._connect_attempted = False
         # Limit concurrent ES writes to prevent connection pool exhaustion
         self._write_semaphore = asyncio.Semaphore(10)
+        # Circuit breaker to prevent timeout storms from flooding logs/output.
+        self._failure_count = 0
+        self._circuit_open_until = 0.0
+        self._circuit_breaker_threshold = 3
+        self._circuit_breaker_cooldown_s = 30.0
+
+    def _is_circuit_open(self) -> bool:
+        """Return True when ES writes are temporarily paused."""
+        return time.monotonic() < self._circuit_open_until
+
+    def _record_failure(self) -> None:
+        """Track a failed ES write and open circuit when threshold reached."""
+        self._failure_count += 1
+        if self._failure_count >= self._circuit_breaker_threshold:
+            self._circuit_open_until = time.monotonic() + self._circuit_breaker_cooldown_s
+            self._failure_count = 0
+            logging.getLogger(__name__).warning(
+                "elasticsearch_circuit_opened",
+                extra={"cooldown_seconds": self._circuit_breaker_cooldown_s},
+            )
+
+    def _record_success(self) -> None:
+        """Reset transient failure tracking after successful write."""
+        self._failure_count = 0
 
     def emit(self, record: logging.LogRecord) -> None:
         """Emit a log record to Elasticsearch.
@@ -36,6 +61,10 @@ class ElasticsearchHandler(logging.Handler):
         """
         # Skip if not connected
         if not self._connected:
+            return
+
+        # Circuit open: skip ES forwarding temporarily
+        if self._is_circuit_open():
             return
 
         # Filter out Elasticsearch client's own logs to prevent feedback loop
@@ -167,13 +196,20 @@ class ElasticsearchHandler(logging.Handler):
         if not self._connected:
             return
 
+        if self._is_circuit_open():
+            return
+
         # Use semaphore to limit concurrent ES writes
         async with self._write_semaphore:
             try:
-                await self.es_logger.log_event(event_type, data, trace_id, span_id)
+                result = await self.es_logger.log_event(event_type, data, trace_id, span_id)
+                if result is None:
+                    self._record_failure()
+                    return
+                self._record_success()
             except Exception:
                 # Silently fail - don't break logging
-                pass
+                self._record_failure()
 
     async def connect(self) -> bool:
         """Connect to Elasticsearch.

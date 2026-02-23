@@ -36,7 +36,7 @@ class ElasticsearchLogger:
             # Configure connection pool and timeouts to prevent connection exhaustion
             self.client = AsyncElasticsearch(
                 [self.es_url],
-                request_timeout=10,  # 10s timeout for requests
+                request_timeout=30,  # Allow slower local ES under heavy concurrent writes
                 max_retries=2,  # Retry failed requests twice
                 retry_on_timeout=True,
                 # Connection pooling
@@ -49,7 +49,7 @@ class ElasticsearchLogger:
             log.error("elasticsearch_connection_failed", error=str(e))
             return False
 
-    async def disconnect(self):
+    async def disconnect(self) -> None:
         """Close Elasticsearch connection."""
         if self.client:
             await self.client.close()
@@ -88,7 +88,7 @@ class ElasticsearchLogger:
             if id is not None:
                 kwargs["id"] = id
             result = await self.client.index(**kwargs)
-            return result["_id"]
+            return str(result["_id"])
         except Exception as e:
             log.warning("elasticsearch_index_failed", index=index_name, error=str(e))
             return None
@@ -125,7 +125,7 @@ class ElasticsearchLogger:
 
         try:
             result = await self.client.index(index=self._get_index_name(), document=doc)
-            return result["_id"]
+            return str(result["_id"])
         except Exception as e:
             log.error("elasticsearch_log_failed", event=event_type, error=str(e))
             return None
@@ -190,14 +190,14 @@ class ElasticsearchLogger:
         if not self.client:
             return []
 
-        must_clauses = []
+        must_clauses: list[dict[str, Any]] = []
 
         if event_type:
             must_clauses.append({"term": {"event_type": event_type}})
         if trace_id:
             must_clauses.append({"term": {"trace_id": str(trace_id)}})
         if start_time or end_time:
-            range_clause = {"range": {"@timestamp": {}}}
+            range_clause: dict[str, dict[str, dict[str, str]]] = {"range": {"@timestamp": {}}}
             if start_time:
                 range_clause["range"]["@timestamp"]["gte"] = start_time.isoformat()
             if end_time:
@@ -219,3 +219,78 @@ class ElasticsearchLogger:
         except Exception as e:
             log.error("elasticsearch_search_failed", error=str(e))
             return []
+
+    async def index_latency_breakdown(
+        self,
+        trace_id: str,
+        breakdown: list[dict[str, Any]],
+        session_id: str | None = None,
+    ) -> str | None:
+        """Index a request-to-reply latency breakdown for dashboarding.
+
+        Call this after a request completes so Kibana can aggregate by phase
+        (entry_to_task, init, planning, llm_call, etc.) and show total
+        request-to-reply duration over time.
+
+        Args:
+            trace_id: Trace ID for the completed request.
+            breakdown: Result of get_request_latency_breakdown(trace_id) from
+                telemetry.metrics (list of phase dicts with phase, duration_ms,
+                start_time, end_time, description).
+            session_id: Optional session ID for filtering.
+
+        Returns:
+            Document ID if successful, None otherwise.
+        """
+        if not self.client:
+            log.warning("elasticsearch_not_connected", event="request_latency_breakdown")
+            return None
+        if not breakdown:
+            return None
+
+        total_row = next(
+            (r for r in breakdown if r.get("phase") == "total_request_to_reply"),
+            None,
+        )
+        total_duration_ms = total_row.get("duration_ms") if total_row else None
+
+        phases_payload: list[dict[str, Any]] = []
+        for row in breakdown:
+            phase = row.get("phase")
+            if phase and phase != "total_request_to_reply":
+                dur = row.get("duration_ms")
+                phases_payload.append(
+                    {
+                        "phase": phase,
+                        "duration_ms": float(dur) if dur is not None else None,
+                        "start_time": row.get("start_time"),
+                        "end_time": row.get("end_time"),
+                        "description": (row.get("description") or "")[:500],
+                    }
+                )
+
+        doc: dict[str, Any] = {
+            "@timestamp": datetime.utcnow().isoformat(),
+            "event_type": "request_latency_breakdown",
+            "trace_id": trace_id,
+            "session_id": session_id,
+            "total_duration_ms": total_duration_ms,
+            "phases": phases_payload,
+        }
+
+        index_name = self._get_index_name()
+        try:
+            result = await self.client.index(
+                index=index_name,
+                document=doc,
+                id=trace_id,
+            )
+            return str(result["_id"])
+        except Exception as e:
+            log.warning(
+                "elasticsearch_index_failed",
+                index=index_name,
+                event="request_latency_breakdown",
+                error=str(e),
+            )
+            return None

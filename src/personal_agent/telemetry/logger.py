@@ -204,9 +204,13 @@ def configure_logging() -> None:
     root_logger = logging.getLogger()
     root_logger.handlers.clear()  # Remove default handler
 
-    # Silence noisy third-party loggers
-    logging.getLogger("elastic_transport").setLevel(logging.WARNING)
-    logging.getLogger("elasticsearch").setLevel(logging.WARNING)
+    # Silence noisy third-party loggers.
+    # elastic_transport emits traceback-heavy warnings on transient timeouts;
+    # keep only errors to avoid flooding console during ES hiccups.
+    logging.getLogger("elastic_transport").setLevel(logging.ERROR)
+    logging.getLogger("elastic_transport.transport").setLevel(logging.ERROR)
+    logging.getLogger("elastic_transport.node_pool").setLevel(logging.ERROR)
+    logging.getLogger("elasticsearch").setLevel(logging.ERROR)
     logging.getLogger("neo4j").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)

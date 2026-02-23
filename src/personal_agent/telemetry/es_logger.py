@@ -220,6 +220,107 @@ class ElasticsearchLogger:
             log.error("elasticsearch_search_failed", error=str(e))
             return []
 
+    async def index_request_timing(
+        self,
+        trace_id: str,
+        breakdown: list[dict[str, Any]],
+        session_id: str | None = None,
+        total_ms: float | None = None,
+    ) -> str | None:
+        """Index a span-based request timing breakdown for Kibana dashboarding.
+
+        This indexes both a nested document (for single-trace drill-down) and
+        flat per-phase documents (for cross-request aggregation in Kibana).
+
+        Args:
+            trace_id: Trace ID for the completed request.
+            breakdown: Result of RequestTimer.to_breakdown() — list of phase
+                dicts with phase, offset_ms, duration_ms, and optional metadata.
+            session_id: Optional session ID for filtering.
+            total_ms: Total request duration in milliseconds.
+
+        Returns:
+            Document ID if successful, None otherwise.
+        """
+        if not self.client:
+            return None
+        if not breakdown:
+            return None
+
+        ts = datetime.utcnow().isoformat()
+        index_name = self._get_index_name()
+
+        # Nested document with all phases
+        doc: dict[str, Any] = {
+            "@timestamp": ts,
+            "event_type": "request_timing",
+            "trace_id": trace_id,
+            "session_id": session_id,
+            "total_duration_ms": total_ms,
+            "phases": [
+                {
+                    "phase": p["phase"],
+                    "offset_ms": p.get("offset_ms"),
+                    "duration_ms": p.get("duration_ms"),
+                    "metadata": p.get("metadata"),
+                }
+                for p in breakdown
+                if p.get("phase") != "total"
+            ],
+        }
+
+        try:
+            result = await self.client.index(
+                index=index_name,
+                document=doc,
+                id=f"timing_{trace_id}",
+            )
+            doc_id = str(result["_id"])
+
+            # Flat per-phase documents for Kibana terms/avg aggregation
+            for phase_row in breakdown:
+                phase_name = phase_row.get("phase")
+                if phase_name is None or phase_name == "total":
+                    continue
+                flat_doc: dict[str, Any] = {
+                    "@timestamp": ts,
+                    "event_type": "request_timing_phase",
+                    "trace_id": trace_id,
+                    "session_id": session_id,
+                    "phase": phase_name,
+                    "offset_ms": phase_row.get("offset_ms"),
+                    "duration_ms": phase_row.get("duration_ms"),
+                    "total_duration_ms": total_ms,
+                }
+                meta = phase_row.get("metadata")
+                if meta:
+                    flat_doc["phase_metadata"] = meta
+                flat_id = f"timing_{trace_id}_{phase_name}"
+                try:
+                    await self.client.index(
+                        index=index_name,
+                        document=flat_doc,
+                        id=flat_id,
+                    )
+                except Exception as flat_e:
+                    log.warning(
+                        "elasticsearch_index_failed",
+                        index=index_name,
+                        event="request_timing_phase",
+                        phase=phase_name,
+                        error=str(flat_e),
+                    )
+
+            return doc_id
+        except Exception as e:
+            log.warning(
+                "elasticsearch_index_failed",
+                index=index_name,
+                event="request_timing",
+                error=str(e),
+            )
+            return None
+
     async def index_latency_breakdown(
         self,
         trace_id: str,

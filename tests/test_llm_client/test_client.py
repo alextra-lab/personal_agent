@@ -66,10 +66,8 @@ models:
     @pytest.mark.asyncio
     async def test_respond_success(self, client: LocalLLMClient) -> None:
         """Test successful LLM response."""
-        # Responses API format (preferred per spec)
         mock_response = {
-            "role": "assistant",
-            "content": "Hello, world!",
+            "choices": [{"message": {"role": "assistant", "content": "Hello, world!"}}],
             "usage": {
                 "prompt_tokens": 10,
                 "completion_tokens": 3,
@@ -100,10 +98,8 @@ models:
     @pytest.mark.asyncio
     async def test_respond_with_system_prompt(self, client: LocalLLMClient) -> None:
         """Test response with system prompt."""
-        # Responses API format
         mock_response = {
-            "role": "assistant",
-            "content": "OK",
+            "choices": [{"message": {"role": "assistant", "content": "OK"}}],
             "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
         }
 
@@ -123,31 +119,32 @@ models:
                 trace_ctx=trace_ctx,
             )
 
-            # Verify system prompt was added to messages
-            # Note: responses API uses "input" field, chat_completions uses "messages"
             call_args = mock_client.post.call_args
             payload = call_args[1]["json"]
-            # Check which API format was used
-            if "input" in payload:
-                # Responses API format - system prompt should be in the input string
-                assert "You are a helpful assistant." in payload["input"]
-            else:
-                # Chat completions format - system prompt should be first message
-                assert payload["messages"][0]["role"] == "system"
-                assert payload["messages"][0]["content"] == "You are a helpful assistant."
+            assert payload["messages"][0]["role"] == "system"
+            assert payload["messages"][0]["content"] == "You are a helpful assistant."
 
     @pytest.mark.asyncio
     async def test_respond_with_tools(self, client: LocalLLMClient) -> None:
         """Test response with tool calls."""
-        # Responses API format
         mock_response = {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
+            "choices": [
                 {
-                    "id": "call_123",
-                    "name": "read_file",
-                    "arguments": '{"path": "/tmp/test.txt"}',
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_123",
+                                "type": "function",
+                                "function": {
+                                    "name": "read_file",
+                                    "arguments": '{"path": "/tmp/test.txt"}',
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
                 }
             ],
             "usage": {"prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25},
@@ -290,10 +287,8 @@ models:
     @pytest.mark.asyncio
     async def test_respond_retry_on_timeout(self, client: LocalLLMClient) -> None:
         """Test that client retries on timeout."""
-        # Responses API format
         mock_response = {
-            "role": "assistant",
-            "content": "Success",
+            "choices": [{"message": {"role": "assistant", "content": "Success"}}],
             "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
         }
 
@@ -358,59 +353,29 @@ models:
             )
 
     @pytest.mark.asyncio
-    async def test_automatic_fallback_404(self, client: LocalLLMClient) -> None:
-        """Test automatic fallback from responses to chat_completions on 404."""
-        # Mock response for chat_completions (fallback)
-        mock_response = {
-            "choices": [{"message": {"role": "assistant", "content": "Fallback success"}}],
-            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
-        }
-
+    async def test_404_raises_client_error(self, client: LocalLLMClient) -> None:
+        """Test that 404 from server raises LLMClientError (no retry for 4xx)."""
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_response_obj = MagicMock()
-            mock_response_obj.json.return_value = mock_response
-            mock_response_obj.raise_for_status = MagicMock()
-
-            # First call to /responses returns 404, second to /chat/completions succeeds
             mock_response_404 = MagicMock()
             mock_response_404.status_code = 404
             mock_response_404.raise_for_status.side_effect = httpx.HTTPStatusError(
                 "Not found", request=MagicMock(), response=mock_response_404
             )
-
-            call_count = 0
-
-            async def mock_post(url: str, **kwargs: Any) -> Any:
-                nonlocal call_count
-                call_count += 1
-                if call_count == 1:
-                    # First call to responses endpoint - return 404
-                    raise httpx.HTTPStatusError(
-                        "Not found", request=MagicMock(), response=mock_response_404
-                    )
-                else:
-                    # Second call to chat_completions - succeed
-                    return mock_response_obj
-
-            mock_client.post = AsyncMock(side_effect=mock_post)
+            mock_client.post = AsyncMock(return_value=mock_response_404)
             mock_client_class.return_value.__aenter__.return_value = mock_client
 
             trace_ctx = TraceContext.new_trace()
-            response = await client.respond(
-                role=ModelRole.ROUTER,
-                messages=[{"role": "user", "content": "Test"}],
-                trace_ctx=trace_ctx,
-            )
-
-            # Should succeed using fallback
-            assert response["content"] == "Fallback success"
-            assert call_count == 2  # Tried responses, then chat_completions
+            with pytest.raises(LLMClientError):
+                await client.respond(
+                    role=ModelRole.ROUTER,
+                    messages=[{"role": "user", "content": "Test"}],
+                    trace_ctx=trace_ctx,
+                )
 
     @pytest.mark.asyncio
     async def test_per_model_endpoint(self, tmp_path: Path) -> None:
         """Test that models can use different endpoints/providers."""
-        # Create config with per-model endpoints
         config_file = tmp_path / "models.yaml"
         config_file.write_text(
             """
@@ -431,7 +396,6 @@ models:
     default_timeout: 60
   coding:
     id: "test-coding"
-    # No endpoint - uses base_url
     context_length: 32768
     quantization: "8bit"
     max_concurrency: 2
@@ -444,10 +408,8 @@ models:
             model_config_path=config_file,
         )
 
-        # Mock response
         mock_response = {
-            "role": "assistant",
-            "content": "Success",
+            "choices": [{"message": {"role": "assistant", "content": "Success"}}],
             "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
         }
 
@@ -461,66 +423,37 @@ models:
 
             trace_ctx = TraceContext.new_trace()
 
-            # Test router with custom endpoint
             await client.respond(
                 role=ModelRole.ROUTER,
                 messages=[{"role": "user", "content": "Test"}],
                 trace_ctx=trace_ctx,
             )
-            # Verify it used the custom endpoint
             call_args = mock_client.post.call_args
-            assert "http://localhost:8001/v1/responses" in str(call_args)
+            assert "http://localhost:8001/v1/chat/completions" in str(call_args)
 
-            # Test coding without endpoint (uses base_url)
             await client.respond(
                 role=ModelRole.CODING,
                 messages=[{"role": "user", "content": "Test"}],
                 trace_ctx=trace_ctx,
             )
-            # Verify it used the base_url endpoint
             call_args = mock_client.post.call_args
-            assert "http://localhost:1234/v1/responses" in str(call_args)
+            assert "http://localhost:1234/v1/chat/completions" in str(call_args)
 
     @pytest.mark.asyncio
-    async def test_automatic_fallback_connection_error(self, client: LocalLLMClient) -> None:
-        """Test automatic fallback from responses to chat_completions on connection error."""
-        # Mock response for chat_completions (fallback)
-        mock_response = {
-            "choices": [{"message": {"role": "assistant", "content": "Fallback success"}}],
-            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
-        }
-
+    async def test_connection_error_retries_then_raises(self, client: LocalLLMClient) -> None:
+        """Test that persistent connection errors raise after all retries exhausted."""
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_response_obj = MagicMock()
-            mock_response_obj.json.return_value = mock_response
-            mock_response_obj.raise_for_status = MagicMock()
-
-            call_count = 0
-
-            async def mock_post(url: str, **kwargs: Any) -> Any:
-                nonlocal call_count
-                call_count += 1
-                if call_count == 1:
-                    # First call to responses endpoint - connection error
-                    raise httpx.ConnectError("Connection refused")
-                else:
-                    # Second call to chat_completions - succeed
-                    return mock_response_obj
-
-            mock_client.post = AsyncMock(side_effect=mock_post)
+            mock_client.post = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
             mock_client_class.return_value.__aenter__.return_value = mock_client
 
             trace_ctx = TraceContext.new_trace()
-            response = await client.respond(
-                role=ModelRole.ROUTER,
-                messages=[{"role": "user", "content": "Test"}],
-                trace_ctx=trace_ctx,
-            )
-
-            # Should succeed using fallback
-            assert response["content"] == "Fallback success"
-            assert call_count == 2  # Tried responses, then chat_completions
+            with pytest.raises(LLMConnectionError):
+                await client.respond(
+                    role=ModelRole.ROUTER,
+                    messages=[{"role": "user", "content": "Test"}],
+                    trace_ctx=trace_ctx,
+                )
 
     @pytest.mark.asyncio
     async def test_respond_uses_model_default_temperature(self, tmp_path: Path) -> None:

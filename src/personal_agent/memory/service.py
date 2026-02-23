@@ -476,11 +476,16 @@ class MemoryService:
 
         scores: dict[str, float] = {}
 
-        # Get current time for recency calculation (timezone-aware)
-        now = datetime.now(timezone.utc)
+        # Normalize all timestamps to naive UTC to avoid mixed tz comparisons
+        now = datetime.utcnow()
+
+        def _to_naive_utc(dt: datetime) -> datetime:
+            if dt.tzinfo is not None:
+                return dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt
 
         # Find oldest conversation for recency normalization
-        oldest_timestamp = min(c.timestamp for c in conversations)
+        oldest_timestamp = min(_to_naive_utc(c.timestamp) for c in conversations)
         time_range = (now - oldest_timestamp).total_seconds()
 
         # Get entity importance scores if querying by entities
@@ -510,7 +515,7 @@ class MemoryService:
 
             # 1. Recency score (0-0.4)
             if time_range > 0:
-                age_seconds = (now - conv.timestamp).total_seconds()
+                age_seconds = (now - _to_naive_utc(conv.timestamp)).total_seconds()
                 recency_ratio = 1.0 - (age_seconds / time_range)
                 score += recency_ratio * 0.4
             else:

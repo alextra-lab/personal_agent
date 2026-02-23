@@ -76,8 +76,11 @@ class TestEnvironmentDetection:
 class TestAppConfig:
     """Test AppConfig class."""
 
-    def test_app_config_defaults(self) -> None:
-        """Test AppConfig has correct defaults."""
+    def test_app_config_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test AppConfig has correct code defaults (isolated from .env)."""
+        monkeypatch.delenv("AGENT_LOG_LEVEL", raising=False)
+        monkeypatch.delenv("APP_LOG_LEVEL", raising=False)
+        monkeypatch.delenv("AGENT_LLM_BASE_URL", raising=False)
         config = AppConfig()
         assert config.environment == Environment.DEVELOPMENT
         assert config.debug is False
@@ -85,36 +88,22 @@ class TestAppConfig:
         assert config.version == "0.1.0"
         assert config.log_level == "INFO"
         assert config.log_format == "json"
-        assert config.llm_base_url == "http://localhost:1234/v1"
+        assert config.llm_base_url == "http://localhost:8000/v1"
         assert config.llm_timeout_seconds == 120
         assert config.orchestrator_max_concurrent_tasks == 5
 
-    def test_app_config_from_env_vars(self) -> None:
-        """Test AppConfig reads from environment variables."""
-        # Reset singleton
-        import personal_agent.config.settings as settings_module
+    def test_app_config_from_env_vars(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test AppConfig reads from environment variables with AGENT_ prefix."""
+        monkeypatch.delenv("APP_LOG_LEVEL", raising=False)
+        monkeypatch.delenv("APP_DEBUG", raising=False)
+        monkeypatch.setenv("AGENT_DEBUG", "1")
+        monkeypatch.setenv("AGENT_LOG_LEVEL", "DEBUG")
+        monkeypatch.setenv("AGENT_LLM_BASE_URL", "http://test:8080/v1")
 
-        original_settings = getattr(settings_module, "_settings", None)
-        settings_module._settings = None
-
-        os.environ["APP_DEBUG"] = "1"  # Use 1 for boolean
-        os.environ["APP_LOG_LEVEL"] = "DEBUG"
-        os.environ["LLM_BASE_URL"] = "http://test:8080/v1"
-
-        try:
-            from personal_agent.config.env_loader import load_env_files
-
-            load_env_files()
-            config = AppConfig()
-            assert config.debug is True
-            assert config.log_level == "DEBUG"
-            assert config.llm_base_url == "http://test:8080/v1"
-        finally:
-            del os.environ["APP_DEBUG"]
-            del os.environ["APP_LOG_LEVEL"]
-            del os.environ["LLM_BASE_URL"]
-            if original_settings is not None:
-                settings_module._settings = original_settings
+        config = AppConfig()
+        assert config.debug is True
+        assert config.log_level == "DEBUG"
+        assert config.llm_base_url == "http://test:8080/v1"
 
     def test_app_config_log_level_validation(self) -> None:
         """Test log level validation."""

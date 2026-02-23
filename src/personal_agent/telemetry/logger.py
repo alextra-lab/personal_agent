@@ -193,20 +193,21 @@ def configure_logging() -> None:
     log_level = _get_log_level()
     log_dir = _get_log_dir()
 
-    # Configure standard library logging
+    # Root logger accepts all levels; individual handlers gate output.
+    # This ensures telemetry INFO events reach the ES handler and file
+    # handler even when the user-configured level is WARNING.
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,
-        level=getattr(logging, log_level, logging.INFO),
+        level=logging.DEBUG,
     )
 
     # Get root logger and add handlers
     root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
     root_logger.handlers.clear()  # Remove default handler
 
     # Silence noisy third-party loggers.
-    # elastic_transport emits traceback-heavy warnings on transient timeouts;
-    # keep only errors to avoid flooding console during ES hiccups.
     logging.getLogger("elastic_transport").setLevel(logging.ERROR)
     logging.getLogger("elastic_transport.transport").setLevel(logging.ERROR)
     logging.getLogger("elastic_transport.node_pool").setLevel(logging.ERROR)
@@ -215,12 +216,16 @@ def configure_logging() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-    # Add file handler for JSON logs
+    configured_level = getattr(logging, log_level, logging.INFO)
+
+    # File handler captures INFO+ (telemetry events) regardless of user config
     file_handler = _configure_file_handler(log_dir)
+    file_handler.setLevel(logging.INFO)
     root_logger.addHandler(file_handler)
 
-    # Add console handler for pretty-printed output
+    # Console handler uses the user-configured level (e.g. WARNING)
     console_handler = _configure_console_handler()
+    console_handler.setLevel(configured_level)
     root_logger.addHandler(console_handler)
 
     # Configure structlog

@@ -13,13 +13,13 @@ from personal_agent.brainstem.scheduler import BrainstemScheduler
 from personal_agent.captains_log.es_indexer import build_es_indexer_from_handler, set_es_indexer
 from personal_agent.config.settings import get_settings
 from personal_agent.memory.service import MemoryService
-from personal_agent.orchestrator.context_window import estimate_messages_tokens
 from personal_agent.security import sanitize_error_message
 from personal_agent.service.database import get_db_session, init_db
 from personal_agent.service.models import SessionCreate, SessionResponse, SessionUpdate
 from personal_agent.service.repositories.session_repository import SessionRepository
 from personal_agent.telemetry import add_elasticsearch_handler, get_logger
 from personal_agent.telemetry.es_handler import ElasticsearchHandler
+from personal_agent.telemetry.request_timer import RequestTimer
 
 log = get_logger(__name__)
 settings = get_settings()
@@ -272,9 +272,11 @@ async def chat(
     Returns:
         Response with assistant message and session_id
     """
-    from personal_agent.telemetry.events import REQUEST_RECEIVED
+    from personal_agent.telemetry.events import REQUEST_RECEIVED, REQUEST_TIMING
 
     trace_id = str(uuid4())
+    timer = RequestTimer(trace_id=trace_id)
+
     log.info(
         REQUEST_RECEIVED,
         trace_id=trace_id,
@@ -283,87 +285,64 @@ async def chat(
     )
     repo = SessionRepository(db)
 
-    # Get or create session
-    if session_id:
-        session = await repo.get(UUID(session_id))
-        if not session:
-            raise HTTPException(status_code=404, detail="Session not found")
-    else:
-        session = await repo.create(SessionCreate())
+    # --- Phase: session_db_lookup ---
+    with timer.span("session_db_lookup"):
+        if session_id:
+            session = await repo.get(UUID(session_id))
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
+        else:
+            session = await repo.create(SessionCreate())
 
-    # Snapshot DB history before appending this turn's user message.
-    db_messages = list(session.messages or [])
-    max_history = settings.conversation_max_history_messages
-    prior_messages = db_messages[-max_history:] if max_history > 0 else db_messages
+    # --- Phase: session_hydration ---
+    with timer.span("session_hydration"):
+        db_messages = list(session.messages or [])
+        max_history = settings.conversation_max_history_messages
+        prior_messages = db_messages[-max_history:] if max_history > 0 else db_messages
 
-    # Append user message
-    await repo.append_message(cast(UUID, session.session_id), {"role": "user", "content": message})
+    # --- Phase: db_append_user_message ---
+    with timer.span("db_append_user_message"):
+        await repo.append_message(
+            cast(UUID, session.session_id), {"role": "user", "content": message}
+        )
 
-    # Call orchestrator (Phase 2.2: with memory enrichment)
+    # --- Phase: orchestrator ---
+    result: dict[str, Any] = {}
+    response_content = ""
     try:
         from personal_agent.orchestrator import Orchestrator
 
-        # Create orchestrator with session manager
-        orchestrator = Orchestrator()
-        session_manager = orchestrator.session_manager
+        with timer.span("orchestrator_setup"):
+            orchestrator = Orchestrator()
+            session_manager = orchestrator.session_manager
 
-        # Get or create session in orchestrator's session manager
-        orchestrator_session = session_manager.get_session(str(session.session_id))
-        if not orchestrator_session:
-            from personal_agent.governance.models import Mode
-            from personal_agent.orchestrator.channels import Channel
+            orchestrator_session = session_manager.get_session(str(session.session_id))
+            if not orchestrator_session:
+                from personal_agent.governance.models import Mode
+                from personal_agent.orchestrator.channels import Channel
 
-            session_manager.create_session(
-                Mode.NORMAL, Channel.CHAT, session_id=str(session.session_id)
-            )
+                session_manager.create_session(
+                    Mode.NORMAL, Channel.CHAT, session_id=str(session.session_id)
+                )
 
-        # Hydrate orchestrator session with DB history before current turn.
-        if prior_messages:
-            session_manager.update_session(str(session.session_id), messages=prior_messages)
+            if prior_messages:
+                session_manager.update_session(str(session.session_id), messages=prior_messages)
 
-        # Handle request via orchestrator
         result = await orchestrator.handle_user_request(
             session_id=str(session.session_id),
             user_message=message,
-            mode=None,  # Will query brainstem
-            channel=None,  # Defaults to CHAT
+            mode=None,
+            channel=None,
             trace_id=trace_id,
+            request_timer=timer,
         )
 
         response_content = result.get("reply", "No response generated")
 
-        # Record request completion for scheduler
         if scheduler:
             scheduler.record_request()
 
-        log.info(
-            "conversation_context_loaded",
-            trace_id=result.get("trace_id"),
-            session_id=str(session.session_id),
-            total_messages_in_db=len(db_messages),
-            messages_loaded=len(prior_messages),
-            messages_truncated=max(0, len(db_messages) - len(prior_messages)),
-            estimated_tokens=estimate_messages_tokens(prior_messages),
-        )
-
-        # Index latency breakdown to Elasticsearch for dashboard (non-blocking)
-        if es_handler and getattr(es_handler, "_connected", False):
-            from personal_agent.telemetry.metrics import get_request_latency_breakdown
-
-            res_trace_id = result.get("trace_id")
-            if res_trace_id:
-                breakdown = get_request_latency_breakdown(res_trace_id)
-                if breakdown:
-                    asyncio.create_task(
-                        es_handler.es_logger.index_latency_breakdown(
-                            res_trace_id,
-                            breakdown,
-                            session_id=str(session.session_id),
-                        )
-                    )
-
     except Exception as e:
-        # Generate error reference ID for log correlation
         error_id = str(uuid4())[:8]
         log.error(
             "orchestrator_call_failed",
@@ -372,36 +351,65 @@ async def chat(
             error_type=type(e).__name__,
             exc_info=True,
         )
-        # Provide user-friendly message with error reference
         sanitized_msg = sanitize_error_message(e)
         response_content = f"{sanitized_msg} (Error ID: {error_id})"
 
-    # Append assistant message
-    await repo.append_message(
-        cast(UUID, session.session_id), {"role": "assistant", "content": response_content}
+    # --- Phase: db_append_assistant_message ---
+    with timer.span("db_append_assistant_message"):
+        await repo.append_message(
+            cast(UUID, session.session_id), {"role": "assistant", "content": response_content}
+        )
+
+    # --- Phase: memory_storage ---
+    if memory_service and memory_service.connected:
+        with timer.span("memory_storage"):
+            try:
+                from personal_agent.memory.models import ConversationNode
+
+                conversation = ConversationNode(
+                    conversation_id=str(uuid4()),
+                    trace_id=result.get("trace_id") if result else None,
+                    session_id=str(session.session_id),
+                    timestamp=datetime.now(timezone.utc),
+                    summary=None,
+                    user_message=message,
+                    assistant_response=response_content,
+                    key_entities=[],
+                    properties={},
+                )
+                await memory_service.create_conversation(conversation)
+            except Exception as e:
+                log.warning(
+                    "memory_conversation_storage_failed",
+                    error=sanitize_error_message(e),
+                    exc_info=True,
+                )
+
+    # --- Emit timing breakdown ---
+    breakdown = timer.to_breakdown()
+    total_ms = timer.get_total_ms()
+
+    log.info(
+        REQUEST_TIMING,
+        trace_id=trace_id,
+        session_id=str(session.session_id),
+        total_ms=total_ms,
+        phases=[
+            {"phase": s["phase"], "duration_ms": s["duration_ms"], "offset_ms": s["offset_ms"]}
+            for s in breakdown
+        ],
     )
 
-    # Store conversation in memory graph (Phase 2.2) - basic version
-    # Full entity extraction happens in second brain consolidation
-    if memory_service and memory_service.connected:
-        try:
-            from personal_agent.memory.models import ConversationNode
-
-            # Create a basic conversation node (entities will be extracted by second brain)
-            conversation = ConversationNode(
-                conversation_id=str(uuid4()),
-                trace_id=result.get("trace_id") if "trace_id" in locals() else None,
+    # Index to Elasticsearch (non-blocking)
+    if es_handler and getattr(es_handler, "_connected", False):
+        asyncio.create_task(
+            es_handler.es_logger.index_request_timing(
+                trace_id=trace_id,
+                breakdown=breakdown,
                 session_id=str(session.session_id),
-                timestamp=datetime.now(timezone.utc),
-                summary=None,  # Will be filled by second brain
-                user_message=message,
-                assistant_response=response_content,
-                key_entities=[],  # Will be extracted by second brain
-                properties={},
+                total_ms=total_ms,
             )
-            await memory_service.create_conversation(conversation)
-        except Exception as e:
-            log.warning("memory_conversation_storage_failed", error=sanitize_error_message(e), exc_info=True)
+        )
 
     return {"session_id": str(session.session_id), "response": response_content}
 

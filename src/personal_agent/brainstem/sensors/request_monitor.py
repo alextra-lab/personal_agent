@@ -171,8 +171,7 @@ class RequestMonitor:
         """
         try:
             while self._running:
-                # Poll metrics
-                metrics = poll_system_metrics()
+                metrics = await asyncio.to_thread(poll_system_metrics)
 
                 # Tag with trace_id and timestamp
                 metrics["trace_id"] = self.trace_id
@@ -181,13 +180,12 @@ class RequestMonitor:
                 # Store sample
                 self._samples.append(metrics)
 
-                # Log for correlation (use flat keys from poll_system_metrics)
                 log.info(
                     SYSTEM_METRICS_SNAPSHOT,
                     trace_id=self.trace_id,
-                    cpu_percent=metrics.get("perf_system_cpu_load"),
-                    memory_percent=metrics.get("perf_system_mem_used"),
-                    gpu_percent=metrics.get("perf_system_gpu_load"),
+                    cpu_load=metrics.get("perf_system_cpu_load"),
+                    memory_used=metrics.get("perf_system_mem_used"),
+                    gpu_load=metrics.get("perf_system_gpu_load"),
                     component="request_monitor",
                 )
 

@@ -1,6 +1,6 @@
 """Integration tests for MCP Gateway (requires Docker)."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -14,12 +14,10 @@ async def test_gateway_initialization():
     registry = ToolRegistry()
     adapter = MCPGatewayAdapter(registry)
 
-    # Mock client
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock()
 
-    # Mock tool discovery
     mock_client.list_tools = AsyncMock(
         return_value=[
             {
@@ -34,12 +32,17 @@ async def test_gateway_initialization():
         ]
     )
 
-    with patch("personal_agent.mcp.gateway.MCPClientWrapper", return_value=mock_client):
-        with patch("personal_agent.mcp.gateway.MCPGovernanceManager"):
-            with patch.object(adapter, "enabled", True):
-                await adapter.initialize()
+    mock_governance = MagicMock()
+    mock_governance.get_description_override.return_value = None
+    mock_governance.ensure_tool_configured.return_value = None
 
-    # Verify tool registered
+    with patch("personal_agent.mcp.gateway.MCPClientWrapper", return_value=mock_client):
+        with patch(
+            "personal_agent.mcp.gateway.MCPGovernanceManager", return_value=mock_governance
+        ):
+            adapter.enabled = True
+            await adapter.initialize()
+
     tools = registry.list_tools()
     assert len(tools) > 0
     assert any(t.name == "mcp_test_tool" for t in tools)
@@ -51,14 +54,11 @@ async def test_graceful_degradation():
     registry = ToolRegistry()
     adapter = MCPGatewayAdapter(registry)
 
-    # Mock client that fails
     mock_client = AsyncMock()
     mock_client.__aenter__.side_effect = Exception("Gateway unavailable")
 
     with patch("personal_agent.mcp.gateway.MCPClientWrapper", return_value=mock_client):
-        with patch.object(adapter, "enabled", True):
-            # Should not raise, just log warning
-            await adapter.initialize()
+        adapter.enabled = True
+        await adapter.initialize()
 
-    # Adapter should be disabled
     assert adapter.enabled is False

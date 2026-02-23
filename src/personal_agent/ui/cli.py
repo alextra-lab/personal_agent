@@ -86,7 +86,11 @@ async def _handle_request(
     # Initialize MCP gateway once (idempotent - won't re-initialize if already connected)
     await _initialize_mcp_gateway()
 
+    from personal_agent.telemetry.request_timer import RequestTimer
+
     trace_ctx = TraceContext.new_trace()
+    timer = RequestTimer(trace_id=trace_ctx.trace_id)
+
     log.info(
         REQUEST_RECEIVED,
         trace_id=trace_ctx.trace_id,
@@ -96,13 +100,28 @@ async def _handle_request(
     )
 
     orchestrator = Orchestrator()
-    # Query current mode from brainstem (orchestrator will query if None)
     result = await orchestrator.handle_user_request(
         session_id=session_id,
         user_message=user_message,
-        mode=None,  # Will query brainstem automatically
+        mode=None,
         channel=channel,
         trace_id=trace_ctx.trace_id,
+        request_timer=timer,
+    )
+
+    # Log timing breakdown from CLI
+    from personal_agent.telemetry.events import REQUEST_TIMING
+
+    breakdown = timer.to_breakdown()
+    log.info(
+        REQUEST_TIMING,
+        trace_id=trace_ctx.trace_id,
+        session_id=session_id,
+        total_ms=timer.get_total_ms(),
+        phases=[
+            {"phase": s["phase"], "duration_ms": s["duration_ms"], "offset_ms": s["offset_ms"]}
+            for s in breakdown
+        ],
     )
 
     # Check if there are background tasks (like Captain's Log reflection)

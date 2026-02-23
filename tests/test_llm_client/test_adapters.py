@@ -209,7 +209,7 @@ class TestBuildResponsesRequest:
         payload = build_responses_request(messages=messages, model="test-model")
 
         assert payload["model"] == "test-model"
-        assert payload["input"] == "Hello"  # Responses API uses "input" field, not "messages"
+        assert payload["input"] == "User: Hello"
         assert "tools" not in payload
         assert "max_tokens" not in payload
         assert "temperature" not in payload
@@ -230,7 +230,10 @@ class TestBuildResponsesRequest:
 
         payload = build_responses_request(messages=messages, model="test-model", tools=tools)
 
-        assert payload["tools"] == tools
+        assert len(payload["tools"]) == 1
+        assert payload["tools"][0]["type"] == "function"
+        assert payload["tools"][0]["function"]["name"] == "read_file"
+        assert payload["tools"][0]["name"] == "read_file"
         assert payload["tool_choice"] == "auto"
 
     def test_request_with_tool_choice(self) -> None:

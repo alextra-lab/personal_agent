@@ -63,12 +63,13 @@ async def test_call_tool():
     with patch("personal_agent.mcp.client.stdio_client"):
         client = MCPClientWrapper(["docker", "mcp", "gateway", "run"])
 
-        # Mock session
         mock_content = MagicMock()
         mock_content.text = '{"result": "success"}'
 
         mock_result = MagicMock()
         mock_result.content = [mock_content]
+        mock_result.isError = False
+        mock_result.structuredContent = None
 
         client.session = AsyncMock()
         client.session.call_tool = AsyncMock(return_value=mock_result)

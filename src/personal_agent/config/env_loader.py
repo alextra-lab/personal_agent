@@ -71,12 +71,12 @@ def load_env_files(project_root: Path | None = None) -> None:
     environment = get_environment()
     env_name = environment.value
 
-    # Priority order: later files override earlier ones
+    # With override=False, first-loaded value wins. Load highest priority first.
     env_files = [
-        project_root / ".env",  # Base config (lowest priority)
-        project_root / ".env.local",  # Local overrides
-        project_root / f".env.{env_name}",  # Environment-specific
         project_root / f".env.{env_name}.local",  # Environment-specific local (highest priority)
+        project_root / f".env.{env_name}",  # Environment-specific
+        project_root / ".env.local",  # Local overrides
+        project_root / ".env",  # Base config (lowest priority)
     ]
 
     loaded_files = []

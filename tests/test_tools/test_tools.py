@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from personal_agent.tools.filesystem import list_directory_executor, read_file_executor
 from personal_agent.tools.system_health import system_metrics_snapshot_executor
@@ -178,30 +179,42 @@ def test_list_directory_with_home_env_var() -> None:
             assert result2["entries"] is not None
 
 
+_MOCK_METRICS = {
+    "perf_system_cpu_load": 42.5,
+    "perf_system_mem_used": 8192.0,
+    "perf_system_cpu_count": 8,
+    "perf_system_disk_usage_percent": 55.0,
+}
+
+
 def test_system_metrics_snapshot_success() -> None:
     """Test system_metrics_snapshot_executor returns metrics."""
-    result = system_metrics_snapshot_executor()
+    with patch(
+        "personal_agent.tools.system_health.get_system_metrics_snapshot",
+        return_value=_MOCK_METRICS.copy(),
+    ):
+        result = system_metrics_snapshot_executor()
 
     assert result["success"] is True
     assert result["metrics"] is not None
     assert isinstance(result["metrics"], dict)
     assert result["error"] is None
 
-    # Check for expected metric keys (from sensors)
     metrics = result["metrics"]
-    # Should have at least CPU and memory metrics
     assert "perf_system_cpu_load" in metrics or "perf_system_mem_used" in metrics
 
 
 def test_system_metrics_snapshot_structure() -> None:
     """Test system_metrics_snapshot returns properly structured data."""
-    result = system_metrics_snapshot_executor()
+    with patch(
+        "personal_agent.tools.system_health.get_system_metrics_snapshot",
+        return_value=_MOCK_METRICS.copy(),
+    ):
+        result = system_metrics_snapshot_executor()
 
     assert result["success"] is True
     metrics = result["metrics"]
 
-    # Metrics should be a dictionary with numeric values (or tuples for some GPU metrics)
     for key, value in metrics.items():
         assert isinstance(key, str)
-        # Values should be numeric (int or float), tuple, or None
         assert isinstance(value, (int, float, tuple)) or value is None

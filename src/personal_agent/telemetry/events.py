@@ -64,6 +64,9 @@ MCP_GATEWAY_INIT_FAILED = "mcp_gateway_init_failed"
 MCP_TOOL_DISCOVERED = "mcp_tool_discovered"
 MCP_TOOL_GOVERNANCE_ADDED = "mcp_tool_governance_added"
 
+# Request timing events (FRE-37)
+REQUEST_TIMING = "request_timing"
+
 # Data lifecycle events (Phase 2.3)
 LIFECYCLE_DISK_CHECK = "lifecycle_disk_check"
 LIFECYCLE_ARCHIVE = "lifecycle_archive"

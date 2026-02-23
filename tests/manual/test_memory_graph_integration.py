@@ -8,6 +8,8 @@ Prerequisites:
 import asyncio
 from datetime import datetime, timezone
 
+import pytest
+
 from personal_agent.memory.models import ConversationNode, Entity, Relationship
 from personal_agent.memory.service import MemoryService
 from personal_agent.telemetry import get_logger
@@ -15,6 +17,7 @@ from personal_agent.telemetry import get_logger
 log = get_logger(__name__)
 
 
+@pytest.mark.asyncio
 async def test_memory_service():
     """Test Neo4j connection and basic operations."""
     print("Testing Memory Service Integration\n")

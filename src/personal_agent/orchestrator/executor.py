@@ -13,7 +13,10 @@ from typing import TYPE_CHECKING, Any, cast
 from personal_agent.config import settings
 from personal_agent.llm_client import LocalLLMClient, ModelRole
 from personal_agent.orchestrator.channels import Channel
-from personal_agent.orchestrator.context_window import apply_context_window, estimate_messages_tokens
+from personal_agent.orchestrator.context_window import (
+    apply_context_window,
+    estimate_messages_tokens,
+)
 from personal_agent.orchestrator.session import SessionManager
 from personal_agent.orchestrator.types import (
     ExecutionContext,
@@ -805,17 +808,25 @@ async def step_init(
     Returns:
         Next state (PLANNING or LLM_CALL).
     """
+    timer = ctx.request_timer
+
     # Load session and build message history
+    if timer:
+        timer.start_span("session_history_load")
     session = session_manager.get_session(ctx.session_id)
     session_message_count = 0
     if session:
         ctx.messages = list(session.messages)
         session_message_count = len(ctx.messages)
+    if timer:
+        timer.end_span("session_history_load", message_count=session_message_count)
 
     # Add new user message
     ctx.messages.append({"role": "user", "content": ctx.user_message})
 
     # Apply context window controls before LLM usage to prevent overflow.
+    if timer:
+        timer.start_span("context_window")
     input_messages_count = len(ctx.messages)
     ctx.messages = apply_context_window(
         ctx.messages,
@@ -824,6 +835,14 @@ async def step_init(
         trace_id=ctx.trace_id,
         session_id=ctx.session_id,
     )
+    estimated_tokens = estimate_messages_tokens(ctx.messages)
+    if timer:
+        timer.end_span(
+            "context_window",
+            messages_in=input_messages_count,
+            messages_out=len(ctx.messages),
+            estimated_tokens=estimated_tokens,
+        )
 
     log.info(
         "conversation_context_loaded",
@@ -832,43 +851,39 @@ async def step_init(
         total_messages_in_db=session_message_count,
         messages_loaded=len(ctx.messages),
         messages_truncated=max(0, input_messages_count - len(ctx.messages)),
-        estimated_tokens=estimate_messages_tokens(ctx.messages),
+        estimated_tokens=estimated_tokens,
     )
 
     # Query memory graph for relevant context (Phase 2.2)
     if settings.enable_memory_graph:
+        if timer:
+            timer.start_span("memory_query")
         try:
             from personal_agent.memory.models import MemoryQuery
             from personal_agent.memory.service import MemoryService
 
-            # Get global memory service instance (initialized in FastAPI lifespan)
-            # For CLI usage, create a temporary connection
             memory_service = None
             try:
-                # Try to get from service if available
                 from personal_agent.service.app import memory_service as global_memory_service
 
                 if global_memory_service and global_memory_service.connected:
                     memory_service = global_memory_service
             except (ImportError, AttributeError):
-                # CLI mode: create temporary connection
                 memory_service = MemoryService()
                 await memory_service.connect()
 
             if memory_service and memory_service.connected:
-                # Extract potential entity names from user message (simple keyword extraction)
-                # TODO: Use proper entity extraction/NLP here
-                words = ctx.user_message.split()  # Don't lowercase - need capitals
-                # Simple heuristic: look for capitalized words or quoted phrases
+                words = ctx.user_message.split()
                 potential_entities = [
                     w.strip('",.:;!?') for w in words if len(w) > 3 and w[0].isupper()
                 ]
 
+                conversations_found = 0
                 if potential_entities:
                     query = MemoryQuery(
-                        entity_names=potential_entities[:5],  # Limit to 5 entities
-                        limit=5,  # Get top 5 related conversations
-                        recency_days=30,  # Only recent conversations
+                        entity_names=potential_entities[:5],
+                        limit=5,
+                        recency_days=30,
                     )
                     result = await memory_service.query_memory(
                         query,
@@ -876,7 +891,6 @@ async def step_init(
                         query_text=ctx.user_message,
                     )
 
-                    # Format memory context for LLM
                     ctx.memory_context = []
                     for conv in result.conversations:
                         ctx.memory_context.append(
@@ -888,18 +902,26 @@ async def step_init(
                                 "key_entities": conv.key_entities,
                             }
                         )
+                    conversations_found = len(ctx.memory_context)
 
                     log.info(
                         "memory_enrichment_completed",
                         trace_id=ctx.trace_id,
-                        conversations_found=len(ctx.memory_context),
+                        conversations_found=conversations_found,
                     )
 
-                # Cleanup temporary connection if created
                 if memory_service != global_memory_service:
                     await memory_service.disconnect()
+
+                if timer:
+                    timer.end_span(
+                        "memory_query",
+                        entities_searched=len(potential_entities) if potential_entities else 0,
+                        conversations_found=conversations_found,
+                    )
         except Exception as e:
-            # Don't fail task if memory query fails
+            if timer:
+                timer.end_span("memory_query", error=str(e))
             log.warning(
                 "memory_enrichment_failed",
                 trace_id=ctx.trace_id,
@@ -907,9 +929,7 @@ async def step_init(
                 exc_info=True,
             )
 
-    # Simple heuristic: if message is short and simple, skip planning
-    # For skeleton, always go to LLM_CALL (planning will be added later)
-    needs_planning = False  # Placeholder: could check message complexity
+    needs_planning = False
 
     if needs_planning:
         return TaskState.PLANNING
@@ -959,6 +979,8 @@ async def step_llm_call(
     Returns:
         Next state (LLM_CALL for delegation, TOOL_EXECUTION, SYNTHESIS, or FAILED).
     """
+    timer = ctx.request_timer
+
     # Determine which model to call
     if ctx.selected_model_role is None:
         # First LLM call: determine initial model based on channel
@@ -1118,6 +1140,11 @@ async def step_llm_call(
         if model_role == ModelRole.ROUTER:
             response_format = _router_response_format()
 
+        # Timer span: distinguish router vs delegated calls
+        llm_span_name = f"llm_call:{model_role.value}"
+        if timer:
+            timer.start_span(llm_span_name)
+
         response = await llm_client.respond(
             role=model_role,
             messages=request_messages,
@@ -1153,6 +1180,18 @@ async def step_llm_call(
             ctx.last_response_id = response["response_id"]
 
         duration_ms = int((time.time() - step_start_time) * 1000)
+        total_tokens = response.get("usage", {}).get("total_tokens", 0)
+        prompt_tokens = response.get("usage", {}).get("prompt_tokens", 0)
+        completion_tokens = response.get("usage", {}).get("completion_tokens", 0)
+
+        if timer:
+            timer.end_span(
+                llm_span_name,
+                model_role=model_role.value,
+                tokens=total_tokens,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
 
         log.info(
             MODEL_CALL_COMPLETED,
@@ -1160,7 +1199,7 @@ async def step_llm_call(
             span_id=span_id,
             duration_ms=duration_ms,
             model_role=model_role.value,
-            tokens=response.get("usage", {}).get("total_tokens", 0),
+            tokens=total_tokens,
         )
 
         # Record step
@@ -1178,6 +1217,8 @@ async def step_llm_call(
 
         # Handle routing decision if this was a router call
         if model_role == ModelRole.ROUTER:
+            if timer:
+                timer.start_span("routing_parse")
             routing_result = _parse_routing_decision(response_content, ctx)
 
             if routing_result:
@@ -1193,6 +1234,14 @@ async def step_llm_call(
                     reasoning_depth=routing_result["reasoning_depth"],
                     reason=routing_result["reason"],
                 )
+
+                if timer:
+                    timer.end_span(
+                        "routing_parse",
+                        decision=str(routing_result["decision"]),
+                        target_model=str(routing_result.get("target_model")),
+                        confidence=routing_result["confidence"],
+                    )
 
                 if routing_result["decision"] == "DELEGATE":
                     # Router wants to delegate to another model
@@ -1313,7 +1362,11 @@ async def step_tool_execution(
     Returns:
         Next state (LLM_CALL for synthesis, or FAILED on error).
     """
+    timer = ctx.request_timer
     step_start_time = time.time()
+
+    if timer:
+        timer.start_span(f"tool_execution:{ctx.tool_iteration_count + 1}")
 
     # Loop governance: prevent infinite tool execution cycles
     ctx.tool_iteration_count += 1
@@ -1561,6 +1614,17 @@ async def step_tool_execution(
     ctx.messages.extend(tool_results)
 
     duration_ms = int((time.time() - step_start_time) * 1000)
+
+    tool_names = [
+        tc.get("function", {}).get("name", "unknown") for tc in tool_calls
+    ]
+    if timer:
+        timer.end_span(
+            f"tool_execution:{ctx.tool_iteration_count}",
+            tool_count=len(tool_calls),
+            tool_names=tool_names,
+        )
+
     log.info(
         "tool_execution_completed",
         trace_id=ctx.trace_id,
@@ -1597,12 +1661,23 @@ async def step_synthesis(
     Returns:
         Terminal state (COMPLETED).
     """
+    timer = ctx.request_timer
+    if timer:
+        timer.start_span("synthesis")
+
     # Ensure final reply is set (should already be set from LLM call)
     if not ctx.final_reply:
         ctx.final_reply = "Task completed"  # Fallback
 
     # Update session with new messages
+    if timer:
+        timer.start_span("session_update")
     session_manager.update_session(ctx.session_id, messages=ctx.messages)
+    if timer:
+        timer.end_span("session_update")
+
+    if timer:
+        timer.end_span("synthesis", reply_length=len(ctx.final_reply))
 
     return TaskState.COMPLETED
 

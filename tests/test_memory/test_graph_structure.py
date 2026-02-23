@@ -115,11 +115,26 @@ async def knowledge_graph(memory_service):
         },
     ]
 
-    # Create all conversations and entities
+    all_entity_names = set()
     for item in conversations:
         await memory_service.create_conversation(item["conv"])
         for entity in item["entities"]:
             await memory_service.create_entity(entity)
+            all_entity_names.add(entity.name)
+
+    # Set test = true as a top-level node property for cleanup and query filtering
+    if memory_service.driver:
+        async with memory_service.driver.session() as session:
+            for item in conversations:
+                await session.run(
+                    "MATCH (c:Conversation {conversation_id: $id}) SET c.test = true",
+                    id=item["conv"].conversation_id,
+                )
+            for name in all_entity_names:
+                await session.run(
+                    "MATCH (e:Entity {name: $name}) SET e.test = true",
+                    name=name,
+                )
 
     return conversations
 
@@ -132,14 +147,13 @@ class TestGraphStructure:
         self, memory_service, knowledge_graph
     ):
         """Verify that entities have DISCUSSES relationships to multiple conversations."""
-        # Python should be discussed in 3 conversations
         if not memory_service.driver:
             pytest.skip("No driver connection")
 
         async with memory_service.driver.session() as session:
             result = await session.run(
                 """
-                MATCH (e:Entity {name: 'Python', test: true})<-[:DISCUSSES]-(c:Conversation)
+                MATCH (e:Entity {name: 'Python', test: true})<-[:DISCUSSES]-(c:Conversation {test: true})
                 RETURN count(c) as conversation_count
                 """
             )
@@ -222,18 +236,26 @@ class TestGraphStructure:
 
     async def test_entity_mention_counts_incremented(self, memory_service, knowledge_graph):
         """Verify that mention counts are tracked correctly."""
-        interests = await memory_service.get_user_interests(limit=10)
+        if not memory_service.driver:
+            pytest.skip("No driver connection")
 
-        # Filter to test entities
-        test_interests = {i.name: i.mention_count for i in interests if i.properties.get("test")}
+        expected_names = {"Python", "Programming", "Django", "Web Development", "FastAPI", "JavaScript"}
+        async with memory_service.driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (e:Entity {test: true})
+                WHERE e.name IN $names
+                RETURN e.name as name, e.mention_count as count
+                """,
+                names=list(expected_names),
+            )
+            test_interests = {}
+            async for record in result:
+                test_interests[record["name"]] = record["count"]
 
-        # Python mentioned in 3 conversations
         assert test_interests.get("Python", 0) >= 3
-        # Web Development mentioned in 3 conversations
         assert test_interests.get("Web Development", 0) >= 3
-        # Programming mentioned in 2 conversations
         assert test_interests.get("Programming", 0) >= 2
-        # Django, FastAPI, JavaScript each mentioned once
         assert test_interests.get("Django", 0) >= 1
         assert test_interests.get("FastAPI", 0) >= 1
         assert test_interests.get("JavaScript", 0) >= 1

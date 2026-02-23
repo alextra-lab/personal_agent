@@ -17,7 +17,7 @@ from personal_agent.telemetry import get_logger
 log = get_logger(__name__)
 
 
-async def test_extraction(model_name: str, user_msg: str, assistant_msg: str) -> dict:
+async def run_extraction(model_name: str, user_msg: str, assistant_msg: str) -> dict:
     """Test entity extraction with a specific model."""
     settings = get_settings()
     original_model = settings.entity_extraction_model
@@ -105,7 +105,7 @@ async def main():
         print(f"{'#' * 80}")
 
         for model in models:
-            result = await test_extraction(
+            result = await run_extraction(
                 model_name=model,
                 user_msg=test_case["user"],
                 assistant_msg=test_case["assistant"],

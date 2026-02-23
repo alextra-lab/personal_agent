@@ -18,6 +18,7 @@ from personal_agent.llm_client import ModelRole
 
 if TYPE_CHECKING:
     from personal_agent.orchestrator.channels import Channel
+    from personal_agent.telemetry.request_timer import RequestTimer
 
 
 class TaskState(str, Enum):
@@ -165,6 +166,9 @@ class ExecutionContext:
 
     # Memory enrichment (Phase 2.2)
     memory_context: list[dict[str, Any]] | None = None  # Retrieved conversations for context
+
+    # Request timing (FRE-37): inline span-based instrumentation
+    request_timer: "RequestTimer | None" = None
 
 
 class OrchestratorStep(TypedDict):

@@ -18,7 +18,7 @@ from personal_agent.insights.engine import INSIGHTS_INDEX_PREFIX
 from personal_agent.memory.service import MemoryService
 from personal_agent.second_brain.consolidator import SecondBrainConsolidator
 from personal_agent.second_brain.quality_monitor import ConsolidationQualityMonitor
-from personal_agent.telemetry import get_logger
+from personal_agent.telemetry import SENSOR_POLL, get_logger
 from personal_agent.telemetry.queries import TelemetryQueries
 from personal_agent.telemetry.lifecycle_manager import DataLifecycleManager
 
@@ -192,14 +192,26 @@ class BrainstemScheduler:
             # No requests yet - allow consolidation after initial delay
             return True
 
-        # Check system resources
+        # Check system resources and emit metrics for ES/dashboards
         try:
-            metrics = poll_system_metrics()
+            metrics = await asyncio.to_thread(poll_system_metrics)
             cpu_load = metrics.get("perf_system_cpu_load", 0.0)
             memory_used = metrics.get("perf_system_mem_used", 0.0)
+            gpu_load = metrics.get("perf_system_gpu_load")
+
+            # Emit sensor_poll at INFO so the ES handler can forward it
+            # to the System Health dashboard.
+            log.info(
+                SENSOR_POLL,
+                cpu_load=cpu_load,
+                memory_used=memory_used,
+                gpu_load=gpu_load,
+                disk_usage=metrics.get("perf_system_disk_usage_percent"),
+                component="scheduler",
+            )
 
             if cpu_load > self.cpu_threshold:
-                log.debug(
+                log.info(
                     "consolidation_skipped_cpu_high",
                     cpu_load=cpu_load,
                     threshold=self.cpu_threshold,
@@ -207,7 +219,7 @@ class BrainstemScheduler:
                 return False
 
             if memory_used > self.memory_threshold:
-                log.debug(
+                log.info(
                     "consolidation_skipped_memory_high",
                     memory_used=memory_used,
                     threshold=self.memory_threshold,

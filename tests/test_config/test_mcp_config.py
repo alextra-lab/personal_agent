@@ -1,14 +1,14 @@
 """Tests for MCP Gateway configuration."""
 
-import os
-
 import pytest
 
 from personal_agent.config.settings import AppConfig
 
 
-def test_mcp_gateway_defaults():
-    """Test default MCP configuration."""
+def test_mcp_gateway_defaults(monkeypatch: pytest.MonkeyPatch):
+    """Test default MCP configuration (isolated from .env overrides)."""
+    monkeypatch.delenv("AGENT_MCP_GATEWAY_ENABLED", raising=False)
+    monkeypatch.delenv("MCP_GATEWAY_ENABLED", raising=False)
     config = AppConfig()
     assert config.mcp_gateway_enabled is False
     assert config.mcp_gateway_command == ["docker", "mcp", "gateway", "run"]
@@ -17,29 +17,24 @@ def test_mcp_gateway_defaults():
     )  # Increased for external API tools like Perplexity
 
 
-def test_mcp_gateway_env_override():
+def test_mcp_gateway_env_override(monkeypatch: pytest.MonkeyPatch):
     """Test environment variable override."""
-    os.environ["MCP_GATEWAY_ENABLED"] = "true"
-    os.environ["MCP_GATEWAY_TIMEOUT_SECONDS"] = "120"  # Override the 60s default
+    monkeypatch.setenv("AGENT_MCP_GATEWAY_ENABLED", "true")
+    monkeypatch.setenv("AGENT_MCP_GATEWAY_TIMEOUT_SECONDS", "120")
 
     config = AppConfig()
     assert config.mcp_gateway_enabled is True
     assert config.mcp_gateway_timeout_seconds == 120
 
-    # Cleanup
-    del os.environ["MCP_GATEWAY_ENABLED"]
-    del os.environ["MCP_GATEWAY_TIMEOUT_SECONDS"]
 
-
-def test_mcp_gateway_command_json_parsing():
+def test_mcp_gateway_command_json_parsing(monkeypatch: pytest.MonkeyPatch):
     """Test gateway command parses from JSON."""
-    os.environ["MCP_GATEWAY_COMMAND"] = '["docker", "mcp", "gateway", "run", "--verbose"]'
+    monkeypatch.setenv(
+        "AGENT_MCP_GATEWAY_COMMAND", '["docker", "mcp", "gateway", "run", "--verbose"]'
+    )
 
     config = AppConfig()
     assert config.mcp_gateway_command == ["docker", "mcp", "gateway", "run", "--verbose"]
-
-    # Cleanup
-    del os.environ["MCP_GATEWAY_COMMAND"]
 
 
 def test_mcp_gateway_command_space_separated():

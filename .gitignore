@@ -69,3 +69,5 @@ telemetry/evaluation/evaluation_results*.json
 .env.production
 .env.test
 # Note: .env.example is tracked as a template
+
+current_session

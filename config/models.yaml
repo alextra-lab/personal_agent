@@ -25,7 +25,8 @@ models:
     default_timeout: 10  # seconds (1.7B model is fast, typical routing ~3-4s)
     temperature: 0.1
     supports_function_calling: false  # Qwen3 has native function calling support
-    endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
+    #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
+    endpoint: "http://127.0.0.1:1234/v1"
 
   standard:
     # Default "workhorse" model: general answers + tool orchestration, but avoid long "thinking".
@@ -37,7 +38,8 @@ models:
     default_timeout: 45  # seconds
     temperature: 0.3
     supports_function_calling: true  # Test if MLX backend handles function calling
-    endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
+    #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
+    endpoint: "http://127.0.0.1:1234/v1"
 
   reasoning:
     # BASELINE: Memory-optimized stack (ADR-0008)
@@ -49,7 +51,8 @@ models:
     default_timeout: 90  # seconds (increased for entity extraction workload)
     temperature: 0.4
     supports_function_calling: true  # Use /v1/responses (native tools); /no_think supported via prompt suffix
-    endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
+    #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
+    endpoint: "http://127.0.0.1:1234/v1"
 
   coding:
     #id: "qwen/qwen3-coder-30b"
@@ -60,7 +63,8 @@ models:
     default_timeout: 45  # seconds
     temperature: 0.2
     supports_function_calling: false  # Use /v1/chat/completions (LM Studio /responses can be slow for some models)
-    endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
+    #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
+    endpoint: "http://127.0.0.1:1234/v1"
 
   # EXPERIMENTAL: Alternative models for A/B testing (not loaded by default)
   reasoning_heavy:
@@ -74,6 +78,7 @@ models:
     temperature: 0.35
     supports_function_calling: false  # Uses text-based tool calls (ADR-0008)
     #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
+    endpoint: "http://127.0.0.1:1234/v1"
 
   reasoning_baseline:
     # Original baseline for comparison experiments

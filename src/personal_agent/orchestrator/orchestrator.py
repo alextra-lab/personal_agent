@@ -11,6 +11,7 @@ from personal_agent.orchestrator.executor import execute_task_safe
 from personal_agent.orchestrator.session import SessionManager
 from personal_agent.orchestrator.types import ExecutionContext, OrchestratorResult
 from personal_agent.telemetry import get_logger
+from personal_agent.telemetry.request_timer import RequestTimer
 from personal_agent.telemetry.trace import TraceContext
 
 log = get_logger(__name__)
@@ -38,6 +39,7 @@ class Orchestrator:
         mode: Mode | None = None,
         channel: Channel | None = None,
         trace_id: str | None = None,
+        request_timer: RequestTimer | None = None,
     ) -> OrchestratorResult:
         """Top-level entrypoint for a single user turn.
 
@@ -52,6 +54,8 @@ class Orchestrator:
             channel: Optional communication channel. If None, defaults to CHAT.
             trace_id: Optional trace ID from the entry point (e.g. service/CLI).
                 If provided, used for request-to-reply latency tracing.
+            request_timer: Optional RequestTimer for inline span-based timing.
+                If provided, the orchestrator records timing spans for each phase.
 
         Returns:
             OrchestratorResult with reply, steps, and trace_id.
@@ -78,13 +82,14 @@ class Orchestrator:
         else:
             trace_ctx = TraceContext.new_trace()
 
-        # Create execution context
+        # Create execution context with timer
         ctx = ExecutionContext(
             session_id=session_id,
             trace_id=trace_ctx.trace_id,
             user_message=user_message,
             mode=mode,
             channel=channel,
+            request_timer=request_timer,
         )
 
         # Execute task

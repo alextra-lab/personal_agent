@@ -13,6 +13,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 # Add project root to path (ruff: noqa: E402)
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root / "src"))
@@ -21,6 +23,7 @@ from personal_agent.telemetry import add_elasticsearch_handler, get_logger  # no
 from personal_agent.telemetry.es_handler import ElasticsearchHandler  # noqa: E402
 
 
+@pytest.mark.asyncio
 async def test_logging():
     """Test Elasticsearch logging with rich structured data."""
     log = get_logger(__name__)

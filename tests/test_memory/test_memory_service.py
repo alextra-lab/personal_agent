@@ -18,6 +18,9 @@ from personal_agent.memory.models import (
 )
 from personal_agent.memory.service import MemoryService
 
+# Note: Tests use unique IDs (uuid) for entity names to avoid interference
+# from stale Neo4j data across test runs.
+
 
 @pytest_asyncio.fixture
 async def memory_service():
@@ -36,15 +39,7 @@ async def memory_service():
 @pytest_asyncio.fixture
 async def clean_test_data(memory_service):
     """Clean test data before and after tests."""
-    # Clean before
-    async with memory_service.driver.session() as session:
-        await session.run("MATCH (n) WHERE n.test = true DETACH DELETE n")
-
     yield
-
-    # Clean after
-    async with memory_service.driver.session() as session:
-        await session.run("MATCH (n) WHERE n.test = true DETACH DELETE n")
 
 
 class TestConnectionHandling:
@@ -97,9 +92,7 @@ class TestConversationCRUD:
             timestamp=datetime.now(),
             user_message="What is the capital of France?",
             assistant_response="The capital of France is Paris.",
-            channel="CLI",
-            mode="NORMAL",
-            test=True,  # Mark as test data
+            key_entities=["France", "Paris"],
         )
 
         success = await memory_service.create_conversation(conversation)
@@ -114,10 +107,8 @@ class TestConversationCRUD:
             timestamp=datetime.now(),
             user_message="Tell me about Python",
             assistant_response="Python is a high-level programming language.",
-            channel="WEB",
-            mode="NORMAL",
-            metadata={"task_id": "123", "duration_ms": 500},
-            test=True,
+            key_entities=["Python"],
+            properties={"task_id": "123", "duration_ms": 500},
         )
 
         success = await memory_service.create_conversation(conversation)
@@ -134,7 +125,6 @@ class TestEntityManagement:
         entity = Entity(
             name="Paris",
             entity_type="LOCATION",
-            test=True,
         )
 
         entity_id = await memory_service.create_entity(entity)
@@ -148,8 +138,6 @@ class TestEntityManagement:
         entity = Entity(
             name="Python",
             entity_type="PROGRAMMING_LANGUAGE",
-            mentions=5,
-            test=True,
         )
 
         entity_id = await memory_service.create_entity(entity)
@@ -162,25 +150,26 @@ class TestEntityManagement:
         self, memory_service, clean_test_data
     ):
         """Test creating duplicate entity increments mention count."""
+        unique_name = f"TestLang_{uuid.uuid4().hex[:8]}"
         entity = Entity(
-            name="JavaScript",
+            name=unique_name,
             entity_type="PROGRAMMING_LANGUAGE",
-            mentions=1,
-            test=True,
         )
 
-        # Create first time
+        await memory_service.create_entity(entity)
         await memory_service.create_entity(entity)
 
-        # Create again (should increment mentions via MERGE)
-        await memory_service.create_entity(entity)
+        # Query the specific entity directly to avoid being pushed out of
+        # top-N results by accumulated test data from previous runs.
+        async with memory_service.driver.session() as session:
+            result = await session.run(
+                "MATCH (e:Entity {name: $name}) RETURN e.mention_count AS mc",
+                name=unique_name,
+            )
+            record = await result.single()
 
-        # Verify via user_interests query
-        interests = await memory_service.get_user_interests(limit=10)
-        js_interest = next((i for i in interests if i.name == "JavaScript"), None)
-
-        assert js_interest is not None
-        assert js_interest.mention_count >= 2  # Should have incremented
+        assert record is not None
+        assert record["mc"] >= 2
 
 
 class TestRelationships:
@@ -189,32 +178,27 @@ class TestRelationships:
     @pytest.mark.asyncio
     async def test_create_relationship(self, memory_service, clean_test_data):
         """Test creating a DISCUSSES relationship."""
-        # Create conversation and entity
         conversation = ConversationNode(
             conversation_id=str(uuid.uuid4()),
             timestamp=datetime.now(),
             user_message="Tell me about Paris",
             assistant_response="Paris is the capital of France.",
-            channel="CLI",
-            mode="NORMAL",
-            test=True,
+            key_entities=["Paris"],
         )
 
         entity = Entity(
             name="Paris",
             entity_type="LOCATION",
-            test=True,
         )
 
         success = await memory_service.create_conversation(conversation)
         assert success
         await memory_service.create_entity(entity)
 
-        # Create relationship
         relationship = Relationship(
             source_id=conversation.conversation_id,
             target_id="Paris",
-            relationship_type="DISCUSSES",
+            relationship_type="RELATED_TO",
         )
 
         success = await memory_service.create_relationship(relationship)
@@ -228,36 +212,17 @@ class TestMemoryQueries:
     @pytest.mark.asyncio
     async def test_query_by_entity_name(self, memory_service, clean_test_data):
         """Test querying conversations by entity name."""
-        # Create test data
         conversation = ConversationNode(
             conversation_id=str(uuid.uuid4()),
             timestamp=datetime.now(),
             user_message="What is Python?",
             assistant_response="Python is a programming language.",
-            channel="CLI",
-            mode="NORMAL",
-            test=True,
-        )
-
-        entity = Entity(
-            name="Python",
-            entity_type="PROGRAMMING_LANGUAGE",
-            test=True,
+            key_entities=["Python"],
         )
 
         success = await memory_service.create_conversation(conversation)
         assert success
-        await memory_service.create_entity(entity)
 
-        # Create relationship
-        relationship = Relationship(
-            source_id=conversation.conversation_id,
-            target_id="Python",
-            relationship_type="DISCUSSES",
-        )
-        await memory_service.create_relationship(relationship)
-
-        # Query by entity name
         query = MemoryQuery(
             entity_names=["Python"],
             limit=10,
@@ -271,35 +236,23 @@ class TestMemoryQueries:
     @pytest.mark.asyncio
     async def test_query_by_entity_type(self, memory_service, clean_test_data):
         """Test querying conversations by entity type."""
-        # Create test data
         conversation = ConversationNode(
             conversation_id=str(uuid.uuid4()),
             timestamp=datetime.now(),
             user_message="Tell me about London",
             assistant_response="London is the capital of the UK.",
-            channel="CLI",
-            mode="NORMAL",
-            test=True,
+            key_entities=["London"],
         )
 
         entity = Entity(
             name="London",
             entity_type="LOCATION",
-            test=True,
         )
 
         success = await memory_service.create_conversation(conversation)
         assert success
         await memory_service.create_entity(entity)
 
-        relationship = Relationship(
-            source_id=conversation.conversation_id,
-            target_id="London",
-            relationship_type="DISCUSSES",
-        )
-        await memory_service.create_relationship(relationship)
-
-        # Query by entity type
         query = MemoryQuery(
             entity_types=["LOCATION"],
             limit=10,
@@ -312,100 +265,65 @@ class TestMemoryQueries:
     @pytest.mark.asyncio
     async def test_query_with_recency_filter(self, memory_service, clean_test_data):
         """Test querying with recency filter."""
-        # Create old conversation
+        unique_entity = f"RecencyLang_{uuid.uuid4().hex[:8]}"
+
         old_conversation = ConversationNode(
             conversation_id=str(uuid.uuid4()),
             timestamp=datetime.now() - timedelta(days=31),
-            user_message="Old message about Ruby",
-            assistant_response="Ruby is a programming language.",
-            channel="CLI",
-            mode="NORMAL",
-            test=True,
+            user_message=f"Old message about {unique_entity}",
+            assistant_response=f"{unique_entity} is a programming language.",
+            key_entities=[unique_entity],
         )
 
-        # Create recent conversation
         recent_conversation = ConversationNode(
             conversation_id=str(uuid.uuid4()),
             timestamp=datetime.now(),
-            user_message="Recent message about Ruby",
-            assistant_response="Ruby is still popular.",
-            channel="CLI",
-            mode="NORMAL",
-            test=True,
-        )
-
-        entity = Entity(
-            name="Ruby",
-            entity_type="PROGRAMMING_LANGUAGE",
-            test=True,
+            user_message=f"Recent message about {unique_entity}",
+            assistant_response=f"{unique_entity} is still popular.",
+            key_entities=[unique_entity],
         )
 
         await memory_service.create_conversation(old_conversation)
         await memory_service.create_conversation(recent_conversation)
-        await memory_service.create_entity(entity)
 
-        await memory_service.create_relationship(
-            Relationship(
-                source_id=old_conversation.conversation_id,
-                target_id="Ruby",
-                relationship_type="DISCUSSES",
-            )
-        )
-        await memory_service.create_relationship(
-            Relationship(
-                source_id=recent_conversation.conversation_id,
-                target_id="Ruby",
-                relationship_type="DISCUSSES",
-            )
-        )
-
-        # Query with recency filter
         query = MemoryQuery(
-            entity_names=["Ruby"],
-            recency_days=30,  # Only last 30 days
+            entity_names=[unique_entity],
+            recency_days=30,
             limit=10,
         )
 
         result = await memory_service.query_memory(query)
 
-        # Should only return recent conversation
         assert len(result.conversations) == 1
         assert result.conversations[0].conversation_id == recent_conversation.conversation_id
 
     @pytest.mark.asyncio
     async def test_get_user_interests(self, memory_service, clean_test_data):
         """Test retrieving user interests (entities by mention count)."""
-        # Create entities with different mention counts
-        entities = [
-            Entity(
-                name="Python",
-                entity_type="PROGRAMMING_LANGUAGE",
-                properties={"mentions": 10, "test": True},
-            ),
-            Entity(
-                name="JavaScript",
-                entity_type="PROGRAMMING_LANGUAGE",
-                properties={"mentions": 5, "test": True},
-            ),
-            Entity(
-                name="Ruby",
-                entity_type="PROGRAMMING_LANGUAGE",
-                properties={"mentions": 2, "test": True},
-            ),
-        ]
+        prefix = f"test_{uuid.uuid4().hex[:6]}_"
+        high_name = f"{prefix}HighMentions"
+        mid_name = f"{prefix}MidMentions"
+        low_name = f"{prefix}LowMentions"
 
-        for entity in entities:
-            await memory_service.create_entity(entity)
+        high_entity = Entity(name=high_name, entity_type="PROGRAMMING_LANGUAGE")
+        mid_entity = Entity(name=mid_name, entity_type="PROGRAMMING_LANGUAGE")
+        low_entity = Entity(name=low_name, entity_type="PROGRAMMING_LANGUAGE")
 
-        # Get user interests
-        interests = await memory_service.get_user_interests(limit=3)
+        for _ in range(10):
+            await memory_service.create_entity(high_entity)
+        for _ in range(5):
+            await memory_service.create_entity(mid_entity)
+        for _ in range(2):
+            await memory_service.create_entity(low_entity)
 
-        assert len(interests) == 3
-        # Should be sorted by mentions (descending)
-        assert interests[0].name == "Python"
-        assert interests[0].mention_count >= 10
-        assert interests[1].name == "JavaScript"
-        assert interests[2].name == "Ruby"
+        interests = await memory_service.get_user_interests(limit=500)
+
+        test_interests = [i for i in interests if i.name.startswith(prefix)]
+        assert len(test_interests) == 3
+        assert test_interests[0].name == high_name
+        assert test_interests[0].mention_count >= 10
+        assert test_interests[1].name == mid_name
+        assert test_interests[2].name == low_name
 
 
 class TestErrorHandling:

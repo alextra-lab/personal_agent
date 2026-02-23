@@ -88,7 +88,7 @@ class TestAppConfig:
         assert config.version == "0.1.0"
         assert config.log_level == "INFO"
         assert config.log_format == "json"
-        assert config.llm_base_url == "http://localhost:8000/v1"
+        assert config.llm_base_url == "http://127.0.0.1:1234/v1"
         assert config.llm_timeout_seconds == 120
         assert config.orchestrator_max_concurrent_tasks == 5
 

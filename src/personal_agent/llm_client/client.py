@@ -492,8 +492,13 @@ class LocalLLMClient:
         """
         from personal_agent.llm_client.dspy_adapter import configure_dspy_lm
 
+        model_def = self.model_configs.get(role.value)
+        effective_base_url = (
+            model_def.endpoint if model_def and model_def.endpoint else self.base_url
+        )
+
         return configure_dspy_lm(
             role=role,
-            base_url=self.base_url,
+            base_url=effective_base_url,
             timeout_s=self.timeout_seconds,
         )

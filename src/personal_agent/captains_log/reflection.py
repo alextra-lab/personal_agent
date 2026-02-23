@@ -9,6 +9,7 @@ Based on:
 - E-008 Test Case A evaluation (100% reliability, ~30-40% code reduction)
 """
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from typing import Any
@@ -149,7 +150,8 @@ async def generate_reflection_entry(
                 trace_id=trace_id,
                 component="reflection",
             )
-            entry = generate_reflection_dspy(
+            entry = await asyncio.to_thread(
+                generate_reflection_dspy,
                 user_message=user_message,
                 trace_id=trace_id,
                 steps_count=steps_count,

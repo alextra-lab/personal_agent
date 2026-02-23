@@ -488,6 +488,16 @@ def _parse_routing_decision(response_content: str, ctx: ExecutionContext) -> Rou
         if "target_model" in data and data["target_model"]:
             result["target_model"] = ModelRole.from_str(data["target_model"])
 
+        # Default target_model to STANDARD for DELEGATE decisions when router omits it
+        if result["decision"] == RoutingDecision.DELEGATE and result["target_model"] is None:
+            log.warning(
+                "routing_target_model_defaulted",
+                trace_id=ctx.trace_id,
+                default="STANDARD",
+                reason="Router returned DELEGATE without target_model",
+            )
+            result["target_model"] = ModelRole.STANDARD
+
         # Phase 2 fields (not in MVP)
         if "detected_format" in data:
             result["detected_format"] = data["detected_format"]
@@ -1247,22 +1257,14 @@ async def step_llm_call(
                     # Router wants to delegate to another model
                     target_model: ModelRole | None = routing_result.get("target_model")
 
-                    # Validate target_model is not None (prevents infinite loop)
+                    # Safety net: target_model should always be set by
+                    # _parse_routing_decision, but guard against edge cases.
                     if target_model is None:
-                        log.error(
-                            ROUTING_PARSE_ERROR,
-                            trace_id=ctx.trace_id,
-                            error="Invalid or missing target_model in DELEGATE decision",
-                            decision="DELEGATE",
-                            target_model_raw=routing_result.get("target_model"),
-                        )
-
-                        # Fallback to STANDARD to prevent infinite loop
                         log.warning(
                             "routing_invalid_target_model_fallback",
                             trace_id=ctx.trace_id,
                             fallback_model="STANDARD",
-                            reason="Invalid target_model in DELEGATE decision",
+                            reason="target_model unexpectedly None after parsing",
                         )
                         target_model = ModelRole.STANDARD
                     target_model_role: ModelRole = target_model

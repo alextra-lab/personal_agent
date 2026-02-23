@@ -79,7 +79,7 @@ class AppConfig(BaseSettings):
 
     # LLM Client
     llm_base_url: str = Field(
-        default="http://localhost:8000/v1", description="Base URL for LLM API (slm_server default)"
+        default="http://127.0.0.1:1234/v1", description="Base URL for LLM API (LM Studio default)"
     )
     llm_timeout_seconds: int = Field(default=120, ge=1, description="Request timeout")
     llm_max_retries: int = Field(default=3, ge=0, description="Maximum retry attempts")

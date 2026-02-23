@@ -131,6 +131,14 @@ See the [`docs/research/`](docs/research/) directory for research notes and anal
    uv run uvicorn personal_agent.service.app:app --reload --port 9000
    ```
 
+5. **Chat with the agent from terminal**
+
+   ```bash
+   # Uses service client, creates/reuses session automatically
+   uv run agent "Hello, what should I focus on today?"
+   uv run agent "Summarize that into 3 bullets"
+   ```
+
 ### Verify Installation
 
 ```bash
@@ -156,17 +164,28 @@ open http://localhost:9000/docs
 
 ## Usage Examples
 
-### Create a Session
+### Primary Interface (Conversation CLI)
+
+```bash
+uv run agent "Hello"
+uv run agent "Follow up on that"
+uv run agent chat "Start new conversation" --new
+uv run agent session
+```
+
+Set target service with `AGENT_SERVICE_URL` if needed:
+
+```bash
+export AGENT_SERVICE_URL=https://agent.example.com
+```
+
+### Raw API (Optional)
 
 ```bash
 curl -X POST http://localhost:9000/sessions \
   -H "Content-Type: application/json" \
   -d '{"channel": "CLI", "mode": "NORMAL"}'
-```
 
-### Send a Chat Message
-
-```bash
 curl -X POST "http://localhost:9000/chat?message=Hello&session_id=YOUR_SESSION_ID"
 ```
 

@@ -192,6 +192,27 @@ class AppConfig(BaseSettings):
         default=9000,
         description="Service port number (9000 to avoid conflict with LLM server on 8000)",
     )
+    service_url: str = Field(
+        default="http://localhost:9000",
+        alias="SERVICE_URL",
+        description="Base URL for service-facing clients (CLI service client).",
+    )
+
+    # Conversation continuity (Phase 2.6)
+    conversation_max_history_messages: int = Field(
+        default=50,
+        ge=1,
+        description="Maximum number of historical session messages to hydrate into orchestrator memory.",
+    )
+    conversation_max_context_tokens: int = Field(
+        default=6000,
+        ge=500,
+        description="Maximum context token budget for conversation messages before LLM call.",
+    )
+    conversation_context_strategy: str = Field(
+        default="truncate",
+        description="Context window strategy. Supported: 'truncate'.",
+    )
 
     # Database (Postgres)
     database_url: str = Field(

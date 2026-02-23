@@ -104,6 +104,7 @@ class LocalLLMClient:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        response_format: dict[str, Any] | None = None,
         system_prompt: str | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
@@ -130,6 +131,7 @@ class LocalLLMClient:
             messages: List of message dicts with role and content.
             tools: Optional list of tool definitions for function calling.
             tool_choice: Tool choice parameter ("auto", "none", or specific tool).
+            response_format: Optional structured output constraints (OpenAI-compatible).
             system_prompt: Optional system prompt (prepended to messages).
             max_tokens: Maximum tokens to generate.
             temperature: Sampling temperature.
@@ -157,6 +159,9 @@ class LocalLLMClient:
 
         # Get model ID
         model_id = model_config.id
+        effective_temperature = temperature
+        if effective_temperature is None:
+            effective_temperature = model_config.temperature
 
         # Determine base URL for this model
         # If endpoint is specified in config, use it; otherwise use client's base_url
@@ -250,7 +255,8 @@ class LocalLLMClient:
                     tools=tools,
                     tool_choice=tool_choice,
                     max_tokens=max_tokens,
-                    temperature=temperature,
+                    temperature=effective_temperature,
+                    response_format=response_format,
                     previous_response_id=previous_response_id,
                     reasoning_effort=reasoning_effort,
                 )

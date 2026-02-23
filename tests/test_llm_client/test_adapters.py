@@ -1,5 +1,7 @@
 """Tests for LLM API adapters."""
 
+from typing import Any
+
 import pytest
 
 from personal_agent.llm_client.adapters import (
@@ -166,14 +168,14 @@ class TestAdaptChatCompletionsResponse:
 
     def test_response_with_empty_choices(self) -> None:
         """Test that empty choices raises LLMInvalidResponse."""
-        response_data = {"choices": []}
+        response_data: dict[str, Any] = {"choices": []}
 
         with pytest.raises(LLMInvalidResponse, match="no choices"):
             adapt_chat_completions_response(response_data)
 
     def test_response_missing_choices(self) -> None:
         """Test that missing choices raises LLMInvalidResponse."""
-        response_data = {}
+        response_data: dict[str, Any] = {}
 
         with pytest.raises(LLMInvalidResponse, match="no choices"):
             adapt_chat_completions_response(response_data)
@@ -318,3 +320,16 @@ class TestBuildChatCompletionsRequest:
         )
 
         assert payload["temperature"] == 0.7
+
+    def test_request_with_response_format(self) -> None:
+        """Test building a request with response_format."""
+        messages = [{"role": "user", "content": "Hello"}]
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {"name": "test_schema", "schema": {"type": "object"}},
+        }
+        payload = build_chat_completions_request(
+            messages=messages, model="test-model", response_format=response_format
+        )
+
+        assert payload["response_format"] == response_format

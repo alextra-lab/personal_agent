@@ -521,3 +521,115 @@ models:
             # Should succeed using fallback
             assert response["content"] == "Fallback success"
             assert call_count == 2  # Tried responses, then chat_completions
+
+    @pytest.mark.asyncio
+    async def test_respond_uses_model_default_temperature(self, tmp_path: Path) -> None:
+        """Use model temperature when caller does not pass one."""
+        config_file = tmp_path / "models.yaml"
+        config_file.write_text(
+            """
+models:
+  router:
+    id: "test-router"
+    context_length: 8192
+    quantization: "8bit"
+    max_concurrency: 4
+    default_timeout: 5
+    temperature: 0.15
+"""
+        )
+        client = LocalLLMClient(base_url="http://localhost:1234/v1", model_config_path=config_file)
+        mock_response = {
+            "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_response_obj = MagicMock()
+            mock_response_obj.json.return_value = mock_response
+            mock_response_obj.raise_for_status = MagicMock()
+            mock_client.post = AsyncMock(return_value=mock_response_obj)
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            trace_ctx = TraceContext.new_trace()
+            await client.respond(
+                role=ModelRole.ROUTER,
+                messages=[{"role": "user", "content": "Test"}],
+                trace_ctx=trace_ctx,
+            )
+
+            payload = mock_client.post.call_args.kwargs["json"]
+            assert payload["temperature"] == 0.15
+
+    @pytest.mark.asyncio
+    async def test_respond_caller_temperature_overrides_model_default(self, tmp_path: Path) -> None:
+        """Caller-supplied temperature should override model default."""
+        config_file = tmp_path / "models.yaml"
+        config_file.write_text(
+            """
+models:
+  router:
+    id: "test-router"
+    context_length: 8192
+    quantization: "8bit"
+    max_concurrency: 4
+    default_timeout: 5
+    temperature: 0.15
+"""
+        )
+        client = LocalLLMClient(base_url="http://localhost:1234/v1", model_config_path=config_file)
+        mock_response = {
+            "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_response_obj = MagicMock()
+            mock_response_obj.json.return_value = mock_response
+            mock_response_obj.raise_for_status = MagicMock()
+            mock_client.post = AsyncMock(return_value=mock_response_obj)
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            trace_ctx = TraceContext.new_trace()
+            await client.respond(
+                role=ModelRole.ROUTER,
+                messages=[{"role": "user", "content": "Test"}],
+                temperature=0.6,
+                trace_ctx=trace_ctx,
+            )
+
+            payload = mock_client.post.call_args.kwargs["json"]
+            assert payload["temperature"] == 0.6
+
+    @pytest.mark.asyncio
+    async def test_respond_includes_response_format(self, client: LocalLLMClient) -> None:
+        """Structured response_format should be included in payload when provided."""
+        mock_response = {
+            "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {"name": "router_decision", "schema": {"type": "object"}},
+        }
+
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_response_obj = MagicMock()
+            mock_response_obj.json.return_value = mock_response
+            mock_response_obj.raise_for_status = MagicMock()
+            mock_client.post = AsyncMock(return_value=mock_response_obj)
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            trace_ctx = TraceContext.new_trace()
+            await client.respond(
+                role=ModelRole.ROUTER,
+                messages=[{"role": "user", "content": "Test"}],
+                response_format=response_format,
+                trace_ctx=trace_ctx,
+            )
+
+            payload = mock_client.post.call_args.kwargs["json"]
+            assert payload["response_format"] == response_format

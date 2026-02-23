@@ -52,23 +52,42 @@ open http://localhost:9000/docs
 
 ## Basic Usage
 
-### Command-line chat
+### Conversation-first CLI
 
-To ask a question or send a request from the terminal, run the CLI with **`uv run`** so the project environment (and dependencies like `typer`) is used:
-
-```bash
-# From the project root, after: uv sync
-uv run python -m personal_agent.ui.cli "Your question or request here"
-```
-
-You can omit the `chat` subcommand; a single argument is treated as a chat message. For explicit `chat` and options:
+Use the service client as the primary interface:
 
 ```bash
-uv run python -m personal_agent.ui.cli chat "Your question or request here"
-uv run python -m personal_agent.ui.cli chat "Follow-up" --session-id my-session
+# First message (creates and stores session automatically)
+uv run agent "Hello, can you help me plan my day?"
+
+# Follow-up in same conversation (reuses stored session)
+uv run agent "Now turn that into a 3-item checklist"
 ```
 
-**Note:** Do not use `python -m ...` alone (system Python may miss dependencies) or `uv python -m ...` (`uv python` is for managing Python versions). Use **`uv run python -m personal_agent.ui.cli`**.
+### Start a new conversation
+
+```bash
+uv run agent chat "Let's start a new topic" --new
+```
+
+### Inspect or rotate session id
+
+```bash
+uv run agent session
+uv run agent session new
+```
+
+### Service URL configuration
+
+The CLI reads `AGENT_SERVICE_URL` (default: `http://localhost:9000`):
+
+```bash
+export AGENT_SERVICE_URL=http://localhost:9000
+# or
+export AGENT_SERVICE_URL=https://agent.example.com
+```
+
+Messages are sent as query parameters via `httpx` and are URL-encoded automatically.
 
 ### Create a Session
 

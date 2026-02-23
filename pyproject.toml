@@ -57,6 +57,9 @@ dependencies = [
   "anthropic>=0.18.0",
 ]
 
+[project.scripts]
+agent = "personal_agent.ui.service_cli:app"
+
 [project.optional-dependencies]
 # Development tooling stack: linting, typing, and tests.
 dev = [

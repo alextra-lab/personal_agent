@@ -209,6 +209,9 @@ class TestRoutingScenarios:
         assert mock_client.respond.call_count == 1
         call_args = mock_client.respond.call_args
         assert call_args.kwargs["role"] == ModelRole.ROUTER
+        response_format = call_args.kwargs.get("response_format")
+        assert isinstance(response_format, dict)
+        assert response_format.get("type") == "json_schema"
 
     @patch("personal_agent.orchestrator.executor.LocalLLMClient")
     async def test_complex_query_router_delegates_to_reasoning(

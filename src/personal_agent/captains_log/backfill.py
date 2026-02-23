@@ -56,6 +56,23 @@ def _path_relative_to_root(p: pathlib.Path) -> str:
         return p.as_posix()
 
 
+def _normalize_reflection_doc_for_es(doc: dict[str, Any]) -> dict[str, Any]:
+    """Normalize reflection payload to avoid ES numeric mapping conflicts."""
+    metrics = doc.get("metrics_structured")
+    if not isinstance(metrics, list):
+        return doc
+
+    for metric in metrics:
+        if not isinstance(metric, dict):
+            continue
+        value = metric.get("value")
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            metric["value"] = float(value)
+    return doc
+
+
 @dataclass
 class BackfillCheckpoint:
     """Replay checkpoint for resume after restart."""
@@ -246,7 +263,7 @@ async def run_backfill(
                 continue
             date_str = entry.timestamp.strftime("%Y-%m-%d")
             index_name = f"{REFLECTIONS_INDEX_PREFIX}-{date_str}"
-            doc = entry.model_dump(mode="json")
+            doc = _normalize_reflection_doc_for_es(entry.model_dump(mode="json"))
             doc_id = entry.entry_id
             rid = await es_logger.index_document(index_name, doc, id=doc_id)
             if rid is not None:

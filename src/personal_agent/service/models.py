@@ -43,7 +43,7 @@ class SessionResponse(BaseModel):
     last_active_at: datetime
     mode: str
     channel: str | None
-    metadata: dict[str, Any]
+    metadata: dict[str, Any] = Field(validation_alias="metadata_", serialization_alias="metadata")
     messages: list[dict[str, Any]]
 
     class Config:  # noqa: D106

@@ -23,6 +23,7 @@ models:
     quantization: "8bit"
     max_concurrency: 4
     default_timeout: 10  # seconds (1.7B model is fast, typical routing ~3-4s)
+    temperature: 0.1
     supports_function_calling: false  # Qwen3 has native function calling support
     endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
 
@@ -34,6 +35,7 @@ models:
     quantization: "8bit"
     max_concurrency: 2
     default_timeout: 45  # seconds
+    temperature: 0.3
     supports_function_calling: true  # Test if MLX backend handles function calling
     endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
 
@@ -45,6 +47,7 @@ models:
     quantization: "8bit"
     max_concurrency: 2  # Increased from 1 (smaller footprint enables parallelism)
     default_timeout: 90  # seconds (increased for entity extraction workload)
+    temperature: 0.4
     supports_function_calling: true  # Use /v1/responses (native tools); /no_think supported via prompt suffix
     endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
 
@@ -55,6 +58,7 @@ models:
     quantization: "8bit"
     max_concurrency: 2
     default_timeout: 45  # seconds
+    temperature: 0.2
     supports_function_calling: false  # Use /v1/chat/completions (LM Studio /responses can be slow for some models)
     endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
 
@@ -67,23 +71,26 @@ models:
     quantization: "4bit"
     max_concurrency: 1
     default_timeout: 90
+    temperature: 0.35
     supports_function_calling: false  # Uses text-based tool calls (ADR-0008)
     #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
 
   reasoning_baseline:
     # Original baseline for comparison experiments
-    id: "qwen/qwen3-next-80b"
+    id: "qwen/qwen3-30b-a3b"
     context_length: 128000
     quantization: "5bit"
     max_concurrency: 1
     default_timeout: 60
+    temperature: 0.4
     #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
 
   coding_large_context:
-    # For large codebase analysis (future evaluation)
-    id: "mistralai/devstral-small-2-2512"
+    # For large codebase analysis (future evaluation; high-memory MoE model)
+    id: "qwen/qwen3-coder-next"
     context_length: 128000
-    quantization: "8bit"  # Per ADR-0008 and research recommendations (not 6bit)
+    quantization: "4bit"
     max_concurrency: 1
     default_timeout: 60
+    temperature: 0.2
     #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model

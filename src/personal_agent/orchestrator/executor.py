@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, cast
 from personal_agent.config import settings
 from personal_agent.llm_client import LocalLLMClient, ModelRole
 from personal_agent.orchestrator.channels import Channel
+from personal_agent.orchestrator.context_window import apply_context_window, estimate_messages_tokens
 from personal_agent.orchestrator.session import SessionManager
 from personal_agent.orchestrator.types import (
     ExecutionContext,
@@ -56,6 +57,37 @@ if TYPE_CHECKING:  # pragma: no cover
     from personal_agent.mcp.gateway import MCPGatewayAdapter
 
 _mcp_adapter: "MCPGatewayAdapter | None" = None
+
+
+def _router_response_format() -> dict[str, Any]:
+    """Return strict JSON schema for router structured output."""
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "router_decision",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "routing_decision": {"type": "string", "enum": ["HANDLE", "DELEGATE"]},
+                    "target_model": {"type": "string", "enum": ["STANDARD", "REASONING", "CODING"]},
+                    "confidence": {"type": "number"},
+                    "reasoning_depth": {"type": "integer"},
+                    "reason": {"type": "string"},
+                    "response": {"type": "string"},
+                    "detected_format": {"type": "string"},
+                    "format_confidence": {"type": "number"},
+                    "format_keywords_matched": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "recommended_params": {"type": "object"},
+                },
+                "required": ["routing_decision", "confidence", "reasoning_depth", "reason"],
+                "additionalProperties": True,
+            },
+        },
+    }
 
 
 def _normalize_no_think_suffix(suffix: str) -> str:
@@ -774,11 +806,33 @@ async def step_init(
     """
     # Load session and build message history
     session = session_manager.get_session(ctx.session_id)
+    session_message_count = 0
     if session:
         ctx.messages = list(session.messages)
+        session_message_count = len(ctx.messages)
 
     # Add new user message
     ctx.messages.append({"role": "user", "content": ctx.user_message})
+
+    # Apply context window controls before LLM usage to prevent overflow.
+    input_messages_count = len(ctx.messages)
+    ctx.messages = apply_context_window(
+        ctx.messages,
+        max_tokens=settings.conversation_max_context_tokens,
+        strategy=settings.conversation_context_strategy,
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+    )
+
+    log.info(
+        "conversation_context_loaded",
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        total_messages_in_db=session_message_count,
+        messages_loaded=len(ctx.messages),
+        messages_truncated=max(0, input_messages_count - len(ctx.messages)),
+        estimated_tokens=estimate_messages_tokens(ctx.messages),
+    )
 
     # Query memory graph for relevant context (Phase 2.2)
     if settings.enable_memory_graph:
@@ -1059,11 +1113,16 @@ async def step_llm_call(
             ],
         )
 
+        response_format: dict[str, Any] | None = None
+        if model_role == ModelRole.ROUTER:
+            response_format = _router_response_format()
+
         response = await llm_client.respond(
             role=model_role,
             messages=request_messages,
             system_prompt=system_prompt,
             tools=tools if tools else None,
+            response_format=response_format,
             trace_ctx=span_ctx,
             previous_response_id=ctx.last_response_id,
             max_retries=max_retries_override,

@@ -161,7 +161,8 @@ class MemoryService:
                 result = await session.run(
                     """
                     MERGE (e:Entity {name: $name})
-                    SET e.entity_type = $entity_type,
+                    SET e.entity_id = COALESCE(e.entity_id, $entity_id),
+                        e.entity_type = $entity_type,
                         e.description = $description,
                         e.properties = $properties,
                         e.last_seen = datetime(),
@@ -170,6 +171,7 @@ class MemoryService:
                     RETURN e.name as entity_id
                     """,
                     name=entity.name,
+                    entity_id=entity.name,
                     entity_type=entity.entity_type,
                     description=entity.description,
                     properties=orjson.dumps(
@@ -202,9 +204,13 @@ class MemoryService:
                 await session.run(
                     """
                     MATCH (source)
-                    WHERE id(source) = toInteger($source_id) OR source.conversation_id = $source_id OR source.name = $source_id
+                    WHERE source.conversation_id = $source_id
+                       OR source.entity_id = $source_id
+                       OR source.name = $source_id
                     MATCH (target)
-                    WHERE id(target) = toInteger($target_id) OR target.conversation_id = $target_id OR target.name = $target_id
+                    WHERE target.conversation_id = $target_id
+                       OR target.entity_id = $target_id
+                       OR target.name = $target_id
                     MERGE (source)-[r:RELATIONSHIP {type: $relationship_type}]->(target)
                     SET r.weight = $weight,
                         r.properties = $properties,

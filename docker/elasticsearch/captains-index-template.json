@@ -41,6 +41,14 @@
           }
         },
         "supporting_metrics": { "type": "keyword" },
+        "metrics_structured": {
+          "type": "nested",
+          "properties": {
+            "name": { "type": "keyword" },
+            "value": { "type": "float" },
+            "unit": { "type": "keyword" }
+          }
+        },
         "telemetry_refs": {
           "type": "nested",
           "properties": {

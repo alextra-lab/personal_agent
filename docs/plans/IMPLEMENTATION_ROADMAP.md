@@ -1,8 +1,8 @@
 # Implementation Roadmap — Personal Local AI Collaborator
 
 > **Status**: MVP Complete → Phase 2: Service Architecture & Memory System
-> **Current Phase**: Phase 2.2 Complete ✅ → Phase 2.3: Homeostasis & Feedback
-> **Next**: Phase 2.3 - Homeostasis & Feedback Implementation
+> **Current Phase**: Phase 2.3 In Progress → Phase 2.6 Conversational Agent MVP
+> **Next**: Phase 2.6 - Conversational Agent MVP implementation
 > **Tracker**: See `docs/plans/DEV_TRACKER.md` for quick status and active work items
 
 ---
@@ -19,9 +19,10 @@
 **Phase 2 (Service Architecture) IN PROGRESS** 🚀
 - ✅ Phase 2.1: Service Foundation (COMPLETE - 2026-01-22)
 - ✅ Phase 2.2: Memory & Second Brain (COMPLETE - 2026-01-23, Testing COMPLETE - 111 tests, 86% pass rate)
-- ⏳ Phase 2.3: Homeostasis & Feedback (NEXT)
+- ⏳ Phase 2.3: Homeostasis & Feedback (IN PROGRESS)
 - ⏳ Phase 2.4: Multi-Agent Orchestration (PROPOSED - ADR-0017)
 - ⏳ Phase 2.5: Seshat Memory Librarian (PROPOSED - ADR-0018)
+- ⏳ Phase 2.6: Conversational Agent MVP (PLANNED)
 - LLM Backend: SLM Server (multi-model routing, MLX-optimized, ports 8000-8503)
 - See: `./sessions/SESSION-2026-01-19-service-architecture-planning.md`
 - See: `../architecture_decisions/ADR-0016-service-cognitive-architecture.md` ✅

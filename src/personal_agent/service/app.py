@@ -13,6 +13,7 @@ from personal_agent.brainstem.scheduler import BrainstemScheduler
 from personal_agent.captains_log.es_indexer import build_es_indexer_from_handler, set_es_indexer
 from personal_agent.config.settings import get_settings
 from personal_agent.memory.service import MemoryService
+from personal_agent.orchestrator.context_window import estimate_messages_tokens
 from personal_agent.security import sanitize_error_message
 from personal_agent.service.database import get_db_session, init_db
 from personal_agent.service.models import SessionCreate, SessionResponse, SessionUpdate
@@ -281,6 +282,11 @@ async def chat(
     else:
         session = await repo.create(SessionCreate())
 
+    # Snapshot DB history before appending this turn's user message.
+    db_messages = list(session.messages or [])
+    max_history = settings.conversation_max_history_messages
+    prior_messages = db_messages[-max_history:] if max_history > 0 else db_messages
+
     # Append user message
     await repo.append_message(cast(UUID, session.session_id), {"role": "user", "content": message})
 
@@ -302,6 +308,10 @@ async def chat(
                 Mode.NORMAL, Channel.CHAT, session_id=str(session.session_id)
             )
 
+        # Hydrate orchestrator session with DB history before current turn.
+        if prior_messages:
+            session_manager.update_session(str(session.session_id), messages=prior_messages)
+
         # Handle request via orchestrator
         result = await orchestrator.handle_user_request(
             session_id=str(session.session_id),
@@ -315,6 +325,16 @@ async def chat(
         # Record request completion for scheduler
         if scheduler:
             scheduler.record_request()
+
+        log.info(
+            "conversation_context_loaded",
+            trace_id=result.get("trace_id"),
+            session_id=str(session.session_id),
+            total_messages_in_db=len(db_messages),
+            messages_loaded=len(prior_messages),
+            messages_truncated=max(0, len(db_messages) - len(prior_messages)),
+            estimated_tokens=estimate_messages_tokens(prior_messages),
+        )
 
     except Exception as e:
         # Generate error reference ID for log correlation

@@ -27,6 +27,12 @@ class ModelDefinition(BaseModel):
     quantization: str = Field(..., description="Quantization level")
     max_concurrency: int = Field(..., ge=1, description="Maximum concurrent requests")
     default_timeout: int = Field(..., ge=1, description="Default timeout in seconds")
+    temperature: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=2.0,
+        description="Default sampling temperature for this model (None uses backend default).",
+    )
     supports_function_calling: bool = Field(
         True, description="Whether model supports native function calling"
     )

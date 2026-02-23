@@ -71,6 +71,9 @@ class SessionRepository:
             Updated session model or None if not found
         """
         update_data = {k: v for k, v in data.model_dump().items() if v is not None}
+        # SQLAlchemy attribute is metadata_ because metadata is reserved.
+        if "metadata" in update_data:
+            update_data["metadata_"] = update_data.pop("metadata")
         update_data["last_active_at"] = datetime.utcnow()
 
         await self.db.execute(

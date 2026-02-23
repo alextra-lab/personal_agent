@@ -23,6 +23,28 @@ if TYPE_CHECKING:
     from personal_agent.telemetry.es_handler import ElasticsearchHandler
 
 
+def _normalize_reflection_doc_for_es(doc: dict[str, object]) -> dict[str, object]:
+    """Normalize reflection document field types for stable ES mappings.
+
+    Elasticsearch cannot accept mixed numeric mappings for the same field in one
+    index (e.g., `float` then `long`). We normalize `metrics_structured.value`
+    integers to floats before indexing.
+    """
+    metrics = doc.get("metrics_structured")
+    if not isinstance(metrics, list):
+        return doc
+
+    for metric in metrics:
+        if not isinstance(metric, dict):
+            continue
+        value = metric.get("value")
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            metric["value"] = float(value)
+    return doc
+
+
 def _get_captains_log_dir() -> pathlib.Path:
     """Get the Captain's Log directory path.
 
@@ -181,7 +203,7 @@ class CaptainLogManager:
         if entry.type in {CaptainLogEntryType.REFLECTION, CaptainLogEntryType.CONFIG_PROPOSAL}:
             date_str = entry.timestamp.strftime("%Y-%m-%d")
             index_name = f"{REFLECTIONS_INDEX_PREFIX}-{date_str}"
-            doc = entry.model_dump(mode="json")
+            doc = _normalize_reflection_doc_for_es(entry.model_dump(mode="json"))
             handler = es_handler or self.es_handler
             schedule_es_index(index_name, doc, es_handler=handler, doc_id=entry.entry_id)
 
@@ -323,8 +345,17 @@ class CaptainLogManager:
             type=CaptainLogEntryType.REFLECTION,
             title=title,
             rationale=rationale,
+            proposed_change=None,
             supporting_metrics=supporting_metrics or [],
-            telemetry_refs=[TelemetryRef(trace_id=trace_id)] if trace_id else [],
+            metrics_structured=None,
+            impact_assessment=None,
+            reviewer_notes=None,
+            experiment_design=None,
+            expected_outcome=None,
+            potential_implementation=None,
+            telemetry_refs=[TelemetryRef(trace_id=trace_id, metric_name=None, value=None)]
+            if trace_id
+            else [],
         )
 
         file_path = self.write_entry(entry)

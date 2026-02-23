@@ -350,6 +350,7 @@ def build_chat_completions_request(
     tool_choice: str | dict[str, Any] | None = None,
     max_tokens: int | None = None,
     temperature: float | None = None,
+    response_format: dict[str, Any] | None = None,
     previous_response_id: str | None = None,  # Ignored for chat/completions (stateless)
     reasoning_effort: str | None = None,  # Ignored for chat/completions (responses-only)
 ) -> dict[str, Any]:
@@ -364,6 +365,7 @@ def build_chat_completions_request(
         tool_choice: Tool choice parameter ("auto", "none", or specific tool).
         max_tokens: Maximum tokens to generate.
         temperature: Sampling temperature.
+        response_format: Optional structured output constraints (OpenAI-compatible).
         previous_response_id: Ignored (chat/completions is stateless, included for signature consistency).
         reasoning_effort: Ignored (chat/completions doesn't support reasoning effort, included for signature consistency).
 
@@ -411,5 +413,8 @@ def build_chat_completions_request(
 
     if temperature is not None:
         payload["temperature"] = temperature
+
+    if response_format is not None:
+        payload["response_format"] = response_format
 
     return payload

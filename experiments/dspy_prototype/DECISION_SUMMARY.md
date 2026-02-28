@@ -1,6 +1,6 @@
 # E-008 Decision Summary & Next Steps
 
-**Date**: 2026-01-17  
+**Date**: 2026-01-17
 **Decision**: ✅ **Option B (Selective Adoption)** - Use DSPy for Captain's Log reflection only
 
 ---

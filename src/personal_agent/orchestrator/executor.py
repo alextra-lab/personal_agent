@@ -11,15 +11,17 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 
 from personal_agent.config import settings
-from personal_agent.llm_client import LocalLLMClient, ModelRole
+from personal_agent.llm_client import LLMTimeout, LocalLLMClient, ModelRole
 from personal_agent.orchestrator.channels import Channel
 from personal_agent.orchestrator.context_window import (
     apply_context_window,
     estimate_messages_tokens,
 )
+from personal_agent.orchestrator.routing import heuristic_routing, resolve_role
 from personal_agent.orchestrator.session import SessionManager
 from personal_agent.orchestrator.types import (
     ExecutionContext,
+    HeuristicRoutingPlan,
     OrchestratorResult,
     OrchestratorStep,
     RoutingDecision,
@@ -44,7 +46,6 @@ from personal_agent.telemetry import (
 from personal_agent.telemetry.events import (
     ROUTING_DECISION,
     ROUTING_DELEGATION,
-    ROUTING_HANDLED,
     ROUTING_PARSE_ERROR,
 )
 from personal_agent.telemetry.trace import TraceContext
@@ -72,23 +73,13 @@ def _router_response_format() -> dict[str, Any]:
             "strict": True,
             "schema": {
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
-                    "routing_decision": {"type": "string", "enum": ["HANDLE", "DELEGATE"]},
                     "target_model": {"type": "string", "enum": ["STANDARD", "REASONING", "CODING"]},
                     "confidence": {"type": "number"},
-                    "reasoning_depth": {"type": "integer"},
                     "reason": {"type": "string"},
-                    "response": {"type": "string"},
-                    "detected_format": {"type": "string"},
-                    "format_confidence": {"type": "number"},
-                    "format_keywords_matched": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "recommended_params": {"type": "object"},
                 },
-                "required": ["routing_decision", "confidence", "reasoning_depth", "reason"],
-                "additionalProperties": True,
+                "required": ["target_model", "confidence"],
             },
         },
     }
@@ -389,9 +380,27 @@ def _determine_initial_model_role(ctx: ExecutionContext) -> ModelRole:
     if ctx.channel == Channel.CODE_TASK:
         return ModelRole.CODING
     elif ctx.channel == Channel.CHAT:
-        return ModelRole.ROUTER  # CHAT always starts with router
+        return resolve_role(ModelRole.ROUTER)
     else:  # SYSTEM_HEALTH or default
-        return ModelRole.REASONING
+        return resolve_role(ModelRole.REASONING)
+
+
+def _routing_result_from_heuristic(
+    plan: HeuristicRoutingPlan, reason_prefix: str = "heuristic"
+) -> RoutingResult:
+    """Convert heuristic gate output to RoutingResult."""
+    return {
+        "decision": RoutingDecision.DELEGATE,
+        "target_model": resolve_role(plan["target_model"]),
+        "confidence": float(plan["confidence"]),
+        "reasoning_depth": 5,
+        "reason": f"{reason_prefix}: {plan['reason']}",
+        "detected_format": None,
+        "format_confidence": None,
+        "format_keywords_matched": None,
+        "recommended_params": None,
+        "response": None,
+    }
 
 
 def _parse_routing_decision(response_content: str, ctx: ExecutionContext) -> RoutingResult | None:
@@ -405,142 +414,54 @@ def _parse_routing_decision(response_content: str, ctx: ExecutionContext) -> Rou
         RoutingResult if parsing succeeds, None otherwise.
     """
     try:
-        # Check for empty response
         if not response_content or not response_content.strip():
-            log.error(
-                ROUTING_PARSE_ERROR,
-                trace_id=ctx.trace_id,
-                error="Empty response from router",
-                response_preview="(empty)",
-            )
-            # Fallback to STANDARD
-            log.warning(
-                "routing_parse_fallback",
-                trace_id=ctx.trace_id,
-                fallback_model="STANDARD",
-            )
-            return {
-                "decision": RoutingDecision.DELEGATE,
-                "target_model": ModelRole.STANDARD,
-                "confidence": 0.5,
-                "reasoning_depth": 5,
-                "reason": "Router returned empty response, defaulting to STANDARD",
-                "detected_format": None,
-                "format_confidence": None,
-                "format_keywords_matched": None,
-                "recommended_params": None,
-                "response": None,
-            }
+            raise ValueError("Empty response from router")
 
-        # Extract JSON from response (may be wrapped in markdown code blocks)
         json_str = response_content.strip()
-
-        # Remove markdown code fences if present
         if json_str.startswith("```"):
             lines = json_str.split("\n")
-            json_str = "\n".join(lines[1:-1])  # Remove first and last lines
-
-        # Check if we still have content after stripping
+            json_str = "\n".join(lines[1:-1]).strip()
         if not json_str:
-            log.error(
-                ROUTING_PARSE_ERROR,
-                trace_id=ctx.trace_id,
-                error="Empty JSON string after processing",
-                response_preview=response_content[:200],
-            )
-            # Fallback to STANDARD
-            log.warning(
-                "routing_parse_fallback",
-                trace_id=ctx.trace_id,
-                fallback_model="STANDARD",
-            )
-            return {
-                "decision": RoutingDecision.DELEGATE,
-                "target_model": ModelRole.STANDARD,
-                "confidence": 0.5,
-                "reasoning_depth": 5,
-                "reason": "Router response was empty after processing, defaulting to STANDARD",
-                "detected_format": None,
-                "format_confidence": None,
-                "format_keywords_matched": None,
-                "recommended_params": None,
-                "response": None,
-            }
+            raise ValueError("Empty JSON string after processing")
 
-        # Parse JSON
         data = json.loads(json_str)
+        if not isinstance(data, dict):
+            raise ValueError("Router output must be a JSON object")
 
-        # Convert to RoutingResult
-        result: RoutingResult = {
-            "decision": RoutingDecision(data["routing_decision"]),
-            "confidence": float(data["confidence"]),
-            "reasoning_depth": int(data["reasoning_depth"]),
-            "reason": data["reason"],
-            "target_model": None,
+        target_model_raw = data.get("target_model")
+        confidence_raw = data.get("confidence")
+        reason_raw = data.get("reason")
+
+        target_model = (
+            ModelRole.from_str(target_model_raw) if isinstance(target_model_raw, str) else None
+        )
+        if target_model is None:
+            raise KeyError("target_model")
+        if confidence_raw is None:
+            raise KeyError("confidence")
+
+        return {
+            "decision": RoutingDecision.DELEGATE,
+            "target_model": resolve_role(target_model),
+            "confidence": float(confidence_raw),
+            "reasoning_depth": 5,
+            "reason": reason_raw
+            if isinstance(reason_raw, str) and reason_raw
+            else "LLM router decision",
             "detected_format": None,
             "format_confidence": None,
             "format_keywords_matched": None,
             "recommended_params": None,
             "response": None,
         }
-
-        # Add optional fields
-        if "target_model" in data and data["target_model"]:
-            result["target_model"] = ModelRole.from_str(data["target_model"])
-
-        # Default target_model to STANDARD for DELEGATE decisions when router omits it
-        if result["decision"] == RoutingDecision.DELEGATE and result["target_model"] is None:
-            log.warning(
-                "routing_target_model_defaulted",
-                trace_id=ctx.trace_id,
-                default="STANDARD",
-                reason="Router returned DELEGATE without target_model",
-            )
-            result["target_model"] = ModelRole.STANDARD
-
-        # Phase 2 fields (not in MVP)
-        if "detected_format" in data:
-            result["detected_format"] = data["detected_format"]
-        if "format_confidence" in data:
-            result["format_confidence"] = float(data["format_confidence"])
-        if "format_keywords_matched" in data:
-            result["format_keywords_matched"] = data["format_keywords_matched"]
-        if "recommended_params" in data:
-            result["recommended_params"] = data["recommended_params"]
-
-        # If router is handling directly, extract response
-        if result["decision"] == RoutingDecision.HANDLE:
-            result["response"] = data.get("response", response_content)
-
-        return result
-
-    except (json.JSONDecodeError, KeyError, ValueError) as e:
+    except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
         log.error(
             ROUTING_PARSE_ERROR,
             trace_id=ctx.trace_id,
             error=str(e),
-            response_preview=response_content[:200],
+            response_preview=response_content[:200] if response_content else "(empty)",
         )
-
-        # Fallback: If parsing fails, default to STANDARD model
-        log.warning(
-            "routing_parse_fallback",
-            trace_id=ctx.trace_id,
-            fallback_model="STANDARD",
-        )
-
-        return {
-            "decision": RoutingDecision.DELEGATE,
-            "target_model": ModelRole.STANDARD,
-            "confidence": 0.5,
-            "reasoning_depth": 5,
-            "reason": "Router parse failed, defaulting to STANDARD",
-            "detected_format": None,
-            "format_confidence": None,
-            "format_keywords_matched": None,
-            "recommended_params": None,
-            "response": None,
-        }
+        return None
 
 
 async def _trigger_captains_log_reflection(ctx: ExecutionContext) -> None:
@@ -991,6 +912,9 @@ async def step_llm_call(
     """
     timer = ctx.request_timer
 
+    routing_policy = (settings.routing_policy or "heuristic_then_llm").strip().lower()
+    heuristic_plan: HeuristicRoutingPlan | None = None
+
     # Determine which model to call
     if ctx.selected_model_role is None:
         # First LLM call: determine initial model based on channel
@@ -999,17 +923,55 @@ async def step_llm_call(
         # Routing decision was made, use selected model
         model_role = ctx.selected_model_role
 
-        # Determine if we need router system prompt
+    # Deterministic pre-router gate: only relevant when using dedicated router role.
+    if model_role == ModelRole.ROUTER:
+        heuristic_plan = heuristic_routing(ctx.user_message)
+        log.info(
+            "routing_heuristics_evaluated",
+            trace_id=ctx.trace_id,
+            policy=routing_policy,
+            target_model=heuristic_plan["target_model"].value,
+            confidence=heuristic_plan["confidence"],
+            reason=heuristic_plan["reason"],
+        )
+
+        should_skip_router = routing_policy == "heuristic_only" or (
+            routing_policy == "heuristic_then_llm"
+            and heuristic_plan["confidence"] >= settings.routing_heuristic_threshold
+        )
+        if should_skip_router:
+            heuristic_routing_result = _routing_result_from_heuristic(
+                heuristic_plan, "pre_router_gate"
+            )
+            ctx.routing_history.append(heuristic_routing_result)
+            ctx.selected_model_role = resolve_role(heuristic_plan["target_model"])
+            log.info(
+                "routing_heuristics_decided",
+                trace_id=ctx.trace_id,
+                router_called=False,
+                target_model=ctx.selected_model_role.value,
+                confidence=heuristic_plan["confidence"],
+                threshold=settings.routing_heuristic_threshold,
+                reason=heuristic_plan["reason"],
+            )
+            log.info(
+                ROUTING_DECISION,
+                trace_id=ctx.trace_id,
+                decision=heuristic_routing_result["decision"],
+                target_model=heuristic_routing_result.get("target_model"),
+                confidence=heuristic_routing_result["confidence"],
+                reasoning_depth=heuristic_routing_result["reasoning_depth"],
+                reason=heuristic_routing_result["reason"],
+            )
+            return TaskState.LLM_CALL
+
+    # Determine if we need router system prompt
     system_prompt: str | None = None
     if model_role == ModelRole.ROUTER and not ctx.routing_history:
         # First router call: add routing prompt
         from personal_agent.orchestrator.prompts import get_router_prompt
 
-        system_prompt = get_router_prompt(include_format_detection=False)  # MVP: basic prompt
-        # Note: User message already in ctx.messages, system prompt passed separately
-    else:
-        # Tool-use guidance for non-router calls (ADR-0008 hybrid tool calling)
-        system_prompt = None
+        system_prompt = get_router_prompt(include_format_detection=False)
 
     # Create span for LLM call
     span_ctx, span_id = trace_ctx.new_span()
@@ -1057,7 +1019,7 @@ async def step_llm_call(
             )
 
         # Add memory context to system prompt (Phase 2.2)
-        if ctx.memory_context and len(ctx.memory_context) > 0:
+        if model_role != ModelRole.ROUTER and ctx.memory_context and len(ctx.memory_context) > 0:
             memory_section = "\n\n## Relevant Past Conversations\n"
             memory_section += (
                 "The following past conversations may be relevant to the current request:\n\n"
@@ -1101,8 +1063,10 @@ async def step_llm_call(
         # - Tool-request call: append suffix to the last user message.
         # - Post-tool synthesis: append a short user nudge ending with the suffix (tool outputs are last).
         #   IMPORTANT: Skip synthesis nudge for Mistral models - they expect direct synthesis after tool results
-        request_messages = ctx.messages
-        if model_role != ModelRole.ROUTER:
+        if model_role == ModelRole.ROUTER:
+            request_messages = [{"role": "user", "content": ctx.user_message}]
+        else:
+            request_messages = ctx.messages
             if tools:
                 request_messages = _append_no_think_to_last_user_message(request_messages)
             elif is_synthesizing:
@@ -1122,8 +1086,10 @@ async def step_llm_call(
                         reason="Mistral models require direct synthesis after tool results",
                     )
 
-        # Validate and fix conversation role alternation for strict models (e.g., Mistral)
-        request_messages = _validate_and_fix_conversation_roles(request_messages)
+        # Validate and fix conversation role alternation for strict models (e.g., Mistral).
+        # Router input intentionally bypasses this: it always uses a minimal user-only view.
+        if model_role != ModelRole.ROUTER:
+            request_messages = _validate_and_fix_conversation_roles(request_messages)
 
         # Debug: log message roles for conversation validation
         message_roles = [msg.get("role", "unknown") for msg in request_messages]
@@ -1145,6 +1111,15 @@ async def step_llm_call(
                 for msg in request_messages
             ],
         )
+        if model_role == ModelRole.ROUTER:
+            log.info(
+                "routing_router_call_payload",
+                trace_id=ctx.trace_id,
+                router_called=True,
+                message_count=len(request_messages),
+                estimated_tokens=estimate_messages_tokens(request_messages),
+                timeout_seconds=settings.router_timeout_seconds,
+            )
 
         response_format: dict[str, Any] | None = None
         if model_role == ModelRole.ROUTER:
@@ -1161,6 +1136,7 @@ async def step_llm_call(
             system_prompt=system_prompt,
             tools=tools if tools else None,
             response_format=response_format,
+            timeout_s=settings.router_timeout_seconds if model_role == ModelRole.ROUTER else None,
             trace_ctx=span_ctx,
             previous_response_id=ctx.last_response_id,
             max_retries=max_retries_override,
@@ -1211,6 +1187,13 @@ async def step_llm_call(
             model_role=model_role.value,
             tokens=total_tokens,
         )
+        if model_role == ModelRole.ROUTER:
+            log.info(
+                "routing_router_latency",
+                trace_id=ctx.trace_id,
+                latency_ms=duration_ms,
+                timed_out=False,
+            )
 
         # Record step
         step: OrchestratorStep = {
@@ -1227,73 +1210,64 @@ async def step_llm_call(
 
         # Handle routing decision if this was a router call
         if model_role == ModelRole.ROUTER:
+            assert heuristic_plan is not None
             if timer:
                 timer.start_span("routing_parse")
-            routing_result = _parse_routing_decision(response_content, ctx)
+            routing_result: RoutingResult | None = _parse_routing_decision(response_content, ctx)
 
-            if routing_result:
-                ctx.routing_history.append(routing_result)
-
-                # Log routing decision
-                log.info(
-                    ROUTING_DECISION,
+            if routing_result is None:
+                routing_result = _routing_result_from_heuristic(
+                    heuristic_plan, "router_parse_fallback"
+                )
+                log.warning(
+                    "routing_parse_fallback_to_heuristic",
                     trace_id=ctx.trace_id,
-                    decision=routing_result["decision"],
-                    target_model=routing_result.get("target_model"),
+                    target_model=routing_result["target_model"].value
+                    if routing_result["target_model"]
+                    else None,
                     confidence=routing_result["confidence"],
-                    reasoning_depth=routing_result["reasoning_depth"],
-                    reason=routing_result["reason"],
+                )
+            assert routing_result is not None
+
+            ctx.routing_history.append(routing_result)
+
+            log.info(
+                ROUTING_DECISION,
+                trace_id=ctx.trace_id,
+                decision=routing_result["decision"],
+                target_model=routing_result.get("target_model"),
+                confidence=routing_result["confidence"],
+                reasoning_depth=routing_result["reasoning_depth"],
+                reason=routing_result["reason"],
+            )
+
+            if timer:
+                timer.end_span(
+                    "routing_parse",
+                    decision=str(routing_result["decision"]),
+                    target_model=str(routing_result.get("target_model")),
+                    confidence=routing_result["confidence"],
                 )
 
-                if timer:
-                    timer.end_span(
-                        "routing_parse",
-                        decision=str(routing_result["decision"]),
-                        target_model=str(routing_result.get("target_model")),
-                        confidence=routing_result["confidence"],
-                    )
+            target_model = routing_result.get("target_model")
+            if target_model is None:
+                target_model = resolve_role(heuristic_plan["target_model"])
+                log.warning(
+                    "routing_target_missing_fallback_heuristic",
+                    trace_id=ctx.trace_id,
+                    fallback_model=target_model.value,
+                )
 
-                if routing_result["decision"] == "DELEGATE":
-                    # Router wants to delegate to another model
-                    target_model: ModelRole | None = routing_result.get("target_model")
+            target_model_role = resolve_role(target_model)
+            log.info(
+                ROUTING_DELEGATION,
+                trace_id=ctx.trace_id,
+                from_model="ROUTER",
+                to_model=target_model_role,
+            )
 
-                    # Safety net: target_model should always be set by
-                    # _parse_routing_decision, but guard against edge cases.
-                    if target_model is None:
-                        log.warning(
-                            "routing_invalid_target_model_fallback",
-                            trace_id=ctx.trace_id,
-                            fallback_model="STANDARD",
-                            reason="target_model unexpectedly None after parsing",
-                        )
-                        target_model = ModelRole.STANDARD
-                    target_model_role: ModelRole = target_model
-
-                    log.info(
-                        ROUTING_DELEGATION,
-                        trace_id=ctx.trace_id,
-                        from_model="ROUTER",
-                        to_model=target_model_role,
-                    )
-
-                    ctx.selected_model_role = target_model_role
-                    # Note: Do NOT add routing marker to ctx.messages - it confuses
-                    # the target model into thinking work has already been done,
-                    # preventing it from calling tools properly.
-                    return TaskState.LLM_CALL  # Loop back for delegated model
-
-                else:  # HANDLE
-                    # Router answered directly
-                    log.info(
-                        ROUTING_HANDLED,
-                        trace_id=ctx.trace_id,
-                        model="ROUTER",
-                    )
-
-                    # Use router's response if provided
-                    router_response = routing_result.get("response")
-                    if router_response:
-                        response_content = router_response
+            ctx.selected_model_role = target_model_role
+            return TaskState.LLM_CALL
 
         # Some reasoning models may emit router-style JSON with a `response` field.
         # Unwrap it to avoid returning JSON to the user.
@@ -1324,6 +1298,23 @@ async def step_llm_call(
             return TaskState.SYNTHESIS
 
     except Exception as e:
+        if model_role == ModelRole.ROUTER and isinstance(e, LLMTimeout):
+            if heuristic_plan is None:
+                heuristic_plan = heuristic_routing(ctx.user_message)
+            fallback_result = _routing_result_from_heuristic(
+                heuristic_plan, "router_timeout_fallback"
+            )
+            ctx.routing_history.append(fallback_result)
+            ctx.selected_model_role = resolve_role(heuristic_plan["target_model"])
+            log.warning(
+                "routing_router_timeout_fallback",
+                trace_id=ctx.trace_id,
+                timeout_seconds=settings.router_timeout_seconds,
+                target_model=ctx.selected_model_role.value,
+                confidence=heuristic_plan["confidence"],
+            )
+            return TaskState.LLM_CALL
+
         duration_ms = int((time.time() - step_start_time) * 1000)
         log.error(
             MODEL_CALL_ERROR,
@@ -1338,7 +1329,11 @@ async def step_llm_call(
         error_step: OrchestratorStep = {
             "type": "warning",
             "description": f"LLM call failed: {sanitized_error}",
-            "metadata": {"error": sanitized_error, "error_type": type(e).__name__, "span_id": span_id},
+            "metadata": {
+                "error": sanitized_error,
+                "error_type": type(e).__name__,
+                "span_id": span_id,
+            },
         }
         ctx.steps.append(error_step)
         return TaskState.FAILED
@@ -1617,9 +1612,7 @@ async def step_tool_execution(
 
     duration_ms = int((time.time() - step_start_time) * 1000)
 
-    tool_names = [
-        tc.get("function", {}).get("name", "unknown") for tc in tool_calls
-    ]
+    tool_names = [tc.get("function", {}).get("name", "unknown") for tc in tool_calls]
     if timer:
         timer.end_span(
             f"tool_execution:{ctx.tool_iteration_count}",

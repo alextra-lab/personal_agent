@@ -1,6 +1,6 @@
 # DSPy Prototype Evaluation Status
 
-**Date**: 2026-01-17  
+**Date**: 2026-01-17
 **Status**: ✅ Configuration Working
 
 ## Summary
@@ -11,7 +11,7 @@ Started the DSPy prototype evaluation (E-008) but encountered configuration chal
 
 ✅ **Completed**:
 1. DSPy installed via `uv add dspy` (v3.1.0)
-2. LM Studio verified running on `localhost:1234` 
+2. LM Studio verified running on `localhost:1234`
 3. Models confirmed available (qwen3-1.7b, qwen3-4b-2507, qwen3-8b, devstral-small-2-2512)
 4. Prototype directory structure created
 5. Setup script created with DSPy configuration attempt
@@ -24,7 +24,7 @@ Started the DSPy prototype evaluation (E-008) but encountered configuration chal
 
 **Status**: Configuration working! (2026-01-17)
 
-**Solution**: 
+**Solution**:
 - Use `dspy.LM()` (not `dspy.OpenAI()` which doesn't exist)
 - Model format: `"openai/{model-name}"` (e.g., `"openai/qwen/qwen3-4b-2507"`)
 - Pass `api_base` and `api_key` as kwargs to `dspy.LM()`

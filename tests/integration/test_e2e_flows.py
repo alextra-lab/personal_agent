@@ -37,13 +37,15 @@ def _routing_delegate(target: str = "STANDARD", reason: str = "Complex question"
     """Build a properly-formatted routing DELEGATE decision JSON string."""
     import json
 
-    return json.dumps({
-        "routing_decision": "DELEGATE",
-        "target_model": target,
-        "confidence": 0.9,
-        "reasoning_depth": 5,
-        "reason": reason,
-    })
+    return json.dumps(
+        {
+            "routing_decision": "DELEGATE",
+            "target_model": target,
+            "confidence": 0.9,
+            "reasoning_depth": 5,
+            "reason": reason,
+        }
+    )
 
 
 @contextmanager
@@ -153,9 +155,7 @@ async def test_e2e_system_health_with_tools():
             _make_llm_response(
                 content="I'll check your system health.",
                 model="qwen3-reasoning",
-                tool_calls=[
-                    {"id": "call_1", "name": "system_metrics_snapshot", "arguments": "{}"}
-                ],
+                tool_calls=[{"id": "call_1", "name": "system_metrics_snapshot", "arguments": "{}"}],
                 usage={"prompt_tokens": 120, "completion_tokens": 20},
             ),
             _make_llm_response(

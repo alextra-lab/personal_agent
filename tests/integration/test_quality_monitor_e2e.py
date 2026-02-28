@@ -142,7 +142,9 @@ async def test_scheduler_quality_monitor_events_are_queryable() -> None:
         ]
     )
     telemetry_queries.get_event_count = AsyncMock(  # type: ignore[method-assign]
-        side_effect=lambda event_type, days: 100 if event_type == "entity_extraction_started" else 10
+        side_effect=lambda event_type, days: 100
+        if event_type == "entity_extraction_started"
+        else 10
     )
     telemetry_queries.get_daily_event_counts = AsyncMock(  # type: ignore[method-assign]
         return_value={
@@ -162,7 +164,10 @@ async def test_scheduler_quality_monitor_events_are_queryable() -> None:
     verification_queries = TelemetryQueries(es_client=fake_es_client)
     assert await verification_queries.get_event_count("quality_monitor_entity_report", days=1) >= 1
     assert await verification_queries.get_event_count("quality_monitor_graph_report", days=1) >= 1
-    assert await verification_queries.get_event_count("quality_monitor_anomalies_detected", days=1) >= 1
+    assert (
+        await verification_queries.get_event_count("quality_monitor_anomalies_detected", days=1)
+        >= 1
+    )
 
     daily_counts = await verification_queries.get_daily_event_counts(
         "quality_monitor_anomalies_detected",

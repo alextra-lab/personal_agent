@@ -71,14 +71,14 @@ def system_metrics_snapshot_executor(
     stat_summary: bool = True
 ) -> dict[str, Any]:
     """Get system metrics with optional historical data.
-    
+
     Args:
         window_str: Optional time window (e.g., "30m", "1h", "24h").
                    If provided, includes historical snapshots.
         trace_id: Optional trace ID to filter metrics for specific request.
         include_history: Whether to include full time-series data.
         stat_summary: Whether to include statistical summary (min/max/avg).
-    
+
     Returns:
         {
             "success": bool,
@@ -149,11 +149,11 @@ def system_metrics_snapshot_executor(...) -> dict[str, Any]:
             "success": True,
             "error": None
         }
-        
+
         # Always get current snapshot
         current_metrics = get_system_metrics_snapshot()
         result["current"] = current_metrics
-        
+
         # If historical data requested
         if window_str or trace_id:
             # Query telemetry logs
@@ -171,17 +171,17 @@ def system_metrics_snapshot_executor(...) -> dict[str, Any]:
                     event=SYSTEM_METRICS_SNAPSHOT,
                     window_str=window_str
                 )
-            
+
             # Include full history if requested
             if include_history:
                 result["history"] = history
-            
+
             # Calculate statistical summary
             if stat_summary and history:
                 result["summary"] = _calculate_summary(history)
-        
+
         return result
-        
+
     except Exception as e:
         return {
             "success": False,
@@ -193,38 +193,38 @@ def _calculate_summary(snapshots: list[dict]) -> dict[str, Any]:
     """Calculate statistical summary from metric snapshots."""
     if not snapshots:
         return {}
-    
+
     # Extract metric values
     cpu_values = [s.get("cpu_load") for s in snapshots if s.get("cpu_load") is not None]
     mem_values = [s.get("memory_used") for s in snapshots if s.get("memory_used") is not None]
     gpu_values = [s.get("gpu_load") for s in snapshots if s.get("gpu_load") is not None]
-    
+
     summary = {
         "duration_seconds": _calculate_duration(snapshots),
         "sample_count": len(snapshots),
     }
-    
+
     if cpu_values:
         summary["cpu"] = {
             "min": min(cpu_values),
             "max": max(cpu_values),
             "avg": sum(cpu_values) / len(cpu_values)
         }
-    
+
     if mem_values:
         summary["memory"] = {
             "min": min(mem_values),
             "max": max(mem_values),
             "avg": sum(mem_values) / len(mem_values)
         }
-    
+
     if gpu_values:
         summary["gpu"] = {
             "min": min(gpu_values),
             "max": max(gpu_values),
             "avg": sum(gpu_values) / len(gpu_values)
         }
-    
+
     return summary
 ```
 
@@ -236,13 +236,13 @@ Update tool definition to document new parameters:
 system_metrics_snapshot_tool = ToolDefinition(
     name="system_metrics_snapshot",
     description="""Get system metrics (CPU, memory, disk, GPU) with optional history.
-    
+
     Use this to:
     - Check current system health
     - Review metrics from a time window (e.g., last 30 minutes)
     - Analyze metrics for a specific request (by trace_id)
     - Investigate performance issues
-    
+
     Examples:
     - Current only: system_metrics_snapshot()
     - Last hour: system_metrics_snapshot(window_str="1h")
@@ -299,19 +299,19 @@ def query_events(
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
     """Query log entries with flexible filters.
-    
+
     Args:
         event: Optional event name filter.
         window_str: Optional time window (e.g., "1h", "30m").
         component: Optional component name filter.
         trace_id: Optional trace ID filter.  # NEW
         limit: Optional maximum number of results.
-    
+
     Returns:
         List of matching log entries, ordered by timestamp (newest first).
     """
     # ... existing implementation ...
-    
+
     # Apply filters
     filtered = []
     for entry in entries:
@@ -322,7 +322,7 @@ def query_events(
         if trace_id and entry.get("trace_id") != trace_id:  # NEW
             continue
         filtered.append(entry)
-    
+
     # ... rest of implementation ...
 ```
 

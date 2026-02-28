@@ -74,7 +74,9 @@ def _request_error_message(error: Exception) -> str:
 
 def _create_session(client: httpx.Client) -> str:
     """Create a new server-side session and return its id."""
-    response = client.post(f"{settings.service_url}/sessions", json={"channel": "CLI", "mode": "NORMAL"})
+    response = client.post(
+        f"{settings.service_url}/sessions", json={"channel": "CLI", "mode": "NORMAL"}
+    )
     response.raise_for_status()
     data: dict[str, Any] = response.json()
     session_id = str(data["session_id"])

@@ -1,8 +1,8 @@
 # DSPy Quick Reference for Personal Agent
 
-**Date**: 2026-01-15  
-**Full Analysis**: `./dspy_framework_analysis_2026-01-15.md`  
-**Experiment**: `../architecture_decisions/experiments/E-008-dspy-prototype-evaluation.md`  
+**Date**: 2026-01-15
+**Full Analysis**: `./dspy_framework_analysis_2026-01-15.md`
+**Experiment**: `../architecture_decisions/experiments/E-008-dspy-prototype-evaluation.md`
 **Hypothesis**: H-008 in `../architecture_decisions/HYPOTHESIS_LOG.md`
 
 ---
@@ -70,8 +70,8 @@ optimized_qa = optimizer.compile(qa, trainset=examples)
 
 **Use DSPy for all LLM interactions**
 
-**Pros**: Systematic optimization, composable modules, research-backed  
-**Cons**: Framework lock-in, learning curve, abstraction complexity  
+**Pros**: Systematic optimization, composable modules, research-backed
+**Cons**: Framework lock-in, learning curve, abstraction complexity
 **When**: Prototype validates strong fit, committed to building eval datasets
 
 ---
@@ -92,8 +92,8 @@ optimized_qa = optimizer.compile(qa, trainset=examples)
 - Cases where we need tight control
 - MVP orchestrator core
 
-**Pros**: Best of both worlds, low risk, flexible, reversible  
-**Cons**: Two abstractions (DSPy + instructor)  
+**Pros**: Best of both worlds, low risk, flexible, reversible
+**Cons**: Two abstractions (DSPy + instructor)
 **When**: Pragmatic balance during pre-implementation phase
 
 ---
@@ -102,8 +102,8 @@ optimized_qa = optimizer.compile(qa, trainset=examples)
 
 **Wait until MVP complete, then evaluate with real data**
 
-**Pros**: Focus on MVP, validate with production data  
-**Cons**: Manual prompt engineering may be inefficient, harder to refactor later  
+**Pros**: Focus on MVP, validate with production data
+**Cons**: Manual prompt engineering may be inefficient, harder to refactor later
 **When**: Prototype shows poor fit or complexity outweighs benefits
 
 ---

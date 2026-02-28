@@ -23,9 +23,8 @@ class TestESIndexerRegistry:
 
     def test_set_and_get_es_indexer(self) -> None:
         """set_es_indexer stores the callable; get_es_indexer returns it."""
-        async def indexer(
-            index_name: str, document: dict, doc_id: str | None = None
-        ) -> None:
+
+        async def indexer(index_name: str, document: dict, doc_id: str | None = None) -> None:
             pass
 
         set_es_indexer(indexer)
@@ -47,9 +46,7 @@ class TestScheduleESIndex:
         """When indexer is set, schedule_es_index invokes it (non-blocking)."""
         called: list[tuple[str, dict, str | None]] = []
 
-        async def indexer(
-            index_name: str, document: dict, doc_id: str | None = None
-        ) -> None:
+        async def indexer(index_name: str, document: dict, doc_id: str | None = None) -> None:
             called.append((index_name, document, doc_id))
 
         set_es_indexer(indexer)
@@ -71,9 +68,8 @@ class TestScheduleESIndex:
     @pytest.mark.asyncio
     async def test_schedule_es_index_swallows_indexer_exception(self) -> None:
         """When indexer raises, schedule_es_index does not propagate (non-blocking)."""
-        async def indexer(
-            index_name: str, document: dict, doc_id: str | None = None
-        ) -> None:
+
+        async def indexer(index_name: str, document: dict, doc_id: str | None = None) -> None:
             raise RuntimeError("ES unavailable")
 
         set_es_indexer(indexer)

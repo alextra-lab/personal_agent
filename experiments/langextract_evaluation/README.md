@@ -9,7 +9,7 @@ Hypothesis-driven experiments to determine whether Google's **LangExtract** libr
 
 ## Status
 
-**Date started**: 2026-01-28  
+**Date started**: 2026-01-28
 **Status**: Planned
 
 ## Hypotheses (Summary)

@@ -34,7 +34,9 @@ async def test_chat_hydrates_prior_messages_before_current_turn(
     session_manager.get_session.return_value = None
     orchestrator = MagicMock()
     orchestrator.session_manager = session_manager
-    orchestrator.handle_user_request = AsyncMock(return_value={"reply": "Alex", "trace_id": "trace-1"})
+    orchestrator.handle_user_request = AsyncMock(
+        return_value={"reply": "Alex", "trace_id": "trace-1"}
+    )
     mock_orchestrator_cls.return_value = orchestrator
 
     result = await chat(message="What is my name?", session_id=str(session_id), db=AsyncMock())

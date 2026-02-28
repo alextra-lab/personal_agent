@@ -23,3 +23,23 @@ def test_parse_tool_request_end_tool_result_is_accepted() -> None:
     assert len(calls) == 1
     assert calls[0]["name"] == "list_directory"
     assert json.loads(calls[0]["arguments"]) == {"path": "/tmp"}
+
+
+def test_parse_bracket_fallback_tool_call() -> None:
+    """Parses [tool_name, {...}] fallback format."""
+    content = '[mcp_perplexity_ask, {"messages":[{"role":"user","content":"What is 2+2?"}]}]'
+    calls = parse_text_tool_calls(content)
+    assert len(calls) == 1
+    assert calls[0]["name"] == "mcp_perplexity_ask"
+    assert json.loads(calls[0]["arguments"]) == {
+        "messages": [{"role": "user", "content": "What is 2+2?"}]
+    }
+
+
+def test_parse_bracket_fallback_with_trailing_noise() -> None:
+    """Parses bracket fallback with extra trailing braces/brackets."""
+    content = '[mcp_perplexity_ask, {"messages":[{"role":"user","content":"OpenAI pricing?"}]}}]'
+    calls = parse_text_tool_calls(content)
+    assert len(calls) == 1
+    assert calls[0]["name"] == "mcp_perplexity_ask"
+    assert json.loads(calls[0]["arguments"])["messages"][0]["content"] == "OpenAI pricing?"

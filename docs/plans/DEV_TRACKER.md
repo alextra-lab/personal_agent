@@ -34,5 +34,5 @@ When starting a session:
 3. **Specs live in**: `docs/plans/PHASE_*.md`, `docs/architecture_decisions/ADR-*.md`, `IMPLEMENTATION_ROADMAP.md`.
 4. **When done**: update the Linear issue status via MCP.
 
-Example: *"What should I work on?"* → call `list_issues` filtered by state=Todo or In Progress.  
+Example: *"What should I work on?"* → call `list_issues` filtered by state=Todo or In Progress.
 Example: *"Complete FRE-8"* → call `get_issue` for FRE-8 → read spec path → implement → `update_issue` state=Done.

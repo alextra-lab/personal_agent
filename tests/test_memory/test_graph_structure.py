@@ -239,7 +239,14 @@ class TestGraphStructure:
         if not memory_service.driver:
             pytest.skip("No driver connection")
 
-        expected_names = {"Python", "Programming", "Django", "Web Development", "FastAPI", "JavaScript"}
+        expected_names = {
+            "Python",
+            "Programming",
+            "Django",
+            "Web Development",
+            "FastAPI",
+            "JavaScript",
+        }
         async with memory_service.driver.session() as session:
             result = await session.run(
                 """

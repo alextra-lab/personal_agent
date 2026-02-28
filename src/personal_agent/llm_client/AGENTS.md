@@ -110,7 +110,7 @@ class GenerateReflection(dspy.Signature):
     user_message: str = dspy.InputField()
     steps_count: int = dspy.InputField()
     final_state: str = dspy.InputField()
-    
+
     rationale: str = dspy.OutputField(desc="Analysis of execution")
     proposed_change_what: str = dspy.OutputField(desc="What to change (empty if none)")
     proposed_change_why: str = dspy.OutputField(desc="Why it helps")

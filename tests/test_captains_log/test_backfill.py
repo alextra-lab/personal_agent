@@ -2,7 +2,6 @@
 
 import json
 import pathlib
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -10,12 +9,9 @@ import pytest
 from personal_agent.captains_log.backfill import (
     BackfillCheckpoint,
     BackfillResult,
-    _captains_log_dir,
-    _captures_dir,
-    _checkpoint_path,
-    _load_checkpoint,
     _list_capture_files_sorted,
     _list_reflection_files_sorted,
+    _load_checkpoint,
     _save_checkpoint,
     run_backfill,
 )
@@ -29,13 +25,22 @@ class TestBackfillCheckpoint:
         cp = BackfillCheckpoint(
             last_scan_started_at="2026-02-22T14:00:00Z",
             last_scan_completed_at="2026-02-22T14:00:03Z",
-            captures={"last_processed_path": "telemetry/captains_log/captures/2026-02-22/trace-x.json", "last_processed_mtime": "2026-02-22T13:59:59Z"},
-            reflections={"last_processed_path": "telemetry/captains_log/CL-001.json", "last_processed_mtime": "2026-02-22T13:59:58Z"},
+            captures={
+                "last_processed_path": "telemetry/captains_log/captures/2026-02-22/trace-x.json",
+                "last_processed_mtime": "2026-02-22T13:59:59Z",
+            },
+            reflections={
+                "last_processed_path": "telemetry/captains_log/CL-001.json",
+                "last_processed_mtime": "2026-02-22T13:59:58Z",
+            },
         )
         d = cp.to_dict()
         assert d["version"] == 1
         assert "captures" in d
-        assert d["captures"]["last_processed_path"] == "telemetry/captains_log/captures/2026-02-22/trace-x.json"
+        assert (
+            d["captures"]["last_processed_path"]
+            == "telemetry/captains_log/captures/2026-02-22/trace-x.json"
+        )
         assert "reflections" in d
 
     def test_checkpoint_from_dict(self) -> None:
@@ -51,7 +56,10 @@ class TestBackfillCheckpoint:
 
     def test_save_and_load_checkpoint(self, tmp_path: pytest.TempPathFactory) -> None:
         """Checkpoint persists to disk and loads back."""
-        with patch("personal_agent.captains_log.backfill._checkpoint_path", return_value=tmp_path / "cp.json"):
+        with patch(
+            "personal_agent.captains_log.backfill._checkpoint_path",
+            return_value=tmp_path / "cp.json",
+        ):
             cp = BackfillCheckpoint(
                 last_scan_started_at="2026-02-22T14:00:00Z",
                 captures={"last_processed_path": "p", "last_processed_mtime": "m"},

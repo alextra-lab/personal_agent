@@ -89,7 +89,7 @@ Add MCP Gateway settings to `AppConfig` (ADR-0007):
 # In config/settings.py
 class AppConfig(BaseSettings):
     # ... existing fields ...
-    
+
     # MCP Gateway
     mcp_gateway_enabled: bool = Field(default=False)
     mcp_gateway_command: list[str] = Field(default=["docker", "mcp", "gateway", "run"])

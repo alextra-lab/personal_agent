@@ -11,8 +11,8 @@ All configuration loaders live in the config/ module per ADR-0007.
 from pathlib import Path
 from typing import Any
 
-from pydantic import ValidationError
 import structlog
+from pydantic import ValidationError
 
 from personal_agent.config.loader import ConfigLoadError, load_yaml_file
 from personal_agent.governance.models import GovernanceConfig

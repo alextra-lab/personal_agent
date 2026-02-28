@@ -1,7 +1,7 @@
 # Model Stack Analysis & Recommendations
 
-**Date**: 2026-01-17  
-**Context**: Post-DSPy evaluation, reviewing model stack for optimal performance  
+**Date**: 2026-01-17
+**Context**: Post-DSPy evaluation, reviewing model stack for optimal performance
 **Hardware**: Apple Silicon (M-series) with LM Studio
 
 ---
@@ -143,7 +143,7 @@ From E-008 test results, key findings affecting model selection:
 1. **LFM2-8B-A1B** (8B total, 1B active) - 6bit or 8bit
    - Pros: Faster than dense 8B, good instruction following
    - Cons: May require MLX-specific tooling, not tested with LM Studio
-   
+
 2. **Granite-4.0-H-Tiny** (~7B total, 1B active) - 6bit
    - Pros: Excellent structured outputs, long context
    - Cons: Unknown LM Studio compatibility
@@ -174,7 +174,7 @@ From E-008 test results, key findings affecting model selection:
 ### Router: qwen/qwen3-1.7b ✅ Keep
 
 **Performance**: Excellent (3-4s routing decisions)
-**Alternatives Considered**: 
+**Alternatives Considered**:
 - Phi-4 mini (3.84B): Better math but slower, no clear routing advantage
 - SmolLM3-3B: Smaller but no function calling
 

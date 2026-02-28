@@ -245,10 +245,15 @@ class InsightsEngine:
                 continue
 
             supporting_metrics = [
-                f"{metric_name}: {metric_value}" for metric_name, metric_value in insight.evidence.items()
+                f"{metric_name}: {metric_value}"
+                for metric_name, metric_value in insight.evidence.items()
             ]
             metrics_structured = [
-                Metric(name=str(metric_name), value=_metric_value(metric_value), unit=_metric_unit(metric_name))
+                Metric(
+                    name=str(metric_name),
+                    value=_metric_value(metric_value),
+                    unit=_metric_unit(metric_name),
+                )
                 for metric_name, metric_value in insight.evidence.items()
             ]
             proposed_change = ProposedChange(
@@ -278,7 +283,11 @@ class InsightsEngine:
                 )
             )
 
-        log.info("insights_captains_log_proposals_created", input_count=len(insights), count=len(proposals))
+        log.info(
+            "insights_captains_log_proposals_created",
+            input_count=len(insights),
+            count=len(proposals),
+        )
         return proposals
 
     def _build_resource_insights(

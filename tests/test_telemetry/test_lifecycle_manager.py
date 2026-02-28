@@ -1,6 +1,5 @@
 """Tests for DataLifecycleManager."""
 
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -39,7 +38,9 @@ def test_iter_reflections_only_cl_prefix(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_check_disk_usage_returns_report(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_check_disk_usage_returns_report(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """check_disk_usage returns list of DiskUsageReport."""
     monkeypatch.setattr(
         "personal_agent.telemetry.lifecycle_manager._telemetry_root",
@@ -54,12 +55,20 @@ async def test_check_disk_usage_returns_report(monkeypatch: pytest.MonkeyPatch, 
 
 
 @pytest.mark.asyncio
-async def test_archive_old_data_returns_result(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_archive_old_data_returns_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """archive_old_data returns ArchiveResult; with empty dir yields 0 archived."""
-    monkeypatch.setattr("personal_agent.telemetry.lifecycle_manager._telemetry_root", lambda: tmp_path)
-    monkeypatch.setattr("personal_agent.telemetry.lifecycle_manager._file_logs_dir", lambda: tmp_path / "logs")
+    monkeypatch.setattr(
+        "personal_agent.telemetry.lifecycle_manager._telemetry_root", lambda: tmp_path
+    )
+    monkeypatch.setattr(
+        "personal_agent.telemetry.lifecycle_manager._file_logs_dir", lambda: tmp_path / "logs"
+    )
     (tmp_path / "logs").mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr("personal_agent.telemetry.lifecycle_manager._archive_base", lambda: tmp_path / "archive")
+    monkeypatch.setattr(
+        "personal_agent.telemetry.lifecycle_manager._archive_base", lambda: tmp_path / "archive"
+    )
 
     manager = DataLifecycleManager()
     result = await manager.archive_old_data("file_logs")
@@ -79,12 +88,20 @@ async def test_purge_expired_data_respects_policy() -> None:
 
 
 @pytest.mark.asyncio
-async def test_purge_expired_data_returns_result(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_purge_expired_data_returns_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """purge_expired_data returns PurgeResult; empty dir yields 0 purged."""
-    monkeypatch.setattr("personal_agent.telemetry.lifecycle_manager._telemetry_root", lambda: tmp_path)
-    monkeypatch.setattr("personal_agent.telemetry.lifecycle_manager._file_logs_dir", lambda: tmp_path / "logs")
+    monkeypatch.setattr(
+        "personal_agent.telemetry.lifecycle_manager._telemetry_root", lambda: tmp_path
+    )
+    monkeypatch.setattr(
+        "personal_agent.telemetry.lifecycle_manager._file_logs_dir", lambda: tmp_path / "logs"
+    )
     (tmp_path / "logs").mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr("personal_agent.telemetry.lifecycle_manager._archive_base", lambda: tmp_path / "archive")
+    monkeypatch.setattr(
+        "personal_agent.telemetry.lifecycle_manager._archive_base", lambda: tmp_path / "archive"
+    )
 
     manager = DataLifecycleManager()
     result = await manager.purge_expired_data("file_logs")
@@ -106,7 +123,9 @@ async def test_cleanup_elasticsearch_indices_no_client() -> None:
 @pytest.mark.asyncio
 async def test_generate_report_read_only(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """generate_report does not modify data; returns LifecycleReport."""
-    monkeypatch.setattr("personal_agent.telemetry.lifecycle_manager._telemetry_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        "personal_agent.telemetry.lifecycle_manager._telemetry_root", lambda: tmp_path
+    )
     manager = DataLifecycleManager()
     report = await manager.generate_report()
     assert isinstance(report, LifecycleReport)

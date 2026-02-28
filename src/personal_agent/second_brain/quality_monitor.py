@@ -87,7 +87,9 @@ class ConsolidationQualityMonitor:
         conversation_count = int(
             await self._run_scalar_query("MATCH (c:Conversation) RETURN count(c) AS value")
         )
-        entity_count = int(await self._run_scalar_query("MATCH (e:Entity) RETURN count(e) AS value"))
+        entity_count = int(
+            await self._run_scalar_query("MATCH (e:Entity) RETURN count(e) AS value")
+        )
         duplicate_count = int(
             await self._run_scalar_query(
                 """
@@ -104,11 +106,7 @@ class ConsolidationQualityMonitor:
         extraction_started = await self._queries.get_event_count("entity_extraction_started", days)
         extraction_failed = await self._queries.get_event_count("entity_extraction_failed", days)
 
-        ratio = (
-            float(entity_count) / float(conversation_count)
-            if conversation_count > 0
-            else 0.0
-        )
+        ratio = float(entity_count) / float(conversation_count) if conversation_count > 0 else 0.0
         duplicate_rate = float(duplicate_count / entity_count) if entity_count > 0 else 0.0
         extraction_failure_rate = (
             float(extraction_failed / extraction_started) if extraction_started > 0 else 0.0
@@ -142,7 +140,9 @@ class ConsolidationQualityMonitor:
             Graph health report.
         """
         total_nodes = int(await self._run_scalar_query("MATCH (n) RETURN count(n) AS value"))
-        entity_nodes = int(await self._run_scalar_query("MATCH (e:Entity) RETURN count(e) AS value"))
+        entity_nodes = int(
+            await self._run_scalar_query("MATCH (e:Entity) RETURN count(e) AS value")
+        )
         conversation_nodes = int(
             await self._run_scalar_query("MATCH (c:Conversation) RETURN count(c) AS value")
         )

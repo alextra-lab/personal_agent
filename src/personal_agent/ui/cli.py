@@ -282,9 +282,7 @@ def telemetry_trace(
 @telemetry_app.command("trace-breakdown")
 def telemetry_trace_breakdown(
     trace_id: str = typer.Argument(..., help="Trace ID for latency breakdown"),
-    json_output: bool = typer.Option(
-        False, "--json", help="Output as JSON instead of table"
-    ),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON instead of table"),
 ) -> None:
     """Show request-to-reply latency breakdown for a trace_id.
 

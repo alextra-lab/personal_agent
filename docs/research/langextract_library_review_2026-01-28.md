@@ -1,8 +1,8 @@
 # LangExtract Library Review for Personal Agent
 
-**Date**: 2026-01-28  
-**Status**: Complete  
-**Related**: Second Brain (entity extraction), Captain's Log (reflection), ADR-0010 (Structured Outputs)  
+**Date**: 2026-01-28
+**Status**: Complete
+**Related**: Second Brain (entity extraction), Captain's Log (reflection), ADR-0010 (Structured Outputs)
 **Experiment**: E-018 (LangExtract Evaluation)
 
 ---
@@ -38,11 +38,11 @@
 
 ### 1.3 Typical Use Cases (from docs)
 
-- Medical/clinical note structuring  
-- Contract and document analysis  
-- Entity and relationship extraction from text  
-- Literature processing (e.g., characters, plot)  
-- Customer feedback and email mining  
+- Medical/clinical note structuring
+- Contract and document analysis
+- Entity and relationship extraction from text
+- Literature processing (e.g., characters, plot)
+- Customer feedback and email mining
 
 Our use cases—**conversation → entities/relationships** and **trace + metrics → reflection entry**—align with “entity/relationship extraction” and “document → structured record.”
 
@@ -87,32 +87,32 @@ Our use cases—**conversation → entities/relationships** and **trace + metric
 
 ## 3. Recommendations
 
-1. **Document the review**  
+1. **Document the review**
    - Keep this document in `docs/research/` as the single source of truth for the LangExtract review.
 
-2. **Run a hypothesis-driven experiment (E-018)**  
-   - Define clear hypotheses (e.g., parse rate, code size, latency, optional grounding value).  
-   - Baseline: current entity extraction (and optionally reflection).  
-   - Treatment: LangExtract-based extraction with same schema.  
+2. **Run a hypothesis-driven experiment (E-018)**
+   - Define clear hypotheses (e.g., parse rate, code size, latency, optional grounding value).
+   - Baseline: current entity extraction (and optionally reflection).
+   - Treatment: LangExtract-based extraction with same schema.
    - Measure: parse success rate, lines of code, latency, and if applicable grounding usefulness.
 
-3. **Prioritize entity extraction in E-018**  
+3. **Prioritize entity extraction in E-018**
    - Entity extraction has no DSPy today and a single, clear “text → JSON” contract; easier to compare and get a clean signal.
 
-4. **Defer reflection until E-018 results**  
+4. **Defer reflection until E-018 results**
    - Only consider LangExtract for reflection if E-018 shows clear benefit and we want to consolidate on one structured-extraction approach or need grounding.
 
-5. **Do not use LangExtract for metrics extraction**  
+5. **Do not use LangExtract for metrics extraction**
    - Captain's Log metrics are intentionally deterministic and non-LLM; no fit.
 
 ---
 
 ## 4. Related Documents
 
-- **Experiment**: [E-018: LangExtract Evaluation](../architecture_decisions/experiments/E-018-langextract-evaluation.md)  
-- **Implementation**: `src/personal_agent/second_brain/entity_extraction.py`, `src/personal_agent/captains_log/reflection.py`  
-- **Structured outputs**: ADR-0010 (Structured Outputs), E-008a (DSPy Prototype)  
-- **Entity extraction experiment**: E-017 (Entity Extraction Model Comparison)  
+- **Experiment**: [E-018: LangExtract Evaluation](../architecture_decisions/experiments/E-018-langextract-evaluation.md)
+- **Implementation**: `src/personal_agent/second_brain/entity_extraction.py`, `src/personal_agent/captains_log/reflection.py`
+- **Structured outputs**: ADR-0010 (Structured Outputs), E-008a (DSPy Prototype)
+- **Entity extraction experiment**: E-017 (Entity Extraction Model Comparison)
 - **External**: [LangExtract on PyPI](https://pypi.org/project/langextract/), [GitHub](https://github.com/google/langextract)
 
 ---

@@ -1,8 +1,8 @@
 # ADR-0015: Tool Call Performance Optimization
 
-**Status**: Proposed  
-**Date**: 2026-01-17  
-**Deciders**: System Architect  
+**Status**: Proposed
+**Date**: 2026-01-17
+**Deciders**: System Architect
 **Related**: ADR-0008 (Tool Calling), ADR-0012 (Request-Scoped Metrics)
 
 ## Context
@@ -73,14 +73,14 @@ Implement a **phased performance optimization strategy** focusing on high-impact
 # In brainstem/sensors/metrics_cache.py
 class MetricsCache:
     """Thread-safe cache for system metrics."""
-    
+
     _instance = None
     _lock = threading.Lock()
-    
+
     def __init__(self):
         self._cache: dict[str, tuple[float, dict]] = {}  # key: (timestamp, metrics)
         self._ttl = 10.0  # seconds
-    
+
     @classmethod
     def get_instance(cls):
         if cls._instance is None:
@@ -88,7 +88,7 @@ class MetricsCache:
                 if cls._instance is None:
                     cls._instance = MetricsCache()
         return cls._instance
-    
+
     def get_metrics(self, key: str) -> dict | None:
         """Get cached metrics if fresh (within TTL)."""
         if key in self._cache:
@@ -96,7 +96,7 @@ class MetricsCache:
             if time.time() - timestamp < self._ttl:
                 return metrics
         return None
-    
+
     def set_metrics(self, key: str, metrics: dict):
         """Cache metrics with current timestamp."""
         self._cache[key] = (time.time(), metrics)
@@ -104,17 +104,17 @@ class MetricsCache:
 # In tools/system_health.py
 def system_metrics_snapshot() -> dict:
     cache = MetricsCache.get_instance()
-    
+
     # Try cache first (GPU metrics)
     gpu_metrics = cache.get_metrics("gpu")
     if not gpu_metrics:
         gpu_metrics = poll_apple_gpu_metrics()  # Slow path
         cache.set_metrics("gpu", gpu_metrics)
-    
+
     # CPU/memory are fast, poll directly
     cpu_metrics = poll_cpu_metrics()  # <10ms
     memory_metrics = poll_memory_metrics()  # <10ms
-    
+
     return {**cpu_metrics, **memory_metrics, **gpu_metrics}
 ```
 
@@ -136,11 +136,11 @@ FAST_PATTERNS = {
 
 def _fast_route_check(user_message: str) -> str | None:
     """Check if message matches fast-path patterns.
-    
+
     Returns model role if match found, None otherwise.
     """
     msg = user_message.lower().strip()
-    
+
     for pattern_type, patterns in FAST_PATTERNS.items():
         for pattern in patterns:
             if re.search(pattern, msg):
@@ -150,7 +150,7 @@ def _fast_route_check(user_message: str) -> str | None:
                     matched_pattern=pattern,
                 )
                 return "router"  # Handle simple queries directly
-    
+
     return None
 
 # In step_llm_call()
@@ -176,13 +176,13 @@ if fast_route:
 # In config/settings.py
 class PerformanceSettings(BaseSettings):
     """Performance thresholds and budgets."""
-    
+
     # Latency budgets (milliseconds)
     router_call_budget_ms: int = 2000
     llm_call_budget_ms: int = 5000
     tool_execution_budget_ms: int = 1000
     total_request_budget_ms: int = 10000
-    
+
     # Alerting
     slow_request_threshold_ms: int = 15000
     enable_performance_alerts: bool = True
@@ -195,7 +195,7 @@ def _check_performance_budget(operation: str, duration_ms: float):
         "llm_call": settings.llm_call_budget_ms,
         "tool_execution": settings.tool_execution_budget_ms,
     }
-    
+
     if operation in budgets and duration_ms > budgets[operation]:
         log.warning(
             "performance_budget_exceeded",
@@ -285,7 +285,7 @@ def test_simple_greeting_under_budget():
     start = time.time()
     result = orchestrator.execute_task("Hello!")
     duration = time.time() - start
-    
+
     assert duration < 3.0, f"Simple greeting took {duration:.1f}s (budget: 3s)"
     assert result.success
 
@@ -296,12 +296,12 @@ def test_tool_call_caching():
     start1 = time.time()
     orchestrator.execute_task("Check GPU metrics")
     duration1 = time.time() - start1
-    
+
     # Second call (cached)
     start2 = time.time()
     orchestrator.execute_task("Check GPU metrics")
     duration2 = time.time() - start2
-    
+
     # Second call should be significantly faster
     assert duration2 < duration1 * 0.5, "Cache not utilized"
     assert duration2 < 1.0, "Cached call too slow"
@@ -317,7 +317,7 @@ def test_query_latency_budgets(query, budget_seconds):
     start = time.time()
     result = orchestrator.execute_task(query)
     duration = time.time() - start
-    
+
     assert duration < budget_seconds, \
         f"{query} took {duration:.1f}s (budget: {budget_seconds}s)"
 ```
@@ -342,22 +342,22 @@ log.info(
 
 ### Positive
 
-✅ **User Experience**: 71% faster responses (21s → 6s target)  
-✅ **Resource Efficiency**: Fewer unnecessary LLM calls  
-✅ **Scalability**: Reduced per-request cost  
-✅ **Observability**: Performance budgets expose slow components  
-✅ **Incremental**: Phased approach, low risk  
+✅ **User Experience**: 71% faster responses (21s → 6s target)
+✅ **Resource Efficiency**: Fewer unnecessary LLM calls
+✅ **Scalability**: Reduced per-request cost
+✅ **Observability**: Performance budgets expose slow components
+✅ **Incremental**: Phased approach, low risk
 
 ### Negative
 
-⚠️ **Complexity**: Caching adds state management  
-⚠️ **Trade-offs**: Fast path may miss edge cases  
-⚠️ **Maintenance**: Performance tests require upkeep  
+⚠️ **Complexity**: Caching adds state management
+⚠️ **Trade-offs**: Fast path may miss edge cases
+⚠️ **Maintenance**: Performance tests require upkeep
 
 ### Neutral
 
-ℹ️ **Best Practices**: Aligns with standard web service optimization  
-ℹ️ **Iterative**: Measure, optimize, repeat  
+ℹ️ **Best Practices**: Aligns with standard web service optimization
+ℹ️ **Iterative**: Measure, optimize, repeat
 
 ---
 
@@ -439,8 +439,8 @@ log.info(
 
 ---
 
-**Decision**: Approved for Week 7 implementation (Phase 1)  
+**Decision**: Approved for Week 7 implementation (Phase 1)
 **Next Steps**: Create performance test suite, implement quick wins, measure impact
 
-**Created**: 2026-01-17  
+**Created**: 2026-01-17
 **Status**: Ready for implementation

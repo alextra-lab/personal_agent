@@ -1,11 +1,11 @@
 # ADR-0010: Structured LLM Outputs via Pydantic Models
 
-**Status:** Accepted (Modified)  
-**Date Proposed:** 2026-01-14  
-**Date Accepted:** 2026-01-17  
-**Decision Owner:** Project Owner  
-**Related Specs:** `../architecture/LOCAL_LLM_CLIENT_SPEC_v0.1.md`  
-**Related ADRs:** ADR-0009 (Streaming), ADR-0003 (Model Stack)  
+**Status:** Accepted (Modified)
+**Date Proposed:** 2026-01-14
+**Date Accepted:** 2026-01-17
+**Decision Owner:** Project Owner
+**Related Specs:** `../architecture/LOCAL_LLM_CLIENT_SPEC_v0.1.md`
+**Related ADRs:** ADR-0009 (Streaming), ADR-0003 (Model Stack)
 **Related Experiments:** E-008 (DSPy Prototype Evaluation)
 
 ---
@@ -109,7 +109,7 @@ async def respond_structured(
 ) -> BaseModel:
     schema = response_model.model_json_schema()
     enhanced_prompt = f"{messages[-1]['content']}\n\nReturn JSON: {json.dumps(schema)}"
-    
+
     for attempt in range(max_retries):
         response = await self.respond(enhanced_prompt)
         try:
@@ -118,7 +118,7 @@ async def respond_structured(
             if attempt == max_retries - 1:
                 raise
             # Retry with error feedback
-    
+
     raise ValueError("Max retries exceeded")
 ```
 
@@ -176,7 +176,7 @@ We will use **DSPy ChainOfThought** for reflection generation:
        steps_count: int = dspy.InputField(desc="Number of orchestrator steps executed")
        final_state: str = dspy.InputField(desc="Final task state")
        reply_length: int = dspy.InputField(desc="Length of the agent's reply in characters")
-       
+
        rationale: str = dspy.OutputField(desc="Analysis of what happened, key observations")
        proposed_change_what: str = dspy.OutputField(desc="What to change (empty string if no change proposed)")
        # ... additional fields
@@ -355,12 +355,12 @@ try:
     content = response.content
     if not content:
         content = response.raw['choices'][0]['message'].get('reasoning_content', '')
-    
+
     reflection_data = json.loads(content)
     entry = CaptainLogEntry(
         title=f"Task: {user_message[:50]}",
         rationale=reflection_data.get("rationale", ""),
-        proposed_change=ProposedChange(**reflection_data["proposed_change"]) 
+        proposed_change=ProposedChange(**reflection_data["proposed_change"])
             if reflection_data.get("proposed_change") else None,
         supporting_metrics=reflection_data.get("supporting_metrics", []),
         impact_assessment=reflection_data.get("impact_assessment"),
@@ -384,7 +384,7 @@ class GenerateReflection(dspy.Signature):
     steps_count: int = dspy.InputField(desc="Number of orchestrator steps executed")
     final_state: str = dspy.InputField(desc="Final task state")
     reply_length: int = dspy.InputField(desc="Length of the agent's reply in characters")
-    
+
     rationale: str = dspy.OutputField(desc="Analysis of what happened, key observations")
     proposed_change_what: str = dspy.OutputField(desc="What to change (empty string if no change)")
     proposed_change_why: str = dspy.OutputField(desc="Why it would help")
@@ -413,7 +413,7 @@ def generate_reflection(user_message, trace_id, steps_count, final_state, reply_
             final_state=final_state,
             reply_length=reply_length,
         )
-        
+
         # Convert to CaptainLogEntry
         proposed_change = None
         if result.proposed_change_what and result.proposed_change_what.strip():
@@ -422,7 +422,7 @@ def generate_reflection(user_message, trace_id, steps_count, final_state, reply_
                 why=result.proposed_change_why or "",
                 how=result.proposed_change_how or "",
             )
-        
+
         return CaptainLogEntry(
             title=f"Task: {user_message[:50]}",
             rationale=result.rationale,
@@ -491,16 +491,16 @@ def generate_reflection(user_message, trace_id, steps_count, final_state, reply_
 
 1. ✅ **Tool calling compatibility**: E-008 Test Case C showed DSPy ReAct has issues (+237% latency)
    - **Resolution**: Use DSPy only for non-tool workflows (Captain's Log reflection)
-   
+
 2. **Streaming structured outputs**: Can we stream partial Pydantic models with DSPy?
    - **Action**: Defer until streaming is implemented (ADR-0009)
-   
+
 3. ✅ **Performance impact**: E-008 measured latency overhead
    - **Resolution**: +21% overhead acceptable for Captain's Log reflection
-   
+
 4. **DSPy optimizers**: Should we use MIPROv2 to improve reflection quality?
    - **Action**: Evaluate post-MVP (Week 6+) with production data
-   
+
 5. **Router with DSPy**: Should we adopt DSPy for routing decisions?
    - **Status**: Optional - E-008 Test Case B showed 100% accuracy with enhanced signature
    - **Action**: Evaluate if signature design effort is worthwhile (manual approach works well)

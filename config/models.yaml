@@ -17,8 +17,8 @@
 
 models:
   router:
-    #id: "liquid/lfm2.5-1.2b"
-    id: "qwen/qwen3-1.7b"
+    id: "liquid/lfm2.5-1.2b"
+    #id: "qwen/qwen3-1.7b"
     context_length: 32768
     quantization: "8bit"
     max_concurrency: 4

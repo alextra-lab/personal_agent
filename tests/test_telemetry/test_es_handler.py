@@ -2,9 +2,9 @@
 
 import asyncio
 from typing import Any, cast
+from unittest.mock import AsyncMock
 
 import pytest
-from unittest.mock import AsyncMock
 
 from personal_agent.telemetry.es_handler import ElasticsearchHandler
 

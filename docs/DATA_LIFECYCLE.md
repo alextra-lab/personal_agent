@@ -1,7 +1,7 @@
 # Data Lifecycle Management
 
-**Version**: 1.0  
-**Date**: 2026-02-22  
+**Version**: 1.0
+**Date**: 2026-02-22
 **Phase**: 2.3 (Homeostasis & Feedback)
 
 ## Purpose

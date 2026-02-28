@@ -4,7 +4,7 @@
 
 ✅ **SLM Server is running** on `localhost:8000`
 - Health check: ✅ Working
-- List models: ✅ Working  
+- List models: ✅ Working
 - Chat completions: ⚠️ Needs backend servers running
 
 ## Issue Found

@@ -114,6 +114,32 @@ class AppConfig(BaseSettings):
         description="Maximum times the same tool call signature can repeat per request",
     )
 
+    # Routing (router speed and single-model mode)
+    routing_policy: str = Field(
+        default="heuristic_then_llm",
+        description="Routing policy: heuristic_then_llm (gate then LLM if below threshold), heuristic_only, llm_only",
+    )
+    router_role: str = Field(
+        default="ROUTER",
+        description="Role used for routing: ROUTER (dedicated small model) or STANDARD (single-model mode, e.g. qwen as router+standard)",
+    )
+    enable_reasoning_role: bool = Field(
+        default=True,
+        description="If False, map REASONING -> STANDARD (single-model mode).",
+    )
+    routing_heuristic_threshold: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        description="Only call LLM router when heuristic confidence is below this (heuristic_then_llm).",
+    )
+    router_timeout_seconds: float = Field(
+        default=6.0,
+        gt=0,
+        le=60,
+        description="Timeout for router LLM call; on timeout fall back to heuristic.",
+    )
+
     # Brainstem
     brainstem_sensor_poll_interval_seconds: float = Field(
         default=5.0, gt=0, description="Sensor polling interval"

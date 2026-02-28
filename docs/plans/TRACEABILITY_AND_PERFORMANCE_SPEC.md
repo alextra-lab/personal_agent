@@ -1,15 +1,15 @@
 # Traceability and Performance Spec
 
-**ADRs:** ADR-0020 (Request Traceability), ADR-0021 (Continuous Metrics Daemon)  
-**Projects:** 2.3 Homeostasis & Feedback, 2.6 Conversational Agent MVP  
+**ADRs:** ADR-0020 (Request Traceability), ADR-0021 (Continuous Metrics Daemon)
+**Projects:** 2.3 Homeostasis & Feedback, 2.6 Conversational Agent MVP
 **Date:** 2026-02-23
 
 ---
 
 ## Task 1: CLI `--new` Flag Bug Fix
 
-**Priority:** Urgent  
-**Project:** 2.6 Conversational Agent MVP  
+**Priority:** Urgent
+**Project:** 2.6 Conversational Agent MVP
 **File:** `src/personal_agent/ui/service_cli.py`
 
 ### Problem
@@ -61,8 +61,8 @@ return {"session_id": str(session.session_id), "response": response_content, "tr
 
 ## Task 2: CLI `--compress` Flag
 
-**Priority:** Normal  
-**Project:** 2.6 Conversational Agent MVP  
+**Priority:** Normal
+**Project:** 2.6 Conversational Agent MVP
 **Files:** `src/personal_agent/ui/service_cli.py`, `src/personal_agent/service/app.py`
 
 ### Design
@@ -117,9 +117,9 @@ This becomes the bridge to Seshat (ADR-0018). When Seshat is implemented, `--com
 
 ## Task 3: Request Traceability — Data Model
 
-**Priority:** High  
-**Project:** 2.3 Homeostasis & Feedback  
-**ADR:** ADR-0020  
+**Priority:** High
+**Project:** 2.3 Homeostasis & Feedback
+**ADR:** ADR-0020
 **File:** `src/personal_agent/telemetry/request_timer.py`
 
 ### Changes to `RequestTimer`
@@ -208,9 +208,9 @@ Add to `TimingSpan`:
 
 ## Task 4: Request Traceability — ES Indexing
 
-**Priority:** High  
-**Project:** 2.3 Homeostasis & Feedback  
-**ADR:** ADR-0020  
+**Priority:** High
+**Project:** 2.3 Homeostasis & Feedback
+**ADR:** ADR-0020
 **Files:** `src/personal_agent/telemetry/es_logger.py`, `src/personal_agent/service/app.py`
 
 ### New method on `ElasticsearchLogger`
@@ -308,9 +308,9 @@ This should be applied once via a setup script (add to `config/kibana/setup_dash
 
 ## Task 5: Request Traceability — Kibana Dashboard
 
-**Priority:** Normal  
-**Project:** 2.3 Homeostasis & Feedback  
-**ADR:** ADR-0020  
+**Priority:** Normal
+**Project:** 2.3 Homeostasis & Feedback
+**ADR:** ADR-0020
 **File:** `config/kibana/setup_dashboards.py`
 
 ### Dashboard: "Request Traces"
@@ -362,9 +362,9 @@ Recommend starting with option 3 (table + stacked bar), with a follow-up issue f
 
 ## Task 6: Metrics Daemon
 
-**Priority:** High  
-**Project:** 2.3 Homeostasis & Feedback  
-**ADR:** ADR-0021  
+**Priority:** High
+**Project:** 2.3 Homeostasis & Feedback
+**ADR:** ADR-0021
 **New file:** `src/personal_agent/brainstem/sensors/metrics_daemon.py`
 
 ### MetricsDaemon class
@@ -382,12 +382,12 @@ class MetricsDaemon:
         es_emit_interval_seconds: float = 30.0,
         buffer_size: int = 720,
     ): ...
-    
+
     async def start(self) -> None:
         """Start the background polling task."""
         self._running = True
         self._task = asyncio.create_task(self._poll_loop())
-    
+
     async def stop(self) -> None:
         """Stop polling and cancel the task."""
         self._running = False
@@ -395,16 +395,16 @@ class MetricsDaemon:
             self._task.cancel()
             try: await self._task
             except asyncio.CancelledError: pass
-    
+
     def get_latest(self) -> MetricsSample | None:
         """Non-blocking read of most recent sample."""
         return self._latest
-    
+
     def get_window(self, seconds: float) -> list[MetricsSample]:
         """Get samples from the last N seconds."""
         cutoff = time.time() - seconds
         return [s for s in self._buffer if s.timestamp >= cutoff]
-    
+
     async def _poll_loop(self) -> None:
         polls_since_emit = 0
         while self._running:
@@ -413,14 +413,14 @@ class MetricsDaemon:
                 sample = MetricsSample(timestamp=time.time(), metrics=raw)
                 self._latest = sample
                 self._buffer.append(sample)
-                
+
                 polls_since_emit += 1
                 if polls_since_emit >= self._es_emit_every_n:
                     log.info(SENSOR_POLL, cpu_load=..., memory_used=..., ...)
                     polls_since_emit = 0
             except Exception as e:
                 log.error("metrics_daemon_poll_error", error=str(e))
-            
+
             await asyncio.sleep(self._poll_interval)
 ```
 
@@ -449,11 +449,11 @@ class RequestMonitor:
         self.trace_id = trace_id
         self.daemon = daemon
         self._start_time: float | None = None
-    
+
     async def start(self) -> None:
         self._start_time = time.time()
         log.info("request_monitor_started", trace_id=self.trace_id)
-    
+
     async def stop(self) -> dict[str, Any]:
         elapsed = time.time() - (self._start_time or time.time())
         samples = self.daemon.get_window(seconds=elapsed)
@@ -485,8 +485,8 @@ metrics_daemon_buffer_size: int = Field(default=720, ge=60)
 
 ## Task 7: Context Window Optimization
 
-**Priority:** Normal  
-**Project:** 2.3 Homeostasis & Feedback  
+**Priority:** Normal
+**Project:** 2.3 Homeostasis & Feedback
 **Files:** `src/personal_agent/orchestrator/context_window.py`, `src/personal_agent/config/settings.py`
 
 ### Problem
@@ -511,7 +511,7 @@ metrics_daemon_buffer_size: int = Field(default=720, ge=60)
 
 Before and after, log:
 ```python
-log.info("context_window_applied", 
+log.info("context_window_applied",
     trace_id=ctx.trace_id,
     input_messages=len(messages_before),
     output_messages=len(messages_after),
@@ -524,8 +524,8 @@ This event already exists (`context_window_applied`) — verify it includes toke
 
 ## Task 8: Kibana Field Mapping Fix
 
-**Priority:** High  
-**Project:** 2.3 Homeostasis & Feedback  
+**Priority:** High
+**Project:** 2.3 Homeostasis & Feedback
 **File:** `config/kibana/setup_dashboards.py`
 
 ### Problem
@@ -574,8 +574,8 @@ After running the script, all panels in LLM Performance, System Health, and Task
 
 ## Task 9: State Transition Logging Fix
 
-**Priority:** Low  
-**Project:** 2.3 Homeostasis & Feedback  
+**Priority:** Low
+**Project:** 2.3 Homeostasis & Feedback
 **File:** `src/personal_agent/orchestrator/executor.py`
 
 ### Problem

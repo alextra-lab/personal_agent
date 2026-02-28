@@ -13,9 +13,7 @@ from personal_agent.captains_log.capture import (
 class TestWriteCapture:
     """Test write_capture and optional ES indexing."""
 
-    def test_write_capture_creates_file_and_indexes_to_es(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_write_capture_creates_file_and_indexes_to_es(self, tmp_path: pathlib.Path) -> None:
         """write_capture writes JSON to disk and calls schedule_es_index (Phase 2.3)."""
         capture = TaskCapture(
             trace_id="trace-123",
@@ -25,12 +23,13 @@ class TestWriteCapture:
             assistant_response="Hi",
             outcome="completed",
         )
-        with patch(
-            "personal_agent.captains_log.capture._get_captures_dir",
-            return_value=tmp_path / "captures",
-        ), patch(
-            "personal_agent.captains_log.capture.schedule_es_index"
-        ) as mock_schedule:
+        with (
+            patch(
+                "personal_agent.captains_log.capture._get_captures_dir",
+                return_value=tmp_path / "captures",
+            ),
+            patch("personal_agent.captains_log.capture.schedule_es_index") as mock_schedule,
+        ):
             path = write_capture(capture)
             assert path.exists()
             assert path.suffix == ".json"

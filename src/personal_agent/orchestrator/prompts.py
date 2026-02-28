@@ -12,6 +12,22 @@ Related:
 - Experiments: ../../docs/architecture/experiments/E-006-router-output-format-detection.md
 """
 
+# Compact router prompt: delegate-only, no HANDLE path, no tool guidance.
+ROUTER_SYSTEM_PROMPT_COMPACT = """You are a routing classifier.
+Choose exactly one target model for the user request:
+- STANDARD: general chat and tool-oriented requests.
+- REASONING: proofs, derivations, rigorous formal analysis, research synthesis.
+- CODING: code writing/debugging/refactoring, stack traces, diffs, CI failures.
+
+Return ONLY JSON with this shape:
+{"target_model":"STANDARD|REASONING|CODING","confidence":0.0,"reason":"short reason"}
+
+Rules:
+- Always delegate. Never answer the user directly.
+- No markdown, no code fences, no commentary.
+- If uncertain, choose STANDARD.
+"""
+
 # ============================================================================
 # Router System Prompt (Basic - Day 11.5 MVP)
 # ============================================================================
@@ -622,9 +638,8 @@ def get_router_prompt(include_format_detection: bool = False) -> str:
     Returns:
         Router system prompt string.
     """
-    if include_format_detection:
-        return ROUTER_SYSTEM_PROMPT_WITH_FORMAT
-    return ROUTER_SYSTEM_PROMPT_BASIC
+    del include_format_detection
+    return ROUTER_SYSTEM_PROMPT_COMPACT
 
 
 def format_router_user_prompt(

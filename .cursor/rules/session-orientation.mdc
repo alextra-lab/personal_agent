@@ -50,7 +50,7 @@ Server: plugin-linear-linear
 Team: FrenchForest
 
 list_projects          → stream status overview
-list_issues            → current work items  
+list_issues            → current work items
 get_issue id:"FRE-8"   → issue details + spec path
 update_issue id:"FRE-8" state:"Done"  → mark complete
 create_issue team:"FrenchForest" project:"2.3 Homeostasis & Feedback"  → new work

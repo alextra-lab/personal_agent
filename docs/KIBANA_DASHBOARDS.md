@@ -220,33 +220,33 @@ Then split or copy the relevant lines into the desired files in `config/kibana/d
 
 Quick reference for building Lens panels and KQL filters.
 
-**agent-captains-captures-\***  
+**agent-captains-captures-\***
 `timestamp`, `trace_id`, `session_id`, `outcome`, `tools_used`, `duration_ms`, `memory_context_used`, `memory_conversations_found`, `title`, `user_message`, `assistant_response`, …
 
-**agent-captains-reflections-\***  
+**agent-captains-reflections-\***
 `timestamp`, `entry_id`, `type`, `title`, `rationale`, `proposed_change.what` / `.why` / `.how`, `impact_assessment`, `supporting_metrics`, `metrics_structured`, `status`, …
 
-**agent-logs-\***  
+**agent-logs-\***
 `@timestamp`, `event_type`, `trace_id`, `level`, `message`, and event-specific fields: `from_mode`, `to_mode`, `reason`, `cpu_load`, `memory_used`, `sensor_data`, …
 
-**agent-insights-\***  
+**agent-insights-\***
 `timestamp`, `record_type`, `insight_type`, `title`, `summary`, `confidence`, `actionable`, `evidence`, `analysis_window_days`, `insights_count`, `proposals_created`, …
 
 ---
 
 ## Custom query examples
 
-- **Tasks that used memory context:**  
+- **Tasks that used memory context:**
   Data view `agent-captains-captures-*`, KQL: `memory_context_used: true`
-- **Reflections with a proposed change:**  
+- **Reflections with a proposed change:**
   Data view `agent-captains-reflections-*`, KQL: `proposed_change.what: *`
-- **Mode transitions in the last 24h:**  
+- **Mode transitions in the last 24h:**
   Data view `agent-logs-*`, KQL: `event_type: mode_transition`, time range: Last 24 hours
-- **Consolidation events:**  
+- **Consolidation events:**
   Data view `agent-logs-*`, KQL: `event_type: consolidation_*`
-- **Memory query quality events:**  
+- **Memory query quality events:**
   Data view `agent-logs-*`, KQL: `event_type: memory_query_quality_metrics`
-- **Consolidation quality monitor events:**  
+- **Consolidation quality monitor events:**
   Data view `agent-logs-*`, KQL: `event_type: (quality_monitor_entity_report or quality_monitor_graph_report or quality_monitor_anomalies_detected)`
 
 ---

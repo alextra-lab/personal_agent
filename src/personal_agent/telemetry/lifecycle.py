@@ -71,7 +71,9 @@ RETENTION_POLICIES: dict[str, RetentionPolicy] = {
         name="ES Event Logs",
         hot_duration=timedelta(days=14),
         warm_duration=timedelta(days=14),
-        cold_duration=timedelta(days=30),  # Aligned with docker/elasticsearch/ilm-policy.json delete phase (30d)
+        cold_duration=timedelta(
+            days=30
+        ),  # Aligned with docker/elasticsearch/ilm-policy.json delete phase (30d)
         archive_enabled=False,
     ),
     "neo4j_graph": RetentionPolicy(

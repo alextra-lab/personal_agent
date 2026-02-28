@@ -270,9 +270,7 @@ class TestCaptainLogManager:
             rationale="Test rationale",
             timestamp=datetime(2026, 2, 22, 12, 0, 0, tzinfo=timezone.utc),
         )
-        with patch(
-            "personal_agent.captains_log.manager.schedule_es_index"
-        ) as mock_schedule:
+        with patch("personal_agent.captains_log.manager.schedule_es_index") as mock_schedule:
             manager.write_entry(entry)
             mock_schedule.assert_called_once()
             call_args = mock_schedule.call_args[0]
@@ -283,9 +281,7 @@ class TestCaptainLogManager:
             assert call_args[1]["title"] == "Test Reflection"
             assert mock_schedule.call_args[1].get("doc_id") == "CL-2026-02-22-001"
 
-    def test_write_entry_config_proposal_calls_es_index(
-        self, tmp_path: pathlib.Path
-    ) -> None:
+    def test_write_entry_config_proposal_calls_es_index(self, tmp_path: pathlib.Path) -> None:
         """Writing a config proposal entry also calls schedule_es_index."""
         log_dir = tmp_path / "captains_log"
         manager = CaptainLogManager(log_dir=log_dir)
@@ -296,9 +292,7 @@ class TestCaptainLogManager:
             rationale="Test",
             timestamp=datetime(2026, 2, 22, 12, 0, 0, tzinfo=timezone.utc),
         )
-        with patch(
-            "personal_agent.captains_log.manager.schedule_es_index"
-        ) as mock_schedule:
+        with patch("personal_agent.captains_log.manager.schedule_es_index") as mock_schedule:
             manager.write_entry(entry)
             mock_schedule.assert_called_once()
             call_args = mock_schedule.call_args[0]

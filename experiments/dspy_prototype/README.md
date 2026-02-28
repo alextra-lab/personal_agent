@@ -2,12 +2,12 @@
 
 This directory contains the prototype evaluation comparing DSPy vs manual approaches for:
 1. Captain's Log reflection generation
-2. Router decision logic  
+2. Router decision logic
 3. Tool-using agent
 
 ## Status
 
-**Date Started**: 2026-01-17  
+**Date Started**: 2026-01-17
 **Status**: ⏳ In Progress
 
 ## Setup
@@ -54,7 +54,7 @@ DSPy uses LiteLLM under the hood for OpenAI-compatible endpoints. Configuration 
 - Custom parsing logic
 - Fallback handling
 
-**DSPy Approach**: Planned implementation  
+**DSPy Approach**: Planned implementation
 - DSPy signature for routing decisions
 - Comparison: routing accuracy, code clarity, debuggability
 
@@ -98,7 +98,7 @@ Results will be documented in:
 1. ✅ Install DSPy
 2. ⏳ Configure DSPy with LM Studio (in progress)
 3. ⏳ Implement Test Case A
-4. ⏳ Implement Test Case B  
+4. ⏳ Implement Test Case B
 5. ⏳ Implement Test Case C
 6. ⏳ Run comparisons and document findings
 7. ⏳ Make adoption decision (Option A/B/C)

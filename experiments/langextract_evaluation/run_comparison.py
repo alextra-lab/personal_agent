@@ -16,7 +16,6 @@ import asyncio
 import json
 import os
 import time
-from pathlib import Path
 
 # Baseline: current implementation
 from personal_agent.second_brain.entity_extraction import (
@@ -67,9 +66,7 @@ async def _run_baseline(pairs: list[tuple[str, str]]) -> dict[str, object]:
     for user_msg, assistant_msg in pairs:
         start = time.perf_counter()
         try:
-            result = await extract_entities_and_relationships(
-                user_msg, assistant_msg or ""
-            )
+            result = await extract_entities_and_relationships(user_msg, assistant_msg or "")
             elapsed_ms = (time.perf_counter() - start) * 1000
             latencies_ms.append(elapsed_ms)
             # Consider parse success if we got expected keys and entities list
@@ -134,9 +131,15 @@ async def main() -> None:
 
     # Summary for E-018
     print("\n--- E-018 summary ---")
-    print(f"Parse rate: baseline={baseline['parse_rate']:.2%}, treatment={treatment['parse_rate']:.2%}")
-    print(f"P95 latency (ms): baseline={baseline['latency_p95_ms']}, treatment={treatment['latency_p95_ms']}")
-    print("Document results in docs/architecture_decisions/experiments/E-018-langextract-results.md")
+    print(
+        f"Parse rate: baseline={baseline['parse_rate']:.2%}, treatment={treatment['parse_rate']:.2%}"
+    )
+    print(
+        f"P95 latency (ms): baseline={baseline['latency_p95_ms']}, treatment={treatment['latency_p95_ms']}"
+    )
+    print(
+        "Document results in docs/architecture_decisions/experiments/E-018-langextract-results.md"
+    )
 
 
 if __name__ == "__main__":

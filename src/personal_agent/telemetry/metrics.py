@@ -255,10 +255,10 @@ def get_request_latency_breakdown(trace_id: str) -> list[dict[str, Any]]:
     from personal_agent.telemetry.events import (
         REPLY_READY,
         REQUEST_RECEIVED,
+        STATE_TRANSITION,
         TASK_COMPLETED,
         TASK_FAILED,
         TASK_STARTED,
-        STATE_TRANSITION,
     )
 
     entries = get_trace_events(trace_id)

@@ -1,8 +1,8 @@
 # ADR-0014: Structured Metrics in Captain's Log
 
-**Status**: Accepted  
-**Date**: 2026-01-17  
-**Deciders**: System Architect  
+**Status**: Accepted
+**Date**: 2026-01-17
+**Deciders**: System Architect
 **Related**: ADR-0010 (Structured LLM Outputs), ADR-0012 (Request-Scoped Metrics)
 
 ## Context
@@ -57,11 +57,11 @@ from pydantic import BaseModel, Field
 
 class Metric(BaseModel):
     """Structured metric with typed value and optional unit."""
-    
+
     name: str = Field(..., description="Metric identifier (e.g., 'cpu_percent', 'duration_seconds')")
     value: float | int | str = Field(..., description="Metric value (prefer numbers when possible)")
     unit: str | None = Field(None, description="Unit of measurement (e.g., '%', 's', 'ms', 'MB')")
-    
+
     class Config:
         json_schema_extra = {
             "examples": [
@@ -73,13 +73,13 @@ class Metric(BaseModel):
 
 class CaptainLogEntry(BaseModel):
     # ... existing fields ...
-    
+
     # Human-readable (keep for backward compatibility and manual review)
     supporting_metrics: list[str] = Field(
         default_factory=list,
         description="Human-readable metrics (e.g., 'cpu: 9.3%')"
     )
-    
+
     # Machine-readable (new, optional for analytics)
     metrics_structured: list[Metric] | None = Field(
         None,
@@ -95,7 +95,7 @@ class CaptainLogEntry(BaseModel):
   "type": "reflection",
   "title": "Task: System health check",
   "rationale": "Task completed efficiently with low resource usage...",
-  
+
   "supporting_metrics": [
     "llm_calls: 2",
     "duration: 5.4s",
@@ -103,7 +103,7 @@ class CaptainLogEntry(BaseModel):
     "memory: 53.4%",
     "gpu: 3.2%"
   ],
-  
+
   "metrics_structured": [
     {"name": "llm_calls", "value": 2, "unit": null},
     {"name": "duration_seconds", "value": 5.4, "unit": "s"},
@@ -159,10 +159,10 @@ def _extract_structured_metrics(
     telemetry_summary: str
 ) -> tuple[list[str], list[Metric]]:
     """Extract both string and structured metrics."""
-    
+
     string_metrics = []
     structured_metrics = []
-    
+
     if metrics_summary:
         # Duration
         if "duration_seconds" in metrics_summary:
@@ -171,7 +171,7 @@ def _extract_structured_metrics(
             structured_metrics.append(
                 Metric(name="duration_seconds", value=dur, unit="s")
             )
-        
+
         # CPU
         if "cpu_avg" in metrics_summary:
             cpu = metrics_summary["cpu_avg"]
@@ -179,7 +179,7 @@ def _extract_structured_metrics(
             structured_metrics.append(
                 Metric(name="cpu_percent", value=cpu, unit="%")
             )
-        
+
         # Memory
         if "memory_avg" in metrics_summary:
             mem = metrics_summary["memory_avg"]
@@ -187,7 +187,7 @@ def _extract_structured_metrics(
             structured_metrics.append(
                 Metric(name="memory_percent", value=mem, unit="%")
             )
-        
+
         # GPU
         if "gpu_avg" in metrics_summary:
             gpu = metrics_summary["gpu_avg"]
@@ -195,7 +195,7 @@ def _extract_structured_metrics(
             structured_metrics.append(
                 Metric(name="gpu_percent", value=gpu, unit="%")
             )
-    
+
     return string_metrics, structured_metrics
 ```
 
@@ -221,7 +221,7 @@ def query_metrics(
     time_range_hours: int | None = None
 ) -> list[tuple[str, float | int]]:
     """Query metric values across all Captain's Log entries.
-    
+
     Returns list of (entry_id, value) tuples.
     """
     # Implementation...
@@ -275,13 +275,13 @@ Update documentation:
 ```python
 def get_cpu_usage(entry: CaptainLogEntry) -> float | None:
     """Get CPU usage, checking structured first, then parsing string."""
-    
+
     # Prefer structured
     if entry.metrics_structured:
         for metric in entry.metrics_structured:
             if metric.name == "cpu_percent":
                 return float(metric.value)
-    
+
     # Fallback to parsing
     for m in entry.supporting_metrics:
         if "cpu" in m.lower():
@@ -290,7 +290,7 @@ def get_cpu_usage(entry: CaptainLogEntry) -> float | None:
                 return float(m.split(":")[1].strip().rstrip("%"))
             except (ValueError, IndexError):
                 continue
-    
+
     return None
 ```
 
@@ -298,24 +298,24 @@ def get_cpu_usage(entry: CaptainLogEntry) -> float | None:
 
 ### Positive
 
-✅ **Analytics-Ready**: Direct access to numerical values  
-✅ **Type-Safe**: Pydantic validation ensures correct types  
-✅ **Backward Compatible**: No breaking changes to existing entries  
-✅ **Future-Proof**: Easy to add new metrics  
-✅ **Queryable**: Can filter/aggregate by metric values  
-✅ **Consistent**: Standardized naming convention  
-✅ **Human-Friendly**: Readable strings preserved  
+✅ **Analytics-Ready**: Direct access to numerical values
+✅ **Type-Safe**: Pydantic validation ensures correct types
+✅ **Backward Compatible**: No breaking changes to existing entries
+✅ **Future-Proof**: Easy to add new metrics
+✅ **Queryable**: Can filter/aggregate by metric values
+✅ **Consistent**: Standardized naming convention
+✅ **Human-Friendly**: Readable strings preserved
 
 ### Negative
 
-⚠️ **Slight Redundancy**: Both string and structured formats  
-⚠️ **Maintenance**: Must keep both formats in sync  
-⚠️ **Storage**: ~20% larger JSON files (minimal impact)  
+⚠️ **Slight Redundancy**: Both string and structured formats
+⚠️ **Maintenance**: Must keep both formats in sync
+⚠️ **Storage**: ~20% larger JSON files (minimal impact)
 
 ### Neutral
 
-ℹ️ **Optional**: Old code continues to work  
-ℹ️ **Gradual**: Can migrate over time  
+ℹ️ **Optional**: Old code continues to work
+ℹ️ **Gradual**: Can migrate over time
 
 ## Alternatives Considered
 
@@ -375,11 +375,11 @@ Store structured metrics in separate files (e.g., `CL-*.metrics.json`).
 
 ## Implementation Timeline
 
-**Target**: Week 6 (Days 33-36)  
-**Effort**: ~8-12 hours  
+**Target**: Week 6 (Days 33-36)
+**Effort**: ~8-12 hours
 **Priority**: Medium (enhances analytics, not blocking)
 
 ---
 
-**Decision**: Approved for implementation in Week 6  
+**Decision**: Approved for implementation in Week 6
 **Next Steps**: Add to `IMPLEMENTATION_ROADMAP.md` and schedule implementation

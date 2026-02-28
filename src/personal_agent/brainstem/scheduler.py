@@ -19,8 +19,8 @@ from personal_agent.memory.service import MemoryService
 from personal_agent.second_brain.consolidator import SecondBrainConsolidator
 from personal_agent.second_brain.quality_monitor import ConsolidationQualityMonitor
 from personal_agent.telemetry import SENSOR_POLL, get_logger
-from personal_agent.telemetry.queries import TelemetryQueries
 from personal_agent.telemetry.lifecycle_manager import DataLifecycleManager
+from personal_agent.telemetry.queries import TelemetryQueries
 
 if TYPE_CHECKING:
     from elasticsearch import AsyncElasticsearch
@@ -30,11 +30,11 @@ settings = get_settings()
 
 # Lifecycle schedule (Phase 2.3)
 LIFECYCLE_CHECK_INTERVAL_SECONDS = 60  # Check every minute whether to run tasks
-DISK_CHECK_INTERVAL_SECONDS = 3600     # Hourly disk check
-ARCHIVE_HOUR_UTC = 2                   # Daily archive at 2 AM UTC
-PURGE_WEEKDAY = 6                      # Sunday
-PURGE_HOUR_UTC = 3                     # Weekly purge at 3 AM UTC Sunday
-BACKFILL_INTERVAL_SECONDS = 600        # Captain's Log ES backfill every 10 minutes (FRE-30)
+DISK_CHECK_INTERVAL_SECONDS = 3600  # Hourly disk check
+ARCHIVE_HOUR_UTC = 2  # Daily archive at 2 AM UTC
+PURGE_WEEKDAY = 6  # Sunday
+PURGE_HOUR_UTC = 3  # Weekly purge at 3 AM UTC Sunday
+BACKFILL_INTERVAL_SECONDS = 600  # Captain's Log ES backfill every 10 minutes (FRE-30)
 
 
 class BrainstemScheduler:
@@ -296,10 +296,16 @@ class BrainstemScheduler:
 
                 # Daily at 2 AM UTC: archive old data
                 today = now.date()
-                if lifecycle_enabled and now.hour == ARCHIVE_HOUR_UTC and (
-                    self._last_archive_date is None or self._last_archive_date != today
+                if (
+                    lifecycle_enabled
+                    and now.hour == ARCHIVE_HOUR_UTC
+                    and (self._last_archive_date is None or self._last_archive_date != today)
                 ):
-                    for data_type in ("file_logs", "captains_log_captures", "captains_log_reflections"):
+                    for data_type in (
+                        "file_logs",
+                        "captains_log_captures",
+                        "captains_log_reflections",
+                    ):
                         await self.lifecycler.archive_old_data(data_type)
                     self._last_archive_date = today
 
@@ -310,7 +316,11 @@ class BrainstemScheduler:
                     and now.hour == PURGE_HOUR_UTC
                     and (self._last_purge_week is None or self._last_purge_week != (year, week))
                 ):
-                    for data_type in ("file_logs", "captains_log_captures", "captains_log_reflections"):
+                    for data_type in (
+                        "file_logs",
+                        "captains_log_captures",
+                        "captains_log_reflections",
+                    ):
                         await self.lifecycler.purge_expired_data(data_type)
                     await self.lifecycler.cleanup_elasticsearch_indices()
                     self._last_purge_week = (year, week)
@@ -334,8 +344,7 @@ class BrainstemScheduler:
                     and now.weekday() == self.insights_weekly_day
                     and now.hour == self.insights_weekly_run_hour_utc
                     and (
-                        self._last_insights_week is None
-                        or self._last_insights_week != (year, week)
+                        self._last_insights_week is None or self._last_insights_week != (year, week)
                     )
                 ):
                     insights = await self.insights_engine.analyze_patterns(days=7)

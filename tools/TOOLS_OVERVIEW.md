@@ -115,7 +115,7 @@ All backends provide **OpenAI-compatible API endpoints**:
 
 #### MLX
 
-- **Installation**: 
+- **Installation**:
   - Via uv: `uv sync --extra mlx`
   - Or manually: `pip install mlx-openai-server`
 - **Server**: `mlx-openai-server` (provides OpenAI-compatible API)

@@ -60,25 +60,25 @@ Create a new `RequestMonitor` class in `src/personal_agent/brainstem/sensors/req
 ```python
 class RequestMonitor:
     """Background system metrics monitor scoped to a specific request.
-    
+
     Collects metrics at regular intervals and tags them with trace_id
     for correlation with logs and Captain's Log reflections.
     """
-    
+
     def __init__(self, trace_id: str, interval_seconds: float = 5.0):
         """Initialize monitor for a specific request.
-        
+
         Args:
             trace_id: Unique identifier for the request
             interval_seconds: Polling interval (default: 5.0)
         """
-        
+
     async def start(self) -> None:
         """Start background monitoring task."""
-        
+
     async def stop(self) -> dict[str, Any]:
         """Stop monitoring and return aggregated summary.
-        
+
         Returns:
             Summary dict with:
             - duration_seconds: Total monitoring duration
@@ -88,7 +88,7 @@ class RequestMonitor:
             - gpu_avg/min/max: GPU statistics (if available)
             - threshold_violations: List of control loop thresholds exceeded
         """
-        
+
     def _should_trigger_alert(self, metrics: dict[str, Any]) -> bool:
         """Check if metrics exceed thresholds for mode transitions."""
 ```
@@ -102,32 +102,32 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
     """Main execution loop with request-scoped monitoring."""
     state = ctx.state
     trace_ctx = TraceContext(trace_id=ctx.trace_id)
-    
+
     # Start request-scoped monitoring
     from personal_agent.brainstem.sensors.request_monitor import RequestMonitor
     monitor = RequestMonitor(trace_id=ctx.trace_id, interval_seconds=5.0)
     await monitor.start()
-    
+
     log.info(TASK_STARTED, trace_id=ctx.trace_id, ...)
-    
+
     try:
         # ... existing execution logic ...
-        
+
         if state == TaskState.COMPLETED:
             log.info(TASK_COMPLETED, trace_id=ctx.trace_id, ...)
-            
+
     except Exception as e:
         log.error(ORCHESTRATOR_FATAL_ERROR, trace_id=ctx.trace_id, exc_info=True)
         ctx.error = e
         ctx.state = TaskState.FAILED
-        
+
     finally:
         # Always stop monitoring and get summary
         metrics_summary = await monitor.stop()
-        
+
         # Attach to context for Captain's Log
         ctx.metrics_summary = metrics_summary
-        
+
         # Log summary for analysis
         log.info(
             REQUEST_METRICS_SUMMARY,
@@ -137,7 +137,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
             memory_avg=metrics_summary['memory_avg'],
             threshold_violations=metrics_summary['threshold_violations']
         )
-    
+
     return ctx
 ```
 
@@ -148,26 +148,26 @@ The `RequestMonitor` checks metrics against thresholds defined in `config/govern
 ```python
 def _check_thresholds(self, metrics: dict[str, Any]) -> list[str]:
     """Check metrics against mode transition thresholds.
-    
+
     Returns list of violated threshold names.
     """
     violations = []
-    
+
     # Load thresholds from governance config
     mode_config = load_mode_config()
     thresholds = mode_config['modes']['NORMAL']['thresholds']
-    
+
     # Check CPU threshold
     if metrics['perf_system_cpu_load'] > thresholds['cpu_load_percent']:
         violations.append('cpu_overload')
         # Emit control signal for mode manager
         self._emit_control_signal('cpu_overload', metrics)
-    
+
     # Check memory threshold
     if metrics['perf_system_mem_used'] > thresholds['memory_used_percent']:
         violations.append('memory_pressure')
         self._emit_control_signal('memory_pressure', metrics)
-    
+
     return violations
 ```
 
@@ -180,10 +180,10 @@ Enhance Captain's Log reflection prompts with metrics summary:
 ```python
 async def _trigger_captains_log_reflection(ctx: ExecutionContext):
     """Generate reflection with performance context."""
-    
+
     # Extract metrics summary
     metrics = ctx.metrics_summary or {}
-    
+
     reflection_prompt = f"""
 Reflect on the task execution:
 
@@ -214,7 +214,7 @@ Add monitoring configuration to `src/personal_agent/config/settings.py`:
 ```python
 class AppConfig(BaseSettings):
     # ... existing fields ...
-    
+
     # Request monitoring settings
     request_monitoring_enabled: bool = True
     request_monitoring_interval_seconds: float = 5.0

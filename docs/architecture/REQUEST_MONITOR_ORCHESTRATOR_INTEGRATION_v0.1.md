@@ -31,7 +31,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
     """Main execution loop: iterate states until terminal."""
     state = ctx.state
     trace_ctx = TraceContext(trace_id=ctx.trace_id)
-    
+
     log.info(
         TASK_STARTED,
         trace_id=ctx.trace_id,
@@ -40,7 +40,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
         mode=ctx.mode.value,
         channel=ctx.channel.value,
     )
-    
+
     # Step function registry
     step_functions = {
         TaskState.INIT: step_init,
@@ -49,13 +49,13 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
         TaskState.TOOL_EXECUTION: step_tool_execution,
         TaskState.SYNTHESIS: step_synthesis,
     }
-    
+
     try:
         while state not in {TaskState.COMPLETED, TaskState.FAILED}:
             # ... execution loop ...
-        
+
         ctx.state = state
-        
+
         if state == TaskState.COMPLETED:
             log.info(
                 TASK_COMPLETED,
@@ -74,7 +74,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                 session_id=ctx.session_id,
                 error=str(ctx.error) if ctx.error else "Unknown error",
             )
-    
+
     except Exception as e:
         log.error(
             ORCHESTRATOR_FATAL_ERROR,
@@ -83,7 +83,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
         )
         ctx.error = e
         ctx.state = TaskState.FAILED
-    
+
     return ctx
 ```
 
@@ -91,29 +91,29 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
 ```python
 async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -> ExecutionContext:
     """Main execution loop: iterate states until terminal.
-    
+
     Automatically starts request-scoped metrics monitoring if enabled
     in configuration. Monitoring runs in background and provides
     performance context for Captain's Log reflections.
     """
     state = ctx.state
     trace_ctx = TraceContext(trace_id=ctx.trace_id)
-    
+
     # ========== START MONITORING (NEW) ==========
     # Import here to avoid circular dependencies
     from personal_agent.config import settings
-    
+
     monitor = None
     if settings.request_monitoring_enabled:
         try:
             from personal_agent.brainstem.sensors.request_monitor import RequestMonitor
-            
+
             monitor = RequestMonitor(
                 trace_id=ctx.trace_id,
                 interval_seconds=settings.request_monitoring_interval_seconds
             )
             await monitor.start()
-            
+
             log.debug(
                 "request_monitoring_started",
                 trace_id=ctx.trace_id,
@@ -130,7 +130,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
             )
             monitor = None  # Ensure monitor is None if start failed
     # ========== END MONITORING SETUP ==========
-    
+
     log.info(
         TASK_STARTED,
         trace_id=ctx.trace_id,
@@ -139,7 +139,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
         mode=ctx.mode.value,
         channel=ctx.channel.value,
     )
-    
+
     # Step function registry
     step_functions = {
         TaskState.INIT: step_init,
@@ -148,7 +148,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
         TaskState.TOOL_EXECUTION: step_tool_execution,
         TaskState.SYNTHESIS: step_synthesis,
     }
-    
+
     try:
         while state not in {TaskState.COMPLETED, TaskState.FAILED}:
             log.info(
@@ -157,7 +157,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                 from_state=state.value,
             )
             ctx.state = state
-            
+
             step_func = step_functions.get(state)
             if not step_func:
                 log.error(
@@ -168,12 +168,12 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                 ctx.error = ValueError(f"Unknown state: {state}")
                 state = TaskState.FAILED
                 break
-            
+
             # Execute step function
             state = await step_func(ctx, session_manager, trace_ctx)
-        
+
         ctx.state = state
-        
+
         if state == TaskState.COMPLETED:
             log.info(
                 TASK_COMPLETED,
@@ -193,7 +193,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                 session_id=ctx.session_id,
                 error=str(ctx.error) if ctx.error else "Unknown error",
             )
-    
+
     except Exception as e:
         log.error(
             ORCHESTRATOR_FATAL_ERROR,
@@ -202,17 +202,17 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
         )
         ctx.error = e
         ctx.state = TaskState.FAILED
-    
+
     # ========== STOP MONITORING (NEW) ==========
     finally:
         # Always stop monitoring and get summary, even if request failed
         if monitor is not None:
             try:
                 metrics_summary = await monitor.stop()
-                
+
                 # Attach summary to context for Captain's Log
                 ctx.metrics_summary = metrics_summary
-                
+
                 # Log summary for telemetry analysis
                 log.info(
                     REQUEST_METRICS_SUMMARY,
@@ -227,7 +227,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                     gpu_avg=metrics_summary.get('gpu', {}).get('avg'),
                     threshold_violations=metrics_summary.get('threshold_violations', [])
                 )
-                
+
                 log.debug(
                     "request_monitoring_stopped",
                     trace_id=ctx.trace_id,
@@ -243,7 +243,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                     exc_info=True
                 )
     # ========== END MONITORING CLEANUP ==========
-    
+
     return ctx
 ```
 
@@ -267,26 +267,26 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
 @dataclass
 class ExecutionContext:
     """Mutable state container passed through execution steps."""
-    
+
     # ... existing fields ...
-    
+
     # Tool loop governance (per-request)
     tool_iteration_count: int = 0
-    
+
     # ========== ADD THIS FIELD (NEW) ==========
     # Request monitoring (ADR-0012)
     metrics_summary: dict[str, Any] | None = None
     """Aggregated metrics summary from request monitoring.
-    
+
     Populated by RequestMonitor.stop() in executor.py finally block.
     Provides performance context for Captain's Log reflections.
-    
+
     Structure matches MetricsSummary TypedDict:
     - duration_seconds: float
     - sample_count: int
     - cpu/memory/disk/gpu: dict with min/max/avg
     - threshold_violations: list[str]
-    
+
     None if monitoring disabled or not yet completed.
     """
     # ========== END NEW FIELD ==========
@@ -347,13 +347,13 @@ from personal_agent.orchestrator.types import ExecutionContext, TaskState
 
 class TestRequestMonitoringIntegration:
     """Test request monitoring integration with orchestrator."""
-    
+
     @pytest.mark.asyncio
     async def test_monitoring_starts_and_stops_with_task(self):
         """Test that monitoring starts when task begins and stops when complete."""
         session_manager = SessionManager()
         session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
-        
+
         ctx = ExecutionContext(
             session_id=session_id,
             trace_id="test-trace-123",
@@ -361,24 +361,24 @@ class TestRequestMonitoringIntegration:
             mode=Mode.NORMAL,
             channel=Channel.CHAT,
         )
-        
+
         with patch('personal_agent.config.settings.request_monitoring_enabled', True):
             with patch('personal_agent.config.settings.request_monitoring_interval_seconds', 0.1):
                 # Execute task (will use router which handles directly or delegates)
                 result_ctx = await execute_task(ctx, session_manager)
-        
+
         # Verify monitoring ran
         assert result_ctx.metrics_summary is not None
         assert result_ctx.metrics_summary['sample_count'] > 0
         assert result_ctx.metrics_summary['duration_seconds'] > 0
         assert 'cpu' in result_ctx.metrics_summary or 'memory' in result_ctx.metrics_summary
-    
+
     @pytest.mark.asyncio
     async def test_monitoring_disabled_via_config(self):
         """Test that monitoring doesn't run when disabled in config."""
         session_manager = SessionManager()
         session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
-        
+
         ctx = ExecutionContext(
             session_id=session_id,
             trace_id="test-trace-456",
@@ -386,19 +386,19 @@ class TestRequestMonitoringIntegration:
             mode=Mode.NORMAL,
             channel=Channel.CHAT,
         )
-        
+
         with patch('personal_agent.config.settings.request_monitoring_enabled', False):
             result_ctx = await execute_task(ctx, session_manager)
-        
+
         # Verify monitoring didn't run
         assert result_ctx.metrics_summary is None
-    
+
     @pytest.mark.asyncio
     async def test_monitoring_continues_through_state_transitions(self):
         """Test that monitoring continues throughout task execution."""
         session_manager = SessionManager()
         session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
-        
+
         ctx = ExecutionContext(
             session_id=session_id,
             trace_id="test-trace-789",
@@ -406,24 +406,24 @@ class TestRequestMonitoringIntegration:
             mode=Mode.NORMAL,
             channel=Channel.CHAT,
         )
-        
+
         with patch('personal_agent.config.settings.request_monitoring_enabled', True):
             with patch('personal_agent.config.settings.request_monitoring_interval_seconds', 0.2):
                 result_ctx = await execute_task(ctx, session_manager)
-        
+
         # Task should have gone through multiple states
         assert result_ctx.state in {TaskState.COMPLETED, TaskState.FAILED}
-        
+
         # Monitoring should have captured multiple samples
         assert result_ctx.metrics_summary is not None
         assert result_ctx.metrics_summary['sample_count'] >= 2
-    
+
     @pytest.mark.asyncio
     async def test_monitoring_cleanup_on_error(self):
         """Test that monitoring stops cleanly even if task fails."""
         session_manager = SessionManager()
         session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
-        
+
         ctx = ExecutionContext(
             session_id=session_id,
             trace_id="test-trace-error",
@@ -431,29 +431,29 @@ class TestRequestMonitoringIntegration:
             mode=Mode.NORMAL,
             channel=Channel.CHAT,
         )
-        
+
         # Mock step function to raise error
         with patch('personal_agent.orchestrator.executor.step_init') as mock_step:
             mock_step.side_effect = RuntimeError("Test error")
-            
+
             with patch('personal_agent.config.settings.request_monitoring_enabled', True):
                 with patch('personal_agent.config.settings.request_monitoring_interval_seconds', 0.1):
                     result_ctx = await execute_task(ctx, session_manager)
-        
+
         # Task should have failed
         assert result_ctx.state == TaskState.FAILED
         assert result_ctx.error is not None
-        
+
         # But monitoring should still have summary
         assert result_ctx.metrics_summary is not None
         assert result_ctx.metrics_summary['duration_seconds'] > 0
-    
+
     @pytest.mark.asyncio
     async def test_monitoring_failure_doesnt_block_task(self):
         """Test that monitoring failures don't prevent task execution."""
         session_manager = SessionManager()
         session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
-        
+
         ctx = ExecutionContext(
             session_id=session_id,
             trace_id="test-trace-robust",
@@ -461,15 +461,15 @@ class TestRequestMonitoringIntegration:
             mode=Mode.NORMAL,
             channel=Channel.CHAT,
         )
-        
+
         # Mock RequestMonitor.start to raise error
         with patch('personal_agent.brainstem.sensors.request_monitor.RequestMonitor.start') as mock_start:
             mock_start.side_effect = RuntimeError("Monitor start failed")
-            
+
             with patch('personal_agent.config.settings.request_monitoring_enabled', True):
                 # Task should still execute successfully
                 result_ctx = await execute_task(ctx, session_manager)
-        
+
         # Task should complete despite monitoring failure
         assert result_ctx.state in {TaskState.COMPLETED, TaskState.FAILED}
         # metrics_summary will be None since monitoring failed to start
@@ -478,13 +478,13 @@ class TestRequestMonitoringIntegration:
 
 class TestMetricsSummaryLogging:
     """Test that metrics summary is logged correctly."""
-    
+
     @pytest.mark.asyncio
     async def test_request_metrics_summary_event_logged(self, caplog):
         """Test that REQUEST_METRICS_SUMMARY event is logged."""
         session_manager = SessionManager()
         session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
-        
+
         ctx = ExecutionContext(
             session_id=session_id,
             trace_id="test-trace-logging",
@@ -492,11 +492,11 @@ class TestMetricsSummaryLogging:
             mode=Mode.NORMAL,
             channel=Channel.CHAT,
         )
-        
+
         with patch('personal_agent.config.settings.request_monitoring_enabled', True):
             with patch('personal_agent.config.settings.request_monitoring_interval_seconds', 0.1):
                 await execute_task(ctx, session_manager)
-        
+
         # Verify log contains REQUEST_METRICS_SUMMARY
         # Note: Actual log checking depends on your logging configuration
         # This is a placeholder - adjust based on your test setup
@@ -505,13 +505,13 @@ class TestMetricsSummaryLogging:
 
 class TestCaptainLogIntegration:
     """Test that metrics summary is passed to Captain's Log."""
-    
+
     @pytest.mark.asyncio
     async def test_metrics_summary_available_for_captains_log(self):
         """Test that metrics_summary is attached to context for Captain's Log."""
         session_manager = SessionManager()
         session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
-        
+
         ctx = ExecutionContext(
             session_id=session_id,
             trace_id="test-trace-captains-log",
@@ -519,19 +519,19 @@ class TestCaptainLogIntegration:
             mode=Mode.NORMAL,
             channel=Channel.CHAT,
         )
-        
+
         with patch('personal_agent.config.settings.request_monitoring_enabled', True):
             with patch('personal_agent.config.settings.request_monitoring_interval_seconds', 0.1):
                 result_ctx = await execute_task(ctx, session_manager)
-        
+
         # Verify metrics_summary is available
         assert result_ctx.metrics_summary is not None
-        
+
         # Verify it has expected structure
         assert 'duration_seconds' in result_ctx.metrics_summary
         assert 'sample_count' in result_ctx.metrics_summary
         assert 'threshold_violations' in result_ctx.metrics_summary
-        
+
         # Captain's Log reflection will receive this context
         # (actual reflection happens in background task)
 ```
@@ -548,7 +548,7 @@ Ensure configuration settings are loaded correctly:
 def test_request_monitoring_settings_defaults():
     """Test that request monitoring settings have correct defaults."""
     from personal_agent.config import settings
-    
+
     assert settings.request_monitoring_enabled is True
     assert settings.request_monitoring_interval_seconds == 5.0
     assert settings.request_monitoring_include_gpu is True
@@ -559,16 +559,16 @@ def test_request_monitoring_interval_validation():
     from personal_agent.config.settings import AppConfig
     from pydantic import ValidationError
     import pytest
-    
+
     # Valid intervals
     AppConfig(request_monitoring_interval_seconds=0.1)  # Min
     AppConfig(request_monitoring_interval_seconds=60.0)  # Max
     AppConfig(request_monitoring_interval_seconds=5.0)  # Default
-    
+
     # Invalid intervals
     with pytest.raises(ValidationError):
         AppConfig(request_monitoring_interval_seconds=0.0)  # Too low
-    
+
     with pytest.raises(ValidationError):
         AppConfig(request_monitoring_interval_seconds=61.0)  # Too high
 ```
@@ -637,7 +637,7 @@ log.debug("monitor_summary", trace_id=ctx.trace_id, summary=metrics_summary)
 ```python
 # At top of execute_task:
 from personal_agent.config import settings
-log.debug("monitoring_config", 
+log.debug("monitoring_config",
     enabled=settings.request_monitoring_enabled,
     interval=settings.request_monitoring_interval_seconds)
 ```

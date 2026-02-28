@@ -1,8 +1,8 @@
 # Captain's Log Elasticsearch Backfill Spec
 
-**Date**: 2026-02-22  
-**Status**: Proposed  
-**Phase**: 2.3 Homeostasis & Feedback  
+**Date**: 2026-02-22
+**Status**: Proposed
+**Phase**: 2.3 Homeostasis & Feedback
 **Related**: `FRE-8` (Captain's Log -> Elasticsearch indexing)
 
 ---

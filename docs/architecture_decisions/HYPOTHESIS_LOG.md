@@ -235,13 +235,13 @@ Status: Under Investigation (2026-01-15)
 - **Option A (Full Adoption)**: DSPy as core framework for all LLM interactions
   - Benefits: Systematic optimization, composable modules, research-backed patterns
   - Risks: Framework lock-in, learning curve, abstraction layer complexity
-  
+
 - **Option B (Selective Adoption)** ⭐ **RECOMMENDED**:
   - Use DSPy for Captain's Log reflection (complex structured output)
   - Keep `instructor` for simple structured outputs (ADR-0010)
   - Apply DSPy patterns manually where framework overhead not justified
   - Benefits: Best of both worlds, lower risk, flexible
-  
+
 - **Option C (Defer)**: Proceed with `instructor`, revisit DSPy post-MVP
   - Choose if prototype shows poor fit with LM Studio or excessive complexity
 

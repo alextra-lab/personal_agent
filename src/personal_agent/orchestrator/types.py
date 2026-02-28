@@ -36,12 +36,24 @@ class TaskState(str, Enum):
 class RoutingDecision(str, Enum):
     """Router decision types.
 
-    The router model can either handle a query directly or delegate to
-    a specialized model (REASONING, CODING).
+    Router is delegate-only; DELEGATE sends to STANDARD/REASONING/CODING.
+    HANDLE retained for backward compatibility in RoutingResult.
     """
 
-    HANDLE = "HANDLE"  # Router answers directly (simple queries)
-    DELEGATE = "DELEGATE"  # Delegate to specialized model (complex queries)
+    HANDLE = "HANDLE"  # Legacy; router no longer answers directly
+    DELEGATE = "DELEGATE"  # Delegate to specialized model
+
+
+class HeuristicRoutingPlan(TypedDict):
+    """Result of deterministic pre-router heuristic gate.
+
+    Used to skip LLM router when confidence is high.
+    """
+
+    target_model: ModelRole
+    confidence: float
+    reason: str
+    used_heuristics: bool
 
 
 class RecommendedParams(TypedDict, total=False):

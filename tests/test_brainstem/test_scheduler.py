@@ -372,12 +372,8 @@ class TestQualityMonitorScheduling:
         scheduler.quality_monitor.check_entity_extraction_quality = AsyncMock(
             side_effect=Exception("entity check failed")
         )
-        scheduler.quality_monitor.check_graph_health = AsyncMock(
-            return_value=object()
-        )
-        scheduler.quality_monitor.detect_anomalies = AsyncMock(
-            return_value=[object(), object()]
-        )
+        scheduler.quality_monitor.check_graph_health = AsyncMock(return_value=object())
+        scheduler.quality_monitor.detect_anomalies = AsyncMock(return_value=[object(), object()])
 
         await scheduler._run_quality_monitoring()
 

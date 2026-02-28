@@ -249,8 +249,8 @@ Agent: "Your Mac is healthy: CPU at 34%, memory at 58%, GPU at 12%"
 ```
 User: "Why was that last request so slow?"
 Agent: [calls system_metrics_snapshot(trace_id=last_trace_id)]
-Agent: "During that request, CPU averaged 82% with a peak of 94%. 
-       The high CPU usage caused the slowdown. Consider using a 
+Agent: "During that request, CPU averaged 82% with a peak of 94%.
+       The high CPU usage caused the slowdown. Consider using a
        smaller model for simple queries."
 ```
 
@@ -258,7 +258,7 @@ Agent: "During that request, CPU averaged 82% with a peak of 94%.
 ```
 User: "Has CPU been high lately?"
 Agent: [calls system_metrics_snapshot(window_str="1h")]
-Agent: "Over the last hour, CPU averaged 42% with occasional spikes 
+Agent: "Over the last hour, CPU averaged 42% with occasional spikes
        to 89%. No sustained overload detected."
 ```
 
@@ -276,9 +276,9 @@ Agent: "Over the last hour, CPU averaged 42% with occasional spikes
 [Request completes]
 → Monitor summary attached to context
 → Captain's Log reflection includes:
-   "CPU averaged 78% during this request, peaking at 92% during 
-    LLM inference. Future similar requests could be optimized by 
-    using the STANDARD model instead of REASONING for tool 
+   "CPU averaged 78% during this request, peaking at 92% during
+    LLM inference. Future similar requests could be optimized by
+    using the STANDARD model instead of REASONING for tool
     orchestration."
 ```
 

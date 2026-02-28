@@ -1,9 +1,9 @@
 # E-018: LangExtract Evaluation
 
-**Status**: Planned  
-**Date Created**: 2026-01-28  
-**Phase**: 2.2 (Memory & Second Brain) / Framework Adoption  
-**Related Research**: [LangExtract Library Review](../../research/langextract_library_review_2026-01-28.md)  
+**Status**: Planned
+**Date Created**: 2026-01-28
+**Phase**: 2.2 (Memory & Second Brain) / Framework Adoption
+**Related Research**: [LangExtract Library Review](../../research/langextract_library_review_2026-01-28.md)
 **Related ADRs**: ADR-0010 (Structured Outputs), E-017 (Entity Extraction Model Comparison), E-008a (DSPy Prototype)
 
 ---

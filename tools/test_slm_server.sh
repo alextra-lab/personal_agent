@@ -70,7 +70,7 @@ body=$(echo "$response" | sed '/HTTP_CODE/d')
 if [ "$http_code" = "200" ]; then
     echo "✅ Chat completions passed"
     echo "$body" | python3 -m json.tool 2>/dev/null || echo "$body"
-    
+
     # Extract the response text
     response_text=$(echo "$body" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('choices', [{}])[0].get('message', {}).get('content', 'N/A'))" 2>/dev/null || echo "N/A")
     echo ""

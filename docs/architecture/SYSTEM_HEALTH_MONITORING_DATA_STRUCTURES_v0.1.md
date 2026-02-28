@@ -24,7 +24,7 @@ from typing import TypedDict
 
 class MetricStats(TypedDict):
     """Statistical summary for a single metric over time.
-    
+
     Computed from multiple samples during request execution.
     All values are floats representing the metric's natural unit
     (e.g., percentage for CPU, GB for memory).
@@ -53,27 +53,27 @@ from typing import TypedDict
 
 class MetricSnapshot(TypedDict):
     """Single point-in-time snapshot of system metrics.
-    
+
     Captured during request monitoring at regular intervals.
     All metric fields are optional (None if not available).
     """
     timestamp: str  # ISO 8601 UTC timestamp (e.g., "2026-01-17T10:23:45.123456+00:00")
-    
+
     # CPU metrics
     perf_system_cpu_load: float | None  # CPU usage percentage (0-100)
     perf_system_cpu_count: int | None  # Number of CPU cores
     perf_system_load_avg: tuple[float, float, float] | None  # 1/5/15 min load averages
-    
+
     # Memory metrics
     perf_system_mem_used: float | None  # Memory usage percentage (0-100)
     perf_system_mem_total_gb: float | None  # Total RAM in GB
     perf_system_mem_available_gb: float | None  # Available RAM in GB
-    
+
     # Disk metrics
     perf_system_disk_used: float | None  # Disk usage percentage (0-100)
     perf_system_disk_total_gb: float | None  # Total disk space in GB
     perf_system_disk_free_gb: float | None  # Free disk space in GB
-    
+
     # GPU metrics (Apple Silicon, if available)
     perf_system_gpu_load: float | None  # GPU utilization percentage (0-100)
     perf_system_gpu_power_w: float | None  # GPU power consumption in watts
@@ -109,7 +109,7 @@ from typing import TypedDict, NotRequired
 
 class MetricsSummary(TypedDict):
     """Aggregated metrics summary from request monitoring.
-    
+
     Returned by RequestMonitor.stop() after monitoring completes.
     Provides statistical analysis of metrics over the request duration.
     """
@@ -118,13 +118,13 @@ class MetricsSummary(TypedDict):
     sample_count: int  # Number of samples collected
     start_time: str  # ISO 8601 UTC timestamp when monitoring started
     end_time: str  # ISO 8601 UTC timestamp when monitoring stopped
-    
+
     # Statistical summaries (OPTIONAL - only present if samples collected)
     cpu: NotRequired[MetricStats]  # CPU statistics
     memory: NotRequired[MetricStats]  # Memory statistics
     disk: NotRequired[MetricStats]  # Disk statistics
     gpu: NotRequired[MetricStats]  # GPU statistics (if available)
-    
+
     # Control loop information (REQUIRED)
     threshold_violations: list[str]  # List of violated threshold names
 ```
@@ -169,7 +169,7 @@ from typing import TypedDict
 
 class SystemHealthParams(TypedDict, total=False):
     """Parameters for system_metrics_snapshot tool.
-    
+
     All parameters are optional. Default behavior is current snapshot only.
     """
     window_str: str | None  # Time window (e.g., "30m", "1h", "24h")
@@ -243,10 +243,10 @@ class SystemHealthResponse(TypedDict):
     """Response from system_metrics_snapshot tool."""
     success: bool
     error: str | None
-    
+
     # Current snapshot (ALWAYS present if success=True)
     current: CurrentMetrics | None
-    
+
     # Historical data (only if window_str or trace_id provided)
     history: NotRequired[list[MetricSnapshot]]  # Full time series
     summary: NotRequired[HistoricalSummary]  # Statistical summary
@@ -315,9 +315,9 @@ response: SystemHealthResponse = {
 @dataclass
 class ExecutionContext:
     """Mutable state container passed through execution steps."""
-    
+
     # ... existing fields ...
-    
+
     # Request monitoring (ADR-0012)
     metrics_summary: MetricsSummary | None = None
     """
@@ -485,44 +485,44 @@ from datetime import timedelta
 
 def validate_time_window(window_str: str) -> timedelta:
     """Validate and parse time window string.
-    
+
     Args:
         window_str: Time window (e.g., "30m", "1h", "24h")
-    
+
     Returns:
         Timedelta object
-    
+
     Raises:
         ValueError: If format invalid or exceeds maximum
     """
     pattern = r'^(\d+)([smhd])$'
     match = re.match(pattern, window_str.lower())
-    
+
     if not match:
         raise ValueError(
             f"Invalid time window format: {window_str}. "
             f"Expected format: <number><unit> (e.g., '30m', '1h', '24h')"
         )
-    
+
     value = int(match.group(1))
     unit = match.group(2)
-    
+
     unit_map = {
         's': timedelta(seconds=1),
         'm': timedelta(minutes=1),
         'h': timedelta(hours=1),
         'd': timedelta(days=1),
     }
-    
+
     delta = value * unit_map[unit]
-    
+
     # Enforce maximum (24 hours)
     max_delta = timedelta(hours=24)
     if delta > max_delta:
         raise ValueError(
             f"Time window {window_str} exceeds maximum of 24h"
         )
-    
+
     return delta
 ```
 
@@ -536,10 +536,10 @@ import uuid
 
 def validate_trace_id(trace_id: str) -> bool:
     """Validate trace ID format.
-    
+
     Args:
         trace_id: Trace ID string
-    
+
     Returns:
         True if valid UUID format
     """
@@ -619,7 +619,7 @@ When adding new fields to existing structures:
 ```python
 class MetricsSummary(TypedDict):
     # Existing fields...
-    
+
     # NEW field (Phase 3)
     threshold_violations: NotRequired[list[str]]  # Defaults to empty list
 ```

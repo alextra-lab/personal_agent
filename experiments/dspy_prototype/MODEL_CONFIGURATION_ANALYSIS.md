@@ -1,6 +1,6 @@
 # Model Configuration Analysis: Qwen3-4B-2507
 
-**Date**: 2026-01-17  
+**Date**: 2026-01-17
 **Issue**: Model configuration and usage verification
 
 ---
@@ -16,7 +16,7 @@
 
 **Issue**: For the instruct/non-thinking model, `/no_think` is **not needed** and doesn't apply (model doesn't have thinking mode).
 
-**Recommendation**: 
+**Recommendation**:
 - Verify which exact model LM Studio is loading
 - If using Instruct variant, `/no_think` is unnecessary (model doesn't have thinking mode)
 - If using Thinking variant, `/no_think` might help but isn't guaranteed to work
@@ -47,7 +47,7 @@
 
 **Warning**:
 ```
-[WARN][qwen/qwen3-4b-2507] No valid custom reasoning fields found in model 'qwen/qwen3-4b-2507'. 
+[WARN][qwen/qwen3-4b-2507] No valid custom reasoning fields found in model 'qwen/qwen3-4b-2507'.
 Reasoning setting 'low' cannot be converted to any custom KVs.
 ```
 

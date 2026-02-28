@@ -121,12 +121,12 @@ class MCPClientWrapper:
         server_params = StdioServerParameters(command=self.command[0], args=self.command[1:])
         self._client_context = stdio_client(server_params)
         self._read_stream, self._write_stream = await self._client_context.__aenter__()
-        
+
         self.session = ClientSession(self._read_stream, self._write_stream)
         await self.session.__aenter__()
         await self.session.initialize()
         return self
-    
+
     async def __aexit__(self, *args):
         if self.session:
             await self.session.__aexit__(*args)
@@ -140,7 +140,7 @@ class MCPClientWrapper:
 # In ToolExecutionLayer.execute_tool()
 async def execute_tool(self, tool_name: str, arguments: dict, trace_ctx: TraceContext) -> ToolResult:
     # ... permission checks ...
-    
+
     # Support both async and sync executors
     import inspect
     if inspect.iscoroutinefunction(executor):
@@ -148,7 +148,7 @@ async def execute_tool(self, tool_name: str, arguments: dict, trace_ctx: TraceCo
     else:
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, lambda: executor(**arguments))
-    
+
     # ... return ToolResult ...
 ```
 
@@ -160,14 +160,14 @@ def ensure_tool_configured(self, tool_name: str, tool_schema: dict, inferred_ris
     # Load config
     with open(self.tools_config_path) as f:
         config = yaml.safe_load(f)
-    
+
     # Check if exists (idempotency)
     if tool_name in config.get("tools", {}):
         return  # Already configured, preserve user changes
-    
+
     # Generate template
     template = self._generate_template(tool_name, tool_schema, inferred_risk_level)
-    
+
     # Append to file
     with open(self.tools_config_path, 'a') as f:
         f.write(f"\n  # Auto-discovered: {template['_auto_discovered']}\n")
@@ -184,18 +184,18 @@ def _create_executor(self, mcp_tool_name: str):
     async def executor(**kwargs):
         if not self.client:
             raise RuntimeError("MCP gateway not connected")
-        
+
         start_time = time.time()
         result = await self.client.call_tool(mcp_tool_name, kwargs)
         latency_ms = (time.time() - start_time) * 1000
-        
+
         return mcp_result_to_tool_result(
             tool_name=f"mcp_{mcp_tool_name}",
             mcp_result=result,
             latency_ms=latency_ms,
             error=None
         )
-    
+
     return executor
 ```
 
@@ -326,9 +326,9 @@ tools:
   read_file:
     category: "read_only"
     # ... existing tools ...
-  
+
   # Auto-discovered MCP tools
-  
+
   # Auto-discovered: 2026-01-17T12:30:45
   mcp_github_search:
     category: "mcp"

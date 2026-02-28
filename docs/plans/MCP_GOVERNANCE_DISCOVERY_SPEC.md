@@ -93,7 +93,7 @@ tool_name = f"mcp_{mcp_tool['name']}"  # e.g., "mcp_github_search"
 # Check if already configured
 with open("config/governance/tools.yaml") as f:
     config = yaml.safe_load(f)
-    
+
 if tool_name in config.get("tools", {}):
     # Tool already configured - SKIP (preserve user customizations)
     continue
@@ -141,27 +141,27 @@ Risk level is inferred from tool name using keyword matching:
 ```python
 def _infer_risk_level(tool_name: str) -> Literal["low", "medium", "high"]:
     """Infer risk level from tool name.
-    
+
     High risk: Actions that modify state, send data, or execute code
     Low risk: Read-only, search, query operations
     Medium risk: Everything else (default)
     """
     name_lower = tool_name.lower()
-    
+
     # High risk keywords
     if any(keyword in name_lower for keyword in [
         "write", "delete", "execute", "send", "create",
         "modify", "update", "remove", "destroy", "drop"
     ]):
         return "high"
-    
-    # Low risk keywords  
+
+    # Low risk keywords
     if any(keyword in name_lower for keyword in [
         "read", "get", "list", "search", "query",
         "view", "show", "fetch", "retrieve"
     ]):
         return "low"
-    
+
     # Default
     return "medium"
 ```
@@ -199,7 +199,7 @@ mcp_tool_name:
   allowed_in_modes: [...]  # Based on risk level
   risk_level: "low|medium|high"  # Inferred from name
   requires_approval: true|false  # Based on risk level
-  
+
   # Optional fields (commented out by default)
   # forbidden_paths: []  # User can uncomment to restrict
   # allowed_paths: []    # User can uncomment to restrict
@@ -314,9 +314,9 @@ tools:
   read_file:
     category: "read_only"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
-    
+
   # MCP tools (auto-discovered, user-editable)
-  
+
   # Auto-discovered: 2026-01-17T12:30:45
   # Search GitHub repositories
   mcp_github_search:
@@ -399,7 +399,7 @@ Test governance manager in isolation:
 def test_template_generation():
     """Test risk level inference and template generation."""
     mgr = MCPGovernanceManager()
-    
+
     # High risk tool
     template = mgr._generate_template(
         "mcp_filesystem_write",
@@ -408,7 +408,7 @@ def test_template_generation():
     )
     assert template["risk_level"] == "high"
     assert template["requires_approval"] is True
-    
+
     # Low risk tool
     template = mgr._generate_template(
         "mcp_github_search",
@@ -429,14 +429,14 @@ def test_config_append():
     with tempfile.TemporaryDirectory() as tmpdir:
         config_path = Path(tmpdir) / "tools.yaml"
         config_path.write_text("tools:\n  read_file:\n    category: read_only\n")
-        
+
         mgr = MCPGovernanceManager()
-        
+
         # First append
         mgr.ensure_tool_configured("mcp_test", {...}, "low")
         content = config_path.read_text()
         assert "mcp_test:" in content
-        
+
         # Second append (should be no-op)
         mgr.ensure_tool_configured("mcp_test", {...}, "low")
         content2 = config_path.read_text()
@@ -454,11 +454,11 @@ async def test_discovery_updates_config():
     # Enable gateway, discover tools
     adapter = MCPGatewayAdapter(registry)
     await adapter.initialize()
-    
+
     # Check config file updated
     with open("config/governance/tools.yaml") as f:
         config = yaml.safe_load(f)
-    
+
     # Verify MCP tools present
     tools = config["tools"]
     mcp_tools = {k: v for k, v in tools.items() if k.startswith("mcp_")}
@@ -615,13 +615,13 @@ Validate user-edited config on load:
 def validate_config(config: dict) -> list[str]:
     """Validate governance config, return warnings."""
     warnings = []
-    
+
     for tool_name, tool_config in config["tools"].items():
         # Check for overly permissive high-risk tools
         if tool_config["risk_level"] == "high":
             if not tool_config.get("requires_approval"):
                 warnings.append(f"{tool_name}: High risk without approval")
-    
+
     return warnings
 ```
 

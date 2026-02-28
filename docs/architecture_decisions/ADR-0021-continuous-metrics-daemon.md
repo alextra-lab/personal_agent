@@ -1,8 +1,8 @@
 # ADR-0021: Continuous Metrics Daemon
 
-**Status:** Accepted  
-**Date:** 2026-02-23  
-**Deciders:** Alex  
+**Status:** Accepted
+**Date:** 2026-02-23
+**Deciders:** Alex
 **Supersedes:** ADR-0012 (Request-Scoped Metrics Monitoring) — partially; the `RequestMonitor` concept remains but becomes a thin reader, not a poller.
 
 ## Context
@@ -41,10 +41,10 @@ Service Shutdown → MetricsDaemon.stop()
 ```python
 class RequestMonitor:
     def __init__(self, trace_id: str, daemon: MetricsDaemon): ...
-    
+
     async def start(self) -> None:
         self._start_time = time.time()
-    
+
     async def stop(self) -> dict[str, Any]:
         window = self.daemon.get_window(seconds=self._elapsed())
         return self._compute_summary(window)

@@ -80,7 +80,7 @@ Before implementing, review these detailed specifications:
    ```python
    class RequestMonitor:
        """Background system metrics monitor scoped to a specific request."""
-       
+
        def __init__(self, trace_id: str, interval_seconds: float = 5.0):
            self._trace_id = trace_id
            self._interval = interval_seconds
@@ -88,13 +88,13 @@ Before implementing, review these detailed specifications:
            self._snapshots: list[dict[str, Any]] = []
            self._start_time: datetime | None = None
            self._stop_requested = False
-           
+
        async def start(self) -> None:
            """Start background monitoring task."""
-           
+
        async def stop(self) -> dict[str, Any]:
            """Stop monitoring and return aggregated summary."""
-           
+
        async def _polling_loop(self) -> None:
            """Main polling loop (runs in background)."""
    ```
@@ -149,12 +149,12 @@ Before implementing, review these detailed specifications:
 1. **Modify executor.py to start/stop monitoring**
    ```python
    # In src/personal_agent/orchestrator/executor.py
-   
+
    async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -> ExecutionContext:
        """Main execution loop with request-scoped monitoring."""
        state = ctx.state
        trace_ctx = TraceContext(trace_id=ctx.trace_id)
-       
+
        # Start request-scoped monitoring
        monitor = None
        if settings.request_monitoring_enabled:
@@ -165,23 +165,23 @@ Before implementing, review these detailed specifications:
            )
            await monitor.start()
            log.debug("request_monitoring_started", trace_id=ctx.trace_id)
-       
+
        log.info(TASK_STARTED, trace_id=ctx.trace_id, ...)
-       
+
        try:
            # ... existing execution logic ...
-           
+
        except Exception as e:
            log.error(ORCHESTRATOR_FATAL_ERROR, trace_id=ctx.trace_id, exc_info=True)
            ctx.error = e
            ctx.state = TaskState.FAILED
-           
+
        finally:
            # Always stop monitoring and get summary
            if monitor:
                metrics_summary = await monitor.stop()
                ctx.metrics_summary = metrics_summary
-               
+
                # Log summary
                log.info(
                    REQUEST_METRICS_SUMMARY,
@@ -192,7 +192,7 @@ Before implementing, review these detailed specifications:
                    memory_avg=metrics_summary.get('memory', {}).get('avg'),
                    threshold_violations=metrics_summary.get('threshold_violations', [])
                )
-       
+
        return ctx
    ```
 
@@ -244,36 +244,36 @@ Before implementing, review these detailed specifications:
    ```python
    def _check_thresholds(self, metrics: dict[str, Any]) -> list[str]:
        """Check metrics against mode transition thresholds.
-       
+
        Returns list of violated threshold names.
        """
        violations = []
-       
+
        # Load thresholds from governance config
        from personal_agent.governance.config_loader import load_governance_config
        gov_config = load_governance_config()
-       
+
        current_mode = get_current_mode()
        mode_config = gov_config.modes.get(current_mode)
        if not mode_config:
            return violations
-       
+
        thresholds = mode_config.thresholds
-       
+
        # Check CPU threshold
        cpu_load = metrics.get('perf_system_cpu_load')
        if cpu_load and cpu_load > thresholds.get('cpu_load_percent', 100):
            violations.append('cpu_overload')
            self._emit_control_signal('cpu_overload', cpu_load)
-       
+
        # Check memory threshold
        mem_used = metrics.get('perf_system_mem_used')
        if mem_used and mem_used > thresholds.get('memory_used_percent', 100):
            violations.append('memory_pressure')
            self._emit_control_signal('memory_pressure', mem_used)
-       
+
        return violations
-   
+
    def _emit_control_signal(self, signal_type: str, metric_value: float) -> None:
        """Emit control signal for mode manager."""
        log.warning(
@@ -288,20 +288,20 @@ Before implementing, review these detailed specifications:
 2. **Wire ModeManager to check control signals**
    ```python
    # In src/personal_agent/brainstem/mode_manager.py
-   
+
    def evaluate_transitions_from_metrics(self, metrics_summary: dict[str, Any]) -> None:
        """Evaluate if mode transition needed based on metrics summary.
-       
+
        Args:
            metrics_summary: Summary from RequestMonitor with threshold_violations
        """
        violations = metrics_summary.get('threshold_violations', [])
-       
+
        if not violations:
            return
-       
+
        current_mode = self.get_current_mode()
-       
+
        # Determine if transition needed
        if 'cpu_overload' in violations or 'memory_pressure' in violations:
            if current_mode == Mode.NORMAL:
@@ -317,12 +317,12 @@ Before implementing, review these detailed specifications:
    if monitor:
        metrics_summary = await monitor.stop()
        ctx.metrics_summary = metrics_summary
-       
+
        # Check for mode transitions based on metrics
        from personal_agent.brainstem.mode_manager import get_mode_manager
        mode_manager = get_mode_manager()
        mode_manager.evaluate_transitions_from_metrics(metrics_summary)
-       
+
        log.info(REQUEST_METRICS_SUMMARY, ...)
    ```
 
@@ -357,12 +357,12 @@ Before implementing, review these detailed specifications:
 1. **Enhance reflection prompt with metrics**
    ```python
    # In src/personal_agent/captains_log/reflection.py
-   
+
    async def _generate_reflection_prompt(ctx: ExecutionContext) -> str:
        """Generate reflection prompt with metrics context."""
-       
+
        metrics = ctx.metrics_summary or {}
-       
+
        metrics_section = ""
        if metrics:
            metrics_section = f"""
@@ -374,22 +374,22 @@ Before implementing, review these detailed specifications:
    - GPU Usage: avg={metrics.get('gpu', {}).get('avg', 'N/A')}% (if applicable)
    - Threshold Violations: {', '.join(metrics.get('threshold_violations', [])) or 'None'}
    """
-       
+
        prompt = f"""
    Reflect on the completed task and system performance:
-   
+
    **User Request**: {ctx.user_message}
-   
+
    **Execution Steps**: {len(ctx.steps)} steps completed
    {_format_steps_summary(ctx.steps)}
    {metrics_section}
-   
+
    **Analysis Questions**:
    1. What patterns emerge from the execution and performance data?
    2. Were there any inefficiencies or resource bottlenecks?
    3. Could this task type be optimized in the future?
    4. What should I remember about similar requests?
-   
+
    Provide insights that would be valuable for future reflection.
    """
        return prompt
@@ -421,7 +421,7 @@ Before implementing, review these detailed specifications:
 1. **Extend query_events() to support trace_id filtering**
    ```python
    # In src/personal_agent/telemetry/metrics.py
-   
+
    def query_events(
        event: str | None = None,
        window_str: str | None = None,
@@ -430,19 +430,19 @@ Before implementing, review these detailed specifications:
        limit: int | None = None,
    ) -> list[dict[str, Any]]:
        """Query log entries with flexible filters.
-       
+
        Args:
            event: Optional event name filter.
            window_str: Optional time window (e.g., "1h", "30m").
            component: Optional component name filter.
            trace_id: Optional trace ID filter.
            limit: Optional maximum number of results.
-       
+
        Returns:
            List of matching log entries, ordered by timestamp (newest first).
        """
        # ... existing time window parsing ...
-       
+
        # Apply filters
        filtered = []
        for entry in entries:
@@ -453,7 +453,7 @@ Before implementing, review these detailed specifications:
            if trace_id and entry.get("trace_id") != trace_id:
                continue
            filtered.append(entry)
-       
+
        # ... rest of implementation ...
    ```
 
@@ -463,17 +463,17 @@ Before implementing, review these detailed specifications:
        """Calculate statistical summary from metric snapshots."""
        if not snapshots:
            return {}
-       
+
        # Extract metric values
        cpu_values = [s.get("cpu_load") for s in snapshots if s.get("cpu_load") is not None]
        mem_values = [s.get("memory_used") for s in snapshots if s.get("memory_used") is not None]
        gpu_values = [s.get("gpu_load") for s in snapshots if s.get("gpu_load") is not None]
-       
+
        summary = {
            "duration_seconds": _calculate_duration(snapshots),
            "sample_count": len(snapshots),
        }
-       
+
        for name, values in [("cpu", cpu_values), ("memory", mem_values), ("gpu", gpu_values)]:
            if values:
                summary[name] = {
@@ -481,14 +481,14 @@ Before implementing, review these detailed specifications:
                    "max": max(values),
                    "avg": sum(values) / len(values)
                }
-       
+
        return summary
    ```
 
 3. **Enhance system_metrics_snapshot_executor**
    ```python
    # In src/personal_agent/tools/system_health.py
-   
+
    def system_metrics_snapshot_executor(
        window_str: str | None = None,
        trace_id: str | None = None,
@@ -498,17 +498,17 @@ Before implementing, review these detailed specifications:
        """Get system metrics with optional historical data."""
        try:
            result = {"success": True, "error": None}
-           
+
            # Always get current snapshot
            current_metrics = get_system_metrics_snapshot()
            result["current"] = current_metrics
-           
+
            # If historical data requested
            if window_str or trace_id:
                # Query telemetry logs
                from personal_agent.telemetry.metrics import query_events
                from personal_agent.telemetry.events import SYSTEM_METRICS_SNAPSHOT
-               
+
                if trace_id:
                    history = query_events(
                        event=SYSTEM_METRICS_SNAPSHOT,
@@ -519,17 +519,17 @@ Before implementing, review these detailed specifications:
                        event=SYSTEM_METRICS_SNAPSHOT,
                        window_str=window_str
                    )
-               
+
                # Include full history if requested
                if include_history:
                    result["history"] = history
-               
+
                # Calculate statistical summary
                if stat_summary and history:
                    result["summary"] = _calculate_metrics_summary(history)
-           
+
            return result
-           
+
        except Exception as e:
            return {
                "success": False,
@@ -543,13 +543,13 @@ Before implementing, review these detailed specifications:
    system_metrics_snapshot_tool = ToolDefinition(
        name="system_metrics_snapshot",
        description="""Get system metrics (CPU, memory, disk, GPU) with optional history.
-       
+
        Use this to:
        - Check current system health
        - Review metrics from a time window (e.g., last 30 minutes)
        - Analyze metrics for a specific request (by trace_id)
        - Investigate performance issues
-       
+
        Examples:
        - Current only: system_metrics_snapshot()
        - Last hour: system_metrics_snapshot(window_str="1h")

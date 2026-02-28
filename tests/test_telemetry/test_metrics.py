@@ -341,9 +341,7 @@ class TestLogQueryFunctions:
         # reply_ready at t0+2010
         t0 = datetime.now(timezone.utc)
         entries = [
-            self._create_log_entry(
-                REQUEST_RECEIVED, trace_id=trace_id, timestamp=t0
-            ),
+            self._create_log_entry(REQUEST_RECEIVED, trace_id=trace_id, timestamp=t0),
             self._create_log_entry(
                 TASK_STARTED, trace_id=trace_id, timestamp=t0 + timedelta(milliseconds=100)
             ),

@@ -2,8 +2,6 @@
 
 from datetime import timedelta
 
-import pytest
-
 from personal_agent.telemetry.lifecycle import RETENTION_POLICIES, RetentionPolicy
 
 

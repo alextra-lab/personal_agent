@@ -120,7 +120,11 @@ class TelemetryQueries:
                 "bool": {
                     "filter": [
                         {"term": {"event_type": event_type}},
-                        {"range": {"@timestamp": {"gte": start.isoformat(), "lte": now.isoformat()}}},
+                        {
+                            "range": {
+                                "@timestamp": {"gte": start.isoformat(), "lte": now.isoformat()}
+                            }
+                        },
                     ]
                 }
             },
@@ -147,7 +151,11 @@ class TelemetryQueries:
                 "bool": {
                     "filter": [
                         {"term": {"event_type": event_type}},
-                        {"range": {"@timestamp": {"gte": start.isoformat(), "lte": now.isoformat()}}},
+                        {
+                            "range": {
+                                "@timestamp": {"gte": start.isoformat(), "lte": now.isoformat()}
+                            }
+                        },
                     ]
                 }
             },
@@ -237,7 +245,11 @@ class TelemetryQueries:
                 "bool": {
                     "filter": [
                         {"term": {"event_type": MODE_TRANSITION_EVENT}},
-                        {"range": {"@timestamp": {"gte": start.isoformat(), "lte": now.isoformat()}}},
+                        {
+                            "range": {
+                                "@timestamp": {"gte": start.isoformat(), "lte": now.isoformat()}
+                            }
+                        },
                     ]
                 }
             },
@@ -281,7 +293,11 @@ class TelemetryQueries:
                 "bool": {
                     "filter": [
                         {"term": {"event_type": CONSOLIDATION_EVENT}},
-                        {"range": {"@timestamp": {"gte": start.isoformat(), "lte": now.isoformat()}}},
+                        {
+                            "range": {
+                                "@timestamp": {"gte": start.isoformat(), "lte": now.isoformat()}
+                            }
+                        },
                     ]
                 }
             },
@@ -326,7 +342,11 @@ class TelemetryQueries:
             query={
                 "bool": {
                     "filter": [
-                        {"range": {"timestamp": {"gte": start.isoformat(), "lte": now.isoformat()}}},
+                        {
+                            "range": {
+                                "timestamp": {"gte": start.isoformat(), "lte": now.isoformat()}
+                            }
+                        },
                     ]
                 }
             },

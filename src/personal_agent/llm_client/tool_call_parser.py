@@ -8,6 +8,7 @@ Supported formats:
 1. [TOOL_REQUEST]{"name":"tool_name","arguments":{...}}[END_TOOL_REQUEST]
 2. <tool_call>{"name":"tool_name","arguments":{...}}</tool_call>
 3. Tool: tool_name(arg1=value1, arg2=value2)
+4. [tool_name, {"arg":"value"}]  (common malformed fallback from some models)
 """
 
 import json
@@ -18,6 +19,95 @@ from personal_agent.llm_client.types import ToolCall
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
+
+
+def _parse_relaxed_json_object(raw: str) -> dict[str, Any] | None:
+    """Best-effort parse of a JSON object with trailing noise.
+
+    Some models emit bracket fallback calls with an extra closing brace/bracket
+    suffix, e.g. `{"messages":[...}]}}]`.
+    """
+    candidate = raw.strip()
+    while candidate:
+        try:
+            data = json.loads(candidate)
+            if isinstance(data, dict):
+                return data
+            return None
+        except json.JSONDecodeError:
+            candidate = candidate[:-1].rstrip()
+    return None
+
+
+def _extract_bracket_fallback_calls(content: str) -> list[tuple[str, str]]:
+    """Extract `[tool_name, {json}]` chunks from free-form model output."""
+    extracted: list[tuple[str, str]] = []
+    idx = 0
+    n = len(content)
+
+    while idx < n:
+        start = content.find("[", idx)
+        if start == -1:
+            break
+
+        j = start + 1
+        while j < n and content[j].isspace():
+            j += 1
+
+        name_start = j
+        while j < n and (content[j].isalnum() or content[j] == "_"):
+            j += 1
+        tool_name = content[name_start:j]
+        if not tool_name:
+            idx = start + 1
+            continue
+
+        while j < n and content[j].isspace():
+            j += 1
+        if j >= n or content[j] != ",":
+            idx = start + 1
+            continue
+        j += 1
+
+        while j < n and content[j].isspace():
+            j += 1
+        if j >= n or content[j] != "{":
+            idx = start + 1
+            continue
+
+        brace_start = j
+        depth = 0
+        in_string = False
+        escape = False
+        while j < n:
+            ch = content[j]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+            else:
+                if ch == '"':
+                    in_string = True
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+            j += 1
+
+        if j >= n or depth != 0:
+            idx = start + 1
+            continue
+
+        args_json = content[brace_start : j + 1]
+        extracted.append((tool_name, args_json))
+        idx = j + 1
+
+    return extracted
 
 
 def parse_text_tool_calls(content: str, trace_id: str | None = None) -> list[ToolCall]:
@@ -133,6 +223,34 @@ def parse_text_tool_calls(content: str, trace_id: str | None = None) -> list[Too
                 error=str(e),
                 trace_id=trace_id,
             )
+
+    # Strategy 4: [tool_name, {"arg":"value"}]
+    # Some models emit this instead of required [TOOL_REQUEST] JSON envelope.
+    for tool_name, args_json in _extract_bracket_fallback_calls(content):
+        parsed_args = _parse_relaxed_json_object(args_json)
+        if parsed_args is None:
+            log.warning(
+                "malformed_text_tool_call_detected",
+                format="bracket_fallback",
+                tool_name=tool_name,
+                args_preview=args_json[:160],
+                trace_id=trace_id,
+            )
+            continue
+
+        tool_calls.append(
+            ToolCall(
+                id=f"text_tool_{len(tool_calls)}",
+                name=tool_name,
+                arguments=json.dumps(parsed_args),
+            )
+        )
+        log.debug(
+            "parsed_text_tool_call",
+            format="bracket_fallback",
+            tool_name=tool_name,
+            trace_id=trace_id,
+        )
 
     if tool_calls:
         log.info(

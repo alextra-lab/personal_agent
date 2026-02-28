@@ -37,9 +37,7 @@ async def test_gateway_initialization():
     mock_governance.ensure_tool_configured.return_value = None
 
     with patch("personal_agent.mcp.gateway.MCPClientWrapper", return_value=mock_client):
-        with patch(
-            "personal_agent.mcp.gateway.MCPGovernanceManager", return_value=mock_governance
-        ):
+        with patch("personal_agent.mcp.gateway.MCPGovernanceManager", return_value=mock_governance):
             adapter.enabled = True
             await adapter.initialize()
 

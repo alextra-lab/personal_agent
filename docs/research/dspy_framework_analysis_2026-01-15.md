@@ -1,8 +1,8 @@
 # DSPy Framework Analysis for Personal Agent
 
-**Date**: 2026-01-15  
-**Analyst**: Project Collaborator  
-**Status**: Strategic Technology Assessment  
+**Date**: 2026-01-15
+**Analyst**: Project Collaborator
+**Status**: Strategic Technology Assessment
 **Related ADRs**: ADR-0010 (Structured Outputs), ADR-0003 (Model Stack), ADR-0006 (Orchestrator)
 
 ---
@@ -293,7 +293,7 @@ class GenerateReflection(dspy.Signature):
     task_summary: str = dspy.InputField(desc="what the agent did")
     telemetry_metrics: dict = dspy.InputField(desc="performance data")
     tool_usage: list[dict] = dspy.InputField(desc="tools called with results")
-    
+
     rationale: str = dspy.OutputField(desc="analysis of what happened")
     proposed_change: ProposedChange = dspy.OutputField(desc="improvement proposal")
     supporting_metrics: list[str] = dspy.OutputField()
@@ -335,7 +335,7 @@ class RouteQuery(dspy.Signature):
     query: str = dspy.InputField()
     system_state: dict = dspy.InputField(desc="current mode, recent history")
     available_models: list[str] = dspy.InputField()
-    
+
     decision: Literal["HANDLE", "DELEGATE"] = dspy.OutputField()
     target_model: ModelRole | None = dspy.OutputField()
     confidence: float = dspy.OutputField()
@@ -424,11 +424,11 @@ class CognitiveAgent(dspy.Module):
         self.executor = dspy.ReAct("plan, step -> result", tools=[...])
         self.monitor = dspy.ChainOfThought("result, expected -> assessment: Assessment")
         self.reflector = dspy.ChainOfThought("execution_trace -> improvements: list[str]")
-    
+
     def forward(self, task):
         # Plan
         plan = self.planner(task=task)
-        
+
         # Execute with monitoring
         results = []
         for step in plan.plan:
@@ -438,10 +438,10 @@ class CognitiveAgent(dspy.Module):
                 # Re-plan or adjust
                 pass
             results.append(result)
-        
+
         # Reflect
         reflection = self.reflector(execution_trace=results)
-        
+
         return dspy.Prediction(results=results, reflection=reflection)
 
 # Optimize entire cognitive pipeline
@@ -623,7 +623,7 @@ DSPy's design philosophy:
    ```bash
    pip install dspy
    ```
-   
+
 2. **Test 3 Use Cases**:
    - **A. Structured output**: Replicate Captain's Log reflection generation
    - **B. Router logic**: Implement routing decision as DSPy signature
@@ -755,11 +755,11 @@ If prototype validates:
 1. **Use DSPy for Captain's Log reflection** (Day 31-32)
    - Replace manual JSON prompt with DSPy signature
    - Keep `instructor` as fallback for other use cases
-   
+
 2. **Extract routing patterns from DSPy** (Day 33)
    - Study DSPy's ChainOfThought implementation
    - Apply patterns to our manual routing logic (don't necessarily use DSPy framework)
-   
+
 3. **Learn optimizer patterns** (Day 34-35)
    - Read MIPROv2 paper
    - Understand bootstrapping and prompt evolution
@@ -803,7 +803,7 @@ class GenerateReflection(dspy.Signature):
     task_summary: str = dspy.InputField()
     telemetry_metrics: str = dspy.InputField(desc="JSON metrics")
     tool_usage: str = dspy.InputField(desc="JSON tool calls")
-    
+
     rationale: str = dspy.OutputField(desc="what happened and why")
     proposed_change: dict = dspy.OutputField(desc="what/why/how")
     supporting_metrics: list[str] = dspy.OutputField()
@@ -818,11 +818,11 @@ async def generate_reflection_entry(
     assistant_message: str
 ) -> CaptainLogEntry:
     """Generate reflection using DSPy."""
-    
+
     # Gather telemetry (as we do now)
     metrics = query_telemetry_for_task(trace_id)
     tool_calls = extract_tool_usage(trace_id)
-    
+
     # Call DSPy module
     try:
         result = reflection_generator(
@@ -830,7 +830,7 @@ async def generate_reflection_entry(
             telemetry_metrics=json.dumps(metrics),
             tool_usage=json.dumps(tool_calls)
         )
-        
+
         # Convert to CaptainLogEntry
         entry = CaptainLogEntry(
             entry_id=generate_entry_id(),
@@ -843,15 +843,15 @@ async def generate_reflection_entry(
             impact_assessment=result.impact_assessment,
             trace_id=trace_id
         )
-        
+
         log.info(
             "reflection_generated_via_dspy",
             entry_id=entry.entry_id,
             trace_id=trace_id
         )
-        
+
         return entry
-        
+
     except Exception as e:
         log.warning(
             "dspy_reflection_failed_fallback_manual",
@@ -891,50 +891,50 @@ async def generate_reflection_entry(
 
 class PlanningModule(dspy.Module):
     """Generate execution plan for complex task."""
-    
+
     def __init__(self):
         self.planner = dspy.ChainOfThought(
             "task, context -> plan: list[Step], confidence: float"
         )
-    
+
     def forward(self, task, context):
         result = self.planner(task=task, context=context)
-        
+
         # Emit telemetry
         log.info(
             "plan_generated",
             num_steps=len(result.plan),
             confidence=result.confidence
         )
-        
+
         return result
 
 
 class MetacognitiveMonitor(dspy.Module):
     """Monitor execution quality and uncertainty."""
-    
+
     def __init__(self):
         self.monitor = dspy.ChainOfThought(
             "action, result, expected -> quality: float, issues: list[str]"
         )
-    
+
     def forward(self, action, result, expected):
         assessment = self.monitor(
             action=action,
             result=result,
             expected=expected
         )
-        
+
         # Trigger mode changes via brainstem
         if assessment.quality < 0.5:
             brainstem.transition_to(Mode.ALERT, reason="Low execution quality")
-        
+
         return assessment
 
 
 class CognitiveOrchestrator(dspy.Module):
     """Full cognitive architecture with metacognition."""
-    
+
     def __init__(self, tools):
         self.planner = PlanningModule()
         self.executor = dspy.ReAct(
@@ -946,11 +946,11 @@ class CognitiveOrchestrator(dspy.Module):
         self.reflector = dspy.ChainOfThought(
             "execution_trace -> insights: list[str], proposals: list[dict]"
         )
-    
+
     def forward(self, task):
         # Plan
         plan = self.planner(task=task, context=get_context())
-        
+
         # Execute with monitoring
         results = []
         for step in plan.plan:
@@ -960,17 +960,17 @@ class CognitiveOrchestrator(dspy.Module):
                 result=result,
                 expected=step.expected
             )
-            
+
             # Adjust if quality low
             if assessment.quality < 0.7:
                 # Re-plan or adjust (metacognitive control)
                 plan = self.planner(task=task, context=get_context() + results)
-            
+
             results.append(result)
-        
+
         # Reflect
         reflection = self.reflector(execution_trace=results)
-        
+
         return dspy.Prediction(
             results=results,
             reflection=reflection
@@ -1031,7 +1031,7 @@ optimized_agent = optimizer.compile(
 | **Community Support** | Access to 250+ contributors and production users | Ongoing |
 | **Future-Proofing** | DSPy evolves with research (MIPROv2, GEPA, etc.) | Long-term |
 
-**Total Estimated Value**: 
+**Total Estimated Value**:
 - **Short-term** (Weeks 5-6): Cleaner code, learning value
 - **Medium-term** (Weeks 6-8): Systematic prompt optimization
 - **Long-term** (Weeks 8+): Cognitive architecture modularity and optimization
@@ -1043,7 +1043,7 @@ optimized_agent = optimizer.compile(
 **Scenario 1: Adopt DSPy for Captain's Log Only (Option B - Recommended)**
 
 - **Investment**: 2 days (prototype + integration)
-- **Payoff**: 
+- **Payoff**:
   - 50% code reduction in reflection.py (~100 lines → ~50 lines)
   - Learning DSPy patterns (applies to future work)
   - Option to optimize reflection quality later
@@ -1124,7 +1124,7 @@ optimized_agent = optimizer.compile(
    - Control (can we integrate governance, telemetry?)
 5. Document findings in `experiments/E-008-dspy-prototype-evaluation.md`
 
-**Decision Point**: 
+**Decision Point**:
 - ✅ If prototype validates fit → Proceed to Day 28-30 (selective integration)
 - ❌ If prototype shows poor fit → Defer DSPy, proceed with `instructor` plan (ADR-0010)
 
@@ -1239,6 +1239,6 @@ Once evaluation harness complete (Day 26-28):
 
 ---
 
-*Document prepared by: AI Collaborator*  
-*Date: 2026-01-15*  
+*Document prepared by: AI Collaborator*
+*Date: 2026-01-15*
 *For: Personal Agent Strategic Technology Assessment*

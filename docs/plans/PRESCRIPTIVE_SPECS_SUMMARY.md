@@ -70,7 +70,7 @@ I've created **comprehensive, prescriptive implementation specifications** that 
 async def _polling_loop(self) -> None:
     """Main polling loop (runs in background)."""
     poll_count = 0
-    
+
     while not self._stop_requested:
         poll_count += 1
         try:
@@ -97,7 +97,7 @@ async def _polling_loop(self) -> None:
   - Shows BEFORE and AFTER code
   - Exact placement (after line X)
   - Comment markers for where to insert
-  
+
 - **Complete error handling patterns**
   - Try-except blocks fully specified
   - Finally block cleanup logic
@@ -184,34 +184,34 @@ def _check_thresholds(self, metrics):
 ```python
 def _check_thresholds(self, metrics: dict[str, Any]) -> list[str]:
     """Check metrics against mode transition thresholds.
-    
+
     Returns list of violated threshold names.
     """
     violations = []
-    
+
     # Load thresholds from governance config
     from personal_agent.governance.config_loader import load_governance_config
     gov_config = load_governance_config()
-    
+
     current_mode = get_current_mode()
     mode_config = gov_config.modes.get(current_mode)
     if not mode_config:
         return violations
-    
+
     thresholds = mode_config.thresholds
-    
+
     # Check CPU threshold
     cpu_load = metrics.get('perf_system_cpu_load')
     if cpu_load and cpu_load > thresholds.get('cpu_load_percent', 100):
         violations.append('cpu_overload')
         self._emit_control_signal('cpu_overload', cpu_load)
-    
+
     # Check memory threshold
     mem_used = metrics.get('perf_system_mem_used')
     if mem_used and mem_used > thresholds.get('memory_used_percent', 100):
         violations.append('memory_pressure')
         self._emit_control_signal('memory_pressure', mem_used)
-    
+
     return violations
 ```
 

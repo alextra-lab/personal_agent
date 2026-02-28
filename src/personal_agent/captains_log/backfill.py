@@ -80,8 +80,12 @@ class BackfillCheckpoint:
     version: int = CHECKPOINT_VERSION
     last_scan_started_at: str | None = None
     last_scan_completed_at: str | None = None
-    captures: dict[str, Any] = field(default_factory=lambda: {"last_processed_path": None, "last_processed_mtime": None})
-    reflections: dict[str, Any] = field(default_factory=lambda: {"last_processed_path": None, "last_processed_mtime": None})
+    captures: dict[str, Any] = field(
+        default_factory=lambda: {"last_processed_path": None, "last_processed_mtime": None}
+    )
+    reflections: dict[str, Any] = field(
+        default_factory=lambda: {"last_processed_path": None, "last_processed_mtime": None}
+    )
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize for JSON."""
@@ -100,8 +104,12 @@ class BackfillCheckpoint:
             version=data.get("version", 1),
             last_scan_started_at=data.get("last_scan_started_at"),
             last_scan_completed_at=data.get("last_scan_completed_at"),
-            captures=data.get("captures", {"last_processed_path": None, "last_processed_mtime": None}),
-            reflections=data.get("reflections", {"last_processed_path": None, "last_processed_mtime": None}),
+            captures=data.get(
+                "captures", {"last_processed_path": None, "last_processed_mtime": None}
+            ),
+            reflections=data.get(
+                "reflections", {"last_processed_path": None, "last_processed_mtime": None}
+            ),
         )
 
 
@@ -211,7 +219,10 @@ async def run_backfill(
         result.files_scanned += 1
         rel = _path_relative_to_root(file_path)
         mtime_str = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
-        if last_capture_path is not None and (rel < last_capture_path or (rel == last_capture_path and last_capture_mtime and mtime_str <= last_capture_mtime)):
+        if last_capture_path is not None and (
+            rel < last_capture_path
+            or (rel == last_capture_path and last_capture_mtime and mtime_str <= last_capture_mtime)
+        ):
             result.skipped_count += 1
             continue
         try:
@@ -252,13 +263,19 @@ async def run_backfill(
         result.files_scanned += 1
         rel = _path_relative_to_root(file_path)
         mtime_str = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
-        if last_refl_path is not None and (rel < last_refl_path or (rel == last_refl_path and last_refl_mtime and mtime_str <= last_refl_mtime)):
+        if last_refl_path is not None and (
+            rel < last_refl_path
+            or (rel == last_refl_path and last_refl_mtime and mtime_str <= last_refl_mtime)
+        ):
             result.skipped_count += 1
             continue
         try:
             raw = json.loads(file_path.read_text(encoding="utf-8"))
             entry = CaptainLogEntry(**raw)
-            if entry.type not in {CaptainLogEntryType.REFLECTION, CaptainLogEntryType.CONFIG_PROPOSAL}:
+            if entry.type not in {
+                CaptainLogEntryType.REFLECTION,
+                CaptainLogEntryType.CONFIG_PROPOSAL,
+            }:
                 result.skipped_count += 1
                 continue
             date_str = entry.timestamp.strftime("%Y-%m-%d")

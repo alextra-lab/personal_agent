@@ -7,8 +7,8 @@ priority order as specified in ADR-0007.
 from enum import Enum
 from pathlib import Path
 
-from dotenv import load_dotenv
 import structlog
+from dotenv import load_dotenv
 
 log = structlog.get_logger(__name__)
 

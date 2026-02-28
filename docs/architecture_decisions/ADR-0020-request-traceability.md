@@ -1,8 +1,8 @@
 # ADR-0020: Request Traceability and Observability
 
-**Status:** Accepted  
-**Date:** 2026-02-23  
-**Deciders:** Alex  
+**Status:** Accepted
+**Date:** 2026-02-23
+**Deciders:** Alex
 **Relates to:** ADR-0004 (Telemetry), ADR-0012 (Request-Scoped Metrics)
 
 ## Context

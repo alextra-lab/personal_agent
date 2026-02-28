@@ -183,7 +183,9 @@ class ThresholdOptimizer:
             "min_consolidation_interval_seconds",
         }
         if normalized_metric not in supported_metrics:
-            raise ValueError(f"Unsupported metric '{metric}'. Supported: {sorted(supported_metrics)}")
+            raise ValueError(
+                f"Unsupported metric '{metric}'. Supported: {sorted(supported_metrics)}"
+            )
 
         analysis = await self.analyze_resource_patterns(days=7)
         false_positives = await self.detect_false_positives()
@@ -214,7 +216,9 @@ class ThresholdOptimizer:
                 reason = "Increase consolidation opportunities for sparse activity."
             else:
                 proposed = current
-                reason = "Current minimum interval is consistent with observed consolidation volume."
+                reason = (
+                    "Current minimum interval is consistent with observed consolidation volume."
+                )
 
         confidence = _clamp_float(
             0.4 + min(analysis.task_patterns.total_tasks, 100) / 200.0,

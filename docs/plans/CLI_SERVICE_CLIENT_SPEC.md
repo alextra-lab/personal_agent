@@ -1,9 +1,9 @@
 # CLI Service Client Spec
 
-**Date**: 2026-02-22  
-**Status**: Draft  
-**Phase**: 2.6 Conversational Agent MVP  
-**Depends on**: `CONVERSATION_CONTINUITY_SPEC.md` (session hydration + context window)  
+**Date**: 2026-02-22
+**Status**: Draft
+**Phase**: 2.6 Conversational Agent MVP
+**Depends on**: `CONVERSATION_CONTINUITY_SPEC.md` (session hydration + context window)
 **Related**: Service API (`docs/architecture/SERVICE_IMPLEMENTATION_SPEC_v0.1.md`), `docs/USAGE_GUIDE.md`
 
 ---

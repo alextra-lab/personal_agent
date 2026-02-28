@@ -172,5 +172,5 @@ GPU metrics will fall back to None (graceful degradation).
 - Security best practices: Only grant minimal required permissions
 - Homeostasis model: GPU metrics enable control loop decisions
 
-**Created**: 2026-01-17  
+**Created**: 2026-01-17
 **Status**: Production-ready

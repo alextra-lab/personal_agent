@@ -1,5 +1,7 @@
 # Router Refactor: Analysis and Plan
 
+**Linear:** [FRE-50](https://linear.app/frenchforest/issue/FRE-50) (implemented), [FRE-49](https://linear.app/frenchforest/issue/FRE-49) (addressed). Commit: `fcac53d`.
+
 ## A) CODEBASE ANALYSIS (short)
 
 ### Current call chain and files

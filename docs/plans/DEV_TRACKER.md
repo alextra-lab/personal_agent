@@ -1,7 +1,7 @@
 # Development Tracker
 
 > **Linear workspace:** [FrenchForest](https://linear.app/frenchforest) · Team: FrenchForest
-> **Last synced:** 2026-02-22
+> **Last synced:** 2026-03-03
 
 Linear is the single source of truth for work items, priorities, and status.
 Markdown docs (`PHASE_*.md`, ADRs, `IMPLEMENTATION_ROADMAP.md`) are the specs — the *how*, not the *what*.

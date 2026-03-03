@@ -4,6 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, cast
+from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -31,6 +32,54 @@ scheduler: BrainstemScheduler | None = None
 mcp_adapter: "MCPGatewayAdapter | None" = None  # type: ignore  # noqa: F821
 
 
+def _parse_db_host_port(database_url: str) -> tuple[str, int]:
+    """Extract host and port from a SQLAlchemy database URL.
+
+    Args:
+        database_url: Full database URL (e.g. postgresql+asyncpg://user:pw@host:5432/db)
+
+    Returns:
+        Tuple of (host, port).
+    """
+    parsed = urlparse(database_url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 5432
+    return host, port
+
+
+async def _preflight_check_tcp(service: str, host: str, port: int) -> None:
+    """Attempt a raw TCP connection to verify a service is reachable before startup.
+
+    Args:
+        service: Human-readable service name for log/error messages.
+        host: Hostname or IP address to connect to.
+        port: TCP port to connect to.
+
+    Raises:
+        RuntimeError: If the service is not reachable within 2 seconds, with an
+            actionable message directing the developer to run 'make infra-up'.
+    """
+    try:
+        _, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout=2.0
+        )
+        writer.close()
+        await writer.wait_closed()
+    except (OSError, asyncio.TimeoutError) as e:
+        log.error(
+            "startup_preflight_failed",
+            service=service,
+            host=host,
+            port=port,
+            remedy="Run 'make infra-up' to start required Docker services",
+            error=str(e),
+        )
+        raise RuntimeError(
+            f"{service} at {host}:{port} is unreachable — "
+            f"run 'make infra-up' to start Docker services."
+        ) from e
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan management."""
@@ -38,6 +87,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Startup
     log.info("service_starting")
+
+    # Pre-flight: verify PostgreSQL is reachable before attempting any DB operations
+    pg_host, pg_port = _parse_db_host_port(settings.database_url)
+    await _preflight_check_tcp("PostgreSQL", pg_host, pg_port)
 
     # Initialize database
     await init_db()
@@ -68,11 +121,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             log.warning("captains_log_backfill_startup_failed", error=str(e))
 
-    # Connect to Neo4j (if enabled)
+    # Connect to Neo4j (if enabled) — non-fatal, matches ES graceful-degradation pattern
     if settings.enable_memory_graph:
-        memory_service = MemoryService()
-        await memory_service.connect()
-        log.info("memory_service_initialized")
+        try:
+            memory_service = MemoryService()
+            await memory_service.connect()
+            log.info("memory_service_initialized")
+        except Exception as e:
+            log.warning(
+                "memory_service_connect_failed",
+                error=str(e),
+                remedy="Neo4j may not be running. Run 'make infra-up'.",
+            )
+            memory_service = None
 
     # Start Brainstem scheduler for second brain, lifecycle, and/or insights tasks.
     if (

@@ -2009,8 +2009,9 @@ Phase 1 (Weeks 1-4) delivered a working MVP. Phase 2 evolves it into a productio
 - ✅ Brainstem scheduling
 - **Completion Summary**: See `./completed/PHASE_2.2_COMPLETE.md` for implementation status (⚠️ testing pending)
 
-**Phase 2.3** (Week 8): Homeostasis & Feedback
-- Adaptive scheduling, model lifecycle, control loops, performance tuning
+**Phase 2.3** (Week 8): Homeostasis & Feedback ⏳ **IN PROGRESS**
+- ✅ ADR-0022: Infrastructure startup resilience (pre-flight checks, Makefile, Neo4j safety guard) — FRE-87
+- ⏳ Adaptive scheduling, model lifecycle, control loops, performance tuning
 
 **Detailed specs**: See ADR-0016 and planning session document (1,400 lines, 12 major parts)
 

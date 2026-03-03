@@ -7,10 +7,56 @@ Per LOCAL_LLM_CLIENT_SPEC_v0.1.md Section 3.2, we prefer the responses API
 when available, with chat_completions as a fallback.
 """
 
+import re
 from typing import Any
 
 from personal_agent.llm_client.tool_call_parser import parse_text_tool_calls
 from personal_agent.llm_client.types import LLMInvalidResponse, LLMResponse, ToolCall
+
+_THINK_TAG_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+# LM Studio MLX backend sometimes leaks model control tokens into content
+_CONTROL_TOKEN_RE = re.compile(r"<\|[^|>]+\|>")
+
+
+def _strip_think_tags(content: str) -> tuple[str, str | None]:
+    """Extract and remove <think>...</think> blocks from model output.
+
+    Qwen3.5 (and similar thinking models) emit reasoning wrapped in <think> tags
+    before the actual response. This function separates the reasoning trace from
+    the user-visible content so that thinking text does not pollute the response
+    and tool-call parsing operates on clean output.
+
+    Handles edge cases:
+    - No think blocks: returns original content and None
+    - Multiple think blocks: joins all block texts with newlines
+    - Unclosed tag: treats remainder of string as thinking content
+    - Empty block: included in reasoning_trace as empty string (filtered out)
+
+    Args:
+        content: Raw model output potentially containing <think>...</think> blocks.
+
+    Returns:
+        Tuple of (cleaned_content, reasoning_trace).
+        cleaned_content: Content with all think blocks removed, leading/trailing
+            whitespace stripped.
+        reasoning_trace: Joined text from all think blocks, or None if no blocks.
+    """
+    think_parts: list[str] = []
+    cleaned = _THINK_TAG_RE.sub(
+        lambda m: think_parts.append(m.group(1)) or "",
+        content,
+    )
+
+    # Handle unclosed <think> tag — treat the remainder as thinking content
+    unclosed_idx = cleaned.find("<think>")
+    if unclosed_idx != -1:
+        think_parts.append(cleaned[unclosed_idx + len("<think>"):])
+        cleaned = cleaned[:unclosed_idx]
+
+    reasoning_trace: str | None = "\n".join(think_parts).strip() or None
+    # Strip model control tokens (e.g. <|im_end|>, <|im_start|>) that LM Studio may leak
+    cleaned = _CONTROL_TOKEN_RE.sub("", cleaned).strip()
+    return cleaned, reasoning_trace
 
 
 def adapt_responses_response(response_data: dict[str, Any]) -> LLMResponse:
@@ -194,8 +240,18 @@ def adapt_chat_completions_response(response_data: dict[str, Any]) -> LLMRespons
         choice = choices[0]
         message = choice.get("message", {})
 
-        # Extract content
-        content = message.get("content", "") or ""
+        # Extract content, stripping any <think>...</think> blocks emitted by
+        # thinking models (e.g. Qwen3.5). The reasoning text is captured in
+        # reasoning_trace so it is not lost; the cleaned content is used for
+        # tool-call parsing and the user-visible response.
+        raw_content = message.get("content", "") or ""
+        content, reasoning_trace = _strip_think_tags(raw_content)
+
+        # Also check for a dedicated reasoning_content field some backends expose
+        # (e.g. vLLM with --reasoning-parser). Prefer it over tag-extracted trace.
+        backend_reasoning = message.get("reasoning_content")
+        if backend_reasoning and not reasoning_trace:
+            reasoning_trace = backend_reasoning
 
         # Extract tool calls if present (native or text-based)
         tool_calls: list[ToolCall] = []
@@ -214,6 +270,7 @@ def adapt_chat_completions_response(response_data: dict[str, Any]) -> LLMRespons
         elif content:
             # If no structured tool calls, check for text-based tool calls
             # (reasoning models without native function calling support generate tool calls as text)
+            # Use the think-stripped content so the parser only sees the actual response
             text_tool_calls = parse_text_tool_calls(content, trace_id=None)
             tool_calls.extend(text_tool_calls)
 
@@ -225,9 +282,6 @@ def adapt_chat_completions_response(response_data: dict[str, Any]) -> LLMRespons
                 "completion_tokens": 0,
                 "total_tokens": 0,
             }
-
-        # No reasoning trace in chat_completions format
-        reasoning_trace = None
 
         # No response_id in chat_completions format (stateless)
         response_id = None
@@ -353,6 +407,11 @@ def build_chat_completions_request(
     response_format: dict[str, Any] | None = None,
     previous_response_id: str | None = None,  # Ignored for chat/completions (stateless)
     reasoning_effort: str | None = None,  # Ignored for chat/completions (responses-only)
+    top_p: float | None = None,
+    top_k: int | None = None,
+    presence_penalty: float | None = None,
+    disable_thinking: bool = False,
+    thinking_budget_tokens: int | None = None,
 ) -> dict[str, Any]:
     """Build a chat_completions API request payload.
 
@@ -368,6 +427,14 @@ def build_chat_completions_request(
         response_format: Optional structured output constraints (OpenAI-compatible).
         previous_response_id: Ignored (chat/completions is stateless, included for signature consistency).
         reasoning_effort: Ignored (chat/completions doesn't support reasoning effort, included for signature consistency).
+        top_p: Top-p nucleus sampling probability (standard OpenAI field).
+        top_k: Top-k sampling; passed via extra_body (non-standard, vLLM/LM Studio extension).
+        presence_penalty: Presence penalty to reduce repetition (standard OpenAI field).
+        disable_thinking: If True, inject chat_template_kwargs enable_thinking=False via extra_body.
+            Hard-disables thinking for Qwen3.5+ models at the chat-template level.
+            Mutually exclusive with thinking_budget_tokens.
+        thinking_budget_tokens: Cap on thinking tokens; passed as thinking_budget in extra_body.
+            Mutually exclusive with disable_thinking.
 
     Returns:
         Request payload dictionary.
@@ -414,7 +481,27 @@ def build_chat_completions_request(
     if temperature is not None:
         payload["temperature"] = temperature
 
+    if top_p is not None:
+        payload["top_p"] = top_p
+
+    if presence_penalty is not None:
+        payload["presence_penalty"] = presence_penalty
+
     if response_format is not None:
         payload["response_format"] = response_format
+
+    # Build extra_body for non-standard extensions (top_k, thinking control)
+    extra_body: dict[str, Any] = {}
+
+    if top_k is not None:
+        extra_body["top_k"] = top_k
+
+    if disable_thinking:
+        extra_body["chat_template_kwargs"] = {"enable_thinking": False}
+    elif thinking_budget_tokens is not None:
+        extra_body["thinking_budget"] = thinking_budget_tokens
+
+    if extra_body:
+        payload["extra_body"] = extra_body
 
     return payload

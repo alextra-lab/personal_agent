@@ -20,6 +20,9 @@
 - ✅ Phase 2.1: Service Foundation (COMPLETE - 2026-01-22)
 - ✅ Phase 2.2: Memory & Second Brain (COMPLETE - 2026-01-23, Testing COMPLETE - 111 tests, 86% pass rate)
 - ⏳ Phase 2.3: Homeostasis & Feedback (IN PROGRESS)
+  - 🔧 **Qwen3.5 Model Integration** (IN PROGRESS - 2026-03-03, Linear: Qwen3.5 Model Integration, ADR-0023)
+    - Unblocks `standard` and `reasoning` roles (think-tag response parsing, tool calls, per-model thinking control)
+    - Prerequisite for Phase 2.6 Conversational Agent MVP
 - ⏳ Phase 2.4: Multi-Agent Orchestration (PROPOSED - ADR-0017)
 - ⏳ Phase 2.5: Seshat Memory Librarian (PROPOSED - ADR-0018)
 - ⏳ Phase 2.6: Conversational Agent MVP (PLANNED)

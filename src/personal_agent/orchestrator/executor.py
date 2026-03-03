@@ -1063,17 +1063,20 @@ async def step_llm_call(
         # - Tool-request call: append suffix to the last user message.
         # - Post-tool synthesis: append a short user nudge ending with the suffix (tool outputs are last).
         #   IMPORTANT: Skip synthesis nudge for Mistral models - they expect direct synthesis after tool results
+        #   Note: We always inject the suffix when tools are present. LM Studio ignores extra_body
+        #   chat_template_kwargs, so the suffix is the only working thinking control for Qwen3.5.
         if model_role == ModelRole.ROUTER:
             request_messages = [{"role": "user", "content": ctx.user_message}]
         else:
             request_messages = ctx.messages
+            model_config = llm_client.model_configs.get(model_role.value)
+
             if tools:
                 request_messages = _append_no_think_to_last_user_message(request_messages)
             elif is_synthesizing:
                 # Check if we're using a Mistral model (strict alternation requirements)
                 # Mistral models expect: user -> assistant (tool_call) -> tool -> assistant (synthesis)
                 # They don't want a user nudge between tool results and synthesis
-                model_config = llm_client.model_configs.get(model_role.value)
                 is_mistral = model_config and "mistral" in model_config.id.lower()
 
                 if not is_mistral:

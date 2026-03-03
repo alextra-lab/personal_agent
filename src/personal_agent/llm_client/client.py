@@ -259,6 +259,11 @@ class LocalLLMClient:
                     response_format=response_format,
                     previous_response_id=previous_response_id,
                     reasoning_effort=reasoning_effort,
+                    top_p=model_config.top_p,
+                    top_k=model_config.top_k,
+                    presence_penalty=model_config.presence_penalty,
+                    disable_thinking=model_config.disable_thinking,
+                    thinking_budget_tokens=model_config.thinking_budget_tokens,
                 )
 
                 # Debug: Log payload structure

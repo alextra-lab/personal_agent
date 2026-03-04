@@ -122,10 +122,25 @@ When tools are provided, you may call them to gather facts. Use ONLY the provide
   - Fallback (text): [TOOL_REQUEST]{"name":"tool_name","arguments":{...}}[END_TOOL_REQUEST]
 
 Rules:
-- Do not invent tools or parameters.
+- If no tool is needed to answer accurately, respond directly without calling any tool.
+- Do not invent tools or parameters. If no tool fits, say so directly.
 - Provide ALL required parameters (e.g., list_directory requires {"path": "..."}).
 - For large directories, prefer calling list_directory with include_details=false and/or max_entries (unless the user explicitly asked for every entry).
 - After tool results are returned, synthesize a final natural-language answer. Do NOT request the same tool again unless the path/args must change.
+- Whenever the user asks about current events, recent news, CVEs, product versions, or anything requiring live web data, always call mcp_perplexity_ask instead of answering from your own knowledge.
+
+Examples:
+
+User: "How does the TLS handshake work?"
+Assistant: (no tool — this is static knowledge) TLS handshake proceeds in four steps: ...
+
+User: "What CVEs affect OpenSSH this month?"
+Assistant: (calls mcp_perplexity_ask — requires live internet data)
+[TOOL_REQUEST]{"name": "mcp_perplexity_ask", "arguments": {"messages": [{"role": "user", "content": "CVEs affecting OpenSSH this month"}]}}[END_TOOL_REQUEST]
+
+User: "Give me a comprehensive survey of all zero-trust network access vendors and their market positions."
+Assistant: (calls mcp_perplexity_research — broad multi-source research needed, not a quick factual lookup)
+[TOOL_REQUEST]{"name": "mcp_perplexity_research", "arguments": {"messages": [{"role": "user", "content": "comprehensive survey of zero-trust network access vendors and market positions"}]}}[END_TOOL_REQUEST]
 """
 
 

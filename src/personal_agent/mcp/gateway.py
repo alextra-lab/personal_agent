@@ -89,6 +89,24 @@ class MCPGatewayAdapter:
         mcp_tools = await self.client.list_tools()
         log.info("mcp_tools_discovered", count=len(mcp_tools))
 
+        # Filter to allowed servers if configured.
+        # Uses substring match so server names like "elasticsearch" match tool
+        # names like "esql", "get_mappings", "list_indices" that share no
+        # common prefix with the server name.
+        allowed_servers = settings.mcp_gateway_enabled_servers
+        if allowed_servers:
+            original_count = len(mcp_tools)
+            mcp_tools = [
+                t for t in mcp_tools
+                if any(s in t.get("name", "") for s in allowed_servers)
+            ]
+            log.info(
+                "mcp_tools_server_filtered",
+                before=original_count,
+                after=len(mcp_tools),
+                allowed_servers=allowed_servers,
+            )
+
         # Initialize governance manager
         governance_mgr = MCPGovernanceManager()
 

@@ -51,7 +51,7 @@ tools:
   # Perform click on a web page
   mcp_browser_click:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -63,7 +63,8 @@ tools:
   # Close the page
   mcp_browser_close:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -75,7 +76,8 @@ tools:
   # Returns all console messages
   mcp_browser_console_messages:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
+    #allowed_in_modes: [NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -87,7 +89,8 @@ tools:
   # Perform drag and drop between two elements
   mcp_browser_drag:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -99,7 +102,8 @@ tools:
   # Evaluate JavaScript expression on page or element
   mcp_browser_evaluate:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -111,7 +115,8 @@ tools:
   # Upload one or multiple files
   mcp_browser_file_upload:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -123,7 +128,8 @@ tools:
   # Fill multiple form fields
   mcp_browser_fill_form:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -135,7 +141,8 @@ tools:
   # Handle a dialog
   mcp_browser_handle_dialog:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -147,7 +154,8 @@ tools:
   # Hover over element on page
   mcp_browser_hover:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -159,7 +167,8 @@ tools:
   # Install the browser specified in the config. Call this if you get an e...
   mcp_browser_install:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -171,7 +180,8 @@ tools:
   # Navigate to a URL
   mcp_browser_navigate:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -183,7 +193,8 @@ tools:
   # Go back to the previous page
   mcp_browser_navigate_back:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -195,7 +206,8 @@ tools:
   # Returns all network requests since loading the page
   mcp_browser_network_requests:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -207,7 +219,8 @@ tools:
   # Press a key on the keyboard
   mcp_browser_press_key:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -219,7 +232,8 @@ tools:
   # Resize the browser window
   mcp_browser_resize:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -231,7 +245,8 @@ tools:
   # Run Playwright code snippet
   mcp_browser_run_code:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -243,7 +258,8 @@ tools:
   # Select an option in a dropdown
   mcp_browser_select_option:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -255,7 +271,8 @@ tools:
   # Capture accessibility snapshot of the current page, this is better tha...
   mcp_browser_snapshot:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -267,7 +284,8 @@ tools:
   # List, create, close, or select a browser tab.
   mcp_browser_tabs:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -279,7 +297,8 @@ tools:
   # Take a screenshot of the current page. You can't perform actions based...
   mcp_browser_take_screenshot:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -291,7 +310,8 @@ tools:
   # Type text into editable element
   mcp_browser_type:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -303,7 +323,8 @@ tools:
   # Wait for text to appear or disappear or a specified time to pass
   mcp_browser_wait_for:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -315,7 +336,8 @@ tools:
   # Create a JavaScript-enabled tool that combines multiple MCP server too...
   mcp_code-mode:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -354,6 +376,7 @@ tools:
     allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
+    description_override: "Fetch and parse the full text of a specific webpage URL. Use when you already have a URL and want to read its content. Prefer mcp_perplexity_ask or mcp_search when you need to find information without a known URL."
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -366,6 +389,7 @@ tools:
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
     requires_approval: false
+    description_override: "Fetch up-to-date official documentation for a library using its Context7 ID. Always call mcp_resolve-library-id first to get the ID. Use when writing code that requires accurate API references."
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -411,7 +435,7 @@ tools:
   # Add a new MCP server to the session.  The server must exist in the cat...
   mcp_mcp-add:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -423,7 +447,7 @@ tools:
   # Set configuration for an MCP server.  The config object will be valida...
   mcp_mcp-config-set:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -435,7 +459,7 @@ tools:
   # Execute a tool that exists in the current session. This allows calling...
   mcp_mcp-exec:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -447,7 +471,7 @@ tools:
   # Find MCP servers in the current catalog by name, title, or description...
   mcp_mcp-find:
     category: "mcp"
-    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
     risk_level: "medium"
     requires_approval: false
     # Customize as needed:
@@ -459,7 +483,7 @@ tools:
   # Remove an MCP server from the registry and reload the configuration. T...
   mcp_mcp-remove:
     category: "mcp"
-    allowed_in_modes: ['NORMAL']
+    allowed_in_modes: []
     risk_level: "high"
     requires_approval: true
     # Customize as needed:
@@ -474,8 +498,7 @@ tools:
     allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
-    # Override description for better LLM tool selection
-    description_override: "Search the internet using Perplexity AI and get answers with citations. Use for factual questions, current events, or when you need sourced information. Input: messages array with {role: 'user', content: 'your question'}."
+    description_override: "Search the internet using Perplexity AI and get a direct answer with citations. Use for factual questions, current events, CVEs, or any question requiring live web data. Prefer this over mcp_perplexity_research for most queries — it is faster. Do NOT answer from your own knowledge when live information is needed; always call this tool instead. Input: messages array with {role: 'user', content: 'your question'}."
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -488,8 +511,7 @@ tools:
     allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
-    # Override description for better LLM tool selection
-    description_override: "Use Perplexity AI for complex reasoning tasks that require internet research and logical analysis. Returns well-reasoned answers with citations. Input: messages array with {role: 'user', content: 'your question'}."
+    description_override: "Use Perplexity AI when the question requires both internet research AND logical analysis together (e.g. comparing two approaches based on recent benchmarks). Slower than mcp_perplexity_ask. Do not use for simple factual questions. Input: messages array with {role: 'user', content: 'your question'}."
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -502,8 +524,7 @@ tools:
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
     requires_approval: false
-    # Override description for better LLM tool selection
-    description_override: "Perform deep internet research using Perplexity AI. Best for comprehensive analysis of topics requiring multiple sources, academic research, or detailed investigation. Returns thorough answers with citations. Input: messages array with {role: 'user', content: 'your research question'}."
+    description_override: "Perform deep internet research using Perplexity AI, drawing from many sources. Use ONLY for comprehensive investigations requiring broad coverage (e.g. academic surveys, multi-vendor comparisons). This is the slowest Perplexity tool. For most questions, use mcp_perplexity_ask instead. Input: messages array with {role: 'user', content: 'your research question'}."
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -516,6 +537,7 @@ tools:
     allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
+    description_override: "Resolve a library or package name to a Context7 library ID. Always call this first before calling mcp_get-library-docs. Input: library name (e.g. 'fastapi', 'react', 'pydantic')."
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -528,6 +550,7 @@ tools:
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
     requires_approval: false
+    description_override: "Search DuckDuckGo and return a list of result links and snippets. Use when you want to browse raw search results or pick specific URLs to read with mcp_fetch_content. For direct answers with citations, prefer mcp_perplexity_ask."
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -540,6 +563,7 @@ tools:
     allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
+    description_override: "Work through a multi-step problem using a structured chain-of-thought. Use for complex tasks that benefit from explicit step-by-step reasoning before answering. Do not use for simple questions or straightforward tool execution tasks."
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []

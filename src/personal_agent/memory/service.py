@@ -76,6 +76,32 @@ class MemoryService:
             self.connected = False
             log.info("neo4j_disconnected")
 
+    async def conversation_exists(self, conversation_id: str) -> bool:
+        """Check if a conversation node already exists (e.g. already consolidated).
+
+        Args:
+            conversation_id: Conversation ID (typically trace_id).
+
+        Returns:
+            True if a Conversation node with this id exists, False otherwise.
+        """
+        if not self.connected or not self.driver:
+            return False
+        try:
+            async with self.driver.session() as session:
+                result = await session.run(
+                    """
+                    MATCH (c:Conversation {conversation_id: $conversation_id})
+                    RETURN c LIMIT 1
+                    """,
+                    conversation_id=conversation_id,
+                )
+                record = await result.single()
+                return record is not None
+        except Exception as e:
+            log.warning("conversation_exists_check_failed", error=str(e))
+            return False
+
     async def create_conversation(self, conversation: ConversationNode) -> bool:
         """Create a conversation node in the graph.
 

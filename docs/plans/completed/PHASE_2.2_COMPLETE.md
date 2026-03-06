@@ -176,8 +176,7 @@ neo4j_uri: str = "bolt://localhost:7687"
 neo4j_user: str = "neo4j"
 neo4j_password: str = "neo4j_dev_password"
 
-# Entity Extraction Model
-entity_extraction_model: str = "qwen3-8b"  # Options: 'qwen3-8b', 'lfm2.5-1.2b', 'claude'
+# Entity extraction: set entity_extraction_role in config/models.yaml (e.g. reasoning, router, claude)
 
 # Claude API (Optional)
 anthropic_api_key: str | None = None  # Leave empty to use local SLM
@@ -206,10 +205,7 @@ second_brain_min_interval_seconds: float = 3600.0  # 1 hour
 AGENT_ENABLE_MEMORY_GRAPH=true
 AGENT_ENABLE_SECOND_BRAIN=true
 
-# Entity extraction model (choose one):
-AGENT_ENTITY_EXTRACTION_MODEL=qwen3-8b        # Reasoning model (default, good quality)
-# AGENT_ENTITY_EXTRACTION_MODEL=lfm2.5-1.2b  # Fast model (experiment)
-# AGENT_ENTITY_EXTRACTION_MODEL=claude        # Cloud model (requires API key below)
+# Entity extraction role: set in config/models.yaml (entity_extraction_role: reasoning | router | claude)
 
 # Optional: Claude API for production quality (leave empty for local SLM)
 # AGENT_ANTHROPIC_API_KEY=your_api_key_here

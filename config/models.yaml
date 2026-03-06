@@ -3,6 +3,10 @@
 # This file defines model configurations for different roles (router, reasoning, coding).
 # Each role maps to a model identifier and configuration.
 #
+# entity_extraction_role (Phase 2.2): Which role under models: is used for entity
+# extraction in the memory graph. Use a key from models: (e.g. reasoning, router) or
+# "claude" to use Claude API instead of a local model.
+#
 # The client automatically tries /v1/responses first, then falls back to /v1/chat/completions
 # if the responses endpoint is unavailable.
 #
@@ -18,6 +22,8 @@
 # - top_k: Sampling param passed via extra_body (non-standard, vLLM/LM Studio extension)
 # - disable_thinking: true/false — hard-disables thinking via chat_template_kwargs extra_body (Qwen3.5+)
 # - thinking_budget_tokens: integer — caps thinking token budget via extra_body (Qwen3.5+)
+
+entity_extraction_role: standard
 
 models:
   router:
@@ -39,7 +45,7 @@ models:
     # Default "workhorse" model: general answers + tool orchestration, non-thinking fast path.
     # disable_thinking sends chat_template_kwargs enable_thinking=False via extra_body (ADR-0023).
     # Sampling params: Qwen3.5 non-thinking mode recommendations.
-    id: "qwen3.5-4b-mlx"
+    id: "qwen3.5-4b-mxfp8-mlx"
     context_length: 32768
     quantization: "8bit"
     max_concurrency: 2
@@ -56,7 +62,7 @@ models:
   reasoning:
     # Deep reasoning model with bounded thinking budget (ADR-0023).
     # thinking_budget_tokens caps thinking token spend; sampling params per Qwen3.5 thinking mode.
-    id: "qwen3.5-9b"
+    id: "qwen3.5-9b-mlx-mxfp8"
     context_length: 32768  # Optimized from 128K for MVP
     quantization: "8bit"
     max_concurrency: 2  # Increased from 1 (smaller footprint enables parallelism)

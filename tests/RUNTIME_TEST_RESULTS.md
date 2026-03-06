@@ -116,8 +116,7 @@ backend_timeout: model_id=qwen/qwen3-8b timeout=60
 
 ```python
 # .env
-AGENT_ENTITY_EXTRACTION_MODEL=lfm2.5-1.2b  # Fast, reliable
-# AGENT_ENTITY_EXTRACTION_MODEL=qwen3-8b  # High quality (after timeout fixes)
+# Entity extraction: set entity_extraction_role in config/models.yaml (e.g. router for LFM, reasoning for Qwen)
 ```
 
 ```yaml

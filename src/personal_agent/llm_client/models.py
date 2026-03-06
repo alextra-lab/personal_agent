@@ -101,6 +101,23 @@ class ModelConfig(BaseModel):
     Attributes:
         models: Dictionary mapping model role names (e.g., "router", "reasoning", "coding")
             to their configuration.
+        entity_extraction_role: Which role under models is used for entity extraction
+            (Phase 2.2). Must be a key in models or "claude".
     """
 
     models: dict[str, ModelDefinition] = Field(..., description="Model configurations by role")
+    entity_extraction_role: str = Field(
+        default="reasoning",
+        description="Role used for entity extraction: a key in models or 'claude'",
+    )
+
+    @model_validator(mode="after")
+    def _validate_entity_extraction_role(self) -> "ModelConfig":
+        """Ensure entity_extraction_role is a key in models or 'claude'."""
+        valid = set(self.models.keys()) | {"claude"}
+        if self.entity_extraction_role not in valid:
+            raise ValueError(
+                f"entity_extraction_role must be one of {sorted(valid)}, "
+                f"got: {self.entity_extraction_role!r}"
+            )
+        return self

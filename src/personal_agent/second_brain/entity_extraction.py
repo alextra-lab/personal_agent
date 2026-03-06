@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 import orjson
 
-from personal_agent.config.settings import get_settings
+from personal_agent.config import load_model_config
 from personal_agent.llm_client import LocalLLMClient, ModelRole
 from personal_agent.telemetry import get_logger
 
@@ -16,7 +16,6 @@ if TYPE_CHECKING:
     from personal_agent.llm_client.claude import ClaudeClient
 
 log = get_logger(__name__)
-settings = get_settings()
 
 
 async def extract_entities_and_relationships(
@@ -34,8 +33,9 @@ async def extract_entities_and_relationships(
     Returns:
         Dict with entities, relationships, entity_names, and summary
     """
-    # Determine which model to use
-    use_claude = settings.entity_extraction_model == "claude" and claude_client is not None
+    model_config = load_model_config()
+    entity_extraction_role = model_config.entity_extraction_role
+    use_claude = entity_extraction_role == "claude" and claude_client is not None
 
     # Build extraction prompt
     prompt = f"""Analyze the following conversation and extract key entities, relationships, and a summary.
@@ -68,7 +68,7 @@ Return ONLY valid JSON in this exact format (no explanation, no thinking, just J
 
     log.info(
         "entity_extraction_started",
-        model=settings.entity_extraction_model,
+        entity_extraction_role=entity_extraction_role,
         user_msg_len=len(user_message),
         assistant_msg_len=len(assistant_response),
     )
@@ -87,18 +87,13 @@ Return ONLY valid JSON in this exact format (no explanation, no thinking, just J
             content = claude_response.get("content", "")
             model_used = "claude"
         else:
-            # Use local SLM (Qwen 8B reasoning or LFM 1.2B fast)
+            # Use local SLM: role from config/models.yaml entity_extraction_role
             local_client = LocalLLMClient()
-
-            # Determine model role based on config
-            if settings.entity_extraction_model == "lfm2.5-1.2b":
-                model_role = ModelRole.ROUTER  # LFM 1.2B (fast)
-            else:
-                model_role = ModelRole.REASONING  # Qwen 8B (default)
+            model_role = ModelRole.from_str(entity_extraction_role) or ModelRole.REASONING
 
             log.debug(
                 "entity_extraction_calling_local_llm",
-                model=settings.entity_extraction_model,
+                entity_extraction_role=entity_extraction_role,
                 role=model_role.value,
                 max_tokens=2000,
             )
@@ -121,7 +116,7 @@ Return ONLY valid JSON in this exact format (no explanation, no thinking, just J
             )
             # LLMResponse is a TypedDict - use dict access
             content = llm_response["content"]
-            model_used = settings.entity_extraction_model
+            model_used = entity_extraction_role
 
             log.debug(
                 "entity_extraction_llm_response_received",

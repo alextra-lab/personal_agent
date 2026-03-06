@@ -65,21 +65,27 @@ async def run_extraction_comparison():
         "lfm12b": [],
     }
 
+    from unittest.mock import patch
+    from personal_agent.config import load_model_config
+
+    real_config = load_model_config()
     for capture in captures:
-        # Test Qwen 8B
-        settings.entity_extraction_model = "qwen3-8b"
-        qwen_result = await extract_entities_and_relationships(
-            capture.user_message,
-            capture.assistant_response or "",
-        )
+        # Test Qwen 8B (reasoning role)
+        with patch("personal_agent.second_brain.entity_extraction.load_model_config",
+                  return_value=real_config.model_copy(update={"entity_extraction_role": "reasoning"})):
+            qwen_result = await extract_entities_and_relationships(
+                capture.user_message,
+                capture.assistant_response or "",
+            )
         results["qwen8b"].append(qwen_result)
 
-        # Test LFM 1.2B
-        settings.entity_extraction_model = "lfm2.5-1.2b"
-        lfm_result = await extract_entities_and_relationships(
-            capture.user_message,
-            capture.assistant_response or "",
-        )
+        # Test LFM 1.2B (router role)
+        with patch("personal_agent.second_brain.entity_extraction.load_model_config",
+                  return_value=real_config.model_copy(update={"entity_extraction_role": "router"})):
+            lfm_result = await extract_entities_and_relationships(
+                capture.user_message,
+                capture.assistant_response or "",
+            )
         results["lfm12b"].append(lfm_result)
 
     # Analyze results

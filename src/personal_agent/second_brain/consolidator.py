@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from personal_agent.captains_log.capture import TaskCapture, read_captures
-from personal_agent.config.settings import get_settings
+from personal_agent.config import load_model_config
 from personal_agent.memory.models import ConversationNode, Entity, Relationship
 from personal_agent.memory.service import MemoryService
 from personal_agent.second_brain.entity_extraction import extract_entities_and_relationships
@@ -18,7 +18,6 @@ if TYPE_CHECKING:
     from personal_agent.llm_client.claude import ClaudeClient
 
 log = get_logger(__name__)
-settings = get_settings()
 
 
 class SecondBrainConsolidator:
@@ -76,15 +75,19 @@ class SecondBrainConsolidator:
             log.info("no_captures_to_consolidate", days=days)
             return {
                 "captures_processed": 0,
+                "captures_skipped": 0,
                 "conversations_created": 0,
                 "entities_created": 0,
                 "relationships_created": 0,
             }
 
+        model_config = load_model_config()
+        entity_extraction_role = model_config.entity_extraction_role
+
         log.info(
             "captures_found",
             count=len(captures),
-            extraction_model=settings.entity_extraction_model,
+            extraction_model=entity_extraction_role,
         )
 
         # Ensure memory service is connected
@@ -92,7 +95,7 @@ class SecondBrainConsolidator:
             await self.memory_service.connect()
 
         # Initialize Claude client only if using Claude for extraction
-        if not self.claude_client and settings.entity_extraction_model == "claude":
+        if not self.claude_client and entity_extraction_role == "claude":
             try:
                 from personal_agent.llm_client.claude import ClaudeClient
 
@@ -101,17 +104,28 @@ class SecondBrainConsolidator:
                 log.warning(
                     "claude_client_unavailable_fallback_to_local",
                     error=str(e),
-                    fallback_model=settings.entity_extraction_model or "qwen3-8b",
+                    fallback_model=entity_extraction_role or "reasoning",
                 )
                 # Will use local SLM instead; claude_client stays None
 
-        # Process each capture
+        # Process each capture (skip ones already in the graph to avoid duplicate work)
         conversations_created = 0
         entities_created = 0
         relationships_created = 0
+        captures_skipped = 0
 
         for i, capture in enumerate(captures, 1):
             try:
+                # Skip captures already consolidated (avoids re-running entity extraction
+                # and re-writing the same conversation/entities every scheduler run)
+                if await self.memory_service.conversation_exists(capture.trace_id):
+                    captures_skipped += 1
+                    log.debug(
+                        "consolidation_skipped_already_consolidated",
+                        capture_num=i,
+                        trace_id=capture.trace_id,
+                    )
+                    continue
                 log.debug(
                     "consolidation_processing_capture",
                     capture_num=i,
@@ -140,6 +154,7 @@ class SecondBrainConsolidator:
 
         summary = {
             "captures_processed": len(captures),
+            "captures_skipped": captures_skipped,
             "conversations_created": conversations_created,
             "entities_created": entities_created,
             "relationships_created": relationships_created,
@@ -148,7 +163,7 @@ class SecondBrainConsolidator:
         log.info(
             "consolidation_completed",
             **summary,
-            extraction_model=settings.entity_extraction_model,
+            extraction_model=entity_extraction_role,
         )
         return summary
 

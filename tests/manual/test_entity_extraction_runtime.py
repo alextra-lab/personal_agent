@@ -4,70 +4,73 @@ Run this after starting:
 1. docker compose up -d (infrastructure)
 2. SLM server on port 8000
 3. Personal agent service (optional for this test)
+
+Entity extraction role is taken from config/models.yaml (entity_extraction_role).
+This test overrides it per run via patch so we can compare reasoning vs router.
 """
 
 import asyncio
 import json
 from datetime import datetime
+from unittest.mock import patch
 
-from personal_agent.config.settings import get_settings
+from personal_agent.config import load_model_config
 from personal_agent.second_brain.entity_extraction import extract_entities_and_relationships
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
 
+# Map legacy model names to config/models.yaml role keys
+_MODEL_NAME_TO_ROLE = {"qwen3-8b": "reasoning", "lfm2.5-1.2b": "router"}
+
 
 async def run_extraction(model_name: str, user_msg: str, assistant_msg: str) -> dict:
-    """Test entity extraction with a specific model."""
-    settings = get_settings()
-    original_model = settings.entity_extraction_model
+    """Test entity extraction with a specific model (role from config/models.yaml)."""
+    role = _MODEL_NAME_TO_ROLE.get(model_name, "reasoning")
+    real_config = load_model_config()
+    test_config = real_config.model_copy(update={"entity_extraction_role": role})
 
-    try:
-        # Set model
-        settings.entity_extraction_model = model_name
+    with patch("personal_agent.second_brain.entity_extraction.load_model_config", return_value=test_config):
+        try:
+            print(f"\n{'=' * 80}")
+            print(f"Testing: {model_name} (entity_extraction_role={role})")
+            print(f"{'=' * 80}")
+            print(f"User: {user_msg[:100]}...")
+            print(f"Assistant: {assistant_msg[:100]}...")
 
-        print(f"\n{'=' * 80}")
-        print(f"Testing: {model_name}")
-        print(f"{'=' * 80}")
-        print(f"User: {user_msg[:100]}...")
-        print(f"Assistant: {assistant_msg[:100]}...")
+            start_time = datetime.now()
+            result = await extract_entities_and_relationships(
+                user_message=user_msg,
+                assistant_response=assistant_msg,
+            )
+            elapsed = (datetime.now() - start_time).total_seconds() * 1000
 
-        start_time = datetime.now()
-        result = await extract_entities_and_relationships(
-            user_message=user_msg,
-            assistant_response=assistant_msg,
-        )
-        elapsed = (datetime.now() - start_time).total_seconds() * 1000
+            print(f"\n✓ Extraction completed in {elapsed:.0f}ms")
+            print(f"  - Entities: {len(result.get('entity_names', []))}")
+            print(f"  - Relationships: {len(result.get('relationships', []))}")
+            print(f"  - Summary: {result.get('summary', 'N/A')[:100]}...")
 
-        print(f"\n✓ Extraction completed in {elapsed:.0f}ms")
-        print(f"  - Entities: {len(result.get('entity_names', []))}")
-        print(f"  - Relationships: {len(result.get('relationships', []))}")
-        print(f"  - Summary: {result.get('summary', 'N/A')[:100]}...")
+            if result.get("entity_names"):
+                print(f"  - Entity names: {', '.join(result['entity_names'][:5])}")
 
-        if result.get("entity_names"):
-            print(f"  - Entity names: {', '.join(result['entity_names'][:5])}")
+            return {
+                "model": model_name,
+                "success": True,
+                "latency_ms": elapsed,
+                "entities": len(result.get("entity_names", [])),
+                "relationships": len(result.get("relationships", [])),
+                "has_summary": bool(result.get("summary")),
+            }
+        except Exception as e:
+            print(f"\n✗ Extraction failed: {e}")
+            import traceback
 
-        return {
-            "model": model_name,
-            "success": True,
-            "latency_ms": elapsed,
-            "entities": len(result.get("entity_names", [])),
-            "relationships": len(result.get("relationships", [])),
-            "has_summary": bool(result.get("summary")),
-        }
-
-    except Exception as e:
-        print(f"\n✗ Extraction failed: {e}")
-        import traceback
-
-        traceback.print_exc()
-        return {
-            "model": model_name,
-            "success": False,
-            "error": str(e),
-        }
-    finally:
-        settings.entity_extraction_model = original_model
+            traceback.print_exc()
+            return {
+                "model": model_name,
+                "success": False,
+                "error": str(e),
+            }
 
 
 async def main():

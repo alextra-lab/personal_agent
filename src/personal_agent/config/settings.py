@@ -258,12 +258,6 @@ class AppConfig(BaseSettings):
     neo4j_user: str = Field(default="neo4j", description="Neo4j username")
     neo4j_password: str = Field(default="neo4j_dev_password", description="Neo4j password")
 
-    # Entity Extraction Configuration (Phase 2.2)
-    entity_extraction_model: str = Field(
-        default="qwen3-8b",
-        description="Model for entity extraction: 'qwen3-8b' (reasoning), 'lfm2.5-1.2b' (fast), or 'claude' (cloud)",
-    )
-
     # Claude API (Second Brain) - optional for production quality
     anthropic_api_key: str | None = Field(default=None, description="Anthropic API key for Claude")
     claude_model: str = Field(default="claude-sonnet-4-5-20250514", description="Claude model name")

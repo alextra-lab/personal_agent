@@ -8,7 +8,7 @@ Phase 2.2 supports multiple models for entity extraction from conversations. Thi
 
 ### 1. Qwen 3 8B (Reasoning) - **DEFAULT**
 
-**Configuration**: `AGENT_ENTITY_EXTRACTION_MODEL=qwen3-8b`
+**Configuration**: `entity_extraction_role: reasoning` in `config/models.yaml`
 
 **Characteristics**:
 - **Model Role**: REASONING
@@ -31,7 +31,7 @@ Phase 2.2 supports multiple models for entity extraction from conversations. Thi
 
 ### 2. LFM 2.5 1.2B - **FAST EXPERIMENT**
 
-**Configuration**: `AGENT_ENTITY_EXTRACTION_MODEL=lfm2.5-1.2b`
+**Configuration**: `entity_extraction_role: router` in `config/models.yaml`
 
 **Characteristics**:
 - **Model Role**: ROUTER
@@ -60,7 +60,7 @@ Phase 2.2 supports multiple models for entity extraction from conversations. Thi
 
 ### 3. Claude Sonnet 4.5 - **PRODUCTION QUALITY**
 
-**Configuration**: `AGENT_ENTITY_EXTRACTION_MODEL=claude`
+**Configuration**: `entity_extraction_role: claude` in `config/models.yaml`
 
 **Characteristics**:
 - **Model Role**: Cloud API
@@ -141,19 +141,33 @@ Phase 2.2 supports multiple models for entity extraction from conversations. Thi
 - If successful: Use LFM 1.2B for bulk consolidation, Qwen 8B for important conversations
 - If failed: Stick with Qwen 8B default
 
+## How the model is chosen (what you see in logs)
+
+The model is selected by the top-level key **`entity_extraction_role`** in `config/models.yaml` (no env var). It accepts:
+
+- A **role name** that exists under `models:` in the same file (e.g. `reasoning`, `router`, `standard`, `coding`). The actual model id and endpoint come from that role's block. Example: `entity_extraction_role: reasoning` uses the **reasoning** model (e.g. `qwen3.5-9b-mlx-mxfp8`); `entity_extraction_role: router` uses the **router** model (e.g. `lfm2.5-1.2b-instruct-mlx`). So the log line `[lfm2.5-1.2b-instruct-mlx] Generated prediction` appears when `entity_extraction_role: router`.
+- **`claude`** — use Claude API instead of a local model (no role block; requires Claude client and API key).
+
+To use the fast LFM model for entity extraction, set `entity_extraction_role: router` in `config/models.yaml`. To use the higher-quality reasoning model, set `entity_extraction_role: reasoning`.
+
 ## Implementation
 
-Current implementation supports all three models via configuration:
+Entity extraction reads the role from model config:
 
 ```python
 # src/personal_agent/second_brain/entity_extraction.py
 
-if settings.entity_extraction_model == "lfm2.5-1.2b":
-    model_role = ModelRole.ROUTER  # LFM 1.2B
-elif settings.entity_extraction_model == "claude":
-    # Use Claude client if provided
-elif settings.entity_extraction_model == "qwen3-8b":
-    model_role = ModelRole.REASONING  # Qwen 8B (default)
+from personal_agent.config import load_model_config
+
+model_config = load_model_config()
+entity_extraction_role = model_config.entity_extraction_role
+
+if entity_extraction_role == "claude":
+    # Use Claude API if claude_client is provided
+else:
+    # Use local model: role name must match a key under models: in config/models.yaml
+    model_role = ModelRole.from_str(entity_extraction_role) or ModelRole.REASONING
+    # ... call LocalLLMClient.respond(role=model_role, ...)
 ```
 
 ## Recommendation

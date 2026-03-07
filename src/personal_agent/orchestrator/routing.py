@@ -11,8 +11,9 @@ from personal_agent.llm_client import ModelRole
 from personal_agent.orchestrator.types import HeuristicRoutingPlan
 
 # CODING: code fences, stack traces, def/class/import, debug/refactor/implement, diffs, CI
+# Use "from\s+\S+\s+import" so natural language ("fly from X to Y") is not matched.
 _CODING_PATTERNS = re.compile(
-    r"(?:^|\s)(?:def\s|class\s|import\s|from\s|```[\s\S]*?```|"
+    r"(?:^|\s)(?:def\s|class\s|import\s|from\s+\S+\s+import\s|```[\s\S]*?```|"
     r"debug|refactor|implement|fix\s+(?:the\s+)?(?:bug|code)|"
     r"stack\s+trace|traceback|File\s+\".*\"|AssertionError|TypeError|"
     r"diff\s|patch\s|\.patch\b|CI\s+(?:failed|error)|build\s+failed)",

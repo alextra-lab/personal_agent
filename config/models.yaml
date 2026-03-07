@@ -23,7 +23,7 @@
 # - disable_thinking: true/false — hard-disables thinking via chat_template_kwargs extra_body (Qwen3.5+)
 # - thinking_budget_tokens: integer — caps thinking token budget via extra_body (Qwen3.5+)
 
-entity_extraction_role: standard
+entity_extraction_role: reasoning
 
 models:
   router:
@@ -62,15 +62,15 @@ models:
   reasoning:
     # Deep reasoning model with bounded thinking budget (ADR-0023).
     # thinking_budget_tokens caps thinking token spend; sampling params per Qwen3.5 thinking mode.
-    id: "qwen3.5-9b-mlx-mxfp8"
-    context_length: 32768  # Optimized from 128K for MVP
+    id: "qwen3.5-35b-a3b"
+    context_length: 64000  # Optimized from 128K for MVP
     quantization: "8bit"
     max_concurrency: 2  # Increased from 1 (smaller footprint enables parallelism)
-    default_timeout: 90  # seconds (increased for entity extraction workload)
+    default_timeout: 180  # seconds (35B model: ~40s thinking + ~30s JSON generation)
     temperature: 0.6     # Qwen3.5 thinking mode recommended
     top_p: 0.95          # Qwen3.5 thinking mode recommended
     top_k: 20            # Qwen3.5 recommended (passed via extra_body)
-    thinking_budget_tokens: 2048  # Cap thinking tokens to limit over-generation (ADR-0023)
+    thinking_budget_tokens: 3000  # Cap thinking tokens to limit over-generation (ADR-0023)
     supports_function_calling: true
     #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
     endpoint: "http://127.0.0.1:1234/v1"

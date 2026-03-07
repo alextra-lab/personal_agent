@@ -25,18 +25,42 @@ class Relationship(BaseModel):
     properties: dict[str, Any] = Field(default_factory=dict)
 
 
-class ConversationNode(BaseModel):
-    """A conversation stored in the memory graph."""
+class TurnNode(BaseModel):
+    """A single turn (one user message + one assistant response) in the memory graph.
 
-    conversation_id: str  # UUID as string
+    Stored with the Neo4j label ``Turn``. The ``turn_id`` equals the ``trace_id``
+    for the originating request and is used as the deduplication key.
+    """
+
+    turn_id: str  # UUID as string — equals trace_id
     trace_id: str | None = None
     session_id: str | None = None
+    sequence_number: int = 0  # Position within the session (1-indexed)
     timestamp: datetime
     summary: str | None = None
     user_message: str
     assistant_response: str | None = None
     key_entities: list[str] = Field(default_factory=list)
     properties: dict[str, Any] = Field(default_factory=dict)
+
+
+# Backward-compatibility alias — remove once all callers use TurnNode
+ConversationNode = TurnNode
+
+
+class SessionNode(BaseModel):
+    """A session grouping an ordered sequence of turns.
+
+    Stored with the Neo4j label ``Session``. One Session per unique
+    ``session_id`` in the captured turns.
+    """
+
+    session_id: str  # UUID as string — matches TurnNode.session_id
+    started_at: datetime  # Timestamp of the first turn
+    ended_at: datetime  # Timestamp of the last turn
+    turn_count: int = 0
+    dominant_entities: list[str] = Field(default_factory=list)
+    session_summary: str | None = None
 
 
 class EntityNode(BaseModel):
@@ -70,7 +94,7 @@ class MemoryQuery(BaseModel):
 class MemoryQueryResult(BaseModel):
     """Result of a memory query."""
 
-    conversations: list[ConversationNode] = Field(default_factory=list)
+    conversations: list[TurnNode] = Field(default_factory=list)
     entities: list[EntityNode] = Field(default_factory=list)
     relationships: list[Relationship] = Field(default_factory=list)
-    relevance_scores: dict[str, float] = Field(default_factory=dict)  # conversation_id -> score
+    relevance_scores: dict[str, float] = Field(default_factory=dict)  # turn_id -> score

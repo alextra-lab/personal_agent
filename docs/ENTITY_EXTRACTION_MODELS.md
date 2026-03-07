@@ -170,13 +170,44 @@ else:
     # ... call LocalLLMClient.respond(role=model_role, ...)
 ```
 
+## Current Configuration (2026-03-06)
+
+`entity_extraction_role: reasoning` — `qwen3.5-35b-a3b` (8bit, 35B MoE)
+
+This replaced the original `qwen3.5-9b-mlx-mxfp8` which crashed on LM Studio
+due to an mxfp8 quantization issue at the 9B size. The 4B standard model was
+used temporarily and confirmed the improved prompt works, but relationship
+quality was poor (wrong directionality, semantic errors). The 35B model
+produces significantly better entity deduplication and relationship reasoning.
+
+**Model call settings for extraction:**
+- `max_tokens: 6000` — headroom after 3000 thinking tokens
+- `default_timeout: 180s` — 35B generates slowly; ~60-90s per capture
+- `thinking_budget_tokens: 3000` — bounded reasoning for structured output
+
+**Known issues:**
+- ~30% empty response rate — model occasionally exhausts budget on thinking.
+  Fallback guard skips these; they retry next consolidation run.
+
+## Extraction Prompt — What to Exclude
+
+The following categories consistently produce noise and are explicitly excluded
+in the prompt (`entity_extraction.py`):
+
+| Category | Example | Reason |
+|---|---|---|
+| Conversation participants | `User`, `Assistant` | Always present, zero recall value |
+| MCP tool bindings | `mcp_perplexity_ask`, `mcp_docker` | Implementation detail — extract the service |
+| Ephemeral data values | `7°C`, `53°F`, `March 6, 2026` | Transient, not knowledge |
+| Test/placeholder text | `Test message`, `Quick test` | Synthetic artifacts |
+| Generic meta-concepts | `Topic`, `Invalid routing` | Not real-world knowledge |
+
 ## Recommendation
 
-**Start with Qwen 8B** (default), then:
-1. Let system run and collect captures
-2. Run E-017 experiment with 50-100 real captures
-3. Compare LFM 1.2B vs Qwen 8B results
-4. Make data-driven decision
-5. Consider hybrid: LFM for simple, Qwen for complex
+**Use `reasoning` (35B)** for all entity extraction. The quality difference in
+relationship correctness and entity deduplication over the 4B standard model
+is significant enough to justify the slower throughput. Extraction runs in the
+background scheduler — latency is not user-facing.
 
-**Don't use Claude** until local models prove insufficient.
+**Don't use Claude** unless local models prove insufficient for a specific task.
+The current 35B model quality is sufficient for the knowledge graph use case.

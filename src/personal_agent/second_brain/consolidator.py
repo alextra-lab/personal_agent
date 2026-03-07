@@ -4,12 +4,15 @@ This component processes recent task captures, extracts entities and relationshi
 using Claude 4.5 or local SLMs, and updates the Neo4j memory graph.
 """
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
+from collections import defaultdict
+
 from personal_agent.captains_log.capture import TaskCapture, read_captures
 from personal_agent.config import load_model_config
-from personal_agent.memory.models import ConversationNode, Entity, Relationship
+from personal_agent.memory.models import Entity, Relationship, SessionNode, TurnNode
 from personal_agent.memory.service import MemoryService
 from personal_agent.second_brain.entity_extraction import extract_entities_and_relationships
 from personal_agent.telemetry import get_logger
@@ -109,16 +112,15 @@ class SecondBrainConsolidator:
                 # Will use local SLM instead; claude_client stays None
 
         # Process each capture (skip ones already in the graph to avoid duplicate work)
-        conversations_created = 0
+        turns_created = 0
         entities_created = 0
         relationships_created = 0
         captures_skipped = 0
+        sessions_with_new_turns: set[str] = set()
 
         for i, capture in enumerate(captures, 1):
             try:
-                # Skip captures already consolidated (avoids re-running entity extraction
-                # and re-writing the same conversation/entities every scheduler run)
-                if await self.memory_service.conversation_exists(capture.trace_id):
+                if await self.memory_service.turn_exists(capture.trace_id):
                     captures_skipped += 1
                     log.debug(
                         "consolidation_skipped_already_consolidated",
@@ -133,7 +135,10 @@ class SecondBrainConsolidator:
                     trace_id=capture.trace_id,
                 )
                 result = await self._process_capture(capture)
-                conversations_created += result.get("conversation_created", 0)
+                if result.get("turn_created"):
+                    turns_created += result["turn_created"]
+                    if capture.session_id:
+                        sessions_with_new_turns.add(capture.session_id)
                 entities_created += result.get("entities_created", 0)
                 relationships_created += result.get("relationships_created", 0)
                 log.debug(
@@ -152,10 +157,14 @@ class SecondBrainConsolidator:
                     exc_info=True,
                 )
 
+        # Build Session nodes for every session that received new turns this run
+        sessions_created = await self._consolidate_sessions(captures, sessions_with_new_turns)
+
         summary = {
             "captures_processed": len(captures),
             "captures_skipped": captures_skipped,
-            "conversations_created": conversations_created,
+            "turns_created": turns_created,
+            "sessions_created": sessions_created,
             "entities_created": entities_created,
             "relationships_created": relationships_created,
         }
@@ -167,6 +176,103 @@ class SecondBrainConsolidator:
         )
         return summary
 
+    async def _consolidate_sessions(
+        self,
+        all_captures: list[TaskCapture],
+        sessions_with_new_turns: set[str],
+    ) -> int:
+        """Create or update Session nodes for sessions that received new turns.
+
+        For each affected session:
+        1. Derive metadata (timestamps, turn count, dominant entities) from captures
+        2. MERGE the Session node
+        3. Wire CONTAINS + NEXT + Session-DISCUSSES-Entity relationships
+
+        Args:
+            all_captures: All captures from this consolidation run.
+            sessions_with_new_turns: session_ids that had at least one new turn.
+
+        Returns:
+            Number of sessions created/updated.
+        """
+        if not sessions_with_new_turns:
+            return 0
+
+        # Group captures by session_id
+        by_session: dict[str, list[TaskCapture]] = defaultdict(list)
+        for capture in all_captures:
+            if capture.session_id in sessions_with_new_turns:
+                by_session[capture.session_id].append(capture)
+
+        sessions_created = 0
+        for session_id, session_captures in by_session.items():
+            try:
+                ordered = sorted(session_captures, key=lambda c: c.timestamp)
+                # Collect dominant entities from key_entities across all turns
+                entity_counts: dict[str, int] = defaultdict(int)
+                for capture in ordered:
+                    # key_entities not directly on capture — inferred from graph
+                    pass
+
+                session_node = SessionNode(
+                    session_id=session_id,
+                    started_at=ordered[0].timestamp,
+                    ended_at=ordered[-1].timestamp,
+                    turn_count=len(ordered),
+                    dominant_entities=[],  # Populated by link_session_turns via graph query
+                    session_summary=None,  # Generated lazily in future
+                )
+                created = await self.memory_service.create_session(session_node)
+                if created:
+                    linked = await self.memory_service.link_session_turns(session_id)
+                    # Refresh dominant_entities from graph after linking
+                    await self._update_session_dominant_entities(session_id)
+                    sessions_created += 1
+                    log.debug(
+                        "session_consolidated",
+                        session_id=session_id,
+                        turns_linked=linked,
+                    )
+            except Exception as e:
+                log.error(
+                    "session_consolidation_failed",
+                    session_id=session_id,
+                    error=str(e),
+                    exc_info=True,
+                )
+
+        return sessions_created
+
+    async def _update_session_dominant_entities(self, session_id: str) -> None:
+        """Update Session.dominant_entities from the top entities discussed in its turns.
+
+        Args:
+            session_id: Session to update.
+        """
+        if not self.memory_service.connected or not self.memory_service.driver:
+            return
+        try:
+            async with self.memory_service.driver.session() as db_session:
+                result = await db_session.run(
+                    """
+                    MATCH (s:Session {session_id: $session_id})-[r:DISCUSSES]->(e:Entity)
+                    RETURN e.name AS name, r.turn_count AS cnt
+                    ORDER BY r.turn_count DESC
+                    LIMIT 10
+                    """,
+                    session_id=session_id,
+                )
+                records = await result.values()
+                dominant = [row[0] for row in records if row[0]]
+                if dominant:
+                    await db_session.run(
+                        "MATCH (s:Session {session_id: $session_id}) SET s.dominant_entities = $dominant",
+                        session_id=session_id,
+                        dominant=dominant,
+                    )
+        except Exception as e:
+            log.warning("update_dominant_entities_failed", session_id=session_id, error=str(e))
+
     async def _process_capture(self, capture: TaskCapture) -> dict[str, Any]:
         """Process a single capture: extract entities and update graph.
 
@@ -176,20 +282,45 @@ class SecondBrainConsolidator:
         Returns:
             Processing result summary
         """
+        # Strip <think>…</think> blocks from the assistant response before extraction.
+        # The full response (including thinking) is preserved in the TurnNode below for
+        # debugging, but passing raw thinking to the extraction model inflates the prompt
+        # and causes extraction of internal tool names (e.g. mcp_perplexity_ask) that the
+        # model was only reasoning about, not actually recommending.
+        raw_response = capture.assistant_response or ""
+        extraction_response = re.sub(r"<think>.*?</think>", "", raw_response, flags=re.DOTALL).strip()
+
         # Extract entities and relationships using configured model (local SLM or Claude)
         extraction_result = await extract_entities_and_relationships(
             capture.user_message,
-            capture.assistant_response or "",
+            extraction_response,
             self.claude_client,  # Optional: uses local SLM if None
         )
 
-        # Create conversation node
-        conversation = ConversationNode(
-            conversation_id=capture.trace_id,
+        # If extraction fell back (LLM error/crash), skip writing to Neo4j entirely.
+        # A fallback result has summary == user_message and empty entities. Writing a
+        # Conversation node here would permanently block future retries via
+        # conversation_exists(), so we bail early and let the next consolidation run retry.
+        summary = extraction_result.get("summary", "")
+        is_fallback = (
+            not extraction_result.get("entities")
+            and summary.strip() == capture.user_message.strip()[:200]
+        )
+        if is_fallback:
+            log.warning(
+                "consolidation_extraction_fallback_skip",
+                trace_id=capture.trace_id,
+                reason="extraction returned fallback result; will retry next run",
+            )
+            return {"turn_created": 0, "entities_created": 0, "relationships_created": 0}
+
+        # Create Turn node
+        turn = TurnNode(
+            turn_id=capture.trace_id,
             trace_id=capture.trace_id,
             session_id=capture.session_id,
             timestamp=capture.timestamp,
-            summary=extraction_result.get("summary"),
+            summary=summary,
             user_message=capture.user_message,
             assistant_response=capture.assistant_response,
             key_entities=extraction_result.get("entity_names", []),
@@ -199,9 +330,12 @@ class SecondBrainConsolidator:
                 "outcome": capture.outcome,
             },
         )
+        # Attach full entity data so create_conversation can set entity_type on inline nodes.
+        # This is a transient attribute — not part of the Pydantic model — used only during write.
+        object.__setattr__(turn, "_entity_data", extraction_result.get("entities", []))
 
-        await self.memory_service.create_conversation(conversation)
-        conversations_created = 1
+        await self.memory_service.create_conversation(turn)
+        turns_created = 1
 
         # Create entity nodes
         entities_created = 0
@@ -230,7 +364,7 @@ class SecondBrainConsolidator:
                 relationships_created += 1
 
         return {
-            "conversation_created": conversations_created,
+            "turn_created": turns_created,
             "entities_created": entities_created,
             "relationships_created": relationships_created,
         }

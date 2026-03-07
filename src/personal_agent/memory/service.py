@@ -13,13 +13,17 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency in test en
 
 from personal_agent.config.settings import get_settings
 from personal_agent.memory.models import (
-    ConversationNode,
     Entity,
     EntityNode,
     MemoryQuery,
     MemoryQueryResult,
     Relationship,
+    SessionNode,
+    TurnNode,
 )
+
+# Backward-compatibility alias
+ConversationNode = TurnNode
 
 log = structlog.get_logger()
 settings = get_settings()
@@ -76,98 +80,240 @@ class MemoryService:
             self.connected = False
             log.info("neo4j_disconnected")
 
-    async def conversation_exists(self, conversation_id: str) -> bool:
-        """Check if a conversation node already exists (e.g. already consolidated).
+    async def turn_exists(self, turn_id: str) -> bool:
+        """Check if a Turn node already exists (i.e. already consolidated).
 
         Args:
-            conversation_id: Conversation ID (typically trace_id).
+            turn_id: Turn ID (equals trace_id for the originating request).
 
         Returns:
-            True if a Conversation node with this id exists, False otherwise.
+            True if a Turn node with this id exists, False otherwise.
         """
         if not self.connected or not self.driver:
             return False
         try:
             async with self.driver.session() as session:
                 result = await session.run(
-                    """
-                    MATCH (c:Conversation {conversation_id: $conversation_id})
-                    RETURN c LIMIT 1
-                    """,
-                    conversation_id=conversation_id,
+                    "MATCH (t:Turn {turn_id: $turn_id}) RETURN t LIMIT 1",
+                    turn_id=turn_id,
                 )
                 record = await result.single()
                 return record is not None
         except Exception as e:
-            log.warning("conversation_exists_check_failed", error=str(e))
+            log.warning("turn_exists_check_failed", error=str(e))
             return False
 
-    async def create_conversation(self, conversation: ConversationNode) -> bool:
-        """Create a conversation node in the graph.
+    async def conversation_exists(self, conversation_id: str) -> bool:
+        """Backward-compatible alias for turn_exists.
 
         Args:
-            conversation: Conversation node to create
+            conversation_id: Conversation/turn ID (trace_id).
 
         Returns:
-            True if successful, False otherwise
+            True if the Turn node exists.
         """
+        return await self.turn_exists(conversation_id)
+
+    async def create_conversation(self, conversation: TurnNode) -> bool:
+        """Create a Turn node in the graph.
+
+        Args:
+            conversation: Turn node to create (accepts TurnNode or legacy ConversationNode).
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        # Support both TurnNode (turn_id) and legacy ConversationNode (conversation_id)
+        turn_id = getattr(conversation, "turn_id", None) or getattr(
+            conversation, "conversation_id", None
+        )
+        if not turn_id:
+            log.warning("create_conversation_missing_id")
+            return False
+
         if not self.connected or not self.driver:
             log.warning("neo4j_not_connected")
             return False
 
         try:
             async with self.driver.session() as session:
-                # Create conversation node
                 await session.run(
                     """
-                    MERGE (c:Conversation {conversation_id: $conversation_id})
-                    SET c.trace_id = $trace_id,
-                        c.session_id = $session_id,
-                        c.timestamp = $timestamp,
-                        c.summary = $summary,
-                        c.user_message = $user_message,
-                        c.assistant_response = $assistant_response,
-                        c.key_entities = $key_entities,
-                        c.properties = $properties
+                    MERGE (t:Turn {turn_id: $turn_id})
+                    SET t.trace_id = $trace_id,
+                        t.session_id = $session_id,
+                        t.sequence_number = $sequence_number,
+                        t.timestamp = $timestamp,
+                        t.summary = $summary,
+                        t.user_message = $user_message,
+                        t.assistant_response = $assistant_response,
+                        t.key_entities = $key_entities,
+                        t.properties = $properties
                     """,
-                    conversation_id=conversation.conversation_id,
+                    turn_id=turn_id,
                     trace_id=conversation.trace_id,
                     session_id=conversation.session_id,
+                    sequence_number=getattr(conversation, "sequence_number", 0),
                     timestamp=conversation.timestamp.isoformat(),
                     summary=conversation.summary,
                     user_message=conversation.user_message,
                     assistant_response=conversation.assistant_response,
                     key_entities=conversation.key_entities,
-                    properties=orjson.dumps(
-                        conversation.properties
-                    ).decode(),  # Serialize dict to JSON string
+                    properties=orjson.dumps(conversation.properties).decode(),
                 )
 
-                # Create entity nodes and relationships
+                # Create Turn→Entity DISCUSSES edges.
+                # entity_types_map lets us set entity_type on the node when we know it;
+                # falls back to preserving any existing type if unknown.
+                entity_types_map: dict[str, str] = {}
+                for entity_data in getattr(conversation, "_entity_data", []):
+                    if isinstance(entity_data, dict) and entity_data.get("name"):
+                        entity_types_map[entity_data["name"]] = entity_data.get("type", "")
+
                 for entity_name in conversation.key_entities:
+                    entity_type = entity_types_map.get(entity_name, "")
                     await session.run(
                         """
                         MERGE (e:Entity {name: $name})
                         SET e.last_seen = $timestamp,
                             e.mention_count = COALESCE(e.mention_count, 0) + 1,
-                            e.first_seen = COALESCE(e.first_seen, $timestamp)
-                        MERGE (c:Conversation {conversation_id: $conversation_id})
-                        MERGE (c)-[:DISCUSSES]->(e)
+                            e.first_seen = COALESCE(e.first_seen, $timestamp),
+                            e.entity_type = CASE WHEN $entity_type <> '' THEN $entity_type
+                                                 ELSE COALESCE(e.entity_type, '') END
+                        WITH e
+                        MATCH (t:Turn {turn_id: $turn_id})
+                        MERGE (t)-[:DISCUSSES]->(e)
                         """,
                         name=entity_name,
+                        entity_type=entity_type,
                         timestamp=conversation.timestamp.isoformat(),
-                        conversation_id=conversation.conversation_id,
+                        turn_id=turn_id,
                     )
 
                 log.info(
-                    "conversation_created",
-                    conversation_id=conversation.conversation_id,
+                    "turn_created",
+                    turn_id=turn_id,
+                    session_id=conversation.session_id,
                     entity_count=len(conversation.key_entities),
                 )
                 return True
         except Exception as e:
-            log.error("conversation_creation_failed", error=str(e), exc_info=True)
+            log.error("turn_creation_failed", error=str(e), exc_info=True)
             return False
+
+    async def create_session(self, session_node: SessionNode) -> bool:
+        """Create or update a Session node in the graph.
+
+        Args:
+            session_node: Session to create or update.
+
+        Returns:
+            True if successful, False otherwise.
+        """
+        if not self.connected or not self.driver:
+            log.warning("neo4j_not_connected")
+            return False
+
+        try:
+            async with self.driver.session() as db_session:
+                await db_session.run(
+                    """
+                    MERGE (s:Session {session_id: $session_id})
+                    SET s.started_at = $started_at,
+                        s.ended_at = $ended_at,
+                        s.turn_count = $turn_count,
+                        s.dominant_entities = $dominant_entities,
+                        s.session_summary = $session_summary
+                    """,
+                    session_id=session_node.session_id,
+                    started_at=session_node.started_at.isoformat(),
+                    ended_at=session_node.ended_at.isoformat(),
+                    turn_count=session_node.turn_count,
+                    dominant_entities=session_node.dominant_entities,
+                    session_summary=session_node.session_summary,
+                )
+                log.info(
+                    "session_created",
+                    session_id=session_node.session_id,
+                    turn_count=session_node.turn_count,
+                )
+                return True
+        except Exception as e:
+            log.error("session_creation_failed", error=str(e), exc_info=True)
+            return False
+
+    async def link_session_turns(self, session_id: str) -> int:
+        """Wire all Turn nodes for a session into an ordered sequence.
+
+        Creates:
+        - (Session)-[:CONTAINS {sequence}]->(Turn) for every turn
+        - (Turn)-[:NEXT]->(Turn) chain ordered by timestamp
+        - (Session)-[:DISCUSSES]->(Entity) aggregated from all turns
+
+        Args:
+            session_id: Session ID to link.
+
+        Returns:
+            Number of turns linked.
+        """
+        if not self.connected or not self.driver:
+            log.warning("neo4j_not_connected")
+            return 0
+
+        try:
+            async with self.driver.session() as db_session:
+                # CONTAINS + sequence_number update (ordered by timestamp)
+                await db_session.run(
+                    """
+                    MATCH (s:Session {session_id: $session_id})
+                    MATCH (t:Turn {session_id: $session_id})
+                    WITH s, t ORDER BY t.timestamp ASC
+                    WITH s, collect(t) AS turns
+                    UNWIND range(0, size(turns)-1) AS idx
+                    WITH s, turns[idx] AS t, idx+1 AS seq
+                    SET t.sequence_number = seq
+                    MERGE (s)-[:CONTAINS {sequence: seq}]->(t)
+                    """,
+                    session_id=session_id,
+                )
+
+                # NEXT chain between consecutive turns
+                await db_session.run(
+                    """
+                    MATCH (t:Turn {session_id: $session_id})
+                    WITH t ORDER BY t.timestamp ASC
+                    WITH collect(t) AS turns
+                    UNWIND range(0, size(turns)-2) AS idx
+                    WITH turns[idx] AS t1, turns[idx+1] AS t2
+                    MERGE (t1)-[:NEXT]->(t2)
+                    """,
+                    session_id=session_id,
+                )
+
+                # Session DISCUSSES entities — aggregate from all turns
+                await db_session.run(
+                    """
+                    MATCH (s:Session {session_id: $session_id})
+                    MATCH (t:Turn {session_id: $session_id})-[:DISCUSSES]->(e:Entity)
+                    WITH s, e, count(t) AS turn_count
+                    MERGE (s)-[r:DISCUSSES]->(e)
+                    SET r.turn_count = turn_count
+                    """,
+                    session_id=session_id,
+                )
+
+                # Count linked turns
+                result = await db_session.run(
+                    "MATCH (:Session {session_id: $session_id})-[:CONTAINS]->(t:Turn) RETURN count(t) AS cnt",
+                    session_id=session_id,
+                )
+                record = await result.single()
+                count: int = record["cnt"] if record else 0
+                log.info("session_turns_linked", session_id=session_id, turn_count=count)
+                return count
+        except Exception as e:
+            log.error("link_session_turns_failed", error=str(e), exc_info=True)
+            return 0
 
     async def create_entity(self, entity: Entity) -> str:
         """Create or update an entity node.
@@ -227,28 +373,27 @@ class MemoryService:
 
         try:
             async with self.driver.session() as session:
+                # Use APOC to create a relationship with a dynamic type label.
+                # Standard Cypher cannot parameterize relationship type labels;
+                # apoc.merge.relationship handles this cleanly.
                 await session.run(
                     """
                     MATCH (source)
-                    WHERE source.conversation_id = $source_id
-                       OR source.entity_id = $source_id
-                       OR source.name = $source_id
+                    WHERE source.entity_id = $source_id OR source.name = $source_id
                     MATCH (target)
-                    WHERE target.conversation_id = $target_id
-                       OR target.entity_id = $target_id
-                       OR target.name = $target_id
-                    MERGE (source)-[r:RELATIONSHIP {type: $relationship_type}]->(target)
-                    SET r.weight = $weight,
-                        r.properties = $properties,
-                        r.created_at = datetime()
+                    WHERE target.entity_id = $target_id OR target.name = $target_id
+                    CALL apoc.merge.relationship(
+                        source, $relationship_type,
+                        {},
+                        {weight: $weight, created_at: datetime()},
+                        target
+                    ) YIELD rel
+                    RETURN rel
                     """,
                     source_id=relationship.source_id,
                     target_id=relationship.target_id,
                     relationship_type=relationship.relationship_type,
                     weight=relationship.weight,
-                    properties=orjson.dumps(
-                        relationship.properties
-                    ).decode(),  # Serialize dict to JSON string
                 )
                 log.info(
                     "relationship_created",
@@ -286,11 +431,10 @@ class MemoryService:
                 # Build Cypher query dynamically based on query parameters
                 cypher_parts = []
 
-                # Build main query - find conversations related to entities
+                # Build main query - find turns related to entities
                 if query.entity_names or query.entity_types:
-                    # Find conversations that discuss the specified entities
                     base_query = """
-                    MATCH (c:Conversation)-[:DISCUSSES]->(e:Entity)
+                    MATCH (c:Turn)-[:DISCUSSES]->(e:Entity)
                     WHERE """
                     if query.entity_names:
                         base_query += "e.name IN $entity_names"
@@ -299,17 +443,16 @@ class MemoryService:
                         base_query += "e.entity_type IN $entity_types"
                         cypher_parts.append("entity_types: $entity_types")
                 elif query.conversation_ids or query.trace_ids:
-                    # Direct conversation/trace lookup
-                    base_query = "MATCH (c:Conversation) WHERE "
+                    # Direct turn/trace lookup (conversation_ids maps to turn_id)
+                    base_query = "MATCH (c:Turn) WHERE "
                     if query.conversation_ids:
-                        base_query += "c.conversation_id IN $conversation_ids"
+                        base_query += "c.turn_id IN $conversation_ids"
                         cypher_parts.append("conversation_ids: $conversation_ids")
                     elif query.trace_ids:
                         base_query += "c.trace_id IN $trace_ids"
                         cypher_parts.append("trace_ids: $trace_ids")
                 else:
-                    # Get all recent conversations
-                    base_query = "MATCH (c:Conversation)"
+                    base_query = "MATCH (c:Turn)"
 
                 # Add WHERE clauses for recency
                 if query.recency_days:
@@ -353,11 +496,14 @@ class MemoryService:
                 for record in records:
                     if record and record[0]:
                         node = record[0]
+                        # Support both Turn nodes (turn_id) and legacy Conversation nodes
+                        turn_id = node.get("turn_id") or node.get("conversation_id", "")
                         conversations.append(
-                            ConversationNode(
-                                conversation_id=node.get("conversation_id", ""),
+                            TurnNode(
+                                turn_id=turn_id,
                                 trace_id=node.get("trace_id"),
                                 session_id=node.get("session_id"),
+                                sequence_number=node.get("sequence_number", 0),
                                 timestamp=datetime.fromisoformat(
                                     node.get("timestamp", datetime.utcnow().isoformat())
                                 ),
@@ -481,7 +627,7 @@ class MemoryService:
         return previous_result_count <= 1
 
     async def _calculate_relevance_scores(
-        self, conversations: list[ConversationNode], query: MemoryQuery
+        self, conversations: list[TurnNode], query: MemoryQuery
     ) -> dict[str, float]:
         """Calculate relevance/plausibility scores for conversations.
 
@@ -567,13 +713,13 @@ class MemoryService:
                     avg_importance = sum(matched_importances) / len(matched_importances)
                     score += avg_importance * 0.2
 
-            scores[conv.conversation_id] = min(score, 1.0)  # Cap at 1.0
+            scores[conv.turn_id] = min(score, 1.0)  # Cap at 1.0
 
         return scores
 
     async def get_related_conversations(
         self, entity_names: list[str], limit: int = 10
-    ) -> list[ConversationNode]:
+    ) -> list[TurnNode]:
         """Get conversations related to given entities.
 
         Args:

@@ -429,31 +429,6 @@ async def chat(
             cast(UUID, session.session_id), {"role": "assistant", "content": response_content}
         )
 
-    # --- Phase: memory_storage ---
-    if memory_service and memory_service.connected:
-        with timer.span("memory_storage"):
-            try:
-                from personal_agent.memory.models import ConversationNode
-
-                conversation = ConversationNode(
-                    conversation_id=str(uuid4()),
-                    trace_id=result.get("trace_id") if result else None,
-                    session_id=str(session.session_id),
-                    timestamp=datetime.now(timezone.utc),
-                    summary=None,
-                    user_message=message,
-                    assistant_response=response_content,
-                    key_entities=[],
-                    properties={},
-                )
-                await memory_service.create_conversation(conversation)
-            except Exception as e:
-                log.warning(
-                    "memory_conversation_storage_failed",
-                    error=sanitize_error_message(e),
-                    exc_info=True,
-                )
-
     # --- Emit timing breakdown ---
     breakdown = timer.to_breakdown()
     total_ms = timer.get_total_ms()

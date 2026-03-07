@@ -12,11 +12,13 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from personal_agent.config import settings
+from personal_agent.ui.memory_cli import memory_app
 
 console = Console()
 app = typer.Typer(help="Personal Agent service client")
 session_app = typer.Typer(help="Manage conversational session state")
 app.add_typer(session_app, name="session")
+app.add_typer(memory_app, name="memory")
 
 
 def _session_file_path() -> Path:
@@ -118,24 +120,14 @@ def _send_chat(message: str, force_new: bool) -> int:
 
 
 @app.callback(invoke_without_command=True)
-def main(
-    ctx: typer.Context,
-    message: str | None = typer.Argument(None, help="Message to send to the agent"),
-    new: bool = typer.Option(
-        False,
-        "--new",
-        help="Start a new conversation session before sending the message.",
-    ),
-) -> None:
-    """Default entrypoint: `agent \"message\"` behaves like chat."""
+def main(ctx: typer.Context) -> None:
+    """Default entrypoint. Use `agent chat <message>` or `agent memory --help`."""
     if ctx.invoked_subcommand is not None:
         return
-
-    if not message:
-        console.print("[yellow]No message provided. Use `agent --help` for usage.[/yellow]")
-        raise typer.Exit(1)
-
-    raise typer.Exit(_send_chat(message, force_new=new))
+    console.print(
+        "[yellow]No command given. Use `agent chat <message>` or `agent memory --help`.[/yellow]"
+    )
+    raise typer.Exit(1)
 
 
 @app.command()

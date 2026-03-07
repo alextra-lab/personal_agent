@@ -112,7 +112,11 @@ def _send_chat(message: str, force_new: bool) -> int:
             resolved_session_id = str(data.get("session_id", session_id))
             _write_current_session(_session_file_path(), resolved_session_id)
             console.print(Markdown(str(data.get("response", ""))))
-            console.print(f"[dim]session: {resolved_session_id}[/dim]")
+            trace_id = data.get("trace_id")
+            if trace_id:
+                console.print(f"[dim]session: {resolved_session_id}  trace_id: {trace_id}[/dim]")
+            else:
+                console.print(f"[dim]session: {resolved_session_id}[/dim]")
             return 0
     except Exception as error:  # noqa: BLE001
         console.print(f"[red]{_request_error_message(error)}[/red]")

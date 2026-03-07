@@ -455,7 +455,11 @@ async def chat(
             )
         )
 
-    return {"session_id": str(session.session_id), "response": response_content}
+    return {
+        "session_id": str(session.session_id),
+        "response": response_content,
+        "trace_id": trace_id,
+    }
 
 
 # ============================================================================

@@ -287,6 +287,12 @@ class AppConfig(BaseSettings):
     second_brain_min_interval_seconds: float = Field(
         default=3600.0, description="Minimum time between consolidations (1 hour)"
     )
+    entity_extraction_timeout_seconds: int = Field(
+        default=90,
+        ge=10,
+        le=600,
+        description="Timeout for entity-extraction LLM call; on timeout return empty entities.",
+    )
 
     # Data Lifecycle (Phase 2.3)
     disk_usage_alert_percent: float = Field(

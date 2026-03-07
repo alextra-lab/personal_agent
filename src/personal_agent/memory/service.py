@@ -542,6 +542,102 @@ class MemoryService:
             log.error("memory_query_failed", error=str(e), exc_info=True)
             return MemoryQueryResult()
 
+    async def query_memory_broad(
+        self,
+        entity_types: list[str] | None = None,
+        recency_days: int = 90,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """Broad memory recall: return entities and session summaries (ADR-0025).
+
+        Used for recall-intent queries ("what have I asked about?") where
+        there are no specific entity names to search for.
+
+        Args:
+            entity_types: Optional filter e.g. ["Location", "Person"]. None = all types.
+            recency_days: How far back to look.
+            limit: Maximum entities to return.
+
+        Returns:
+            Dict with keys:
+              - entities: list of {name, type, mentions, description}
+              - sessions: list of {session_id, dominant_entities, turn_count, started_at}
+              - turns_summary: list of recent turn summaries
+        """
+        if not self.connected or not self.driver:
+            return {"entities": [], "sessions": [], "turns_summary": []}
+
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=recency_days)
+        ).isoformat()
+
+        try:
+            async with self.driver.session() as db_session:
+                # Entities (optionally filtered by type)
+                if entity_types:
+                    entity_q = """
+                        MATCH (e:Entity)<-[:DISCUSSES]-(t:Turn)
+                        WHERE e.entity_type IN $entity_types
+                          AND t.timestamp >= $cutoff
+                        RETURN e.name as name, e.entity_type as type,
+                               e.description as description,
+                               count(t) as mentions
+                        ORDER BY mentions DESC LIMIT $limit
+                    """
+                    r = await db_session.run(
+                        entity_q,
+                        entity_types=entity_types,
+                        cutoff=cutoff,
+                        limit=limit,
+                    )
+                else:
+                    entity_q = """
+                        MATCH (e:Entity)<-[:DISCUSSES]-(t:Turn)
+                        WHERE t.timestamp >= $cutoff
+                        RETURN e.name as name, e.entity_type as type,
+                               e.description as description,
+                               count(t) as mentions
+                        ORDER BY mentions DESC LIMIT $limit
+                    """
+                    r = await db_session.run(entity_q, cutoff=cutoff, limit=limit)
+                entities = await r.data()
+
+                # Recent sessions with dominant topics
+                session_q = """
+                    MATCH (s:Session)
+                    WHERE s.started_at >= $cutoff
+                    RETURN s.session_id as session_id,
+                           s.dominant_entities as dominant_entities,
+                           s.turn_count as turn_count,
+                           s.started_at as started_at
+                    ORDER BY s.started_at DESC LIMIT 10
+                """
+                r = await db_session.run(session_q, cutoff=cutoff)
+                sessions = await r.data()
+
+                # Recent turn summaries
+                turn_q = """
+                    MATCH (t:Turn)
+                    WHERE t.timestamp >= $cutoff
+                    RETURN t.summary as summary, t.key_entities as entities,
+                           t.timestamp as ts
+                    ORDER BY t.timestamp DESC LIMIT 10
+                """
+                r = await db_session.run(turn_q, cutoff=cutoff)
+                turns = await r.data()
+
+                return {
+                    "entities": entities,
+                    "sessions": sessions,
+                    "turns_summary": turns,
+                }
+
+        except Exception as e:
+            log.error(
+                "query_memory_broad_failed", error=str(e), exc_info=True
+            )
+            return {"entities": [], "sessions": [], "turns_summary": []}
+
     def _log_query_quality_metrics(
         self,
         query: MemoryQuery,

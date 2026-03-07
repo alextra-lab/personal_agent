@@ -7,10 +7,104 @@ import pytest
 
 from personal_agent.governance.models import Mode
 from personal_agent.orchestrator import Channel, Orchestrator
-from personal_agent.orchestrator.executor import execute_task_safe
+from personal_agent.orchestrator.executor import (
+    _extract_entity_type_hints,
+    _format_broad_recall,
+    execute_task_safe,
+)
 from personal_agent.orchestrator.session import SessionManager
 from personal_agent.orchestrator.types import ExecutionContext, TaskState
 from personal_agent.telemetry.trace import TraceContext
+
+
+class TestMemoryRecallHelpers:
+    """ADR-0025: tests for memory recall intent helpers in executor."""
+
+    def test_extract_entity_type_hints_location(self) -> None:
+        """Location keywords map to Location type."""
+        assert _extract_entity_type_hints("What locations have I asked about?") == [
+            "Location"
+        ]
+        assert _extract_entity_type_hints("places and cities I mentioned") == [
+            "Location"
+        ]
+        assert _extract_entity_type_hints("Which country or city?") == ["Location"]
+
+    def test_extract_entity_type_hints_person(self) -> None:
+        """Person keywords map to Person type."""
+        assert _extract_entity_type_hints("What people have I discussed?") == [
+            "Person"
+        ]
+        assert _extract_entity_type_hints("someone I mentioned") == ["Person"]
+
+    def test_extract_entity_type_hints_organization(self) -> None:
+        """Organization keywords map to Organization type."""
+        assert _extract_entity_type_hints("What company have I asked about?") == [
+            "Organization"
+        ]
+        assert _extract_entity_type_hints("org and companies") == ["Organization"]
+
+    def test_extract_entity_type_hints_technology(self) -> None:
+        """Technology keywords map to Technology type."""
+        assert _extract_entity_type_hints("What tools have I used recently?") == [
+            "Technology"
+        ]
+        assert _extract_entity_type_hints("technology and tools") == ["Technology"]
+
+    def test_extract_entity_type_hints_topic(self) -> None:
+        """Topic keywords map to Topic type."""
+        assert _extract_entity_type_hints("What topic have we covered?") == [
+            "Topic"
+        ]
+        assert _extract_entity_type_hints("topics I asked about") == ["Topic"]
+
+    def test_extract_entity_type_hints_concept(self) -> None:
+        """Concept keywords map to Concept type."""
+        assert _extract_entity_type_hints("What concepts did I mention?") == [
+            "Concept"
+        ]
+        assert _extract_entity_type_hints("concept we discussed") == ["Concept"]
+
+    def test_extract_entity_type_hints_multiple_types(self) -> None:
+        """Multiple keywords yield deduplicated types."""
+        result = _extract_entity_type_hints(
+            "What locations and people have I asked about?"
+        )
+        assert set(result) == {"Location", "Person"}
+        assert len(result) == 2
+
+    def test_extract_entity_type_hints_no_match(self) -> None:
+        """No type keywords returns empty list."""
+        assert _extract_entity_type_hints("What have I discussed?") == []
+        assert _extract_entity_type_hints("Hello") == []
+        assert _extract_entity_type_hints("") == []
+        assert _extract_entity_type_hints(None) == []  # type: ignore[arg-type]
+
+    def test_format_broad_recall_empty(self) -> None:
+        """Empty broad result yields empty list."""
+        assert _format_broad_recall({}) == []
+        assert _format_broad_recall({"entities": [], "sessions": []}) == []
+
+    def test_format_broad_recall_entities_and_sessions(self) -> None:
+        """Entities and sessions are formatted for memory_context."""
+        broad = {
+            "entities": [
+                {"name": "Crete", "type": "Location", "mentions": 3, "description": "Greek island"}
+            ],
+            "sessions": [
+                {"session_id": "s1", "dominant_entities": ["Crete"], "turn_count": 5}
+            ],
+            "turns_summary": [],
+        }
+        result = _format_broad_recall(broad)
+        assert len(result) == 2
+        assert result[0]["type"] == "entity"
+        assert result[0]["name"] == "Crete"
+        assert result[0]["entity_type"] == "Location"
+        assert result[0]["mentions"] == 3
+        assert result[1]["type"] == "session"
+        assert result[1]["session_id"] == "s1"
+        assert result[1]["turn_count"] == 5
 
 
 @pytest.mark.asyncio

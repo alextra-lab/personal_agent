@@ -17,7 +17,11 @@ from personal_agent.orchestrator.context_window import (
     apply_context_window,
     estimate_messages_tokens,
 )
-from personal_agent.orchestrator.routing import heuristic_routing, resolve_role
+from personal_agent.orchestrator.routing import (
+    heuristic_routing,
+    is_memory_recall_query,
+    resolve_role,
+)
 from personal_agent.orchestrator.session import SessionManager
 from personal_agent.orchestrator.types import (
     ExecutionContext,
@@ -53,6 +57,73 @@ from personal_agent.tools import ToolExecutionLayer, get_default_registry
 from personal_agent.tools.registry import ToolRegistry
 
 log = get_logger(__name__)
+
+# Entity type keywords for recall intent (ADR-0025) — map words to graph entity_type
+_ENTITY_TYPE_KEYWORDS: dict[str, str] = {
+    "location": "Location",
+    "locations": "Location",
+    "place": "Location",
+    "places": "Location",
+    "city": "Location",
+    "cities": "Location",
+    "country": "Location",
+    "countries": "Location",
+    "person": "Person",
+    "people": "Person",
+    "someone": "Person",
+    "organization": "Organization",
+    "org": "Organization",
+    "company": "Organization",
+    "companies": "Organization",
+    "tool": "Technology",
+    "tools": "Technology",
+    "technology": "Technology",
+    "topic": "Topic",
+    "topics": "Topic",
+    "concept": "Concept",
+    "concepts": "Concept",
+}
+
+
+def _extract_entity_type_hints(user_message: str) -> list[str]:
+    """Map words in the query to entity_type values (ADR-0025).
+
+    e.g. "What Greek locations" -> ["Location"]
+         "What tools have I used" -> ["Technology"]
+         "What have I discussed" -> []
+    """
+    words = (user_message or "").lower().split()
+    types: set[str] = set()
+    for w in words:
+        clean = w.strip('",.:;!?')
+        if clean in _ENTITY_TYPE_KEYWORDS:
+            types.add(_ENTITY_TYPE_KEYWORDS[clean])
+    return list(types)
+
+
+def _format_broad_recall(broad: dict[str, Any]) -> list[dict[str, Any]]:
+    """Convert query_memory_broad result to memory_context format (ADR-0025).
+
+    The list is injected into the system prompt; keep it concise.
+    """
+    items: list[dict[str, Any]] = []
+    for e in broad.get("entities", []):
+        items.append({
+            "type": "entity",
+            "name": e.get("name", ""),
+            "entity_type": e.get("type", ""),
+            "mentions": e.get("mentions", 0),
+            "description": e.get("description") or "",
+        })
+    for s in broad.get("sessions", []):
+        items.append({
+            "type": "session",
+            "session_id": s.get("session_id", ""),
+            "dominant_entities": s.get("dominant_entities") or [],
+            "turn_count": s.get("turn_count", 0),
+        })
+    return items
+
 
 # Global tool registry instance (initialized on first use)
 _tool_registry: ToolRegistry | None = None
@@ -804,42 +875,59 @@ async def step_init(
                 await memory_service.connect()
 
             if memory_service and memory_service.connected:
-                words = ctx.user_message.split()
-                potential_entities = [
-                    w.strip('",.:;!?') for w in words if len(w) > 3 and w[0].isupper()
-                ]
-
                 conversations_found = 0
-                if potential_entities:
-                    query = MemoryQuery(
-                        entity_names=potential_entities[:5],
-                        limit=5,
-                        recency_days=30,
-                    )
-                    result = await memory_service.query_memory(
-                        query,
-                        feedback_key=ctx.session_id,
-                        query_text=ctx.user_message,
-                    )
 
-                    ctx.memory_context = []
-                    for conv in result.conversations:
-                        ctx.memory_context.append(
+                if is_memory_recall_query(ctx.user_message):
+                    # Broad recall path (ADR-0025): no entity names to match
+                    entity_type_hints = _extract_entity_type_hints(ctx.user_message)
+                    broad = await memory_service.query_memory_broad(
+                        entity_types=entity_type_hints or None,
+                        recency_days=90,
+                        limit=20,
+                    )
+                    ctx.memory_context = _format_broad_recall(broad)
+                    conversations_found = len(ctx.memory_context)
+                    log.info(
+                        "memory_recall_broad_query",
+                        trace_id=ctx.trace_id,
+                        entity_type_hints=entity_type_hints,
+                        entities_found=len(broad.get("entities", [])),
+                    )
+                else:
+                    # Entity-name match path (existing)
+                    words = ctx.user_message.split()
+                    potential_entities = [
+                        w.strip('",.:;!?')
+                        for w in words
+                        if len(w) > 3 and w[0].isupper()
+                    ]
+                    if potential_entities:
+                        query = MemoryQuery(
+                            entity_names=potential_entities[:5],
+                            limit=5,
+                            recency_days=30,
+                        )
+                        result = await memory_service.query_memory(
+                            query,
+                            feedback_key=ctx.session_id,
+                            query_text=ctx.user_message,
+                        )
+                        ctx.memory_context = [
                             {
-                                "conversation_id": conv.conversation_id,
+                                "conversation_id": conv.turn_id,
                                 "timestamp": conv.timestamp.isoformat(),
                                 "user_message": conv.user_message,
                                 "summary": conv.summary or conv.user_message[:200],
                                 "key_entities": conv.key_entities,
                             }
+                            for conv in result.conversations
+                        ]
+                        conversations_found = len(ctx.memory_context)
+                        log.info(
+                            "memory_enrichment_completed",
+                            trace_id=ctx.trace_id,
+                            conversations_found=conversations_found,
                         )
-                    conversations_found = len(ctx.memory_context)
-
-                    log.info(
-                        "memory_enrichment_completed",
-                        trace_id=ctx.trace_id,
-                        conversations_found=conversations_found,
-                    )
 
                 if memory_service != global_memory_service:
                     await memory_service.disconnect()
@@ -1018,19 +1106,39 @@ async def step_llm_call(
                 model_role=model_role.value,
             )
 
-        # Add memory context to system prompt (Phase 2.2)
+        # Add memory context to system prompt (Phase 2.2, ADR-0025 broad recall)
         if model_role != ModelRole.ROUTER and ctx.memory_context and len(ctx.memory_context) > 0:
-            memory_section = "\n\n## Relevant Past Conversations\n"
-            memory_section += (
-                "The following past conversations may be relevant to the current request:\n\n"
-            )
-            for i, mem in enumerate(ctx.memory_context[:3], 1):  # Limit to top 3
+            if ctx.memory_context[0].get("type") in ("entity", "session"):
+                # Broad recall path — format as direct knowledge summary
+                entity_items = [
+                    m
+                    for m in ctx.memory_context
+                    if m.get("type") == "entity"
+                ]
+                entity_lines = [
+                    f"- [{m.get('entity_type', '')}] {m.get('name', '')}: {m.get('description', '')} "
+                    f"(mentioned {m.get('mentions', 1)}x)"
+                    for m in entity_items[:15]
+                ]
+                memory_section = "\n\n## Your Memory Graph — Known Entities\n"
+                memory_section += "\n".join(entity_lines)
                 memory_section += (
-                    f"{i}. {mem.get('summary', mem.get('user_message', ''))[:150]}...\n"
+                    "\n\nUse this list to directly answer questions about what the user "
+                    "has previously discussed. Do NOT say you have no memory."
                 )
-                if mem.get("key_entities"):
-                    memory_section += f"   Entities: {', '.join(mem['key_entities'][:5])}\n"
-            memory_section += "\nYou can reference these past conversations to provide more context-aware responses."
+            else:
+                # Task-assist path — inject conversation summaries
+                memory_section = "\n\n## Relevant Past Conversations\n"
+                memory_section += (
+                    "The following past conversations may be relevant to the current request:\n\n"
+                )
+                for i, mem in enumerate(ctx.memory_context[:3], 1):  # Limit to top 3
+                    memory_section += (
+                        f"{i}. {mem.get('summary', mem.get('user_message', ''))[:150]}...\n"
+                    )
+                    if mem.get("key_entities"):
+                        memory_section += f"   Entities: {', '.join(mem['key_entities'][:5])}\n"
+                memory_section += "\nYou can reference these past conversations to provide more context-aware responses."
 
             if system_prompt:
                 system_prompt = f"{system_prompt}\n{memory_section}"

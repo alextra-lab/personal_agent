@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Any
 
 import orjson
 
-from personal_agent.config import load_model_config
-from personal_agent.llm_client import LocalLLMClient, ModelRole
+from personal_agent.config import load_model_config, settings
+from personal_agent.llm_client import LLMTimeout, LocalLLMClient, ModelRole
 from personal_agent.telemetry import get_logger
 
 if TYPE_CHECKING:
@@ -171,15 +171,26 @@ async def extract_entities_and_relationships(
                 {"role": "user", "content": prompt},
             ]
 
-            llm_response = await local_client.respond(
-                role=model_role,
-                messages=messages,
-                system_prompt=None,  # Already in messages
-                tools=None,
-                max_tokens=10000,  # thinking_budget_tokens (≤3000) + JSON response headroom
-                max_retries=0,  # No retries: a timeout means the model is overloaded;
-                                # retrying queues more work and blocks consolidation for ~27min
-            )
+            try:
+                llm_response = await local_client.respond(
+                    role=model_role,
+                    messages=messages,
+                    system_prompt=None,  # Already in messages
+                    tools=None,
+                    max_tokens=10000,  # thinking_budget_tokens (≤3000) + JSON response headroom
+                    max_retries=0,  # No retries: a timeout means the model is overloaded;
+                                    # retrying queues more work and blocks consolidation for ~27min
+                    timeout_s=float(settings.entity_extraction_timeout_seconds),
+                )
+            except LLMTimeout as e:
+                log.warning(
+                    "entity_extraction_timeout",
+                    error=str(e),
+                    timeout_seconds=settings.entity_extraction_timeout_seconds,
+                    message="Returning empty entities to avoid blocking consolidation.",
+                )
+                return _default_extraction_result(user_message)
+
             # LLMResponse is a TypedDict - use dict access
             content = llm_response["content"]
             model_used = entity_extraction_role

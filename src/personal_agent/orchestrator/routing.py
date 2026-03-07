@@ -39,6 +39,35 @@ _REASONING_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# MEMORY RECALL: questions about the user's own history (ADR-0025)
+_MEMORY_RECALL_PATTERNS = re.compile(
+    r"(?:"
+    r"what\s+(?:have\s+I|did\s+I|topics?\s+have\s+I|things?\s+have\s+I)|"
+    r"have\s+I\s+(?:ever|asked|mentioned|talked|discussed)|"
+    r"did\s+I\s+(?:ask|mention|talk|discuss)|"
+    r"do\s+you\s+remember|"
+    r"(?:my|our)\s+(?:past|previous|earlier|last)\s+(?:question|conversation|session|discussion)|"
+    r"last\s+time\s+(?:I|we)\s+(?:asked|talked|discussed)|"
+    r"remind\s+me\s+(?:what|about)|"
+    r"what\s+(?:else\s+)?(?:have\s+we|have\s+I)\s+(?:talked|discussed|covered)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def is_memory_recall_query(user_message: str) -> bool:
+    """Return True if the user is asking about their own history.
+
+    Used by step_init to select the broad-recall memory query path (ADR-0025).
+
+    Args:
+        user_message: Raw user input.
+
+    Returns:
+        True if message matches a memory-recall intent pattern.
+    """
+    return bool(_MEMORY_RECALL_PATTERNS.search(user_message or ""))
+
 
 def heuristic_routing(user_message: str) -> HeuristicRoutingPlan:
     """Run deterministic classifier on user message (no LLM).

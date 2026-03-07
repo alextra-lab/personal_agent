@@ -15,7 +15,11 @@ from personal_agent.orchestrator.executor import (
     _parse_routing_decision,
     _router_response_format,
 )
-from personal_agent.orchestrator.routing import heuristic_routing, resolve_role
+from personal_agent.orchestrator.routing import (
+    heuristic_routing,
+    is_memory_recall_query,
+    resolve_role,
+)
 from personal_agent.orchestrator.types import ExecutionContext, RoutingDecision
 
 
@@ -37,6 +41,56 @@ class TestRoutingHelpers:
         """Routes formal proof style prompts to REASONING."""
         plan = heuristic_routing("Prove this rigorously with multi-step formal analysis")
         assert plan["target_model"] == ModelRole.REASONING
+
+    def test_is_memory_recall_query_positive_cases(self) -> None:
+        """ADR-0025: recall intent detected for history questions."""
+        positive = [
+            "What Greek locations have I asked about in the past?",
+            "What have I ever asked you about?",
+            "What topics have I discussed with you?",
+            "What things have I mentioned?",
+            "Have I ever asked about Paris?",
+            "Have I mentioned my trip to Rome?",
+            "Did I ask about the weather?",
+            "Did I talk about Python?",
+            "Do you remember what we discussed?",
+            "My past conversation about travel",
+            "Our previous session on cooking",
+            "Last time we talked about books",
+            "Remind me what we covered",
+            "Remind me about that project",
+            "What else have we talked about?",
+            "What have we discussed so far?",
+        ]
+        for msg in positive:
+            assert is_memory_recall_query(msg), f"Expected recall: {msg!r}"
+
+    def test_is_memory_recall_query_negative_cases(self) -> None:
+        """ADR-0025: no recall intent for task-assist or other queries."""
+        negative = [
+            "What is the weather in Crete?",
+            "What is the capital of France?",
+            "Search the web for news",
+            "Tell me about Python",
+            "How do I install Rust?",
+            "Debug this stack trace",
+            "Write a function to add two numbers",
+            "What time is it?",
+            "Hello",
+            "Thanks",
+            "Prove this rigorously",
+            "List files in the current directory",
+            "Open url https://example.com",
+            "What Greek locations are worth visiting?",  # not "have I asked"
+            "Have you seen the report?",  # "have you" not "have I"
+        ]
+        for msg in negative:
+            assert not is_memory_recall_query(msg), f"Expected non-recall: {msg!r}"
+
+    def test_is_memory_recall_query_empty_or_none(self) -> None:
+        """None or empty message is not recall."""
+        assert not is_memory_recall_query("")
+        assert not is_memory_recall_query(None)  # type: ignore[arg-type]
 
     def test_schema_is_minimal_and_strict(self) -> None:
         """Ensures router schema is strict and minimal."""

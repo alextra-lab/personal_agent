@@ -21,6 +21,8 @@ from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
 
+_gpu_unavailable_logged = False
+
 
 def is_apple_silicon() -> bool:
     """Check if running on Apple Silicon.
@@ -75,7 +77,7 @@ def _poll_gpu_via_macmon() -> dict[str, Any]:
                 metrics["perf_system_gpu_temp_c"] = float(data["temp"]["gpu_temp_avg"])
 
         if metrics:
-            log.info(
+            log.debug(
                 "gpu_metrics_collected_via_macmon_python",
                 metrics=list(metrics.keys()),
                 gpu_load=metrics.get("perf_system_gpu_load"),
@@ -124,10 +126,10 @@ def _poll_gpu_via_macmon() -> dict[str, Any]:
         # Approach 1: Try with script command (provides TTY)
         try:
             result = subprocess.run(
-                ["script", "-q", "/dev/null", "timeout", "1", "macmon", "pipe"],
+                ["script", "-q", "/dev/null", "timeout", "2", "macmon", "pipe"],
                 capture_output=True,
                 text=True,
-                timeout=3,
+                timeout=5,
                 check=False,
             )
             if result.stdout:
@@ -197,7 +199,7 @@ def _poll_gpu_via_macmon() -> dict[str, Any]:
                 metrics["perf_system_gpu_temp_c"] = float(data["temp"]["gpu_temp_avg"])
 
         if metrics:
-            log.info(
+            log.debug(
                 "gpu_metrics_collected_via_macmon",
                 metrics=list(metrics.keys()),
                 gpu_load=metrics.get("perf_system_gpu_load"),
@@ -205,11 +207,11 @@ def _poll_gpu_via_macmon() -> dict[str, Any]:
             return metrics
 
     except subprocess.TimeoutExpired:
-        log.warning("macmon_timeout", message="macmon command timed out")
+        log.debug("macmon_timeout", message="macmon command timed out")
     except FileNotFoundError:
-        log.warning("macmon_not_found", message="macmon command not found")
+        log.debug("macmon_not_found", message="macmon command not found")
     except Exception as e:
-        log.warning("macmon_poll_error", error=str(e), error_type=type(e).__name__, exc_info=True)
+        log.debug("macmon_poll_error", error=str(e), error_type=type(e).__name__, exc_info=True)
 
     return metrics
 
@@ -357,22 +359,27 @@ def poll_apple_gpu_metrics() -> dict[str, Any]:
     if not is_apple_silicon():
         return {}
 
+    global _gpu_unavailable_logged  # noqa: PLW0603
+
     # Try macmon first (most secure, no sudo)
     metrics = _poll_gpu_via_macmon()
     if metrics:
-        log.info("gpu_metrics_via_macmon", metrics=list(metrics.keys()))
+        _gpu_unavailable_logged = False
         return metrics
 
     # Fallback to powermetrics (requires sudo, see docs/GPU_METRICS_SETUP.md)
     metrics = _poll_gpu_via_powermetrics()
     if metrics:
-        log.info("gpu_metrics_via_powermetrics", metrics=list(metrics.keys()))
-    else:
+        _gpu_unavailable_logged = False
+        return metrics
+
+    if not _gpu_unavailable_logged:
         log.warning(
             "gpu_metrics_unavailable",
             message="Neither macmon nor powermetrics provided GPU metrics. "
             "Configure sudo-less powermetrics access per docs/GPU_METRICS_SETUP.md",
         )
+        _gpu_unavailable_logged = True
 
     return metrics
 

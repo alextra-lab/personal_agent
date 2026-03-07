@@ -1,0 +1,41 @@
+---
+description: Linear approval workflow. Apply when creating or implementing Linear issues. New issues need approval; only implement approved issues.
+alwaysApply: true
+---
+# Linear Implement Gate
+
+All Linear task creation and implementation in this workspace follow a single policy.
+
+## Policy
+
+- **New == Needs Approval.** Every new Linear issue must be created with status or label **Needs Approval** (no matter who or what creates it).
+- **Implement == status_check(Approved).** Only implement a Linear issue after confirming it is approved. If the issue is not Approved, do not implement; tell the user it needs human approval first.
+
+## When Creating a Linear Issue
+
+Whenever you create an issue via the Linear MCP (`save_issue` or equivalent):
+
+1. Set **state** to `"Needs Approval"` (if your Linear workflow has that state), **or**
+2. Add **label** `"Needs Approval"` to the issue's labels.
+
+Do this for every issue you create — whether from a user request, from session planning, or from any other context. A human will review and move the issue to Approved (or add the Approved label) before implementation.
+
+## When Implementing a Linear Issue
+
+Before implementing any Linear issue:
+
+1. **Status check:** Call `get_issue` for that issue and inspect its **state** (or **labels**).
+2. **Gate:** Proceed with implementation **only if** the issue has state **Approved** or label **Approved**.
+3. **If not approved:** Do not implement. Tell the user that this issue needs human approval first (e.g. "Move this issue to Approved status or add the Approved label in Linear before I can implement it.").
+
+When listing work to implement (e.g. "What should I work on?"):
+
+- Use `list_issues` with filter **state: "Approved"** (or **label: "Approved"**) so that only approved work is suggested.
+- Do not suggest or implement issues that are not Approved.
+
+## Linear MCP (plugin-linear-linear)
+
+- **Team:** FrenchForest
+- **Create:** `save_issue` with `state: "Needs Approval"` or `labels: ["Needs Approval", ...]`
+- **List implementable work:** `list_issues` with `state: "Approved"` or `label: "Approved"`
+- **Before implementing a specific issue:** `get_issue` → verify state or labels include Approved → then implement or refuse

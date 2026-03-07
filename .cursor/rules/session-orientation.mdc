@@ -8,7 +8,7 @@ alwaysApply: false
 
 Before beginning any implementation work, orient yourself:
 
-1. **Query Linear** via MCP (`plugin-linear-linear`) — call `list_projects` for stream status, `list_issues` for current work items
+1. **Query Linear** via MCP (`plugin-linear-linear`) — call `list_projects` for stream status, `list_issues` with `state: "Approved"` (or `label: "Approved"`) for implementable work items (see **Linear Implement Gate** rule)
 2. **Read the relevant spec** (e.g., `docs/plans/PHASE_2.3_PLAN.md`) for implementation details
 3. **Check recent session logs** in `docs/plans/sessions/` for context from the last session
 
@@ -16,10 +16,11 @@ If Linear MCP is unavailable, fall back to `docs/plans/DEV_TRACKER.md` for proje
 
 ## When Implementing a Linear Issue
 
-1. **Read the issue** via `get_issue` — the description contains: spec path, files to modify, acceptance criteria
-2. **Read the linked spec** for full implementation details
-3. **Reference ADRs** in `docs/architecture_decisions/` for architectural constraints
-4. **Implement, test, and update** the issue status via `update_issue`
+1. **Approval gate:** Call `get_issue` and confirm the issue has state **Approved** or label **Approved**. If not, do not implement — tell the user the issue needs human approval first.
+2. **Read the issue** — the description contains: spec path, files to modify, acceptance criteria
+3. **Read the linked spec** for full implementation details
+4. **Reference ADRs** in `docs/architecture_decisions/` for architectural constraints
+5. **Implement, test, and update** the issue status via `update_issue`
 
 ## When Completing Work
 
@@ -45,13 +46,15 @@ If Linear MCP is unavailable, fall back to `docs/plans/DEV_TRACKER.md` for proje
 
 ## Linear MCP Quick Reference
 
+See **Linear Implement Gate** rule for approval policy (New == Needs Approval, Implement == status_check(Approved)).
+
 ```
 Server: plugin-linear-linear
 Team: FrenchForest
 
-list_projects          → stream status overview
-list_issues            → current work items
-get_issue id:"FRE-8"   → issue details + spec path
+list_projects                    → stream status overview
+list_issues state:"Approved"     → implementable work only (approved issues)
+get_issue id:"FRE-8"             → issue details + spec path (check Approved before implementing)
 update_issue id:"FRE-8" state:"Done"  → mark complete
-create_issue team:"FrenchForest" project:"2.3 Homeostasis & Feedback"  → new work
+save_issue ... state:"Needs Approval"   → new work (always create with Needs Approval)
 ```

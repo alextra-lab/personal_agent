@@ -25,6 +25,7 @@ Design:
 from datetime import datetime, timezone
 from typing import Any
 
+from personal_agent.captains_log.dedup import compute_proposal_fingerprint
 from personal_agent.captains_log.metrics_extraction import (
     extract_metrics_from_summary,
     format_metrics_string,
@@ -33,6 +34,8 @@ from personal_agent.captains_log.models import (
     CaptainLogEntry,
     CaptainLogEntryType,
     CaptainLogStatus,
+    ChangeCategory,
+    ChangeScope,
     ProposedChange,
     TelemetryRef,
 )
@@ -84,6 +87,20 @@ try:
         proposed_change_how: str = dspy.OutputField(  # type: ignore[misc]
             desc="How to implement this change (empty string if no change proposed)"
         )
+        proposed_change_category: str = dspy.OutputField(  # type: ignore[misc]
+            desc=(
+                "Category of proposed change. One of: performance, reliability, "
+                "concurrency, knowledge, cost, ux, observability, architecture, safety. "
+                "Empty string if no change proposed."
+            )
+        )
+        proposed_change_scope: str = dspy.OutputField(  # type: ignore[misc]
+            desc=(
+                "Target subsystem of proposed change. One of: llm_client, orchestrator, "
+                "second_brain, captains_log, brainstem, tools, telemetry, governance, "
+                "insights, config, cross_cutting. Empty string if no change proposed."
+            )
+        )
         impact_assessment: str = dspy.OutputField(  # type: ignore[misc]
             desc="Expected benefits if change is implemented (empty string if none)"
         )
@@ -93,6 +110,20 @@ except ImportError:
     dspy = None  # type: ignore[assignment,unused-ignore]
     GenerateReflection = None  # type: ignore[assignment,misc]
     DSPY_AVAILABLE = False
+
+
+def _parse_enum(enum_cls: type, raw: str) -> object | None:
+    """Safely parse an LLM-produced string into an enum value.
+
+    Returns None if the string doesn't match any member.
+    """
+    raw = raw.strip().lower()
+    if not raw:
+        return None
+    try:
+        return enum_cls(raw)
+    except ValueError:
+        return None
 
 
 def generate_reflection_dspy(
@@ -209,13 +240,25 @@ def generate_reflection_dspy(
             )
 
         # Convert DSPy result to CaptainLogEntry (outside context manager)
-        # Parse proposed_change
         proposed_change = None
         if result.proposed_change_what and result.proposed_change_what.strip():
+            category = _parse_enum(ChangeCategory, getattr(result, "proposed_change_category", ""))
+            scope = _parse_enum(ChangeScope, getattr(result, "proposed_change_scope", ""))
+
+            fingerprint = None
+            if category and scope:
+                fingerprint = compute_proposal_fingerprint(
+                    category, scope, result.proposed_change_what
+                )
+
             proposed_change = ProposedChange(
                 what=result.proposed_change_what,
                 why=result.proposed_change_why or "",
                 how=result.proposed_change_how or "",
+                category=category,
+                scope=scope,
+                fingerprint=fingerprint,
+                first_seen=datetime.now(timezone.utc),
             )
 
         # Parse impact_assessment (empty string if none)

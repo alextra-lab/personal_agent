@@ -2,6 +2,8 @@
 
 These models define the structure of Captain's Log entries as documented
 in ../../docs/architecture_decisions/captains_log/README.md.
+
+Extended by ADR-0030: Categorization, dedup fingerprinting, and Linear promotion fields.
 """
 
 from datetime import datetime, timezone
@@ -9,6 +11,42 @@ from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
+
+
+class ChangeCategory(str, Enum):
+    """Taxonomy of improvement types (ADR-0030).
+
+    Classifies proposed changes for dedup grouping and dashboard filtering.
+    """
+
+    PERFORMANCE = "performance"
+    RELIABILITY = "reliability"
+    CONCURRENCY = "concurrency"
+    KNOWLEDGE_QUALITY = "knowledge"
+    COST = "cost"
+    UX = "ux"
+    OBSERVABILITY = "observability"
+    ARCHITECTURE = "architecture"
+    SAFETY = "safety"
+
+
+class ChangeScope(str, Enum):
+    """Target subsystem for a proposed change (ADR-0030).
+
+    Combined with ChangeCategory to form the dedup fingerprint namespace.
+    """
+
+    LLM_CLIENT = "llm_client"
+    ORCHESTRATOR = "orchestrator"
+    SECOND_BRAIN = "second_brain"
+    CAPTAINS_LOG = "captains_log"
+    BRAINSTEM = "brainstem"
+    TOOLS = "tools"
+    TELEMETRY = "telemetry"
+    GOVERNANCE = "governance"
+    INSIGHTS = "insights"
+    CONFIG = "config"
+    CROSS_CUTTING = "cross_cutting"
 
 
 class Metric(BaseModel):
@@ -65,11 +103,28 @@ class CaptainLogStatus(str, Enum):
 
 
 class ProposedChange(BaseModel):
-    """Proposed improvement or change."""
+    """Proposed improvement or change.
+
+    Extended by ADR-0030 with category/scope for dedup and a merge counter.
+    All new fields are optional for backward compatibility with existing entries.
+    """
 
     what: str = Field(..., description="What to change")
     why: str = Field(..., description="Why it would help")
     how: str = Field(..., description="How to implement it")
+    category: ChangeCategory | None = Field(None, description="Improvement category (ADR-0030)")
+    scope: ChangeScope | None = Field(None, description="Target subsystem (ADR-0030)")
+    fingerprint: str | None = Field(
+        None, description="Semantic dedup key: sha256(category:scope:normalized_what)[:16]"
+    )
+    seen_count: int = Field(
+        default=1, ge=1, description="How many times this proposal has been observed"
+    )
+    first_seen: datetime | None = Field(None, description="Timestamp of the earliest observation")
+    related_entry_ids: list[str] = Field(
+        default_factory=list,
+        description="Entry IDs that were merged into this proposal",
+    )
 
 
 class TelemetryRef(BaseModel):
@@ -120,6 +175,12 @@ class CaptainLogEntry(BaseModel):
     )
     telemetry_refs: list[TelemetryRef] = Field(
         default_factory=list, description="References to telemetry traces/metrics"
+    )
+
+    # ADR-0030: Linear promotion tracking
+    linear_issue_id: str | None = Field(
+        None,
+        description="Linear issue ID if this proposal was promoted to backlog (ADR-0030)",
     )
 
     # Type-specific optional fields

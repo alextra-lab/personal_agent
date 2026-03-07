@@ -1,5 +1,9 @@
-"""Captain's Log Manager for creating and managing agent reflection entries."""
+"""Captain's Log Manager for creating and managing agent reflection entries.
 
+Extended by ADR-0030: fingerprint-based deduplication on write.
+"""
+
+import json as _json
 import pathlib
 import re
 import subprocess
@@ -10,6 +14,7 @@ from personal_agent.captains_log.es_indexer import schedule_es_index
 from personal_agent.captains_log.models import (
     CaptainLogEntry,
     CaptainLogEntryType,
+    CaptainLogStatus,
     TelemetryRef,
 )
 from personal_agent.telemetry import CAPTAINS_LOG_ENTRY_CREATED, get_logger
@@ -162,34 +167,47 @@ class CaptainLogManager:
     ) -> pathlib.Path:
         """Save a Captain's Log entry to a JSON file.
 
+        ADR-0030 dedup: if the entry has a proposed_change with a fingerprint,
+        check for an existing AWAITING_APPROVAL entry that shares the same
+        fingerprint. When found, merge (increment seen_count) instead of
+        writing a new file.
+
         Args:
             entry: The entry to write.
             es_handler: Optional Elasticsearch handler override.
 
         Returns:
-            Path to the written file.
+            Path to the written (or updated) file.
 
         Raises:
             OSError: If file cannot be written.
         """
-        # Generate entry ID if not set
+        # --- ADR-0030: fingerprint-based dedup ---
+        fingerprint = (
+            entry.proposed_change.fingerprint
+            if entry.proposed_change and entry.proposed_change.fingerprint
+            else None
+        )
+
+        if fingerprint:
+            existing_path = self._find_entry_by_fingerprint(fingerprint)
+            if existing_path is not None:
+                return self._merge_into_existing(existing_path, entry, es_handler)
+
+        # --- Normal write path ---
         if not entry.entry_id:
-            # Extract trace_id from telemetry_refs for scenario tracking
             trace_id = None
             if entry.telemetry_refs and len(entry.telemetry_refs) > 0:
                 trace_id = entry.telemetry_refs[0].trace_id
             entry.entry_id = _generate_entry_id(entry.timestamp, trace_id=trace_id)
 
-        # Generate filename: CL-YYYYMMDD-HHMMSS-<trace>-NNN-title.json
         title_slug = _sanitize_filename(entry.title)
         filename = f"{entry.entry_id}-{title_slug}.json"
         file_path = self.log_dir / filename
 
-        # Write JSON content (pretty-printed)
         json_content = entry.model_dump_json_pretty()
         file_path.write_text(json_content, encoding="utf-8")
 
-        # Emit telemetry
         log.info(
             CAPTAINS_LOG_ENTRY_CREATED,
             entry_id=entry.entry_id,
@@ -198,8 +216,6 @@ class CaptainLogManager:
             file_path=str(file_path),
         )
 
-        # Optional ES indexing for reflections and config proposals (Phase 2.3/FRE-24):
-        # non-blocking, best-effort; doc_id for idempotent backfill (FRE-30).
         if entry.type in {CaptainLogEntryType.REFLECTION, CaptainLogEntryType.CONFIG_PROPOSAL}:
             date_str = entry.timestamp.strftime("%Y-%m-%d")
             index_name = f"{REFLECTIONS_INDEX_PREFIX}-{date_str}"
@@ -208,6 +224,88 @@ class CaptainLogManager:
             schedule_es_index(index_name, doc, es_handler=handler, doc_id=entry.entry_id)
 
         return file_path
+
+    # ------------------------------------------------------------------
+    # ADR-0030 dedup helpers
+    # ------------------------------------------------------------------
+
+    def _find_entry_by_fingerprint(self, fingerprint: str) -> pathlib.Path | None:
+        """Scan on-disk entries for an AWAITING_APPROVAL proposal with matching fingerprint.
+
+        Args:
+            fingerprint: The 16-char hex fingerprint to match.
+
+        Returns:
+            Path to the matching file, or None.
+        """
+        for json_file in sorted(self.log_dir.glob("CL-*.json"), reverse=True):
+            try:
+                data = _json.loads(json_file.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+
+            if data.get("status") != CaptainLogStatus.AWAITING_APPROVAL.value:
+                continue
+
+            pc = data.get("proposed_change")
+            if pc and pc.get("fingerprint") == fingerprint:
+                return json_file
+
+        return None
+
+    def _merge_into_existing(
+        self,
+        existing_path: pathlib.Path,
+        new_entry: CaptainLogEntry,
+        es_handler: "ElasticsearchHandler | None" = None,
+    ) -> pathlib.Path:
+        """Increment seen_count on an existing entry instead of creating a duplicate.
+
+        Also appends the new entry's entry_id (if set) to related_entry_ids and
+        refreshes supporting_metrics if the new entry carries different ones.
+
+        Args:
+            existing_path: Path to the existing JSON file.
+            new_entry: The incoming (duplicate) entry.
+            es_handler: Optional Elasticsearch handler override.
+
+        Returns:
+            Path to the updated file.
+        """
+        data = _json.loads(existing_path.read_text(encoding="utf-8"))
+        pc = data.get("proposed_change", {})
+
+        pc["seen_count"] = pc.get("seen_count", 1) + 1
+
+        new_id = new_entry.entry_id or ""
+        related = pc.get("related_entry_ids", [])
+        if new_id and new_id not in related:
+            related.append(new_id)
+        pc["related_entry_ids"] = related
+
+        data["proposed_change"] = pc
+        existing_path.write_text(_json.dumps(data, indent=2, default=str), encoding="utf-8")
+
+        log.info(
+            "captains_log_proposal_merged",
+            existing_entry_id=data.get("entry_id"),
+            fingerprint=pc.get("fingerprint"),
+            seen_count=pc["seen_count"],
+        )
+
+        # Re-index the updated doc
+        existing_entry = CaptainLogEntry.model_validate(data)
+        if existing_entry.type in {
+            CaptainLogEntryType.REFLECTION,
+            CaptainLogEntryType.CONFIG_PROPOSAL,
+        }:
+            date_str = existing_entry.timestamp.strftime("%Y-%m-%d")
+            index_name = f"{REFLECTIONS_INDEX_PREFIX}-{date_str}"
+            doc = _normalize_reflection_doc_for_es(existing_entry.model_dump(mode="json"))
+            handler = es_handler or self.es_handler
+            schedule_es_index(index_name, doc, es_handler=handler, doc_id=existing_entry.entry_id)
+
+        return existing_path
 
     def write_entry(
         self,

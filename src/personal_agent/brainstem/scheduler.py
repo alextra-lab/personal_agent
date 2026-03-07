@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, cast
 from personal_agent.brainstem.sensors.sensors import poll_system_metrics
 from personal_agent.captains_log.es_indexer import schedule_es_index
 from personal_agent.captains_log.manager import CaptainLogManager
+from personal_agent.captains_log.promotion import PromotionPipeline
 from personal_agent.config.settings import get_settings
 from personal_agent.insights import InsightsEngine
 from personal_agent.insights.engine import INSIGHTS_INDEX_PREFIX
@@ -35,6 +36,8 @@ ARCHIVE_HOUR_UTC = 2  # Daily archive at 2 AM UTC
 PURGE_WEEKDAY = 6  # Sunday
 PURGE_HOUR_UTC = 3  # Weekly purge at 3 AM UTC Sunday
 BACKFILL_INTERVAL_SECONDS = 600  # Captain's Log ES backfill every 10 minutes (FRE-30)
+PROMOTION_WEEKDAY = 6  # Sunday (ADR-0030)
+PROMOTION_HOUR_UTC = 10  # Weekly promotion at 10 AM UTC Sunday
 
 
 class BrainstemScheduler:
@@ -78,6 +81,8 @@ class BrainstemScheduler:
         self._last_insights_daily_date: datetime | None = None
         self._last_insights_week: tuple[int, int] | None = None  # (year, week)
         self._last_quality_check_date: date | None = None
+        self._last_promotion_week: tuple[int, int] | None = None  # (year, week) ADR-0030
+        self.promotion_pipeline = PromotionPipeline()
         self.quality_monitor = quality_monitor or ConsolidationQualityMonitor(
             memory_service=memory_service,
             telemetry_queries=TelemetryQueries(
@@ -374,6 +379,30 @@ class BrainstemScheduler:
                         insights_count=len(insights),
                         proposal_count=len(proposals),
                     )
+
+                # Weekly promotion pipeline (ADR-0030): promote qualifying CL proposals to Linear
+                if (
+                    getattr(settings, "promotion_pipeline_enabled", True)
+                    and now.weekday() == PROMOTION_WEEKDAY
+                    and now.hour == PROMOTION_HOUR_UTC
+                    and (
+                        self._last_promotion_week is None
+                        or self._last_promotion_week != (year, week)
+                    )
+                ):
+                    try:
+                        promoted = await self.promotion_pipeline.run()
+                        self._last_promotion_week = (year, week)
+                        log.info(
+                            "promotion_pipeline_scheduled_run",
+                            promoted_count=len(promoted),
+                        )
+                    except Exception as promo_err:
+                        log.warning(
+                            "promotion_pipeline_failed",
+                            error=str(promo_err),
+                            exc_info=True,
+                        )
 
                 # Daily quality monitoring (FRE-32)
                 if self.quality_monitor_enabled and (

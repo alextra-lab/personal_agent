@@ -1,6 +1,6 @@
 # ADR-0030: Captain's Log Deduplication & Self-Improvement Pipeline
 
-**Status**: Proposed  
+**Status**: Accepted  
 **Date**: 2026-03-07  
 **Deciders**: Project owner  
 

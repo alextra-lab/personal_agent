@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 import orjson
 
 from personal_agent.config import load_model_config, settings
-from personal_agent.llm_client import LLMTimeout, LocalLLMClient, ModelRole
+from personal_agent.llm_client import InferenceSlotTimeout, LLMTimeout, LocalLLMClient, ModelRole
 from personal_agent.telemetry import get_logger
 
 if TYPE_CHECKING:
@@ -175,6 +175,8 @@ async def extract_entities_and_relationships(
             ]
 
             try:
+                from personal_agent.llm_client.concurrency import InferencePriority
+
                 llm_response = await local_client.respond(
                     role=model_role,
                     messages=messages,
@@ -184,11 +186,14 @@ async def extract_entities_and_relationships(
                     max_retries=0,  # No retries: a timeout means the model is overloaded;
                                     # retrying queues more work and blocks consolidation for ~27min
                     timeout_s=float(settings.entity_extraction_timeout_seconds),
+                    priority=InferencePriority.BACKGROUND,
+                    priority_timeout=60.0,
                 )
-            except LLMTimeout as e:
+            except (LLMTimeout, InferenceSlotTimeout) as e:
                 log.warning(
                     "entity_extraction_timeout",
                     error=str(e),
+                    error_type=type(e).__name__,
                     timeout_seconds=settings.entity_extraction_timeout_seconds,
                     message="Returning empty entities to avoid blocking consolidation.",
                 )

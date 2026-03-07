@@ -13,6 +13,10 @@ class ModelDefinition(BaseModel):
         id: Model identifier (e.g., "qwen/qwen3-4b-thinking-2507").
         endpoint: Optional base URL override for this model. If None, uses
             settings.llm_base_url.
+        provider_type: Endpoint classification for concurrency control (ADR-0029).
+            "local" = single-GPU servers (strict concurrency), "managed" = self-hosted
+            multi-GPU clusters (moderate control), "cloud" = OpenAI/Anthropic/etc
+            (pass-through). Auto-detected from endpoint if omitted.
         context_length: Maximum context length for this model.
         quantization: Quantization level (e.g., "8bit", "4bit", "5bit").
         max_concurrency: Maximum concurrent requests for this model.
@@ -35,6 +39,14 @@ class ModelDefinition(BaseModel):
 
     id: str = Field(..., description="Model identifier")
     endpoint: str | None = Field(None, description="Optional base URL override")
+    provider_type: str | None = Field(
+        None,
+        description=(
+            "Endpoint classification for concurrency control (ADR-0029). "
+            "'local' = single-GPU (strict), 'managed' = multi-GPU cluster, "
+            "'cloud' = OpenAI/Anthropic (pass-through). Auto-detected if omitted."
+        ),
+    )
     context_length: int = Field(..., ge=1, description="Maximum context length")
     quantization: str = Field(..., description="Quantization level")
     max_concurrency: int = Field(..., ge=1, description="Maximum concurrent requests")

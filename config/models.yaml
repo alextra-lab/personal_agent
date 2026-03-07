@@ -17,6 +17,7 @@
 #     - "http://localhost:1234/v1" (same provider, uses base_url if omitted)
 #     - "http://localhost:8001/v1" (different provider/port)
 #     - "http://ollama:11434/v1" (different provider entirely)
+# - provider_type: "local" | "managed" | "cloud" (ADR-0029 concurrency control; auto-detected if omitted)
 # - context_length, quantization, max_concurrency, default_timeout: Model-specific settings
 # - temperature, top_p, presence_penalty: Sampling params (top-level OpenAI fields)
 # - top_k: Sampling param passed via extra_body (non-standard, vLLM/LM Studio extension)
@@ -37,7 +38,8 @@ models:
     top_p: 0.1
     top_k: 50
     presence_penalty: 1.05
-    supports_function_calling: false 
+    supports_function_calling: false
+    provider_type: "local"
     #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
     endpoint: "http://127.0.0.1:1234/v1"
 
@@ -56,6 +58,7 @@ models:
     presence_penalty: 1.5  # Reduces repetition in non-thinking mode
     disable_thinking: true  # Hard disable via chat_template_kwargs (ADR-0023)
     supports_function_calling: true
+    provider_type: "local"
     #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
     endpoint: "http://127.0.0.1:1234/v1"
 
@@ -72,44 +75,59 @@ models:
     top_k: 20            # Qwen3.5 recommended (passed via extra_body)
     thinking_budget_tokens: 3000  # Cap thinking tokens to limit over-generation (ADR-0023)
     supports_function_calling: true
+    provider_type: "local"
     #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
     endpoint: "http://127.0.0.1:1234/v1"
 
   coding:
-    #id: "qwen/qwen3-coder-30b"
-    id: "mistralai/devstral-small-2-2512"
+    # Fallback: devstral not loaded, reuse standard model for coding tasks
+    #id: "mistralai/devstral-small-2-2512"
+    id: "qwen3.5-4b-mxfp8-mlx"
     context_length: 32768
     quantization: "8bit"
     max_concurrency: 2
     default_timeout: 45  # seconds
     temperature: 0.2
-    supports_function_calling: false  # Use /v1/chat/completions (LM Studio /responses can be slow for some models)
+    disable_thinking: true
+    supports_function_calling: true
+    provider_type: "local"
     #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
     endpoint: "http://127.0.0.1:1234/v1"
 
   # EXPERIMENTAL: Alternative models for A/B testing (not loaded by default)
   reasoning_heavy:
-    # For complex reasoning tasks requiring more capacity
-    #id: "qwen/qwen3-30b-a3b"
-    id: "qwen/qwen3-next-80b"
-    context_length: 32768
-    quantization: "4bit"
-    max_concurrency: 1
-    default_timeout: 90
-    temperature: 0.35
-    supports_function_calling: false  # Uses text-based tool calls (ADR-0008)
+    # Deep reasoning model with bounded thinking budget (ADR-0023).
+    # thinking_budget_tokens caps thinking token spend; sampling params per Qwen3.5 thinking mode.
+    id: "qwen3.5-35b-a3b"
+    context_length: 64000  # Optimized from 128K for MVP
+    quantization: "8bit"
+    max_concurrency: 2  # Increased from 1 (smaller footprint enables parallelism)
+    default_timeout: 180  # seconds (35B model: ~40s thinking + ~30s JSON generation)
+    temperature: 0.6     # Qwen3.5 thinking mode recommended
+    top_p: 0.95          # Qwen3.5 thinking mode recommended
+    top_k: 20            # Qwen3.5 recommended (passed via extra_body)
+    thinking_budget_tokens: 3000  # Cap thinking tokens to limit over-generation (ADR-0023)
+    supports_function_calling: true
+    provider_type: "local"
     #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
     endpoint: "http://127.0.0.1:1234/v1"
 
   reasoning_baseline:
-    # Original baseline for comparison experiments
-    id: "qwen/qwen3-30b-a3b"
-    context_length: 128000
-    quantization: "5bit"
-    max_concurrency: 1
-    default_timeout: 60
-    temperature: 0.4
+    # Deep reasoning model with bounded thinking budget (ADR-0023).
+    # thinking_budget_tokens caps thinking token spend; sampling params per Qwen3.5 thinking mode.
+    id: "qwen3.5-35b-a3b"
+    context_length: 64000  # Optimized from 128K for MVP
+    quantization: "8bit"
+    max_concurrency: 2  # Increased from 1 (smaller footprint enables parallelism)
+    default_timeout: 180  # seconds (35B model: ~40s thinking + ~30s JSON generation)
+    temperature: 0.6     # Qwen3.5 thinking mode recommended
+    top_p: 0.95          # Qwen3.5 thinking mode recommended
+    top_k: 20            # Qwen3.5 recommended (passed via extra_body)
+    thinking_budget_tokens: 3000  # Cap thinking tokens to limit over-generation (ADR-0023)
+    supports_function_calling: true
+    provider_type: "local"
     #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
+    endpoint: "http://127.0.0.1:1234/v1"
 
   coding_large_context:
     # For large codebase analysis (future evaluation; high-memory MoE model)

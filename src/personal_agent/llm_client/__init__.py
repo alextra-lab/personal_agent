@@ -7,6 +7,11 @@ This module provides the LocalLLMClient for interacting with local LLM servers
 import warnings
 from typing import TYPE_CHECKING
 
+from personal_agent.llm_client.concurrency import (
+    InferenceConcurrencyController,
+    InferencePriority,
+    InferenceSlotTimeout,
+)
 from personal_agent.llm_client.cost_tracker import CostTrackerService
 from personal_agent.llm_client.tool_call_parser import parse_text_tool_calls
 from personal_agent.llm_client.types import (
@@ -57,6 +62,9 @@ __all__ = [
     "LocalLLMClient",
     "load_model_config",
     "ModelConfigError",
+    "InferenceConcurrencyController",
+    "InferencePriority",
+    "InferenceSlotTimeout",
     "LLMClientError",
     "LLMConnectionError",
     "LLMInvalidResponse",

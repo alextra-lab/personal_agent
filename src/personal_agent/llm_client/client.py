@@ -19,6 +19,11 @@ from personal_agent.llm_client.adapters import (
     adapt_chat_completions_response,
     build_chat_completions_request,
 )
+from personal_agent.llm_client.concurrency import (
+    InferenceConcurrencyController,
+    InferencePriority,
+    InferenceSlotTimeout,
+)
 from personal_agent.llm_client.models import ModelConfig, ModelDefinition
 from personal_agent.llm_client.types import (
     LLMClientError,
@@ -81,6 +86,19 @@ class LocalLLMClient:
             log.warning("model_config_load_failed", error=str(e), using_defaults=True)
             self.model_configs = {}
 
+        # Initialize concurrency controller (ADR-0029)
+        self._concurrency = InferenceConcurrencyController(
+            default_base_url=self.base_url,
+            default_endpoint_limit=2,
+        )
+        for role_name, model_def in self.model_configs.items():
+            self._concurrency.register_model(
+                role=role_name,
+                max_concurrency=model_def.max_concurrency,
+                endpoint=model_def.endpoint,
+                provider_type=model_def.provider_type,
+            )
+
         # Build timeout map per role from model configs
         # Use default_timeout from each model's config, fallback to hardcoded defaults
         self._role_timeouts: dict[ModelRole, int] = {}
@@ -113,6 +131,8 @@ class LocalLLMClient:
         reasoning_effort: str | None = None,
         trace_ctx: TraceContext | None = None,
         previous_response_id: str | None = None,
+        priority: InferencePriority = InferencePriority.USER_FACING,
+        priority_timeout: float | None = None,
         # TODO: Add governance hooks (Section 7 of spec)
         # mode: Mode | None = None,  # Current operational mode for constraint enforcement
         # governance_config: GovernanceConfig | None = None,  # Mode-aware limits
@@ -120,6 +140,7 @@ class LocalLLMClient:
         """Make a single-turn LLM call for a given model role.
 
         This method handles:
+        - Concurrency control via InferenceConcurrencyController (ADR-0029)
         - Model configuration lookup by role
         - HTTP request with timeout and retries
         - Response normalization via adapters
@@ -141,6 +162,10 @@ class LocalLLMClient:
                 supports "minimal", "low", "medium", "high". Warnings about model support are harmless.
             trace_ctx: Trace context for telemetry correlation.
             previous_response_id: ID from previous response (for /v1/responses API stateful conversation).
+            priority: Inference priority tier (ADR-0029). Controls scheduling order
+                when multiple requests compete for the same local endpoint.
+            priority_timeout: Max seconds to wait for an inference slot. None waits
+                forever. Background tasks should set a finite timeout to skip gracefully.
 
         Returns:
             LLMResponse with normalized structure.
@@ -151,12 +176,54 @@ class LocalLLMClient:
             LLMServerError: If server returns an error.
             LLMInvalidResponse: If response format is invalid.
             ModelConfigError: If model configuration is missing or invalid.
+            InferenceSlotTimeout: If priority_timeout expires before a slot is available.
         """
         # Get model configuration
         model_config: ModelDefinition | None = self.model_configs.get(role.value)
         if not model_config:
             raise ModelConfigError(f"No configuration found for role: {role.value}")
 
+        # Acquire concurrency slot (ADR-0029)
+        async with self._concurrency.request_slot(
+            role=role.value,
+            priority=priority,
+            timeout=priority_timeout,
+        ):
+            return await self._do_request(
+                role=role,
+                model_config=model_config,
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                system_prompt=system_prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                timeout_s=timeout_s,
+                max_retries=max_retries,
+                reasoning_effort=reasoning_effort,
+                trace_ctx=trace_ctx,
+                previous_response_id=previous_response_id,
+            )
+
+    async def _do_request(
+        self,
+        role: ModelRole,
+        model_config: ModelDefinition,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        response_format: dict[str, Any] | None = None,
+        system_prompt: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        timeout_s: float | None = None,
+        max_retries: int | None = None,
+        reasoning_effort: str | None = None,
+        trace_ctx: TraceContext | None = None,
+        previous_response_id: str | None = None,
+    ) -> LLMResponse:
+        """Execute the HTTP request with retries (called within concurrency slot)."""
         # Get model ID
         model_id = model_config.id
         effective_temperature = temperature

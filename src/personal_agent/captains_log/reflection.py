@@ -199,6 +199,8 @@ async def generate_reflection_entry(
             telemetry_summary=telemetry_summary,
         )
 
+        from personal_agent.llm_client.concurrency import InferencePriority
+
         # Call LLM with manual prompt (reasoning model)
         response = await llm_client.respond(
             role=ModelRole.REASONING,
@@ -207,6 +209,8 @@ async def generate_reflection_entry(
             max_tokens=3000,  # Increased for reasoning models with thinking process
             reasoning_effort="medium",  # LM Studio /v1/responses: minimal/low/medium/high
             trace_ctx=TraceContext.new_trace(),  # New trace for reflection
+            priority=InferencePriority.BACKGROUND,
+            priority_timeout=30.0,
         )
 
         # Parse LLM response (manual JSON parsing)

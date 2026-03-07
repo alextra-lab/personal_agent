@@ -1241,6 +1241,14 @@ async def step_llm_call(
         if timer:
             timer.start_span(llm_span_name)
 
+        from personal_agent.llm_client.concurrency import InferencePriority
+
+        _priority = (
+            InferencePriority.CRITICAL
+            if model_role == ModelRole.ROUTER
+            else InferencePriority.USER_FACING
+        )
+
         response = await llm_client.respond(
             role=model_role,
             messages=request_messages,
@@ -1251,6 +1259,7 @@ async def step_llm_call(
             trace_ctx=span_ctx,
             previous_response_id=ctx.last_response_id,
             max_retries=max_retries_override,
+            priority=_priority,
         )
 
         # Extract response content and tool calls

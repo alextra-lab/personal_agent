@@ -23,6 +23,40 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Generator
 
+# Prefix-to-phase mapping for span name classification. Order matters:
+# more specific prefixes (e.g. session_update, llm_call:router) before
+# generic ones (session_, llm_call:).
+_PHASE_MAP: list[tuple[str, str]] = [
+    ("session_update", "synthesis"),
+    ("session_", "setup"),
+    ("orchestrator_setup", "setup"),
+    ("context_window", "context"),
+    ("memory_query", "context"),
+    ("llm_call:router", "routing"),
+    ("routing_", "routing"),
+    ("llm_call:", "llm_inference"),
+    ("tool_execution:", "tool_execution"),
+    ("synthesis", "synthesis"),
+    ("db_append_", "persistence"),
+    ("memory_storage", "persistence"),
+]
+
+
+def _classify_phase(span_name: str) -> str:
+    """Classify a span name into a phase category for aggregation.
+
+    Args:
+        span_name: The span name (e.g. "llm_call:router", "memory_query").
+
+    Returns:
+        Phase category: setup, context, routing, llm_inference, tool_execution,
+        synthesis, persistence, or "other".
+    """
+    for prefix, phase in _PHASE_MAP:
+        if span_name.startswith(prefix):
+            return phase
+    return "other"
+
 
 @dataclass
 class TimingSpan:
@@ -30,15 +64,25 @@ class TimingSpan:
 
     Attributes:
         name: Phase name (e.g., "router_llm_call", "memory_query").
+        sequence: Monotonically increasing step number within the request.
+        phase: Phase category for aggregation (setup, context, routing, etc.).
         offset_ms: Milliseconds from request start when this span began.
         duration_ms: How long this span took in milliseconds.
         metadata: Arbitrary key-value pairs (model_role, tokens, etc.).
+        parent_sequence: Reserved for nested span parent (unpopulated).
+        span_id: Reserved for unique span ID (unpopulated).
+        depth: Reserved for nesting depth (unpopulated).
     """
 
     name: str
+    sequence: int
+    phase: str
     offset_ms: float
     duration_ms: float
     metadata: dict[str, Any] = field(default_factory=dict)
+    parent_sequence: int | None = None
+    span_id: str = ""
+    depth: int = 0
 
 
 class RequestTimer:
@@ -56,6 +100,7 @@ class RequestTimer:
         self._start_ns: int = time.monotonic_ns()
         self._spans: list[TimingSpan] = []
         self._active: dict[str, int] = {}  # name -> start_ns
+        self._sequence_counter: int = 0
 
     def _elapsed_ms(self, from_ns: int | None = None) -> float:
         """Milliseconds elapsed since a given point (or request start)."""
@@ -85,12 +130,16 @@ class RequestTimer:
         start_ns = self._active.pop(name, None)
         if start_ns is None:
             return 0.0
+        self._sequence_counter += 1
         end_ns = time.monotonic_ns()
         duration_ms = round((end_ns - start_ns) / 1_000_000, 2)
         offset_ms = round((start_ns - self._start_ns) / 1_000_000, 2)
+        phase = _classify_phase(name)
         self._spans.append(
             TimingSpan(
                 name=name,
+                sequence=self._sequence_counter,
+                phase=phase,
                 offset_ms=offset_ms,
                 duration_ms=duration_ms,
                 metadata=dict(metadata),
@@ -124,26 +173,57 @@ class RequestTimer:
             name: Event name.
             **metadata: Additional data.
         """
+        self._sequence_counter += 1
         offset_ms = round((time.monotonic_ns() - self._start_ns) / 1_000_000, 2)
+        phase = _classify_phase(name)
         self._spans.append(
-            TimingSpan(name=name, offset_ms=offset_ms, duration_ms=0.0, metadata=dict(metadata))
+            TimingSpan(
+                name=name,
+                sequence=self._sequence_counter,
+                phase=phase,
+                offset_ms=offset_ms,
+                duration_ms=0.0,
+                metadata=dict(metadata),
+            )
         )
 
     def get_total_ms(self) -> float:
         """Total milliseconds elapsed since the timer was created."""
         return round((time.monotonic_ns() - self._start_ns) / 1_000_000, 2)
 
+    def to_trace_summary(self) -> dict[str, Any]:
+        """Aggregate duration and step counts per phase for trace summaries.
+
+        Returns:
+            Dict with total_duration_ms, total_steps, and phases_summary
+            (per-phase duration_ms and steps).
+        """
+        phases: dict[str, dict[str, float | int]] = {}
+        for span in self._spans:
+            if span.phase not in phases:
+                phases[span.phase] = {"duration_ms": 0.0, "steps": 0}
+            phases[span.phase]["duration_ms"] += span.duration_ms
+            phases[span.phase]["steps"] += 1
+        return {
+            "total_duration_ms": self.get_total_ms(),
+            "total_steps": len(self._spans),
+            "phases_summary": phases,
+        }
+
     def to_breakdown(self) -> list[dict[str, Any]]:
         """Export all recorded spans as a list of dicts for ES indexing.
 
         Returns:
             List of span dicts sorted by offset_ms, plus a "total" entry.
-            Each dict has: phase, offset_ms, duration_ms, metadata.
+            Each span dict has: name, sequence, phase (category), offset_ms,
+            duration_ms, metadata.
         """
         result: list[dict[str, Any]] = []
         for span in sorted(self._spans, key=lambda s: s.offset_ms):
             entry: dict[str, Any] = {
-                "phase": span.name,
+                "name": span.name,
+                "sequence": span.sequence,
+                "phase": span.phase,
                 "offset_ms": span.offset_ms,
                 "duration_ms": span.duration_ms,
             }

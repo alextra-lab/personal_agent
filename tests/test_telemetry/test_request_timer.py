@@ -62,7 +62,7 @@ class TestRequestTimer:
             time.sleep(0.005)
 
         breakdown = timer.to_breakdown()
-        phase_names = [s["phase"] for s in breakdown]
+        phase_names = [s.get("name", s["phase"]) for s in breakdown]
         assert "phase_a" in phase_names
         assert "phase_b" in phase_names
         assert "total" in phase_names
@@ -76,8 +76,8 @@ class TestRequestTimer:
 
         breakdown = timer.to_breakdown()
         non_total = [s for s in breakdown if s["phase"] != "total"]
-        assert non_total[0]["phase"] == "first"
-        assert non_total[1]["phase"] == "second"
+        assert non_total[0]["name"] == "first"
+        assert non_total[1]["name"] == "second"
         assert non_total[0]["offset_ms"] <= non_total[1]["offset_ms"]
 
     def test_to_breakdown_total_entry(self) -> None:
@@ -141,18 +141,60 @@ class TestRequestTimer:
             pass
 
         breakdown = timer.to_breakdown()
-        llm_phase = next(s for s in breakdown if s["phase"] == "llm_call")
+        llm_phase = next(s for s in breakdown if s.get("name") == "llm_call")
         assert "metadata" in llm_phase
         assert llm_phase["metadata"]["model_role"] == "router"
         assert llm_phase["metadata"]["tokens"] == 500
+
+    def test_each_span_has_sequence_and_phase(self) -> None:
+        timer = RequestTimer(trace_id="test-trace")
+        with timer.span("context_window"):
+            time.sleep(0.005)
+        with timer.span("llm_call:router"):
+            time.sleep(0.005)
+        with timer.span("tool_execution:1"):
+            pass
+
+        breakdown = timer.to_breakdown()
+        non_total = [s for s in breakdown if s.get("phase") != "total"]
+        sequences = [s["sequence"] for s in non_total]
+        assert sequences == [1, 2, 3]
+        assert non_total[0]["phase"] == "context"
+        assert non_total[1]["phase"] == "routing"
+        assert non_total[2]["phase"] == "tool_execution"
+
+    def test_to_trace_summary_aggregates_by_phase(self) -> None:
+        timer = RequestTimer(trace_id="test-trace")
+        with timer.span("context_window"):
+            time.sleep(0.01)
+        with timer.span("memory_query"):
+            time.sleep(0.01)
+        with timer.span("llm_call:standard"):
+            time.sleep(0.005)
+
+        summary = timer.to_trace_summary()
+        assert summary["total_steps"] == 3
+        assert "phases_summary" in summary
+        context = summary["phases_summary"].get("context", {})
+        assert context["steps"] == 2
+        assert context["duration_ms"] >= 20.0
+        assert summary["phases_summary"].get("llm_inference", {}).get("steps") == 1
 
 
 class TestTimingSpan:
     """Tests for TimingSpan dataclass."""
 
     def test_create(self) -> None:
-        span = TimingSpan(name="test", offset_ms=100.0, duration_ms=50.0)
+        span = TimingSpan(
+            name="test",
+            sequence=1,
+            phase="other",
+            offset_ms=100.0,
+            duration_ms=50.0,
+        )
         assert span.name == "test"
+        assert span.sequence == 1
+        assert span.phase == "other"
         assert span.offset_ms == 100.0
         assert span.duration_ms == 50.0
         assert span.metadata == {}
@@ -160,6 +202,8 @@ class TestTimingSpan:
     def test_with_metadata(self) -> None:
         span = TimingSpan(
             name="llm",
+            sequence=1,
+            phase="llm_inference",
             offset_ms=0,
             duration_ms=1000,
             metadata={"model": "router", "tokens": 250},

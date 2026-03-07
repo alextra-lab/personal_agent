@@ -1,10 +1,13 @@
 """Elasticsearch logger for structured events."""
 
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from elasticsearch import AsyncElasticsearch
+if TYPE_CHECKING:
+    from elasticsearch import AsyncElasticsearch
+else:
+    AsyncElasticsearch = Any  # noqa: A001
 
 from personal_agent.telemetry import get_logger
 
@@ -33,8 +36,10 @@ class ElasticsearchLogger:
             True if connected successfully
         """
         try:
+            from elasticsearch import AsyncElasticsearch as ESClient
+
             # Configure connection pool and timeouts to prevent connection exhaustion
-            self.client = AsyncElasticsearch(
+            self.client = ESClient(
                 [self.es_url],
                 request_timeout=30,  # Allow slower local ES under heavy concurrent writes
                 max_retries=2,  # Retry failed requests twice
@@ -234,8 +239,9 @@ class ElasticsearchLogger:
 
         Args:
             trace_id: Trace ID for the completed request.
-            breakdown: Result of RequestTimer.to_breakdown() — list of phase
-                dicts with phase, offset_ms, duration_ms, and optional metadata.
+            breakdown: Result of RequestTimer.to_breakdown() — list of span
+                dicts with name, sequence, phase (category), offset_ms,
+                duration_ms, metadata; plus a "total" entry.
             session_id: Optional session ID for filtering.
             total_ms: Total request duration in milliseconds.
 
@@ -259,7 +265,9 @@ class ElasticsearchLogger:
             "total_duration_ms": total_ms,
             "phases": [
                 {
-                    "phase": p["phase"],
+                    "name": p.get("name"),
+                    "sequence": p.get("sequence"),
+                    "phase": p.get("phase"),
                     "offset_ms": p.get("offset_ms"),
                     "duration_ms": p.get("duration_ms"),
                     "metadata": p.get("metadata"),
@@ -279,15 +287,19 @@ class ElasticsearchLogger:
 
             # Flat per-phase documents for Kibana terms/avg aggregation
             for phase_row in breakdown:
-                phase_name = phase_row.get("phase")
-                if phase_name is None or phase_name == "total":
+                if phase_row.get("phase") == "total":
+                    continue
+                span_name = phase_row.get("name")
+                if span_name is None:
                     continue
                 flat_doc: dict[str, Any] = {
                     "@timestamp": ts,
                     "event_type": "request_timing_phase",
                     "trace_id": trace_id,
                     "session_id": session_id,
-                    "phase": phase_name,
+                    "phase": span_name,
+                    "phase_category": phase_row.get("phase"),
+                    "sequence": phase_row.get("sequence"),
                     "offset_ms": phase_row.get("offset_ms"),
                     "duration_ms": phase_row.get("duration_ms"),
                     "total_duration_ms": total_ms,
@@ -295,7 +307,8 @@ class ElasticsearchLogger:
                 meta = phase_row.get("metadata")
                 if meta:
                     flat_doc["phase_metadata"] = meta
-                flat_id = f"timing_{trace_id}_{phase_name}"
+                seq = phase_row.get("sequence", 0)
+                flat_id = f"timing_{trace_id}_{seq}_{span_name}"
                 try:
                     await self.client.index(
                         index=index_name,
@@ -307,7 +320,7 @@ class ElasticsearchLogger:
                         "elasticsearch_index_failed",
                         index=index_name,
                         event="request_timing_phase",
-                        phase=phase_name,
+                        phase=span_name,
                         error=str(flat_e),
                     )
 

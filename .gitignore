@@ -70,4 +70,7 @@ telemetry/evaluation/evaluation_results*.json
 .env.test
 # Note: .env.example is tracked as a template
 
+# Experiment results (environment-specific, regeneratable)
+experiments/*/results/
+
 current_session

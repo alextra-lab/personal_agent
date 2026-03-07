@@ -68,7 +68,7 @@ models:
     id: "qwen3.5-35b-a3b"
     context_length: 64000  # Optimized from 128K for MVP
     quantization: "8bit"
-    max_concurrency: 2  # Increased from 1 (smaller footprint enables parallelism)
+    max_concurrency: 1  # Increased from 1 (smaller footprint enables parallelism)
     default_timeout: 180  # seconds (35B model: ~40s thinking + ~30s JSON generation)
     temperature: 0.6     # Qwen3.5 thinking mode recommended
     top_p: 0.95          # Qwen3.5 thinking mode recommended
@@ -85,7 +85,7 @@ models:
     id: "qwen3.5-4b-mxfp8-mlx"
     context_length: 32768
     quantization: "8bit"
-    max_concurrency: 2
+    max_concurrency: 1
     default_timeout: 45  # seconds
     temperature: 0.2
     disable_thinking: true
@@ -101,7 +101,7 @@ models:
     id: "qwen3.5-35b-a3b"
     context_length: 64000  # Optimized from 128K for MVP
     quantization: "8bit"
-    max_concurrency: 2  # Increased from 1 (smaller footprint enables parallelism)
+    max_concurrency: 1  # Increased from 1 (smaller footprint enables parallelism)
     default_timeout: 180  # seconds (35B model: ~40s thinking + ~30s JSON generation)
     temperature: 0.6     # Qwen3.5 thinking mode recommended
     top_p: 0.95          # Qwen3.5 thinking mode recommended

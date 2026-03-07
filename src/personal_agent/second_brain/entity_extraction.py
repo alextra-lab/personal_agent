@@ -49,6 +49,8 @@ EXTRACTION RULES (follow strictly):
 3. NEVER extract internal tool binding names that start with "mcp_" (e.g. mcp_perplexity_ask,
    mcp_docker, mcp_search, mcp_fetch_content) — extract the underlying service instead
    (e.g. "Perplexity" not "mcp_perplexity_ask", "Docker" not "mcp_docker")
+   NEVER extract the native tool name "search_memory" as an entity — it is an internal
+   capability, not user-discussed content (ADR-0026).
 4. NEVER extract ephemeral data values as entities: temperatures ("7°C", "53°F"), dates used
    only as context ("March 6, 2026"), sky conditions ("Partly sunny"), generic time references
 5. ONLY extract entities with knowledge recall value: would knowing this be useful in a future conversation?
@@ -73,6 +75,7 @@ BAD EXAMPLES (never produce these):
   ✗ {{"name": "Assistant", "type": "Person", ...}}
   ✗ {{"name": "mcp_perplexity_ask", "type": "Technology", ...}}  ← use "Perplexity" instead
   ✗ {{"name": "mcp_docker", "type": "Technology", ...}}           ← use "Docker" instead
+  ✗ {{"name": "search_memory", "type": "Technology", ...}}        ← internal tool, not an entity
   ✗ {{"name": "7°C", "type": "Concept", ...}}                    ← ephemeral data value
   ✗ {{"name": "Météo-France", ...}}                               ← use "Météo France" (no hyphen)
   ✗ {{"name": "Test message", "type": "Message", ...}}

@@ -290,8 +290,13 @@ class ToolExecutionLayer:
         start_time = time.time()
 
         try:
-            # Execute tool (async or sync executor)
+            # Execute tool (async or sync executor). Pass ctx to executors that accept it.
             import inspect
+
+            sig = inspect.signature(executor)
+            pass_ctx = "ctx" in sig.parameters
+            if pass_ctx:
+                filtered_arguments = {**filtered_arguments, "ctx": trace_ctx}
 
             if inspect.iscoroutinefunction(executor):
                 result = await executor(**filtered_arguments)

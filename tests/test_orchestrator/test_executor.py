@@ -1,11 +1,14 @@
 """Tests for orchestrator executor and state machine."""
 
 import json
-from unittest.mock import AsyncMock, patch
+import sys
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from personal_agent.governance.models import Mode
+from personal_agent.memory.models import MemoryQueryResult, TurnNode
 from personal_agent.orchestrator import Channel, Orchestrator
 from personal_agent.orchestrator.executor import (
     _extract_entity_type_hints,
@@ -587,3 +590,77 @@ class TestToolUsingFlow:
         if tool_steps:
             # Tool step should exist even if tool failed
             assert "tool_name" in tool_steps[0]["metadata"]
+
+    @patch("personal_agent.orchestrator.executor.LocalLLMClient")
+    @pytest.mark.asyncio
+    async def test_search_memory_tool_called_when_llm_requests_it(self, mock_client_class):
+        """Integration: agent executes search_memory when LLM returns that tool call (ADR-0026)."""
+        mock_client = AsyncMock()
+        mock_client_class.return_value = mock_client
+        # Provide model_configs so executor can access model_config.id during synthesis
+        mock_client.model_configs = {
+            "REASONING": MagicMock(id="reasoning-model"),
+        }
+
+        turn = TurnNode(
+            turn_id="turn-athens",
+            timestamp=datetime.now(timezone.utc),
+            user_message="I want to visit Athens",
+            summary="User asked about Athens",
+            key_entities=["Athens"],
+        )
+        query_result = MemoryQueryResult(conversations=[turn], entities=[])
+        mock_memory = MagicMock()
+        mock_memory.connected = True
+        mock_memory.query_memory = AsyncMock(return_value=query_result)
+
+        fake_app = MagicMock()
+        fake_app.memory_service = mock_memory
+
+        mock_response_with_tools = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_search",
+                    "name": "search_memory",
+                    "arguments": json.dumps({"query_text": "Athens", "entity_names": ["Athens"]}),
+                }
+            ],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 100},
+            "raw": {},
+        }
+        synthesis_response = {
+            "role": "assistant",
+            "content": "You have discussed Athens before (travel).",
+            "tool_calls": [],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 150},
+            "raw": {},
+        }
+        mock_client.respond.side_effect = [mock_response_with_tools, synthesis_response]
+
+        with patch.dict(sys.modules, {"personal_agent.service.app": fake_app}):
+            orchestrator = Orchestrator()
+            result = await orchestrator.handle_user_request(
+                session_id="test-session",
+                user_message="Before answering, check if I've discussed Athens before.",
+                mode=Mode.NORMAL,
+                channel=Channel.SYSTEM_HEALTH,
+            )
+
+        tool_steps = [s for s in result["steps"] if s["type"] == "tool_call"]
+        assert len(tool_steps) >= 1, "Expected at least one tool_call step"
+        search_steps = [s for s in tool_steps if s["metadata"].get("tool_name") == "search_memory"]
+        assert len(search_steps) == 1, "Expected exactly one search_memory tool call"
+        assert search_steps[0]["metadata"].get("success") is True
+
+        # Synthesis call should have received tool result with matched_turns
+        assert mock_client.respond.call_count >= 2
+        second_call = mock_client.respond.call_args_list[1]
+        messages = second_call.kwargs.get("messages", [])
+        tool_messages = [m for m in messages if m.get("role") == "tool"]
+        assert len(tool_messages) >= 1
+        content = tool_messages[0].get("content", "")
+        assert "matched_turns" in content or "entity_match" in content

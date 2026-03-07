@@ -13,6 +13,10 @@ from personal_agent.tools.filesystem import (
     read_file_executor,
     read_file_tool,
 )
+from personal_agent.tools.memory_search import (
+    search_memory_executor,
+    search_memory_tool,
+)
 from personal_agent.tools.registry import ToolRegistry
 from personal_agent.tools.system_health import (
     system_metrics_snapshot_executor,
@@ -41,6 +45,7 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
     - read_file: Read file contents
     - list_directory: List directory contents
     - system_metrics_snapshot: Get system health metrics
+    - search_memory: Query memory graph (ADR-0026)
 
     Args:
         registry: Tool registry to register tools with.
@@ -48,6 +53,7 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
     registry.register(read_file_tool, read_file_executor)
     registry.register(list_directory_tool, list_directory_executor)
     registry.register(system_metrics_snapshot_tool, system_metrics_snapshot_executor)
+    registry.register(search_memory_tool, search_memory_executor)
 
 
 # Global singleton registry

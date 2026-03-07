@@ -215,3 +215,25 @@ def test_get_tool_definitions_for_llm() -> None:
     assert "max_size" in llm_tool["function"]["parameters"]["properties"]
     assert "path" in llm_tool["function"]["parameters"]["required"]
     assert "max_size" not in llm_tool["function"]["parameters"]["required"]
+
+
+def test_default_registry_includes_search_memory() -> None:
+    """Test get_default_registry includes search_memory (ADR-0026)."""
+    from personal_agent.tools import get_default_registry
+
+    registry = get_default_registry()
+    names = registry.list_tool_names()
+    assert "search_memory" in names
+
+
+def test_search_memory_in_llm_tool_definitions() -> None:
+    """Test search_memory appears in get_tool_definitions_for_llm output."""
+    from personal_agent.tools import get_default_registry
+
+    registry = get_default_registry()
+    llm_tools = registry.get_tool_definitions_for_llm()
+    names = [t["function"]["name"] for t in llm_tools if t.get("type") == "function"]
+    assert "search_memory" in names
+    search_memory_def = next(t for t in llm_tools if t["function"]["name"] == "search_memory")
+    assert "query_text" in search_memory_def["function"]["parameters"]["properties"]
+    assert "query_text" in search_memory_def["function"]["parameters"]["required"]

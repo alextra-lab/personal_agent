@@ -4,6 +4,22 @@
 **Projects:** 2.3 Homeostasis & Feedback, 2.6 Conversational Agent MVP
 **Date:** 2026-02-23
 
+## Status (updated from commits and code)
+
+| Task | Title | Linear | Status |
+|------|--------|--------|--------|
+| 1 | CLI `--new` Flag Bug Fix | FRE-39 | ✅ Done (7a5d98d) |
+| 2 | CLI `--compress` Flag | FRE-40 | Not started |
+| 3 | Request Traceability — Data Model | FRE-41 | ✅ Done (4a4b24d) |
+| 4 | Request Traceability — ES Indexing | FRE-42 | ✅ Done (this session) |
+| 5 | Request Traceability — Kibana Dashboard | FRE-43 | Not started |
+| 6 | Metrics Daemon | FRE-44 | Not started |
+| 7 | Context Window Optimization | FRE-46 | Not started |
+| 8 | Kibana Field Mapping Fix | FRE-45 | ✅ Done (this session) |
+| 9 | State Transition Logging Fix | FRE-47 | Not started |
+
+**Next sequential:** Task 4 (FRE-42), then Task 8 (FRE-45) per priority.
+
 ---
 
 ## Task 1: CLI `--new` Flag Bug Fix

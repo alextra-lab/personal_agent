@@ -2,20 +2,76 @@
 """Create Kibana dashboards for personal_agent telemetry.
 
 Usage:
-    python config/kibana/setup_dashboards.py [--kibana-url http://localhost:5601]
+    python config/kibana/setup_dashboards.py [--kibana-url http://localhost:5601] [--es-url http://localhost:9200]
 
-Creates dashboards using Kibana saved objects API with agg-based visualizations
-that match the actual event types indexed into agent-logs-*.
+Creates an ES index template (agent-logs-template) so key fields are mapped as
+keyword for Kibana terms aggregations, then creates dashboards using the Kibana
+saved objects API.
 """
 
 import argparse
 import json
 import sys
+import urllib.error
 import urllib.request
 from typing import Any
 
 KIBANA_URL = "http://localhost:5601"
+ES_URL = "http://localhost:9200"
 DATA_VIEW_ID = "agent-logs-pattern"
+
+
+def create_index_template(es_url: str) -> bool:
+    """Create ES index template so agent-logs-* fields are keyword for Kibana.
+
+    Ensures event_type, trace_id, session_id, phase, name, role, model_id,
+    from_state, to_state, delegated_role, component are mapped as keyword
+    (required for Kibana terms aggregations). Template only applies to new
+    indices; existing data may need reindex or wait for next daily rollover.
+
+    Returns:
+        True if template was applied successfully.
+    """
+    template = {
+        "index_patterns": ["agent-logs-*"],
+        "template": {
+            "mappings": {
+                "properties": {
+                    "event_type": {"type": "keyword"},
+                    "trace_id": {"type": "keyword"},
+                    "session_id": {"type": "keyword"},
+                    "phase": {"type": "keyword"},
+                    "name": {"type": "keyword"},
+                    "role": {"type": "keyword"},
+                    "model_id": {"type": "keyword"},
+                    "from_state": {"type": "keyword"},
+                    "to_state": {"type": "keyword"},
+                    "delegated_role": {"type": "keyword"},
+                    "component": {"type": "keyword"},
+                }
+            }
+        },
+    }
+    url = f"{es_url.rstrip('/')}/_index_template/agent-logs-template"
+    data = json.dumps(template).encode()
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="PUT",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status in (200, 201):
+                print("  [OK] Index template agent-logs-template applied")
+                return True
+            return False
+    except urllib.error.HTTPError as e:
+        print(f"  ERROR ES index template: {e.code} {e.read().decode()[:200]}", file=sys.stderr)
+        return False
+    except OSError as e:
+        print(f"  ERROR ES connection: {e}", file=sys.stderr)
+        return False
 
 
 def _api(method: str, path: str, body: dict[str, Any] | list | None = None) -> Any:
@@ -165,7 +221,7 @@ def create_llm_performance() -> None:
                 "enabled": True,
                 "type": "terms",
                 "schema": "group",
-                "params": {"field": "role.keyword", "size": 5, "order": "desc", "orderBy": "1"},
+                "params": {"field": "role", "size": 5, "order": "desc", "orderBy": "1"},
             },
         ],
     )
@@ -189,7 +245,7 @@ def create_llm_performance() -> None:
                 "enabled": True,
                 "type": "terms",
                 "schema": "segment",
-                "params": {"field": "role.keyword", "size": 10, "order": "desc", "orderBy": "1"},
+                "params": {"field": "role", "size": 10, "order": "desc", "orderBy": "1"},
             },
         ],
     )
@@ -239,7 +295,7 @@ def create_llm_performance() -> None:
                 "type": "terms",
                 "schema": "segment",
                 "params": {
-                    "field": "model_id.keyword",
+                    "field": "model_id",
                     "size": 10,
                     "order": "desc",
                     "orderBy": "1",
@@ -292,7 +348,7 @@ def create_llm_performance() -> None:
                 "enabled": True,
                 "type": "terms",
                 "schema": "segment",
-                "params": {"field": "role.keyword", "size": 10, "order": "desc", "orderBy": "_key"},
+                "params": {"field": "role", "size": 10, "order": "desc", "orderBy": "_key"},
             },
         ],
     )
@@ -337,7 +393,7 @@ def create_request_timing() -> None:
                 "enabled": True,
                 "type": "terms",
                 "schema": "segment",
-                "params": {"field": "phase.keyword", "size": 20, "order": "desc", "orderBy": "1"},
+                "params": {"field": "phase", "size": 20, "order": "desc", "orderBy": "1"},
             },
         ],
     )
@@ -399,7 +455,7 @@ def create_request_timing() -> None:
                 "enabled": True,
                 "type": "terms",
                 "schema": "bucket",
-                "params": {"field": "phase.keyword", "size": 30, "order": "desc", "orderBy": "1"},
+                "params": {"field": "phase", "size": 30, "order": "desc", "orderBy": "1"},
             },
         ],
         {"perPage": 25, "showPartialRows": False, "showMetricsAtAllLevels": False},
@@ -495,7 +551,7 @@ def create_system_health() -> None:
                 "type": "terms",
                 "schema": "segment",
                 "params": {
-                    "field": "from_state.keyword",
+                    "field": "from_state",
                     "size": 10,
                     "order": "desc",
                     "orderBy": "1",
@@ -611,7 +667,7 @@ def create_task_analytics() -> None:
                 "type": "terms",
                 "schema": "segment",
                 "params": {
-                    "field": "delegated_role.keyword",
+                    "field": "delegated_role",
                     "size": 10,
                     "order": "desc",
                     "orderBy": "1",
@@ -674,13 +730,16 @@ def create_task_analytics() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create Kibana dashboards for personal_agent")
     parser.add_argument("--kibana-url", default="http://localhost:5601")
+    parser.add_argument("--es-url", default="http://localhost:9200", help="Elasticsearch URL for index template")
     args = parser.parse_args()
 
-    global KIBANA_URL
+    global KIBANA_URL, ES_URL
     KIBANA_URL = args.kibana_url
+    ES_URL = args.es_url
 
     print(f"Creating dashboards at {KIBANA_URL}")
     print(f"Data view: {DATA_VIEW_ID}")
+    create_index_template(ES_URL)
 
     create_llm_performance()
     create_request_timing()

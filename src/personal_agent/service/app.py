@@ -447,11 +447,10 @@ async def chat(
     # Index to Elasticsearch (non-blocking)
     if es_handler and getattr(es_handler, "_connected", False):
         asyncio.create_task(
-            es_handler.es_logger.index_request_timing(
+            es_handler.es_logger.index_request_trace(
                 trace_id=trace_id,
-                breakdown=breakdown,
+                timer=timer,
                 session_id=str(session.session_id),
-                total_ms=total_ms,
             )
         )
 

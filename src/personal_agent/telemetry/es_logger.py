@@ -6,6 +6,7 @@ from uuid import UUID
 
 if TYPE_CHECKING:
     from elasticsearch import AsyncElasticsearch
+    from personal_agent.telemetry.request_timer import RequestTimer
 else:
     AsyncElasticsearch = Any  # noqa: A001
 
@@ -225,103 +226,96 @@ class ElasticsearchLogger:
             log.error("elasticsearch_search_failed", error=str(e))
             return []
 
-    async def index_request_timing(
+    async def index_request_trace(
         self,
         trace_id: str,
-        breakdown: list[dict[str, Any]],
+        timer: "RequestTimer",
         session_id: str | None = None,
-        total_ms: float | None = None,
     ) -> str | None:
-        """Index a span-based request timing breakdown for Kibana dashboarding.
+        """Index request trace summary and per-step documents for Kibana.
 
-        This indexes both a nested document (for single-trace drill-down) and
-        flat per-phase documents (for cross-request aggregation in Kibana).
+        One request_trace document (summary) and one request_trace_step per
+        completed span. Document IDs are idempotent: trace_{trace_id},
+        trace_{trace_id}_step_{sequence}.
 
         Args:
             trace_id: Trace ID for the completed request.
-            breakdown: Result of RequestTimer.to_breakdown() — list of span
-                dicts with name, sequence, phase (category), offset_ms,
-                duration_ms, metadata; plus a "total" entry.
+            timer: RequestTimer after request completion (to_trace_summary
+                and spans used).
             session_id: Optional session ID for filtering.
-            total_ms: Total request duration in milliseconds.
 
         Returns:
-            Document ID if successful, None otherwise.
+            Document ID of the request_trace doc if successful, None otherwise.
         """
         if not self.client:
             return None
-        if not breakdown:
+
+        from personal_agent.telemetry.request_timer import RequestTimer as RT
+
+        if not isinstance(timer, RT):
+            log.warning("index_request_trace_invalid_timer", trace_id=trace_id)
             return None
 
+        summary = timer.to_trace_summary()
+        total_duration_ms = summary.get("total_duration_ms") or timer.get_total_ms()
         ts = datetime.utcnow().isoformat()
         index_name = self._get_index_name()
 
-        # Nested document with all phases
-        doc: dict[str, Any] = {
+        # One request_trace summary document
+        trace_doc: dict[str, Any] = {
             "@timestamp": ts,
-            "event_type": "request_timing",
+            "event_type": "request_trace",
             "trace_id": trace_id,
             "session_id": session_id,
-            "total_duration_ms": total_ms,
-            "phases": [
-                {
-                    "name": p.get("name"),
-                    "sequence": p.get("sequence"),
-                    "phase": p.get("phase"),
-                    "offset_ms": p.get("offset_ms"),
-                    "duration_ms": p.get("duration_ms"),
-                    "metadata": p.get("metadata"),
-                }
-                for p in breakdown
-                if p.get("phase") != "total"
-            ],
+            "total_duration_ms": total_duration_ms,
+            "total_steps": summary.get("total_steps", 0),
+            "phases_summary": summary.get("phases_summary") or {},
         }
 
         try:
             result = await self.client.index(
                 index=index_name,
-                document=doc,
-                id=f"timing_{trace_id}",
+                document=trace_doc,
+                id=f"trace_{trace_id}",
             )
             doc_id = str(result["_id"])
 
-            # Flat per-phase documents for Kibana terms/avg aggregation
-            for phase_row in breakdown:
-                if phase_row.get("phase") == "total":
+            # One request_trace_step per span (from to_breakdown, skip "total" row)
+            breakdown = timer.to_breakdown()
+            for entry in breakdown:
+                if entry.get("phase") == "total":
                     continue
-                span_name = phase_row.get("name")
-                if span_name is None:
-                    continue
-                flat_doc: dict[str, Any] = {
+                step_doc: dict[str, Any] = {
                     "@timestamp": ts,
-                    "event_type": "request_timing_phase",
+                    "event_type": "request_trace_step",
                     "trace_id": trace_id,
                     "session_id": session_id,
-                    "phase": span_name,
-                    "phase_category": phase_row.get("phase"),
-                    "sequence": phase_row.get("sequence"),
-                    "offset_ms": phase_row.get("offset_ms"),
-                    "duration_ms": phase_row.get("duration_ms"),
-                    "total_duration_ms": total_ms,
+                    "sequence": entry.get("sequence", 0),
+                    "phase": entry.get("phase", ""),
+                    "name": entry.get("name", ""),
+                    "offset_ms": entry.get("offset_ms", 0.0),
+                    "duration_ms": entry.get("duration_ms", 0.0),
+                    "total_duration_ms": total_duration_ms,
                 }
-                meta = phase_row.get("metadata")
-                if meta:
-                    flat_doc["phase_metadata"] = meta
-                seq = phase_row.get("sequence", 0)
-                flat_id = f"timing_{trace_id}_{seq}_{span_name}"
+                meta = entry.get("metadata")
+                if meta and isinstance(meta, dict):
+                    for k, v in meta.items():
+                        if k not in step_doc and v is not None:
+                            step_doc[k] = v
+                step_id = f"trace_{trace_id}_step_{entry.get('sequence', 0)}"
                 try:
                     await self.client.index(
                         index=index_name,
-                        document=flat_doc,
-                        id=flat_id,
+                        document=step_doc,
+                        id=step_id,
                     )
-                except Exception as flat_e:
+                except Exception as step_e:
                     log.warning(
                         "elasticsearch_index_failed",
                         index=index_name,
-                        event="request_timing_phase",
-                        phase=span_name,
-                        error=str(flat_e),
+                        event="request_trace_step",
+                        sequence=entry.get("sequence"),
+                        error=str(step_e),
                     )
 
             return doc_id
@@ -329,7 +323,7 @@ class ElasticsearchLogger:
             log.warning(
                 "elasticsearch_index_failed",
                 index=index_name,
-                event="request_timing",
+                event="request_trace",
                 error=str(e),
             )
             return None

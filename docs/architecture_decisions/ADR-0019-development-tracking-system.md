@@ -1,9 +1,9 @@
 # ADR-0019: Development Tracking and Plan Management System
 
-**Status**: Proposed
+**Status**: Accepted
 **Date**: 2026-02-22
 **Deciders**: System Architect
-**Related**: All ADRs (tracking their status), IMPLEMENTATION_ROADMAP.md
+**Related**: All ADRs (tracking their status), `docs/plans/MASTER_PLAN.md`
 
 ---
 
@@ -14,7 +14,7 @@
 The project has strong documentation (16+ ADRs, 23 architecture specs, detailed session logs, phase plans) but lacks a **living, queryable development tracker**. This creates real pain:
 
 | Symptom | Impact |
-|---------|--------|
+| ------- | ------ |
 | ADR statuses are stale | Many marked "Proposed" despite accepted implementations |
 | Phase docs conflict | Completion docs say "testing pending" but session logs show 86% pass rate |
 | ADR-0008 numbering collision | Two files share the same number |
@@ -34,61 +34,57 @@ The project has strong documentation (16+ ADRs, 23 architecture specs, detailed 
 
 ## 2. Decision
 
-### Adopt a **markdown-based dev tracker** in the repo as the primary tracking system, with optional **Linear** integration for visual project management.
+### Adopt **Linear as the primary planning/tracking system**, with markdown docs in-repo as the implementation source of truth and offline fallback
 
-### 2.1 Primary: Markdown Dev Tracker (`docs/plans/DEV_TRACKER.md`)
+### 2.1 Primary: Linear (issue lifecycle + prioritization)
 
-A single markdown file that serves as the project's status dashboard:
+Linear is the canonical source for:
 
-**Structure:**
-- Quick Status (phase table)
-- Active Work Items (in progress + ready to start)
-- Backlog (prioritized future work)
-- Completed Milestones (archive)
-- Documentation Debt (known inconsistencies)
-- Decision Log (quick-reference ADR history)
+- Work status (`Needs Approval` -> `Approved` -> `In Progress` -> `Done`)
+- Prioritization and sequencing
+- Cross-project visibility and stream dashboards
+- Assignment, milestones, and blocking relationships
 
 **Properties:**
-- Lives in the repo → always available to Cursor agents
-- Version-controlled → history of project evolution
-- Human-readable → no tooling required to access
-- Markdown tables → structured enough for parsing, readable enough for scanning
-- Single file → one place to look, not scattered across docs
 
-### 2.2 Optional: Linear Integration
+- Structured and queryable via MCP from Cursor agents
+- Provides workflow state transitions and board views that markdown cannot
+- Single canonical tracker to prevent split-brain planning
 
-Linear provides:
-- Visual board/timeline views
-- Sprint planning
-- Mobile access
-- Team collaboration (future)
+### 2.2 Source docs in repo: Specs/ADRs/Plans (implementation truth)
 
-**Integration path**: Linear has an official Cursor MCP integration (`https://mcp.linear.app/mcp`) that allows Cursor agents to create, update, and query issues via natural language. This means the AI agent can sync between the markdown tracker and Linear.
+Markdown documentation remains authoritative for implementation detail and architectural rationale:
 
-**When to adopt Linear**: When either (a) the markdown tracker becomes insufficient (>50 active items, need filtering/sorting beyond what markdown provides), or (b) collaborators join the project.
+- `docs/specs/` -> what to build
+- `docs/architecture_decisions/` -> why we build it this way
+- `docs/plans/` -> strategic and phase planning context
+
+`docs/plans/DEV_TRACKER.md` is retained as a lightweight fallback and project index when Linear MCP is unavailable.
 
 ### 2.3 Maintenance Protocol
 
 | Trigger | Action |
-|---------|--------|
-| Starting a dev session | Read `DEV_TRACKER.md` for context |
-| Completing a work item | Move to "Completed Milestones", update "Quick Status" |
-| New work identified | Add to "Backlog" with phase and priority |
-| ADR written or status changed | Update "Decision Log" |
-| Documentation inconsistency found | Add to "Documentation Debt" |
-| Phase completed | Update "Quick Status" table, archive milestone items |
-| Monthly | Review backlog priorities, archive old completed items |
+| ------- | ------ |
+| Starting a dev session | Query Linear (`list_projects`, `list_issues state:"Approved"`) for current implementable work |
+| Completing a work item | Update the issue in Linear (`Done`) and link/refresh implementation evidence in docs as needed |
+| Completing a Linear issue | Set issue state to `Done` in Linear |
+| New work identified | Create Linear issue in `Needs Approval` with `PersonalAgent` label and spec/ADR links |
+| ADR written or status changed | Update ADR status in-repo and ensure relevant Linear issues reference the ADR |
+| Documentation inconsistency found | Create/update a Linear issue to track the fix and link affected docs |
+| Phase completed | Close associated Linear issues/milestones and update phase summary docs |
+| Monthly | Review backlog priorities in Linear; prune stale or superseded issues |
 
 ### 2.4 Cursor Agent Integration
 
-The tracker is designed for AI agent consumption:
+The tracking workflow is designed for AI agent consumption:
 
-```
+```text
 Session Start Protocol:
-1. Read docs/plans/DEV_TRACKER.md        → "Where are we?"
-2. Read docs/plans/IMPLEMENTATION_ROADMAP.md → "What's the plan?"
-3. Read relevant PHASE_*.md              → "What are the details?"
-4. Read relevant ADRs                     → "What are the constraints?"
+1. Query Linear Approved work (`list_issues`) -> "What can be implemented now?"
+2. Read the selected issue (`get_issue`) -> "What exactly is requested?"
+3. Read linked spec/plan docs -> "What are the implementation details?"
+4. Read relevant ADRs -> "What are the architectural constraints?"
+5. If Linear MCP is unavailable, use `docs/plans/DEV_TRACKER.md` as fallback
 ```
 
 This can be encoded as a Cursor rule (`.cursor/rules/`) to ensure agents always orient before working.
@@ -113,13 +109,13 @@ Full-featured workspace with databases, views, and collaboration.
 - **Cons**: SaaS dependency, not in-repo, requires network, data sovereignty concern (conflicts with project's local-sovereignty principle), MCP integration exists but less mature than Linear
 - **Rejected because**: Violates local sovereignty; data lives on Notion's servers. Also adds a heavyweight tool for a single-developer project.
 
-### Alternative C: Linear Only (No Markdown)
+### Alternative C: Markdown Only (No Linear)
 
-Use Linear as the single source of truth.
+Use markdown files (`DEV_TRACKER.md`) as the only tracker.
 
-- **Pros**: Excellent UI, keyboard-driven, great API, official Cursor MCP integration
-- **Cons**: SaaS dependency, not available offline, requires network for every query, AI agent needs MCP call for every status check (latency), data not in repo
-- **Rejected because**: AI agent needs instant, zero-latency access to project status. Markdown is always there. Linear is a good *complement*, not a good *replacement*.
+- **Pros**: Fully local, version-controlled, zero network dependency
+- **Cons**: Poor filtering/sorting, no true workflow states, no native board/timeline views, higher manual overhead
+- **Rejected because**: It does not scale for active planning and creates drift risk versus issue workflow.
 
 ### Alternative D: Dedicated Open-Source Tool (Plane, Taiga, Focalboard)
 
@@ -135,23 +131,21 @@ Self-host an open-source project management tool.
 
 ### Positive
 
-- **Zero-latency context recovery**: Agents read one file, know where we are
-- **No new infrastructure**: Just a markdown file in the repo
-- **Version-controlled**: Can diff project status over time
-- **Low maintenance**: Update when things change, not on a schedule
-- **Composable**: Can add Linear later without replacing the markdown tracker
-- **Agent-friendly**: Designed explicitly for AI agent consumption
+- **Single planning truth**: All execution status lives in one system (Linear)
+- **Agent operability**: Cursor agents can query implementable approved work directly
+- **Workflow rigor**: Approval gates and explicit state transitions reduce accidental execution
+- **Docs remain authoritative**: Specs/ADRs stay in-repo and version controlled
 
 ### Negative
 
-- **Manual maintenance**: Must be updated by human or AI agent (not auto-synced from code)
-- **Limited views**: Markdown tables don't provide filtering, sorting, or timeline views (Linear fills this gap if needed)
-- **Single-developer assumption**: Doesn't scale to teams without adding Linear or similar
+- **MCP dependency**: Issue operations depend on Linear availability and network access
+- **Dual-surface discipline needed**: Status in Linear, implementation detail in docs; both must stay linked
+- **Tooling coupling**: Session workflow now depends on Linear MCP capability
 
 ### Risks
 
-- Tracker becomes stale if not maintained (mitigate: Cursor rule that prompts agents to check/update it at session boundaries)
-- Markdown tables become unwieldy past ~50 items (mitigate: archive aggressively, adopt Linear at that point)
+- Issue metadata can drift from docs (mitigate: require spec/ADR links in issue descriptions)
+- Linear outages can block normal workflow (mitigate: documented `DEV_TRACKER.md` fallback path)
 
 ---
 
@@ -170,24 +164,19 @@ Self-host an open-source project management tool.
 
 ### Immediate Actions
 
-1. Create `docs/plans/DEV_TRACKER.md` (done — created alongside this ADR)
-2. Create Cursor rule for session-start orientation
-3. Fix documentation debt items:
-   - Resolve ADR-0008 numbering collision
-   - Update stale ADR statuses
-   - Update Phase 2.2 completion doc to reflect testing results
+1. Keep Linear as the canonical planning surface for all new and active work
+2. Keep spec/ADR links in every implementation issue
+3. Maintain session-orientation rules for Linear-first workflow
 
-### Future: Linear Integration
+### Current State: Linear Integration Implemented
 
-If/when Linear is adopted:
-1. Configure Linear MCP in `.cursor/mcp.json`
-2. Create project and map phases to Linear projects
-3. Sync backlog items as Linear issues
-4. Keep `DEV_TRACKER.md` as the canonical quick-reference (Linear becomes the rich view)
+1. Linear MCP configured and in active use
+2. Work streams/projects created and synced
+3. Issues linked to specs/ADRs
+4. `DEV_TRACKER.md` retained as fallback/index rather than primary tracker
 
 ### Estimated Effort
 
-- Tracker creation: 1 day (done)
-- Cursor rule: 30 minutes
-- Documentation debt cleanup: 1-2 hours
-- Linear setup (future): 2-3 hours
+- Initial tracker setup: completed
+- Linear integration and migration: completed
+- Ongoing maintenance: continuous issue/document hygiene

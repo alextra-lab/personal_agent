@@ -37,7 +37,7 @@ If Linear MCP is unavailable, fall back to `docs/plans/DEV_TRACKER.md` for proje
 ## Key References
 
 | Source | Purpose |
-|--------|---------|
+| -------- | --------- |
 | **Linear** (via MCP) | What to work on — issues, status, priorities, blocking |
 | `docs/plans/PHASE_*.md` | How to build it — implementation specs |
 | `docs/architecture_decisions/ADR-*.md` | Why we decided — architectural constraints |
@@ -48,7 +48,7 @@ If Linear MCP is unavailable, fall back to `docs/plans/DEV_TRACKER.md` for proje
 
 See **Linear Implement Gate** rule for approval policy (New == Needs Approval, Implement == status_check(Approved)).
 
-```
+```text
 Server: plugin-linear-linear
 Team: FrenchForest
 

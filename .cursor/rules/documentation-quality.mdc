@@ -42,11 +42,11 @@ globs: docs/**/*.md
 
 ## Red Flags (Reject if Present)
 
-- ❌ **No alternatives** (only one option presented)
-- ❌ **No tradeoffs** (decision presented as pure win)
-- ❌ **Vague decision** (can't extract clear "we will do X")
-- ❌ **No rationale** (decision without "why")
-- ❌ **Contradicts existing ADRs** (without acknowledging supersession)
+- **No alternatives** (only one option presented)
+- **No tradeoffs** (decision presented as pure win)
+- **Vague decision** (can't extract clear "we will do X")
+- **No rationale** (decision without "why")
+- **Contradicts existing ADRs** (without acknowledging supersession)
 
 ## Quality Tiers
 

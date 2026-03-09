@@ -9,21 +9,24 @@ globs: docs/architecture_decisions/**/*.md, docs/architecture/**/*.md
 ## Quick Reference
 
 ### Blocking Issues (Must Fix)
-- 🚨 Problem unclear or non-existent
-- 🚨 Solution technically unsound (score < 3)
-- 🚨 Security risk identified
-- 🚨 No observability plan (for system components)
-- 🚨 Violates core principles
+
+- Problem unclear or non-existent
+- Solution technically unsound (score < 3)
+- Security risk identified
+- No observability plan (for system components)
+- Violates core principles
 
 ### High Priority (Fix Before Merge)
-- 🔴 No alternatives listed (ADRs)
-- 🔴 Consequences incomplete
-- 🔴 Testing strategy vague
-- 🔴 Scope too large
+
+- No alternatives listed (ADRs)
+- Consequences incomplete
+- Testing strategy vague
+- Scope too large
 
 ### Medium Priority (Can Fix Post-Approval)
-- ⚠️ Documentation needs polish
-- ⚠️ Minor consistency issues
+
+- Documentation needs polish
+- Minor consistency issues
 
 ## Review Categories
 

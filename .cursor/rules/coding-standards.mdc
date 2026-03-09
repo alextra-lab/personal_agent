@@ -13,10 +13,10 @@ alwaysApply: true
 - Use `collections.abc` for generics: `Sequence[str]` not `list[str]` when appropriate
 
 ```python
-# ✅ Good
+# Good
 def process_message(msg: str | None) -> dict[str, Any]: ...
 
-# ❌ Bad
+# Bad
 from typing import Union, Dict, Any
 def process_message(msg: Union[str, None]) -> Dict[str, Any]: ...
 ```
@@ -52,7 +52,7 @@ def execute_tool(name: str, args: dict[str, Any], ctx: TraceContext) -> dict[str
 - Always log errors with context before raising
 
 ```python
-# ✅ Good
+# Good
 from personal_agent.exceptions import ToolExecutionError
 try:
     result = execute_tool(name, args, ctx)
@@ -60,7 +60,7 @@ except ToolExecutionError as e:
     log.error("tool_failed", tool=name, error=str(e), trace_id=ctx.trace_id)
     raise
 
-# ❌ Bad
+# Bad
 try:
     result = execute_tool(name, args, ctx)
 except:  # Catches KeyboardInterrupt!
@@ -75,12 +75,12 @@ except:  # Catches KeyboardInterrupt!
 - **Never** log secrets/PII - redact first
 
 ```python
-# ✅ Good
+# Good
 from personal_agent.telemetry import get_logger
 log = get_logger(__name__)
 log.info("tool_executed", tool=name, success=True, trace_id=ctx.trace_id)
 
-# ❌ Bad
+# Bad
 print(f"Tool {name} executed")  # Never do this
 log.info(f"Tool {name} executed")  # No structure, no trace_id
 ```
@@ -92,12 +92,12 @@ log.info(f"Tool {name} executed")  # No structure, no trace_id
 - All config is type-safe and validated via Pydantic
 
 ```python
-# ✅ Good
+# Good
 from personal_agent.config import settings
 log_level = settings.log_level
 base_url = settings.llm_base_url
 
-# ❌ Bad
+# Bad
 import os
 log_level = os.getenv("LOG_LEVEL")  # Never do this
 log_level = os.environ.get("LOG_LEVEL", "INFO")  # Never do this
@@ -110,7 +110,7 @@ log_level = os.environ.get("LOG_LEVEL", "INFO")  # Never do this
 - Use `asyncio.to_thread()` for sync functions in async context
 
 ```python
-# ✅ Good
+# Good
 async def execute_tool(name: str, args: dict[str, Any], ctx: TraceContext) -> ToolResult:
     log.info("tool_start", tool=name, trace_id=ctx.trace_id)
     return await tool_registry.execute(name, args)
@@ -135,7 +135,7 @@ result = await asyncio.to_thread(blocking_function, data)
 - Prefer Pydantic over TypedDict
 
 ```python
-# ✅ Good
+# Good
 from pydantic import BaseModel, Field
 class TaskConfig(BaseModel):
     max_iterations: int = Field(default=10, ge=1)
@@ -144,12 +144,12 @@ class TaskConfig(BaseModel):
 
 ## Anti-Patterns
 
-- ❌ Bare `except:` clauses
-- ❌ `print()` statements
-- ❌ `os.getenv()` or `os.environ` access
-- ❌ Global mutable state
-- ❌ Magic strings (use enums)
-- ❌ God objects (single responsibility)
+- Bare `except:` clauses
+- `print()` statements
+- `os.getenv()` or `os.environ` access
+- Global mutable state
+- Magic strings (use enums)
+- God objects (single responsibility)
 
 ## Reference
 

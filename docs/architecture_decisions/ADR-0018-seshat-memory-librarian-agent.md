@@ -1,9 +1,9 @@
 # ADR-0018: Seshat — Memory Librarian Agent
 
-**Status**: Proposed
-**Date**: 2026-02-22
+**Status**: Accepted
+**Date**: 2026-02-22 (Revised: 2026-03-09)
 **Deciders**: System Architect
-**Related**: ADR-0017 (Multi-Agent Orchestration), ADR-0016 (Service Architecture)
+**Related**: ADR-0017 (Three-Tier Multi-Agent Orchestration), ADR-0016 (Service Architecture)
 
 ---
 
@@ -56,7 +56,8 @@ SESHAT_SPEC = AgentSpec(
     name="seshat",
     description="Memory librarian — curates, consolidates, and serves knowledge",
     system_prompt=SESHAT_SYSTEM_PROMPT,
-    model_role=ModelRole.REASONING,  # qwen3-8b
+    tier=AgentTier.WORKER,
+    model_role=ModelRole.REASONING,  # model TBD — empirically selected per ADR-0017
     allowed_tools=[
         "memory_store", "memory_search", "memory_consolidate",
         "memory_promote", "memory_demote", "memory_forget",
@@ -64,9 +65,12 @@ SESHAT_SPEC = AgentSpec(
         "knowledge_graph_mutate"
     ],
     max_iterations=20,  # curation cycles can be multi-step
-    autonomous=True,     # can run without user request
+    max_rework_attempts=2,
+    autonomous=True,     # can run without user request (brainstem-scheduled)
 )
 ```
+
+Seshat is a **Tier 2 (Worker)** agent per ADR-0017, but with a unique characteristic: it operates both on-demand (orchestrator requests context assembly) and autonomously (brainstem-scheduled curation cycles). The specific SLM powering Seshat is an empirical choice — it needs strong entity extraction and reasoning about knowledge quality, so a capable reasoning-oriented SLM is preferred.
 
 ### 2.2 Responsibilities
 
@@ -141,7 +145,7 @@ Brainstem Scheduler ──────┐
 │  (Neo4j)  │    │  (Neo4j)     │    │   traces)     │
 └───────────┘    └──────────────┘    └──────────────┘
 
-Other Agents ──── request context ──── Seshat ──── assembled context ──── back to agent
+Orchestrator / Workers ── request context ── Seshat ── assembled context ── back to requester
 ```
 
 ---
@@ -158,11 +162,11 @@ Continue with the current scheduled entity extraction without agent intelligence
 
 ### Alternative B: Embed Memory Logic in Every Agent
 
-Each specialist agent manages its own memory interactions directly.
+Each worker agent manages its own memory interactions directly.
 
-- **Pros**: No central memory bottleneck, agents have domain-specific memory logic
+- **Pros**: No central memory bottleneck, agents have task-specific memory logic
 - **Cons**: Duplicated memory code, inconsistent storage patterns, no cross-agent knowledge synthesis, harder to A/B test memory strategies
-- **Rejected because**: Violates separation of concerns; the orchestrator research doc explicitly recommends a unified memory access layer
+- **Rejected because**: Violates separation of concerns; a unified memory access layer through a dedicated agent is cleaner and enables cross-worker knowledge synthesis
 
 ### Alternative C: External Memory Service (Separate Process)
 
@@ -179,7 +183,7 @@ Deploy memory as a standalone microservice with REST/gRPC API.
 ### Positive
 
 - **Knowledge quality**: Active curation prevents noise accumulation
-- **Context relevance**: Other agents receive tailored context, not raw search results
+- **Context relevance**: Workers and the orchestrator receive tailored context, not raw search results — reinforcing context isolation (ADR-0017 §2.6)
 - **Memory A/B testing**: Abstract interface enables swapping backends without touching agents
 - **Lifecycle management**: Knowledge doesn't just grow — it matures, archives, and forgets
 - **Research value**: Memory stewardship is an underexplored area; this creates a novel research artifact
@@ -240,3 +244,8 @@ Defer to later iterations:
 ### Migration Path
 
 The existing `second_brain/` module becomes an implementation detail *inside* Seshat. The entity extraction, background consolidation, and scheduling logic are preserved but wrapped in the agent's reasoning loop, allowing Seshat to make intelligent decisions about *when* and *what* to consolidate rather than running on a fixed schedule.
+
+### Revision History
+
+- **2026-02-22**: Original proposal
+- **2026-03-09**: Aligned with revised ADR-0017 (three-tier architecture). Updated `AgentSpec` to include `tier` and `max_rework_attempts` fields. Clarified Seshat as a Tier 2 worker with autonomous scheduling. Changed hardcoded model reference to empirical selection. Updated terminology from "specialist agents" to "workers" for consistency.

@@ -1,40 +1,59 @@
 # Documentation Index
 
-This directory contains all project documentation, organized by purpose.
+All project documentation, organized by purpose.
 
-## 📖 Essential Documentation (Start Here)
+## Structure
 
-- **[Usage Guide](USAGE_GUIDE.md)** - How to use the Personal Agent
-- **[Configuration Guide](CONFIGURATION.md)** - Configuration reference
-- **[SLM Server Integration](SLM_SERVER_INTEGRATION.md)** - LLM backend setup
-- **[Coding Conventions](CODING_CONVENTIONS.md)** - Code style and standards
+| Directory | Contents |
+|-----------|----------|
+| [`reference/`](reference/) | Knowledge docs — standards, policies, checklists |
+| [`guides/`](guides/) | How-to and setup guides |
+| [`specs/`](specs/) | Technical specifications |
+| [`plans/`](plans/) | Project plans, tracking, session logs |
+| [`architecture/`](architecture/) | System design documents |
+| [`architecture_decisions/`](architecture_decisions/) | Architecture Decision Records (ADRs) |
+| [`research/`](research/) | Research notes and analysis |
 
-## 🏗️ Architecture Documentation
+## Start Here
 
-- **[architecture/](architecture/)** - System design specifications
-- **[architecture_decisions/](architecture_decisions/)** - Architecture Decision Records (ADRs)
-- **[Vision Document](VISION_DOC.md)** - Project philosophy and goals
+- **[Vision Document](VISION_DOC.md)** — Project philosophy and goals
+- **[Master Plan](plans/MASTER_PLAN.md)** — Current priorities and sequencing
+- **[Usage Guide](guides/USAGE_GUIDE.md)** — How to use the Personal Agent
+- **[Configuration](guides/CONFIGURATION.md)** — Environment setup
 
-## 📚 Research & Learning
+## Reference Docs
 
-- **[research/](research/)** - Research notes and external system analysis
+- [Agent Workflow Methodology](reference/AGENT_WORKFLOW_METHODOLOGY.md) -- how this project is managed and why (reusable across projects)
+- [Coding Standards](reference/CODING_STANDARDS.md)
+- [Coding Conventions](reference/CODING_CONVENTIONS.md)
+- [PR Review Rubric](reference/PR_REVIEW_RUBRIC.md)
+- [Validation Checklist](reference/VALIDATION_CHECKLIST.md)
+- [Project Directory Structure](reference/PROJECT_DIRECTORY_STRUCTURE.md)
+- [Root Level Policy](reference/ROOT_LEVEL_POLICY.md)
+- [Agent MD Strategy](reference/AGENT_MD_STRATEGY.md)
+- [Data Lifecycle](reference/DATA_LIFECYCLE.md)
+- [Dependency Security](reference/DEPENDENCY_SECURITY.md)
+- [Entity Extraction Models](reference/ENTITY_EXTRACTION_MODELS.md)
 
-## 📋 Development Documentation
+## Guides
 
-- **[plans/](plans/)** - Implementation plans and session logs
-- **[PR Review Rubric](PR_REVIEW_RUBRIC.md)** - Code review guidelines
-- **[Project Directory Structure](PROJECT_DIRECTORY_STRUCTURE.md)** - Project organization
+- [Usage Guide](guides/USAGE_GUIDE.md)
+- [Configuration](guides/CONFIGURATION.md)
+- [SLM Server Integration](guides/SLM_SERVER_INTEGRATION.md)
+- [GPU Metrics Setup](guides/GPU_METRICS_SETUP.md)
+- [GPU Metrics Security](guides/GPU_METRICS_SECURITY.md)
+- [macmon GPU Metrics](guides/MACMON_GPU_METRICS.md)
+- [Kibana Dashboards](guides/KIBANA_DASHBOARDS.md)
+- [Metrics Storage Guide](guides/METRICS_STORAGE_GUIDE.md)
+- [Telemetry ES Integration](guides/TELEMETRY_ELASTICSEARCH_INTEGRATION.md)
+- [Implementation Quick Reference](guides/IMPLEMENTATION_QUICK_REFERENCE.md)
+- [MCP Integration Quick Start](guides/MCP_INTEGRATION_QUICK_START.md)
 
-## 🔧 Technical Guides
+## Specs
 
-- **[GPU Metrics Setup](GPU_METRICS_SETUP.md)** - Apple Silicon GPU monitoring
-- **[Telemetry Integration](TELEMETRY_ELASTICSEARCH_INTEGRATION.md)** - Logging setup
-- **[Entity Extraction Models](ENTITY_EXTRACTION_MODELS.md)** - Model comparison
-
-## 📝 Internal Documentation
-
-- **[internal/](internal/)** - Development notes, session logs, and internal processes
-
----
-
-**Note**: This is a research and learning project. The extensive documentation reflects the exploration and decision-making process.
+- [Traceability & Performance](specs/TRACEABILITY_AND_PERFORMANCE_SPEC.md)
+- [Captain's Log ES Backfill](specs/CAPTAINS_LOG_ES_BACKFILL_SPEC.md)
+- [CLI Service Client](specs/CLI_SERVICE_CLIENT_SPEC.md)
+- [Conversation Continuity](specs/CONVERSATION_CONTINUITY_SPEC.md)
+- [MCP Governance Discovery](specs/MCP_GOVERNANCE_DISCOVERY_SPEC.md)
+- [System Health Monitoring](specs/SYSTEM_HEALTH_MONITORING_SPEC.md)

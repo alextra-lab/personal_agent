@@ -15,23 +15,27 @@ alwaysApply: true
 ### Not Allowed at Root
 - Session logs → `docs/plans/sessions/`
 - Action items → `docs/plans/`
-- Validation checklists → `docs/`
-- PR review rubrics → `docs/`
-- Vision documents → `docs/`
-- Directory structure docs → `docs/`
+- Validation checklists → `docs/reference/`
+- PR review rubrics → `docs/reference/`
+- Vision documents → `docs/` (top-level foundational doc)
+- Directory structure docs → `docs/reference/`
+- Technical specifications → `docs/specs/`
+- How-to guides → `docs/guides/`
 - Temporary files → Delete or move to appropriate location
 
 ## File Placement Guide
 
 | File Type | Location |
 |-----------|----------|
+| Knowledge docs, standards, policies | `docs/reference/` |
+| How-to and setup guides | `docs/guides/` |
+| Technical specifications | `docs/specs/` |
+| Project plans and tracking | `docs/plans/` |
 | Session logs | `docs/plans/sessions/` |
-| Action items | `docs/plans/` |
-| Implementation plans | `docs/plans/` |
-| Architecture specs | `docs/architecture/` |
+| Completed/archived plans | `docs/plans/completed/` |
+| Architecture design docs | `docs/architecture/` |
 | ADRs | `docs/architecture_decisions/` |
 | Research notes | `docs/research/` |
-| Process docs | `docs/` |
 | Source code | `src/personal_agent/` |
 | Tests | `tests/` |
 | Runtime config | `config/` (gitignored except templates) |
@@ -41,14 +45,16 @@ alwaysApply: true
 
 1. **Is it essential for project setup?** (config files) → Root
 2. **Is it the first thing newcomers need?** (README) → Root
-3. **Is it process/quality documentation?** → `docs/`
-4. **Is it planning/tracking?** → `docs/plans/`
-5. **Is it architecture/design?** → `docs/architecture/` or `docs/architecture_decisions/`
-6. **Is it code?** → `src/`
-7. **Is it research?** → `docs/research/`
+3. **Is it a standard, policy, or checklist?** → `docs/reference/`
+4. **Is it a how-to or setup guide?** → `docs/guides/`
+5. **Is it a technical specification?** → `docs/specs/`
+6. **Is it planning/tracking?** → `docs/plans/`
+7. **Is it architecture/design?** → `docs/architecture/` or `docs/architecture_decisions/`
+8. **Is it code?** → `src/`
+9. **Is it research?** → `docs/research/`
 
-**When in doubt, NOT at root.**
+**When in doubt, NOT at root. When in doubt within docs, NOT at docs root.**
 
 ## Reference
 
-For complete policy, see `docs/ROOT_LEVEL_POLICY.md`
+For complete policy, see `docs/reference/ROOT_LEVEL_POLICY.md`

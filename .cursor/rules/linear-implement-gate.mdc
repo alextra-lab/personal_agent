@@ -17,6 +17,8 @@ Whenever you create an issue via the Linear MCP (`save_issue` or equivalent):
 
 1. Set **state** to `"Needs Approval"` (if your Linear workflow has that state), **or**
 2. Add **label** `"Needs Approval"` to the issue's labels.
+3. Add the **project label** `"PersonalAgent"` so issues are scoped to this project.
+4. Link relevant **specs** (`docs/specs/`) and **ADRs** in the issue description.
 
 Do this for every issue you create — whether from a user request, from session planning, or from any other context. A human will review and move the issue to Approved (or add the Approved label) before implementation.
 
@@ -36,6 +38,6 @@ When listing work to implement (e.g. "What should I work on?"):
 ## Linear MCP (plugin-linear-linear)
 
 - **Team:** FrenchForest
-- **Create:** `save_issue` with `state: "Needs Approval"` or `labels: ["Needs Approval", ...]`
+- **Create:** `save_issue` with `state: "Needs Approval"`, `labels: ["Needs Approval", "PersonalAgent"]`
 - **List implementable work:** `list_issues` with `state: "Approved"` or `label: "Approved"`
 - **Before implementing a specific issue:** `get_issue` → verify state or labels include Approved → then implement or refuse

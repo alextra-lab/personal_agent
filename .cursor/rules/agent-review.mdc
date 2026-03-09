@@ -1,0 +1,53 @@
+---
+description: Review agent workflow. Use when reviewing completed work, validating implementations, or when asked to review Linear issues marked Done.
+alwaysApply: false
+---
+# Agent Review Workflow
+
+Review completed Linear issues for correctness, test coverage, and spec compliance.
+
+## When to Review
+
+- When asked to review completed work
+- When querying Linear for issues with state **Done** (not yet reviewed)
+
+## Review Process
+
+1. **Find reviewable work:** `list_issues` with `state: "Done"` on team FrenchForest
+2. **For each issue:**
+   a. Read the issue description for spec path and acceptance criteria
+   b. Read the linked spec in `docs/specs/` or ADR in `docs/architecture_decisions/`
+   c. Check that implementation matches the spec
+   d. Run tests: `python3 -m pytest` — all must pass
+   e. Check for lint errors in modified files
+   f. Verify acceptance criteria are met
+
+## Review Outcomes
+
+| Outcome | Action |
+|---------|--------|
+| All checks pass | Add label `"Review OK"` via `save_issue`, add comment summarizing what was verified |
+| Issues found | Add label `"Review Needs Work"` via `save_issue`, add comment with specific findings |
+| Cannot determine | Flag for human review with a comment explaining what's unclear |
+
+## Review Comment Template
+
+```markdown
+## Review: [PASS/NEEDS WORK]
+
+### Checked
+- [ ] Implementation matches spec
+- [ ] Tests pass (X/Y)
+- [ ] Acceptance criteria met
+- [ ] No lint errors introduced
+
+### Findings
+- [specific findings or "No issues found"]
+```
+
+## Constraints
+
+- Do NOT fix issues yourself — only report them
+- Do NOT change issue state — only add labels and comments
+- If tests fail, report which tests and why
+- If acceptance criteria are ambiguous, flag for human review

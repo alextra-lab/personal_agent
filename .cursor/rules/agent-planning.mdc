@@ -1,0 +1,56 @@
+---
+description: Planning agent workflow. Use when maintaining the Master Plan, creating Linear issues from specs, or organizing project work.
+alwaysApply: false
+---
+# Agent Planning Workflow
+
+Maintain project plans and create well-structured Linear issues.
+
+## Maintaining MASTER_PLAN.md
+
+`docs/plans/MASTER_PLAN.md` is the living priority document. Update it when:
+- Phases complete (move to Completed, FIFO)
+- Priorities shift (reorder Current Focus)
+- New work is approved (move from Backlog to Upcoming)
+
+Keep it under 100 lines. Link to sub-plans and specs, never duplicate their content.
+
+## Creating Linear Issues from Specs
+
+When a spec in `docs/specs/` or a phase plan in `docs/plans/PHASE_*.md` is approved:
+
+1. Break the spec into implementable issues (1-4 hours of work each)
+2. For each issue, call `save_issue` with:
+   - `team`: "FrenchForest"
+   - `state`: "Needs Approval"
+   - `labels`: ["Needs Approval", "PersonalAgent"]
+   - `project`: The relevant Linear project
+   - `description`: Use the issue template below
+
+## Issue Description Template
+
+```markdown
+## Spec
+- `docs/specs/SPEC_NAME.md` (section X.Y)
+
+## ADRs
+- ADR-XXXX (relevant decision)
+
+## Files
+- `src/personal_agent/...`
+- `tests/...`
+
+## Acceptance Criteria
+- [ ] Criterion 1
+- [ ] Criterion 2
+- [ ] Tests pass
+- [ ] No new lint errors
+```
+
+## Planning Constraints
+
+- Every issue must link to a spec or ADR
+- Issues should be small enough to implement in one session
+- For issues touching >2 files, include a brief implementation approach
+- Never create issues without `state: "Needs Approval"`
+- Group related issues under a Linear project

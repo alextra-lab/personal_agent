@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "hooks": {
+    "afterFileEdit": [
+      {
+        "command": ".cursor/hooks/check-python.sh",
+        "matcher": "Write"
+      }
+    ],
+    "stop": [
+      {
+        "command": ".cursor/hooks/verify-on-stop.sh",
+        "loop_limit": 3
+      }
+    ]
+  }
+}

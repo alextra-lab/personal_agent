@@ -4,7 +4,8 @@
 > **Last synced:** 2026-03-03
 
 Linear is the single source of truth for work items, priorities, and status.
-Markdown docs (`PHASE_*.md`, ADRs, `IMPLEMENTATION_ROADMAP.md`) are the specs — the *how*, not the *what*.
+See `MASTER_PLAN.md` for current priorities and sequencing.
+Specs live in `docs/specs/`, ADRs in `docs/architecture_decisions/`.
 
 ---
 
@@ -31,7 +32,7 @@ Markdown docs (`PHASE_*.md`, ADRs, `IMPLEMENTATION_ROADMAP.md`) are the specs �
 When starting a session:
 1. **Query Linear** via MCP (`plugin-linear-linear`) for current issues, priorities, and status.
 2. **To implement an issue**: read the issue description in Linear — it contains the spec path, files, and acceptance criteria.
-3. **Specs live in**: `docs/plans/PHASE_*.md`, `docs/architecture_decisions/ADR-*.md`, `IMPLEMENTATION_ROADMAP.md`.
+3. **Specs live in**: `docs/specs/`, phase plans in `docs/plans/PHASE_*.md`, ADRs in `docs/architecture_decisions/`.
 4. **When done**: update the Linear issue status via MCP.
 
 Example: *"What should I work on?"* → call `list_issues` filtered by state=Todo or In Progress.

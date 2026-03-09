@@ -8,11 +8,12 @@ alwaysApply: false
 
 Before beginning any implementation work, orient yourself:
 
-1. **Query Linear** via MCP (`plugin-linear-linear`) — call `list_projects` for stream status, `list_issues` with `state: "Approved"` (or `label: "Approved"`) for implementable work items (see **Linear Implement Gate** rule)
-2. **Read the relevant spec** (e.g., `docs/plans/PHASE_2.3_PLAN.md`) for implementation details
-3. **Check recent session logs** in `docs/plans/sessions/` for context from the last session
+1. **Read `docs/plans/MASTER_PLAN.md`** for current priorities and sequencing
+2. **Query Linear** via MCP (`plugin-linear-linear`) — call `list_projects` for stream status, `list_issues` with `state: "Approved"` (or `label: "Approved"`) for implementable work items (see **Linear Implement Gate** rule)
+3. **Read the relevant spec** in `docs/specs/` or phase plan in `docs/plans/PHASE_*.md`
+4. **Check recent session logs** in `docs/plans/sessions/` for context from the last session
 
-If Linear MCP is unavailable, fall back to `docs/plans/DEV_TRACKER.md` for project links and completed phases.
+If Linear MCP is unavailable, fall back to `docs/plans/DEV_TRACKER.md` for project links.
 
 ## When Implementing a Linear Issue
 
@@ -38,10 +39,11 @@ If Linear MCP is unavailable, fall back to `docs/plans/DEV_TRACKER.md` for proje
 
 | Source | Purpose |
 | -------- | --------- |
+| `docs/plans/MASTER_PLAN.md` | Priorities, sequencing, current focus |
 | **Linear** (via MCP) | What to work on — issues, status, priorities, blocking |
-| `docs/plans/PHASE_*.md` | How to build it — implementation specs |
+| `docs/specs/` | How to build it — technical specifications |
+| `docs/plans/PHASE_*.md` | Phase sub-plans with implementation detail |
 | `docs/architecture_decisions/ADR-*.md` | Why we decided — architectural constraints |
-| `docs/plans/IMPLEMENTATION_ROADMAP.md` | Full phase history and module structure |
 | `docs/research/ARCHITECTURE_ASSESSMENT_2026-02-22.md` | Strategic direction |
 
 ## Linear MCP Quick Reference

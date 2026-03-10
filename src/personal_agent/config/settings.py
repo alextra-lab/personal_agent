@@ -258,12 +258,15 @@ class AppConfig(BaseSettings):
     neo4j_user: str = Field(default="neo4j", description="Neo4j username")
     neo4j_password: str = Field(default="neo4j_dev_password", description="Neo4j password")
 
-    # Claude API (Second Brain) - optional for production quality
+    # Cloud API secrets (model identity lives in config/models.yaml — ADR-0031)
     anthropic_api_key: str | None = Field(default=None, description="Anthropic API key for Claude")
-    claude_model: str = Field(default="claude-sonnet-4-5-20250514", description="Claude model name")
-    claude_max_tokens: int = Field(default=4096, description="Maximum tokens for Claude requests")
-    claude_weekly_budget_usd: float = Field(
-        default=5.0, description="Weekly budget for Claude API (USD)"
+    openai_api_key: str | None = Field(default=None, description="OpenAI API key")
+    cloud_weekly_budget_usd: float = Field(
+        default=5.0,
+        description=(
+            "Weekly spending cap across all cloud LLM providers (USD). "
+            "Shared budget; per-provider breakdown available via CostTrackerService."
+        ),
     )
 
     # Feature flags

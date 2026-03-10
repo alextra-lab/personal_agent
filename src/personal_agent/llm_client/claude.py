@@ -1,9 +1,11 @@
-"""Claude API client for Anthropic's Claude models (Phase 2.2).
+"""Claude API client for Anthropic's Claude models.
 
-This module provides integration with Anthropic's Claude API for deep reasoning
-tasks like entity extraction and second brain consolidation.
+Model identity (model ID, max_tokens) is injected at construction time from a
+ModelDefinition loaded out of config/models.yaml (ADR-0031). Only secrets
+(api_key) and operational controls (budget) come from settings.
 """
 
+import time
 from typing import Any
 from uuid import UUID
 
@@ -16,22 +18,72 @@ from personal_agent.telemetry import get_logger
 log = get_logger(__name__)
 settings = get_settings()
 
+# Approximate pricing per million tokens for cost estimation when the API
+# does not return pricing metadata.  Update this table when model pricing changes.
+_ANTHROPIC_PRICING: dict[str, tuple[float, float]] = {
+    # model_id_prefix: (input_usd_per_mtok, output_usd_per_mtok)
+    "claude-haiku": (0.80, 4.0),
+    "claude-sonnet": (3.0, 15.0),
+    "claude-opus": (15.0, 75.0),
+}
+
+_DEFAULT_INPUT_PRICE = 3.0
+_DEFAULT_OUTPUT_PRICE = 15.0
+
+
+def _estimate_cost(model_id: str, input_tokens: int, output_tokens: int) -> float:
+    """Estimate cost in USD using known pricing tiers.
+
+    Args:
+        model_id: Full model identifier string.
+        input_tokens: Number of prompt tokens consumed.
+        output_tokens: Number of completion tokens generated.
+
+    Returns:
+        Estimated cost in USD.
+    """
+    for prefix, (in_price, out_price) in _ANTHROPIC_PRICING.items():
+        if prefix in model_id:
+            return (input_tokens / 1_000_000 * in_price) + (
+                output_tokens / 1_000_000 * out_price
+            )
+    return (input_tokens / 1_000_000 * _DEFAULT_INPUT_PRICE) + (
+        output_tokens / 1_000_000 * _DEFAULT_OUTPUT_PRICE
+    )
+
 
 class ClaudeClient:
     """Client for Anthropic Claude API.
 
+    Model identity comes from a ModelDefinition (config/models.yaml) injected at
+    construction time; secrets and budgets come from settings (ADR-0031).
+
     Usage:
-        client = ClaudeClient()
-        response = await client.chat_completion(
-            messages=[{"role": "user", "content": "Extract entities from this text..."}]
-        )
+        from personal_agent.config import load_model_config
+
+        model_config = load_model_config()
+        model_def = model_config.models[model_config.entity_extraction_role]
+        client = ClaudeClient(model_id=model_def.id, max_tokens=model_def.max_tokens)
+        response = await client.chat_completion(messages=[...])
     """
 
-    def __init__(self, cost_tracker: CostTrackerService | None = None) -> None:  # noqa: D107
-        """Initialize Claude client with API key from settings.
+    def __init__(
+        self,
+        model_id: str,
+        max_tokens: int = 4096,
+        cost_tracker: CostTrackerService | None = None,
+    ) -> None:
+        """Initialize Claude client.
 
         Args:
-            cost_tracker: Optional cost tracking service (will create one if not provided)
+            model_id: Anthropic model identifier (e.g. "claude-sonnet-4-5-20250514").
+                      Comes from ModelDefinition.id in config/models.yaml.
+            max_tokens: Maximum output tokens per request. Comes from
+                        ModelDefinition.max_tokens in config/models.yaml.
+            cost_tracker: Optional cost tracking service (creates one if not provided).
+
+        Raises:
+            ValueError: If AGENT_ANTHROPIC_API_KEY is not configured.
         """
         api_key = settings.anthropic_api_key
         if not api_key:
@@ -40,9 +92,9 @@ class ClaudeClient:
             )
 
         self.client = AsyncAnthropic(api_key=api_key)
-        self.model = settings.claude_model
-        self.max_tokens = settings.claude_max_tokens
-        self.weekly_budget_usd = settings.claude_weekly_budget_usd
+        self.model = model_id
+        self.max_tokens = max_tokens
+        self.weekly_budget_usd = settings.cloud_weekly_budget_usd
 
         # Cost tracking (persisted to PostgreSQL)
         self.cost_tracker = cost_tracker or CostTrackerService()
@@ -84,6 +136,10 @@ class ClaudeClient:
             if role in ("user", "assistant"):
                 claude_messages.append({"role": role, "content": content})
 
+        # Ensure cost tracker is connected (lazy connect — __init__ is sync)
+        if self.cost_tracker.pool is None:
+            await self.cost_tracker.connect()
+
         # Make API call
         try:
             # Build create parameters
@@ -95,7 +151,9 @@ class ClaudeClient:
             if system:
                 create_params["system"] = system
 
+            t0 = time.monotonic()
             response = await self.client.messages.create(**create_params)
+            latency_ms = int((time.monotonic() - t0) * 1000)
 
             # Extract response content
             content = ""
@@ -104,13 +162,11 @@ class ClaudeClient:
                     if hasattr(block, "text"):
                         content += block.text
 
-            # Calculate cost (approximate, based on Claude pricing)
-            # Claude Sonnet 4.5: $3/1M input tokens, $15/1M output tokens
             input_tokens = response.usage.input_tokens
             output_tokens = response.usage.output_tokens
-            cost_usd = (input_tokens / 1_000_000 * 3.0) + (output_tokens / 1_000_000 * 15.0)
+            cost_usd = _estimate_cost(self.model, input_tokens, output_tokens)
 
-            # Record cost to database
+            # Record cost + latency to database
             await self.cost_tracker.record_api_call(
                 provider="anthropic",
                 model=self.model,
@@ -119,6 +175,7 @@ class ClaudeClient:
                 cost_usd=cost_usd,
                 trace_id=trace_id,
                 purpose=purpose,
+                latency_ms=latency_ms,
             )
 
             log.info(
@@ -127,6 +184,7 @@ class ClaudeClient:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cost_usd=cost_usd,
+                latency_ms=latency_ms,
                 trace_id=trace_id,
                 purpose=purpose,
                 component="claude_client",
@@ -139,6 +197,7 @@ class ClaudeClient:
                     "output_tokens": output_tokens,
                 },
                 "cost_usd": cost_usd,
+                "latency_ms": latency_ms,
                 "model": self.model,
             }
 
@@ -153,17 +212,17 @@ class ClaudeClient:
             raise
 
     async def _check_weekly_budget(self) -> None:
-        """Check if weekly budget has been exceeded.
+        """Check if the shared cloud weekly budget has been exceeded.
 
         Raises:
-            ValueError: If weekly budget exceeded
+            ValueError: If weekly budget exceeded.
         """
-        # Get weekly cost from database
-        weekly_cost_usd = await self.cost_tracker.get_weekly_cost(provider="anthropic")
+        weekly_cost_usd = await self.cost_tracker.get_weekly_cost(provider=None)
 
         if weekly_cost_usd >= self.weekly_budget_usd:
             raise ValueError(
-                f"Weekly Claude API budget exceeded: ${weekly_cost_usd:.2f} / ${self.weekly_budget_usd:.2f}"
+                f"Weekly cloud API budget exceeded: "
+                f"${weekly_cost_usd:.2f} / ${self.weekly_budget_usd:.2f}"
             )
 
     async def get_cost_summary(self) -> dict[str, Any]:

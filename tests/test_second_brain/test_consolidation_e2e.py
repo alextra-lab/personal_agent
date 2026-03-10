@@ -61,7 +61,7 @@ class TestConsolidationE2E:
         result = await consolidator._process_capture(capture)
 
         # Verify processing results
-        assert result["conversation_created"] == 1
+        assert result["turns_created"] == 1
         assert result["entities_created"] > 0  # Should extract at least Python
 
         # Verify conversation was stored in Neo4j
@@ -102,7 +102,7 @@ class TestConsolidationE2E:
         result = await consolidator._process_capture(capture)
 
         # Should create entities and possibly relationships
-        assert result["conversation_created"] == 1
+        assert result["turns_created"] == 1
         assert result["entities_created"] >= 2  # Django and Python at minimum
 
         # Verify in Neo4j
@@ -216,7 +216,7 @@ class TestConsolidationE2E:
         result = await consolidator._process_capture(capture)
 
         # Conversation should still be created
-        assert result["conversation_created"] == 1
+        assert result["turns_created"] == 1
 
         # Verify in Neo4j
         query = MemoryQuery(conversation_ids=[trace_id], limit=1)
@@ -244,7 +244,7 @@ class TestConsolidationE2E:
         )
 
         result = await consolidator._process_capture(capture)
-        assert result["conversation_created"] == 1
+        assert result["turns_created"] == 1
 
         # Step 2: Query by extracted entities (optional - may or may not find it)
         # The LLM should have extracted "Machine Learning" or similar
@@ -284,7 +284,7 @@ class TestConsolidationE2E:
 
         for capture in captures:
             result = await consolidator._process_capture(capture)
-            total_conversations += result["conversation_created"]
+            total_conversations += result["turns_created"]
             total_entities += result["entities_created"]
 
         # Summary should match

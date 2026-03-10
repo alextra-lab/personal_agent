@@ -52,6 +52,7 @@ class CostTrackerService:
         cost_usd: float,
         trace_id: UUID | None = None,
         purpose: str | None = None,
+        latency_ms: int | None = None,
     ) -> int | None:
         """Record an API call cost to the database.
 
@@ -63,6 +64,7 @@ class CostTrackerService:
             cost_usd: Cost in USD
             trace_id: Optional trace ID for request tracking
             purpose: Optional purpose ('user_request', 'second_brain', etc.)
+            latency_ms: Wall-clock time of the API round-trip in milliseconds.
 
         Returns:
             ID of inserted record, or None if failed
@@ -78,8 +80,8 @@ class CostTrackerService:
                     INSERT INTO api_costs (
                         timestamp, provider, model,
                         input_tokens, output_tokens, cost_usd,
-                        trace_id, purpose
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        trace_id, purpose, latency_ms
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                     RETURNING id
                     """,
                     datetime.now(timezone.utc),
@@ -90,6 +92,7 @@ class CostTrackerService:
                     Decimal(str(cost_usd)),  # Convert to Decimal for precision
                     trace_id,
                     purpose,
+                    latency_ms,
                 )
 
                 log.debug(
@@ -97,6 +100,7 @@ class CostTrackerService:
                     provider=provider,
                     model=model,
                     cost_usd=cost_usd,
+                    latency_ms=latency_ms,
                     record_id=record_id,
                 )
 

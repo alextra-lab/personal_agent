@@ -79,7 +79,8 @@ class SecondBrainConsolidator:
             return {
                 "captures_processed": 0,
                 "captures_skipped": 0,
-                "conversations_created": 0,
+                "turns_created": 0,
+                "sessions_created": 0,
                 "entities_created": 0,
                 "relationships_created": 0,
             }
@@ -97,17 +98,24 @@ class SecondBrainConsolidator:
         if not self.memory_service.connected:
             await self.memory_service.connect()
 
-        # Initialize Claude client only if using Claude for extraction
-        if not self.claude_client and entity_extraction_role == "claude":
+        # entity_extraction.py auto-creates ClaudeClient when the configured role
+        # is a cloud model (provider="anthropic"). Pre-warm it here so connection
+        # errors surface early (before iterating over captures) and so the same
+        # client instance is reused across all captures in this consolidation run.
+        model_def = model_config.models.get(entity_extraction_role)
+        if not self.claude_client and model_def and model_def.provider == "anthropic":
             try:
                 from personal_agent.llm_client.claude import ClaudeClient
 
-                self.claude_client = ClaudeClient()
+                self.claude_client = ClaudeClient(
+                    model_id=model_def.id,
+                    max_tokens=model_def.max_tokens or 8192,
+                )
             except (ImportError, ValueError) as e:
                 log.warning(
                     "claude_client_unavailable_fallback_to_local",
                     error=str(e),
-                    fallback_model=entity_extraction_role or "reasoning",
+                    fallback_model=entity_extraction_role,
                 )
                 # Will use local SLM instead; claude_client stays None
 
@@ -135,8 +143,8 @@ class SecondBrainConsolidator:
                     trace_id=capture.trace_id,
                 )
                 result = await self._process_capture(capture)
-                if result.get("turn_created"):
-                    turns_created += result["turn_created"]
+                if result.get("turns_created"):
+                    turns_created += result["turns_created"]
                     if capture.session_id:
                         sessions_with_new_turns.add(capture.session_id)
                 entities_created += result.get("entities_created", 0)
@@ -312,7 +320,7 @@ class SecondBrainConsolidator:
                 trace_id=capture.trace_id,
                 reason="extraction returned fallback result; will retry next run",
             )
-            return {"turn_created": 0, "entities_created": 0, "relationships_created": 0}
+            return {"turns_created": 0, "entities_created": 0, "relationships_created": 0}
 
         # Create Turn node
         turn = TurnNode(
@@ -364,7 +372,7 @@ class SecondBrainConsolidator:
                 relationships_created += 1
 
         return {
-            "turn_created": turns_created,
+            "turns_created": turns_created,
             "entities_created": entities_created,
             "relationships_created": relationships_created,
         }

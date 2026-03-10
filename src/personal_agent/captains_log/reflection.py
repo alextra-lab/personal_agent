@@ -140,6 +140,90 @@ async def generate_reflection_entry(
     # Ensure final_state is a string (DSPy expects string, not None)
     effective_final_state = final_state or "UNKNOWN"
 
+    # Resolve the configured model for Captain's Log (ADR-0031)
+    from personal_agent.config import load_model_config
+
+    _model_config = load_model_config()
+    _captains_log_model_def = _model_config.models.get(_model_config.captains_log_role)
+    _captains_log_provider = (
+        _captains_log_model_def.provider if _captains_log_model_def else None
+    )
+
+    # ── Cloud path (Anthropic / OpenAI) ──────────────────────────────────────
+    if _captains_log_provider == "anthropic":
+        try:
+            from personal_agent.llm_client.claude import ClaudeClient
+
+            _claude_client = ClaudeClient(
+                model_id=_captains_log_model_def.id,  # type: ignore[union-attr]
+                max_tokens=_captains_log_model_def.max_tokens or 8192,  # type: ignore[union-attr]
+            )
+            log.info(
+                "captains_log_using_anthropic",
+                model_id=_captains_log_model_def.id,  # type: ignore[union-attr]
+                trace_id=trace_id,
+                component="reflection",
+            )
+            prompt = REFLECTION_PROMPT.format(
+                user_message=user_message[:200],
+                trace_id=trace_id,
+                steps_count=steps_count,
+                final_state=effective_final_state,
+                reply_length=reply_length,
+                telemetry_summary=telemetry_summary,
+            )
+            _cloud_response = await _claude_client.chat_completion(
+                messages=[{"role": "user", "content": prompt}],
+                purpose="captains_log",
+                trace_id=None,  # trace_id here is a str; ClaudeClient expects UUID | None
+            )
+            _content = _cloud_response.get("content", "")
+            if not _content:
+                raise ValueError("Claude returned empty response for Captain's Log reflection")
+
+            reflection_data = _parse_reflection_response(_content)
+            string_metrics, structured_metrics = extract_metrics_from_summary(metrics_summary)
+            title = (
+                f"Task: {user_message[:50]}" if len(user_message) > 50 else f"Task: {user_message}"
+            )
+            proposed_change = _build_proposed_change(reflection_data.get("proposed_change"))
+            entry = CaptainLogEntry(
+                entry_id="",
+                timestamp=datetime.now(timezone.utc),
+                type=CaptainLogEntryType.REFLECTION,
+                title=title,
+                rationale=reflection_data["rationale"],
+                proposed_change=proposed_change,
+                supporting_metrics=string_metrics,
+                metrics_structured=structured_metrics if structured_metrics else None,
+                impact_assessment=reflection_data.get("impact_assessment"),
+                status=CaptainLogStatus.AWAITING_APPROVAL,
+                related_adrs=reflection_data.get("related_adrs", []),
+                related_experiments=reflection_data.get("related_experiments", []),
+                telemetry_refs=[{"trace_id": trace_id, "metric_name": None, "value": None}],
+            )
+            log.info(
+                "captains_log_cloud_reflection_succeeded",
+                model_id=_captains_log_model_def.id,  # type: ignore[union-attr]
+                input_tokens=_cloud_response.get("usage", {}).get("input_tokens"),
+                output_tokens=_cloud_response.get("usage", {}).get("output_tokens"),
+                latency_ms=_cloud_response.get("latency_ms"),
+                has_proposal=entry.proposed_change is not None,
+                trace_id=trace_id,
+                component="reflection",
+            )
+            return entry
+        except Exception as e:
+            log.warning(
+                "captains_log_cloud_reflection_failed_fallback_local",
+                error_type=type(e).__name__,
+                error_message=str(e),
+                trace_id=trace_id,
+                component="reflection",
+            )
+            # Fall through to local DSPy / manual path
+
+    # ── Local path (DSPy → manual JSON → basic) ──────────────────────────────
     # Create LLM client
     llm_client = LocalLLMClient(
         base_url=settings.llm_base_url,

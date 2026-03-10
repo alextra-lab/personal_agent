@@ -9,16 +9,29 @@ from pydantic import BaseModel, Field, model_validator
 class ModelDefinition(BaseModel):
     """Configuration for a single model.
 
+    Applies to both local models (LM Studio, vLLM, Ollama) and cloud models
+    (Anthropic Claude, OpenAI). Cloud-specific fields (provider, max_tokens) are
+    optional and ignored for local models; local-specific fields (quantization,
+    endpoint) are optional and ignored for cloud models (ADR-0031).
+
     Attributes:
-        id: Model identifier (e.g., "qwen/qwen3-4b-thinking-2507").
+        id: Model identifier. For local models this is the LM Studio slug
+            (e.g., "qwen3.5-35b-a3b"). For cloud models this is the provider's
+            model name (e.g., "claude-sonnet-4-5-20250514", "o4-mini").
+        provider: Cloud provider name. "anthropic" dispatches to ClaudeClient;
+            "openai" dispatches to OpenAIClient (future). None means local model.
+        max_tokens: Maximum output tokens for this model. Primarily useful for
+            cloud models where output length is billed per token. None = provider
+            default / LocalLLMClient call-site default.
         endpoint: Optional base URL override for this model. If None, uses
-            settings.llm_base_url.
+            settings.llm_base_url. Not used for cloud models (they use provider SDK).
         provider_type: Endpoint classification for concurrency control (ADR-0029).
             "local" = single-GPU servers (strict concurrency), "managed" = self-hosted
             multi-GPU clusters (moderate control), "cloud" = OpenAI/Anthropic/etc
             (pass-through). Auto-detected from endpoint if omitted.
         context_length: Maximum context length for this model.
-        quantization: Quantization level (e.g., "8bit", "4bit", "5bit").
+        quantization: Quantization level (e.g., "8bit", "4bit", "5bit"). None for
+            cloud models where quantization is managed by the provider.
         max_concurrency: Maximum concurrent requests for this model.
         default_timeout: Default timeout in seconds for requests to this model.
         temperature: Default sampling temperature (None uses backend default).
@@ -38,7 +51,23 @@ class ModelDefinition(BaseModel):
     """
 
     id: str = Field(..., description="Model identifier")
-    endpoint: str | None = Field(None, description="Optional base URL override")
+    provider: str | None = Field(
+        None,
+        description=(
+            "Cloud provider for dispatch (ADR-0031). "
+            "'anthropic' = ClaudeClient, 'openai' = OpenAIClient. "
+            "None = local model via LocalLLMClient."
+        ),
+    )
+    max_tokens: int | None = Field(
+        None,
+        ge=1,
+        description=(
+            "Maximum output tokens. Primarily used for cloud models where output length "
+            "is billed per token. None = provider default."
+        ),
+    )
+    endpoint: str | None = Field(None, description="Optional base URL override (local models)")
     provider_type: str | None = Field(
         None,
         description=(
@@ -48,7 +77,13 @@ class ModelDefinition(BaseModel):
         ),
     )
     context_length: int = Field(..., ge=1, description="Maximum context length")
-    quantization: str = Field(..., description="Quantization level")
+    quantization: str | None = Field(
+        None,
+        description=(
+            "Quantization level (e.g., '8bit', '4bit'). "
+            "None for cloud models where quantization is provider-managed."
+        ),
+    )
     max_concurrency: int = Field(..., ge=1, description="Maximum concurrent requests")
     default_timeout: int = Field(..., ge=1, description="Default timeout in seconds")
     temperature: float | None = Field(
@@ -109,38 +144,93 @@ class ModelConfig(BaseModel):
     """Complete model configuration.
 
     This represents the structure of config/models.yaml after loading and validation.
+    All model identity and call parameters live here (ADR-0031). Only secrets (API keys)
+    and operational controls (budgets, feature flags) belong in settings.py / .env.
 
     Attributes:
-        models: Dictionary mapping model role names (e.g., "router", "reasoning", "coding")
-            to their configuration.
-        entity_extraction_role: Which role under models is used for entity extraction
-            (Phase 2.2). Must be a key in models or "claude".
+        models: Dictionary mapping role names to their configuration. Includes both
+            local model roles (router, standard, reasoning, coding) and cloud model
+            entries (e.g. claude_sonnet, openai_o4_mini).
+        entity_extraction_role: Role key used for Second Brain entity extraction.
+            Must be a key in models. Cloud models are identified by their provider field.
+        captains_log_role: Role key used for Captain's Log reflection generation.
+            Must be a key in models. Defaults to "reasoning" (local fallback).
+        insights_role: Role key used for Insights Engine analysis.
+            Must be a key in models. Defaults to "reasoning" (local fallback).
     """
 
     models: dict[str, ModelDefinition] = Field(..., description="Model configurations by role")
     entity_extraction_role: str = Field(
         default="reasoning",
-        description="Role used for entity extraction: a key in models or 'claude'",
+        description="Role used for entity extraction: a key in models",
+    )
+    captains_log_role: str = Field(
+        default="reasoning",
+        description="Role used for Captain's Log reflection: a key in models",
+    )
+    insights_role: str = Field(
+        default="reasoning",
+        description="Role used for Insights Engine LLM calls: a key in models",
     )
 
     @model_validator(mode="after")
-    def _validate_entity_extraction_role(self) -> "ModelConfig":
-        """Ensure entity_extraction_role is a key in models or 'claude'."""
-        valid = set(self.models.keys()) | {"claude"}
-        if self.entity_extraction_role in valid:
-            return self
+    def _validate_process_roles(self) -> "ModelConfig":
+        """Ensure all process role keys resolve to entries in models.
+
+        For backward compatibility, the legacy sentinel value "claude" is accepted
+        for entity_extraction_role and silently remapped to the first cloud model
+        with provider="anthropic" if one exists, or left as-is for callers that
+        handle the old sentinel themselves.
+        """
+        self.entity_extraction_role = self._resolve_role(
+            "entity_extraction_role", self.entity_extraction_role
+        )
+        self.captains_log_role = self._resolve_role(
+            "captains_log_role", self.captains_log_role
+        )
+        self.insights_role = self._resolve_role(
+            "insights_role", self.insights_role
+        )
+        return self
+
+    def _resolve_role(self, field_name: str, value: str) -> str:
+        """Validate a role field and return a resolved value.
+
+        Args:
+            field_name: Name of the field being validated (for error messages).
+            value: The role string from models.yaml.
+
+        Returns:
+            Resolved role string (a key in self.models).
+
+        Raises:
+            ValueError: If value is not a valid model key and cannot be resolved.
+        """
+        valid = set(self.models.keys())
+
+        if value in valid:
+            return value
 
         # Backward-compatible fallback: if the field was omitted and defaulted to
-        # "reasoning", choose a viable local role from provided models.
-        explicitly_set = "entity_extraction_role" in self.model_fields_set
-        if not explicitly_set and self.entity_extraction_role == "reasoning":
+        # "reasoning", choose a viable role from the provided models dict.
+        explicitly_set = field_name in self.model_fields_set
+        if not explicitly_set and value == "reasoning":
             if self.models:
-                self.entity_extraction_role = (
-                    "reasoning" if "reasoning" in self.models else next(iter(self.models))
-                )
-            return self
+                return "reasoning" if "reasoning" in self.models else next(iter(self.models))
+            return value
+
+        # Legacy sentinel: "claude" was the old magic string for entity_extraction_role.
+        # Remap to the first Anthropic cloud model in the registry if one exists.
+        if value == "claude":
+            anthropic_key = next(
+                (k for k, m in self.models.items() if m.provider == "anthropic"),
+                None,
+            )
+            if anthropic_key:
+                return anthropic_key
+            # No cloud model defined yet — keep sentinel for callers to handle gracefully.
+            return value
 
         raise ValueError(
-            f"entity_extraction_role must be one of {sorted(valid)}, "
-            f"got: {self.entity_extraction_role!r}"
+            f"{field_name} must be one of {sorted(valid)}, got: {value!r}"
         )

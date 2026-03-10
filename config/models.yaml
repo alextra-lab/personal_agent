@@ -1,30 +1,39 @@
-# Model configuration for Local LLM Client
+# Model configuration (ADR-0031: single source of truth for all model identity)
 #
-# This file defines model configurations for different roles (router, reasoning, coding).
-# Each role maps to a model identifier and configuration.
+# This file owns ALL model parameters — both local (LM Studio) and cloud (Anthropic, OpenAI).
+# Only secrets (API keys) and operational controls (budgets) belong in .env / settings.py.
 #
-# entity_extraction_role (Phase 2.2): Which role under models: is used for entity
-# extraction in the memory graph. Use a key from models: (e.g. reasoning, router) or
-# "claude" to use Claude API instead of a local model.
+# ── Process-to-model assignments ──────────────────────────────────────────────
+# Each key below maps a background process to a model role defined in models:
+#   entity_extraction_role  →  Second Brain memory graph extraction
+#   captains_log_role       →  Captain's Log self-reflection generation
+#   insights_role           →  Insights Engine pattern analysis
 #
-# The client automatically tries /v1/responses first, then falls back to /v1/chat/completions
-# if the responses endpoint is unavailable.
+# ── Model definition fields ───────────────────────────────────────────────────
+# Required for all models:
+#   id               Model identifier (LM Studio slug or provider model name)
+#   context_length   Maximum context window in tokens
+#   max_concurrency  Max concurrent in-flight requests
+#   default_timeout  Request timeout in seconds
 #
-# Configuration options:
-# - id: Model identifier (required)
-# - endpoint: Base URL for this model (optional, defaults to settings.llm_base_url)
-#   Examples:
-#     - "http://localhost:1234/v1" (same provider, uses base_url if omitted)
-#     - "http://localhost:8001/v1" (different provider/port)
-#     - "http://ollama:11434/v1" (different provider entirely)
-# - provider_type: "local" | "managed" | "cloud" (ADR-0029 concurrency control; auto-detected if omitted)
-# - context_length, quantization, max_concurrency, default_timeout: Model-specific settings
-# - temperature, top_p, presence_penalty: Sampling params (top-level OpenAI fields)
-# - top_k: Sampling param passed via extra_body (non-standard, vLLM/LM Studio extension)
-# - disable_thinking: true/false — hard-disables thinking via chat_template_kwargs extra_body (Qwen3.5+)
-# - thinking_budget_tokens: integer — caps thinking token budget via extra_body (Qwen3.5+)
+# Local-model fields (omit for cloud models):
+#   endpoint         Base URL override (defaults to settings.llm_base_url)
+#   provider_type    "local" | "managed" | "cloud" (ADR-0029; auto-detected if omitted)
+#   quantization     e.g. "8bit", "4bit" (omit for cloud models)
+#   temperature, top_p, presence_penalty   Sampling params
+#   top_k            Passed via extra_body (vLLM/LM Studio extension)
+#   disable_thinking Hard-disables thinking via chat_template_kwargs (Qwen3.5+)
+#   thinking_budget_tokens  Caps thinking tokens via extra_body (Qwen3.5+)
+#
+# Cloud-model fields:
+#   provider         "anthropic" | "openai"  ← selects which SDK to dispatch to
+#   max_tokens       Max output tokens (billed per token; set deliberately)
+#   provider_type    "cloud" (set explicitly for ADR-0029 concurrency pass-through)
 
-entity_extraction_role: reasoning
+# ── Process-to-model assignments ──────────────────────────────────────────────
+entity_extraction_role: claude_sonnet
+captains_log_role: claude_sonnet
+insights_role: claude_sonnet
 
 models:
   router:
@@ -138,3 +147,33 @@ models:
     default_timeout: 60
     temperature: 0.2
     #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
+
+  # ── Cloud models (ADR-0031) ────────────────────────────────────────────────
+  # API key is NOT stored here — set AGENT_ANTHROPIC_API_KEY / AGENT_OPENAI_API_KEY in .env
+  # provider_type: "cloud" opts out of local GPU concurrency control (ADR-0029)
+
+  claude_sonnet:
+    # Anthropic Claude Sonnet — used for background reasoning tasks
+    # (entity extraction, Captain's Log reflection, insights analysis)
+    #
+    # Use the undated alias ("claude-sonnet-4-5") for the latest patch of that
+    # minor version, or a pinned dated string once you confirm it's available
+    # on your API plan. Update this single ID to switch all three processes.
+    id: "claude-sonnet-4-6"
+    provider: "anthropic"
+    provider_type: "cloud"
+    max_tokens: 8192
+    context_length: 200000
+    max_concurrency: 10
+    default_timeout: 60
+
+  # openai_o4_mini:
+  #   # OpenAI o4-mini — A/B test candidate for background reasoning tasks
+  #   # Uncomment and set AGENT_OPENAI_API_KEY to use
+  #   id: "o4-mini"
+  #   provider: "openai"
+  #   provider_type: "cloud"
+  #   max_tokens: 8192
+  #   context_length: 128000
+  #   max_concurrency: 10
+  #   default_timeout: 60

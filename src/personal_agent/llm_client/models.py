@@ -127,9 +127,20 @@ class ModelConfig(BaseModel):
     def _validate_entity_extraction_role(self) -> "ModelConfig":
         """Ensure entity_extraction_role is a key in models or 'claude'."""
         valid = set(self.models.keys()) | {"claude"}
-        if self.entity_extraction_role not in valid:
-            raise ValueError(
-                f"entity_extraction_role must be one of {sorted(valid)}, "
-                f"got: {self.entity_extraction_role!r}"
-            )
-        return self
+        if self.entity_extraction_role in valid:
+            return self
+
+        # Backward-compatible fallback: if the field was omitted and defaulted to
+        # "reasoning", choose a viable local role from provided models.
+        explicitly_set = "entity_extraction_role" in self.model_fields_set
+        if not explicitly_set and self.entity_extraction_role == "reasoning":
+            if self.models:
+                self.entity_extraction_role = (
+                    "reasoning" if "reasoning" in self.models else next(iter(self.models))
+                )
+            return self
+
+        raise ValueError(
+            f"entity_extraction_role must be one of {sorted(valid)}, "
+            f"got: {self.entity_extraction_role!r}"
+        )

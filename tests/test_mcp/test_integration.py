@@ -21,7 +21,7 @@ async def test_gateway_initialization():
     mock_client.list_tools = AsyncMock(
         return_value=[
             {
-                "name": "test_tool",
+                "name": "duckduckgo_test_tool",
                 "description": "Test tool",
                 "inputSchema": {
                     "type": "object",
@@ -43,7 +43,7 @@ async def test_gateway_initialization():
 
     tools = registry.list_tools()
     assert len(tools) > 0
-    assert any(t.name == "mcp_test_tool" for t in tools)
+    assert any(t.name == "mcp_duckduckgo_test_tool" for t in tools)
 
 
 @pytest.mark.asyncio

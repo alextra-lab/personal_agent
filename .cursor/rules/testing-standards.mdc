@@ -1,0 +1,88 @@
+---
+description: Testing standards for personal_agent. Use when writing new tests, classifying existing tests, or debugging why tests are hitting live LLMs.
+alwaysApply: false
+---
+
+# Testing Standards
+
+## Two-Tier Test Suite
+
+| Tier | Command | Requirement | Time |
+|------|---------|-------------|------|
+| **Unit/mock** | `make test` | No LLM server needed | ~71s |
+| **Integration** | `make test-integration` | Live LLM server required | minutes |
+
+CI and default dev runs use `make test` only.
+
+## When a Test MUST Be `@pytest.mark.integration`
+
+Mark with **both** `@pytest.mark.integration` and `@pytest.mark.requires_llm_server` if the test:
+
+- Creates a **real** `LocalLLMClient()` and calls `.respond()` or `.get_dspy_lm()`
+- Creates a **real** `Orchestrator()` and calls `handle_user_request()` — even with `LocalLLMClient` patched (see bypass warning below)
+- Calls `extract_entities_and_relationships()` directly (routes to `reasoning` model via `entity_extraction_role`)
+- Calls `generate_reflection_entry()` or `generate_reflection_dspy()` without mocking
+- Runs a DSPy predictor (`predictor(...)` — not just `configure_dspy_lm()` or `dspy.LM()` which are safe)
+
+```python
+# GOOD — properly gated
+@pytest.mark.integration
+@pytest.mark.requires_llm_server
+@pytest.mark.asyncio
+async def test_entity_extraction_python():
+    result = await extract_entities_and_relationships(user_msg, assistant_msg)
+    assert "entities" in result
+
+# BAD — hits reasoning model in CI
+@pytest.mark.asyncio
+async def test_entity_extraction_python():
+    result = await extract_entities_and_relationships(user_msg, assistant_msg)
+```
+
+## The Reflection Bypass Problem
+
+`Orchestrator().handle_user_request()` always triggers a post-task reflection that calls `ModelRole.REASONING` via DSPy — **regardless of executor-level patching**.
+
+**Why**: `reflection.py` creates its own `LocalLLMClient()` at line 144, completely bypassing `@patch("personal_agent.orchestrator.executor.LocalLLMClient")`.
+
+**Fix for orchestrator unit tests**: Use the `conftest.py` fixture in `tests/test_orchestrator/` which patches `generate_reflection_entry` as an `AsyncMock` for all non-integration tests.
+
+```python
+# tests/test_orchestrator/conftest.py — already in place
+# AsyncMock patches generate_reflection_entry for all non-integration tests
+# Do NOT remove this — it prevents ~15 live reasoning model calls per test run
+```
+
+If you add a new test directory that calls `handle_user_request()`, add an equivalent conftest.
+
+## Safe vs. Live Operations
+
+| Operation | Live LLM? | Notes |
+| --------- | --------- | ----- |
+| `dspy.LM(...)` | No | Object creation only, no network call |
+| `dspy.configure(lm=...)` | No | Sets global state only |
+| `configure_dspy_lm(role=...)` | No | Returns LM object, no call |
+| `predictor(question=...)` | **Yes** | Calls model — needs mock or integration mark |
+| `LocalLLMClient()` | No | Loads config, no network call |
+| `llm_client.respond(...)` | **Yes** | HTTP call to LM Studio |
+| `extract_entities_and_relationships()` | **Yes** | Uses `entity_extraction_role: reasoning` |
+| `Orchestrator().handle_user_request()` | **Yes** | Calls LLM + triggers reflection |
+
+## Mocking Patterns
+
+```python
+# Mock the executor's LLM (covers main task execution)
+@patch("personal_agent.orchestrator.executor.LocalLLMClient")
+async def test_something(self, mock_llm_class):
+    mock_llm = AsyncMock()
+    mock_llm_class.return_value = mock_llm
+    mock_llm.respond.return_value = {"role": "assistant", "content": "reply"}
+    ...
+
+# Mock reflection separately (needed whenever Orchestrator() is used)
+# Already handled by tests/test_orchestrator/conftest.py autouse fixture
+```
+
+## Reference
+
+Full testing strategy: `docs/reference/TESTING_STANDARDS.md`

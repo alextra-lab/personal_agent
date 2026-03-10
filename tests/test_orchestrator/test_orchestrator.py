@@ -6,6 +6,8 @@ from personal_agent.governance.models import Mode
 from personal_agent.orchestrator import Channel, Orchestrator
 
 
+@pytest.mark.integration
+@pytest.mark.requires_llm_server
 @pytest.mark.asyncio
 async def test_handle_user_request() -> None:
     """Test the high-level handle_user_request API."""
@@ -30,6 +32,8 @@ async def test_handle_user_request() -> None:
     assert len(result["steps"]) > 0
 
 
+@pytest.mark.integration
+@pytest.mark.requires_llm_server
 @pytest.mark.asyncio
 async def test_handle_user_request_creates_session() -> None:
     """Test that handle_user_request creates session if it doesn't exist."""
@@ -53,6 +57,8 @@ async def test_handle_user_request_creates_session() -> None:
     assert result["trace_id"] is not None
 
 
+@pytest.mark.integration
+@pytest.mark.requires_llm_server
 @pytest.mark.asyncio
 async def test_handle_user_request_uses_existing_session() -> None:
     """Test that handle_user_request uses existing session."""

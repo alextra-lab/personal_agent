@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class Entity(BaseModel):
@@ -32,7 +32,9 @@ class TurnNode(BaseModel):
     for the originating request and is used as the deduplication key.
     """
 
-    turn_id: str  # UUID as string — equals trace_id
+    turn_id: str = Field(
+        validation_alias=AliasChoices("turn_id", "conversation_id")
+    )  # UUID as string — equals trace_id
     trace_id: str | None = None
     session_id: str | None = None
     sequence_number: int = 0  # Position within the session (1-indexed)
@@ -42,6 +44,11 @@ class TurnNode(BaseModel):
     assistant_response: str | None = None
     key_entities: list[str] = Field(default_factory=list)
     properties: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def conversation_id(self) -> str:
+        """Backward-compatible alias for legacy callers/tests."""
+        return self.turn_id
 
 
 # Backward-compatibility alias — remove once all callers use TurnNode

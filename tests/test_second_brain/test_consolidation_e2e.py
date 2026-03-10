@@ -33,6 +33,8 @@ async def consolidator(memory_service):
     return SecondBrainConsolidator(memory_service=memory_service)
 
 
+@pytest.mark.integration
+@pytest.mark.requires_llm_server
 @pytest.mark.asyncio
 class TestConsolidationE2E:
     """E2E tests for consolidation workflow with qwen3-8b."""

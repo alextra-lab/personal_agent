@@ -1,15 +1,27 @@
 # Phase 2.2 Testing Complete - Summary
 
-**Date**: January 23, 2026
-**Status**: ✅ **11 out of 12 TODOs Completed (92%)**
+**Date**: January 23, 2026 | **Updated**: March 9, 2026 (FRE-104)
+**Status**: ✅ **513 passed, 1 skipped, 0 failures**
 
 ## Executive Summary
 
 Comprehensive testing suite implemented and validated for Phase 2.2, covering memory service, knowledge graph, scheduler, entity extraction, and E2E consolidation workflows. Tests identified and helped fix **4 critical bugs** in production code.
 
+Updated March 2026 (FRE-104): Test suite brought to 100% pass rate. Integration tests requiring a live LLM server are now properly gated with `@pytest.mark.integration`. See `docs/reference/TESTING_STANDARDS.md` for the full testing strategy.
+
+```bash
+make test               # 513 passed, 1 skipped in ~71s (no LLM server required)
+make test-integration   # 29 additional tests requiring live LLM server
+```
+
 ## Test Suite Statistics
 
-### Overall Results
+### Overall Results (Updated March 2026)
+- **Fast suite (unit/mock)**: 513 passed, 1 skipped, 0 failures
+- **Integration suite**: 29 tests (require live LLM server)
+- **Fast suite execution time**: ~71 seconds
+
+### Phase 2.2 Original Results (January 2026)
 - **Total Tests Written**: 103 tests
 - **Passing Tests**: 89 tests
 - **Pass Rate**: **86%**

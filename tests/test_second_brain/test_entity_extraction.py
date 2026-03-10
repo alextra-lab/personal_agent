@@ -7,6 +7,8 @@ from personal_agent.second_brain.entity_extraction import (
 )
 
 
+@pytest.mark.integration
+@pytest.mark.requires_llm_server
 @pytest.mark.asyncio
 class TestEntityExtraction:
     """Test entity extraction with local SLM."""

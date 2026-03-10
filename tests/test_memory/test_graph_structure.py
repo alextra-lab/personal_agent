@@ -127,7 +127,7 @@ async def knowledge_graph(memory_service):
         async with memory_service.driver.session() as session:
             for item in conversations:
                 await session.run(
-                    "MATCH (c:Conversation {conversation_id: $id}) SET c.test = true",
+                    "MATCH (c:Turn {turn_id: $id}) SET c.test = true",
                     id=item["conv"].conversation_id,
                 )
             for name in all_entity_names:
@@ -153,7 +153,7 @@ class TestGraphStructure:
         async with memory_service.driver.session() as session:
             result = await session.run(
                 """
-                MATCH (e:Entity {name: 'Python', test: true})<-[:DISCUSSES]-(c:Conversation {test: true})
+                MATCH (e:Entity {name: 'Python', test: true})<-[:DISCUSSES]-(c:Turn {test: true})
                 RETURN count(c) as conversation_count
                 """
             )
@@ -187,7 +187,7 @@ class TestGraphStructure:
             # Find entities related to Django through shared conversations
             result = await session.run(
                 """
-                MATCH (django:Entity {name: 'Django', test: true})<-[:DISCUSSES]-(c:Conversation)-[:DISCUSSES]->(related:Entity)
+                MATCH (django:Entity {name: 'Django', test: true})<-[:DISCUSSES]-(c:Turn)-[:DISCUSSES]->(related:Entity)
                 WHERE related.name <> 'Django'
                 RETURN DISTINCT related.name as entity_name, count(c) as connection_strength
                 ORDER BY connection_strength DESC
@@ -211,7 +211,7 @@ class TestGraphStructure:
             # Find entities that share conversations with Python
             result = await session.run(
                 """
-                MATCH (python:Entity {name: 'Python', test: true})<-[:DISCUSSES]-(c:Conversation)-[:DISCUSSES]->(neighbor:Entity)
+                MATCH (python:Entity {name: 'Python', test: true})<-[:DISCUSSES]-(c:Turn)-[:DISCUSSES]->(neighbor:Entity)
                 WHERE neighbor.name <> 'Python'
                 RETURN DISTINCT neighbor.name as neighbor_name, neighbor.entity_type as entity_type
                 """
@@ -276,7 +276,7 @@ class TestGraphStructure:
             # Find all frameworks that are connected to Web Development
             result = await session.run(
                 """
-                MATCH (framework:Entity {entity_type: 'FRAMEWORK', test: true})<-[:DISCUSSES]-(c:Conversation)-[:DISCUSSES]->(webdev:Entity {name: 'Web Development'})
+                MATCH (framework:Entity {entity_type: 'FRAMEWORK', test: true})<-[:DISCUSSES]-(c:Turn)-[:DISCUSSES]->(webdev:Entity {name: 'Web Development'})
                 RETURN DISTINCT framework.name as framework_name
                 """
             )
@@ -327,11 +327,10 @@ class TestGraphStructure:
         async with memory_service.driver.session() as session:
             result = await session.run(
                 """
-                MATCH (django:Entity {name: 'Django'})-[r:RELATIONSHIP {type: 'IS_BUILT_WITH'}]->(python:Entity {name: 'Python'})
-                RETURN r.type as rel_type, r.weight as weight
+                MATCH (django:Entity {name: 'Django'})-[r:IS_BUILT_WITH]->(python:Entity {name: 'Python'})
+                RETURN r.weight as weight
                 """
             )
             record = await result.single()
             assert record is not None
-            assert record["rel_type"] == "IS_BUILT_WITH"
             assert record["weight"] == 1.0

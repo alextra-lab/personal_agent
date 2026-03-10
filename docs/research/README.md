@@ -35,6 +35,7 @@ This directory contains research findings, external system analyses, and archite
 
 #### Agent Architecture & Orchestration
 
+- **context-switching-task-segmentation.md** — Automatic task boundary detection, task registries, and context switching within agent systems; hypothesis-driven research with 3 experiments planned (prerequisite: ADR-0017)
 - **orchestration-survey.md** — Survey of orchestration frameworks (LangGraph, AutoGen, etc.)
 - **cognitive_architecture_principles.md** — Brain-inspired cognitive patterns
 - **external_systems_analysis.md** — Analysis of production AI systems (Factory.ai, Cursor, etc.)
@@ -150,6 +151,12 @@ Research Discovery → Analysis Document → Architecture Doc → ADR → Implem
 
 ## 🚀 Recent Updates
 
+### March 10, 2026
+- **Added:** Context switching and task segmentation research (`context-switching-task-segmentation.md`)
+- **Scope:** Automatic task boundary detection, task registries, per-task context assembly, multi-task orchestration
+- **Hypotheses:** H1 (4B instruct boundary detection accuracy), H2 (task-scoped context quality), H3 (Task node behavioral analysis)
+- **Status:** Research documented; experimentation blocked on ADR-0017 implementation
+
 ### January 28, 2026
 - **Added:** LangExtract library review (`langextract_library_review_2026-01-28.md`)
 - **Added:** E-018 experiment spec and hypothesis-driven design (entity extraction parse rate, code size, latency, grounding)
@@ -263,5 +270,5 @@ Add research documents when:
 
 ---
 
-**Last Updated:** 2026-01-28
+**Last Updated:** 2026-03-10
 **Next Review:** After Phase 2 model evaluation (Month 2-3)

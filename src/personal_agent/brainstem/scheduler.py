@@ -67,6 +67,7 @@ class BrainstemScheduler:
         self.consolidator: SecondBrainConsolidator | None = None
         self.last_consolidation: datetime | None = None
         self.last_request_time: datetime | None = None
+        self._active_request_count = 0
         self._monitoring_task: asyncio.Task[None] | None = None
         self._lifecycle_task: asyncio.Task[None] | None = None
 
@@ -147,12 +148,30 @@ class BrainstemScheduler:
             await queries.disconnect()
         log.info("brainstem_scheduler_stopped")
 
+    @property
+    def active_request_count(self) -> int:
+        """Get the number of currently active service requests."""
+        return self._active_request_count
+
+    def notify_request_start(self) -> None:
+        """Record that request handling has started."""
+        self._active_request_count += 1
+
+    def notify_request_end(self) -> None:
+        """Record that request handling has ended.
+
+        Decrements the active request counter and updates the last completed
+        request timestamp used by idle-time consolidation checks.
+        """
+        self._active_request_count = max(0, self._active_request_count - 1)
+        self.last_request_time = datetime.now(timezone.utc)
+
     def record_request(self) -> None:
-        """Record that a request was processed (updates last_request_time).
+        """Backward-compatible alias for request completion.
 
         Call this from the orchestrator/service when a request completes.
         """
-        self.last_request_time = datetime.now(timezone.utc)
+        self.notify_request_end()
 
     async def _monitoring_loop(self) -> None:
         """Background monitoring loop that checks conditions and triggers consolidation."""
@@ -182,6 +201,13 @@ class BrainstemScheduler:
         Returns:
             True if conditions are met for consolidation
         """
+        if self._active_request_count > 0:
+            log.debug(
+                "consolidation_skipped_active_requests",
+                active_request_count=self._active_request_count,
+            )
+            return False
+
         # Check minimum interval since last consolidation
         if self.last_consolidation:
             time_since_last = (datetime.now(timezone.utc) - self.last_consolidation).total_seconds()
@@ -249,7 +275,11 @@ class BrainstemScheduler:
                 self.consolidator = SecondBrainConsolidator()
 
             # Consolidate recent captures (last 7 days, up to 50 captures)
-            result = await self.consolidator.consolidate_recent_captures(days=7, limit=50)
+            result = await self.consolidator.consolidate_recent_captures(
+                days=7,
+                limit=50,
+                should_pause=lambda: self._active_request_count > 0,
+            )
 
             self.last_consolidation = datetime.now(timezone.utc)
 

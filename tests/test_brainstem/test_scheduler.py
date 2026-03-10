@@ -29,6 +29,7 @@ class TestSchedulerInitialization:
         assert scheduler.consolidator is None
         assert scheduler.last_consolidation is None
         assert scheduler.last_request_time is None
+        assert scheduler.active_request_count == 0
 
         # Check default thresholds
         assert scheduler.idle_time_seconds == 300  # 5 minutes
@@ -98,6 +99,26 @@ class TestSchedulerStartStop:
 class TestRequestRecording:
     """Test request time recording."""
 
+    async def test_notify_request_start_increments_active_count(self, scheduler):
+        """Starting a request increments active request count."""
+        assert scheduler.active_request_count == 0
+
+        scheduler.notify_request_start()
+
+        assert scheduler.active_request_count == 1
+
+    async def test_notify_request_end_decrements_and_updates_timestamp(self, scheduler):
+        """Ending a request decrements active count and updates timestamp."""
+        scheduler.notify_request_start()
+        before = datetime.now(timezone.utc)
+
+        scheduler.notify_request_end()
+        after = datetime.now(timezone.utc)
+
+        assert scheduler.active_request_count == 0
+        assert scheduler.last_request_time is not None
+        assert before <= scheduler.last_request_time <= after
+
     async def test_record_request_updates_timestamp(self, scheduler):
         """Test that record_request updates last_request_time."""
         assert scheduler.last_request_time is None
@@ -140,6 +161,20 @@ class TestConsolidationTriggerConditions:
 
                 should = await scheduler._should_consolidate()
                 assert should is True
+
+    async def test_should_not_consolidate_when_request_active(self, scheduler):
+        """Test consolidation is blocked while a request is in progress."""
+        scheduler.notify_request_start()
+        scheduler.last_request_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+
+        with patch("personal_agent.brainstem.scheduler.poll_system_metrics") as mock_metrics:
+            mock_metrics.return_value = {
+                "perf_system_cpu_load": 20.0,
+                "perf_system_mem_used": 40.0,
+            }
+
+            should = await scheduler._should_consolidate()
+            assert should is False
 
     async def test_should_not_consolidate_too_soon_after_last(self, scheduler):
         """Test consolidation blocked if too soon after last consolidation."""
@@ -246,7 +281,11 @@ class TestConsolidationExecution:
             assert scheduler.consolidator is not None
 
             # Verify consolidation was called
-            mock_consolidator.consolidate_recent_captures.assert_called_once_with(days=7, limit=50)
+            mock_consolidator.consolidate_recent_captures.assert_called_once()
+            call_kwargs = mock_consolidator.consolidate_recent_captures.call_args.kwargs
+            assert call_kwargs["days"] == 7
+            assert call_kwargs["limit"] == 50
+            assert callable(call_kwargs["should_pause"])
 
             # Verify last_consolidation timestamp was updated
             assert scheduler.last_consolidation is not None
@@ -264,6 +303,10 @@ class TestConsolidationExecution:
         # Should reuse existing consolidator
         assert scheduler.consolidator is mock_consolidator
         mock_consolidator.consolidate_recent_captures.assert_called_once()
+        call_kwargs = mock_consolidator.consolidate_recent_captures.call_args.kwargs
+        assert call_kwargs["days"] == 7
+        assert call_kwargs["limit"] == 50
+        assert callable(call_kwargs["should_pause"])
 
     async def test_trigger_consolidation_error_handling(self, scheduler):
         """Test consolidation error handling."""

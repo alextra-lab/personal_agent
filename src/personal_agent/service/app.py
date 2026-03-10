@@ -376,8 +376,9 @@ async def chat(
         )
 
     # --- Phase: orchestrator ---
-    result: dict[str, Any] = {}
+    result: Any = {}
     response_content = ""
+    request_started = False
     try:
         from personal_agent.orchestrator import Orchestrator
 
@@ -397,6 +398,10 @@ async def chat(
             if prior_messages:
                 session_manager.update_session(str(session.session_id), messages=prior_messages)
 
+        if scheduler:
+            scheduler.notify_request_start()
+            request_started = True
+
         result = await orchestrator.handle_user_request(
             session_id=str(session.session_id),
             user_message=message,
@@ -407,9 +412,6 @@ async def chat(
         )
 
         response_content = result.get("reply", "No response generated")
-
-        if scheduler:
-            scheduler.record_request()
 
     except Exception as e:
         error_id = str(uuid4())[:8]
@@ -422,6 +424,9 @@ async def chat(
         )
         sanitized_msg = sanitize_error_message(e)
         response_content = f"{sanitized_msg} (Error ID: {error_id})"
+    finally:
+        if scheduler and request_started:
+            scheduler.notify_request_end()
 
     # --- Phase: db_append_assistant_message ---
     with timer.span("db_append_assistant_message"):

@@ -4,11 +4,12 @@ This component processes recent task captures, extracts entities and relationshi
 using Claude 4.5 or local SLMs, and updates the Neo4j memory graph.
 """
 
+import asyncio
 import re
+from collections import defaultdict
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
-
-from collections import defaultdict
 
 from personal_agent.captains_log.capture import TaskCapture, read_captures
 from personal_agent.config import load_model_config
@@ -57,12 +58,19 @@ class SecondBrainConsolidator:
             # In CLI mode, this will create a temporary connection
             pass
 
-    async def consolidate_recent_captures(self, days: int = 7, limit: int = 50) -> dict[str, Any]:
+    async def consolidate_recent_captures(
+        self,
+        days: int = 7,
+        limit: int = 50,
+        should_pause: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         """Consolidate recent task captures into memory graph.
 
         Args:
             days: Number of days to look back
             limit: Maximum number of captures to process
+            should_pause: Optional callback indicating whether consolidation
+                should temporarily pause before processing the next capture.
 
         Returns:
             Summary dict with processing results
@@ -127,6 +135,15 @@ class SecondBrainConsolidator:
         sessions_with_new_turns: set[str] = set()
 
         for i, capture in enumerate(captures, 1):
+            if should_pause and should_pause():
+                log.info(
+                    "consolidation_paused_request_active",
+                    capture_num=i,
+                    remaining=len(captures) - i + 1,
+                )
+                while should_pause():
+                    await asyncio.sleep(1.0)
+                log.info("consolidation_resumed", capture_num=i)
             try:
                 if await self.memory_service.turn_exists(capture.trace_id):
                     captures_skipped += 1

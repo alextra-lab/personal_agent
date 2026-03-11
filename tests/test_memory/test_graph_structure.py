@@ -57,9 +57,9 @@ async def knowledge_graph(memory_service):
             ),
             "entities": [
                 Entity(
-                    name="Python", entity_type="PROGRAMMING_LANGUAGE", properties={"test": True}
+                    name="Python", entity_type="Technology", properties={"test": True}
                 ),
-                Entity(name="Programming", entity_type="TOPIC", properties={"test": True}),
+                Entity(name="Programming", entity_type="Topic", properties={"test": True}),
             ],
         },
         {
@@ -72,11 +72,11 @@ async def knowledge_graph(memory_service):
                 properties={"test": True},
             ),
             "entities": [
-                Entity(name="Django", entity_type="FRAMEWORK", properties={"test": True}),
+                Entity(name="Django", entity_type="Technology", properties={"test": True}),
                 Entity(
-                    name="Python", entity_type="PROGRAMMING_LANGUAGE", properties={"test": True}
+                    name="Python", entity_type="Technology", properties={"test": True}
                 ),
-                Entity(name="Web Development", entity_type="TOPIC", properties={"test": True}),
+                Entity(name="Web Development", entity_type="Topic", properties={"test": True}),
             ],
         },
         {
@@ -89,11 +89,11 @@ async def knowledge_graph(memory_service):
                 properties={"test": True},
             ),
             "entities": [
-                Entity(name="FastAPI", entity_type="FRAMEWORK", properties={"test": True}),
+                Entity(name="FastAPI", entity_type="Technology", properties={"test": True}),
                 Entity(
-                    name="Python", entity_type="PROGRAMMING_LANGUAGE", properties={"test": True}
+                    name="Python", entity_type="Technology", properties={"test": True}
                 ),
-                Entity(name="Web Development", entity_type="TOPIC", properties={"test": True}),
+                Entity(name="Web Development", entity_type="Topic", properties={"test": True}),
             ],
         },
         {
@@ -107,10 +107,10 @@ async def knowledge_graph(memory_service):
             ),
             "entities": [
                 Entity(
-                    name="JavaScript", entity_type="PROGRAMMING_LANGUAGE", properties={"test": True}
+                    name="JavaScript", entity_type="Technology", properties={"test": True}
                 ),
-                Entity(name="Programming", entity_type="TOPIC", properties={"test": True}),
-                Entity(name="Web Development", entity_type="TOPIC", properties={"test": True}),
+                Entity(name="Programming", entity_type="Topic", properties={"test": True}),
+                Entity(name="Web Development", entity_type="Topic", properties={"test": True}),
             ],
         },
     ]
@@ -273,21 +273,21 @@ class TestGraphStructure:
             pytest.skip("No driver connection")
 
         async with memory_service.driver.session() as session:
-            # Find all frameworks that are connected to Web Development
+            # Find all Technology entities connected to Web Development through shared turns
             result = await session.run(
                 """
-                MATCH (framework:Entity {entity_type: 'FRAMEWORK', test: true})<-[:DISCUSSES]-(c:Turn)-[:DISCUSSES]->(webdev:Entity {name: 'Web Development'})
-                RETURN DISTINCT framework.name as framework_name
+                MATCH (tech:Entity {entity_type: 'Technology', test: true})<-[:DISCUSSES]-(c:Turn)-[:DISCUSSES]->(webdev:Entity {name: 'Web Development'})
+                RETURN DISTINCT tech.name as tech_name
                 """
             )
 
-            frameworks = []
+            tech_names = []
             async for record in result:
-                frameworks.append(record["framework_name"])
+                tech_names.append(record["tech_name"])
 
-            # Both Django and FastAPI should be connected to Web Development
-            assert "Django" in frameworks
-            assert "FastAPI" in frameworks
+            # Django and FastAPI should be connected to Web Development
+            assert "Django" in tech_names
+            assert "FastAPI" in tech_names
 
     async def test_temporal_ordering_preserved(self, memory_service, knowledge_graph):
         """Verify that temporal ordering is preserved in the graph."""

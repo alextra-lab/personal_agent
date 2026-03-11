@@ -38,8 +38,35 @@ async def memory_service():
 
 @pytest_asyncio.fixture
 async def clean_test_data(memory_service):
-    """Clean test data before and after tests."""
+    """Clean test-tagged data before and after each test.
+
+    Handles two tagging approaches:
+    - Top-level property: ``{test: true}`` (set by test_graph_structure.py)
+    - JSON-serialized property: ``properties`` containing ``"test": true``
+      (set by create_conversation which serialises properties to JSON)
+    """
+    async def _clean(driver):
+        async with driver.session() as session:
+            # Top-level test property (Entity nodes, manually tagged Turn nodes)
+            await session.run("MATCH (n {test: true}) DETACH DELETE n")
+            # Turn nodes where properties JSON contains test marker
+            await session.run(
+                "MATCH (t:Turn) WHERE t.properties CONTAINS '\"test\":true' "
+                "OR t.properties CONTAINS '\"test\": true' DETACH DELETE t"
+            )
+            # Clean up orphaned entities that no longer have any DISCUSSES edges
+            await session.run(
+                "MATCH (e:Entity) WHERE NOT ()-[:DISCUSSES]->(e) "
+                "AND e.mention_count <= 3 DETACH DELETE e"
+            )
+
+    if memory_service.driver:
+        await _clean(memory_service.driver)
+
     yield
+
+    if memory_service.driver:
+        await _clean(memory_service.driver)
 
 
 class TestConnectionHandling:
@@ -93,6 +120,7 @@ class TestConversationCRUD:
             user_message="What is the capital of France?",
             assistant_response="The capital of France is Paris.",
             key_entities=["France", "Paris"],
+            properties={"test": True},
         )
 
         success = await memory_service.create_conversation(conversation)
@@ -108,7 +136,7 @@ class TestConversationCRUD:
             user_message="Tell me about Python",
             assistant_response="Python is a high-level programming language.",
             key_entities=["Python"],
-            properties={"task_id": "123", "duration_ms": 500},
+            properties={"test": True, "task_id": "123", "duration_ms": 500},
         )
 
         success = await memory_service.create_conversation(conversation)
@@ -124,7 +152,8 @@ class TestEntityManagement:
         """Test creating an entity node."""
         entity = Entity(
             name="Paris",
-            entity_type="LOCATION",
+            entity_type="Location",
+            properties={"test": True},
         )
 
         entity_id = await memory_service.create_entity(entity)
@@ -137,7 +166,8 @@ class TestEntityManagement:
         """Test creating entity with mention count."""
         entity = Entity(
             name="Python",
-            entity_type="PROGRAMMING_LANGUAGE",
+            entity_type="Technology",
+            properties={"test": True},
         )
 
         entity_id = await memory_service.create_entity(entity)
@@ -153,7 +183,8 @@ class TestEntityManagement:
         unique_name = f"TestLang_{uuid.uuid4().hex[:8]}"
         entity = Entity(
             name=unique_name,
-            entity_type="PROGRAMMING_LANGUAGE",
+            entity_type="Technology",
+            properties={"test": True},
         )
 
         await memory_service.create_entity(entity)
@@ -184,11 +215,13 @@ class TestRelationships:
             user_message="Tell me about Paris",
             assistant_response="Paris is the capital of France.",
             key_entities=["Paris"],
+            properties={"test": True},
         )
 
         entity = Entity(
             name="Paris",
-            entity_type="LOCATION",
+            entity_type="Location",
+            properties={"test": True},
         )
 
         success = await memory_service.create_conversation(conversation)
@@ -218,6 +251,7 @@ class TestMemoryQueries:
             user_message="What is Python?",
             assistant_response="Python is a programming language.",
             key_entities=["Python"],
+            properties={"test": True},
         )
 
         success = await memory_service.create_conversation(conversation)
@@ -242,11 +276,13 @@ class TestMemoryQueries:
             user_message="Tell me about London",
             assistant_response="London is the capital of the UK.",
             key_entities=["London"],
+            properties={"test": True},
         )
 
         entity = Entity(
             name="London",
-            entity_type="LOCATION",
+            entity_type="Location",
+            properties={"test": True},
         )
 
         success = await memory_service.create_conversation(conversation)
@@ -254,7 +290,7 @@ class TestMemoryQueries:
         await memory_service.create_entity(entity)
 
         query = MemoryQuery(
-            entity_types=["LOCATION"],
+            entity_types=["Location"],
             limit=10,
         )
 
@@ -273,6 +309,7 @@ class TestMemoryQueries:
             user_message=f"Old message about {unique_entity}",
             assistant_response=f"{unique_entity} is a programming language.",
             key_entities=[unique_entity],
+            properties={"test": True},
         )
 
         recent_conversation = ConversationNode(
@@ -281,6 +318,7 @@ class TestMemoryQueries:
             user_message=f"Recent message about {unique_entity}",
             assistant_response=f"{unique_entity} is still popular.",
             key_entities=[unique_entity],
+            properties={"test": True},
         )
 
         await memory_service.create_conversation(old_conversation)
@@ -305,9 +343,9 @@ class TestMemoryQueries:
         mid_name = f"{prefix}MidMentions"
         low_name = f"{prefix}LowMentions"
 
-        high_entity = Entity(name=high_name, entity_type="PROGRAMMING_LANGUAGE")
-        mid_entity = Entity(name=mid_name, entity_type="PROGRAMMING_LANGUAGE")
-        low_entity = Entity(name=low_name, entity_type="PROGRAMMING_LANGUAGE")
+        high_entity = Entity(name=high_name, entity_type="Technology", properties={"test": True})
+        mid_entity = Entity(name=mid_name, entity_type="Technology", properties={"test": True})
+        low_entity = Entity(name=low_name, entity_type="Technology", properties={"test": True})
 
         for _ in range(10):
             await memory_service.create_entity(high_entity)

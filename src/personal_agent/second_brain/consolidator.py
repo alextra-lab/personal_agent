@@ -185,6 +185,10 @@ class SecondBrainConsolidator:
         # Build Session nodes for every session that received new turns this run
         sessions_created = await self._consolidate_sessions(captures, sessions_with_new_turns)
 
+        # Repair orphaned turns: turns with session_id but no incoming CONTAINS edge.
+        # This catches turns from previous runs where session wiring failed mid-way.
+        orphans_repaired = await self._repair_orphaned_turns()
+
         summary = {
             "captures_processed": len(captures),
             "captures_skipped": captures_skipped,
@@ -192,6 +196,7 @@ class SecondBrainConsolidator:
             "sessions_created": sessions_created,
             "entities_created": entities_created,
             "relationships_created": relationships_created,
+            "orphans_repaired": orphans_repaired,
         }
 
         log.info(
@@ -298,6 +303,84 @@ class SecondBrainConsolidator:
         except Exception as e:
             log.warning("update_dominant_entities_failed", session_id=session_id, error=str(e))
 
+    async def _repair_orphaned_turns(self) -> int:
+        """Find turns with session_id but no incoming CONTAINS edge and wire them.
+
+        This repairs turns from previous consolidation runs where session wiring
+        failed (e.g. crash after turn creation but before _consolidate_sessions).
+
+        Returns:
+            Number of orphaned turns repaired.
+        """
+        if not self.memory_service.connected or not self.memory_service.driver:
+            return 0
+
+        try:
+            async with self.memory_service.driver.session() as db_session:
+                # Find session_ids that have orphaned turns (turns with no CONTAINS edge)
+                result = await db_session.run(
+                    """
+                    MATCH (t:Turn)
+                    WHERE t.session_id IS NOT NULL
+                      AND NOT ()-[:CONTAINS]->(t)
+                    RETURN DISTINCT t.session_id AS session_id
+                    """
+                )
+                records = await result.values()
+                orphan_sessions = [row[0] for row in records if row[0]]
+
+            if not orphan_sessions:
+                return 0
+
+            log.info("repair_orphaned_turns_found", session_count=len(orphan_sessions))
+
+            repaired = 0
+            for session_id in orphan_sessions:
+                try:
+                    # Ensure Session node exists (MERGE is idempotent)
+                    async with self.memory_service.driver.session() as db_session:
+                        result = await db_session.run(
+                            """
+                            MATCH (t:Turn {session_id: $session_id})
+                            RETURN min(t.timestamp) AS started_at,
+                                   max(t.timestamp) AS ended_at,
+                                   count(t) AS turn_count
+                            """,
+                            session_id=session_id,
+                        )
+                        record = await result.single()
+                        if not record or not record["started_at"]:
+                            continue
+
+                    session_node = SessionNode(
+                        session_id=session_id,
+                        started_at=datetime.fromisoformat(record["started_at"]),
+                        ended_at=datetime.fromisoformat(record["ended_at"]),
+                        turn_count=record["turn_count"],
+                        dominant_entities=[],
+                        session_summary=None,
+                    )
+                    await self.memory_service.create_session(session_node)
+                    linked = await self.memory_service.link_session_turns(session_id)
+                    await self._update_session_dominant_entities(session_id)
+                    repaired += linked
+                    log.info(
+                        "orphaned_turns_repaired",
+                        session_id=session_id,
+                        turns_linked=linked,
+                    )
+                except Exception as e:
+                    log.warning(
+                        "orphan_repair_session_failed",
+                        session_id=session_id,
+                        error=str(e),
+                    )
+
+            return repaired
+        except Exception as e:
+            log.warning("repair_orphaned_turns_failed", error=str(e))
+            return 0
+
     async def _process_capture(self, capture: TaskCapture) -> dict[str, Any]:
         """Process a single capture: extract entities and update graph.
 
@@ -339,6 +422,16 @@ class SecondBrainConsolidator:
             )
             return {"turns_created": 0, "entities_created": 0, "relationships_created": 0}
 
+        # Extract routing metadata from capture.steps so the Turn node records
+        # which models were involved and how many hops the delegation chain took.
+        model_chain = [
+            s.get("metadata", {}).get("model_role", "")
+            for s in (capture.steps or [])
+            if s.get("type") == "llm_call" and s.get("metadata", {}).get("model_role")
+        ]
+        delegation_hops = len(model_chain)
+        final_model = model_chain[-1] if model_chain else None
+
         # Create Turn node
         turn = TurnNode(
             turn_id=capture.trace_id,
@@ -353,6 +446,9 @@ class SecondBrainConsolidator:
                 "tools_used": capture.tools_used,
                 "duration_ms": capture.duration_ms,
                 "outcome": capture.outcome,
+                "model_chain": model_chain,
+                "final_model": final_model,
+                "delegation_hops": delegation_hops,
             },
         )
         # Attach full entity data so create_conversation can set entity_type on inline nodes.

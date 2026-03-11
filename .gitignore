@@ -74,3 +74,6 @@ telemetry/evaluation/evaluation_results*.json
 experiments/*/results/
 
 current_session
+
+# Claude
+.claude/worktrees/

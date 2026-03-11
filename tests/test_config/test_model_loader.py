@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from personal_agent.config import ModelConfigError, load_model_config
+from personal_agent.config import model_loader as model_loader_module
 from personal_agent.llm_client.models import ModelConfig, ModelDefinition
 
 
@@ -140,3 +141,30 @@ models:
 
         with pytest.raises(ModelConfigError, match="validation failed"):
             load_model_config(config_file)
+
+    def test_load_uses_cache_for_same_path(self, tmp_path: Path) -> None:
+        """Test repeated loads for same path only parse YAML once."""
+        config_file = tmp_path / "models.yaml"
+        config_file.write_text(
+            """
+models:
+  router:
+    id: "test-router"
+    context_length: 8192
+    quantization: "8bit"
+    max_concurrency: 4
+    default_timeout: 5
+"""
+        )
+
+        model_loader_module._load_model_config_at_path.cache_clear()
+        try:
+            first = load_model_config(config_file)
+            second = load_model_config(config_file)
+            cache_info = model_loader_module._load_model_config_at_path.cache_info()
+        finally:
+            model_loader_module._load_model_config_at_path.cache_clear()
+
+        assert first == second
+        assert cache_info.misses == 1
+        assert cache_info.hits == 1

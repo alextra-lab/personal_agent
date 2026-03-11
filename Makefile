@@ -14,7 +14,7 @@ help:
 
 infra-up:
 	@docker compose up -d
-	#@bash scripts/init-services.sh
+	@bash scripts/init-services.sh
 
 infra-down:
 	@docker compose down

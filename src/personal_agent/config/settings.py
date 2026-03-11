@@ -159,6 +159,22 @@ class AppConfig(BaseSettings):
         default=True,
         description="Include GPU metrics in request monitoring (Apple Silicon: powermetrics)",
     )
+    metrics_daemon_poll_interval_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        description="Continuous metrics daemon polling interval in seconds",
+    )
+    metrics_daemon_es_emit_interval_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        description="How often the metrics daemon emits SENSOR_POLL telemetry to ES",
+    )
+    metrics_daemon_buffer_size: int = Field(
+        default=720,
+        ge=1,
+        le=10000,
+        description="Metrics daemon ring buffer size",
+    )
 
     # MCP Gateway
     mcp_gateway_enabled: bool = Field(

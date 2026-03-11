@@ -606,15 +606,17 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
     # Start request-scoped metrics monitoring (ADR-0012)
     monitor = None
     if settings.request_monitoring_enabled:
+        from personal_agent.brainstem.sensors.metrics_daemon import get_global_metrics_daemon
         from personal_agent.brainstem.sensors.request_monitor import RequestMonitor
 
-        monitor = RequestMonitor(
-            trace_id=ctx.trace_id,
-            interval_seconds=settings.request_monitoring_interval_seconds,
-            include_gpu=settings.request_monitoring_include_gpu,
-        )
+        daemon = get_global_metrics_daemon()
+        if daemon is None:
+            log.warning("request_monitor_skipped_no_metrics_daemon", trace_id=ctx.trace_id)
+        else:
+            monitor = RequestMonitor(trace_id=ctx.trace_id, daemon=daemon)
         try:
-            await monitor.start()
+            if monitor is not None:
+                await monitor.start()
         except Exception as e:
             # Don't fail task if monitoring fails
             log.warning(

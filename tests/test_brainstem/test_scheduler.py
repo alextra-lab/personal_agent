@@ -8,6 +8,7 @@ import pytest
 import pytest_asyncio
 
 from personal_agent.brainstem.scheduler import BrainstemScheduler
+from personal_agent.brainstem.sensors.metrics_daemon import MetricsSample
 
 
 @pytest_asyncio.fixture
@@ -382,6 +383,42 @@ class TestMonitoringLoop:
 
                     # Should trigger at least once
                     assert mock_trigger.call_count >= 1
+
+
+@pytest.mark.asyncio
+class TestDaemonBackedResourceChecks:
+    """Test scheduler consolidation checks with daemon metrics source."""
+
+    async def test_should_consolidate_uses_daemon_latest_without_polling(self, scheduler):
+        """When daemon is present, scheduler reads latest sample and skips direct polling."""
+        scheduler.last_request_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+
+        daemon = MagicMock()
+        daemon.get_latest.return_value = MetricsSample(
+            timestamp=datetime.now(timezone.utc).timestamp(),
+            metrics={
+                "perf_system_cpu_load": 10.0,
+                "perf_system_mem_used": 20.0,
+            },
+        )
+        scheduler.metrics_daemon = daemon
+
+        with patch("personal_agent.brainstem.scheduler.poll_system_metrics") as mock_poll:
+            should = await scheduler._should_consolidate()
+            assert should is True
+            mock_poll.assert_not_called()
+            daemon.get_latest.assert_called_once()
+
+    async def test_should_not_consolidate_without_daemon_sample(self, scheduler):
+        """When daemon has no sample yet, resource check should fail closed."""
+        scheduler.last_request_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+
+        daemon = MagicMock()
+        daemon.get_latest.return_value = None
+        scheduler.metrics_daemon = daemon
+
+        should = await scheduler._should_consolidate()
+        assert should is False
 
 
 @pytest.mark.asyncio

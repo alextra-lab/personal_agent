@@ -11,6 +11,10 @@ from fastapi import Depends, FastAPI, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from personal_agent.brainstem.scheduler import BrainstemScheduler
+from personal_agent.brainstem.sensors.metrics_daemon import (
+    MetricsDaemon,
+    set_global_metrics_daemon,
+)
 from personal_agent.captains_log.es_indexer import build_es_indexer_from_handler, set_es_indexer
 from personal_agent.config.settings import get_settings
 from personal_agent.memory.service import MemoryService
@@ -29,6 +33,7 @@ settings = get_settings()
 es_handler: ElasticsearchHandler | None = None
 memory_service: MemoryService | None = None
 scheduler: BrainstemScheduler | None = None
+metrics_daemon: MetricsDaemon | None = None
 mcp_adapter: "MCPGatewayAdapter | None" = None  # type: ignore  # noqa: F821
 
 
@@ -83,7 +88,7 @@ async def _preflight_check_tcp(service: str, host: str, port: int) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan management."""
-    global es_handler, memory_service, scheduler, mcp_adapter
+    global es_handler, memory_service, scheduler, metrics_daemon, mcp_adapter
 
     # Startup
     log.info("service_starting")
@@ -135,6 +140,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             )
             memory_service = None
 
+    metrics_daemon = MetricsDaemon(
+        poll_interval_seconds=settings.metrics_daemon_poll_interval_seconds,
+        es_emit_interval_seconds=settings.metrics_daemon_es_emit_interval_seconds,
+        buffer_size=settings.metrics_daemon_buffer_size,
+    )
+    await metrics_daemon.start()
+    app.state.metrics_daemon = metrics_daemon
+    set_global_metrics_daemon(metrics_daemon)
+
     # Start Brainstem scheduler for second brain, lifecycle, and/or insights tasks.
     if (
         settings.enable_second_brain
@@ -156,6 +170,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             lifecycle_es_client=es_client,
             backfill_es_logger=backfill_logger,
             memory_service=memory_service,
+            metrics_daemon=metrics_daemon,
         )
         await scheduler.start()
         log.info("brainstem_scheduler_started")
@@ -190,6 +205,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Shutdown
     log.info("service_shutting_down")
+
+    set_global_metrics_daemon(None)
+    daemon = cast(MetricsDaemon | None, getattr(app.state, "metrics_daemon", None))
+    if daemon is not None:
+        await daemon.stop()
+    metrics_daemon = None
 
     if scheduler:
         await scheduler.stop()

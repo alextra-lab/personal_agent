@@ -25,6 +25,7 @@ from personal_agent.telemetry.queries import TelemetryQueries
 
 if TYPE_CHECKING:
     from elasticsearch import AsyncElasticsearch
+    from personal_agent.brainstem.sensors.metrics_daemon import MetricsDaemon
 
 log = get_logger(__name__)
 settings = get_settings()
@@ -61,6 +62,7 @@ class BrainstemScheduler:
         backfill_es_logger: object | None = None,
         memory_service: MemoryService | None = None,
         quality_monitor: ConsolidationQualityMonitor | None = None,
+        metrics_daemon: "MetricsDaemon | None" = None,
     ) -> None:  # noqa: D107
         """Initialize scheduler with consolidation thresholds and optional lifecycle ES client."""
         self.running = False
@@ -70,6 +72,7 @@ class BrainstemScheduler:
         self._active_request_count = 0
         self._monitoring_task: asyncio.Task[None] | None = None
         self._lifecycle_task: asyncio.Task[None] | None = None
+        self.metrics_daemon = metrics_daemon
 
         # Data lifecycle (Phase 2.3)
         self.lifecycler = DataLifecycleManager(es_client=lifecycle_es_client)
@@ -225,21 +228,29 @@ class BrainstemScheduler:
 
         # Check system resources and emit metrics for ES/dashboards
         try:
-            metrics = await asyncio.to_thread(poll_system_metrics)
+            if self.metrics_daemon is not None:
+                latest_sample = self.metrics_daemon.get_latest()
+                if latest_sample is None:
+                    log.debug("consolidation_skipped_no_metrics_daemon_sample")
+                    return False
+                metrics = latest_sample.metrics
+            else:
+                metrics = await asyncio.to_thread(poll_system_metrics)
             cpu_load = metrics.get("perf_system_cpu_load", 0.0)
             memory_used = metrics.get("perf_system_mem_used", 0.0)
             gpu_load = metrics.get("perf_system_gpu_load")
 
-            # Emit sensor_poll at INFO so the ES handler can forward it
-            # to the System Health dashboard.
-            log.info(
-                SENSOR_POLL,
-                cpu_load=cpu_load,
-                memory_used=memory_used,
-                gpu_load=gpu_load,
-                disk_usage=metrics.get("perf_system_disk_usage_percent"),
-                component="scheduler",
-            )
+            if self.metrics_daemon is None:
+                # Emit sensor_poll here only for fallback mode. In normal mode,
+                # the daemon emits SENSOR_POLL continuously.
+                log.info(
+                    SENSOR_POLL,
+                    cpu_load=cpu_load,
+                    memory_used=memory_used,
+                    gpu_load=gpu_load,
+                    disk_usage=metrics.get("perf_system_disk_usage_percent"),
+                    component="scheduler",
+                )
 
             if cpu_load > self.cpu_threshold:
                 log.info(

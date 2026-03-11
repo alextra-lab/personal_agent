@@ -1,54 +1,34 @@
-"""Request-scoped system metrics monitoring for homeostasis control loops.
+"""Request-scoped metrics summary reader for homeostasis control loops.
 
-This module implements ADR-0012: Request-Scoped Metrics Monitoring, providing
-automatic background monitoring of system metrics during agent request execution.
-
-Key Features:
-- Async background polling at configurable intervals (default: 5s)
-- Trace correlation (all metrics tagged with trace_id)
-- Threshold monitoring for control loop triggers
-- Aggregated summaries for Captain's Log enrichment
-- Graceful cleanup on both success and failure paths
-
-Architecture:
-    User Request → Orchestrator starts RequestMonitor
-                  ↓
-                  Monitor polls metrics every 5s
-                  ↓
-                  Logs SYSTEM_METRICS_SNAPSHOT + trace_id
-                  ↓
-                  Checks thresholds → Emits control signals
-                  ↓
-                  ModeManager evaluates transitions
-                  ↓
-    Request Completes → Monitor stops, returns summary
-
-Related:
-- ADR-0012: Request-Scoped Metrics Monitoring
-- ADR-0013: Enhanced System Health Tool
-- ../../docs/architecture/CONTROL_LOOPS_SENSORS_v0.1.md
+This module implements the post-ADR-0021 `RequestMonitor`, which records
+request timing and computes aggregates from the service-lifetime
+`MetricsDaemon` ring buffer.
 """
 
-import asyncio
 import time
-from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Protocol
 
-from personal_agent.brainstem.sensors.sensors import poll_system_metrics
-from personal_agent.config import settings
-from personal_agent.telemetry import SYSTEM_METRICS_SNAPSHOT, get_logger
+from personal_agent.brainstem.sensors.metrics_daemon import MetricsSample
+from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
 
 
-class RequestMonitor:
-    """Background system metrics monitor scoped to a specific request.
+class MetricsWindowReader(Protocol):
+    """Protocol for reading a time-window of metrics samples."""
 
-    Collects metrics at regular intervals and tags them with trace_id
-    for correlation with logs and Captain's Log reflections.
+    def get_window(self, seconds: float) -> list[MetricsSample]:
+        """Return daemon samples captured within the requested window."""
+
+
+class RequestMonitor:
+    """Request-scoped monitor that computes summaries from daemon samples.
+
+    Tracks request start/end time and computes aggregate metrics over the
+    corresponding daemon window for Captain's Log enrichment.
 
     Usage:
-        >>> monitor = RequestMonitor(trace_id="abc-123", interval_seconds=5.0)
+        >>> monitor = RequestMonitor(trace_id="abc-123", daemon=daemon)
         >>> await monitor.start()
         >>> # ... request executes ...
         >>> summary = await monitor.stop()
@@ -56,9 +36,7 @@ class RequestMonitor:
 
     Attributes:
         trace_id: Unique identifier for the request being monitored.
-        interval_seconds: Polling interval (default: 5.0 seconds).
-        _task: Background asyncio task for polling.
-        _samples: List of collected metric snapshots.
+        daemon: Service-lifetime metrics daemon for reading samples.
         _start_time: Monitor start timestamp.
         _running: Flag indicating if monitoring is active.
     """
@@ -66,36 +44,22 @@ class RequestMonitor:
     def __init__(
         self,
         trace_id: str,
-        interval_seconds: float | None = None,
-        include_gpu: bool | None = None,
+        daemon: MetricsWindowReader,
     ):
         """Initialize monitor for a specific request.
 
         Args:
             trace_id: Unique identifier for the request.
-            interval_seconds: Polling interval. Defaults to settings.request_monitoring_interval_seconds.
-            include_gpu: Whether to include GPU metrics. Defaults to settings.request_monitoring_include_gpu.
+            daemon: Service-lifetime metrics daemon for window reads.
         """
         self.trace_id = trace_id
-        self.interval_seconds = (
-            interval_seconds
-            if interval_seconds is not None
-            else settings.request_monitoring_interval_seconds
-        )
-        self.include_gpu = (
-            include_gpu if include_gpu is not None else settings.request_monitoring_include_gpu
-        )
-        self._task: asyncio.Task[None] | None = None
-        self._samples: list[dict[str, Any]] = []
+        self.daemon = daemon
         self._start_time: float | None = None
         self._running: bool = False
         self._threshold_violations: list[str] = []
 
     async def start(self) -> None:
-        """Start background monitoring task.
-
-        Launches an async task that polls system metrics at the configured
-        interval until stop() is called.
+        """Start request-scoped monitoring window.
 
         Raises:
             RuntimeError: If monitor is already running.
@@ -105,21 +69,17 @@ class RequestMonitor:
 
         self._start_time = time.time()
         self._running = True
-        self._task = asyncio.create_task(self._monitor_loop())
 
         log.info(
             "request_monitor_started",
             trace_id=self.trace_id,
-            interval_seconds=self.interval_seconds,
-            include_gpu=self.include_gpu,
             component="request_monitor",
         )
 
     async def stop(self) -> dict[str, Any]:
         """Stop monitoring and return aggregated summary.
 
-        Cancels the background task and computes statistics across all
-        collected samples.
+        Computes statistics across daemon samples in the request window.
 
         Returns:
             Summary dict with:
@@ -138,16 +98,15 @@ class RequestMonitor:
 
         self._running = False
 
-        # Cancel background task
-        if self._task and not self._task.done():
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass  # Expected
+        elapsed = time.time() - (self._start_time or time.time())
+        samples = self.daemon.get_window(seconds=elapsed)
+        for sample in samples:
+            violations = self._check_thresholds(sample.metrics)
+            if violations:
+                self._threshold_violations.extend(violations)
 
         # Compute summary
-        summary = self._compute_summary()
+        summary = self._compute_summary(samples)
 
         log.info(
             "request_monitor_stopped",
@@ -162,65 +121,6 @@ class RequestMonitor:
         )
 
         return summary
-
-    async def _monitor_loop(self) -> None:
-        """Background loop that polls metrics at interval.
-
-        Runs until _running is False or task is cancelled.
-        Logs SYSTEM_METRICS_SNAPSHOT events with trace_id.
-        """
-        try:
-            while self._running:
-                metrics = await asyncio.to_thread(poll_system_metrics)
-
-                # Tag with trace_id and timestamp
-                metrics["trace_id"] = self.trace_id
-                metrics["timestamp"] = datetime.now(timezone.utc).isoformat()
-
-                # Store sample
-                self._samples.append(metrics)
-
-                log.info(
-                    SYSTEM_METRICS_SNAPSHOT,
-                    trace_id=self.trace_id,
-                    cpu_load=metrics.get("perf_system_cpu_load"),
-                    memory_used=metrics.get("perf_system_mem_used"),
-                    gpu_load=metrics.get("perf_system_gpu_load"),
-                    component="request_monitor",
-                )
-
-                # Check thresholds for control loops
-                violations = self._check_thresholds(metrics)
-                if violations:
-                    self._threshold_violations.extend(violations)
-                    log.warning(
-                        "metrics_threshold_violated",
-                        trace_id=self.trace_id,
-                        violations=violations,
-                        component="request_monitor",
-                    )
-
-                # Wait for next interval
-                await asyncio.sleep(self.interval_seconds)
-
-        except asyncio.CancelledError:
-            # Normal shutdown
-            log.debug(
-                "monitor_loop_cancelled",
-                trace_id=self.trace_id,
-                samples_collected=len(self._samples),
-                component="request_monitor",
-            )
-            raise
-        except Exception as e:
-            # Unexpected error - log but don't crash request
-            log.error(
-                "monitor_loop_error",
-                trace_id=self.trace_id,
-                error_type=type(e).__name__,
-                error_message=str(e),
-                component="request_monitor",
-            )
 
     def _check_thresholds(self, metrics: dict[str, Any]) -> list[str]:
         """Check metrics against control loop thresholds.
@@ -261,13 +161,13 @@ class RequestMonitor:
 
         return violations
 
-    def _compute_summary(self) -> dict[str, Any]:
+    def _compute_summary(self, samples: list[MetricsSample]) -> dict[str, Any]:
         """Compute aggregated statistics across all samples.
 
         Returns:
             Summary dict with min/max/avg for CPU, memory, GPU.
         """
-        if not self._samples:
+        if not samples:
             return {
                 "duration_seconds": 0.0,
                 "samples_collected": 0,
@@ -277,25 +177,13 @@ class RequestMonitor:
         duration = time.time() - (self._start_time or time.time())
 
         # Extract values (use flat keys from poll_system_metrics)
-        cpu_values = [
-            s.get("perf_system_cpu_load")
-            for s in self._samples
-            if s.get("perf_system_cpu_load") is not None
-        ]
-        memory_values = [
-            s.get("perf_system_mem_used")
-            for s in self._samples
-            if s.get("perf_system_mem_used") is not None
-        ]
-        gpu_values = [
-            s.get("perf_system_gpu_load")
-            for s in self._samples
-            if s.get("perf_system_gpu_load") is not None
-        ]
+        cpu_values = self._extract_numeric_values(samples, "perf_system_cpu_load")
+        memory_values = self._extract_numeric_values(samples, "perf_system_mem_used")
+        gpu_values = self._extract_numeric_values(samples, "perf_system_gpu_load")
 
         summary: dict[str, Any] = {
             "duration_seconds": round(duration, 2),
-            "samples_collected": len(self._samples),
+            "samples_collected": len(samples),
             "threshold_violations": list(set(self._threshold_violations)),
         }
 
@@ -318,3 +206,13 @@ class RequestMonitor:
             summary["gpu_avg"] = round(sum(gpu_values) / len(gpu_values), 1)
 
         return summary
+
+    @staticmethod
+    def _extract_numeric_values(samples: list[MetricsSample], key: str) -> list[float]:
+        """Extract numeric values for a metric key from samples."""
+        values: list[float] = []
+        for sample in samples:
+            value = sample.metrics.get(key)
+            if isinstance(value, (int, float)):
+                values.append(float(value))
+        return values

@@ -9,9 +9,22 @@ Structure:
 - platforms/apple.py: Apple Silicon-specific metrics (GPU via powermetrics)
 """
 
+from personal_agent.brainstem.sensors.metrics_daemon import (
+    MetricsDaemon,
+    MetricsSample,
+    get_global_metrics_daemon,
+    set_global_metrics_daemon,
+)
 from personal_agent.brainstem.sensors.sensors import (
     get_system_metrics_snapshot,
     poll_system_metrics,
 )
 
-__all__ = ["poll_system_metrics", "get_system_metrics_snapshot"]
+__all__ = [
+    "poll_system_metrics",
+    "get_system_metrics_snapshot",
+    "MetricsDaemon",
+    "MetricsSample",
+    "get_global_metrics_daemon",
+    "set_global_metrics_daemon",
+]

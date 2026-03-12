@@ -3,7 +3,7 @@
 This module provides:
 - Tool registry for tool discovery and registration
 - Tool execution layer with permission checks and validation
-- MVP tools (read_file, system_metrics_snapshot)
+- MVP tools (read_file, system_metrics_snapshot, self_telemetry_query)
 """
 
 from personal_agent.tools.executor import ToolExecutionError, ToolExecutionLayer
@@ -16,6 +16,10 @@ from personal_agent.tools.filesystem import (
 from personal_agent.tools.memory_search import (
     search_memory_executor,
     search_memory_tool,
+)
+from personal_agent.tools.self_telemetry import (
+    self_telemetry_query_executor,
+    self_telemetry_query_tool,
 )
 from personal_agent.tools.registry import ToolRegistry
 from personal_agent.tools.system_health import (
@@ -54,6 +58,7 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
     registry.register(list_directory_tool, list_directory_executor)
     registry.register(system_metrics_snapshot_tool, system_metrics_snapshot_executor)
     registry.register(search_memory_tool, search_memory_executor)
+    registry.register(self_telemetry_query_tool, self_telemetry_query_executor)
 
 
 # Global singleton registry

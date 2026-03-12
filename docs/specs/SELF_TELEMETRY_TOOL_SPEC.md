@@ -1,7 +1,7 @@
 # Self-Telemetry Tool Spec
 
 **Date**: 2026-03-12
-**Status**: Draft
+**Status**: Implemented
 **Phase**: 2.3 Homeostasis & Feedback
 **Related**: `telemetry/metrics.py`, `telemetry/queries.py`, `tools/system_health.py`, FRE-53
 
@@ -146,7 +146,7 @@ registry.register(self_telemetry_query_tool, self_telemetry_query_executor)
 
 1. Default `limit` to 20 if not provided.
 2. Cap output to 50 entries max regardless of `limit` parameter.
-3. If truncated, append a summary: `{"truncated": true, "total_available": N}`.
+3. If truncated, include a summary item: `{"truncated": true, "total_available": N}` while keeping total returned entries at 50.
 
 This keeps tool-call responses within reasonable context window size.
 
@@ -176,15 +176,15 @@ A follow-up could deprecate and remove it if the service-side approach
 
 ## Acceptance criteria
 
-- [ ] `self_telemetry_query` appears in `registry.list_tools()`.
-- [ ] `query_type=events` with `event=model_call_completed`, `window=1h` returns matching entries.
-- [ ] `query_type=trace` with a valid `trace_id` returns chronological events.
-- [ ] `query_type=latency` with a valid `trace_id` returns phase breakdown with `duration_ms`.
-- [ ] Missing `trace_id` on `trace`/`latency` returns `{success: False, error: ...}`.
-- [ ] Output is capped at 50 entries; `truncated` flag set when applicable.
-- [ ] Invalid `query_type` returns `{success: False, error: ...}`.
-- [ ] Tool is `read_only`, `risk_level=low`, allowed in all modes.
-- [ ] Unit tests pass with synthetic JSONL data (no live telemetry required).
+- [x] `self_telemetry_query` appears in `registry.list_tools()`.
+- [x] `query_type=events` with `event=model_call_completed`, `window=1h` returns matching entries.
+- [x] `query_type=trace` with a valid `trace_id` returns chronological events.
+- [x] `query_type=latency` with a valid `trace_id` returns phase breakdown with `duration_ms`.
+- [x] Missing `trace_id` on `trace`/`latency` returns `{success: False, error: ...}`.
+- [x] Output is capped at 50 entries; `truncated` flag set when applicable.
+- [x] Invalid `query_type` returns `{success: False, error: ...}`.
+- [x] Tool is `read_only`, `risk_level=low`, allowed in all modes.
+- [x] Unit tests pass with synthetic JSONL data (no live telemetry required).
 
 ---
 

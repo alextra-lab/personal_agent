@@ -834,7 +834,7 @@ async def step_init(
     input_messages_count = len(ctx.messages)
     ctx.messages = apply_context_window(
         ctx.messages,
-        max_tokens=settings.conversation_max_context_tokens,
+        max_tokens=settings.context_window_max_tokens,
         strategy=settings.conversation_context_strategy,
         trace_id=ctx.trace_id,
         session_id=ctx.session_id,

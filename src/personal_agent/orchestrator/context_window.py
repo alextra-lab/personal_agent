@@ -76,7 +76,18 @@ def apply_context_window(
             session_id=session_id,
         )
 
-    available_budget = max(1, max_tokens - reserved_tokens)
+    if reserved_tokens >= max_tokens:
+        log.warning(
+            "context_window_reserved_tokens_clamped",
+            max_tokens=max_tokens,
+            reserved_tokens=reserved_tokens,
+            effective_reserved_tokens=0,
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        available_budget = max_tokens
+    else:
+        available_budget = max(1, max_tokens - reserved_tokens)
     input_tokens = estimate_messages_tokens(messages)
     if input_tokens <= available_budget:
         log.info(

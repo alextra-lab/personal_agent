@@ -242,14 +242,14 @@ class AppConfig(BaseSettings):
 
     # Conversation continuity (Phase 2.6)
     conversation_max_history_messages: int = Field(
-        default=50,
+        default=10,
         ge=1,
         description="Maximum number of historical session messages to hydrate into orchestrator memory.",
     )
-    conversation_max_context_tokens: int = Field(
-        default=6000,
+    context_window_max_tokens: int = Field(
+        default=2048,
         ge=500,
-        description="Maximum context token budget for conversation messages before LLM call.",
+        description="Maximum context token budget for conversation messages before each LLM call.",
     )
     conversation_context_strategy: str = Field(
         default="truncate",

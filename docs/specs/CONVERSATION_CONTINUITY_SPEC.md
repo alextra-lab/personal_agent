@@ -117,12 +117,12 @@ New fields on `AppConfig`:
 ```python
 # Conversation continuity
 conversation_max_history_messages: int = Field(
-    default=50,
+    default=10,
     ge=1,
     description="Maximum number of messages to load from DB into orchestrator session",
 )
-conversation_max_context_tokens: int = Field(
-    default=6000,
+context_window_max_tokens: int = Field(
+    default=2048,
     ge=500,
     description="Token budget for conversation history in LLM prompt (excluding system prompt and tools)",
 )
@@ -151,7 +151,7 @@ ctx.messages.append({"role": "user", "content": ctx.user_message})
 from personal_agent.orchestrator.context_window import apply_context_window
 ctx.messages = apply_context_window(
     ctx.messages,
-    max_tokens=settings.conversation_max_context_tokens,
+    max_tokens=settings.context_window_max_tokens,
 )
 ```
 
@@ -192,7 +192,7 @@ log.info(
 - [ ] Conversation history loaded from DB matches what was persisted (no duplication, correct order).
 - [ ] Context window management prevents prompt overflow: a 100-message conversation is truncated to fit token budget.
 - [ ] Truncation preserves the most recent messages and inserts a marker for dropped messages.
-- [ ] New config fields (`conversation_max_history_messages`, `conversation_max_context_tokens`) are respected.
+- [ ] New config fields (`conversation_max_history_messages`, `context_window_max_tokens`) are respected.
 - [ ] Telemetry logs context loading metrics (messages loaded, truncated, estimated tokens).
 - [ ] Existing single-turn behavior is unchanged (no regression).
 - [ ] Unit tests for `apply_context_window` cover: short history (no truncation), long history (truncation), edge cases (empty, single message).

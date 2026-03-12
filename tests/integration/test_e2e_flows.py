@@ -63,7 +63,7 @@ def _e2e_patches() -> Generator[Any, None, None]:
         ):
             mock_settings.request_monitoring_enabled = False
             mock_settings.enable_memory_graph = False
-            mock_settings.conversation_max_context_tokens = 6000
+            mock_settings.context_window_max_tokens = 6000
             mock_settings.conversation_context_strategy = "truncate"
             mock_settings.orchestrator_max_tool_iterations = 3
             mock_settings.orchestrator_max_repeated_tool_calls = 1

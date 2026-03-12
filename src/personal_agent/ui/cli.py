@@ -39,6 +39,11 @@ def chat_command(
     session_id: Optional[str] = typer.Option(
         None, "--session-id", help="Session ID for multi-turn conversations"
     ),
+    wait_background: bool = typer.Option(
+        False,
+        "--wait-background",
+        help="Wait for background tasks (e.g. Captain's Log reflection) before exiting. Default: exit after reply for faster CLI.",
+    ),
 ) -> None:
     """Chat with the agent (Q&A, general conversation).
 
@@ -53,7 +58,9 @@ def chat_command(
         session_id = str(uuid.uuid4())
 
     # Run async orchestrator call
-    result = asyncio.run(_handle_request(user_message, session_id, Channel.CHAT))
+    result = asyncio.run(
+        _handle_request(user_message, session_id, Channel.CHAT, wait_background)
+    )
 
     # Display response
     console.print("\n[bold blue]Agent:[/bold blue]")
@@ -65,7 +72,10 @@ def chat_command(
 
 
 async def _handle_request(
-    user_message: str, session_id: str, channel: Channel
+    user_message: str,
+    session_id: str,
+    channel: Channel,
+    wait_background: bool = False,
 ) -> OrchestratorResult:
     """Handle a user request via orchestrator.
 
@@ -73,6 +83,7 @@ async def _handle_request(
         user_message: The user's message.
         session_id: Session identifier.
         channel: Communication channel.
+        wait_background: If True, wait for background tasks (e.g. reflection) before returning.
 
     Returns:
         OrchestratorResult with reply, steps, and trace_id.
@@ -124,12 +135,18 @@ async def _handle_request(
         ],
     )
 
-    # Check if there are background tasks (like Captain's Log reflection)
+    # Optionally wait for background tasks (e.g. Captain's Log reflection).
+    # Default: don't wait so CLI returns at reply_ready (~1.5s) instead of after reflection (~14s).
     task_count = get_background_task_count()
     if task_count > 0:
-        console.print(f"\n[dim]⏳ Completing {task_count} background task(s)...[/dim]")
-        await wait_for_background_tasks()
-        console.print("[dim]✓ Background tasks complete[/dim]\n")
+        if wait_background:
+            console.print(f"\n[dim]⏳ Completing {task_count} background task(s)...[/dim]")
+            await wait_for_background_tasks()
+            console.print("[dim]✓ Background tasks complete[/dim]\n")
+        else:
+            console.print(
+                f"\n[dim]{task_count} background task(s) still running (use --wait-background to wait)[/dim]\n"
+            )
 
     return result
 

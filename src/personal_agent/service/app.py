@@ -19,7 +19,7 @@ from personal_agent.captains_log.es_indexer import build_es_indexer_from_handler
 from personal_agent.config.settings import get_settings
 from personal_agent.memory.service import MemoryService
 from personal_agent.security import sanitize_error_message
-from personal_agent.service.database import get_db_session, init_db
+from personal_agent.service.database import AsyncSessionLocal, get_db_session, init_db
 from personal_agent.service.models import SessionCreate, SessionResponse, SessionUpdate
 from personal_agent.service.repositories.session_repository import SessionRepository
 from personal_agent.telemetry import add_elasticsearch_handler, get_logger
@@ -35,6 +35,38 @@ memory_service: MemoryService | None = None
 scheduler: BrainstemScheduler | None = None
 metrics_daemon: MetricsDaemon | None = None
 mcp_adapter: "MCPGatewayAdapter | None" = None  # type: ignore  # noqa: F821
+
+# Fire-and-forget assistant message appends: session_id -> task (FRE-51).
+# Next request for same session awaits this so history is consistent before hydration.
+_pending_append_tasks: dict[str, asyncio.Task[None]] = {}
+
+
+async def _append_assistant_message_background(
+    session_id: UUID,
+    content: str,
+    trace_id: str,
+) -> None:
+    """Append assistant message in a dedicated DB session (fire-and-forget).
+
+    Used so the /chat response can return immediately; rapid follow-ups await
+    this task before loading session history.
+    """
+    sid = str(session_id)
+    try:
+        async with AsyncSessionLocal() as db:
+            repo = SessionRepository(db)
+            await repo.append_message(session_id, {"role": "assistant", "content": content})
+    except Exception as e:
+        log.error(
+            "db_append_assistant_message_background_failed",
+            trace_id=trace_id,
+            session_id=sid,
+            error=sanitize_error_message(e),
+            error_type=type(e).__name__,
+            exc_info=True,
+        )
+    finally:
+        _pending_append_tasks.pop(sid, None)
 
 
 def _parse_db_host_port(database_url: str) -> tuple[str, int]:
@@ -384,6 +416,11 @@ async def chat(
         else:
             session = await repo.create(SessionCreate())
 
+    # Await any in-flight assistant-message append for this session (FRE-51 edge case).
+    sid = str(cast(UUID, session.session_id))
+    if sid in _pending_append_tasks:
+        await _pending_append_tasks.pop(sid)
+
     # --- Phase: session_hydration ---
     with timer.span("session_hydration"):
         db_messages = list(session.messages or [])
@@ -449,13 +486,7 @@ async def chat(
         if scheduler and request_started:
             scheduler.notify_request_end()
 
-    # --- Phase: db_append_assistant_message ---
-    with timer.span("db_append_assistant_message"):
-        await repo.append_message(
-            cast(UUID, session.session_id), {"role": "assistant", "content": response_content}
-        )
-
-    # --- Emit timing breakdown ---
+    # --- Emit timing breakdown (before response so timer reflects time-to-reply) ---
     breakdown = timer.to_breakdown()
     total_ms = timer.get_total_ms()
 
@@ -479,6 +510,13 @@ async def chat(
                 session_id=str(session.session_id),
             )
         )
+
+    # Fire-and-forget DB write: return response immediately, append assistant message in background (FRE-51).
+    session_uuid = cast(UUID, session.session_id)
+    task = asyncio.create_task(
+        _append_assistant_message_background(session_uuid, response_content, trace_id)
+    )
+    _pending_append_tasks[sid] = task
 
     return {
         "session_id": str(session.session_id),

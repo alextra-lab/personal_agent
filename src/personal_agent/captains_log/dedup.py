@@ -6,6 +6,7 @@ an incrementing seen_count.
 """
 
 import hashlib
+import inspect
 import re
 
 from personal_agent.captains_log.models import ChangeCategory, ChangeScope
@@ -72,6 +73,12 @@ def _normalize_text(text: str) -> str:
     Returns:
         Space-joined, sorted, deduplicated lowercase tokens.
     """
+    # Defensive: DSPy or async LM can leave coroutines in result fields (e.g. when
+    # reflection runs in asyncio.to_thread). re.findall expects str/bytes.
+    if not isinstance(text, str):
+        return ""
+    if inspect.iscoroutine(text):
+        return ""
     tokens = _WORD_RE.findall(text.lower())
     meaningful = [t for t in tokens if t not in STOPWORDS]
     return " ".join(sorted(set(meaningful)))
@@ -95,6 +102,8 @@ def compute_proposal_fingerprint(
     Returns:
         First 16 hex chars of sha256(category:scope:normalized_what).
     """
-    normalized = _normalize_text(what)
+    # Coerce to str so _normalize_text never receives a coroutine (avoids re error)
+    what_str = what if isinstance(what, str) and not inspect.iscoroutine(what) else ""
+    normalized = _normalize_text(what_str)
     key = f"{category.value}:{scope.value}:{normalized}"
     return hashlib.sha256(key.encode()).hexdigest()[:16]

@@ -90,6 +90,11 @@ def _generate_entry_id(date: datetime | None = None, trace_id: str | None = None
     log_dir = _get_captains_log_dir()
 
     # Add trace prefix if provided (for scenario grouping/comparison)
+    # Defensive: trace_id can be a coroutine if reflection runs in wrong context (e.g. to_thread).
+    if trace_id is not None and not isinstance(trace_id, str):
+        trace_id = None
+    if trace_id and hasattr(trace_id, "__await__"):  # coroutine
+        trace_id = None
     trace_prefix = f"{trace_id[:8]}-" if trace_id else ""
 
     # Find existing entries for this timestamp+trace combo
@@ -121,6 +126,9 @@ def _sanitize_filename(title: str) -> str:
     Returns:
         Sanitized filename-safe string.
     """
+    # Defensive: title can be non-string (e.g. coroutine) from DSPy in to_thread context.
+    if not isinstance(title, str) or hasattr(title, "__await__"):
+        title = "task"
     # Convert to lowercase, replace spaces and special chars with hyphens
     sanitized = re.sub(r"[^\w\s-]", "", title.lower())
     sanitized = re.sub(r"[-\s]+", "-", sanitized)
@@ -198,7 +206,10 @@ class CaptainLogManager:
         if not entry.entry_id:
             trace_id = None
             if entry.telemetry_refs and len(entry.telemetry_refs) > 0:
-                trace_id = entry.telemetry_refs[0].trace_id
+                raw = entry.telemetry_refs[0].trace_id
+                # Defensive: avoid passing coroutine to _generate_entry_id (re.escape fails).
+                if isinstance(raw, str) and not getattr(raw, "__await__", None):
+                    trace_id = raw
             entry.entry_id = _generate_entry_id(entry.timestamp, trace_id=trace_id)
 
         title_slug = _sanitize_filename(entry.title)

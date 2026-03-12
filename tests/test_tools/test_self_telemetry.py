@@ -271,12 +271,14 @@ def test_latency_query_with_synthetic_jsonl_returns_duration_breakdown(
             trace_id=trace_id,
             timestamp=t0 + timedelta(milliseconds=100),
             from_state="init",
+            to_state="init",
         ),
         _create_log_entry(
             "state_transition",
             trace_id=trace_id,
             timestamp=t0 + timedelta(milliseconds=450),
-            from_state="llm_call",
+            from_state="init",
+            to_state="llm_call",
         ),
         _create_log_entry(
             "task_completed",

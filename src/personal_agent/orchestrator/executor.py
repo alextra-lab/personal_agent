@@ -638,14 +638,20 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
         TaskState.SYNTHESIS: step_synthesis,
     }
 
+    previous_state: TaskState | None = None
     try:
         while state not in {TaskState.COMPLETED, TaskState.FAILED}:
             log.info(
                 STATE_TRANSITION,
                 trace_id=ctx.trace_id,
-                from_state=state.value,
+                from_state=(
+                    previous_state.value if previous_state is not None else state.value
+                ),
+                to_state=state.value,
+                component="executor",
             )
             ctx.state = state
+            previous_state = state
 
             step_func = step_functions.get(state)
             if not step_func:

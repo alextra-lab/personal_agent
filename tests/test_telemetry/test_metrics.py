@@ -350,12 +350,14 @@ class TestLogQueryFunctions:
                 trace_id=trace_id,
                 timestamp=t0 + timedelta(milliseconds=100),
                 from_state="init",
+                to_state="init",
             ),
             self._create_log_entry(
                 STATE_TRANSITION,
                 trace_id=trace_id,
                 timestamp=t0 + timedelta(milliseconds=500),
                 from_state="llm_call",
+                to_state="llm_call",
             ),
             self._create_log_entry(
                 TASK_COMPLETED,

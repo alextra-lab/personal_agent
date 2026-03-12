@@ -26,7 +26,9 @@ self_telemetry_query_tool = ToolDefinition(
         "find errors, analyze latency, or review recent events. "
         "query_type: 'events' (filter by event/component/time), "
         "'trace' (reconstruct one trace), "
-        "'latency' (phase-by-phase breakdown for one trace)."
+        "'latency' (phase-by-phase breakdown for one trace). "
+        "To find recent errors: use query_type='events', event='model_call_error' or 'task_failed', "
+        "window e.g. '1h' or '24h', and limit (e.g. 10)."
     ),
     category="read_only",
     parameters=[
@@ -49,7 +51,7 @@ self_telemetry_query_tool = ToolDefinition(
         ToolParameter(
             name="event",
             type="string",
-            description="Event name filter (for events query)",
+            description="Event name filter (for events query). Use 'model_call_error' or 'task_failed' to find recent errors.",
             required=False,
             default=None,
             json_schema=None,

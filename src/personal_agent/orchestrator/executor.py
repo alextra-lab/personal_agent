@@ -321,8 +321,10 @@ def _fallback_reply_from_tool_results(ctx: ExecutionContext) -> str:
     """Build a safe, user-facing reply when the model fails to synthesize after tools."""
     if not ctx.tool_results:
         return (
-            "I attempted to use tools, but couldn't produce a final answer. "
-            "Try rephrasing your request or specify the exact path to inspect."
+            "I couldn't produce a final answer. Try rephrasing your request or being more specific. "
+            "For questions about recent errors or failures, I can query my telemetry using the "
+            "self_telemetry_query tool with query_type='events', event='model_call_error' or "
+            "'task_failed', and a time window (e.g. window='1h')."
         )
 
     last_results = ctx.tool_results[-3:]
@@ -757,6 +759,8 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
         log.error(
             ORCHESTRATOR_FATAL_ERROR,
             trace_id=ctx.trace_id,
+            error=str(e),
+            error_type=type(e).__name__,
             exc_info=True,
         )
         ctx.error = e
@@ -1849,6 +1853,8 @@ async def execute_task_safe(
         log.critical(
             ORCHESTRATOR_FATAL_ERROR,
             trace_id=ctx.trace_id,
+            error=str(e),
+            error_type=type(e).__name__,
             exc_info=True,
         )
         # Return error result with sanitized message

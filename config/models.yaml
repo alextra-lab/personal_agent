@@ -56,7 +56,7 @@ models:
     # Default "workhorse" model: general answers + tool orchestration, non-thinking fast path.
     # disable_thinking sends chat_template_kwargs enable_thinking=False via extra_body (ADR-0023).
     # Sampling params: Qwen3.5 non-thinking mode recommendations.
-    id: "qwen3.5-9b-mxfp8-mlx"
+    id: "qwen3.5-9b-mlx-mxfp8"
     context_length: 32768
     quantization: "8bit"
     max_concurrency: 2

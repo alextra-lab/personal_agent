@@ -126,10 +126,10 @@ pytest tests/integration/test_e2e_flows.py --cov=src/personal_agent --cov-report
 ### Daily Evaluation (During Development)
 
 ```bash
-# 1. Run a few manual queries to generate telemetry
-python -m personal_agent.ui.cli chat "Hello"
-python -m personal_agent.ui.cli chat "What is Python?"
-python -m personal_agent.ui.cli chat "What is my Mac's health?"
+# 1. Run a few manual queries to generate telemetry (service must be running)
+uv run agent chat "Hello"
+uv run agent chat "What is Python?"
+uv run agent chat "What is my Mac's health?"
 
 # 2. Analyze the telemetry
 python tests/evaluation/analyze_telemetry.py --window=1h
@@ -250,10 +250,10 @@ Based on telemetry analysis, you may need to tune governance thresholds.
 
 **Cause**: No recent activity, or logs have been rotated/cleared.
 
-**Solution**: Run some queries first:
+**Solution**: Run some queries first (service must be running):
 
 ```bash
-python -m personal_agent.ui.cli chat "Test query"
+uv run agent chat "Test query"
 python tests/evaluation/analyze_telemetry.py --window=1h
 ```
 

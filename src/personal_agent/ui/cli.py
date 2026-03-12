@@ -1,154 +1,33 @@
-"""CLI interface for the personal agent.
+"""Telemetry CLI for the personal agent.
 
-This module provides a Typer-based command-line interface for interacting
-with the orchestrator and agent capabilities.
+This module provides telemetry query and trace analysis. For chat, use the
+service-backed CLI instead:
+
+    uv run agent chat "Your message here"
+    uv run agent chat "New topic" --new
 """
 
-import asyncio
 import json
-import uuid
 from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.markdown import Markdown
 from rich.table import Table
 
-from personal_agent.orchestrator import Channel, Orchestrator, OrchestratorResult
 from personal_agent.telemetry import (
-    REQUEST_RECEIVED,
     get_logger,
     get_request_latency_breakdown,
     get_trace_events,
     query_events,
 )
-from personal_agent.telemetry.trace import TraceContext
 
-app = typer.Typer(help="Personal AI Agent - Local AI collaborator")
+app = typer.Typer(help="Personal Agent telemetry (query, trace). For chat use: uv run agent chat")
 console = Console()
 log = get_logger(__name__)
 
-# Create telemetry subcommand group
+# Telemetry subcommand group
 telemetry_app = typer.Typer(help="Telemetry analysis and query tools")
 app.add_typer(telemetry_app, name="telemetry")
-
-
-@app.command(name="chat")
-def chat_command(
-    message: str = typer.Argument(..., help="User message to send to the agent"),
-    session_id: Optional[str] = typer.Option(
-        None, "--session-id", help="Session ID for multi-turn conversations"
-    ),
-    wait_background: bool = typer.Option(
-        False,
-        "--wait-background",
-        help="Wait for background tasks (e.g. Captain's Log reflection) before exiting. Default: exit after reply for faster CLI.",
-    ),
-) -> None:
-    """Chat with the agent (Q&A, general conversation).
-
-    Examples:
-        python -m personal_agent.ui.cli "What is Python?"
-        python -m personal_agent.ui.cli "Hello" --session-id my-session
-    """
-    user_message = message
-
-    # Generate session ID if not provided
-    if not session_id:
-        session_id = str(uuid.uuid4())
-
-    # Run async orchestrator call
-    result = asyncio.run(
-        _handle_request(user_message, session_id, Channel.CHAT, wait_background)
-    )
-
-    # Display response
-    console.print("\n[bold blue]Agent:[/bold blue]")
-    console.print(Markdown(result["reply"]))
-
-    # Optionally display trace ID for debugging
-    if result.get("trace_id"):
-        console.print(f"\n[dim]Trace ID: {result['trace_id']}[/dim]")
-
-
-async def _handle_request(
-    user_message: str,
-    session_id: str,
-    channel: Channel,
-    wait_background: bool = False,
-) -> OrchestratorResult:
-    """Handle a user request via orchestrator.
-
-    Args:
-        user_message: The user's message.
-        session_id: Session identifier.
-        channel: Communication channel.
-        wait_background: If True, wait for background tasks (e.g. reflection) before returning.
-
-    Returns:
-        OrchestratorResult with reply, steps, and trace_id.
-    """
-    from personal_agent.captains_log.background import (
-        get_background_task_count,
-        wait_for_background_tasks,
-    )
-    from personal_agent.orchestrator.executor import _initialize_mcp_gateway
-
-    # Initialize MCP gateway once (idempotent - won't re-initialize if already connected)
-    await _initialize_mcp_gateway()
-
-    from personal_agent.telemetry.request_timer import RequestTimer
-
-    trace_ctx = TraceContext.new_trace()
-    timer = RequestTimer(trace_id=trace_ctx.trace_id)
-
-    log.info(
-        REQUEST_RECEIVED,
-        trace_id=trace_ctx.trace_id,
-        entry="cli",
-        session_id=session_id,
-        message_length=len(user_message),
-    )
-
-    orchestrator = Orchestrator()
-    result = await orchestrator.handle_user_request(
-        session_id=session_id,
-        user_message=user_message,
-        mode=None,
-        channel=channel,
-        trace_id=trace_ctx.trace_id,
-        request_timer=timer,
-    )
-
-    # Log timing breakdown from CLI
-    from personal_agent.telemetry.events import REQUEST_TIMING
-
-    breakdown = timer.to_breakdown()
-    log.info(
-        REQUEST_TIMING,
-        trace_id=trace_ctx.trace_id,
-        session_id=session_id,
-        total_ms=timer.get_total_ms(),
-        phases=[
-            {"phase": s["phase"], "duration_ms": s["duration_ms"], "offset_ms": s["offset_ms"]}
-            for s in breakdown
-        ],
-    )
-
-    # Optionally wait for background tasks (e.g. Captain's Log reflection).
-    # Default: don't wait so CLI returns at reply_ready (~1.5s) instead of after reflection (~14s).
-    task_count = get_background_task_count()
-    if task_count > 0:
-        if wait_background:
-            console.print(f"\n[dim]⏳ Completing {task_count} background task(s)...[/dim]")
-            await wait_for_background_tasks()
-            console.print("[dim]✓ Background tasks complete[/dim]\n")
-        else:
-            console.print(
-                f"\n[dim]{task_count} background task(s) still running (use --wait-background to wait)[/dim]\n"
-            )
-
-    return result
 
 
 @telemetry_app.command("query")
@@ -355,14 +234,4 @@ def telemetry_trace_breakdown(
 
 
 if __name__ == "__main__":
-    # Run the full app (includes chat and telemetry commands)
-    # If no command provided and first arg is not a known command, treat as chat message
-    import sys
-
-    if len(sys.argv) > 1 and sys.argv[1] not in ["telemetry", "chat", "--help", "-h", "--version"]:
-        # Treat as chat command with message (backward compatibility)
-        # Insert "chat" command before the message
-        sys.argv.insert(1, "chat")
-
-    # Run normal Typer app for commands
     app()

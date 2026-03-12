@@ -1,39 +1,44 @@
 # UI
 
-Command-line interface using Typer + Rich.
+Command-line interfaces using Typer + Rich.
+
+## Architecture
+
+- **Primary CLI**: `uv run agent` (entrypoint in `pyproject.toml` → `service_cli.py`). Talks to the running Personal Agent service over HTTP. Use this for chat, session, memory.
+- **Telemetry CLI**: `python -m personal_agent.ui.cli telemetry ...` for query/trace/trace-breakdown on local telemetry. No service required.
 
 ## Responsibilities
 
-- CLI command structure (Typer)
-- Rich terminal formatting
-- Human approval workflows
-- Session management (start, stop, status)
+- **service_cli.py**: Chat, session, memory — HTTP client to the service.
+- **cli.py**: Telemetry analysis (query events, trace reconstruction, latency breakdown).
+- **approval.py**: Human approval workflows (e.g. governance).
 
 ## Structure
 
 ```
 ui/
 ├── __init__.py          # Package exports
-├── cli.py               # Main Typer CLI app
+├── service_cli.py       # Agent CLI (chat, session, memory) — primary entrypoint
+├── cli.py               # Telemetry-only (query, trace, trace-breakdown)
+├── memory_cli.py        # Memory subcommand for agent
 └── approval.py          # Human approval workflow
 ```
 
-## CLI Commands
+## Primary CLI (agent)
 
-```python
-import typer
-from rich.console import Console
+```bash
+uv run agent chat "What is the current weather in Forcalquier?"
+uv run agent chat "New topic" --new
+uv run agent session
+uv run agent memory --help
+```
 
-app = typer.Typer()
-console = Console()
+## Telemetry CLI
 
-@app.command()
-def start(
-    task: str = typer.Argument(..., help="Task description"),
-    verbose: bool = typer.Option(False, "--verbose", "-v"),
-):
-    """Start the agent with a task."""
-    console.print(f"[bold green]Starting:[/bold green] {task}")
+```bash
+python -m personal_agent.ui.cli telemetry query --event=model_call_completed --last=1h
+python -m personal_agent.ui.cli telemetry trace <trace_id>
+python -m personal_agent.ui.cli telemetry trace-breakdown <trace_id>
 ```
 
 ## Rich Output
@@ -71,8 +76,8 @@ def request_approval(action: str, details: dict[str, Any]) -> bool:
 
 - `typer`: CLI structure
 - `rich`: Terminal formatting
-- `orchestrator`: Task execution
-- `brainstem`: Mode status
+- `service_cli`: httpx, config (service_url)
+- `cli` (telemetry): telemetry module (query_events, get_trace_events, etc.)
 
 ## Search
 
@@ -94,12 +99,14 @@ rg -n "console\.print" src/personal_agent/ui/
 - Mock Confirm.ask for approval tests
 - Test session lifecycle (start → status → stop)
 
-## Entry Point
+## Entry Points
 
 ```bash
-python -m personal_agent.ui.cli start "Analyze this codebase"
-python -m personal_agent.ui.cli status
-python -m personal_agent.ui.cli stop
+# Chat and session (service must be running)
+uv run agent chat "Hello"
+
+# Telemetry (local log analysis)
+python -m personal_agent.ui.cli telemetry query --last=1h
 ```
 
 ## Pre-PR

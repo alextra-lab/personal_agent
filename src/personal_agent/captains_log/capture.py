@@ -55,6 +55,8 @@ class TaskCapture(BaseModel):
     outcome: str  # "completed", "failed", "timeout"
     memory_context_used: bool = False
     memory_conversations_found: int = 0
+    # Raw tool results (tool_name, success, output, error, latency_ms) for comparing LLM reply vs actual tool output
+    tool_results: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def _get_captures_dir() -> pathlib.Path:

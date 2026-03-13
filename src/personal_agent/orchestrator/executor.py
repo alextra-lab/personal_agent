@@ -736,6 +736,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                     outcome="completed",
                     memory_context_used=bool(ctx.memory_context),
                     memory_conversations_found=len(ctx.memory_context) if ctx.memory_context else 0,
+                    tool_results=ctx.tool_results,
                 )
                 write_capture(capture)
             except Exception as e:

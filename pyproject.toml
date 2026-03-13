@@ -31,6 +31,7 @@ dependencies = [
   "rich>=13.9.0",         # nice terminal output for local UI / status views
   "pyyaml>=6.0.0",        # YAML parsing for governance configs
   "orjson>=3.9.0",        # fast JSON serialization (replaces stdlib json in performance-critical paths)
+  "jsonschema>=4.20.0",   # tool argument schema validation (ToolDefinition → JSON Schema)
   "typing-extensions>=4.8.0",  # extended type hints (TypedDict, etc.) for compatibility
   "psutil>=5.9.0",        # system metrics for sensor polling
   "macmon-python>=0.1.0",  # Apple Silicon GPU metrics (no sudo required)

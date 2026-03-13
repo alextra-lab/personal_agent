@@ -40,6 +40,7 @@ from personal_agent.telemetry.events import (
     TOOL_CALL_FAILED,
     TOOL_CALL_STARTED,
     TOOL_EXECUTED,
+    TOOL_SCHEMA_VALIDATION_FAILED,
     UNKNOWN_STATE,
 )
 from personal_agent.telemetry.logger import add_elasticsearch_handler, configure_logging, get_logger
@@ -94,6 +95,7 @@ __all__ = [
     "TOOL_CALL_COMPLETED",
     "TOOL_CALL_FAILED",
     "TOOL_EXECUTED",
+    "TOOL_SCHEMA_VALIDATION_FAILED",
     "MODE_TRANSITION",
     "SENSOR_POLL",
     "SYSTEM_METRICS_SNAPSHOT",

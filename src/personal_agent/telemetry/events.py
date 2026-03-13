@@ -25,6 +25,7 @@ TOOL_CALL_STARTED = "tool_call_started"
 TOOL_CALL_COMPLETED = "tool_call_completed"
 TOOL_CALL_FAILED = "tool_call_failed"
 TOOL_EXECUTED = "tool_executed"
+TOOL_SCHEMA_VALIDATION_FAILED = "tool_schema_validation_failed"
 
 # Brainstem events
 MODE_TRANSITION = "mode_transition"

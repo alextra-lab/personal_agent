@@ -20,6 +20,7 @@ from personal_agent.telemetry import (
     TraceContext,
     get_logger,
 )
+from personal_agent.telemetry.events import TOOL_SCHEMA_VALIDATION_FAILED
 from personal_agent.tools.registry import ToolRegistry
 from personal_agent.tools.types import ToolResult
 
@@ -274,6 +275,27 @@ class ToolExecutionLayer:
                 invalid_parameters=list(invalid_params),
                 valid_parameters=list(valid_param_names),
                 trace_id=trace_ctx.trace_id,
+            )
+
+        # 3b. Full schema validation (required fields, types, nested structures)
+        from personal_agent.tools.schema_validator import validate_tool_arguments
+
+        schema_errors = validate_tool_arguments(tool_def, filtered_arguments)
+        if schema_errors:
+            error_summary = "; ".join(schema_errors[:3])
+            log.warning(
+                TOOL_SCHEMA_VALIDATION_FAILED,
+                tool_name=tool_name,
+                errors=schema_errors,
+                arguments_preview={k: repr(v)[:80] for k, v in filtered_arguments.items()},
+                trace_id=trace_ctx.trace_id,
+            )
+            return ToolResult(
+                tool_name=tool_name,
+                success=False,
+                output={},
+                error=f"Invalid arguments: {error_summary}. Retry with corrected params.",
+                latency_ms=0.0,
             )
 
         # 4. Emit telemetry (start)

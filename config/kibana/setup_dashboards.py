@@ -74,7 +74,7 @@ def create_index_template(es_url: str) -> bool:
         return False
 
 
-def _api(method: str, path: str, body: dict[str, Any] | list | None = None) -> Any:
+def _api(method: str, path: str, body: dict[str, Any] | list[Any] | None = None) -> Any:
     url = f"{KIBANA_URL}{path}"
     data = json.dumps(body).encode() if body else None
     req = urllib.request.Request(
@@ -91,7 +91,12 @@ def _api(method: str, path: str, body: dict[str, Any] | list | None = None) -> A
         return None
 
 
-def _vis_state(title: str, vis_type: str, aggs: list[dict], params: dict | None = None) -> str:
+def _vis_state(
+    title: str,
+    vis_type: str,
+    aggs: list[dict[str, Any]],
+    params: dict[str, Any] | None = None,
+) -> str:
     state: dict[str, Any] = {
         "title": title,
         "type": vis_type,
@@ -117,8 +122,9 @@ def _create_visualization(
     desc: str,
     vis_type: str,
     query: str,
-    aggs: list[dict],
-    params: dict | None = None,
+    aggs: list[dict[str, Any]],
+    params: dict[str, Any] | None = None,
+    extra_references: list[dict[str, str]] | None = None,
 ) -> None:
     body = {
         "attributes": {
@@ -135,7 +141,8 @@ def _create_visualization(
                 "name": "kibanaSavedObjectMeta.searchSourceJSON.index",
                 "type": "index-pattern",
             }
-        ],
+        ]
+        + (extra_references or []),
     }
     result = _api("POST", f"/api/saved_objects/visualization/{vid}?overwrite=true", body)
     status = "OK" if result else "FAIL"
@@ -496,6 +503,195 @@ def create_request_timing() -> None:
     )
 
 
+def create_request_traces() -> None:
+    print("\n── Request Traces ──")
+
+    _create_visualization(
+        "rt-request-overview",
+        "Request Overview",
+        "Request total_duration_ms over time, split by trace_id",
+        "histogram",
+        "event_type:request_trace",
+        [
+            {
+                "id": "1",
+                "enabled": True,
+                "type": "max",
+                "schema": "metric",
+                "params": {"field": "total_duration_ms", "customLabel": "Total Duration (ms)"},
+            },
+            {
+                "id": "2",
+                "enabled": True,
+                "type": "date_histogram",
+                "schema": "segment",
+                "params": {"field": "@timestamp", "interval": "auto", "min_doc_count": 1},
+            },
+            {
+                "id": "3",
+                "enabled": True,
+                "type": "terms",
+                "schema": "group",
+                "params": {"field": "trace_id", "size": 20, "order": "desc", "orderBy": "1"},
+            },
+        ],
+    )
+
+    _create_visualization(
+        "rt-phase-averages",
+        "Phase Averages",
+        "Average duration_ms by phase category across request_trace_step events",
+        "horizontal_bar",
+        "event_type:request_trace_step",
+        [
+            {
+                "id": "1",
+                "enabled": True,
+                "type": "avg",
+                "schema": "metric",
+                "params": {"field": "duration_ms", "customLabel": "Avg Duration (ms)"},
+            },
+            {
+                "id": "2",
+                "enabled": True,
+                "type": "terms",
+                "schema": "segment",
+                "params": {"field": "phase", "size": 20, "order": "desc", "orderBy": "1"},
+            },
+        ],
+    )
+
+    _create_visualization(
+        "rt-single-trace-waterfall",
+        "Single Trace Waterfall",
+        "Approximate waterfall for one trace (apply trace_id filter via selector)",
+        "horizontal_bar",
+        "event_type:request_trace_step",
+        [
+            {
+                "id": "1",
+                "enabled": True,
+                "type": "avg",
+                "schema": "metric",
+                "params": {"field": "offset_ms", "customLabel": "Start Offset (ms)"},
+            },
+            {
+                "id": "2",
+                "enabled": True,
+                "type": "avg",
+                "schema": "metric",
+                "params": {"field": "duration_ms", "customLabel": "Duration (ms)"},
+            },
+            {
+                "id": "3",
+                "enabled": True,
+                "type": "terms",
+                "schema": "segment",
+                "params": {"field": "name", "size": 50, "order": "asc", "orderBy": "5"},
+            },
+            {
+                "id": "4",
+                "enabled": True,
+                "type": "terms",
+                "schema": "group",
+                "params": {"field": "phase", "size": 10, "order": "desc", "orderBy": "2"},
+            },
+            {
+                "id": "5",
+                "enabled": True,
+                "type": "avg",
+                "schema": "metric",
+                "params": {"field": "sequence", "customLabel": "Step Sequence"},
+            },
+        ],
+    )
+
+    _create_visualization(
+        "rt-trace-detail-table",
+        "Trace Detail Table",
+        "Per-step sequence, phase, name, duration_ms, and offset_ms for filtered trace",
+        "table",
+        "event_type:request_trace_step",
+        [
+            {
+                "id": "1",
+                "enabled": True,
+                "type": "avg",
+                "schema": "metric",
+                "params": {"field": "duration_ms", "customLabel": "Duration (ms)"},
+            },
+            {
+                "id": "2",
+                "enabled": True,
+                "type": "avg",
+                "schema": "metric",
+                "params": {"field": "offset_ms", "customLabel": "Offset (ms)"},
+            },
+            {
+                "id": "3",
+                "enabled": True,
+                "type": "terms",
+                "schema": "bucket",
+                "params": {"field": "sequence", "size": 100, "order": "asc", "orderBy": "_key"},
+            },
+            {
+                "id": "4",
+                "enabled": True,
+                "type": "terms",
+                "schema": "bucket",
+                "params": {"field": "phase", "size": 20, "order": "asc", "orderBy": "_key"},
+            },
+            {
+                "id": "5",
+                "enabled": True,
+                "type": "terms",
+                "schema": "bucket",
+                "params": {"field": "name", "size": 100, "order": "asc", "orderBy": "_key"},
+            },
+        ],
+        {"perPage": 50, "showPartialRows": False, "showMetricsAtAllLevels": False},
+    )
+
+    _create_visualization(
+        "rt-trace-selector",
+        "Trace Selector",
+        "Options list control for trace_id to filter trace-level panels",
+        "input_control_vis",
+        "event_type:request_trace",
+        [],
+        {
+            "controls": [
+                {
+                    "id": "1",
+                    "indexPatternRefName": "control_0_index_pattern",
+                    "fieldName": "trace_id",
+                    "label": "Trace ID",
+                    "type": "list",
+                    "options": {"type": "terms", "multiselect": False, "size": 100},
+                }
+            ],
+            "useTimeFilter": True,
+            "pinFilters": True,
+        },
+        extra_references=[
+            {"id": DATA_VIEW_ID, "name": "control_0_index_pattern", "type": "index-pattern"}
+        ],
+    )
+
+    _create_dashboard(
+        "request-traces-dashboard",
+        "Request Traces",
+        "Trace overview, phase averages, single-trace waterfall approximation, and detailed steps",
+        [
+            "rt-request-overview",
+            "rt-phase-averages",
+            "rt-single-trace-waterfall",
+            "rt-trace-detail-table",
+            "rt-trace-selector",
+        ],
+    )
+
+
 # ── System Health Dashboard ────────────────────────────────────────────
 def create_system_health() -> None:
     print("\n── System Health ──")
@@ -743,6 +939,7 @@ def main() -> None:
 
     create_llm_performance()
     create_request_timing()
+    create_request_traces()
     create_system_health()
     create_task_analytics()
 

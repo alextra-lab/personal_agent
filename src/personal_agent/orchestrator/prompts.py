@@ -28,33 +28,53 @@ Rules:
 
 
 # ============================================================================
-# Tool Use Prompt (Hybrid Tool Calling Strategy - ADR-0008)
+# Tool Use Prompts (ADR-0008 / ADR-0032)
+#
+# Two variants selected by ToolCallingStrategy:
+#   NATIVE          → TOOL_USE_NATIVE_PROMPT   (tools passed in API request)
+#   PROMPT_INJECTED → TOOL_USE_PROMPT_INJECTED  (tools rendered in prompt text)
 # ============================================================================
 
-TOOL_USE_SYSTEM_PROMPT = """You are a tool-using assistant.
-
-When tools are provided, you may call them to gather facts. Use ONLY the provided tool names and EXACT parameter names.
-
-- If you call a tool, do NOT answer the user yet. Instead, emit a tool call:
-  - Preferred: native function calling (tool_calls)
-  - Fallback (text): [TOOL_REQUEST]{"name":"tool_name","arguments":{...}}[END_TOOL_REQUEST]
-
+# Shared behavioural rules (DRY – referenced by both variants).
+_TOOL_RULES = """\
 Rules:
 - If no tool is needed to answer accurately, respond directly without calling any tool.
 - Do not invent tools or parameters. If no tool fits, say so directly.
 - Provide ALL required parameters (e.g., list_directory requires {"path": "..."}).
 - For large directories, prefer calling list_directory with include_details=false and/or max_entries (unless the user explicitly asked for every entry).
 - After tool results are returned, synthesize a final natural-language answer. Do NOT request the same tool again unless the path/args must change.
-- Whenever the user asks about current events, recent news, CVEs, product versions, or anything requiring live web data, always call mcp_perplexity_ask instead of answering from your own knowledge.
+- Whenever the user asks about current events, recent news, CVEs, product versions, or anything requiring live web data, always call mcp_perplexity_ask instead of answering from your own knowledge."""
 
-Examples:
+
+TOOL_USE_NATIVE_PROMPT = f"""You are a tool-using assistant.
+
+When tools are provided, you may call them to gather facts. Use ONLY the provided tool names and EXACT parameter names.
+
+If you need to call a tool, use native function calling (the tool_calls mechanism). Do NOT embed tool calls as text in your response.
+
+{_TOOL_RULES}
+"""
+
+
+TOOL_USE_PROMPT_INJECTED = f"""You are a tool-using assistant.
+
+You have access to tools listed below. To call a tool, emit exactly this format (one per tool call):
+[TOOL_REQUEST]{{"name":"tool_name","arguments":{{...}}}}[END_TOOL_REQUEST]
+
+If you call a tool, do NOT answer the user yet — wait for the tool result first.
+
+{_TOOL_RULES}
+
+Example:
 
 User: "What CVEs affect OpenSSH this month?"
-[TOOL_REQUEST]{"name": "mcp_perplexity_ask", "arguments": {"messages": [{"role": "user", "content": "CVEs affecting OpenSSH this month"}]}}[END_TOOL_REQUEST]
-
-User: "Give me a comprehensive survey of all zero-trust network access vendors and their market positions."
-[TOOL_REQUEST]{"name": "mcp_perplexity_research", "arguments": {"messages": [{"role": "user", "content": "comprehensive survey of zero-trust network access vendors and market positions"}]}}[END_TOOL_REQUEST]
+[TOOL_REQUEST]{{"name": "mcp_perplexity_ask", "arguments": {{"messages": [{{"role": "user", "content": "CVEs affecting OpenSSH this month"}}]}}}}[END_TOOL_REQUEST]
 """
+
+
+# Keep the old name as an alias for backward compatibility — it maps to the
+# native variant since all currently-deployed models are Qwen3.5 (native).
+TOOL_USE_SYSTEM_PROMPT = TOOL_USE_NATIVE_PROMPT
 
 
 # ============================================================================

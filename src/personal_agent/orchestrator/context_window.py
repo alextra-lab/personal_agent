@@ -117,6 +117,12 @@ def apply_context_window(
         )
         return list(messages)
 
+    # ── Priority eviction: strip old tool error messages first (ADR-0032 §3.2) ──
+    # Failed tool results from *previous* turns carry stale negative signal that
+    # biases small models against tool use.  We evict them before the general
+    # truncation pass to maximise useful context in the window.
+    messages = _evict_old_tool_errors(messages)
+
     first_message = messages[0]
     remaining = messages[1:]
 
@@ -162,3 +168,57 @@ def apply_context_window(
         truncated=len(output_messages) < len(messages),
     )
     return output_messages
+
+
+# ---------------------------------------------------------------------------
+# Error-message eviction (ADR-0032 §3.2)
+# ---------------------------------------------------------------------------
+
+_ERROR_KEYWORDS = frozenset({"error", "retry", "failed", "status"})
+
+
+def _is_tool_error_message(message: dict[str, Any]) -> bool:
+    """Return True if *message* is a tool-role message carrying an error/retry hint."""
+    if message.get("role") != "tool":
+        return False
+    content = message.get("content", "")
+    if not isinstance(content, str):
+        return False
+    # Quick heuristic: check for JSON keys that our error format uses.
+    content_lower = content.lower()
+    return '"error"' in content_lower or '"retry"' in content_lower or '"status": "error"' in content_lower
+
+
+def _evict_old_tool_errors(
+    messages: list[dict[str, Any]],
+    *,
+    keep_recent: int = 6,
+) -> list[dict[str, Any]]:
+    """Remove tool error messages from older parts of the conversation.
+
+    Preserves the most recent *keep_recent* messages unconditionally so that
+    errors from the *current* tool execution turn are still visible to the model
+    for immediate retry.  Only older error messages are evicted.
+
+    Args:
+        messages: Full message list (mutated in place for efficiency, but a new
+            list is returned).
+        keep_recent: Number of trailing messages guaranteed to be preserved.
+
+    Returns:
+        Filtered message list.
+    """
+    if len(messages) <= keep_recent:
+        return list(messages)
+
+    protected_tail = messages[-keep_recent:]
+    evictable = messages[:-keep_recent]
+
+    filtered = [msg for msg in evictable if not _is_tool_error_message(msg)]
+    if len(filtered) < len(evictable):
+        log.debug(
+            "tool_error_messages_evicted",
+            evicted=len(evictable) - len(filtered),
+            total=len(messages),
+        )
+    return filtered + protected_tail

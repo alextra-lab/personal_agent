@@ -48,6 +48,7 @@ models:
     top_k: 50
     presence_penalty: 1.05
     supports_function_calling: false
+    tool_calling_strategy: "disabled"  # Router never uses tools
     provider_type: "local"
     #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
     endpoint: "http://127.0.0.1:1234/v1"
@@ -56,7 +57,7 @@ models:
     # Default "workhorse" model: general answers + tool orchestration, non-thinking fast path.
     # disable_thinking sends chat_template_kwargs enable_thinking=False via extra_body (ADR-0023).
     # Sampling params: Qwen3.5 non-thinking mode recommendations.
-    id: "qwen3.5-9b-mlx-mxfp8"
+    id: "qwen/qwen3.5-35b-a3b"
     context_length: 32768
     quantization: "8bit"
     max_concurrency: 2
@@ -67,6 +68,7 @@ models:
     presence_penalty: 1.5  # Reduces repetition in non-thinking mode
     disable_thinking: true  # Hard disable via chat_template_kwargs (ADR-0023)
     supports_function_calling: true
+    tool_calling_strategy: "native"  # Qwen3.5 chat template supports tools natively
     provider_type: "local"
     #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
     endpoint: "http://127.0.0.1:1234/v1"
@@ -74,7 +76,7 @@ models:
   reasoning:
     # Deep reasoning model with bounded thinking budget (ADR-0023).
     # thinking_budget_tokens caps thinking token spend; sampling params per Qwen3.5 thinking mode.
-    id: "qwen3.5-35b-a3b"
+    id: "qwen/qwen3.5-35b-a3b"
     context_length: 64000  # Optimized from 128K for MVP
     quantization: "8bit"
     max_concurrency: 1  # Increased from 1 (smaller footprint enables parallelism)
@@ -84,6 +86,7 @@ models:
     top_k: 20            # Qwen3.5 recommended (passed via extra_body)
     thinking_budget_tokens: 3000  # Cap thinking tokens to limit over-generation (ADR-0023)
     supports_function_calling: true
+    tool_calling_strategy: "native"  # Qwen3.5 chat template supports tools natively
     provider_type: "local"
     #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
     endpoint: "http://127.0.0.1:1234/v1"
@@ -91,7 +94,7 @@ models:
   coding:
     # Fallback: devstral not loaded, reuse standard model for coding tasks
     #id: "mistralai/devstral-small-2-2512"
-    id: "qwen3.5-4b-mxfp8-mlx"
+    id: "qwen3.5-9b-claude-4.6-highiq-instruct"
     context_length: 32768
     quantization: "8bit"
     max_concurrency: 1
@@ -99,6 +102,7 @@ models:
     temperature: 0.2
     disable_thinking: true
     supports_function_calling: true
+    tool_calling_strategy: "native"  # Qwen3.5 chat template supports tools natively
     provider_type: "local"
     #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
     endpoint: "http://127.0.0.1:1234/v1"

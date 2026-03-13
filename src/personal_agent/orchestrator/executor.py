@@ -1096,26 +1096,54 @@ async def step_llm_call(
             len(ctx.steps) > 0 and ctx.steps[-1].get("type") == "tool_call"
         )
 
+        # ── Strategy-aware tool setup (ADR-0032) ──────────────────────
+        from personal_agent.llm_client.models import ToolCallingStrategy
+
+        model_config = llm_client.model_configs.get(model_role.value)
+        tool_strategy = (
+            model_config.effective_tool_strategy
+            if model_config
+            else ToolCallingStrategy.NATIVE
+        )
+
         tools: list[dict[str, Any]] | None = None
-        if not is_synthesizing and model_role != ModelRole.ROUTER:
-            # Only pass tools if not synthesizing (per spec)
+        _prompt_injected_tool_text: str | None = None  # filled for PROMPT_INJECTED only
+
+        if not is_synthesizing and model_role != ModelRole.ROUTER and tool_strategy != ToolCallingStrategy.DISABLED:
+            # Load tool definitions from registry
             global _tool_registry
             if _tool_registry is None:
                 _tool_registry = get_default_registry()
-            tools = _tool_registry.get_tool_definitions_for_llm(mode=ctx.mode)
+            tool_defs = _tool_registry.get_tool_definitions_for_llm(mode=ctx.mode)
+
+            if tool_strategy == ToolCallingStrategy.NATIVE:
+                # Pass tools in the API request — model uses native function calling
+                tools = tool_defs
+            elif tool_strategy == ToolCallingStrategy.PROMPT_INJECTED:
+                # Render tools as text for the system prompt instead of the API parameter.
+                # The model's chat template doesn't support the tools array.
+                from personal_agent.llm_client.tool_prompt_renderer import render_tools_for_prompt
+
+                _prompt_injected_tool_text = render_tools_for_prompt(tool_defs)
+                tools = None  # do NOT send tools array in the API request
+
             log.debug(
                 "tools_passed_to_llm",
                 trace_id=ctx.trace_id,
                 model_role=model_role.value,
-                tool_count=len(tools) if tools else 0,
-                tool_names=[t.get("function", {}).get("name") for t in (tools or [])],
+                tool_strategy=tool_strategy.value,
+                tool_count=len(tool_defs) if tool_defs else 0,
+                tool_names=[t.get("function", {}).get("name") for t in (tool_defs or [])],
                 mode=ctx.mode.value,
+                prompt_injected=(_prompt_injected_tool_text is not None),
             )
         else:
             log.debug(
-                "tools_not_passed_synthesizing",
+                "tools_not_passed",
                 trace_id=ctx.trace_id,
                 model_role=model_role.value,
+                tool_strategy=tool_strategy.value,
+                reason="synthesizing" if is_synthesizing else "disabled_or_router",
             )
 
         # Add memory context to system prompt (Phase 2.2, ADR-0025 broad recall)
@@ -1157,21 +1185,30 @@ async def step_llm_call(
             else:
                 system_prompt = memory_section
 
-        # If we are passing tools, include tool-use guidance in the system prompt to reduce
-        # malformed tool calls and looping.
-        if tools:
+        # If we are passing tools (native or prompt-injected), include tool-use guidance
+        # in the system prompt to reduce malformed tool calls and looping (ADR-0032).
+        if tools or _prompt_injected_tool_text:
             from personal_agent.orchestrator.prompts import (
-                TOOL_USE_SYSTEM_PROMPT,
+                TOOL_USE_NATIVE_PROMPT,
+                TOOL_USE_PROMPT_INJECTED,
                 get_tool_awareness_prompt,
             )
+
+            # Select the prompt variant that matches the strategy
+            if tool_strategy == ToolCallingStrategy.PROMPT_INJECTED:
+                tool_prompt = TOOL_USE_PROMPT_INJECTED
+                # Append the rendered tool definitions after the behavioural prompt
+                tool_prompt = f"{tool_prompt}\n{_prompt_injected_tool_text}"
+            else:
+                tool_prompt = TOOL_USE_NATIVE_PROMPT
 
             # Add tool awareness so agent can answer questions about its capabilities
             tool_awareness = get_tool_awareness_prompt()
 
             if system_prompt:
-                system_prompt = f"{tool_awareness}\n\n{system_prompt}\n\n{TOOL_USE_SYSTEM_PROMPT}"
+                system_prompt = f"{tool_awareness}\n\n{system_prompt}\n\n{tool_prompt}"
             else:
-                system_prompt = f"{tool_awareness}\n\n{TOOL_USE_SYSTEM_PROMPT}"
+                system_prompt = f"{tool_awareness}\n\n{tool_prompt}"
 
         # Call LocalLLMClient.respond()
         # Pass previous_response_id for stateful /v1/responses API
@@ -1585,14 +1622,17 @@ async def step_tool_execution(
                 tool_call_id=tool_call_id,
                 error=str(e),
             )
-            # Create error result with sanitized message
-            sanitized_error = sanitize_error_message(e)
+            # Concise, neutral error — avoids poisoning the model's confidence
+            # in tool use on subsequent turns (ADR-0032 §3.1).
             tool_results.append(
                 {
                     "tool_call_id": tool_call_id,
                     "role": "tool",
                     "name": tool_name,
-                    "content": json.dumps({"error": f"Invalid arguments JSON: {sanitized_error}"}),
+                    "content": json.dumps({
+                        "status": "retry",
+                        "hint": f"Arguments for {tool_name} were malformed JSON. Retry with valid JSON.",
+                    }),
                 }
             )
             continue
@@ -1618,14 +1658,10 @@ async def step_tool_execution(
                     "tool_call_id": tool_call_id,
                     "role": "tool",
                     "name": tool_name,
-                    "content": json.dumps(
-                        {
-                            "error": (
-                                "Blocked repeated tool call to prevent a loop. "
-                                "Use the previous tool result and provide a final answer."
-                            )
-                        }
-                    ),
+                    "content": json.dumps({
+                        "status": "done",
+                        "hint": "This tool was already called with the same arguments. Use the previous result to answer.",
+                    }),
                 }
             )
             continue
@@ -1643,17 +1679,6 @@ async def step_tool_execution(
                 p for p in required_params if p not in arguments or arguments[p] is None
             ]
             if missing_params:
-                # Build detailed error with parameter descriptions and types
-                param_details = []
-                for param in tool_def.parameters:
-                    if param.name in missing_params:
-                        desc = param.description[:100] if param.description else "No description"
-                        param_details.append(f"  - {param.name} ({param.type}): {desc}")
-                error_msg = (
-                    f"Missing required parameters for {tool_name}:\n"
-                    + "\n".join(param_details)
-                    + "\n\nPlease call this tool again with all required parameters."
-                )
                 log.warning(
                     "tool_call_missing_required_params",
                     trace_id=ctx.trace_id,
@@ -1662,12 +1687,16 @@ async def step_tool_execution(
                     missing_params=missing_params,
                     required_params=required_params,
                 )
+                # Concise hint — full param descriptions stay in logs only (ADR-0032 §3.1)
                 tool_results.append(
                     {
                         "tool_call_id": tool_call_id,
                         "role": "tool",
                         "name": tool_name,
-                        "content": json.dumps({"error": error_msg}),
+                        "content": json.dumps({
+                            "status": "retry",
+                            "hint": f"Missing required params: {', '.join(missing_params)}. Retry with these included.",
+                        }),
                     }
                 )
                 continue
@@ -1695,7 +1724,12 @@ async def step_tool_execution(
                     else str(result.output)
                 )
             else:
-                content = json.dumps({"error": result.error or "Tool execution failed"})
+                # Concise error — full details logged by ToolExecutionLayer (ADR-0032 §3.1)
+                short_error = (result.error or "execution failed")[:150]
+                content = json.dumps({
+                    "status": "error",
+                    "hint": f"{tool_name}: {short_error}",
+                })
 
             tool_results.append(
                 {
@@ -1728,14 +1762,16 @@ async def step_tool_execution(
                 error=str(e),
                 exc_info=True,
             )
-            # Create error result with sanitized message
-            sanitized_error = sanitize_error_message(e)
+            # Concise neutral hint — full traceback stays in logs only (ADR-0032 §3.1)
             tool_results.append(
                 {
                     "tool_call_id": tool_call_id,
                     "role": "tool",
                     "name": tool_name,
-                    "content": json.dumps({"error": sanitized_error}),
+                    "content": json.dumps({
+                        "status": "error",
+                        "hint": f"{tool_name} failed to execute. Try a different approach or tool.",
+                    }),
                 }
             )
 

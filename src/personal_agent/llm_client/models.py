@@ -3,7 +3,29 @@
 This module defines the schema for model configuration loaded from config/models.yaml.
 """
 
+from enum import Enum
+
 from pydantic import BaseModel, Field, model_validator
+
+
+class ToolCallingStrategy(str, Enum):
+    """How the agent presents tools to a given model.
+
+    NATIVE:          Pass tools in the OpenAI ``tools`` array and expect
+                     structured ``tool_calls`` in the response.  Works only when
+                     the model's chat template renders tools correctly *and* the
+                     model was fine-tuned on that format (e.g. Qwen3.5 via
+                     LM Studio).
+    PROMPT_INJECTED: Render tool definitions as text inside the system prompt
+                     and parse tool invocations from the model's free-text
+                     output.  Use this for models whose chat template does not
+                     support tools or whose native tool output is unreliable.
+    DISABLED:        No tool calling at all (e.g. the router model).
+    """
+
+    NATIVE = "native"
+    PROMPT_INJECTED = "prompt"
+    DISABLED = "disabled"
 
 
 class ModelDefinition(BaseModel):
@@ -110,7 +132,20 @@ class ModelDefinition(BaseModel):
         description="Presence penalty to reduce token repetition.",
     )
     supports_function_calling: bool = Field(
-        True, description="Whether model supports native function calling"
+        True,
+        description=(
+            "DEPRECATED — use tool_calling_strategy instead.  Kept for backward "
+            "compatibility; ignored when tool_calling_strategy is set explicitly."
+        ),
+    )
+    tool_calling_strategy: ToolCallingStrategy | None = Field(
+        default=None,
+        description=(
+            "How to present tools to this model.  'native' = OpenAI tools array, "
+            "'prompt' = inject tools into the system prompt as text, "
+            "'disabled' = no tool calling.  When None the strategy is derived "
+            "from supports_function_calling for backward compatibility."
+        ),
     )
     disable_thinking: bool = Field(
         default=False,
@@ -138,6 +173,28 @@ class ModelDefinition(BaseModel):
                 "a model cannot have thinking both disabled and budgeted."
             )
         return self
+
+    @model_validator(mode="after")
+    def _derive_tool_calling_strategy(self) -> "ModelDefinition":
+        """Derive tool_calling_strategy from supports_function_calling when not set."""
+        if self.tool_calling_strategy is None:
+            self.tool_calling_strategy = (
+                ToolCallingStrategy.NATIVE
+                if self.supports_function_calling
+                else ToolCallingStrategy.DISABLED
+            )
+        return self
+
+    @property
+    def effective_tool_strategy(self) -> ToolCallingStrategy:
+        """Return the resolved tool calling strategy (never None)."""
+        if self.tool_calling_strategy is not None:
+            return self.tool_calling_strategy
+        return (
+            ToolCallingStrategy.NATIVE
+            if self.supports_function_calling
+            else ToolCallingStrategy.DISABLED
+        )
 
 
 class ModelConfig(BaseModel):

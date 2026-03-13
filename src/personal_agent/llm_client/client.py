@@ -253,16 +253,22 @@ class LocalLLMClient:
         current_api_type = "chat_completions"
         tried_fallback = False  # No fallback needed since we're using the standard endpoint
 
-        # Check if model supports native function calling
-        # If not, filter out tools to avoid confusing the model
-        supports_function_calling = model_config.supports_function_calling
-        if tools and not supports_function_calling:
+        # Strategy-aware tool filtering (ADR-0032).
+        # When the strategy is not NATIVE the orchestrator should already have
+        # stripped tools from the request (prompt-injecting them instead), but
+        # enforce it here as a safety net so the API never sends a tools array
+        # that LM Studio's chat template cannot render.
+        from personal_agent.llm_client.models import ToolCallingStrategy
+
+        strategy = model_config.effective_tool_strategy
+        if tools and strategy != ToolCallingStrategy.NATIVE:
             log.warning(
-                "tools_filtered_no_function_calling",
+                "tools_filtered_by_strategy",
                 model_id=model_id,
                 role=role.value,
                 tools_count=len(tools),
-                reason="Model does not support native function calling",
+                strategy=strategy.value,
+                reason="Tools stripped — model strategy is not NATIVE",
             )
             tools = None
             tool_choice = None

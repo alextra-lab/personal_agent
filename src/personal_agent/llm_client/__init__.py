@@ -7,6 +7,7 @@ This module provides the LocalLLMClient for interacting with local LLM servers
 import warnings
 from typing import TYPE_CHECKING
 
+from personal_agent.llm_client.models import ToolCallingStrategy
 from personal_agent.llm_client.concurrency import (
     InferenceConcurrencyController,
     InferencePriority,
@@ -77,4 +78,5 @@ __all__ = [
     "parse_text_tool_calls",
     "ClaudeClient",
     "CostTrackerService",
+    "ToolCallingStrategy",
 ]

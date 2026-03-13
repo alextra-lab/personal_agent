@@ -1,0 +1,10 @@
+{
+  "_comment": "Prompt-token baselines for routing delegation regression tests (FRE-105). Values are character counts of assembled prompt strings — no external tokenizer required. Update only when a deliberate, reviewed prompt change is made.",
+  "_how_to_update": "After an intentional prompt edit, run the tests with ROUTING_UPDATE_BASELINES=1 to re-capture, or update values manually after reviewing the diff.",
+  "router_system_prompt_chars": 556,
+  "router_system_prompt_max_chars": 700,
+  "tool_use_system_prompt_chars": 1656,
+  "tool_use_system_prompt_max_chars": 2000,
+  "tool_awareness_prompt_min_chars": 50,
+  "standard_with_tools_system_prompt_min_chars": 1700
+}

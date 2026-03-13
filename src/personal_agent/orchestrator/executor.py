@@ -1071,7 +1071,7 @@ async def step_llm_call(
         # First router call: add routing prompt
         from personal_agent.orchestrator.prompts import get_router_prompt
 
-        system_prompt = get_router_prompt(include_format_detection=False)
+        system_prompt = get_router_prompt()
 
     # Create span for LLM call
     span_ctx, span_id = trace_ctx.new_span()

@@ -32,11 +32,20 @@ _TOOL_INTENT_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
-# REASONING: prove/derive/rigorously, deep reasoning, research synthesis
+# REASONING: prove/derive/rigorously, deep reasoning, research synthesis,
+# and structured-reasoning task framing ("think step by step", "explore solution paths", etc.)
 _REASONING_PATTERNS = re.compile(
     r"(?:prove|derive|rigorously|deep\s+reasoning|research\s+synthesis|"
     r"multi-step\s+(?:formal\s+)?analysis|step-by-step\s+proof|"
-    r"formal\s+analysis|careful\s+reasoning)",
+    r"formal\s+analysis|careful\s+reasoning|"
+    r"think\s+step[\s-]by[\s-]step|"
+    r"list\s+(?:your\s+)?assumptions|"
+    r"explore\s+(?:at\s+least\s+)?(?:\w+\s+)?(?:alternative|solution|approach|path)|"
+    r"converge\s+on\s+(?:a\s+)?(?:final\s+)?(?:answer|solution)|"
+    r"(?:two|three|multiple)\s+(?:alternative|solution|approach)\s+(?:paths?|routes?|options?)|"
+    r"weigh\s+(?:the\s+)?(?:trade-?offs?|options?|alternatives?)|"
+    r"reason\s+through|walk\s+(?:me\s+)?through\s+(?:your\s+)?reasoning|"
+    r"consider\s+(?:all\s+)?(?:constraints?|trade-?offs?|scenarios?))",
     re.IGNORECASE,
 )
 

@@ -52,8 +52,11 @@ def get_environment() -> Environment:
         return Environment.DEVELOPMENT
 
 
+_env_loaded_for_root: Path | None = None
+
+
 def load_env_files(project_root: Path | None = None) -> None:
-    """Load .env files in priority order.
+    """Load .env files in priority order (idempotent: only loads and logs once per process).
 
     Priority order (highest to lowest):
     1. `.env.{environment}.local` (highest priority, gitignored)
@@ -64,9 +67,14 @@ def load_env_files(project_root: Path | None = None) -> None:
     Args:
         project_root: Path to project root. If None, detects from current file location.
     """
+    global _env_loaded_for_root
     if project_root is None:
         # Assume we're in src/personal_agent/config, go up to project root
         project_root = Path(__file__).parent.parent.parent.parent
+    project_root = project_root.resolve()
+
+    if _env_loaded_for_root is not None and _env_loaded_for_root == project_root:
+        return
 
     environment = get_environment()
     env_name = environment.value
@@ -85,6 +93,8 @@ def load_env_files(project_root: Path | None = None) -> None:
             # override=False ensures explicit environment variables win over .env files
             load_dotenv(env_file, override=False)
             loaded_files.append(str(env_file.relative_to(project_root)))
+
+    _env_loaded_for_root = project_root
 
     if loaded_files:
         log.info(

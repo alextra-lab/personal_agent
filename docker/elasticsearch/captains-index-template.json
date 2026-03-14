@@ -56,6 +56,16 @@
             "metric_name": { "type": "keyword" },
             "value": { "type": "keyword" }
           }
+        },
+        "tool_results": {
+          "type": "nested",
+          "properties": {
+            "tool_name": { "type": "keyword" },
+            "success": { "type": "boolean" },
+            "error": { "type": "text" },
+            "latency_ms": { "type": "float" },
+            "output": { "type": "flattened" }
+          }
         }
       }
     }

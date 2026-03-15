@@ -11,6 +11,9 @@
       {
         "command": ".cursor/hooks/verify-on-stop.sh",
         "loop_limit": 3
+      },
+      {
+        "command": ".cursor/hooks/notify-on-stop.sh"
       }
     ]
   }

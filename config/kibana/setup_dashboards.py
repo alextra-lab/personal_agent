@@ -360,6 +360,54 @@ def create_llm_performance() -> None:
         ],
     )
 
+    _create_visualization(
+        "llm-prompt-tokens-by-role",
+        "Avg Prompt Tokens by Model Role",
+        "Average prompt_tokens per call by role (ROUTER ~140, STANDARD ~600–700)",
+        "histogram",
+        q,
+        [
+            {
+                "id": "1",
+                "enabled": True,
+                "type": "avg",
+                "schema": "metric",
+                "params": {"field": "prompt_tokens", "customLabel": "Avg Prompt Tokens"},
+            },
+            {
+                "id": "2",
+                "enabled": True,
+                "type": "terms",
+                "schema": "segment",
+                "params": {"field": "role", "size": 10, "order": "desc", "orderBy": "1"},
+            },
+        ],
+    )
+
+    _create_visualization(
+        "llm-prompt-tokens-percentiles",
+        "Prompt Token Percentiles by Role",
+        "50th, 95th, 99th percentile of prompt_tokens per model role (outlier detection)",
+        "histogram",
+        q,
+        [
+            {
+                "id": "1",
+                "enabled": True,
+                "type": "percentiles",
+                "schema": "metric",
+                "params": {"field": "prompt_tokens", "percents": [50, 95, 99]},
+            },
+            {
+                "id": "2",
+                "enabled": True,
+                "type": "terms",
+                "schema": "segment",
+                "params": {"field": "role", "size": 10, "order": "desc", "orderBy": "_key"},
+            },
+        ],
+    )
+
     _create_dashboard(
         "llm-performance-dashboard",
         "LLM Performance",
@@ -371,6 +419,8 @@ def create_llm_performance() -> None:
             "llm-call-count",
             "llm-errors",
             "llm-p95-latency",
+            "llm-prompt-tokens-by-role",
+            "llm-prompt-tokens-percentiles",
         ],
     )
 

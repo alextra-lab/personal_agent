@@ -4,6 +4,21 @@ All log events should use these constants rather than magic strings to ensure
 consistency and enable reliable querying and analysis.
 """
 
+# Task outcomes (for self-telemetry health/error tracking)
+TASK_OUTCOME_COMPLETED = "completed"
+TASK_OUTCOME_FAILED = "failed"
+TASK_OUTCOME_TIMEOUT = "timeout"
+
+# Health status constants (for self-telemetry health queries)
+HEALTH_STATUS_HEALTHY = "healthy"
+HEALTH_STATUS_DEGRADED = "degraded"
+HEALTH_STATUS_UNHEALTHY = "unhealthy"
+
+# Error trend constants
+ERROR_TREND_INCREASING = "increasing"
+ERROR_TREND_STABLE = "stable"
+ERROR_TREND_DECREASING = "decreasing"
+
 # Orchestrator events
 REQUEST_RECEIVED = "request_received"
 REPLY_READY = "reply_ready"

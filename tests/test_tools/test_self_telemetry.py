@@ -6,6 +6,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import patch
 
+from personal_agent.captains_log.capture import TaskCapture
+from personal_agent.telemetry.events import (
+    ERROR_TREND_DECREASING,
+    ERROR_TREND_INCREASING,
+    ERROR_TREND_STABLE,
+)
 from personal_agent.tools.self_telemetry import (
     self_telemetry_query_executor,
     self_telemetry_query_tool,
@@ -299,3 +305,267 @@ def test_latency_query_with_synthetic_jsonl_returns_duration_breakdown(
     assert result["error"] is None
     assert result["output"]
     assert any("duration_ms" in phase for phase in result["output"])
+
+
+# =============================================================================
+# Tests for new query types: health, errors, interactions, performance
+# =============================================================================
+
+
+@patch("personal_agent.tools.self_telemetry._load_captures")
+@patch("personal_agent.tools.self_telemetry._assess_component_health")
+@patch("personal_agent.tools.self_telemetry._get_system_status")
+@patch("personal_agent.tools.self_telemetry._determine_health_status")
+@patch("personal_agent.tools.self_telemetry._generate_alerts")
+def test_health_query_dispatches_correctly(
+    mock_generate_alerts: Any,
+    mock_determine_status: Any,
+    mock_get_system: Any,
+    mock_assess_health: Any,
+    mock_load_captures: Any,
+) -> None:
+    """Health query should call all helper functions and return structured report."""
+    # Mock captures
+    mock_captures = [
+        TaskCapture(
+            trace_id="trace-1",
+            session_id="sess-1",
+            timestamp=datetime.now(timezone.utc),
+            user_message="test",
+            outcome="completed",
+            duration_ms=1000,
+        ),
+        TaskCapture(
+            trace_id="trace-2",
+            session_id="sess-1",
+            timestamp=datetime.now(timezone.utc),
+            user_message="test",
+            outcome="completed",
+            duration_ms=2000,
+        ),
+    ]
+    mock_load_captures.return_value = mock_captures
+    mock_assess_health.return_value = {"llm": {"status": "healthy", "calls": 10, "errors": 0}, "tools": {"status": "healthy", "calls": 5, "errors": 0}}
+    mock_get_system.return_value = {"mode": "NORMAL", "cpu_avg": 15.0, "mem_avg": 50.0}
+    mock_determine_status.return_value = "healthy"
+    mock_generate_alerts.return_value = []
+
+    result = self_telemetry_query_executor(query_type="health", window="1h")
+
+    assert result["success"] is True
+    assert result["error"] is None
+    assert result["output"]["status"] == "healthy"
+    assert result["output"]["interactions"]["total"] == 2
+    assert result["output"]["interactions"]["success_rate"] == 1.0
+    mock_load_captures.assert_called_once_with(window="1h", last_n=None)
+
+
+@patch("personal_agent.tools.self_telemetry._load_captures")
+def test_health_query_with_last_n(
+    mock_load_captures: Any,
+) -> None:
+    """Health query with last_n should override window parameter."""
+    mock_load_captures.return_value = []
+
+    result = self_telemetry_query_executor(query_type="health", last_n=5)
+
+    assert result["success"] is True
+    mock_load_captures.assert_called_once_with(window=None, last_n=5)
+
+
+@patch("personal_agent.tools.self_telemetry._load_captures")
+@patch("personal_agent.tools.self_telemetry.query_events")
+@patch("personal_agent.tools.self_telemetry._compute_error_trend")
+def test_errors_query_dispatches_correctly(
+    mock_compute_trend: Any,
+    mock_query_events: Any,
+    mock_load_captures: Any,
+) -> None:
+    """Errors query should call helper functions and return grouped analysis."""
+    # Mock captures with failures
+    mock_captures = [
+        TaskCapture(
+            trace_id="trace-1",
+            session_id="sess-1",
+            timestamp=datetime.now(timezone.utc),
+            user_message="test",
+            outcome="failed",
+            duration_ms=1000,
+        ),
+    ]
+    mock_load_captures.return_value = mock_captures
+    mock_query_events.return_value = []
+    mock_compute_trend.return_value = "stable"
+
+    result = self_telemetry_query_executor(query_type="errors", window="24h")
+
+    assert result["success"] is True
+    assert result["error"] is None
+    assert "by_type" in result["output"]
+    assert "by_component" in result["output"]
+    assert "trend" in result["output"]
+    assert result["output"]["trend"] == "stable"
+
+
+@patch("personal_agent.tools.self_telemetry._load_captures")
+def test_interactions_query_dispatches_correctly(
+    mock_load_captures: Any,
+) -> None:
+    """Interactions query should return interaction list with summary."""
+    mock_captures = [
+        TaskCapture(
+            trace_id="trace-1",
+            session_id="sess-1",
+            timestamp=datetime.now(timezone.utc),
+            user_message="Hello world",
+            outcome="completed",
+            duration_ms=1000,
+            tools_used=["mcp_perplexity_ask"],
+            steps=[{"type": "planning"}],
+        ),
+        TaskCapture(
+            trace_id="trace-2",
+            session_id="sess-1",
+            timestamp=datetime.now(timezone.utc),
+            user_message="Test",
+            outcome="completed",
+            duration_ms=2000,
+            tools_used=["mcp_perplexity_ask", "search_memory"],
+            steps=[{"type": "planning"}, {"type": "tool_execution"}],
+        ),
+    ]
+    mock_load_captures.return_value = mock_captures
+
+    result = self_telemetry_query_executor(query_type="interactions", last_n=10)
+
+    assert result["success"] is True
+    assert result["error"] is None
+    assert result["output"]["count"] == 2
+    assert len(result["output"]["interactions"]) == 2
+    assert result["output"]["summary"]["success_rate"] == 1.0
+    assert result["output"]["interactions"][0]["user_message_preview"] == "Hello world"
+    assert result["output"]["interactions"][1]["user_message_preview"] == "Test"
+
+
+@patch("personal_agent.tools.self_telemetry._load_captures")
+def test_performance_query_dispatches_correctly(
+    mock_load_captures: Any,
+) -> None:
+    """Performance query should return latency/throughput metrics."""
+    mock_captures = [
+        TaskCapture(
+            trace_id="trace-1",
+            session_id="sess-1",
+            timestamp=datetime.now(timezone.utc),
+            user_message="test",
+            outcome="completed",
+            duration_ms=1000,
+            tools_used=["mcp_perplexity_ask"],
+        ),
+        TaskCapture(
+            trace_id="trace-2",
+            session_id="sess-1",
+            timestamp=datetime.now(timezone.utc),
+            user_message="test",
+            outcome="completed",
+            duration_ms=2000,
+            tools_used=["mcp_perplexity_ask"],
+        ),
+        TaskCapture(
+            trace_id="trace-3",
+            session_id="sess-1",
+            timestamp=datetime.now(timezone.utc),
+            user_message="test",
+            outcome="failed",
+            duration_ms=5000,
+            tools_used=["search_memory"],
+        ),
+    ]
+    mock_load_captures.return_value = mock_captures
+
+    result = self_telemetry_query_executor(query_type="performance", window="24h")
+
+    assert result["success"] is True
+    assert result["error"] is None
+    assert "throughput" in result["output"]
+    assert "latency" in result["output"]
+    assert "by_outcome" in result["output"]
+    assert "top_tools" in result["output"]
+    assert result["output"]["throughput"]["total_interactions"] == 3
+
+
+def test_new_query_types_in_tool_definition() -> None:
+    """Tool definition should list health, errors, interactions, performance query types."""
+    description = self_telemetry_query_tool.description
+
+    assert "health" in description
+    assert "errors" in description
+    assert "interactions" in description
+    assert "performance" in description
+
+    # Check query_type parameter includes new types
+    parameters = {p.name: p for p in self_telemetry_query_tool.parameters}
+    assert "query_type" in parameters
+    assert "health" in parameters["query_type"].description
+    assert "errors" in parameters["query_type"].description
+
+
+@patch("personal_agent.tools.self_telemetry._load_captures")
+def test_graceful_handling_empty_captures(
+    mock_load_captures: Any,
+) -> None:
+    """Query types should handle empty captures gracefully."""
+    mock_load_captures.return_value = []
+
+    # Health query with no captures should return valid structure with defaults
+    result = self_telemetry_query_executor(query_type="health", window="1h")
+
+    assert result["success"] is True
+    assert result["output"]["interactions"]["total"] == 0
+    assert result["output"]["interactions"]["success_rate"] == 1.0  # Default when no data
+
+
+def test_compute_error_trend_with_named_window_returns_valid_trend() -> None:
+    """_compute_error_trend should handle named windows and return a valid trend constant."""
+    from personal_agent.tools.self_telemetry import _compute_error_trend
+
+    # Test with "today" named window - should return one of the ERROR_TREND_* constants
+    trend = _compute_error_trend("today")
+
+    assert trend in (ERROR_TREND_INCREASING, ERROR_TREND_STABLE, ERROR_TREND_DECREASING)
+
+
+@patch("personal_agent.tools.self_telemetry.query_events")
+def test_compute_error_trend_with_named_window_uses_24h_previous(
+    mock_query_events: Any,
+) -> None:
+    """Named window trend comparison should use 24h as preceding window."""
+    from personal_agent.tools.self_telemetry import _compute_error_trend
+
+    # Mock error counts: today has 5 errors, yesterday has 2
+    def query_side_effect(event: str, window_str: str) -> list[dict[str, Any]]:
+        if window_str == "today":
+            return [{"event": event, "timestamp": "2026-03-15T10:00:00Z"}] * 5
+        elif window_str == "24h":
+            return [{"event": event, "timestamp": "2026-03-14T10:00:00Z"}] * 2
+        return []
+
+    mock_query_events.side_effect = query_side_effect
+
+    trend = _compute_error_trend("today")
+
+    # 5 errors today vs 2 yesterday = 2.5x increase, should be "increasing"
+    assert trend == ERROR_TREND_INCREASING
+
+
+@patch("personal_agent.tools.self_telemetry.query_events")
+def test_compute_error_trend_named_window_stable(mock_query_events: Any) -> None:
+    """Named window with similar error counts should return stable trend."""
+    from personal_agent.tools.self_telemetry import _compute_error_trend
+
+    # Mock equal error counts
+    mock_query_events.return_value = [{"event": "model_call_error"}] * 3
+
+    trend = _compute_error_trend("yesterday")
+
+    assert trend == ERROR_TREND_STABLE

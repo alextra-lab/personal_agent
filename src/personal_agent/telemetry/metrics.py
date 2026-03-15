@@ -7,11 +7,38 @@ and trace reconstruction. All queries operate on the JSONL log files.
 import json
 import pathlib
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
+
+
+def _get_named_window_today() -> datetime:
+    """Return start of today (00:00:00)."""
+    return datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _get_named_window_yesterday() -> datetime:
+    """Return start of yesterday (00:00:00)."""
+    return datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ) - timedelta(days=1)
+
+
+def _get_named_window_this_week() -> datetime:
+    """Return start of this week (Monday at 00:00:00)."""
+    return datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ) - timedelta(days=datetime.now(timezone.utc).weekday())
+
+
+# Named time windows that return absolute start datetimes
+_NAMED_WINDOWS: dict[str, Callable[[], datetime]] = {
+    "today": _get_named_window_today,
+    "yesterday": _get_named_window_yesterday,
+    "this_week": _get_named_window_this_week,
+}
 
 
 def _get_log_file_path() -> pathlib.Path:
@@ -28,20 +55,47 @@ def _get_log_file_path() -> pathlib.Path:
     return log_dir / "current.jsonl"
 
 
-def _parse_time_window(window_str: str) -> timedelta:
-    """Parse a time window string into a timedelta.
+def resolve_window_to_datetime(window: str) -> datetime:
+    """Convert window string to start datetime (public version).
 
-    Supports formats like:
-    - "1h" -> 1 hour
-    - "30m" -> 30 minutes
-    - "2d" -> 2 days
-    - "45s" -> 45 seconds
+    This is a public wrapper around the internal _parse_time_window function.
+    Use this instead of importing the private `_parse_time_window` directly.
 
     Args:
-        window_str: Time window string (e.g., "1h", "30m").
+        window: Time window string (e.g., "1h", "today").
 
     Returns:
-        Timedelta object.
+        Start datetime for the window. For relative windows (e.g., "1h"), returns
+        a datetime at the window start. For named windows (e.g., "today"), returns
+        the absolute start datetime.
+
+    Example:
+        >>> resolve_window_to_datetime("1h")  # datetime one hour ago
+        >>> resolve_window_to_datetime("today")  # today at 00:00:00
+    """
+    result = _parse_time_window(window)
+    if isinstance(result, timedelta):
+        return datetime.now(timezone.utc) - result
+    return result  # datetime from named window
+
+
+def _parse_time_window(window_str: str) -> timedelta | datetime:
+    """Parse a time window string into a timedelta or start datetime.
+
+    Supports formats like:
+    - "1h" -> timedelta(hours=1)
+    - "30m" -> timedelta(minutes=30)
+    - "2d" -> timedelta(days=2)
+    - "45s" -> timedelta(seconds=45)
+    - "today" -> datetime at 00:00:00 today
+    - "yesterday" -> datetime at 00:00:00 yesterday
+    - "this_week" -> datetime at 00:00:00 on Monday of current week
+
+    Args:
+        window_str: Time window string (e.g., "1h", "30m", "today").
+
+    Returns:
+        Timedelta for relative windows, or datetime for named windows.
 
     Raises:
         ValueError: If format is invalid.
@@ -49,8 +103,14 @@ def _parse_time_window(window_str: str) -> timedelta:
     if not window_str:
         raise ValueError("Time window string cannot be empty")
 
-    # Extract number and unit
+    # Normalize input
     window_str = window_str.strip().lower()
+
+    # Named windows first (return datetime start time)
+    if window_str in _NAMED_WINDOWS:
+        return _NAMED_WINDOWS[window_str]()
+
+    # Extract number and unit for relative windows
     if not window_str[-1].isalpha():
         raise ValueError(f"Invalid time window format: {window_str}")
 
@@ -418,8 +478,11 @@ def query_events(
     # Parse time window if provided
     start_time: datetime | None = None
     if window_str:
-        window_delta = _parse_time_window(window_str)
-        start_time = datetime.now(timezone.utc) - window_delta
+        result = _parse_time_window(window_str)
+        if isinstance(result, timedelta):
+            start_time = datetime.now(timezone.utc) - result
+        else:
+            start_time = result
 
     entries = _read_log_entries(start_time=start_time)
 

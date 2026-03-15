@@ -345,7 +345,10 @@ def test_health_query_dispatches_correctly(
         ),
     ]
     mock_load_captures.return_value = mock_captures
-    mock_assess_health.return_value = {"llm": {"status": "healthy", "calls": 10, "errors": 0}, "tools": {"status": "healthy", "calls": 5, "errors": 0}}
+    mock_assess_health.return_value = {
+        "llm": {"status": "healthy", "calls": 10, "errors": 0},
+        "tools": {"status": "healthy", "calls": 5, "errors": 0},
+    }
     mock_get_system.return_value = {"mode": "NORMAL", "cpu_avg": 15.0, "mem_avg": 50.0}
     mock_determine_status.return_value = "healthy"
     mock_generate_alerts.return_value = []
@@ -569,3 +572,374 @@ def test_compute_error_trend_named_window_stable(mock_query_events: Any) -> None
     trend = _compute_error_trend("yesterday")
 
     assert trend == ERROR_TREND_STABLE
+
+
+# =============================================================================
+# Tests for compute_trend function (FRE-109)
+# =============================================================================
+
+
+def test_compute_trend_increasing() -> None:
+    """compute_trend should return increasing when current > 1.5x previous."""
+    from personal_agent.tools.self_telemetry import compute_trend
+
+    assert compute_trend(10, 5) == ERROR_TREND_INCREASING  # 2x
+    assert compute_trend(8, 5) == ERROR_TREND_INCREASING  # 1.6x
+    assert compute_trend(100, 10) == ERROR_TREND_INCREASING  # 10x
+
+
+def test_compute_trend_decreasing() -> None:
+    """compute_trend should return decreasing when current < 0.5x previous."""
+    from personal_agent.tools.self_telemetry import compute_trend
+
+    assert compute_trend(2, 5) == ERROR_TREND_DECREASING  # 0.4x
+    assert compute_trend(1, 10) == ERROR_TREND_DECREASING  # 0.1x
+
+
+def test_compute_trend_stable() -> None:
+    """compute_trend should return stable for intermediate values."""
+    from personal_agent.tools.self_telemetry import compute_trend
+
+    assert compute_trend(5, 5) == ERROR_TREND_STABLE  # 1x
+    assert compute_trend(7, 5) == ERROR_TREND_STABLE  # 1.4x
+    assert compute_trend(3, 5) == ERROR_TREND_STABLE  # 0.6x
+    assert compute_trend(10, 12) == ERROR_TREND_STABLE  # ~0.83x
+
+
+def test_compute_trend_edge_case_zero_previous() -> None:
+    """compute_trend should return increasing if current > 0 and previous = 0."""
+    from personal_agent.tools.self_telemetry import compute_trend
+
+    assert compute_trend(0, 0) == ERROR_TREND_STABLE  # both zero
+    assert compute_trend(5, 0) == ERROR_TREND_INCREASING  # previous zero, current > 0
+
+
+# =============================================================================
+# Tests for latency percentiles (FRE-109)
+# =============================================================================
+
+
+def test_compute_latency_stats_with_percentiles() -> None:
+    """_compute_latency_stats should include p50, p75, p90, p95."""
+    from personal_agent.tools.self_telemetry import _compute_latency_stats
+
+    durations = list(range(1, 101))  # 1 to 100 ms
+
+    stats = _compute_latency_stats(durations)
+
+    assert stats["avg_ms"] == 50.5  # (1+100)/2
+    assert stats["min_ms"] == 1
+    assert stats["max_ms"] == 100
+    # For 100 samples: idx 50->51, idx 75->76, idx 90->91, idx 95->96
+    assert stats["p50_ms"] == 51
+    assert stats["p75_ms"] == 76
+    assert stats["p90_ms"] == 91
+    assert stats["p95_ms"] == 96
+
+
+def test_compute_latency_stats_few_samples_no_percentiles() -> None:
+    """_compute_latency_stats should return None for percentiles with < 20 samples."""
+    from personal_agent.tools.self_telemetry import _compute_latency_stats
+
+    durations = [10, 20, 30, 40, 50]  # Only 5 samples
+
+    stats = _compute_latency_stats(durations)
+
+    assert stats["avg_ms"] == 30.0
+    assert stats["min_ms"] == 10
+    assert stats["max_ms"] == 50
+    # All percentiles should be None with < 20 samples
+    assert stats["p50_ms"] is None
+    assert stats["p75_ms"] is None
+    assert stats["p90_ms"] is None
+    assert stats["p95_ms"] is None
+
+
+def test_compute_latency_stats_empty() -> None:
+    """_compute_latency_stats should return None for all values with empty input."""
+    from personal_agent.tools.self_telemetry import _compute_latency_stats
+
+    stats = _compute_latency_stats([])
+
+    assert stats["avg_ms"] is None
+    assert stats["min_ms"] is None
+    assert stats["max_ms"] is None
+    assert stats["p50_ms"] is None
+    assert stats["p75_ms"] is None
+    assert stats["p90_ms"] is None
+    assert stats["p95_ms"] is None
+
+
+# =============================================================================
+# Tests for performance query with trend detection (FRE-109)
+# =============================================================================
+
+
+@patch("personal_agent.tools.self_telemetry._load_captures")
+def test_performance_query_includes_latency_trend(mock_load_captures: Any) -> None:
+    """Performance query should include latency_trend in output."""
+    from personal_agent.telemetry.events import ERROR_TREND_STABLE
+
+    mock_captures = [
+        TaskCapture(
+            trace_id="trace-1",
+            session_id="sess-1",
+            timestamp=datetime.now(timezone.utc),
+            user_message="test",
+            outcome="completed",
+            duration_ms=1000,
+            tools_used=[],
+        ),
+    ]
+    mock_load_captures.return_value = mock_captures
+
+    result = self_telemetry_query_executor(query_type="performance", window="24h")
+
+    assert result["success"] is True
+    assert "latency_trend" in result["output"]
+    assert result["output"]["latency_trend"] in (
+        ERROR_TREND_INCREASING,
+        ERROR_TREND_STABLE,
+        ERROR_TREND_DECREASING,
+    )
+
+
+# =============================================================================
+# E2E validation tests for FRE-107 repro matrix (FRE-110)
+# =============================================================================
+
+
+@patch("personal_agent.tools.self_telemetry._load_captures")
+def test_repro_matrix_how_are_you_doing(mock_load_captures: Any) -> None:
+    """'How are you doing?' should produce health query with well-structured response."""
+    mock_captures = [
+        TaskCapture(
+            trace_id="trace-1",
+            session_id="sess-1",
+            timestamp=datetime.now(timezone.utc),
+            user_message="test",
+            outcome="completed",
+            duration_ms=1000,
+            tools_used=[],
+        ),
+        TaskCapture(
+            trace_id="trace-2",
+            session_id="sess-1",
+            timestamp=datetime.now(timezone.utc),
+            user_message="test",
+            outcome="completed",
+            duration_ms=2000,
+            tools_used=[],
+        ),
+    ]
+    mock_load_captures.return_value = mock_captures
+
+    result = self_telemetry_query_executor(query_type="health", window="1h")
+
+    assert result["success"] is True
+    assert "output" in result
+    assert "status" in result["output"]
+    assert "interactions" in result["output"]
+    assert "components" in result["output"]
+    # Response should be structured, not raw events
+    assert isinstance(result["output"]["status"], str)
+    assert result["output"]["status"] in ("healthy", "degraded", "unhealthy")
+
+
+@patch("personal_agent.tools.self_telemetry._load_captures")
+@patch("personal_agent.tools.self_telemetry.query_events")
+def test_repro_matrix_any_errors_recently(mock_query_events: Any, mock_load_captures: Any) -> None:
+    """'Any errors recently?' should produce errors query with grouped analysis."""
+    mock_query_events.return_value = [
+        {"event": "model_call_error", "timestamp": "2026-03-15T10:00:00Z"},
+    ]
+    mock_captures: list[TaskCapture] = []
+    mock_load_captures.return_value = mock_captures
+
+    result = self_telemetry_query_executor(query_type="errors", window="today")
+
+    assert result["success"] is True
+    assert "output" in result
+    assert "by_type" in result["output"]
+    assert "by_component" in result["output"]
+    assert "recent" in result["output"]
+    assert "trend" in result["output"]
+    # Response should be structured, not raw events
+    assert isinstance(result["output"]["by_type"], dict)
+
+
+@patch("personal_agent.tools.self_telemetry._load_captures")
+def test_repro_matrix_errors_last_5_interactions(mock_load_captures: Any) -> None:
+    """'Errors in the last 5 interactions' should use last_n scoping."""
+    mock_captures = [
+        TaskCapture(
+            trace_id="trace-1",
+            session_id="sess-1",
+            timestamp=datetime.now(timezone.utc),
+            user_message="test",
+            outcome="completed",
+            duration_ms=1000,
+            tools_used=[],
+        ),
+        TaskCapture(
+            trace_id="trace-2",
+            session_id="sess-1",
+            timestamp=datetime.now(timezone.utc),
+            user_message="test",
+            outcome="failed",
+            duration_ms=2000,
+            tools_used=[],
+        ),
+    ]
+    mock_load_captures.return_value = mock_captures
+
+    result = self_telemetry_query_executor(query_type="errors", last_n=5)
+
+    assert result["success"] is True
+    # Should have been called with last_n=5
+    mock_load_captures.assert_called_once_with(window=None, last_n=5)
+
+
+@patch("personal_agent.tools.self_telemetry._load_captures")
+def test_repro_matrix_is_agent_healthy(mock_load_captures: Any) -> None:
+    """'Is the agent healthy?' should produce health query."""
+    mock_captures = [
+        TaskCapture(
+            trace_id="trace-1",
+            session_id="sess-1",
+            timestamp=datetime.now(timezone.utc),
+            user_message="test",
+            outcome="completed",
+            duration_ms=1000,
+            tools_used=[],
+        ),
+    ]
+    mock_load_captures.return_value = mock_captures
+
+    result = self_telemetry_query_executor(query_type="health")
+
+    assert result["success"] is True
+    assert "status" in result["output"]
+    assert "window" in result["output"]
+    # Verify it returns a status verdict, not raw data
+    assert result["output"]["status"] in ("healthy", "degraded", "unhealthy")
+
+
+@patch("personal_agent.tools.self_telemetry._load_captures")
+@patch("personal_agent.tools.self_telemetry.get_request_latency_breakdown")
+def test_repro_matrix_why_was_that_slow(
+    mock_latency_breakdown: Any, mock_load_captures: Any
+) -> None:
+    """'Why was that slow?' should use latency query with trace_id."""
+    mock_latency_breakdown.return_value = [
+        {"phase": "llm_call", "duration_ms": 1000},
+        {"phase": "tool_execution", "duration_ms": 500},
+    ]
+    mock_load_captures.return_value = []
+
+    result = self_telemetry_query_executor(query_type="latency", trace_id="current")
+
+    assert result["success"] is True
+    assert "output" in result
+    # Should return phase breakdown with durations
+    assert len(result["output"]) > 0
+    assert any("duration_ms" in phase for phase in result["output"])
+
+
+@patch("personal_agent.tools.self_telemetry._load_captures")
+def test_repro_matrix_what_have_you_been_working_on(mock_load_captures: Any) -> None:
+    """'What have you been working on?' should produce interactions query."""
+    mock_captures = [
+        TaskCapture(
+            trace_id="trace-1",
+            session_id="sess-1",
+            timestamp=datetime.now(timezone.utc),
+            user_message="Hello",
+            outcome="completed",
+            duration_ms=1000,
+            tools_used=["mcp_perplexity_ask"],
+            steps=[{"type": "planning"}],
+        ),
+        TaskCapture(
+            trace_id="trace-2",
+            session_id="sess-1",
+            timestamp=datetime.now(timezone.utc),
+            user_message="World",
+            outcome="completed",
+            duration_ms=2000,
+            tools_used=["search_memory"],
+            steps=[{"type": "planning"}, {"type": "tool_execution"}],
+        ),
+    ]
+    mock_load_captures.return_value = mock_captures
+
+    result = self_telemetry_query_executor(query_type="interactions", last_n=5)
+
+    assert result["success"] is True
+    assert "interactions" in result["output"]
+    assert "count" in result["output"]
+    assert result["output"]["count"] == 2
+    # Response should be structured, not raw events
+    assert len(result["output"]["interactions"]) == 2
+
+
+@patch("personal_agent.tools.self_telemetry._load_captures")
+def test_repro_matrix_am_i_getting_slower(mock_load_captures: Any) -> None:
+    """'Am I getting slower?' should produce performance query with trend."""
+    mock_captures = [
+        TaskCapture(
+            trace_id="trace-1",
+            session_id="sess-1",
+            timestamp=datetime.now(timezone.utc),
+            user_message="test",
+            outcome="completed",
+            duration_ms=1000,
+            tools_used=[],
+        ),
+        TaskCapture(
+            trace_id="trace-2",
+            session_id="sess-1",
+            timestamp=datetime.now(timezone.utc),
+            user_message="test",
+            outcome="completed",
+            duration_ms=2000,
+            tools_used=[],
+        ),
+    ]
+    mock_load_captures.return_value = mock_captures
+
+    result = self_telemetry_query_executor(query_type="performance", window="today")
+
+    assert result["success"] is True
+    assert "latency" in result["output"]
+    assert "throughput" in result["output"]
+    assert "latency_trend" in result["output"]
+    # Response should be structured, not raw events
+    assert "avg_ms" in result["output"]["latency"]
+    assert result["output"]["latency_trend"] in (
+        ERROR_TREND_INCREASING,
+        ERROR_TREND_STABLE,
+        ERROR_TREND_DECREASING,
+    )
+
+
+@patch("personal_agent.tools.self_telemetry._load_captures")
+@patch("personal_agent.tools.self_telemetry.query_events")
+def test_repro_matrix_show_failures_this_week(
+    mock_query_events: Any, mock_load_captures: Any
+) -> None:
+    """'Show me failures this week' should use errors query with named window."""
+    mock_query_events.return_value = [
+        {"event": "task_failed", "timestamp": "2026-03-15T10:00:00Z"},
+    ]
+    mock_captures: list[TaskCapture] = []
+    mock_load_captures.return_value = mock_captures
+
+    result = self_telemetry_query_executor(query_type="errors", window="this_week")
+
+    assert result["success"] is True
+    assert "by_type" in result["output"]
+    assert "by_component" in result["output"]
+    assert "trend" in result["output"]
+    # Verify named window handling
+    assert result["output"]["scope"] == "this_week"

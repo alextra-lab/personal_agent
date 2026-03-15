@@ -2,10 +2,76 @@
 
 This module exposes existing telemetry metric query helpers through a
 single tool-call interface so the agent can inspect historical behavior.
+
+## Overview
+
+The `self_telemetry_query` tool provides access to multiple query types for
+inspecting agent health, performance, errors, and interaction history. All
+queries return pre-computed summaries rather than raw event data, making them
+actionable for both the agent and human users.
+
+## Query Types
+
+| Query Type | Description | Default Scope |
+|------------|-------------|---------------|
+| `health` | Overall operational status (success rate, component health, alerts) | window=1h |
+| `errors` | Error analysis grouped by type and component with trend detection | window=24h |
+| `interactions` | Recent interaction history from Captain's Log | last_n=10 |
+| `performance` | Latency percentiles (p50/p75/p90/p95), throughput, top tools | window=24h |
+| `events` | Raw event query (filter by event/component/time) | N/A |
+| `trace` | Reconstruct one trace (requires trace_id) | N/A |
+| `latency` | Phase breakdown for one trace (requires trace_id) | N/A |
+
+## Time Windows
+
+Relative windows: `1h`, `30m`, `2d`, `45s`
+Named windows: `today`, `yesterday`, `this_week`
+
+## Scoping
+
+- Use `window` for time-based queries (all query types except `interactions`)
+- Use `last_n` for interaction-count scoping (`health`, `errors`, `interactions`, `performance`)
+- `window` and `last_n` are mutually exclusive
+
+## Internal Use Patterns
+
+### Orchestrator Health Check at Session Start
+
+```python
+from personal_agent.tools.self_telemetry import self_telemetry_query_executor
+
+health = self_telemetry_query_executor(query_type="health", window="1h")
+if health["output"]["status"] == "degraded":
+    log.warning("session_start_degraded", alerts=health["output"]["alerts"])
+```
+
+### Post-Failure Investigation
+
+```python
+trace_result = self_telemetry_query_executor(
+    query_type="trace", trace_id=current_trace_id
+)
+```
+
+### Brainstem Scheduler Mode Transitions
+
+```python
+health = self_telemetry_query_executor(query_type="health", window="30m")
+if health["output"]["interactions"]["success_rate"] < 0.5:
+    trigger_mode_transition("DEGRADED", reason="high_failure_rate")
+```
+
+### Captain's Log Enrichment for Reflection
+
+```python
+perf = self_telemetry_query_executor(query_type="performance", window="1h")
+# Include in telemetry_summary for richer reflection
+```
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -39,27 +105,37 @@ self_telemetry_query_tool = ToolDefinition(
     description=(
         "Query this agent's operational health and telemetry. "
         "Use to inspect execution traces, analyze performance, find errors, or review recent interactions. "
-        "\n\nquery_type options:\n"
+        "\n\nquery_type options (choose one):\n"
         "- 'health': Overall operational status (success rate, component health, alerts). "
-        "Default window=1h.\n"
+        "Default window=1h. Example: 'How are you?', 'Any errors recently?', 'Am I getting slower?'\n"
         "- 'errors': Error analysis grouped by type and component with trend detection. "
-        "Default window=24h.\n"
+        "Default window=24h. Example: 'Show me failures this week', 'Errors in the last 5 interactions'\n"
         "- 'interactions': Recent interaction history from Captain's Log. "
-        "Default last_n=10.\n"
-        "- 'performance': Latency percentiles and throughput metrics. "
-        "Default window=24h.\n"
-        "- 'events': Raw event query (filter by event/component/time).\n"
-        "- 'trace': Reconstruct one trace (requires trace_id).\n"
-        "- 'latency': Phase breakdown for one trace (requires trace_id)."
-        "\n\nWindow accepts: '1h', '30m', '2d', 'today', 'yesterday', 'this_week'. "
-        "Use last_n for interaction-count scoping (mutually exclusive with window)."
+        "Default last_n=10. Example: 'What have you been working on?'\n"
+        "- 'performance': Latency percentiles (p50/p75/p90/p95), throughput (interactions/hour), "
+        "breakdown by outcome (completed vs failed), top tools by usage, bottleneck identification. "
+        "Default window=24h. Example: 'Am I getting slower?', 'Show performance this week'\n"
+        "- 'events': Raw event query (filter by event/component/time). "
+        "Use 'model_call_error' or 'task_failed' to find recent errors. Default limit=20.\n"
+        "- 'trace': Reconstruct one trace by trace_id. Required for 'latency' queries too.\n"
+        "- 'latency': Phase breakdown (duration_ms) for one trace. Requires trace_id.\n"
+        "\nTime window formats:\n"
+        "- Relative: '1h', '30m', '2d', '45s' (hours, minutes, days, seconds)\n"
+        "- Named: 'today' (start of day), 'yesterday' (previous day), 'this_week' (Monday start)\n"
+        "\nScoping:\n"
+        "- Use 'window' for time-based queries (all types except 'interactions')\n"
+        "- Use 'last_n' for interaction-count scoping (health, errors, interactions, performance)\n"
+        "- 'window' and 'last_n' are mutually exclusive"
     ),
     category="read_only",
     parameters=[
         ToolParameter(
             name="query_type",
             type="string",
-            description="One of: events, trace, latency, health, errors, interactions, performance",
+            description=(
+                "One of: events, trace, latency, health, errors, interactions, performance. "
+                "See tool description for detailed examples for each query type."
+            ),
             required=True,
             default=None,
             json_schema=None,
@@ -167,26 +243,45 @@ def _load_captures(
     return captures
 
 
-def _compute_latency_stats(durations: list[float]) -> dict[str, float | None]:
-    """Compute latency statistics (avg, min, max, p95).
+def _compute_latency_stats(durations: Sequence[float | int]) -> dict[str, float | None]:
+    """Compute latency statistics including percentiles.
 
     Args:
-        durations: List of duration values in milliseconds.
+        durations: Sequence of duration values in milliseconds.
 
     Returns:
-        Dict with avg_ms, min_ms, max_ms, p95_ms keys.
+        Dict with avg_ms, min_ms, max_ms, p50_ms, p75_ms, p90_ms, p95_ms keys.
+        Percentiles are None if fewer than 20 samples.
     """
     if not durations:
-        return {"avg_ms": None, "min_ms": None, "max_ms": None, "p95_ms": None}
+        return {
+            "avg_ms": None,
+            "min_ms": None,
+            "max_ms": None,
+            "p50_ms": None,
+            "p75_ms": None,
+            "p90_ms": None,
+            "p95_ms": None,
+        }
 
     sorted_durations = sorted(durations)
     n = len(sorted_durations)
+
+    def percentile(p: float) -> float | None:
+        """Calculate the p-th percentile (0-100) from sorted data."""
+        if n < 20:
+            return None
+        idx = int(n * p / 100)
+        return float(sorted_durations[idx])
 
     return {
         "avg_ms": round(sum(sorted_durations) / n, 2),
         "min_ms": sorted_durations[0],
         "max_ms": sorted_durations[-1],
-        "p95_ms": sorted_durations[int(n * 0.95)] if n >= 20 else None,
+        "p50_ms": percentile(50),
+        "p75_ms": percentile(75),
+        "p90_ms": percentile(90),
+        "p95_ms": percentile(95),
     }
 
 
@@ -224,6 +319,44 @@ def _assess_component_health(window: str) -> dict[str, dict[str, Any]]:
             "errors": len(tool_errors),
         },
     }
+
+
+def _compute_latency_trend(window: str) -> str:
+    """Compute latency trend by comparing median latency to preceding window.
+
+    Args:
+        window: Time window string (e.g., "24h"). Named windows like "today" or
+        "yesterday" are also supported.
+
+    Returns:
+        One of: ERROR_TREND_INCREASING, ERROR_TREND_DECREASING, ERROR_TREND_STABLE
+    """
+    window_delta = _parse_time_window(window)
+
+    # Get duration for current window
+    captures = _load_captures(window=window)
+    current_durations = [c.duration_ms for c in captures if c.duration_ms is not None]
+
+    # Get duration for preceding window
+    if isinstance(window_delta, timedelta):
+        window_hours = int(window_delta.total_seconds() / 3600)
+        window_minutes = int(window_delta.total_seconds() / 60)
+        prev_window = f"{window_minutes}m" if window_hours < 1 else f"{window_hours}h"
+    else:
+        # Named window: compare "today so far" to "yesterday same time period"
+        prev_window = "24h"
+
+    prev_captures = _load_captures(window=prev_window)
+    prev_durations = [c.duration_ms for c in prev_captures if c.duration_ms is not None]
+
+    # Use median as the metric for comparison
+    if not current_durations or not prev_durations:
+        return ERROR_TREND_STABLE
+
+    current_median = sorted(current_durations)[len(current_durations) // 2]
+    prev_median = sorted(prev_durations)[len(prev_durations) // 2]
+
+    return compute_trend(current_median, prev_median)
 
 
 def _determine_health_status(
@@ -265,6 +398,39 @@ def _determine_health_status(
     return HEALTH_STATUS_HEALTHY
 
 
+def compute_trend(current_value: int | float, previous_value: int | float) -> str:
+    """Compare current vs. previous values to determine trend direction.
+
+    Uses multiplicative thresholds:
+    - Increasing: current > 1.5x previous
+    - Decreasing: current < 0.5x previous
+    - Stable: otherwise
+
+    Args:
+        current_value: Current period's metric value.
+        previous_value: Previous period's metric value (same duration).
+
+    Returns:
+        One of: ERROR_TREND_INCREASING, ERROR_TREND_DECREASING, ERROR_TREND_STABLE
+
+    Example:
+        >>> compute_trend(10, 5)  # 2x increase = increasing
+        "increasing"
+        >>> compute_trend(10, 20)  # 0.5x = decreasing
+        "decreasing"
+        >>> compute_trend(10, 12)  # ~0.83x = stable
+        "stable"
+    """
+    if previous_value == 0:
+        return ERROR_TREND_STABLE if current_value == 0 else ERROR_TREND_INCREASING
+    ratio = current_value / previous_value
+    if ratio > 1.5:
+        return ERROR_TREND_INCREASING
+    if ratio < 0.5:
+        return ERROR_TREND_DECREASING
+    return ERROR_TREND_STABLE
+
+
 def _compute_error_trend(window: str) -> str:
     """Compute error trend: ERROR_TREND_* constants.
 
@@ -300,14 +466,8 @@ def _compute_error_trend(window: str) -> str:
     current_count = len(current_errors)
     prev_count = len(prev_errors)
 
-    # Compute trend
-    if prev_count == 0:
-        return ERROR_TREND_STABLE if current_count == 0 else ERROR_TREND_INCREASING
-    if current_count > prev_count * 1.5:
-        return ERROR_TREND_INCREASING
-    if current_count < prev_count * 0.5:
-        return ERROR_TREND_DECREASING
-    return ERROR_TREND_STABLE
+    # Compute trend using reusable comparison function
+    return compute_trend(current_count, prev_count)
 
 
 def _get_system_status() -> dict[str, Any]:
@@ -573,7 +733,8 @@ def _execute_performance_query(
         last_n: Number of interactions to analyze. If provided, overrides window.
 
     Returns:
-        Dict with throughput, latency percentiles, by_outcome, top_tools, bottleneck.
+        Dict with throughput, latency percentiles, by_outcome, top_tools, bottleneck,
+        and latency_trend (comparing current vs. preceding window).
     """
     captures = _load_captures(window=window, last_n=last_n)
     window_str = window or "24h"
@@ -639,6 +800,9 @@ def _execute_performance_query(
     # Determine bottleneck (phase with highest % of total duration)
     bottleneck = _identify_bottleneck(captures)
 
+    # Compute latency trend (compare median latency to preceding same-duration window)
+    latency_trend = _compute_latency_trend(window_str)
+
     return {
         "success": True,
         "output": {
@@ -651,6 +815,7 @@ def _execute_performance_query(
             "by_outcome": by_outcome,
             "top_tools": top_tools,
             "bottleneck": bottleneck,
+            "latency_trend": latency_trend,
         },
         "error": None,
     }
@@ -730,10 +895,6 @@ def self_telemetry_query_executor(
     limit: int | None = None,
     last_n: int | None = None,
 ) -> dict[str, Any]:
-    """Execute a self-telemetry query."""
-    # Normalize last_n to int to prevent float issues from tool calls
-    if last_n is not None:
-        last_n = int(last_n)
     """Execute a self-telemetry query.
 
     Args:
@@ -752,6 +913,9 @@ def self_telemetry_query_executor(
     Raises:
         ValueError: If both ``window`` and ``last_n`` are provided.
     """
+    # Normalize last_n to int to prevent float issues from tool calls
+    if last_n is not None:
+        last_n = int(last_n)
     normalized_type = query_type.strip().lower()
 
     # Enforce mutual exclusivity of window and last_n

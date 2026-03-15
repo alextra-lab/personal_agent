@@ -1,5 +1,5 @@
 #!/bin/bash
-# stop hook: when the agent run completes, send an iMessage notification.
+# stop hook: when the agent run completes, create a Reminder so you see it on all devices.
 # Does not emit followup_message; only notifies.
 
 input=$(cat)
@@ -10,7 +10,7 @@ if [[ "$status" != "completed" ]]; then
   exit 0
 fi
 
-# Optional: include project name in message
+# Include project (work context) in the reminder message
 project_name=""
 if [[ -n "${CURSOR_PROJECT_DIR:-}" ]]; then
   project_name=$(basename "$CURSOR_PROJECT_DIR")
@@ -19,13 +19,13 @@ elif [[ -n "$input" ]]; then
 fi
 
 if [[ -n "$project_name" ]]; then
-  msg="Cursor has completed ($project_name)."
+  msg="Cursor run completed — $project_name. Review when back."
 else
-  msg="Cursor has completed."
+  msg="Cursor run completed. Review when back."
 fi
 
 hook_dir="$(cd "$(dirname "$0")" && pwd)"
-"$hook_dir/notify-imessage.sh" "$msg"
+"$hook_dir/notify-reminder.sh" "$msg"
 
 echo '{}'
 exit 0

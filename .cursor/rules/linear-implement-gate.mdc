@@ -28,7 +28,7 @@ Before implementing any Linear issue:
 
 1. **Status check:** Call `get_issue` for that issue and inspect its **state** (or **labels**).
 2. **Gate:** Proceed with implementation **only if** the issue has state **Approved** or label **Approved**.
-3. **If not approved:** Do not implement. Tell the user that this issue needs human approval first (e.g. "Move this issue to Approved status or add the Approved label in Linear before I can implement it."). Then run `.cursor/hooks/notify-imessage.sh 'Cursor needs approval: <issue id or title>'` so the user gets an iMessage notification.
+3. **If not approved:** Do not implement. Tell the user that this issue needs human approval first (e.g. "Move this issue to Approved status or add the Approved label in Linear before I can implement it."). Then run `.cursor/hooks/notify-reminder.sh 'Cursor needs approval: <issue id or title>'` so the user gets a reminder on all devices.
 
 When listing work to implement (e.g. "What should I work on?"):
 

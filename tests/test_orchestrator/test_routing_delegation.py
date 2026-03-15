@@ -27,6 +27,7 @@ from personal_agent.orchestrator.prompts import (
     get_router_prompt,
 )
 from personal_agent.orchestrator.routing import heuristic_routing
+from tests.test_orchestrator.conftest import configure_mock_llm_client_model_configs
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -172,6 +173,7 @@ class TestLLMDelegation:
         """Factual queries with no live-data requirement should route to STANDARD."""
         monkeypatch.setattr(settings, "routing_policy", "llm_only")
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
         mock_client.respond.side_effect = [
             _make_llm_response(_router_json("STANDARD")),
@@ -198,6 +200,7 @@ class TestLLMDelegation:
         """Live-data queries should route to STANDARD (tool-capable) not REASONING."""
         monkeypatch.setattr(settings, "routing_policy", "llm_only")
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
         mock_client.respond.side_effect = [
             _make_llm_response(_router_json("STANDARD")),
@@ -222,6 +225,7 @@ class TestLLMDelegation:
         """Step-by-step proof queries should route to REASONING."""
         monkeypatch.setattr(settings, "routing_policy", "llm_only")
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
         mock_client.respond.side_effect = [
             _make_llm_response(_router_json("REASONING", confidence=0.95)),
@@ -246,6 +250,7 @@ class TestLLMDelegation:
         """Research synthesis queries should route to REASONING."""
         monkeypatch.setattr(settings, "routing_policy", "llm_only")
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
         mock_client.respond.side_effect = [
             _make_llm_response(_router_json("REASONING", confidence=0.92)),
@@ -270,6 +275,7 @@ class TestLLMDelegation:
         """Malformed router JSON should fall back to STANDARD via heuristic."""
         monkeypatch.setattr(settings, "routing_policy", "llm_only")
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
         mock_client.respond.side_effect = [
             _make_llm_response('{"confidence": 0.9}'),  # missing target_model
@@ -304,6 +310,7 @@ class TestToolPromptAssembly:
         """STANDARD model call must include TOOL_USE_SYSTEM_PROMPT in its system prompt."""
         monkeypatch.setattr(settings, "routing_policy", "llm_only")
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
         mock_client.respond.side_effect = [
             _make_llm_response(_router_json("STANDARD")),
@@ -331,6 +338,7 @@ class TestToolPromptAssembly:
         """REASONING model call must include TOOL_USE_SYSTEM_PROMPT in its system prompt."""
         monkeypatch.setattr(settings, "routing_policy", "llm_only")
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
         mock_client.respond.side_effect = [
             _make_llm_response(_router_json("REASONING")),
@@ -356,6 +364,7 @@ class TestToolPromptAssembly:
         """Router call must NOT include TOOL_USE_SYSTEM_PROMPT."""
         monkeypatch.setattr(settings, "routing_policy", "llm_only")
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
         mock_client.respond.side_effect = [
             _make_llm_response(_router_json("STANDARD")),
@@ -382,6 +391,7 @@ class TestToolPromptAssembly:
         """System prompt assembled for a STANDARD tool call must meet minimum size baseline."""
         monkeypatch.setattr(settings, "routing_policy", "llm_only")
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
         mock_client.respond.side_effect = [
             _make_llm_response(_router_json("STANDARD")),
@@ -411,6 +421,7 @@ class TestToolPromptAssembly:
         """Router call must not receive memory context injection."""
         monkeypatch.setattr(settings, "routing_policy", "llm_only")
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
         mock_client.respond.side_effect = [
             _make_llm_response(_router_json("STANDARD")),
@@ -448,6 +459,7 @@ class TestHeuristicBypass:
         monkeypatch.setattr(settings, "routing_policy", "heuristic_then_llm")
         monkeypatch.setattr(settings, "routing_heuristic_threshold", 0.8)
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
         mock_client.respond.return_value = _make_llm_response("Here is the fix.")
 

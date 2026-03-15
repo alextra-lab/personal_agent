@@ -19,7 +19,9 @@ from personal_agent.memory.service import MemoryService
 async def memory_service():
     """Create memory service for testing."""
     service = MemoryService()
-    await service.connect()
+    connected = await service.connect()
+    if not connected:
+        pytest.skip("Neo4j not available (docker compose up -d)")
     yield service
     await service.disconnect()
 

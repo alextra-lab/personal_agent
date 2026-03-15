@@ -6,9 +6,27 @@ ModelRole.REASONING) creates its own LocalLLMClient internally, bypassing any
 executor-level patches. This fixture blocks that path for all non-integration tests.
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from personal_agent.llm_client.models import ToolCallingStrategy
+
+
+def configure_mock_llm_client_model_configs(mock_client: AsyncMock) -> None:
+    """Set model_configs on a mock LocalLLMClient so executor can read effective_tool_strategy.
+
+    Without this, model_configs.get(role) returns an AsyncMock and accessing
+    .effective_tool_strategy raises AttributeError (coroutine has no attribute).
+    """
+    mock_def = MagicMock()
+    mock_def.effective_tool_strategy = ToolCallingStrategy.NATIVE
+    mock_client.model_configs = {
+        "router": mock_def,
+        "standard": mock_def,
+        "reasoning": mock_def,
+        "coding": mock_def,
+    }
 
 
 @pytest.fixture(autouse=True)

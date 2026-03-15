@@ -43,7 +43,7 @@ Rules:
 - Provide ALL required parameters (e.g., list_directory requires {"path": "..."}).
 - For large directories, prefer calling list_directory with include_details=false and/or max_entries (unless the user explicitly asked for every entry).
 - After tool results are returned, synthesize a final natural-language answer. Do NOT request the same tool again unless the path/args must change.
-- Whenever the user asks about current events, recent news, CVEs, product versions, or anything requiring live web data, always call mcp_perplexity_ask instead of answering from your own knowledge."""
+- Whenever the user asks about current events, recent news, CVEs, product versions, or anything requiring live web data, call mcp_perplexity_ask for quick lookups or mcp_perplexity_research for deeper research instead of answering from your own knowledge."""
 
 
 TOOL_USE_NATIVE_PROMPT = f"""You are a tool-using assistant.

@@ -14,6 +14,8 @@ import pytest
 
 from personal_agent.orchestrator import Channel, Orchestrator
 
+pytestmark = pytest.mark.integration
+
 
 def _make_llm_response(
     content: str,

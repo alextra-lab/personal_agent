@@ -18,6 +18,7 @@ from personal_agent.orchestrator.executor import (
 from personal_agent.orchestrator.session import SessionManager
 from personal_agent.orchestrator.types import ExecutionContext, TaskState
 from personal_agent.telemetry.trace import TraceContext
+from tests.test_orchestrator.conftest import configure_mock_llm_client_model_configs
 
 
 class TestMemoryRecallHelpers:
@@ -110,9 +111,16 @@ class TestMemoryRecallHelpers:
         assert result[1]["turn_count"] == 5
 
 
+@patch("personal_agent.orchestrator.executor.LocalLLMClient")
 @pytest.mark.asyncio
-async def test_execute_simple_task() -> None:
+async def test_execute_simple_task(mock_client_class) -> None:
     """Test executing a simple task through the state machine."""
+    mock_client = AsyncMock()
+    configure_mock_llm_client_model_configs(mock_client)
+    mock_client_class.return_value = mock_client
+    mock_client.respond.side_effect = [
+        {"role": "assistant", "content": "Hello! I'm doing well.", "tool_calls": [], "reasoning_trace": None, "usage": {"total_tokens": 20}, "raw": {}},
+    ]
     session_manager = SessionManager()
     session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
 
@@ -144,9 +152,14 @@ async def test_execute_simple_task() -> None:
     assert "llm_call" in step_types
 
 
+@patch("personal_agent.orchestrator.executor.LocalLLMClient")
 @pytest.mark.asyncio
-async def test_execute_task_with_code_channel() -> None:
+async def test_execute_task_with_code_channel(mock_client_class) -> None:
     """Test executing a task with CODE_TASK channel."""
+    mock_client = AsyncMock()
+    configure_mock_llm_client_model_configs(mock_client)
+    mock_client_class.return_value = mock_client
+    mock_client.respond.return_value = {"role": "assistant", "content": "Here is a function.", "tool_calls": [], "reasoning_trace": None, "usage": {"total_tokens": 30}, "raw": {}}
     session_manager = SessionManager()
     session_id = session_manager.create_session(Mode.NORMAL, Channel.CODE_TASK)
 
@@ -166,9 +179,14 @@ async def test_execute_task_with_code_channel() -> None:
     assert len(result["steps"]) > 0
 
 
+@patch("personal_agent.orchestrator.executor.LocalLLMClient")
 @pytest.mark.asyncio
-async def test_execute_task_updates_session() -> None:
+async def test_execute_task_updates_session(mock_client_class) -> None:
     """Test that executing a task updates session messages."""
+    mock_client = AsyncMock()
+    configure_mock_llm_client_model_configs(mock_client)
+    mock_client_class.return_value = mock_client
+    mock_client.respond.return_value = {"role": "assistant", "content": "Acknowledged.", "tool_calls": [], "reasoning_trace": None, "usage": {"total_tokens": 10}, "raw": {}}
     session_manager = SessionManager()
     session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
 
@@ -194,9 +212,14 @@ async def test_execute_task_updates_session() -> None:
     assert user_messages[0]["content"] == "Test message"
 
 
+@patch("personal_agent.orchestrator.executor.LocalLLMClient")
 @pytest.mark.asyncio
-async def test_execute_task_preserves_context() -> None:
+async def test_execute_task_preserves_context(mock_client_class) -> None:
     """Test that execution context is preserved through state machine."""
+    mock_client = AsyncMock()
+    configure_mock_llm_client_model_configs(mock_client)
+    mock_client_class.return_value = mock_client
+    mock_client.respond.return_value = {"role": "assistant", "content": "OK", "tool_calls": [], "reasoning_trace": None, "usage": {"total_tokens": 5}, "raw": {}}
     session_manager = SessionManager()
     session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
 
@@ -223,9 +246,14 @@ async def test_execute_task_preserves_context() -> None:
     assert ctx.user_message == original_user_message
 
 
+@patch("personal_agent.orchestrator.executor.LocalLLMClient")
 @pytest.mark.asyncio
-async def test_execute_task_state_transitions() -> None:
+async def test_execute_task_state_transitions(mock_client_class) -> None:
     """Test that state machine transitions through expected states."""
+    mock_client = AsyncMock()
+    configure_mock_llm_client_model_configs(mock_client)
+    mock_client_class.return_value = mock_client
+    mock_client.respond.return_value = {"role": "assistant", "content": "Done.", "tool_calls": [], "reasoning_trace": None, "usage": {"total_tokens": 10}, "raw": {}}
     session_manager = SessionManager()
     session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
 
@@ -251,9 +279,14 @@ async def test_execute_task_state_transitions() -> None:
     assert "error" not in result or not result.get("error")
 
 
+@patch("personal_agent.orchestrator.executor.LocalLLMClient")
 @pytest.mark.asyncio
-async def test_execute_task_with_different_modes() -> None:
+async def test_execute_task_with_different_modes(mock_client_class) -> None:
     """Test executing tasks with different operational modes."""
+    mock_client = AsyncMock()
+    configure_mock_llm_client_model_configs(mock_client)
+    mock_client_class.return_value = mock_client
+    mock_client.respond.return_value = {"role": "assistant", "content": "Response.", "tool_calls": [], "reasoning_trace": None, "usage": {"total_tokens": 10}, "raw": {}}
     session_manager = SessionManager()
 
     for mode in [Mode.NORMAL, Mode.ALERT, Mode.DEGRADED]:
@@ -274,9 +307,14 @@ async def test_execute_task_with_different_modes() -> None:
         assert len(result["reply"]) > 0
 
 
+@patch("personal_agent.orchestrator.executor.LocalLLMClient")
 @pytest.mark.asyncio
-async def test_execute_task_error_handling() -> None:
+async def test_execute_task_error_handling(mock_client_class) -> None:
     """Test that errors are handled gracefully and don't crash."""
+    mock_client = AsyncMock()
+    configure_mock_llm_client_model_configs(mock_client)
+    mock_client_class.return_value = mock_client
+    mock_client.respond.return_value = {"role": "assistant", "content": "OK", "tool_calls": [], "reasoning_trace": None, "usage": {"total_tokens": 5}, "raw": {}}
     session_manager = SessionManager()
 
     trace_ctx = TraceContext.new_trace()
@@ -312,6 +350,7 @@ class TestToolUsingFlow:
     async def test_llm_call_with_tools_passed_to_client(self, mock_client_class):
         """Test that tools are passed to LLM client when available."""
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
 
         # Mock LLM response without tool calls
@@ -345,6 +384,7 @@ class TestToolUsingFlow:
     async def test_tool_calls_executed_when_returned_from_llm(self, mock_client_class):
         """Test that tool calls from LLM are executed and results appended."""
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
 
         # Mock router response (DELEGATE to REASONING) - CHAT channel goes through router first
@@ -429,6 +469,7 @@ class TestToolUsingFlow:
     async def test_tool_execution_stores_results_in_context(self, mock_client_class):
         """Test that tool execution results are stored in context."""
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
 
         # Mock LLM response with tool calls
@@ -483,6 +524,7 @@ class TestToolUsingFlow:
     async def test_multiple_tool_calls_executed_sequentially(self, mock_client_class):
         """Test that multiple tool calls are executed sequentially."""
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
 
         # Use SYSTEM_HEALTH channel to bypass router
@@ -543,6 +585,7 @@ class TestToolUsingFlow:
     async def test_tool_execution_error_handled_gracefully(self, mock_client_class):
         """Test that tool execution errors are handled gracefully."""
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
 
         # Mock LLM response with tool call to nonexistent tool
@@ -596,6 +639,7 @@ class TestToolUsingFlow:
     async def test_search_memory_tool_called_when_llm_requests_it(self, mock_client_class):
         """Integration: agent executes search_memory when LLM returns that tool call (ADR-0026)."""
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
         # Provide model_configs so executor can access model_config.id during synthesis
         mock_client.model_configs = {

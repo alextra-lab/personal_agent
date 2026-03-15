@@ -93,11 +93,16 @@ class TestAppConfig:
         assert config.orchestrator_max_concurrent_tasks == 5
 
     def test_app_config_from_env_vars(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test AppConfig reads from environment variables with AGENT_ prefix."""
+        """Test AppConfig reads from environment variables.
+
+        Fields with explicit alias (e.g. APP_DEBUG, APP_LOG_LEVEL) use that alias;
+        others use AGENT_ prefix per env_prefix.
+        """
         monkeypatch.delenv("APP_LOG_LEVEL", raising=False)
         monkeypatch.delenv("APP_DEBUG", raising=False)
-        monkeypatch.setenv("AGENT_DEBUG", "1")
-        monkeypatch.setenv("AGENT_LOG_LEVEL", "DEBUG")
+        monkeypatch.delenv("AGENT_LLM_BASE_URL", raising=False)
+        monkeypatch.setenv("APP_DEBUG", "1")
+        monkeypatch.setenv("APP_LOG_LEVEL", "DEBUG")
         monkeypatch.setenv("AGENT_LLM_BASE_URL", "http://test:8080/v1")
 
         config = AppConfig()

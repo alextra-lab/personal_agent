@@ -21,6 +21,7 @@ from personal_agent.orchestrator.routing import (
     resolve_role,
 )
 from personal_agent.orchestrator.types import ExecutionContext, RoutingDecision
+from tests.test_orchestrator.conftest import configure_mock_llm_client_model_configs
 
 
 class TestRoutingHelpers:
@@ -141,6 +142,7 @@ class TestRoutingFlow:
         """Router call receives only the current user message."""
         monkeypatch.setattr(settings, "routing_policy", "llm_only")
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
         mock_client.respond.side_effect = [
             {
@@ -183,6 +185,7 @@ class TestRoutingFlow:
         monkeypatch.setattr(settings, "routing_policy", "heuristic_then_llm")
         monkeypatch.setattr(settings, "routing_heuristic_threshold", 0.8)
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
         mock_client.respond.return_value = {
             "role": "assistant",
@@ -212,6 +215,7 @@ class TestRoutingFlow:
         """Router system prompt excludes memory enrichment section."""
         monkeypatch.setattr(settings, "routing_policy", "llm_only")
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
         mock_client.respond.side_effect = [
             {
@@ -253,6 +257,7 @@ class TestRoutingFlow:
         """Invalid router JSON falls back to heuristic delegation."""
         monkeypatch.setattr(settings, "routing_policy", "llm_only")
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
         mock_client.respond.side_effect = [
             {
@@ -291,6 +296,7 @@ class TestRoutingFlow:
         """Single-model mode routes initial CHAT call to STANDARD."""
         monkeypatch.setattr(settings, "router_role", "STANDARD")
         mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
         mock_client.respond.return_value = {
             "role": "assistant",

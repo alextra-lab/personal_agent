@@ -69,7 +69,7 @@ can be made in microseconds.
 
 **2. One Brain, Many Hands**
 
-A single capable model (Qwen3.5-35B-A3B) is the reasoning center. It doesn't
+A single capable model (Qwen3.5-35-A3B) is the reasoning center. It doesn't
 share this role. When it needs to expand, it spawns ephemeral sub-agents for
 parallel work or delegates to external agents. Sub-agents are task-scoped
 processes, not persistent specialist identities. They expand and contract with
@@ -78,8 +78,9 @@ demand.
 **3. Memory Is Infrastructure, Not Feature**
 
 Memory isn't something bolted on after the agent works. It's the foundation
-that makes the agent a *companion* rather than a chatbot. Seshat (memory
-steward) is a core subsystem, not a deferred afterthought. The agent's value
+that makes the agent a *companion* rather than a chatbot. Seshat (named after
+the Egyptian goddess of writing and record-keeping -- the memory steward) is a
+core subsystem, not a deferred afterthought. The agent's value
 compounds over time because it remembers.
 
 **4. Observability Is The Research Instrument**
@@ -95,7 +96,8 @@ memory, basic tools. When a complex task arrives, it expands: spawning
 sub-agents, loading skills, delegating externally, assembling rich context.
 When the task completes, it contracts: consolidates what it learned, proposes
 improvements, returns to calm. The brainstem homeostasis model provides the
-biological foundation for this.
+biological foundation for this. (See Section 2.3 Flow 4 and Section 4.3 for
+the concrete mechanism.)
 
 **6. Infrastructure Can Evolve**
 
@@ -143,7 +145,7 @@ are new.
                                  |              |
               +------------------v--------+     |
               |      PRIMARY AGENT        |     |
-              |   Qwen3.5-35B-A3B         |     |
+              |   Qwen3.5-35-A3B         |     |
               |                           |     |
               |   . Conversational core   |     |
               |   . Tool calling (MCP +   |     |
@@ -288,7 +290,7 @@ Captain's Log captures (continuous)
 ### 2.4 Orchestrator State Machine -- Simplified
 
 The current executor has: `INIT -> PLANNING -> LLM_CALL -> TOOL_EXECUTION ->
-SYNTHESIS -> COMPLETED`.
+SYNTHESIS -> COMPLETED | FAILED`.
 
 This mostly survives, but the semantics shift:
 
@@ -300,6 +302,7 @@ This mostly survives, but the semantics shift:
 | **TOOL_EXECUTION** | Execute tool calls from LLM | Same, plus: sub-agent spawning and external delegation are "tools" from the executor's perspective |
 | **SYNTHESIS** | Finalize reply, update session | Same, plus: capture delegation outcomes |
 | **COMPLETED** | Done | Same. Brainstem takes over for contraction phase |
+| **FAILED** | Error during execution | Same. Additionally: if failure occurred during expansion, contraction is triggered to clean up sub-agents and release resources |
 
 The state machine gets *simpler* because the gateway absorbs the routing
 complexity that was previously tangled into the executor.
@@ -349,9 +352,10 @@ Telemetry: `governance_decision` event -> ES.
 ### 3.4 Stage 4: Intent Classification [PARTIAL -- evolves]
 
 Today: `heuristic_routing()` classifies to model roles (STANDARD, REASONING,
-CODING, MEMORY_RECALL).
+CODING) and a separate `is_memory_recall_query()` detects memory intent as a
+boolean flag. These are two disconnected mechanisms.
 
-Redesign: classify into **task types**, not model roles. The model is always
+Redesign: unify into **task types**, not model roles. The model is always
 the 35B -- what changes is how we prepare context and whether we expand.
 
 Task types:
@@ -433,7 +437,8 @@ Telemetry: `context_assembly` span -> ES (with source sizes).
 
 Ensure assembled context fits the practical window.
 
-Practical budget on M4 Max 128GB with 35B @ 8-bit:
+Practical budget (reference hardware: M4 Max 128GB; adjust for different
+configurations) with 35B @ 8-bit:
 
 - Model weights: ~35 GB
 - KV cache headroom: ~60-80 GB available
@@ -459,18 +464,47 @@ Output: `BudgetedContext {final_messages, token_count, trimmed: bool,
 overflow_action: str | None}`.
 Telemetry: `context_budget` event -> ES (budget vs actual, what was trimmed).
 
-### 3.8 What This Replaces in Current Code
+### 3.8 Gateway Failure Modes and Graceful Degradation
+
+Each gateway stage can fail. The pipeline must degrade gracefully rather than
+halt the request.
+
+| Stage | Failure | Degradation |
+|---|---|---|
+| **Security** | Sanitization service down | Log warning, pass through with flag `security_degraded=true`. Never block on sanitization failure -- availability over perfection |
+| **Session** | DB unreachable | Create ephemeral in-memory session. Mark `session_ephemeral=true`. Conversation history unavailable but request proceeds |
+| **Governance** | Brainstem unresponsive | Default to NORMAL mode with expansion disabled. Conservative: treat resource state as unknown |
+| **Intent** | Low confidence classification (below threshold) | Default to CONVERSATIONAL with complexity SIMPLE. Log the ambiguous signals for later analysis. Never block on classification uncertainty |
+| **Decomposition** | Cannot assess (e.g., governance unavailable) | Default to SINGLE. The safest option -- no expansion, no resource risk |
+| **Context Assembly** | Neo4j unreachable (memory unavailable) | Proceed without memory context. Mark `memory_degraded=true` in telemetry. The agent can still converse, just without memory enrichment |
+| **Context Assembly** | Skill files missing or unreadable | Proceed without skills. Log warning. Agent operates with base knowledge only |
+| **Budget** | Token count exceeds budget even after maximum trimming | Two paths: (1) If decomposition was SINGLE and intent is COMPLEX, re-enter Stage 5 with DECOMPOSE forced. (2) If already DECOMPOSE or intent is SIMPLE, proceed with truncated context and warn the agent via system message that context was trimmed |
+
+**Re-entry behavior:** When Stage 7 (Budget) forces a DECOMPOSE override, the
+pipeline re-enters at Stage 5 with a `budget_overflow=true` flag. Stage 5
+sets strategy to DECOMPOSE unconditionally. Stage 6 then assembles a minimal
+context for decomposition planning (just the user message + essential system
+prompt), not the full enriched context. This avoids infinite loops -- the
+re-entry path always produces a context that fits.
+
+**Telemetry principle:** Every degradation emits a structured event to ES with
+the stage name, failure type, and degradation path chosen. This makes failure
+patterns visible in Kibana and feeds the insights engine.
+
+### 3.9 What This Replaces in Current Code
 
 | Current Code | What Happens |
 |---|---|
 | `routing.py: heuristic_routing()` | Evolves into Stage 4 (intent classification). Same regex approach, richer task types instead of model roles |
 | `routing.py: resolve_role()` | Removed. No more role resolution -- the model is always the 35B primary |
-| `routing.py: _MEMORY_RECALL_PATTERNS` | Moves into Stage 4 as one of the intent classifiers |
+| `routing.py: is_memory_recall_query()` | Moves into Stage 4 as one of the intent classifiers (memory recall is a task type, not a separate boolean check) |
+| `routing.py: _MEMORY_RECALL_PATTERNS` | Absorbed into Stage 4 intent patterns |
 | `executor.py: step_init()` | Split: memory/routing logic moves to Stages 4-6. `step_init()` becomes thin -- just receives the gateway output |
 | `mode_manager.py` | Stays, feeds into Stage 3 (governance). Gains resource-pressure signaling |
-| `executor.py: _call_router_model()` | Removed. No separate router model call. Classification is deterministic |
+| `config/models.yaml: router role` | Removed or repurposed. The `liquid/lfm2.5-1.2b` router entry is no longer used for request classification. See Section 3.10 for potential future roles |
+| `orchestrator/types.py: ModelRole.ROUTER` | Removed. Intent classification returns task types, not model roles |
 
-### 3.9 The Router SLM Question
+### 3.10 The Router SLM Question
 
 The current `liquid/lfm2.5-1.2b` router model is unnecessary for intent
 classification -- that's deterministic. However, there are possible future
@@ -555,7 +589,26 @@ This is a lookup table, not clever. Task type maps to skill set. But it means
 a MEMORY_RECALL conversation gets memory-specific knowledge injected, while a
 DELEGATION task gets instruction-composition patterns.
 
-### 4.3 The Expansion Model
+### 4.3 System Prompt Strategy
+
+The primary agent's system prompt has two layers:
+
+**Base prompt (always present):** Agent identity, behavioral constraints, tool
+usage instructions, response formatting guidelines. This is the permanent
+personality and operational contract. Compact -- target under 1K tokens.
+
+**Task-type injection (variable):** Skills, memory context, delegation
+templates, and tool definitions loaded by the gateway's Context Assembly
+stage. This is what changes per request. Injected as additional system or
+user messages after the base prompt.
+
+The base prompt should be explicit about the agent's role as a life
+collaborator, its memory capabilities, and its delegation model. It should
+NOT contain task-specific instructions -- those come from skills. This
+separation keeps the base prompt stable across all task types while allowing
+rich contextual augmentation.
+
+### 4.4 The Expansion Model
 
 Three expansion modes:
 
@@ -619,7 +672,7 @@ User -> Gateway -> Primary Agent -> composes instructions
                   Reports result -> Response
 ```
 
-### 4.4 Delegation Evolution: A -> B -> C
+### 4.5 Delegation Evolution: A -> B -> C
 
 | Stage | How Delegation Works | What You Learn |
 |---|---|---|
@@ -630,7 +683,7 @@ User -> Gateway -> Primary Agent -> composes instructions
 Starting at A is deliberate -- you learn what good delegation looks like
 before automating it.
 
-### 4.5 Sub-Agent Architecture
+### 4.6 Sub-Agent Architecture
 
 Sub-agents are NOT separate services, NOT persistent processes, and NOT
 specialist identities. They are **task-scoped inference calls** -- the primary
@@ -681,7 +734,27 @@ Which model runs sub-agents is a design variable:
 - **Research question**: Does sub-agent quality degrade meaningfully with a
   smaller model? Testable. Telemetry will answer this.
 
-### 4.6 Brainstem Expansion Signals
+### 4.7 Sub-Agent Concurrency Model
+
+Sub-agents execute as `asyncio.Task` instances within the existing service
+process. They integrate with the ADR-0029 concurrency controller:
+
+- Each sub-agent inference call acquires a concurrency slot before executing.
+- The brainstem's `expansion_budget` determines maximum concurrent sub-agents,
+  but the concurrency controller's `max_concurrency` per model is the hard
+  limit. If the 35B model has `max_concurrency: 1`, sub-agents execute
+  sequentially regardless of expansion_budget.
+- Sub-agent tasks respect the same timeout and cancellation mechanisms as
+  regular inference calls.
+- If the user sends a new message while sub-agents are running, the new
+  request is queued behind active inference. The user receives a response
+  once their request reaches the front of the queue. Sub-agent results from
+  the previous expansion are still collected and available for synthesis.
+- Future optimization: route simple sub-agent tasks to the 9B model (which
+  has its own concurrency slot), enabling true parallelism with the 35B
+  primary. This is a Slice 2/3 experiment.
+
+### 4.8 Brainstem Expansion Signals
 
 The brainstem gains two new signals:
 
@@ -837,6 +910,30 @@ class MemoryProtocol(Protocol):
         self, current_context: str, ctx: TraceContext
     ) -> list[Memory]: ...
 ```
+
+**Mapping to existing types:** The protocol types wrap existing models from
+`memory/models.py`:
+
+| Protocol Type | Maps To / Contains |
+|---|---|
+| `Episode` | Wraps `TurnNode` + user_message + assistant_response + tools_used |
+| `Fact` | New: extracted stable assertion with confidence score |
+| `Procedure` | New: reusable tool/delegation pattern |
+| `MemoryQuery` | Evolves existing `MemoryQuery` (adds memory type filter) |
+| `MemoryResult` | Evolves existing `MemoryQueryResult` |
+| `BroadRecallResult` | Wraps current `query_memory_broad()` return shape |
+| `WorkingContext` | New: current session messages + active sub-agent state |
+| `RecallScope` | New: enum (ALL, EPISODIC, SEMANTIC, PROCEDURAL, DERIVED) |
+| `TimeWindow` | New: start/end datetime for consolidation range |
+| `ConsolidationResult` | Evolves current consolidation summary dict |
+| `MemoryType` | New: enum matching the six memory types in Section 5.3 |
+| `Contradiction` | New: conflicting fact pair with confidence comparison |
+| `MemoryHealthReport` | Evolves current quality monitor report dicts |
+| `ProvenanceChain` | New: list of source episode IDs leading to a derived fact |
+| `Memory` | Union type: Episode or Fact or Procedure (for suggest_relevant) |
+
+Detailed field definitions will be specified during Slice 1 implementation.
+The table above establishes the relationship to existing code.
 
 The first implementation wraps the existing `MemoryService` behind this
 protocol. No new storage -- just a clean interface over what exists. Then, as
@@ -1133,6 +1230,17 @@ learned.
 | **Delegation** | Stage A: instruction composition. Agent produces markdown delegation packages. Manual outcome capture |
 | **Telemetry** | Intent classification dashboard. Task type distribution over time. Delegation events tracked |
 
+Acceptance criteria:
+
+- [ ] All requests route through the gateway pipeline (no direct executor entry)
+- [ ] Intent classification events appear in ES with task type and confidence
+- [ ] Role-switching removed: `resolve_role()` gone, all requests use 35B
+- [ ] MemoryProtocol defined with at least `recall()` and `store_episode()`
+- [ ] Existing MemoryService passes as MemoryProtocol implementation (tests)
+- [ ] Agent can produce a markdown delegation instruction package for a sample task
+- [ ] Gateway degradation: agent responds when Neo4j is down (without memory)
+- [ ] Kibana dashboard shows intent classification distribution
+
 What you learn:
 
 - Does single-agent feel better or worse than role-switching?
@@ -1148,13 +1256,13 @@ Key code changes:
 
 | File | Change |
 |---|---|
-| `orchestrator/routing.py` | Returns task types instead of model roles. `resolve_role()` removed |
-| `orchestrator/executor.py` | `step_init()` simplified. `_call_router_model()` removed. LLM_CALL always uses primary 35B |
-| `orchestrator/types.py` | New: TaskType enum, IntentResult, GatewayOutput |
-| `memory/protocol.py` | New: MemoryProtocol abstract interface |
-| `memory/service.py` | Implements MemoryProtocol (wrapper) |
-| `config/models.yaml` | Router role removed or repurposed |
-| New: `gateway/` | New module: gateway pipeline |
+| `orchestrator/routing.py` | `heuristic_routing()` returns `IntentResult` (task types) instead of `HeuristicRoutingPlan` (model roles). `resolve_role()` removed. `is_memory_recall_query()` absorbed into intent classification |
+| `orchestrator/executor.py` | `step_init()` simplified -- receives `GatewayOutput` instead of performing routing/memory detection inline. Router model dispatch path removed. LLM_CALL always uses primary 35B |
+| `orchestrator/types.py` | New: `TaskType` enum, `IntentResult`, `GatewayOutput`, `DecompositionResult`. `ModelRole.ROUTER` removed |
+| `memory/protocol.py` | New file: `MemoryProtocol` abstract interface |
+| `memory/service.py` | Implements `MemoryProtocol` (wrapper over existing logic, no new capabilities) |
+| `config/models.yaml` | Router role entry removed or commented out |
+| New: `request_gateway/` | New module: gateway pipeline stages (named to avoid collision with existing `mcp/gateway.py`). Contains: `pipeline.py`, `security.py`, `intent.py`, `decomposition.py`, `context.py`, `budget.py` |
 
 ### 8.2 Slice 2: Expansion
 
@@ -1172,6 +1280,19 @@ Key code changes:
 | **Delegation** | Stage B: structured handoff (DelegationPackage/DelegationOutcome). Agent suggests delegation proactively. Pattern analysis in insights engine |
 | **Brainstem** | Expansion permission signal (expansion_budget). Contraction trigger. Expansion metrics to ES |
 | **Telemetry** | Expansion dashboard. Context budget dashboard. Delegation outcomes dashboard. Memory comparison dashboard |
+
+Acceptance criteria:
+
+- [ ] Gateway decomposition stage operational (SINGLE/HYBRID/DECOMPOSE/DELEGATE decisions emitted to ES)
+- [ ] Context budget management active: token counts logged, trimming occurs when over budget
+- [ ] At least one successful HYBRID execution: sub-agent spawned, result synthesized
+- [ ] SubAgentSpec/SubAgentResult types implemented with full ES tracing
+- [ ] Brainstem expansion_budget signal operational and visible in telemetry
+- [ ] Episodic and semantic memory types distinguished in Neo4j
+- [ ] At least one promote() execution: episode consolidated to semantic fact
+- [ ] Graphiti experiment completed with comparison report
+- [ ] DelegationPackage/DelegationOutcome types in use for Stage B handoffs
+- [ ] Kibana dashboards for expansion, context budget, and delegation outcomes
 
 What you learn:
 
@@ -1200,6 +1321,18 @@ loading, self-improvement loop closure.
 | **Delegation** | Stage C: programmatic orchestration via API/MCP/CLI. Context briefing generation. Delegation feedback becomes procedural memory |
 | **Self-Improvement** | Closed loop operational. Agent as architecture collaborator. Improvement ROI tracking |
 | **Telemetry** | Memory intelligence dashboard. Self-improvement dashboard. Sub-agent model comparison. Full system health overview |
+
+Acceptance criteria:
+
+- [ ] Proactive memory surfacing operational: suggest_relevant() called during context assembly
+- [ ] Lifecycle management: at least one demote() or forget() execution with reason logged
+- [ ] Contradiction detection: check_contradiction() runs on new facts
+- [ ] At least one procedural memory stored (tool pattern or delegation template)
+- [ ] Dynamic skill loading: different skills loaded for different task types (visible in ES)
+- [ ] At least one programmatic delegation: agent calls external agent via API/CLI
+- [ ] Self-improvement loop closed: approved proposal delegated to Claude Code, outcome captured
+- [ ] Seshat backend decision documented based on Slice 2 experiment data
+- [ ] Full system health dashboard operational in Kibana
 
 What you learn:
 

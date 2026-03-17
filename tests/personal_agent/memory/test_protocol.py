@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from personal_agent.memory.protocol import (
@@ -13,6 +15,7 @@ from personal_agent.memory.protocol import (
     MemoryType,
     RecallScope,
 )
+from personal_agent.memory.protocol_adapter import MemoryServiceAdapter
 
 
 class TestMemoryTypes:
@@ -224,3 +227,100 @@ class TestProtocolIsRuntimeCheckable:
                 return True
 
         assert isinstance(FakeMemory(), MemoryProtocol)
+
+
+class TestMemoryServiceAdapter:
+    """Verify adapter satisfies MemoryProtocol."""
+
+    def test_adapter_satisfies_protocol(self) -> None:
+        """Verify adapter passes isinstance check for MemoryProtocol."""
+        mock_service = MagicMock()
+        adapter = MemoryServiceAdapter(service=mock_service)
+        assert isinstance(adapter, MemoryProtocol)
+
+    @pytest.mark.asyncio
+    async def test_recall_delegates_to_query_memory(self) -> None:
+        """Verify recall() converts types and delegates to service."""
+        mock_service = MagicMock()
+        mock_service.query_memory = AsyncMock(
+            return_value=MagicMock(
+                conversations=[],
+                entities=[],
+                relevance_scores={},
+            )
+        )
+        adapter = MemoryServiceAdapter(service=mock_service)
+        query = MemoryRecallQuery(entity_names=["Neo4j"], limit=5)
+
+        result = await adapter.recall(query, trace_id="test-trace")
+
+        assert isinstance(result, MemoryRecallResult)
+        mock_service.query_memory.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_recall_broad_delegates(self) -> None:
+        """Verify recall_broad() delegates to query_memory_broad."""
+        mock_service = MagicMock()
+        mock_service.query_memory_broad = AsyncMock(
+            return_value={
+                "entities": [
+                    {"name": "Alice", "type": "Person", "mentions": 3},
+                    {"name": "Neo4j", "type": "Technology", "mentions": 5},
+                ],
+                "sessions": [{"session_id": "s1"}],
+                "turns_summary": [],
+            }
+        )
+        adapter = MemoryServiceAdapter(service=mock_service)
+
+        result = await adapter.recall_broad(
+            entity_types=None, recency_days=90, limit=20, trace_id="test"
+        )
+
+        assert isinstance(result, BroadRecallResult)
+        assert "Person" in result.entities_by_type
+        assert "Technology" in result.entities_by_type
+        assert len(result.entities_by_type["Person"]) == 1
+        assert result.total_entity_count == 2
+        assert result.recent_sessions == [{"session_id": "s1"}]
+        mock_service.query_memory_broad.assert_called_once_with(
+            entity_types=None, recency_days=90, limit=20
+        )
+
+    @pytest.mark.asyncio
+    async def test_is_connected_when_driver_exists(self) -> None:
+        """Verify is_connected returns True when driver is available."""
+        mock_service = MagicMock()
+        mock_service.driver = MagicMock()
+        adapter = MemoryServiceAdapter(service=mock_service)
+
+        result = await adapter.is_connected()
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_is_connected_when_no_driver(self) -> None:
+        """Verify is_connected returns False when no driver."""
+        mock_service = MagicMock()
+        mock_service.driver = None
+        adapter = MemoryServiceAdapter(service=mock_service)
+
+        result = await adapter.is_connected()
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_store_episode_returns_turn_id(self) -> None:
+        """Verify store_episode stub returns the episode's turn_id."""
+        from datetime import datetime, timezone
+
+        mock_service = MagicMock()
+        adapter = MemoryServiceAdapter(service=mock_service)
+        episode = Episode(
+            turn_id="trace-abc",
+            session_id="sess-123",
+            timestamp=datetime.now(tz=timezone.utc),
+            user_message="Hello",
+            assistant_response="Hi",
+        )
+
+        result = await adapter.store_episode(episode, trace_id="trace-abc")
+        assert result == "trace-abc"

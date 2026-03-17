@@ -2564,7 +2564,66 @@ uv run agent "What have I asked about?"
 # Expected: Response with memory context (or graceful without if Neo4j down)
 ```
 
-- [ ] **Step 6: Verify acceptance criteria**
+- [ ] **Step 6: Verify self-analysis stream model indirection preserved**
+
+The Slice 1 refactoring must not collapse the configurable model assignment for
+background self-analysis streams (spec Section 4.1.1). Add two guard-rail tests:
+
+```python
+# tests/personal_agent/test_process_role_indirection.py
+"""Guard-rail tests for self-analysis stream model indirection (spec 4.1.1).
+
+These tests verify the MECHANISM — configurable process-role keys and
+provider-based dispatch — not specific provider values. They must pass
+regardless of whether streams point at cloud or local models.
+"""
+
+import inspect
+
+from personal_agent.config import load_model_config
+
+
+def test_process_role_keys_resolve_to_valid_models() -> None:
+    """Process-role keys must resolve to entries in the models registry.
+
+    Defense-in-depth: ModelConfig._validate_process_roles already enforces
+    this at load time, but we assert it explicitly so a Slice 1 refactoring
+    that removes the validator is caught immediately.
+    """
+    config = load_model_config()
+
+    for role_name in ("entity_extraction_role", "captains_log_role", "insights_role"):
+        role_value = getattr(config, role_name)
+        assert role_value in config.models, (
+            f"{role_name}={role_value!r} does not match any entry in models"
+        )
+
+
+def test_self_analysis_consumers_use_process_role_indirection() -> None:
+    """Consumers must read model assignment from config, not hardcode a ModelRole."""
+    from personal_agent.second_brain import entity_extraction
+    from personal_agent.captains_log import reflection
+
+    ee_source = inspect.getsource(entity_extraction)
+    refl_source = inspect.getsource(reflection)
+
+    # Must reference the configurable process-role key (not a hardcoded ModelRole)
+    assert "entity_extraction_role" in ee_source
+    assert "captains_log_role" in refl_source
+
+    # Must branch on the provider field (the dispatch mechanism)
+    assert ".provider" in ee_source
+    assert ".provider" in refl_source
+
+    # NOTE: insights/engine.py does not yet use LLM-based analysis.
+    # When insights_role dispatch is added to engine.py, add assertions here.
+    # See spec Section 4.1.1 invariant.
+```
+
+Run: `uv run pytest tests/personal_agent/test_process_role_indirection.py -v`
+Expected: Both tests pass
+
+- [ ] **Step 7: Verify acceptance criteria**
 
 Review against spec acceptance criteria:
 
@@ -2574,6 +2633,7 @@ Review against spec acceptance criteria:
 - [ ] MemoryProtocol defined with recall() and store_episode()
 - [ ] MemoryService adapter passes protocol tests
 - [ ] Gateway degradation works when Neo4j is down
+- [ ] Self-analysis stream process-role indirection preserved (Section 4.1.1)
 - [ ] (Delegation instruction composition — see Task 12)
 - [ ] (Kibana dashboard — see Task 12)
 

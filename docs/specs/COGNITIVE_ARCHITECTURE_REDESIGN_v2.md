@@ -525,9 +525,10 @@ later slice.
 
 ### 4.1 The Primary Agent
 
-The 35B model is the single reasoning center. Everything flows through it --
-conversation, analysis, planning, delegation instructions, self-improvement
-proposals.
+The 35B model is the single reasoning center. Everything **on the user-facing
+request path** flows through it -- conversation, analysis, planning, delegation
+instructions, self-improvement proposals. Background self-analysis streams have
+their own configurable model assignment (see 4.1.1).
 
 What it does:
 
@@ -544,6 +545,40 @@ What it does NOT do:
 - Execute long-running background work itself (sub-agents handle that)
 - Code like Claude Code (delegates instead)
 - Make security/governance decisions (gateway decides)
+
+### 4.1.1 Self-Analysis Stream Model Assignment
+
+"Single reasoning center" applies to the **user-facing request path** -- the
+gateway -> primary agent -> response flow. Three background self-analysis
+streams operate outside this path and have **independently configurable model
+assignments**:
+
+| Stream | Config Key | What It Does |
+|--------|-----------|--------------|
+| Entity extraction | `entity_extraction_role` | Extracts knowledge graph entities from conversations |
+| Captain's Log reflection | `captains_log_role` | Generates self-reflection entries from task telemetry |
+| Insights analysis | `insights_role` | Detects cross-data patterns and proposes improvements |
+
+Each key in `config/models.yaml` points to any entry in the `models:` dict.
+The dispatch code in each consumer checks the resolved model's `provider`
+field -- a cloud provider value routes to the corresponding SDK client, `None`
+routes to `LocalLLMClient`. Model assignment is a config change, not a code
+change.
+
+**Why separate:** These streams run in the background during contraction
+(brainstem-scheduled). On current hardware (single Apple Silicon GPU), running
+them on the primary 35B model would block user-facing inference. Offloading to
+a cloud model avoids this contention. This limitation is **hardware-dependent,
+not architectural** -- when local concurrency improves (second GPU, faster
+hardware, dedicated inference server), these streams should return to local
+models by changing only the `models.yaml` role assignments.
+
+**Invariant:** The Slice 1 implementation must not collapse this indirection.
+The `models.yaml` process-role mechanism and provider-based dispatch in
+`entity_extraction.py` and `reflection.py` must be preserved through all
+refactoring. The `insights_role` key is reserved for future LLM-based
+analysis in `engine.py`; when that capability is added, it must follow the
+same pattern.
 
 ### 4.2 Dynamic Skill Loading
 

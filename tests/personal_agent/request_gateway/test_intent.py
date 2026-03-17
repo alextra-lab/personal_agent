@@ -20,11 +20,13 @@ class TestMemoryRecall:
         ],
     )
     def test_memory_recall_detected(self, message: str) -> None:
+        """Verify memory recall messages are classified correctly."""
         result = classify_intent(message)
         assert result.task_type == TaskType.MEMORY_RECALL
         assert result.confidence >= 0.8
 
     def test_memory_recall_includes_signal(self) -> None:
+        """Verify memory recall classification emits the expected signal."""
         result = classify_intent("What have I asked about?")
         assert "memory_recall_pattern" in result.signals
 
@@ -43,6 +45,7 @@ class TestCoding:
         ],
     )
     def test_coding_classified_as_delegation(self, message: str) -> None:
+        """Verify coding messages are classified as DELEGATION."""
         result = classify_intent(message)
         assert result.task_type == TaskType.DELEGATION
         assert "coding_pattern" in result.signals
@@ -61,10 +64,12 @@ class TestAnalysis:
         ],
     )
     def test_analysis_detected(self, message: str) -> None:
+        """Verify analysis messages are classified correctly."""
         result = classify_intent(message)
         assert result.task_type == TaskType.ANALYSIS
 
     def test_complex_analysis(self) -> None:
+        """Verify multi-step analysis requests are classified as COMPLEX."""
         msg = (
             "Research how Graphiti handles temporal memory, "
             "compare it with our Neo4j approach, and draft "
@@ -88,6 +93,7 @@ class TestToolUse:
         ],
     )
     def test_tool_use_detected(self, message: str) -> None:
+        """Verify tool intent messages are classified as TOOL_USE."""
         result = classify_intent(message)
         assert result.task_type == TaskType.TOOL_USE
 
@@ -105,6 +111,7 @@ class TestSelfImprove:
         ],
     )
     def test_self_improve_detected(self, message: str) -> None:
+        """Verify self-improvement messages are classified correctly."""
         result = classify_intent(message)
         assert result.task_type == TaskType.SELF_IMPROVE
 
@@ -122,6 +129,7 @@ class TestPlanning:
         ],
     )
     def test_planning_detected(self, message: str) -> None:
+        """Verify planning messages are classified correctly."""
         result = classify_intent(message)
         assert result.task_type == TaskType.PLANNING
 
@@ -140,6 +148,7 @@ class TestConversational:
         ],
     )
     def test_conversational_default(self, message: str) -> None:
+        """Verify unmatched messages default to CONVERSATIONAL with SIMPLE complexity."""
         result = classify_intent(message)
         assert result.task_type == TaskType.CONVERSATIONAL
         assert result.complexity == Complexity.SIMPLE
@@ -149,15 +158,18 @@ class TestComplexityEstimation:
     """Complexity heuristics based on message properties."""
 
     def test_short_message_is_simple(self) -> None:
+        """Verify short messages are classified as SIMPLE complexity."""
         result = classify_intent("Hello")
         assert result.complexity == Complexity.SIMPLE
 
     def test_long_message_bumps_complexity(self) -> None:
+        """Verify long messages bump complexity to MODERATE or COMPLEX."""
         msg = "Please " + "analyze this carefully. " * 30
         result = classify_intent(msg)
         assert result.complexity in (Complexity.MODERATE, Complexity.COMPLEX)
 
     def test_multiple_questions_bumps_complexity(self) -> None:
+        """Verify multiple questions bump complexity to MODERATE or COMPLEX."""
         msg = "What is X? How does Y work? Why did Z happen?"
         result = classify_intent(msg)
         assert result.complexity in (Complexity.MODERATE, Complexity.COMPLEX)

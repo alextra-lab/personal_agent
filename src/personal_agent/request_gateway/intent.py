@@ -190,7 +190,6 @@ def classify_intent(user_message: str) -> IntentResult:
         IntentResult with task type, complexity, confidence, and signals.
     """
     signals: list[str] = []
-    msg_lower = user_message.lower()
 
     # 1. Memory recall
     if _MEMORY_RECALL_PATTERNS.search(user_message):
@@ -219,7 +218,9 @@ def classify_intent(user_message: str) -> IntentResult:
         )
 
     # 3. Coding -> DELEGATION
-    if _CODING_PATTERNS.search(user_message) or any(kw in msg_lower for kw in _CODING_KEYWORDS):
+    if _CODING_PATTERNS.search(user_message) or any(
+        kw in user_message.lower() for kw in _CODING_KEYWORDS
+    ):
         signals.append("coding_pattern")
         task_type = TaskType.DELEGATION
         confidence = 0.85

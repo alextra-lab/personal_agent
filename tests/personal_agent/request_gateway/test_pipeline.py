@@ -109,6 +109,34 @@ class TestRunGatewayPipeline:
         assert "degraded_stages" in evt
 
     @pytest.mark.asyncio
+    async def test_pipeline_logs_intent_classification_to_es(self) -> None:
+        """Analysis intent emits telemetry with correct task_type value.
+
+        Verifies the structured log event contains the specific intent
+        classification result (not just field presence). ES indexing is
+        handled by the existing structlog → ElasticsearchHandler.
+        """
+        import structlog.testing
+
+        with structlog.testing.capture_logs() as cap_logs:
+            await run_gateway_pipeline(
+                user_message="Analyze the trade-offs",
+                session_id="s",
+                session_messages=[],
+                trace_id="t",
+                mode=Mode.NORMAL,
+                memory_adapter=None,
+            )
+        events = [
+            e for e in cap_logs if e.get("event") == "gateway_pipeline_complete"
+        ]
+        assert len(events) == 1
+        evt = events[0]
+        assert evt["task_type"] == "analysis"
+        assert "confidence" in evt
+        assert evt["trace_id"] == "t"
+
+    @pytest.mark.asyncio
     async def test_degraded_stages_tracked(self) -> None:
         """Disconnected memory adapter produces degraded_stages entry."""
         # Memory adapter that fails

@@ -10,6 +10,7 @@ from personal_agent.orchestrator.channels import Channel
 from personal_agent.orchestrator.executor import execute_task_safe
 from personal_agent.orchestrator.session import SessionManager
 from personal_agent.orchestrator.types import ExecutionContext, OrchestratorResult
+from personal_agent.request_gateway.types import GatewayOutput
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.request_timer import RequestTimer
 from personal_agent.telemetry.trace import TraceContext
@@ -40,6 +41,7 @@ class Orchestrator:
         channel: Channel | None = None,
         trace_id: str | None = None,
         request_timer: RequestTimer | None = None,
+        gateway_output: GatewayOutput | None = None,
     ) -> OrchestratorResult:
         """Top-level entrypoint for a single user turn.
 
@@ -56,6 +58,8 @@ class Orchestrator:
                 If provided, used for request-to-reply latency tracing.
             request_timer: Optional RequestTimer for inline span-based timing.
                 If provided, the orchestrator records timing spans for each phase.
+            gateway_output: Optional GatewayOutput from the request gateway pipeline.
+                When present, executor skips inline routing and uses pre-assembled context.
 
         Returns:
             OrchestratorResult with reply, steps, and trace_id.
@@ -90,6 +94,7 @@ class Orchestrator:
             mode=mode,
             channel=channel,
             request_timer=request_timer,
+            gateway_output=gateway_output,
         )
 
         # Execute task

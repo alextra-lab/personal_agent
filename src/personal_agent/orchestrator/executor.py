@@ -839,6 +839,21 @@ async def step_init(
     # Add new user message
     ctx.messages.append({"role": "user", "content": ctx.user_message})
 
+    # --- Gateway-driven path: skip inline routing and memory ---
+    if ctx.gateway_output is not None:
+        gw = ctx.gateway_output
+        # Use pre-assembled memory context
+        if gw.context.memory_context:
+            ctx.memory_context = gw.context.memory_context
+        log.info(
+            "step_init_gateway_path",
+            trace_id=ctx.trace_id,
+            task_type=gw.intent.task_type.value,
+            complexity=gw.intent.complexity.value,
+            has_memory=gw.context.memory_context is not None,
+        )
+        return TaskState.LLM_CALL
+
     # Apply context window controls before LLM usage to prevent overflow.
     if timer:
         timer.start_span("context_window")
@@ -890,6 +905,7 @@ async def step_init(
             if memory_service and memory_service.connected:
                 conversations_found = 0
 
+                potential_entities: list[str] = []
                 if is_memory_recall_query(ctx.user_message):
                     # Broad recall path (ADR-0025): no entity names to match
                     entity_type_hints = _extract_entity_type_hints(ctx.user_message)
@@ -1017,7 +1033,17 @@ async def step_llm_call(
     heuristic_plan: HeuristicRoutingPlan | None = None
 
     # Determine which model to call
-    if ctx.selected_model_role is None:
+    if ctx.gateway_output is not None and ctx.selected_model_role is None:
+        # Gateway-driven path: always use REASONING role (35B primary)
+        model_role = ModelRole.REASONING
+        ctx.selected_model_role = model_role
+        log.info(
+            "step_llm_call_gateway_model",
+            trace_id=ctx.trace_id,
+            model_role=model_role.value,
+            task_type=ctx.gateway_output.intent.task_type.value,
+        )
+    elif ctx.selected_model_role is None:
         # First LLM call: determine initial model based on channel
         model_role = _determine_initial_model_role(ctx)
     else:

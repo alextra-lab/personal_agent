@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, TypedDict
 
 from personal_agent.governance.models import Mode
 from personal_agent.llm_client import ModelRole
+from personal_agent.request_gateway.types import GatewayOutput
 
 if TYPE_CHECKING:
     from personal_agent.orchestrator.channels import Channel
@@ -181,6 +182,9 @@ class ExecutionContext:
 
     # Request timing (FRE-37): inline span-based instrumentation
     request_timer: "RequestTimer | None" = None
+
+    # Gateway output (Cognitive Architecture Redesign v2)
+    gateway_output: GatewayOutput | None = None  # From request_gateway pipeline
 
 
 class OrchestratorStep(TypedDict):

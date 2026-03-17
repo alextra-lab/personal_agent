@@ -17,7 +17,10 @@ from personal_agent.brainstem.sensors.metrics_daemon import (
 )
 from personal_agent.captains_log.es_indexer import build_es_indexer_from_handler, set_es_indexer
 from personal_agent.config.settings import get_settings
+from personal_agent.governance.models import Mode
+from personal_agent.memory.protocol_adapter import MemoryServiceAdapter
 from personal_agent.memory.service import MemoryService
+from personal_agent.request_gateway import run_gateway_pipeline
 from personal_agent.security import sanitize_error_message
 from personal_agent.service.database import AsyncSessionLocal, get_db_session, init_db
 from personal_agent.service.models import SessionCreate, SessionResponse, SessionUpdate
@@ -433,6 +436,33 @@ async def chat(
             cast(UUID, session.session_id), {"role": "user", "content": message}
         )
 
+    # --- Phase: gateway_pipeline ---
+    gateway_output = None
+    try:
+        with timer.span("gateway_pipeline"):
+            memory_adapter = (
+                MemoryServiceAdapter(service=memory_service)
+                if memory_service and memory_service.driver
+                else None
+            )
+            gateway_output = await run_gateway_pipeline(
+                user_message=message,
+                session_id=str(session.session_id),
+                session_messages=prior_messages,
+                trace_id=trace_id,
+                mode=Mode.NORMAL,  # From brainstem in future
+                memory_adapter=memory_adapter,
+            )
+    except Exception as e:
+        log.warning(
+            "gateway_pipeline_failed",
+            trace_id=trace_id,
+            error=sanitize_error_message(e),
+            error_type=type(e).__name__,
+            exc_info=True,
+        )
+        gateway_output = None
+
     # --- Phase: orchestrator ---
     result: Any = {}
     response_content = ""
@@ -446,7 +476,6 @@ async def chat(
 
             orchestrator_session = session_manager.get_session(str(session.session_id))
             if not orchestrator_session:
-                from personal_agent.governance.models import Mode
                 from personal_agent.orchestrator.channels import Channel
 
                 session_manager.create_session(
@@ -467,6 +496,7 @@ async def chat(
             channel=None,
             trace_id=trace_id,
             request_timer=timer,
+            gateway_output=gateway_output,
         )
 
         response_content = result.get("reply", "No response generated")

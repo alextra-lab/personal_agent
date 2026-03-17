@@ -459,6 +459,7 @@ async def chat(
             trace_id=trace_id,
             error=sanitize_error_message(e),
             error_type=type(e).__name__,
+            exc_info=True,
         )
         gateway_output = None
 

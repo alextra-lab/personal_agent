@@ -905,6 +905,7 @@ async def step_init(
             if memory_service and memory_service.connected:
                 conversations_found = 0
 
+                potential_entities: list[str] = []
                 if is_memory_recall_query(ctx.user_message):
                     # Broad recall path (ADR-0025): no entity names to match
                     entity_type_hints = _extract_entity_type_hints(ctx.user_message)

@@ -58,9 +58,17 @@ class TestGatewayOutputOnExecutionContext:
         assert ctx.gateway_output.intent.task_type == TaskType.CONVERSATIONAL
 
     def test_gateway_output_defaults_to_none(self) -> None:
-        """ExecutionContext.gateway_output defaults to None."""
-        ctx = ExecutionContext.__new__(ExecutionContext)
-        assert getattr(ctx, "gateway_output", None) is None
+        """ExecutionContext.gateway_output defaults to None when not provided."""
+        from personal_agent.orchestrator.channels import Channel
+
+        ctx = ExecutionContext(
+            session_id="s",
+            trace_id="t",
+            user_message="hello",
+            mode=Mode.NORMAL,
+            channel=Channel.CHAT,
+        )
+        assert ctx.gateway_output is None
 
     def test_gateway_output_with_memory_context(self) -> None:
         """GatewayOutput with memory context can be accessed."""

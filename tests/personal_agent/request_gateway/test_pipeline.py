@@ -20,6 +20,7 @@ class TestRunGatewayPipeline:
 
     @pytest.mark.asyncio
     async def test_simple_conversational_request(self) -> None:
+        """Conversational message produces valid GatewayOutput."""
         result = await run_gateway_pipeline(
             user_message="Hello, how are you?",
             session_id="test-session",
@@ -36,6 +37,7 @@ class TestRunGatewayPipeline:
 
     @pytest.mark.asyncio
     async def test_memory_recall_request(self) -> None:
+        """Memory recall request enriches context via adapter."""
         mock_adapter = AsyncMock()
         mock_adapter.is_connected = AsyncMock(return_value=True)
         mock_adapter.recall_broad = AsyncMock(
@@ -58,6 +60,7 @@ class TestRunGatewayPipeline:
 
     @pytest.mark.asyncio
     async def test_coding_maps_to_delegation(self) -> None:
+        """Coding request maps to DELEGATION task type."""
         result = await run_gateway_pipeline(
             user_message="Write a function to sort a list",
             session_id="s",
@@ -70,6 +73,7 @@ class TestRunGatewayPipeline:
 
     @pytest.mark.asyncio
     async def test_alert_mode_disables_expansion(self) -> None:
+        """ALERT mode disables expansion in governance context."""
         result = await run_gateway_pipeline(
             user_message="Hello",
             session_id="s",
@@ -82,6 +86,7 @@ class TestRunGatewayPipeline:
 
     @pytest.mark.asyncio
     async def test_pipeline_emits_telemetry_event(self) -> None:
+        """Pipeline emits gateway_pipeline_complete structlog event."""
         import structlog.testing
 
         with structlog.testing.capture_logs() as cap_logs:
@@ -93,17 +98,19 @@ class TestRunGatewayPipeline:
                 mode=Mode.NORMAL,
                 memory_adapter=None,
             )
-        pipeline_events = [
-            e for e in cap_logs
-            if e.get("event") == "gateway_pipeline_complete"
-        ]
+        pipeline_events = [e for e in cap_logs if e.get("event") == "gateway_pipeline_complete"]
         assert len(pipeline_events) == 1
-        assert "task_type" in pipeline_events[0]
-        assert "complexity" in pipeline_events[0]
-        assert "trace_id" in pipeline_events[0]
+        evt = pipeline_events[0]
+        assert "task_type" in evt
+        assert "complexity" in evt
+        assert "trace_id" in evt
+        assert "strategy" in evt
+        assert "has_memory" in evt
+        assert "degraded_stages" in evt
 
     @pytest.mark.asyncio
     async def test_degraded_stages_tracked(self) -> None:
+        """Disconnected memory adapter produces degraded_stages entry."""
         # Memory adapter that fails
         mock_adapter = AsyncMock()
         mock_adapter.is_connected = AsyncMock(return_value=False)
@@ -118,3 +125,4 @@ class TestRunGatewayPipeline:
         )
         # Context assembly should report degraded memory
         assert result.context.memory_context is None
+        assert "context_assembly:memory_unavailable" in result.degraded_stages

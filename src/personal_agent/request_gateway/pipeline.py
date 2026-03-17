@@ -11,6 +11,7 @@ Runs the deterministic pre-LLM pipeline:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import structlog
@@ -33,7 +34,7 @@ logger = structlog.get_logger(__name__)
 async def run_gateway_pipeline(
     user_message: str,
     session_id: str,
-    session_messages: list[dict[str, Any]],
+    session_messages: Sequence[dict[str, Any]],
     trace_id: str,
     mode: Mode = Mode.NORMAL,
     memory_adapter: MemoryProtocol | None = None,
@@ -59,6 +60,8 @@ async def run_gateway_pipeline(
     # Stage 1: Security (stub -- pass-through in Slice 1)
     # Future: rate limiting, input sanitization, PII detection
 
+    # Stage 2: Session (handled by caller -- messages passed in as session_messages)
+
     # Stage 3: Governance
     governance = evaluate_governance(mode=mode)
 
@@ -80,7 +83,11 @@ async def run_gateway_pipeline(
         trace_id=trace_id,
     )
 
-    # Track degraded memory
+    # Track degraded memory.
+    # Slice 1: only MEMORY_RECALL triggers a real memory query in
+    # _query_memory_for_intent(). Other intents return None by design,
+    # so we only flag degradation for MEMORY_RECALL.  Extend this guard
+    # in Slice 2 when more intents use memory enrichment.
     if (
         memory_adapter is not None
         and context.memory_context is None

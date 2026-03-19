@@ -2,7 +2,9 @@
 
 > Last updated: 2026-03-19
 
-Development model selection criteria for the Personal Agent project. Optimizes for **quality first, then cost** — use the most capable model where it matters, cheaper models where Opus reasoning depth is wasted.
+Development model selection criteria. Optimizes for **quality first, then cost** — use the most capable model where it matters, cheaper models where Opus reasoning depth is wasted.
+
+Applies to all projects. Invoked via the Superpowers plugin (`writing-plans`, `brainstorming`, `executing-plans` skills).
 
 ---
 
@@ -37,6 +39,8 @@ Development model selection criteria for the Personal Agent project. Optimizes f
 
 **Signal:** The plan has complete code and exact steps, but the executor may need to adapt to what the codebase actually looks like (import paths shifted, a method was renamed, test needs a new fixture). Sonnet handles that. Haiku doesn't.
 
+**Note on spec quality test:** The five-criteria spec quality test (see below) applies specifically to **plan-driven feature implementation**. Other Tier 2 tasks (refactoring, code review responses, integration wiring) are ready for Sonnet when scope is clearly defined and boundaries are explicit — they don't require complete pre-written code.
+
 ### Tier 3: Haiku / Qwen 3.5-35B — "The Executor"
 
 **When the task is fully mechanical — zero judgment required.**
@@ -61,26 +65,27 @@ Development model selection criteria for the Personal Agent project. Optimizes f
 
 ```
 Does this task require a design decision?
-  YES → Opus
+  YES → Tier-1: Opus
   NO ↓
 
 Is there a detailed plan with complete code?
-  NO → Opus (write the plan first)
+  NO → Tier-1: Opus (write the plan first)
   YES ↓
 
 Might the executor need to adapt to surprises?
-  YES → Sonnet
+  YES → Tier-2: Sonnet
   NO ↓
 
 Is it purely mechanical (copy/paste/run)?
-  YES → Haiku / Qwen
+  YES → Tier-3: Haiku / Qwen
+  NO  → Tier-2: Sonnet (safe default — surprises are easy to underestimate)
 ```
 
 ---
 
 ## "Detailed Enough" — The Spec Quality Test
 
-A plan is ready for Sonnet execution when **all five** are true:
+**Applies to plan-driven feature implementation tasks.** A plan is ready for Sonnet execution when **all five** are true:
 
 1. **Complete code** — not pseudocode, not "implement something like this"
 2. **Exact file paths** — no "find the right file"
@@ -89,6 +94,17 @@ A plan is ready for Sonnet execution when **all five** are true:
 5. **No design decisions deferred** — no "choose the best approach"
 
 If any of these fail → Opus writes or improves the plan first, then Sonnet executes.
+
+---
+
+## Cross-Tier Tasks
+
+When a task has components at different tiers (e.g., "write a script to automate X" — the logic is Tier 2 but wiring it up is Tier 3):
+
+- **Prefer (A): Decompose** into separate subtasks with their own tier labels, when the components are independently executable
+- **Use (B): Run at highest tier** when the components are tightly coupled and can't be cleanly separated
+
+Apply the "if unsure, use the higher tier" rule to the whole task when in doubt.
 
 ---
 
@@ -106,7 +122,7 @@ Tests pass? → Done
 Attempt 3 (Sonnet)
   ↓
 Tests pass? → Done
-  ↓ NO — OR — model is floundering*
+  ↓ NO — OR — model is floundering (see signals below)
 Escalate to Opus with full error context
 ```
 
@@ -115,12 +131,14 @@ Escalate to Opus with full error context
 - **Same error twice:** The same error message appears after the model's "fix"
 - **Self-revert:** Model reverts its own changes
 - **Circular reasoning:** Trying the same approach with minor variations
-- **Wrong layer:** Model is fixing symptoms instead of root cause
+- **Wrong layer:** Model is fixing symptoms instead of root cause (e.g., suppressing the error rather than fixing the cause)
 
-When escalating to Opus, include:
-- The original error
+### When Escalating to Opus, Include
+
+- The original error message
 - What Sonnet tried (all attempts)
 - Why each attempt failed
+- Files modified (with diffs or summary of changes)
 - Current state of the code
 
 ---
@@ -146,7 +164,7 @@ Three labels on the FrenchForest team:
 
 ## Impact on Workflows
 
-### When Writing Plans (writing-plans skill)
+### When Writing Plans (Superpowers `writing-plans` skill)
 
 Each task in the plan gets a `**Model:** Tier-X` annotation. The summary table includes a Model column:
 
@@ -194,3 +212,6 @@ Start with Sonnet. Escalate per the escalation model. Never start debugging with
 
 ### "Review the Slice 2 plan for spec compliance"
 → **Tier 1: Opus.** Requires cross-referencing spec sections, catching design flaws, consistency checking.
+
+### "Write a script to automate Linear issue creation, then run it"
+→ **Cross-tier.** Writing the script = Tier 2: Sonnet. Running it = Tier 3: Haiku. Decompose if independently executable.

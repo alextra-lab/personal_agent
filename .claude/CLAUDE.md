@@ -358,6 +358,51 @@ Cherny's rule: **"The most important thing to get great results out of Claude Co
 - Ensure tests pass and coverage adequate
 - Validate with real system if applicable
 
+### 7. Model Routing Policy
+
+**Full policy:** `~/.claude/MODEL_ROUTING_POLICY.md` (global) · `.claude/MODEL_ROUTING_POLICY.md` (project copy)
+
+**Decision tree — apply to every task, plan, issue, and subagent dispatch:**
+
+```
+Does this task require a design decision?
+  YES → Tier-1: Opus
+  NO ↓
+
+Is there a detailed plan with complete code?
+  NO → Tier-1: Opus (write the plan first)
+  YES ↓
+
+Might the executor need to adapt to surprises?
+  YES → Tier-2: Sonnet
+  NO ↓
+
+Is it purely mechanical (copy/paste/run)?
+  YES → Tier-3: Haiku / Qwen
+```
+
+**Tier summary:**
+
+| Tier | Model | Role | Examples |
+|------|-------|------|----------|
+| 1 | Opus | Architect | Specs, plans, plan review, ADRs, complex debugging (escalated) |
+| 2 | Sonnet | Implementer | Feature implementation from plans, first-pass debugging (3 attempts max) |
+| 3 | Haiku/Qwen | Executor | Linear issues, git ops, linting fixes, boilerplate, template docs |
+
+**Spec quality test** — a plan is ready for Sonnet when ALL five are true:
+
+1. Complete code (not pseudocode)
+2. Exact file paths
+3. Exact test commands with expected output
+4. Atomic steps (2-5 min each)
+5. No design decisions deferred
+
+**Escalation:** Sonnet debugging → 3 failed attempts OR floundering (same error twice, self-revert, circular reasoning) → escalate to Opus with full error context.
+
+**Linear labeling:** Every issue gets exactly one label: `Tier-1:Opus`, `Tier-2:Sonnet`, or `Tier-3:Haiku`. Plans include a Model column in the summary table.
+
+**Subagent dispatch:** Use the `model` parameter — `"opus"` for plan review, `"sonnet"` for implementation, `"haiku"` for mechanical tasks.
+
 ---
 
 ## Architecture Overview

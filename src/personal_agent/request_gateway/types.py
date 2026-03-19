@@ -78,12 +78,14 @@ class GovernanceContext:
     Attributes:
         mode: Current brainstem operational mode.
         expansion_permitted: Whether expansion is safe given resource state.
+        expansion_budget: Remaining expansion slots (0 = exhausted, force SINGLE).
         cost_budget_remaining: Remaining API cost budget (None = unlimited).
         allowed_tool_categories: Tool categories permitted in this mode.
     """
 
     mode: Mode
     expansion_permitted: bool
+    expansion_budget: int = 3
     cost_budget_remaining: float | None = None
     allowed_tool_categories: list[str] | None = None
 

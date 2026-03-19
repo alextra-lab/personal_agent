@@ -154,3 +154,116 @@ class TestRunGatewayPipeline:
         # Context assembly should report degraded memory
         assert result.context.memory_context is None
         assert "context_assembly:memory_unavailable" in result.degraded_stages
+
+    # --- Slice 2 integration tests ---
+
+    @pytest.mark.asyncio
+    async def test_complex_analysis_produces_decompose_strategy(self) -> None:
+        """Complex multi-part analysis request routes to DECOMPOSE strategy.
+
+        Uses 3+ question marks to trigger COMPLEX complexity (question_count >= 3).
+        """
+        message = (
+            "Analyze the trade-offs between microservices and monolithic architecture. "
+            "What are the scalability implications? What are the hidden maintenance costs? "
+            "What are the team-size thresholds where each approach breaks down?"
+        )
+        result = await run_gateway_pipeline(
+            user_message=message,
+            session_id="s",
+            session_messages=[],
+            trace_id="t",
+            mode=Mode.NORMAL,
+            memory_adapter=None,
+        )
+        assert result.intent.task_type == TaskType.ANALYSIS
+        assert result.decomposition.strategy == DecompositionStrategy.DECOMPOSE
+
+    @pytest.mark.asyncio
+    async def test_delegation_produces_delegate_strategy(self) -> None:
+        """Coding/delegation request produces DELEGATE strategy.
+
+        Uses 'write a function' keyword (exact substring match in _CODING_KEYWORDS).
+        """
+        result = await run_gateway_pipeline(
+            user_message="write a function to parse and validate JSON schemas",
+            session_id="s",
+            session_messages=[],
+            trace_id="t",
+            mode=Mode.NORMAL,
+            memory_adapter=None,
+        )
+        assert result.intent.task_type == TaskType.DELEGATION
+        assert result.decomposition.strategy == DecompositionStrategy.DELEGATE
+
+    @pytest.mark.asyncio
+    async def test_budget_trim_when_context_exceeds_limit(self) -> None:
+        """apply_budget() trims context when messages exceed max_tokens."""
+        long_content = " ".join(["word"] * 200)
+        large_history = [
+            {"role": "user", "content": long_content},
+            {"role": "assistant", "content": long_content},
+            {"role": "user", "content": long_content},
+            {"role": "assistant", "content": long_content},
+        ]
+        result = await run_gateway_pipeline(
+            user_message="current question",
+            session_id="s",
+            session_messages=large_history,
+            trace_id="t",
+            mode=Mode.NORMAL,
+            memory_adapter=None,
+            expansion_budget=3,
+            max_context_tokens=50,  # tiny budget to force trimming
+        )
+        # Context should have been trimmed due to large history
+        assert result.context.trimmed is True
+        assert result.context.overflow_action is not None
+        # Last user message must always be preserved
+        last_user = next(
+            (m for m in reversed(result.context.messages) if m["role"] == "user"),
+            None,
+        )
+        assert last_user is not None
+        assert last_user["content"] == "current question"
+
+    @pytest.mark.asyncio
+    async def test_zero_expansion_budget_forces_single(self) -> None:
+        """Pipeline with expansion_budget=0 forces SINGLE regardless of intent."""
+        message = (
+            "Analyze the trade-offs between microservices and monolithic architecture "
+            "in detail. Consider scalability, team size, deployment complexity, "
+            "observability, and data consistency. What are the hidden costs?"
+        )
+        result = await run_gateway_pipeline(
+            user_message=message,
+            session_id="s",
+            session_messages=[],
+            trace_id="t",
+            mode=Mode.NORMAL,
+            memory_adapter=None,
+            expansion_budget=0,
+        )
+        assert result.decomposition.strategy == DecompositionStrategy.SINGLE
+        assert result.decomposition.reason == "zero_budget"
+
+    @pytest.mark.asyncio
+    async def test_telemetry_includes_budget_fields(self) -> None:
+        """gateway_pipeline_complete event includes budget_trimmed and overflow_action."""
+        import structlog.testing
+
+        with structlog.testing.capture_logs() as cap_logs:
+            await run_gateway_pipeline(
+                user_message="Hello",
+                session_id="s",
+                session_messages=[],
+                trace_id="t",
+                mode=Mode.NORMAL,
+                memory_adapter=None,
+            )
+        events = [e for e in cap_logs if e.get("event") == "gateway_pipeline_complete"]
+        assert len(events) == 1
+        evt = events[0]
+        assert "budget_trimmed" in evt
+        assert "overflow_action" in evt
+        assert "expansion_budget" in evt

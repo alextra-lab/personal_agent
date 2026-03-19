@@ -5,7 +5,7 @@ Runs the deterministic pre-LLM pipeline:
   Stage 2: Session (handled externally -- messages passed in)
   Stage 3: Governance
   Stage 4: Intent Classification
-  Stage 5: Decomposition Assessment (always SINGLE in Slice 1)
+  Stage 5: Decomposition Assessment
   Stage 6+7: Context Assembly + Budget
 """
 
@@ -16,14 +16,15 @@ from typing import Any
 
 import structlog
 
+from personal_agent.config import get_settings
 from personal_agent.governance.models import Mode
 from personal_agent.memory.protocol import MemoryProtocol
+from personal_agent.request_gateway.budget import apply_budget
 from personal_agent.request_gateway.context import assemble_context
+from personal_agent.request_gateway.decomposition import assess_decomposition
 from personal_agent.request_gateway.governance import evaluate_governance
 from personal_agent.request_gateway.intent import classify_intent
 from personal_agent.request_gateway.types import (
-    DecompositionResult,
-    DecompositionStrategy,
     GatewayOutput,
     TaskType,
 )
@@ -38,6 +39,8 @@ async def run_gateway_pipeline(
     trace_id: str,
     mode: Mode = Mode.NORMAL,
     memory_adapter: MemoryProtocol | None = None,
+    expansion_budget: int | None = None,
+    max_context_tokens: int | None = None,
 ) -> GatewayOutput:
     """Run the full request gateway pipeline.
 
@@ -51,10 +54,20 @@ async def run_gateway_pipeline(
         trace_id: Request trace identifier.
         mode: Current brainstem operational mode.
         memory_adapter: Seshat protocol adapter (None if unavailable).
+        expansion_budget: Remaining expansion slots (None = read from settings).
+        max_context_tokens: Context token ceiling (None = read from settings).
 
     Returns:
         GatewayOutput with intent, governance, decomposition, and context.
     """
+    settings = get_settings()
+
+    if expansion_budget is None:
+        expansion_budget = settings.expansion_budget_max
+
+    if max_context_tokens is None:
+        max_context_tokens = settings.context_budget_max_tokens
+
     degraded_stages: list[str] = []
 
     # Stage 1: Security (stub -- pass-through in Slice 1)
@@ -63,16 +76,13 @@ async def run_gateway_pipeline(
     # Stage 2: Session (handled by caller -- messages passed in as session_messages)
 
     # Stage 3: Governance
-    governance = evaluate_governance(mode=mode)
+    governance = evaluate_governance(mode=mode, expansion_budget=expansion_budget)
 
     # Stage 4: Intent Classification
     intent = classify_intent(user_message)
 
-    # Stage 5: Decomposition Assessment (always SINGLE in Slice 1)
-    decomposition = DecompositionResult(
-        strategy=DecompositionStrategy.SINGLE,
-        reason="slice_1_always_single",
-    )
+    # Stage 5: Decomposition Assessment
+    decomposition = assess_decomposition(intent=intent, governance=governance)
 
     # Stage 6+7: Context Assembly + Budget
     context = await assemble_context(
@@ -82,12 +92,14 @@ async def run_gateway_pipeline(
         memory_adapter=memory_adapter,
         trace_id=trace_id,
     )
+    context = apply_budget(
+        context=context,
+        max_tokens=max_context_tokens,
+        trace_id=trace_id,
+    )
 
     # Track degraded memory.
-    # Slice 1: only MEMORY_RECALL triggers a real memory query in
-    # _query_memory_for_intent(). Other intents return None by design,
-    # so we only flag degradation for MEMORY_RECALL.  Extend this guard
-    # in Slice 2 when more intents use memory enrichment.
+    # Only flag degradation for MEMORY_RECALL (other intents return None by design).
     if (
         memory_adapter is not None
         and context.memory_context is None
@@ -114,9 +126,12 @@ async def run_gateway_pipeline(
         signals=intent.signals,
         mode=governance.mode.value,
         expansion_permitted=governance.expansion_permitted,
+        expansion_budget=governance.expansion_budget,
         strategy=decomposition.strategy.value,
         message_count=len(context.messages),
         token_count=context.token_count,
+        budget_trimmed=context.trimmed,
+        overflow_action=context.overflow_action,
         has_memory=context.memory_context is not None,
         degraded_stages=degraded_stages,
         trace_id=trace_id,

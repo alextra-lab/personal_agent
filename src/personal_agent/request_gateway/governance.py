@@ -22,14 +22,16 @@ _EXPANSION_DISABLED_MODES: frozenset[Mode] = frozenset(
 
 def evaluate_governance(
     mode: Mode = Mode.NORMAL,
+    expansion_budget: int = 3,
 ) -> GovernanceContext:
     """Evaluate governance constraints for this request.
 
     Args:
         mode: Current brainstem operational mode.
+        expansion_budget: Remaining expansion slots for this request.
 
     Returns:
-        GovernanceContext with mode and expansion permission.
+        GovernanceContext with mode, expansion permission, and budget.
     """
     expansion_permitted = mode not in _EXPANSION_DISABLED_MODES
 
@@ -37,9 +39,11 @@ def evaluate_governance(
         "governance_evaluated",
         mode=mode.value,
         expansion_permitted=expansion_permitted,
+        expansion_budget=expansion_budget,
     )
 
     return GovernanceContext(
         mode=mode,
         expansion_permitted=expansion_permitted,
+        expansion_budget=expansion_budget,
     )

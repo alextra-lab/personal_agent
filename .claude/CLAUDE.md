@@ -360,7 +360,7 @@ Cherny's rule: **"The most important thing to get great results out of Claude Co
 
 ### 7. Model Routing Policy
 
-**Full policy:** `~/.claude/MODEL_ROUTING_POLICY.md` (global) · `.claude/MODEL_ROUTING_POLICY.md` (project copy)
+**Full policy:** `/Users/Alex/.claude/MODEL_ROUTING_POLICY.md` (global) · `.claude/MODEL_ROUTING_POLICY.md` (project copy)
 
 **Decision tree — apply to every task, plan, issue, and subagent dispatch:**
 
@@ -379,6 +379,7 @@ Might the executor need to adapt to surprises?
 
 Is it purely mechanical (copy/paste/run)?
   YES → Tier-3: Haiku / Qwen
+  NO  → Tier-2: Sonnet (safe default)
 ```
 
 **Tier summary:**
@@ -389,7 +390,7 @@ Is it purely mechanical (copy/paste/run)?
 | 2 | Sonnet | Implementer | Feature implementation from plans, first-pass debugging (3 attempts max) |
 | 3 | Haiku/Qwen | Executor | Linear issues, git ops, linting fixes, boilerplate, template docs |
 
-**Spec quality test** — a plan is ready for Sonnet when ALL five are true:
+**Spec quality test** — a plan is ready for Sonnet (plan-driven implementation) when ALL five are true:
 
 1. Complete code (not pseudocode)
 2. Exact file paths
@@ -397,7 +398,9 @@ Is it purely mechanical (copy/paste/run)?
 4. Atomic steps (2-5 min each)
 5. No design decisions deferred
 
-**Escalation:** Sonnet debugging → 3 failed attempts OR floundering (same error twice, self-revert, circular reasoning) → escalate to Opus with full error context.
+**Escalation:** Sonnet debugging → 3 failed attempts OR floundering (same error twice, self-revert, circular reasoning, wrong layer) → escalate to Opus with full error context including files modified.
+
+**Cross-tier tasks:** Decompose into subtasks at different tiers when independently executable; otherwise run at the highest tier required.
 
 **Linear labeling:** Every issue gets exactly one label: `Tier-1:Opus`, `Tier-2:Sonnet`, or `Tier-3:Haiku`. Plans include a Model column in the summary table.
 

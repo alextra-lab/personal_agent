@@ -1,6 +1,6 @@
 # Claude Code Configuration for Personal Agent
 
-> Last updated: 2026-03-14
+> Last updated: 2026-03-19
 
 This file provides Claude with comprehensive context about the **Personal Agent** project structure, architectural decisions, development standards, and workflow policies. Claude should apply all guidelines in this file when assisting with development tasks.
 
@@ -75,7 +75,7 @@ All of the following workspace rules **MUST** be followed consistently:
 
 **Policy: New == Needs Approval. Implement == Approved.**
 
-- **Creating Issues**: Always set state to `"Needs Approval"` and add label `"Needs Approval"` + `"PersonalAgent"`
+- **Creating Issues**: Always set state to `"Needs Approval"` and add label `"PersonalAgent"` (no `"Needs Approval"` label exists — use state only)
 - **Before Implementation**: Call `get_issue` to verify the issue has state/label **Approved**
 - **Never implement unapproved work** – tell the user to move the issue to Approved first
 - **List implementable work** using `list_issues` with filter `state: "Approved"`
@@ -497,6 +497,19 @@ Is it purely mechanical (copy/paste/run)?
 4. **Use subagents for exploration** – When exploring large codebases or independent tasks, spawn dedicated agents instead of bloating the main session.
 5. **Consider parallel execution** – For independent features/fixes, run multiple Claude sessions with git worktrees to parallelize work.
 
+### Worktree → Main Merge (Gotcha)
+
+Cannot `git checkout main` from a worktree — main is checked out in the primary repo. Always merge from the primary:
+
+```bash
+cd /Users/Alex/Dev/personal_agent && git merge <branch> --no-edit && git push origin main
+```
+
+### Implementation Plan Naming Convention
+
+Plans live at `docs/superpowers/plans/YYYY-MM-DD-slice-N-theme.md`
+Example: `docs/superpowers/plans/2026-03-18-slice-2-expansion.md`
+
 ### Before Starting Work
 
 1. **Check Linear Issues**: Use `list_issues` with filter `state: "Approved"` to see implementable work
@@ -508,7 +521,7 @@ Is it purely mechanical (copy/paste/run)?
 ### Starting a Feature/Fix
 
 1. **Create/Verify Linear Issue**:
-   - New issues must have state `"Needs Approval"` and label `"Needs Approval"` + `"PersonalAgent"`
+   - New issues must have state `"Needs Approval"` and label `"PersonalAgent"` (no `"Needs Approval"` label exists)
    - Wait for human approval before implementation
    - When approved, verify issue is moved to `Approved` state
 

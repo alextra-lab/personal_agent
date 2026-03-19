@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from personal_agent.captains_log.capture import CAPTURES_INDEX_PREFIX, TaskCapture
+from personal_agent.captains_log.es_indexer import normalize_capture_doc_for_es
 from personal_agent.captains_log.models import CaptainLogEntry, CaptainLogEntryType
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.events import (
@@ -230,7 +231,7 @@ async def run_backfill(
             capture = TaskCapture(**raw)
             date_str = capture.timestamp.strftime("%Y-%m-%d")
             index_name = f"{CAPTURES_INDEX_PREFIX}-{date_str}"
-            doc = capture.model_dump(mode="json")
+            doc = normalize_capture_doc_for_es(capture.model_dump(mode="json"))
             doc_id = capture.trace_id
             rid = await es_logger.index_document(index_name, doc, id=doc_id)
             if rid is not None:

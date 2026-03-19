@@ -16,6 +16,37 @@ from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
 
+# Prefix for Captain's Log captures index (must match capture.CAPTURES_INDEX_PREFIX and template).
+CAPTURES_INDEX_PREFIX = "agent-captains-captures"
+
+
+def normalize_capture_doc_for_es(doc: dict[str, Any]) -> dict[str, Any]:
+    """Ensure capture document conforms to ES captains-captures mapping.
+
+    The index template defines tool_results[].output as type \"flattened\",
+    which requires an object. When a tool returns a string (or other
+    non-dict), indexing fails with document_parsing_exception. This
+    normalizer wraps non-object output in {\"value\": ...}.
+
+    Args:
+        doc: Capture document (e.g. from TaskCapture.model_dump(mode=\"json\")).
+
+    Returns:
+        New dict safe to index; input is not mutated.
+    """
+    if "tool_results" not in doc or not isinstance(doc["tool_results"], list):
+        return doc
+    normalized: list[dict[str, Any]] = []
+    for item in doc["tool_results"]:
+        if not isinstance(item, dict):
+            normalized.append({"value": item})
+            continue
+        output = item.get("output")
+        if not isinstance(output, dict):
+            item = {**item, "output": {"value": output}}
+        normalized.append(item)
+    return {**doc, "tool_results": normalized}
+
 # Type for async indexer: (index_name, document, doc_id?) -> None
 ESIndexer = Callable[[str, dict[str, Any], str | None], Awaitable[None]]
 
@@ -84,6 +115,9 @@ def schedule_es_index(
     indexer = build_es_indexer_from_handler(es_handler) if es_handler else get_es_indexer()
     if not indexer:
         return
+
+    if index_name.startswith(CAPTURES_INDEX_PREFIX):
+        document = normalize_capture_doc_for_es(document)
 
     async def _index() -> None:
         try:

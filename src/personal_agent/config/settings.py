@@ -220,6 +220,40 @@ class AppConfig(BaseSettings):
 
         raise ValueError(f"Invalid gateway command type: {type(v)}")
 
+    # Request Gateway & Expansion Budget (Phase 2.4)
+    context_budget_comfortable_tokens: int = Field(
+        default=32000,
+        ge=1000,
+        description="Comfortable context budget threshold for token management",
+    )
+    context_budget_max_tokens: int = Field(
+        default=65536,
+        ge=2000,
+        description="Maximum context budget limit",
+    )
+    context_budget_generation_reserve_tokens: int = Field(
+        default=4096,
+        ge=500,
+        description="Reserve tokens for LLM generation in context budget calculations",
+    )
+    expansion_budget_max: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Maximum request expansion budget (max decomposition depth)",
+    )
+    sub_agent_timeout_seconds: float = Field(
+        default=120.0,
+        gt=0,
+        le=3600,
+        description="Timeout for sub-agent task execution",
+    )
+    sub_agent_max_tokens: int = Field(
+        default=4096,
+        ge=500,
+        description="Maximum tokens per sub-agent response",
+    )
+
     # Paths (for domain config loaders)
     governance_config_path: Path = Field(
         default=Path("config/governance"), description="Path to governance config directory"

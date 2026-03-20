@@ -186,6 +186,11 @@ class ExecutionContext:
     # Gateway output (Cognitive Architecture Redesign v2)
     gateway_output: GatewayOutput | None = None  # From request_gateway pipeline
 
+    # HYBRID expansion state (Cognitive Architecture Redesign v2)
+    expansion_strategy: str | None = None  # "hybrid" or "decompose" when active
+    expansion_constraints: dict[str, Any] | None = None  # max_sub_agents etc.
+    sub_agent_results: list[Any] | None = None  # SubAgentResult list after expansion
+
 
 class OrchestratorStep(TypedDict):
     """Step metadata for observability.

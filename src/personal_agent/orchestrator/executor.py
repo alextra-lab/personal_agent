@@ -852,6 +852,20 @@ async def step_init(
             complexity=gw.intent.complexity.value,
             has_memory=gw.context.memory_context is not None,
         )
+        from personal_agent.request_gateway.types import DecompositionStrategy
+
+        if gw.decomposition.strategy in (
+            DecompositionStrategy.HYBRID,
+            DecompositionStrategy.DECOMPOSE,
+        ):
+            ctx.expansion_strategy = gw.decomposition.strategy.value
+            ctx.expansion_constraints = gw.decomposition.constraints or {}
+            log.info(
+                "step_init_expansion_flagged",
+                strategy=gw.decomposition.strategy.value,
+                constraints=gw.decomposition.constraints,
+                trace_id=ctx.trace_id,
+            )
         return TaskState.LLM_CALL
 
     # Apply context window controls before LLM usage to prevent overflow.
@@ -1468,6 +1482,70 @@ async def step_llm_call(
         # Some reasoning models may emit router-style JSON with a `response` field.
         # Unwrap it to avoid returning JSON to the user.
         response_content = _unwrap_embedded_response_json(response_content)
+
+        # --- HYBRID expansion hook ---
+        if (
+            ctx.expansion_strategy is not None
+            and ctx.sub_agent_results is None
+        ):
+            from personal_agent.orchestrator.expansion import (
+                execute_hybrid,
+                parse_decomposition_plan,
+            )
+
+            max_sub = (ctx.expansion_constraints or {}).get("max_sub_agents", 3)
+            specs = parse_decomposition_plan(
+                plan_text=response_content,
+                max_sub_agents=max_sub,
+            )
+
+            if specs:
+                results = await execute_hybrid(
+                    specs=specs,
+                    llm_client=llm_client,
+                    trace_id=ctx.trace_id,
+                    max_concurrent=max_sub,
+                )
+                ctx.sub_agent_results = results
+
+                # Build synthesis context and append to messages
+                synthesis_parts = ["Sub-agent results:\n"]
+                for r in results:
+                    status = "OK" if r.success else f"FAILED: {r.error}"
+                    synthesis_parts.append(
+                        f"- {r.spec_task}: [{status}] {r.summary}\n"
+                    )
+                synthesis_context = "".join(synthesis_parts)
+
+                synthesis_msg = {
+                    "role": "user",
+                    "content": (
+                        f"{synthesis_context}\n"
+                        "The sub-tasks above have been completed. "
+                        "Synthesize the results into a coherent response "
+                        "for the user's original question."
+                    ),
+                }
+                ctx.messages.append({"role": "assistant", "content": response_content})
+                ctx.messages.append(synthesis_msg)
+
+                log.info(
+                    "expansion_phase1_complete",
+                    sub_agent_count=len(results),
+                    successful=sum(1 for r in results if r.success),
+                    trace_id=ctx.trace_id,
+                )
+
+                # Re-enter LLM_CALL for synthesis (phase 2)
+                return TaskState.LLM_CALL
+
+            # No parseable specs — fall through to normal response path
+            log.warning(
+                "expansion_no_specs_parsed",
+                strategy=ctx.expansion_strategy,
+                trace_id=ctx.trace_id,
+            )
+        # --- End HYBRID expansion hook ---
 
         # Add assistant message to history (with tool calls if present)
         assistant_message: dict[str, Any] = {"role": "assistant", "content": response_content}

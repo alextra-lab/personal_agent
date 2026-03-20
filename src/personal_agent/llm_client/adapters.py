@@ -50,7 +50,7 @@ def _strip_think_tags(content: str) -> tuple[str, str | None]:
     # Handle unclosed <think> tag — treat the remainder as thinking content
     unclosed_idx = cleaned.find("<think>")
     if unclosed_idx != -1:
-        think_parts.append(cleaned[unclosed_idx + len("<think>"):])
+        think_parts.append(cleaned[unclosed_idx + len("<think>") :])
         cleaned = cleaned[:unclosed_idx]
 
     reasoning_trace: str | None = "\n".join(think_parts).strip() or None

@@ -20,8 +20,16 @@ _CODING_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 _CODING_KEYWORDS = (
-    "code review", "unit test", "write a function", "write a class",
-    "implement ", "refactor ", "debug ", "bug ", "syntax error", "lint ",
+    "code review",
+    "unit test",
+    "write a function",
+    "write a class",
+    "implement ",
+    "refactor ",
+    "debug ",
+    "bug ",
+    "syntax error",
+    "lint ",
 )
 
 # STANDARD: explicit tool intent

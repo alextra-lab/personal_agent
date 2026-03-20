@@ -567,9 +567,7 @@ class MemoryService:
         if not self.connected or not self.driver:
             return {"entities": [], "sessions": [], "turns_summary": []}
 
-        cutoff = (
-            datetime.now(timezone.utc) - timedelta(days=recency_days)
-        ).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=recency_days)).isoformat()
 
         try:
             async with self.driver.session() as db_session:
@@ -633,9 +631,7 @@ class MemoryService:
                 }
 
         except Exception as e:
-            log.error(
-                "query_memory_broad_failed", error=str(e), exc_info=True
-            )
+            log.error("query_memory_broad_failed", error=str(e), exc_info=True)
             return {"entities": [], "sessions": [], "turns_summary": []}
 
     def _log_query_quality_metrics(
@@ -946,7 +942,9 @@ class MemoryService:
         try:
             async with self.driver.session() as session:
                 result = await session.run(
-                    query, name=entity_name, confidence=confidence,
+                    query,
+                    name=entity_name,
+                    confidence=confidence,
                     source_turn_ids=source_turn_ids,
                 )
                 record = await result.single()

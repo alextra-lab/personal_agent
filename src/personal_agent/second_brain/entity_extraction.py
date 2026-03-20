@@ -207,7 +207,7 @@ async def extract_entities_and_relationships(
                     tools=None,
                     max_tokens=10000,  # thinking_budget_tokens (≤3000) + JSON response headroom
                     max_retries=0,  # No retries: a timeout means the model is overloaded;
-                                    # retrying queues more work and blocks consolidation for ~27min
+                    # retrying queues more work and blocks consolidation for ~27min
                     timeout_s=float(settings.entity_extraction_timeout_seconds),
                     priority=InferencePriority.BACKGROUND,
                     priority_timeout=60.0,

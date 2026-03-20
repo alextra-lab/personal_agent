@@ -242,12 +242,8 @@ class ModelConfig(BaseModel):
         self.entity_extraction_role = self._resolve_role(
             "entity_extraction_role", self.entity_extraction_role
         )
-        self.captains_log_role = self._resolve_role(
-            "captains_log_role", self.captains_log_role
-        )
-        self.insights_role = self._resolve_role(
-            "insights_role", self.insights_role
-        )
+        self.captains_log_role = self._resolve_role("captains_log_role", self.captains_log_role)
+        self.insights_role = self._resolve_role("insights_role", self.insights_role)
         return self
 
     def _resolve_role(self, field_name: str, value: str) -> str:
@@ -288,6 +284,4 @@ class ModelConfig(BaseModel):
             # No cloud model defined yet — keep sentinel for callers to handle gracefully.
             return value
 
-        raise ValueError(
-            f"{field_name} must be one of {sorted(valid)}, got: {value!r}"
-        )
+        raise ValueError(f"{field_name} must be one of {sorted(valid)}, got: {value!r}")

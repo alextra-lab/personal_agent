@@ -193,8 +193,11 @@ class MemoryProtocol(Protocol):
 
     # TODO(Slice 3): Align to spec signature: promote(episode_id, to_type, ctx)
     async def promote(
-        self, entity_name: str, confidence: float,
-        source_turn_ids: list[str], trace_id: str,
+        self,
+        entity_name: str,
+        confidence: float,
+        source_turn_ids: list[str],
+        trace_id: str,
     ) -> bool:
         """Promote an entity to semantic memory.
 

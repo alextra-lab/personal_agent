@@ -313,7 +313,9 @@ class SecondBrainConsolidator:
         # and causes extraction of internal tool names (e.g. mcp_perplexity_ask) that the
         # model was only reasoning about, not actually recommending.
         raw_response = capture.assistant_response or ""
-        extraction_response = re.sub(r"<think>.*?</think>", "", raw_response, flags=re.DOTALL).strip()
+        extraction_response = re.sub(
+            r"<think>.*?</think>", "", raw_response, flags=re.DOTALL
+        ).strip()
 
         # Extract entities and relationships using configured model (local SLM or Claude)
         extraction_result = await extract_entities_and_relationships(

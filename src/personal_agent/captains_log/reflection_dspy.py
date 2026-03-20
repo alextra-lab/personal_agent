@@ -273,9 +273,7 @@ def generate_reflection_dspy(
 
             fingerprint = None
             if category and scope:
-                fingerprint = compute_proposal_fingerprint(
-                    category, scope, proposed_change_what
-                )
+                fingerprint = compute_proposal_fingerprint(category, scope, proposed_change_what)
 
             proposed_change = ProposedChange(
                 what=proposed_change_what,

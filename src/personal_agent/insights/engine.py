@@ -120,7 +120,8 @@ class InsightsEngine:
             )
 
         delegation_insights = await self.detect_delegation_patterns(
-            days=days, trace_id="",
+            days=days,
+            trace_id="",
         )
         insights.extend(delegation_insights)
 
@@ -128,9 +129,7 @@ class InsightsEngine:
         log.info("insights_generated", days=days, count=len(insights))
         return insights
 
-    async def detect_delegation_patterns(
-        self, days: int = 30, trace_id: str = ""
-    ) -> list[Insight]:
+    async def detect_delegation_patterns(self, days: int = 30, trace_id: str = "") -> list[Insight]:
         """Detect patterns in delegation outcomes.
 
         Analyzes: success rate by agent/complexity, missing context trends,

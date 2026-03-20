@@ -108,20 +108,24 @@ def _format_broad_recall(broad: dict[str, Any]) -> list[dict[str, Any]]:
     """
     items: list[dict[str, Any]] = []
     for e in broad.get("entities", []):
-        items.append({
-            "type": "entity",
-            "name": e.get("name", ""),
-            "entity_type": e.get("type", ""),
-            "mentions": e.get("mentions", 0),
-            "description": e.get("description") or "",
-        })
+        items.append(
+            {
+                "type": "entity",
+                "name": e.get("name", ""),
+                "entity_type": e.get("type", ""),
+                "mentions": e.get("mentions", 0),
+                "description": e.get("description") or "",
+            }
+        )
     for s in broad.get("sessions", []):
-        items.append({
-            "type": "session",
-            "session_id": s.get("session_id", ""),
-            "dominant_entities": s.get("dominant_entities") or [],
-            "turn_count": s.get("turn_count", 0),
-        })
+        items.append(
+            {
+                "type": "session",
+                "session_id": s.get("session_id", ""),
+                "dominant_entities": s.get("dominant_entities") or [],
+                "turn_count": s.get("turn_count", 0),
+            }
+        )
     return items
 
 
@@ -644,9 +648,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
             log.info(
                 STATE_TRANSITION,
                 trace_id=ctx.trace_id,
-                from_state=(
-                    previous_state.value if previous_state is not None else state.value
-                ),
+                from_state=(previous_state.value if previous_state is not None else state.value),
                 to_state=state.value,
                 component="executor",
             )
@@ -940,9 +942,7 @@ async def step_init(
                     # Entity-name match path (existing)
                     words = ctx.user_message.split()
                     potential_entities = [
-                        w.strip('",.:;!?')
-                        for w in words
-                        if len(w) > 3 and w[0].isupper()
+                        w.strip('",.:;!?') for w in words if len(w) > 3 and w[0].isupper()
                     ]
                     if potential_entities:
                         query = MemoryQuery(
@@ -1142,15 +1142,17 @@ async def step_llm_call(
 
         model_config = llm_client.model_configs.get(model_role.value)
         tool_strategy = (
-            model_config.effective_tool_strategy
-            if model_config
-            else ToolCallingStrategy.NATIVE
+            model_config.effective_tool_strategy if model_config else ToolCallingStrategy.NATIVE
         )
 
         tools: list[dict[str, Any]] | None = None
         _prompt_injected_tool_text: str | None = None  # filled for PROMPT_INJECTED only
 
-        if not is_synthesizing and model_role != ModelRole.ROUTER and tool_strategy != ToolCallingStrategy.DISABLED:
+        if (
+            not is_synthesizing
+            and model_role != ModelRole.ROUTER
+            and tool_strategy != ToolCallingStrategy.DISABLED
+        ):
             # Load tool definitions from registry
             global _tool_registry
             if _tool_registry is None:
@@ -1191,11 +1193,7 @@ async def step_llm_call(
         if model_role != ModelRole.ROUTER and ctx.memory_context and len(ctx.memory_context) > 0:
             if ctx.memory_context[0].get("type") in ("entity", "session"):
                 # Broad recall path — format as direct knowledge summary
-                entity_items = [
-                    m
-                    for m in ctx.memory_context
-                    if m.get("type") == "entity"
-                ]
+                entity_items = [m for m in ctx.memory_context if m.get("type") == "entity"]
                 entity_lines = [
                     f"- [{m.get('entity_type', '')}] {m.get('name', '')}: {m.get('description', '')} "
                     f"(mentioned {m.get('mentions', 1)}x)"
@@ -1484,10 +1482,7 @@ async def step_llm_call(
         response_content = _unwrap_embedded_response_json(response_content)
 
         # --- HYBRID expansion hook ---
-        if (
-            ctx.expansion_strategy is not None
-            and ctx.sub_agent_results is None
-        ):
+        if ctx.expansion_strategy is not None and ctx.sub_agent_results is None:
             from personal_agent.orchestrator.expansion import (
                 execute_hybrid,
                 parse_decomposition_plan,
@@ -1512,9 +1507,7 @@ async def step_llm_call(
                 synthesis_parts = ["Sub-agent results:\n"]
                 for r in results:
                     status = "OK" if r.success else f"FAILED: {r.error}"
-                    synthesis_parts.append(
-                        f"- {r.spec_task}: [{status}] {r.summary}\n"
-                    )
+                    synthesis_parts.append(f"- {r.spec_task}: [{status}] {r.summary}\n")
                 synthesis_context = "".join(synthesis_parts)
 
                 synthesis_msg = {
@@ -1734,10 +1727,12 @@ async def step_tool_execution(
                     "tool_call_id": tool_call_id,
                     "role": "tool",
                     "name": tool_name,
-                    "content": json.dumps({
-                        "status": "retry",
-                        "hint": f"Arguments for {tool_name} were malformed JSON. Retry with valid JSON.",
-                    }),
+                    "content": json.dumps(
+                        {
+                            "status": "retry",
+                            "hint": f"Arguments for {tool_name} were malformed JSON. Retry with valid JSON.",
+                        }
+                    ),
                 }
             )
             continue
@@ -1763,10 +1758,12 @@ async def step_tool_execution(
                     "tool_call_id": tool_call_id,
                     "role": "tool",
                     "name": tool_name,
-                    "content": json.dumps({
-                        "status": "done",
-                        "hint": "This tool was already called with the same arguments. Use the previous result to answer.",
-                    }),
+                    "content": json.dumps(
+                        {
+                            "status": "done",
+                            "hint": "This tool was already called with the same arguments. Use the previous result to answer.",
+                        }
+                    ),
                 }
             )
             continue
@@ -1798,10 +1795,12 @@ async def step_tool_execution(
                         "tool_call_id": tool_call_id,
                         "role": "tool",
                         "name": tool_name,
-                        "content": json.dumps({
-                            "status": "retry",
-                            "hint": f"Missing required params: {', '.join(missing_params)}. Retry with these included.",
-                        }),
+                        "content": json.dumps(
+                            {
+                                "status": "retry",
+                                "hint": f"Missing required params: {', '.join(missing_params)}. Retry with these included.",
+                            }
+                        ),
                     }
                 )
                 continue
@@ -1831,10 +1830,12 @@ async def step_tool_execution(
             else:
                 # Concise error — full details logged by ToolExecutionLayer (ADR-0032 §3.1)
                 short_error = (result.error or "execution failed")[:150]
-                content = json.dumps({
-                    "status": "error",
-                    "hint": f"{tool_name}: {short_error}",
-                })
+                content = json.dumps(
+                    {
+                        "status": "error",
+                        "hint": f"{tool_name}: {short_error}",
+                    }
+                )
 
             tool_results.append(
                 {
@@ -1873,10 +1874,12 @@ async def step_tool_execution(
                     "tool_call_id": tool_call_id,
                     "role": "tool",
                     "name": tool_name,
-                    "content": json.dumps({
-                        "status": "error",
-                        "hint": f"{tool_name} failed to execute. Try a different approach or tool.",
-                    }),
+                    "content": json.dumps(
+                        {
+                            "status": "error",
+                            "hint": f"{tool_name} failed to execute. Try a different approach or tool.",
+                        }
+                    ),
                 }
             )
 

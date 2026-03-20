@@ -97,8 +97,7 @@ class MCPGatewayAdapter:
         if allowed_servers:
             original_count = len(mcp_tools)
             mcp_tools = [
-                t for t in mcp_tools
-                if any(s in t.get("name", "") for s in allowed_servers)
+                t for t in mcp_tools if any(s in t.get("name", "") for s in allowed_servers)
             ]
             log.info(
                 "mcp_tools_server_filtered",

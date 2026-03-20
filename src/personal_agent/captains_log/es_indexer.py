@@ -47,6 +47,7 @@ def normalize_capture_doc_for_es(doc: dict[str, Any]) -> dict[str, Any]:
         normalized.append(item)
     return {**doc, "tool_results": normalized}
 
+
 # Type for async indexer: (index_name, document, doc_id?) -> None
 ESIndexer = Callable[[str, dict[str, Any], str | None], Awaitable[None]]
 

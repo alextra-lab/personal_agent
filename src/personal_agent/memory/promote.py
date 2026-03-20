@@ -63,11 +63,15 @@ async def run_promotion_pipeline(
 
     logger.info(
         "promotion_pipeline_complete",
-        promoted=promoted, skipped=skipped, errors=len(errors),
+        promoted=promoted,
+        skipped=skipped,
+        errors=len(errors),
         trace_id=trace_id,
     )
 
     return PromotionResult(
-        promoted_count=promoted, skipped_count=skipped,
-        facts_created=facts_created, errors=errors,
+        promoted_count=promoted,
+        skipped_count=skipped,
+        facts_created=facts_created,
+        errors=errors,
     )

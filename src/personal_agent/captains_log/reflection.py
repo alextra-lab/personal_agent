@@ -145,9 +145,7 @@ async def generate_reflection_entry(
 
     _model_config = load_model_config()
     _captains_log_model_def = _model_config.models.get(_model_config.captains_log_role)
-    _captains_log_provider = (
-        _captains_log_model_def.provider if _captains_log_model_def else None
-    )
+    _captains_log_provider = _captains_log_model_def.provider if _captains_log_model_def else None
 
     # ── Cloud path (Anthropic / OpenAI) ──────────────────────────────────────
     if _captains_log_provider == "anthropic":

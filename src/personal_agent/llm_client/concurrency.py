@@ -59,6 +59,7 @@ def infer_provider_type(endpoint: str | None) -> str:
 
     try:
         from urllib.parse import urlparse
+
         parsed = urlparse(endpoint)
         host = (parsed.hostname or "").lower()
         if host in _LOCAL_HOSTS:
@@ -86,6 +87,7 @@ def _normalize_endpoint(endpoint: str | None, default_base_url: str) -> str:
     url = endpoint or default_base_url
     try:
         from urllib.parse import urlparse
+
         parsed = urlparse(url)
         host = parsed.hostname or "localhost"
         port = parsed.port or (443 if parsed.scheme == "https" else 80)

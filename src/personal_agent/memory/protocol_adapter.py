@@ -169,8 +169,11 @@ class MemoryServiceAdapter:
         return episode.turn_id
 
     async def promote(
-        self, entity_name: str, confidence: float,
-        source_turn_ids: list[str], trace_id: str,
+        self,
+        entity_name: str,
+        confidence: float,
+        source_turn_ids: list[str],
+        trace_id: str,
     ) -> bool:
         """Promote an entity to semantic memory via the service.
 

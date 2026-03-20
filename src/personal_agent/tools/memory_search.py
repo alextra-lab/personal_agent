@@ -136,15 +136,14 @@ async def search_memory_executor(
             from personal_agent.service.app import (  # type: ignore[attr-defined]
                 memory_service as global_memory_service,
             )
+
             if global_memory_service and global_memory_service.connected:
                 memory_service = global_memory_service
         except (ImportError, AttributeError):
             pass
 
         if not memory_service or not memory_service.connected:
-            raise ToolExecutionError(
-                "Memory service unavailable or not connected."
-            )
+            raise ToolExecutionError("Memory service unavailable or not connected.")
 
         if entity_names or not _looks_like_broad_query(query_text, entity_types):
             query = MemoryQuery(
@@ -153,9 +152,7 @@ async def search_memory_executor(
                 limit=limit,
                 recency_days=recency_days if recency_days > 0 else None,
             )
-            result = await memory_service.query_memory(
-                query, query_text=query_text
-            )
+            result = await memory_service.query_memory(query, query_text=query_text)
             output = {
                 "matched_turns": [
                     {
@@ -212,9 +209,19 @@ async def search_memory_executor(
 def _looks_like_broad_query(query_text: str, entity_types: list[str]) -> bool:
     """Heuristic: is this an open-ended 'what have I discussed?' query?"""
     broad_keywords = {
-        "everything", "anything", "topics", "subjects", "history",
-        "all", "previous", "past", "before", "discussed", "mentioned",
-        "talked about", "asked about",
+        "everything",
+        "anything",
+        "topics",
+        "subjects",
+        "history",
+        "all",
+        "previous",
+        "past",
+        "before",
+        "discussed",
+        "mentioned",
+        "talked about",
+        "asked about",
     }
     words = set(query_text.lower().split())
     return bool(words & broad_keywords) and not entity_types
@@ -223,8 +230,4 @@ def _looks_like_broad_query(query_text: str, entity_types: list[str]) -> bool:
 def _extract_keywords(query_text: str) -> list[str]:
     """Extract candidate entity names from free-text query (capitalised words)."""
     words = query_text.split()
-    return [
-        w.strip('",.:;!?()')
-        for w in words
-        if len(w) > 2 and w[0].isupper()
-    ][:5]
+    return [w.strip('",.:;!?()') for w in words if len(w) > 2 and w[0].isupper()][:5]

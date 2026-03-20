@@ -100,9 +100,7 @@ async def _preflight_check_tcp(service: str, host: str, port: int) -> None:
             actionable message directing the developer to run 'make infra-up'.
     """
     try:
-        _, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port), timeout=2.0
-        )
+        _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=2.0)
         writer.close()
         await writer.wait_closed()
     except (OSError, asyncio.TimeoutError) as e:

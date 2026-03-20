@@ -44,9 +44,7 @@ def _estimate_cost(model_id: str, input_tokens: int, output_tokens: int) -> floa
     """
     for prefix, (in_price, out_price) in _ANTHROPIC_PRICING.items():
         if prefix in model_id:
-            return (input_tokens / 1_000_000 * in_price) + (
-                output_tokens / 1_000_000 * out_price
-            )
+            return (input_tokens / 1_000_000 * in_price) + (output_tokens / 1_000_000 * out_price)
     return (input_tokens / 1_000_000 * _DEFAULT_INPUT_PRICE) + (
         output_tokens / 1_000_000 * _DEFAULT_OUTPUT_PRICE
     )

@@ -186,7 +186,11 @@ def _is_tool_error_message(message: dict[str, Any]) -> bool:
         return False
     # Quick heuristic: check for JSON keys that our error format uses.
     content_lower = content.lower()
-    return '"error"' in content_lower or '"retry"' in content_lower or '"status": "error"' in content_lower
+    return (
+        '"error"' in content_lower
+        or '"retry"' in content_lower
+        or '"status": "error"' in content_lower
+    )
 
 
 def _evict_old_tool_errors(

@@ -59,7 +59,10 @@ async def _get_memory_service() -> Any:
 def memory_search(
     query: str = typer.Argument(..., help="Free-text search query"),
     entity_type: list[str] = typer.Option(
-        [], "--type", "-t", help="Filter by entity type (repeatable). E.g. --type Location --type Person"
+        [],
+        "--type",
+        "-t",
+        help="Filter by entity type (repeatable). E.g. --type Location --type Person",
     ),
     days: int = typer.Option(90, "--days", "-d", help="Look back this many days (0 = all history)"),
     limit: int = typer.Option(20, "--limit", "-n", help="Max results"),
@@ -72,9 +75,7 @@ def memory_search(
         svc = await _get_memory_service()
         try:
             entity_names = [
-                w.strip('",.:;!?()')
-                for w in query.split()
-                if len(w) > 2 and w[0].isupper()
+                w.strip('",.:;!?()') for w in query.split() if len(w) > 2 and w[0].isupper()
             ]
             q = MemoryQuery(
                 entity_names=entity_names or [],
@@ -132,11 +133,15 @@ def memory_entities(
     entity_type: list[str] = typer.Option(
         [], "--type", "-t", help="Filter by entity type (repeatable)"
     ),
-    days: int = typer.Option(90, "--days", "-d", help="Only entities seen in last N days (0 = all)"),
+    days: int = typer.Option(
+        90, "--days", "-d", help="Only entities seen in last N days (0 = all)"
+    ),
     limit: int = typer.Option(30, "--limit", "-n", help="Max entities to show"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
     sort_by: str = typer.Option(
-        "mentions", "--sort", help="Sort by: mentions | name (last_seen not available from broad query)"
+        "mentions",
+        "--sort",
+        help="Sort by: mentions | name (last_seen not available from broad query)",
     ),
 ) -> None:
     """List entities in the memory graph, sorted by frequency or name."""

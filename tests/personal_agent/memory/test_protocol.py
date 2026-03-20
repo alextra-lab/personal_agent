@@ -223,6 +223,12 @@ class TestProtocolIsRuntimeCheckable:
             async def store_episode(self, episode: Episode, trace_id: str) -> str:
                 return "ep-1"
 
+            async def promote(
+                self, entity_name: str, confidence: float,
+                source_turn_ids: list[str], trace_id: str,
+            ) -> bool:
+                return True
+
             async def is_connected(self) -> bool:
                 return True
 
@@ -309,10 +315,12 @@ class TestMemoryServiceAdapter:
 
     @pytest.mark.asyncio
     async def test_store_episode_returns_turn_id(self) -> None:
-        """Verify store_episode stub returns the episode's turn_id."""
+        """Verify store_episode creates a TurnNode and returns the turn_id."""
         from datetime import datetime, timezone
 
         mock_service = MagicMock()
+        mock_service.create_conversation = AsyncMock(return_value=True)
+        mock_service.turn_exists = AsyncMock(return_value=False)
         adapter = MemoryServiceAdapter(service=mock_service)
         episode = Episode(
             turn_id="trace-abc",
@@ -324,3 +332,38 @@ class TestMemoryServiceAdapter:
 
         result = await adapter.store_episode(episode, trace_id="trace-abc")
         assert result == "trace-abc"
+        mock_service.create_conversation.assert_called_once()
+
+
+class TestMemoryServiceAdapterSlice2:
+    @pytest.mark.asyncio
+    async def test_store_episode_creates_turn(self) -> None:
+        from datetime import datetime, timezone
+
+        mock_service = MagicMock()
+        mock_service.create_conversation = AsyncMock(return_value=True)
+        mock_service.turn_exists = AsyncMock(return_value=False)
+
+        adapter = MemoryServiceAdapter(service=mock_service)
+        episode = Episode(
+            turn_id="turn-real-001", session_id="sess-001",
+            timestamp=datetime.now(tz=timezone.utc),
+            user_message="Tell me about Neo4j",
+            assistant_response="Neo4j is a graph database.",
+            entities=["Neo4j"],
+        )
+        result = await adapter.store_episode(episode, trace_id="t")
+        assert result == "turn-real-001"
+        mock_service.create_conversation.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_promote_delegates_to_service(self) -> None:
+        mock_service = MagicMock()
+        mock_service.promote_entity = AsyncMock(return_value=True)
+
+        adapter = MemoryServiceAdapter(service=mock_service)
+        result = await adapter.promote(
+            entity_name="Neo4j", confidence=0.85,
+            source_turn_ids=["t1"], trace_id="t",
+        )
+        assert result is True

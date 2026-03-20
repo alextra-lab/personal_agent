@@ -114,11 +114,10 @@ class MemoryServiceAdapter:
         )
 
     async def store_episode(self, episode: Episode, trace_id: str) -> str:
-        """Store episode -- Slice 1 stub.
+        """Store a new episode as a TurnNode in Neo4j.
 
-        Full implementation in Slice 2 when episodic/semantic distinction
-        is added. For now, logs the intent without persisting (consolidation
-        handles persistence via the existing SecondBrainConsolidator).
+        Replaces Slice 1 stub. Deduplicates by turn_id, creates a TurnNode
+        via the existing create_conversation() method.
 
         Args:
             episode: The episode to store.
@@ -127,13 +126,78 @@ class MemoryServiceAdapter:
         Returns:
             The episode's turn_id.
         """
+        from personal_agent.memory.models import TurnNode
+
+        # Dedup check
+        if hasattr(self._service, "turn_exists"):
+            exists = await self._service.turn_exists(episode.turn_id)
+            if exists:
+                logger.debug(
+                    "store_episode_dedup_skip",
+                    turn_id=episode.turn_id,
+                    trace_id=trace_id,
+                )
+                return episode.turn_id
+
+        turn = TurnNode(
+            turn_id=episode.turn_id,
+            trace_id=trace_id,
+            session_id=episode.session_id,
+            timestamp=episode.timestamp,
+            user_message=episode.user_message,
+            assistant_response=episode.assistant_response,
+            key_entities=episode.entities,
+        )
+
+        try:
+            await self._service.create_conversation(turn)
+        except Exception:
+            logger.warning(
+                "store_episode_create_failed",
+                turn_id=episode.turn_id,
+                trace_id=trace_id,
+                exc_info=True,
+            )
+            raise
+
         logger.info(
-            "memory_store_episode_stub",
+            "store_episode_created",
             turn_id=episode.turn_id,
             session_id=episode.session_id,
             trace_id=trace_id,
         )
         return episode.turn_id
+
+    async def promote(
+        self, entity_name: str, confidence: float,
+        source_turn_ids: list[str], trace_id: str,
+    ) -> bool:
+        """Promote an entity to semantic memory via the service.
+
+        Args:
+            entity_name: Entity to promote.
+            confidence: Confidence score.
+            source_turn_ids: Supporting turn IDs.
+            trace_id: Request trace identifier.
+
+        Returns:
+            True if promoted successfully.
+        """
+        try:
+            return await self._service.promote_entity(
+                entity_name=entity_name,
+                confidence=confidence,
+                source_turn_ids=source_turn_ids,
+                trace_id=trace_id,
+            )
+        except Exception:
+            logger.warning(
+                "promote_adapter_failed",
+                entity_name=entity_name,
+                trace_id=trace_id,
+                exc_info=True,
+            )
+            return False
 
     async def is_connected(self) -> bool:
         """Check if the underlying Neo4j driver is available.

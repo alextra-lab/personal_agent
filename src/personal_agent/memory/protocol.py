@@ -191,6 +191,24 @@ class MemoryProtocol(Protocol):
         """
         ...
 
+    # TODO(Slice 3): Align to spec signature: promote(episode_id, to_type, ctx)
+    async def promote(
+        self, entity_name: str, confidence: float,
+        source_turn_ids: list[str], trace_id: str,
+    ) -> bool:
+        """Promote an entity to semantic memory.
+
+        Args:
+            entity_name: Entity name to promote.
+            confidence: Confidence score for the semantic fact.
+            source_turn_ids: Turn IDs supporting this promotion.
+            trace_id: Trace identifier for observability.
+
+        Returns:
+            True if promoted successfully.
+        """
+        ...
+
     async def is_connected(self) -> bool:
         """Check if the memory backend is reachable.
 

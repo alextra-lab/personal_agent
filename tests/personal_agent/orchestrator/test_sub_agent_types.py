@@ -14,9 +14,9 @@ from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgent
 class TestSubAgentSpec:
     def test_minimal_construction(self) -> None:
         """Only required fields — all defaults applied."""
-        spec = SubAgentSpec(task="Summarise the document.", context_slice=[])
+        spec = SubAgentSpec(task="Summarise the document.", context=[])
         assert spec.task == "Summarise the document."
-        assert spec.context_slice == []
+        assert spec.context == []
         assert spec.output_format == "text"
         assert spec.max_tokens == 4096
         assert spec.timeout_seconds == 120.0
@@ -29,7 +29,7 @@ class TestSubAgentSpec:
         ctx = [{"role": "user", "content": "Analyse this"}]
         spec = SubAgentSpec(
             task="Deep analysis",
-            context_slice=ctx,
+            context=ctx,
             output_format="json",
             max_tokens=2048,
             timeout_seconds=60.0,
@@ -46,23 +46,23 @@ class TestSubAgentSpec:
 
     def test_immutability(self) -> None:
         """SubAgentSpec is frozen — mutation raises AttributeError."""
-        spec = SubAgentSpec(task="test", context_slice=[])
+        spec = SubAgentSpec(task="test", context=[])
         with pytest.raises(AttributeError):
             spec.task = "modified"  # type: ignore[misc]
 
-    def test_context_slice_can_hold_structured_data(self) -> None:
-        """context_slice accepts arbitrary dicts (messages, docs, tool results)."""
+    def test_context_can_hold_structured_data(self) -> None:
+        """context accepts arbitrary dicts (messages, docs, tool results)."""
         ctx = [
             {"role": "user", "content": "Question"},
             {"type": "doc", "title": "Manual", "text": "..."},
             {"type": "tool_result", "tool": "search", "output": ["item1"]},
         ]
-        spec = SubAgentSpec(task="process", context_slice=ctx)
-        assert len(spec.context_slice) == 3
+        spec = SubAgentSpec(task="process", context=ctx)
+        assert len(spec.context) == 3
 
     def test_default_tools_is_empty_list(self) -> None:
         """Default tools list is empty, not None."""
-        spec = SubAgentSpec(task="task", context_slice=[])
+        spec = SubAgentSpec(task="task", context=[])
         assert spec.tools == []
         assert isinstance(spec.tools, list)
 

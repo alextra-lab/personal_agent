@@ -23,7 +23,7 @@ class SubAgentSpec:
 
     Attributes:
         task: Human-readable description of the sub-task to perform.
-        context_slice: Subset of context relevant to this sub-task
+        context: Subset of context relevant to this sub-task
             (messages, retrieved docs, tool results, etc.).
         output_format: Expected output shape — e.g. "text", "json",
             "bullet_list", "code". Used by synthesiser to interpret results.
@@ -36,7 +36,7 @@ class SubAgentSpec:
     """
 
     task: str
-    context_slice: list[dict[str, Any]]
+    context: list[dict[str, Any]]
     output_format: str = "text"
     max_tokens: int = 4096
     timeout_seconds: float = 120.0

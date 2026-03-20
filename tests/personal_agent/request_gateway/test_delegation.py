@@ -1,8 +1,11 @@
-"""Tests for Stage A delegation instruction composition."""
+"""Tests for Stage A + Stage B delegation instruction composition."""
 
 from personal_agent.request_gateway.delegation import (
     compose_delegation_instructions,
+    compose_delegation_package,
+    record_delegation_outcome,
 )
+from personal_agent.request_gateway.delegation_types import DelegationOutcome
 
 
 class TestComposeDelegationInstructions:
@@ -60,3 +63,44 @@ class TestComposeDelegationInstructions:
         )
         assert "Simple task" in result
         assert result.startswith("# ")
+
+
+class TestComposeDelegationPackage:
+    def test_creates_package_with_id(self) -> None:
+        pkg = compose_delegation_package(
+            task_description="Add export endpoint",
+            trace_id="test-trace-1",
+            target_agent="claude-code",
+        )
+        assert pkg.task_id.startswith("del-")
+        assert pkg.target_agent == "claude-code"
+
+    def test_includes_all_fields(self) -> None:
+        pkg = compose_delegation_package(
+            task_description="test",
+            trace_id="test-trace-2",
+            relevant_files=["app.py"],
+            conventions=["type hints"],
+            acceptance_criteria=["tests pass"],
+            known_pitfalls=["include schema"],
+        )
+        assert pkg.context.relevant_files == ["app.py"]
+        assert len(pkg.acceptance_criteria) == 1
+
+
+class TestRecordDelegationOutcome:
+    def test_logs_outcome(self) -> None:
+        import structlog.testing
+
+        outcome = DelegationOutcome(
+            task_id="del-test",
+            success=True,
+            rounds_needed=1,
+            what_worked="Good context",
+            what_was_missing="",
+        )
+        with structlog.testing.capture_logs() as cap_logs:
+            record_delegation_outcome(outcome, trace_id="test-trace-3")
+        events = [e for e in cap_logs if "delegation_outcome" in e.get("event", "")]
+        assert len(events) == 1
+        assert events[0]["trace_id"] == "test-trace-3"

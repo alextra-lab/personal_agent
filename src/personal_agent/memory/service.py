@@ -904,3 +904,73 @@ class MemoryService:
         except Exception as e:
             log.error("user_interests_query_failed", error=str(e), exc_info=True)
             return []
+
+    async def promote_entity(
+        self,
+        entity_name: str,
+        confidence: float,
+        source_turn_ids: list[str],
+        trace_id: str = "",
+    ) -> bool:
+        """Promote an entity to semantic memory.
+
+        Sets memory_type='semantic', confidence, promoted_at on the Entity node.
+
+        Args:
+            entity_name: The entity to promote.
+            confidence: Confidence score for the semantic fact.
+            source_turn_ids: Turn IDs supporting this promotion.
+            trace_id: Request trace identifier.
+
+        Returns:
+            True if the entity was found and promoted.
+        """
+        if not self.driver:
+            log.warning(
+                "promote_entity_no_driver",
+                entity_name=entity_name,
+                trace_id=trace_id,
+            )
+            return False
+
+        query = """
+        MATCH (e:Entity {name: $name})
+        SET e.memory_type = 'semantic',
+            e.confidence = $confidence,
+            e.promoted_at = datetime(),
+            e.source_turn_ids = $source_turn_ids
+        RETURN e.name AS name, e.entity_type AS entity_type,
+               e.mention_count AS mention_count
+        """
+
+        try:
+            async with self.driver.session() as session:
+                result = await session.run(
+                    query, name=entity_name, confidence=confidence,
+                    source_turn_ids=source_turn_ids,
+                )
+                record = await result.single()
+                if record is None:
+                    log.debug(
+                        "promote_entity_not_found",
+                        entity_name=entity_name,
+                        trace_id=trace_id,
+                    )
+                    return False
+
+                log.info(
+                    "promote_entity_success",
+                    entity_name=entity_name,
+                    entity_type=record["entity_type"],
+                    confidence=confidence,
+                    trace_id=trace_id,
+                )
+                return True
+        except Exception:
+            log.warning(
+                "promote_entity_neo4j_error",
+                entity_name=entity_name,
+                trace_id=trace_id,
+                exc_info=True,
+            )
+            return False

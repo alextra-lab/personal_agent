@@ -437,6 +437,21 @@ async def chat(
         )
 
     # --- Phase: gateway_pipeline ---
+    # Compute expansion budget from brainstem sensors before pipeline.
+    # Graceful degradation: budget defaults to 0 on any sensor failure.
+    from personal_agent.brainstem.expansion import compute_expansion_budget
+    from personal_agent.brainstem.sensors import poll_system_metrics
+
+    try:
+        system_metrics = poll_system_metrics()
+        expansion_budget = compute_expansion_budget(
+            system_metrics,
+            max_budget=settings.expansion_budget_max,
+        )
+    except Exception:
+        log.warning("expansion_budget_computation_failed", trace_id=trace_id, exc_info=True)
+        expansion_budget = 0
+
     gateway_output = None
     try:
         with timer.span("gateway_pipeline"):
@@ -452,6 +467,7 @@ async def chat(
                 trace_id=trace_id,
                 mode=Mode.NORMAL,  # From brainstem in future
                 memory_adapter=memory_adapter,
+                expansion_budget=expansion_budget,
             )
     except Exception as e:
         log.warning(

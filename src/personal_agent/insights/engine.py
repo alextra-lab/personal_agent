@@ -119,8 +119,57 @@ class InsightsEngine:
                 )
             )
 
+        delegation_insights = await self.detect_delegation_patterns(
+            days=days, trace_id="",
+        )
+        insights.extend(delegation_insights)
+
         self._index_insights(insights=insights, days=days)
         log.info("insights_generated", days=days, count=len(insights))
+        return insights
+
+    async def detect_delegation_patterns(
+        self, days: int = 30, trace_id: str = ""
+    ) -> list[Insight]:
+        """Detect patterns in delegation outcomes.
+
+        Analyzes: success rate by agent/complexity, missing context trends,
+        average rounds needed, time-to-completion.
+
+        Args:
+            days: Lookback window in days.
+            trace_id: Request trace identifier.
+
+        Returns:
+            List of delegation-related insights.
+        """
+        insights: list[Insight] = []
+
+        # Query ES for delegation_outcome_recorded events
+        # This is a best-effort analysis — if ES is unavailable, return empty
+        try:
+            log.info(
+                "delegation_pattern_analysis_start",
+                days=days,
+                trace_id=trace_id,
+            )
+
+            # Scaffold: full implementation requires ES query support
+            # which will be added when delegation outcomes accumulate
+            log.info(
+                "delegation_pattern_analysis_complete",
+                insights_found=len(insights),
+                days=days,
+                trace_id=trace_id,
+            )
+
+        except Exception:
+            log.warning(
+                "delegation_pattern_analysis_failed",
+                trace_id=trace_id,
+                exc_info=True,
+            )
+
         return insights
 
     async def detect_cost_anomalies(self, days: int = 14) -> list[CostAnomaly]:

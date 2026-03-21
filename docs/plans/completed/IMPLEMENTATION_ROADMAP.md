@@ -1,8 +1,12 @@
+> **NOTE (2026-03-21)**: Phases 2.4, 2.5, and 2.6 listed below have been superseded by the **[Cognitive Architecture Redesign v2](../../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md)**. Phase 2.4 is now "Cognitive Architecture Redesign" implemented as vertical slices (Slices 1 & 2 complete). Phase 2.5 (Seshat) is partially delivered (MemoryProtocol + promotion pipeline) with the remainder absorbed into Slice 3. Phase 2.6 (Conversational Agent MVP) is absorbed into Slice 1.
+
+---
+
 # Implementation Roadmap — Personal Local AI Collaborator
 
 > **Status**: MVP Complete → Phase 2: Service Architecture & Memory System
-> **Current Phase**: Phase 2.3 In Progress → Phase 2.6 Conversational Agent MVP
-> **Next**: Phase 2.6 - Conversational Agent MVP implementation
+> **Current Phase**: Cognitive Architecture Redesign v2 — Slices 1 & 2 Implemented, Evaluation Phase
+> **Next**: Slice 3: Intelligence (after evaluation data collected)
 > **Tracker**: See `docs/plans/DEV_TRACKER.md` for quick status and active work items
 
 ---
@@ -23,9 +27,9 @@
   - 🔧 **Qwen3.5 Model Integration** (IN PROGRESS - 2026-03-03, Linear: Qwen3.5 Model Integration, ADR-0023)
     - Unblocks `standard` and `reasoning` roles (think-tag response parsing, tool calls, per-model thinking control)
     - Prerequisite for Phase 2.6 Conversational Agent MVP
-- ⏳ Phase 2.4: Multi-Agent Orchestration (PROPOSED - ADR-0017)
-- ⏳ Phase 2.5: Seshat Memory Librarian (PROPOSED - ADR-0018)
-- ⏳ Phase 2.6: Conversational Agent MVP (PLANNED)
+- ✅ Phase 2.4: Cognitive Architecture Redesign — Slices 1 & 2 complete (supersedes ADR-0017)
+- 🔄 Phase 2.5: Seshat Memory — partially delivered in Slices 1 & 2 (MemoryProtocol + promote), remainder in Slice 3
+- ✅ Phase 2.6: Conversational Agent MVP — absorbed into Slice 1
 - LLM Backend: SLM Server (multi-model routing, MLX-optimized, ports 8000-8503)
 - See: `./sessions/SESSION-2026-01-19-service-architecture-planning.md`
 - See: `../architecture_decisions/ADR-0016-service-cognitive-architecture.md` ✅

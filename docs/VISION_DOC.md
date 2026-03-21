@@ -2,8 +2,8 @@
 
 > **For**: Future AI assistants, new contributors, and the project owner
 > **Purpose**: Provide philosophical and technical context for intelligent collaboration
-> **Version**: 1.0
-> **Date**: 2025-12-28
+> **Version**: 1.1
+> **Date**: 2026-03-21 (updated from 2025-12-28)
 
 ---
 
@@ -64,11 +64,14 @@ The architecture mirrors human physiology **intentionally**:
 
 | Human System | Agent Component | Engineering Benefit |
 |--------------|-----------------|---------------------|
-| Nervous system | Orchestrator | Thinks, plans, senses |
+| Prefrontal gateway | Pre-LLM Gateway | Deterministic filtering before conscious thought |
+| Nervous system | Primary Agent + Orchestrator | Thinks, plans, senses — single brain, not committee |
+| Social cognition | Delegation Hub | Knows when to ask for help (external agents) |
 | Endocrine system | Policy layer | Long-term behavior regulation |
 | Cardiovascular | Telemetry pipeline | Circulates context, keeps system "alive" |
 | Renal (kidney) | Risk filters | Prevents dangerous buildup |
 | Immune | Supervisor | Detects threats, isolates, repairs |
+| Respiratory | Expand/Contract | Breathes — scales up for complex tasks, contracts when done |
 | Reproductive | Experiments + Captain's Log | Evolution and learning |
 
 **This is not metaphor**—it's a design pattern for:
@@ -176,6 +179,30 @@ Captured in:
 
 ---
 
+### 5. Deterministic Before Probabilistic
+
+Security, governance, rate limiting, and intent classification happen in deterministic code *before* the LLM sees the request. The LLM should never decide what it's allowed to do. This is both a security principle and an efficiency principle — don't spend inference tokens on decisions that can be made in microseconds.
+
+**The Pre-LLM Gateway embodies this.**
+
+---
+
+### 6. One Brain, Many Hands
+
+A single capable model is the reasoning center. It doesn't share this role. When it needs to expand, it spawns ephemeral sub-agents for parallel work or delegates to external agents (Claude Code, Codex, etc.). Sub-agents are task-scoped processes, not persistent specialist identities.
+
+**Delegate to the best tool for the job, don't reinvent it locally.**
+
+---
+
+### 7. Expand and Contract
+
+The system breathes. In a calm state, it's a small footprint — primary agent, memory, basic tools. When a complex task arrives, it expands: spawning sub-agents, loading skills, delegating externally, assembling rich context. When the task completes, it contracts: consolidates what it learned, proposes improvements, returns to calm.
+
+**The brainstem homeostasis model provides the biological foundation.**
+
+---
+
 ## 🤖 Agent Identity Summary
 
 The agent's behavioral contract:
@@ -246,7 +273,7 @@ Traditional project planning assumes **human-paced development**. AI-assisted co
 
 **New metric**: Tasks are grouped into **coherent implementation batches** (e.g., "Telemetry module complete"). Progress measured by **batch completion**, not hours.
 
-See `plans/PROJECT_PLAN_v0.1.md` and `plans/VELOCITY_TRACKING.md` for details.
+See `docs/plans/MASTER_PLAN.md` for current priorities and tracking.
 
 ---
 
@@ -267,7 +294,7 @@ See `plans/PROJECT_PLAN_v0.1.md` and `plans/VELOCITY_TRACKING.md` for details.
 - **One concern per file** (don't mix specs and plans)
 - **Version explicitly** (use `v0.1`, `v0.2` suffixes)
 
-See `PROJECT_DIRECTORY_STRUCTURE.md` for detailed rules.
+See the project structure in `README.md` and `.claude/CLAUDE.md` for detailed rules.
 
 ### 3. Captain's Log as Improvement Engine
 
@@ -312,22 +339,20 @@ Read this **first**. It explains:
 
 Read in order:
 
-1. `README.md` — Project overview
-2. `PROJECT_DIRECTORY_STRUCTURE.md` — File organization
-3. `ROADMAP.md` — High-level timeline
-4. `plans/PROJECT_PLAN_v0.1.md` — Current work plan
-5. `architecture/system_architecture_v0.1.md` — Technical design
-6. Recent `plans/sessions/` logs — What's happening now
-7. `architecture_decisions/` — Key decisions and rationale
+1. `README.md` — Project overview and current architecture diagram
+2. `docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md` — Current architecture specification
+3. `docs/plans/MASTER_PLAN.md` — Current priorities and status
+4. `docs/architecture/` — Historical architecture docs (for context on evolution)
+5. `docs/architecture_decisions/` — Key decisions and rationale
 
 ### 3. Follow Quality Standards
 
-Use `VALIDATION_CHECKLIST.md` to ensure:
+Ensure:
 
 - Documentation is complete
-- Decisions are justified
-- Code is observable
-- Tests exist
+- Decisions are justified (ADRs in `architecture_decisions/`)
+- Code is observable (structured logging, trace IDs)
+- Tests exist (`uv run pytest`, `uv run mypy src/`, `uv run ruff check src/`)
 
 ### 4. Propose, Don't Presume
 
@@ -389,6 +414,7 @@ The project succeeds when:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.1 | 2026-03-21 | Updated for Cognitive Architecture Redesign v2 (Slices 1 & 2). Added architectural principles, updated biological mapping, fixed stale file references. |
 | 1.0 | 2025-12-28 | Initial vision document created |
 
 ---

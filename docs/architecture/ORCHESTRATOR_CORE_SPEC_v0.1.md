@@ -1,3 +1,7 @@
+> **SUPERSEDED (2026-03-21)**: This MVP orchestrator spec (role-switching via `resolve_role()`, router/reasoning/coding roles) has been superseded by the [Cognitive Architecture Redesign v2](../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md). The orchestrator now uses a Pre-LLM Gateway for intent classification and a single primary agent. Retained for historical reference.
+
+---
+
 # Orchestrator Core – MVP Specification (v0.1)
 
 ## 1. Purpose & Responsibilities

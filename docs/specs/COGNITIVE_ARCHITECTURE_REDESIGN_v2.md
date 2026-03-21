@@ -1,7 +1,7 @@
 # Cognitive Architecture Redesign v2
 
 **Date**: 2026-03-16
-**Status**: Draft
+**Status**: Slices 1 & 2 Implemented — Evaluation Phase (building usage history and traces before Slice 3)
 **Phase**: 2.4 — Cognitive Architecture Redesign
 **Supersedes**: ADR-0017 (Three-Tier Multi-Agent Orchestration)
 **Evolves**: ADR-0018 (Seshat Memory Librarian Agent)

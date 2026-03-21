@@ -14,75 +14,87 @@ See the [`docs/research/`](docs/research/) directory for research notes and anal
 
 ## Architecture
 
-**Service-Based Design (Phase 2.1+)**
+**Cognitive Architecture (Redesign v2)** — [Full Spec](docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md)
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                 Personal Agent Service (Port 9000)          │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │
-│  │ Orchestrator │  │  Brainstem   │  │  Telemetry   │    │
-│  │              │  │  (Homeostasis)│  │              │    │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘    │
-│         │                  │                  │             │
-│         │                  │                  │             │
-│  ┌──────▼───────┐  ┌──────▼───────┐  ┌──────▼───────┐    │
-│  │     MCP      │  │    Tools     │  │  Captain's   │    │
-│  │   Gateway    │  │   Registry   │  │     Log      │    │
-│  └──────────────┘  └──────────────┘  └──────────────┘    │
-└─────────┬──────────────────────────────────────┬──────────┘
-          │                                       │
-          │ LLM API (OpenAI-compatible)          │ Persistence
-          ▼                                       ▼
-┌──────────────────────┐        ┌─────────────────────────────┐
-│   SLM Server (8000)  │        │   Storage Infrastructure    │
-│  ┌────────────────┐  │        │  ┌──────────────────────┐  │
-│  │ Router (8500)  │  │        │  │ PostgreSQL (5432)    │  │
-│  │ Standard (8501)│  │        │  │ - Sessions           │  │
-│  │ Reasoning(8502)│  │        │  │ - Metrics            │  │
-│  │ Coding (8503)  │  │        │  │ - API Costs          │  │
-│  └────────────────┘  │        │  └──────────────────────┘  │
-│   MLX-optimized      │        │  ┌──────────────────────┐  │
-└──────────────────────┘        │  │ Elasticsearch (9200) │  │
-                                │  │ - Logs & Events      │  │
-                                │  │ - Traces             │  │
-                                │  └──────────────────────┘  │
-                                │  ┌──────────────────────┐  │
-                                │  │ Neo4j (7474/7687)    │  │
-                                │  │ - Knowledge Graph    │  │
-                                │  │ - Memory (Phase 2.2) │  │
-                                │  └──────────────────────┘  │
-                                └─────────────────────────────┘
++---------------------------------------------------------------------+
+|                        INTERFACE LAYER                               |
+|  CLI . API /chat (port 9000) . Future: mobile, voice                |
++--------------------------------+------------------------------------+
+                                 |
++--------------------------------v------------------------------------+
+|                      PRE-LLM GATEWAY (7 stages)                     |
+|                                                                     |
+|  Security -> Session -> Governance -> Intent Classification         |
+|     -> Decomposition Assessment -> Context Assembly -> Budget       |
++--------------------------------+------------------------------------+
+                                 |
+              +------------------v--------+
+              |      PRIMARY AGENT        |
+              |   Qwen3.5-35-A3B         |
+              |                           |
+              |   Conversational core     |
+              |   Tool calling (MCP +     |
+              |     native)               |
+              |   Delegation composer     |
+              +--+----------+--------+----+
+                 |          |        |
+    +------------v--+  +---v-----+  +v---------------------------+
+    |   TOOLS       |  |  SESHAT |  |   EXPANSION LAYER          |
+    |               |  | MEMORY  |  |                             |
+    |  MCP Gateway  |  |         |  |  Internal sub-agents        |
+    |  Native tools |  | Protocol|  |  (ephemeral, task-scoped)   |
+    |  (extensible) |  | Neo4j   |  |  External delegation        |
+    |               |  |         |  |  (Claude Code, Codex, etc.) |
+    +---------------+  +----+----+  +-------------+---------------+
+                            |                     |
+              +-------------v---------------------v--------------+
+              |              BRAINSTEM                            |
+              |  Homeostasis . Sensors . Mode manager             |
+              |  Consolidation . Expand/contract signals          |
+              +------------------------+-------------------------+
+                                       |
+              +------------------------v-------------------------+
+              |           SELF-IMPROVEMENT LOOP                  |
+              |  Captain's Log . Insights engine                 |
+              |  Promotion pipeline                              |
+              +------------------------+-------------------------+
+                                       |
+              +------------------------v-------------------------+
+              |              INFRASTRUCTURE                      |
+              |  PostgreSQL (sessions, metrics, cost)            |
+              |  Elasticsearch (traces, logs, insights)          |
+              |  Neo4j (knowledge graph, memory)                 |
+              +--------------------------------------------------+
 ```
 
 ## Features
 
-### Phase 2.2 (Current) ✅
+### Cognitive Architecture Redesign v2 (Slices 1 & 2 Implemented)
 
-- **Knowledge Graph**: Neo4j-based persistent memory (OPERATIONAL)
-- **Entity Extraction**: qwen3-8b via SLM server (100% tested)
-- **Second Brain**: Background consolidation and learning (100% tested)
-- **Task Capture**: Fast structured logging for later processing
-- **Brainstem Scheduler**: Smart consolidation triggering (100% tested)
-- **Persistent Cost Tracking**: PostgreSQL-backed API cost monitoring
-- **Relevance Scoring**: Multi-factor memory query ranking
+- **Pre-LLM Gateway**: 7-stage deterministic pipeline (security, session, governance, intent classification, decomposition assessment, context assembly, budget management) — all requests processed before the LLM sees them
+- **Single-Brain Architecture**: Qwen3.5-35B as sole reasoning center — no role-switching, no router SLM
+- **Intent Classification**: Task-type routing (CONVERSATIONAL, MEMORY_RECALL, ANALYSIS, PLANNING, DELEGATION, SELF_IMPROVE, TOOL_USE) replaces model-role routing
+- **Decomposition & Expansion**: SINGLE/HYBRID/DECOMPOSE/DELEGATE strategies with sub-agent spawning and concurrent execution
+- **Delegation (Stage B)**: Structured handoffs via `DelegationPackage`/`DelegationOutcome` types with telemetry
+- **Seshat Memory Protocol**: Abstract `MemoryProtocol` interface with episodic-to-semantic promotion pipeline
+- **Expansion Budget**: Brainstem signals expansion safety based on GPU/memory/concurrency state
+- **Context Budget**: Token-aware context trimming with priority-based overflow handling
+- **Insights Engine**: Delegation pattern analysis across sessions
 
-### Phase 2.1 (Complete) ✅
+*Status: Evaluation phase — building real usage traces before Slice 3 (Intelligence)*
 
-- **Service Architecture**: FastAPI-based persistent service
+### Foundation (Complete)
+
+- **Knowledge Graph**: Neo4j-based persistent memory with entity extraction
+- **Service Architecture**: FastAPI-based persistent service (port 9000)
 - **Session Management**: PostgreSQL storage with async SQLAlchemy
-- **Structured Logging**: Elasticsearch with Kibana visualization
-- **Metrics Storage**: Time-series metrics in PostgreSQL
+- **Structured Logging**: Elasticsearch with Kibana dashboards
 - **Local LLM Inference**: Multi-model routing via SLM Server (MLX-optimized)
 - **MCP Gateway**: Tool discovery and execution
-- **Health Monitoring**: Brainstem sensors for homeostasis
-
-### Phase 2.3 (In Progress)
-
-- **Homeostasis Loop**: Adaptive threshold adjustment (FRE-11 complete)
-- **Consolidation Quality Monitoring**: Entity extraction and graph health metrics (FRE-23 core complete)
-- **Memory Query Feedback Metrics**: Result-count/relevance telemetry with implicit rephrase detection
-- **Kibana Dashboards**: Task/Reflection/System dashboards available and importable
-- **Remaining work**: Scheduler wiring for automatic quality monitor runs and E2E runtime validation
+- **Brainstem**: Homeostasis loop, sensors, consolidation scheduler, quality monitoring
+- **Captain's Log**: Self-improvement data capture and reflection
+- **Persistent Cost Tracking**: PostgreSQL-backed API cost monitoring
 
 ## Quick Start
 
@@ -286,7 +298,19 @@ personal_agent/
 │   │   ├── models.py        # Data models
 │   │   ├── database.py      # DB connection
 │   │   └── repositories/    # Data access layer
-│   ├── orchestrator/        # Request orchestration
+│   ├── request_gateway/     # Pre-LLM Gateway (7-stage pipeline)
+│   │   ├── pipeline.py      # Gateway orchestration
+│   │   ├── types.py         # TaskType, IntentResult, GatewayOutput
+│   │   ├── intent.py        # Deterministic intent classification
+│   │   ├── decomposition.py # SINGLE/HYBRID/DECOMPOSE/DELEGATE
+│   │   ├── context.py       # Multi-source context assembly
+│   │   ├── budget.py        # Token-aware context trimming
+│   │   ├── governance.py    # Mode + expansion gating
+│   │   ├── delegation.py    # Delegation instruction composition
+│   │   └── delegation_types.py  # DelegationPackage/DelegationOutcome
+│   ├── orchestrator/        # Request orchestration + sub-agents + HYBRID expansion
+│   ├── memory/              # Seshat memory (protocol, service, promotion)
+│   ├── insights/            # Cross-data analysis engine
 │   ├── brainstem/           # Homeostasis & monitoring
 │   ├── llm_client/          # LLM API client
 │   ├── mcp/                 # MCP Gateway integration
@@ -315,20 +339,22 @@ personal_agent/
 ## Documentation
 
 ### Getting Started
-- **[Usage Guide](docs/USAGE_GUIDE.md)** - Complete usage guide with examples
-- **[Configuration Guide](docs/CONFIGURATION.md)** - Configuration reference
+- **[Usage Guide](docs/guides/USAGE_GUIDE.md)** - Complete usage guide with examples
+- **[Configuration Guide](docs/guides/CONFIGURATION.md)** - Configuration reference
 - **[SLM Server Integration](docs/SLM_SERVER_INTEGRATION.md)** - LLM backend setup
 
 ### Architecture
-- **[Service Implementation Spec](docs/architecture/SERVICE_IMPLEMENTATION_SPEC_v0.1.md)** - Detailed Phase 2.1 specification
+- **[Cognitive Architecture Redesign v2](docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md)** - Current architecture specification (supersedes ADR-0017)
+- **[Service Implementation Spec](docs/architecture/SERVICE_IMPLEMENTATION_SPEC_v0.1.md)** - Phase 2.1 foundation specification
 - **[ADR-0016](docs/architecture_decisions/ADR-0016-service-cognitive-architecture.md)** - Service architecture decision
-- **[Implementation Roadmap](docs/plans/IMPLEMENTATION_ROADMAP.md)** - Full project roadmap
 - **[Research Knowledge Base](docs/research/README.md)** - Research notes and external system analysis
 
 ### Development
+- **[Slice 1: Foundation](docs/superpowers/plans/2026-03-16-slice-1-foundation.md)** - Gateway + single agent + protocol
+- **[Slice 2: Expansion](docs/superpowers/plans/2026-03-18-slice-2-expansion.md)** - Decomposition + sub-agents + memory types + Stage B
 - **[Phase 2.1 Complete](docs/plans/completed/PHASE_2.1_COMPLETE.md)** - Service foundation complete
 - **[Phase 2.2 Complete](docs/plans/completed/PHASE_2.2_COMPLETE.md)** - Memory implementation complete
-- **[Coding Conventions](docs/CODING_CONVENTIONS.md)** - Code style and standards
+- **[Coding Conventions](docs/reference/CODING_CONVENTIONS.md)** - Code style and standards
 
 ## Troubleshooting
 
@@ -374,7 +400,7 @@ curl http://localhost:9200/_cluster/health
 
 ## Contributing
 
-See [CODING_CONVENTIONS.md](docs/CODING_CONVENTIONS.md) and [PR_REVIEW_RUBRIC.md](docs/PR_REVIEW_RUBRIC.md).
+See [CODING_CONVENTIONS.md](docs/reference/CODING_CONVENTIONS.md) and [PR_REVIEW_RUBRIC.md](docs/reference/PR_REVIEW_RUBRIC.md).
 
 ## License
 

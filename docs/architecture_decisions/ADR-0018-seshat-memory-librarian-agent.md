@@ -1,6 +1,10 @@
+> **PARTIALLY DELIVERED & EVOLVED (2026-03-21)**: Seshat's core concepts (MemoryProtocol, episodic/semantic memory types, promotion pipeline) were implemented in Slices 1 & 2 of the [Cognitive Architecture Redesign v2](../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md). However, Seshat is no longer a separate "Tier 2 Worker agent" per ADR-0017 — it is integrated as a memory subsystem (`src/personal_agent/memory/`) with a protocol interface. The three-tier agent model (ADR-0017) has been superseded. Remaining Seshat capabilities (proactive memory, lifecycle management, procedural memory) are planned for Slice 3.
+
+---
+
 # ADR-0018: Seshat — Memory Librarian Agent
 
-**Status**: Accepted
+**Status**: Partially Delivered — evolved by [Cognitive Architecture Redesign v2](../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md)
 **Date**: 2026-02-22 (Revised: 2026-03-09)
 **Deciders**: System Architect
 **Related**: ADR-0017 (Three-Tier Multi-Agent Orchestration), ADR-0016 (Service Architecture)

@@ -1,6 +1,10 @@
+> **SUPERSEDED (2026-03-21)**: This ADR proposed a three-tier hierarchy (small router → MoE orchestrator → specialist SLM workers). It has been superseded by the [Cognitive Architecture Redesign v2](../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md), which chose single-brain + Pre-LLM Gateway + external delegation instead. See Redesign v2 Section 1.2 for the three insights that invalidated this design. Retained for historical reference.
+
+---
+
 # ADR-0017: Three-Tier Multi-Agent Orchestration with MoE Orchestrator and SLM Workers
 
-**Status**: Accepted
+**Status**: Superseded by [Cognitive Architecture Redesign v2](../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md)
 **Date**: 2026-02-22 (Revised: 2026-03-09)
 **Deciders**: System Architect
 **Related**: ADR-0016 (Service Architecture), ADR-0003 (Model Stack), ADR-0008 (Model Stack Course Correction), ADR-0018 (Seshat Memory Librarian)

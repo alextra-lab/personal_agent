@@ -340,7 +340,10 @@ Cherny's rule: **"The most important thing to get great results out of Claude Co
 
 - **Phase 2.1**: Service architecture (✅ complete)
 - **Phase 2.2**: Knowledge graph + memory (✅ complete)
-- **Phase 2.3**: Homeostasis loop + consolidation quality monitoring (🚀 in progress)
+- **Redesign v2 — Slice 1**: Pre-LLM Gateway, single-brain, MemoryProtocol, Stage A delegation (✅ complete)
+- **Redesign v2 — Slice 2**: Decomposition, sub-agents, HYBRID execution, memory promotion, Stage B delegation, insights (✅ complete)
+- **Evaluation Phase**: Building real usage traces to evaluate Slices 1 & 2 (🚀 in progress)
+- **Redesign v2 — Slice 3**: Intelligence — proactive memory, programmatic delegation, self-improvement (📋 planned, blocked on evaluation data)
 
 ### 6. Agent Planning & Review Workflows
 
@@ -410,53 +413,72 @@ Is it purely mechanical (copy/paste/run)?
 
 ## Architecture Overview
 
-### Service-Based Design (Phase 2.1+)
+### Cognitive Architecture (Redesign v2)
+
+*Full spec: `docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md`*
+*Status: Slices 1 & 2 Implemented — Evaluation Phase (building usage traces before Slice 3)*
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                 Personal Agent Service (Port 9000)          │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │
-│  │ Orchestrator │  │  Brainstem   │  │  Telemetry   │    │
-│  │              │  │  (Homeostasis)│  │              │    │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘    │
-│         │                  │                  │             │
-└─────────┼──────────────────┼──────────────────┼─────────────┘
-          │                  │                  │
-          ▼                  ▼                  ▼
-┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
-│  MCP Gateway     │ │  Tools Registry  │ │  Captain's Log   │
-│                  │ │                  │ │  (Self-improve)  │
-└──────────────────┘ └──────────────────┘ └──────────────────┘
-          │                                       │
-          │ OpenAI-compatible LLM API            │ Persistence
-          ▼                                       ▼
-┌──────────────────────┐        ┌─────────────────────────────┐
-│   SLM Server (8000)  │        │   Storage Infrastructure    │
-│  ┌────────────────┐  │        │  ┌──────────────────────┐  │
-│  │ Router (8500)  │  │        │  │ PostgreSQL (5432)    │  │
-│  │ Standard (8501)│  │        │  │ - Sessions           │  │
-│  │ Reasoning(8502)│  │        │  │ - Metrics            │  │
-│  │ Coding (8503)  │  │        │  │ - API Costs          │  │
-│  └────────────────┘  │        │  └──────────────────────┘  │
-│   MLX-optimized      │        │  ┌──────────────────────┐  │
-└──────────────────────┘        │  │ Elasticsearch (9200) │  │
-                                │  │ - Logs & Events      │  │
-                                │  │ - Traces             │  │
-                                │  └──────────────────────┘  │
-                                │  ┌──────────────────────┐  │
-                                │  │ Neo4j (7474/7687)    │  │
-                                │  │ - Knowledge Graph    │  │
-                                │  │ - Memory (Phase 2.2) │  │
-                                │  └──────────────────────┘  │
-                                └─────────────────────────────┘
++---------------------------------------------------------------------+
+|                        INTERFACE LAYER                               |
+|  CLI . API /chat (port 9000) . Future: mobile, voice                |
++--------------------------------+------------------------------------+
+                                 |
++--------------------------------v------------------------------------+
+|                      PRE-LLM GATEWAY (7 stages)                     |
+|                                                                     |
+|  Security -> Session -> Governance -> Intent Classification         |
+|     -> Decomposition Assessment -> Context Assembly -> Budget       |
++--------------------------------+------------------------------------+
+                                 |
+              +------------------v--------+
+              |      PRIMARY AGENT        |
+              |   Qwen3.5-35-A3B         |
+              |                           |
+              |   Conversational core     |
+              |   Tool calling (MCP +     |
+              |     native)               |
+              |   Delegation composer     |
+              +--+----------+--------+----+
+                 |          |        |
+    +------------v--+  +---v-----+  +v---------------------------+
+    |   TOOLS       |  |  SESHAT |  |   EXPANSION LAYER          |
+    |               |  | MEMORY  |  |                             |
+    |  MCP Gateway  |  |         |  |  Internal sub-agents        |
+    |  Native tools |  | Protocol|  |  (ephemeral, task-scoped)   |
+    |  (extensible) |  | Neo4j   |  |  External delegation        |
+    |               |  |         |  |  (Claude Code, Codex, etc.) |
+    +---------------+  +----+----+  +-------------+---------------+
+                            |                     |
+              +-------------v---------------------v--------------+
+              |              BRAINSTEM                            |
+              |  Homeostasis . Sensors . Mode manager             |
+              |  Consolidation . Expand/contract signals          |
+              +------------------------+-------------------------+
+                                       |
+              +------------------------v-------------------------+
+              |           SELF-IMPROVEMENT LOOP                  |
+              |  Captain's Log . Insights engine                 |
+              |  Promotion pipeline                              |
+              +------------------------+-------------------------+
+                                       |
+              +------------------------v-------------------------+
+              |              INFRASTRUCTURE                      |
+              |  PostgreSQL (sessions, metrics, cost)            |
+              |  Elasticsearch (traces, logs, insights)          |
+              |  Neo4j (knowledge graph, memory)                 |
+              +--------------------------------------------------+
 ```
 
 ### Core Modules
 
 | Module | Purpose | Status |
 |--------|---------|--------|
-| `orchestrator/` | Request routing and tool execution | ✅ Operational |
-| `brainstem/` | Homeostasis sensors and scheduling | 🚀 Phase 2.3 |
+| `request_gateway/` | Pre-LLM Gateway: 7-stage deterministic pipeline (intent, decomposition, budget) | ✅ Slice 1 & 2 |
+| `orchestrator/` | Request orchestration + sub-agents + HYBRID expansion | ✅ Operational |
+| `memory/` | Seshat memory: protocol, service, episodic→semantic promotion | ✅ Slice 1 & 2 |
+| `insights/` | Cross-data analysis engine (delegation patterns, cost anomalies) | ✅ Slice 2 |
+| `brainstem/` | Homeostasis sensors, scheduling, expand/contract signals | ✅ Operational |
 | `llm_client/` | OpenAI-compatible LLM client | ✅ Operational |
 | `mcp/` | MCP Gateway for tool discovery | ✅ Operational |
 | `telemetry/` | Structured logging (structlog/ES) | ✅ Operational |
@@ -466,22 +488,25 @@ Is it purely mechanical (copy/paste/run)?
 
 ### Key Data Flows
 
-**Request Flow:**
+**Request Flow (Redesign v2):**
 
 1. Client sends message via API (`/chat`)
-2. Session retrieved/created
-3. Orchestrator routes to appropriate tool/LLM
-4. MCP Gateway discovers and executes tools
-5. Response returned to client
-6. Telemetry emitted to Captain's Log
+2. Pre-LLM Gateway processes request (7 stages: security → session → governance → intent → decomposition → context → budget)
+3. Gateway outputs: intent classification, decomposition strategy (SINGLE/HYBRID/DECOMPOSE/DELEGATE), assembled context
+4. Primary agent processes with assembled context
+5. If HYBRID: sub-agents spawned, results synthesized
+6. If DELEGATE: delegation package composed for external agent
+7. Response returned to client
+8. Telemetry emitted to Captain's Log + Elasticsearch
 
-**Memory Flow (Phase 2.2+):**
+**Memory Flow:**
 
 1. Task captured in fast structured log
 2. Brainstem consolidation scheduler triggered
 3. Entity extraction via qwen3-8b
 4. Entities stored in Neo4j knowledge graph
-5. Memory queries use multi-factor relevance scoring
+5. Episodic memories promoted to semantic via `promote()` pipeline
+6. Memory queries use multi-factor relevance scoring
 
 ---
 
@@ -589,9 +614,11 @@ curl http://localhost:9200/_cluster/health
 
 ### Key Files to Know
 
-- **Architecture**: `docs/architecture/SERVICE_IMPLEMENTATION_SPEC_v0.1.md`
+- **Current Architecture**: `docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md`
+- **Slice 1 Plan**: `docs/superpowers/plans/2026-03-16-slice-1-foundation.md`
+- **Slice 2 Plan**: `docs/superpowers/plans/2026-03-18-slice-2-expansion.md`
 - **Master Plan**: `docs/plans/MASTER_PLAN.md`
-- **Completed Work**: `docs/plans/completed/PHASE_2.2_COMPLETE.md`
+- **Vision**: `docs/VISION_DOC.md`
 - **Coding Standards**: `.cursor/rules/coding-standards.mdc`
 - **Testing Standards**: `.cursor/rules/testing-standards.mdc`
 - **ADRs**: `docs/architecture_decisions/ADR-*.md`
@@ -665,24 +692,33 @@ uv run ruff check src/
 
 ## Experimental Systems & Known Limitations
 
-### Phase 2.3 (Current - In Progress)
+### Redesign v2 — Evaluation Phase (Current)
 
-**Operational:**
+**Implemented (Slices 1 & 2):**
 
-- Brainstem homeostasis loop (partial)
-- Consolidation quality monitoring (core complete)
-- Kibana dashboards (available)
+- Pre-LLM Gateway (7-stage deterministic pipeline)
+- Single-brain primary agent (no role-switching)
+- Request gateway: intent classification, decomposition assessment
+- HYBRID expansion path with sub-agent spawning
+- Delegation Stage B (structured DelegationPackage/DelegationOutcome)
+- Seshat MemoryProtocol with episodic→semantic promotion
+- Expansion/contraction budget signals
+- Context budget management
+- Insights engine (delegation pattern analysis)
+- Kibana dashboards for Slice 2 telemetry
 
-**Not Yet Wired:**
+**In Evaluation:**
 
-- Automatic quality monitor scheduling
-- Full end-to-end runtime validation
+- Building real usage traces to evaluate implemented architecture
+- Gathering delegation pattern data for Slice 3 decisions
+- Graphiti experiment comparison pending
 
 **Known Limitations:**
 
 - Knowledge graph entity extraction depends on qwen3-8b availability
 - Memory query relevance scoring is multi-factor but not ML-based
-- Consolidation runs synchronously (should be async in Phase 2.4)
+- Sub-agent spawning not yet tested under production load
+- Delegation Stage C (programmatic orchestration) not yet implemented — Slice 3
 
 ### When Making Changes to Experimental Systems
 
@@ -700,29 +736,33 @@ All documentation follows this hierarchy:
 
 ```
 docs/
-├── USAGE_GUIDE.md                    # Getting started
-├── CONFIGURATION.md                  # Config reference
-├── CODING_STANDARDS.md               # Code style (mirrors .cursor/rules/)
-├── reference/                        # Standards, policies, checklists
-│   ├── ROOT_LEVEL_POLICY.md
-│   ├── PR_REVIEW_RUBRIC.md
-│   └── DIRECTORY_STRUCTURE.md
+├── VISION_DOC.md                     # Project vision and philosophy
 ├── specs/                            # Technical specifications
-│   └── *.md (e.g., ENTITY_EXTRACTION_SPEC.md)
+│   ├── COGNITIVE_ARCHITECTURE_REDESIGN_v2.md  # Current architecture (primary reference)
+│   └── *.md (CLI, conversation, telemetry specs)
+├── reference/                        # Standards, policies, checklists
+│   ├── CODING_STANDARDS.md
+│   ├── CODING_CONVENTIONS.md
+│   ├── TESTING_STANDARDS.md
+│   ├── PR_REVIEW_RUBRIC.md
+│   ├── ROOT_LEVEL_POLICY.md
+│   └── PROJECT_DIRECTORY_STRUCTURE.md
 ├── guides/                           # How-to guides
-│   ├── SETUP_GUIDE.md
-│   ├── LOCAL_LLM_SETUP.md
-│   └── DEBUGGING_GUIDE.md
+│   ├── USAGE_GUIDE.md
+│   ├── CONFIGURATION.md
+│   ├── KIBANA_DASHBOARDS.md
+│   └── *.md (GPU metrics, telemetry, MCP setup)
 ├── plans/                            # Project planning
-│   ├── MASTER_PLAN.md               # Current plan
-│   ├── IMPLEMENTATION_ROADMAP.md    # Full roadmap
-│   └── completed/                    # Archived plans
-├── architecture/                     # Architecture specs
+│   ├── MASTER_PLAN.md               # Current priorities
+│   └── completed/                    # Archived plans & roadmap
+├── superpowers/plans/                # Slice implementation plans
+│   ├── 2026-03-16-slice-1-foundation.md
+│   └── 2026-03-18-slice-2-expansion.md
+├── architecture/                     # Historical architecture specs (see superseded banners)
 │   ├── SERVICE_IMPLEMENTATION_SPEC_v0.1.md
-│   └── COGNITIVE_ARCHITECTURE_OVERVIEW.md
+│   └── *.md (homeostasis, routing, brainstem — mostly historical)
 ├── architecture_decisions/           # ADRs
-│   ├── ADR-0001-*.md
-│   └── ADR-0016-service-cognitive-architecture.md
+│   └── ADR-*.md (ADR-0017 superseded by Redesign v2)
 └── research/                         # Research notes
     └── *.md
 ```

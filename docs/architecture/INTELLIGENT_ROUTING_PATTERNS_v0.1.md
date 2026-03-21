@@ -1,3 +1,7 @@
+> **SUPERSEDED (2026-03-21)**: The hierarchical specialist routing patterns described here (MoMA, LLMRouter) were considered but ultimately rejected. Redesign v2 chose single-brain + delegation over specialist agent routing. See [Cognitive Architecture Redesign v2](../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md) Section 1.2 for rationale. Retained for historical reference.
+
+---
+
 # Intelligent Routing Patterns — Inspiration from MoMA & LLMRouter
 
 **Version:** 0.1

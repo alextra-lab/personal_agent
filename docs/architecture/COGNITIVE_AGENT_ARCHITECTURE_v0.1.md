@@ -1,3 +1,7 @@
+> **SUPERSEDED (2026-03-21)**: This modular cognitive architecture (CognitiveModule protocol, Perception/Planner/Critic/Synthesis/Executor) has been superseded by the [Cognitive Architecture Redesign v2](../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md) which implements single-brain + gateway + delegation. Retained for historical reference.
+
+---
+
 # Cognitive Agent Architecture — v0.1
 
 *Brain-inspired cognitive architecture for the Personal Agent's main orchestrator*

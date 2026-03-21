@@ -1,3 +1,7 @@
+> **SUPERSEDED (2026-03-21)**: Router self-tuning is no longer applicable — the router SLM has been removed in Redesign v2 in favor of deterministic intent classification in the Pre-LLM Gateway. See [Cognitive Architecture Redesign v2](../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md). Retained for historical reference.
+
+---
+
 # Router Self-Tuning Architecture
 
 **Version:** 0.1

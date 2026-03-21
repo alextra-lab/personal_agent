@@ -1,4 +1,4 @@
-# Kibana dashboards (Phase 2.3)
+# Kibana Dashboards
 
 <!-- markdownlint-disable MD060 MD036 -->
 

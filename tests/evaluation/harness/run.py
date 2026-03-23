@@ -43,7 +43,12 @@ log = structlog.get_logger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse CLI arguments."""
+    """Parse CLI arguments for the evaluation runner.
+
+    Returns:
+        Parsed argument namespace with paths, category, agent_url,
+        es_url, output_dir, and skip_setup attributes.
+    """
     parser = argparse.ArgumentParser(
         description="Run evaluation conversation paths against the live agent",
     )
@@ -80,7 +85,15 @@ def parse_args() -> argparse.Namespace:
 
 
 def select_paths(args: argparse.Namespace) -> list[ConversationPath]:
-    """Select paths based on CLI arguments."""
+    """Select paths based on CLI arguments.
+
+    Args:
+        args: Parsed CLI arguments from parse_args().
+
+    Returns:
+        List of ConversationPath instances to run, filtered by --paths,
+        --category, and --skip-setup flags.
+    """
     if args.paths:
         paths = []
         for pid in args.paths:

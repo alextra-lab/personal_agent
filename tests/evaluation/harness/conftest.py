@@ -26,9 +26,8 @@ def evaluation_runner(telemetry_checker: TelemetryChecker) -> EvaluationRunner:
 
 
 @pytest_asyncio.fixture(scope="session")
-async def agent_healthy(evaluation_runner: EvaluationRunner) -> bool:
-    """Check that the agent is healthy before running evaluation tests."""
+async def agent_healthy(evaluation_runner: EvaluationRunner) -> None:
+    """Skip all evaluation tests if the agent service is not running on port 9000."""
     healthy = await evaluation_runner.check_agent_health()
     if not healthy:
         pytest.skip("Agent service not running on port 9000")
-    return healthy

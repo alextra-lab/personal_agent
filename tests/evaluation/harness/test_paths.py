@@ -32,7 +32,7 @@ from tests.evaluation.harness.runner import EvaluationRunner
 async def test_conversation_path(
     path: ConversationPath,
     evaluation_runner: EvaluationRunner,
-    agent_healthy: bool,
+    agent_healthy: None,
 ) -> None:
     """Execute a conversation path and verify telemetry assertions.
 

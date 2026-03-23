@@ -96,8 +96,8 @@ def generate_markdown_report(
     # Summary
     lines.append("## Summary")
     lines.append("")
-    lines.append(f"| Metric | Value |")
-    lines.append(f"|--------|-------|")
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
     lines.append(f"| Paths Passed | {paths_passed}/{len(results)} |")
     lines.append(
         f"| Assertions Passed | {passed_assertions}/{total_assertions} |"

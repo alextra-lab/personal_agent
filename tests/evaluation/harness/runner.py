@@ -1,4 +1,6 @@
-"""Core evaluation runner — sends conversation turns to the agent API
+"""Core evaluation runner.
+
+Sends conversation turns to the agent API
 and checks telemetry assertions via Elasticsearch.
 
 Usage:
@@ -42,7 +44,7 @@ class EvaluationRunner:
         inter_turn_delay_s: Delay between turns to allow ES indexing.
     """
 
-    def __init__(
+    def __init__(  # noqa: D107
         self,
         agent_url: str = DEFAULT_AGENT_URL,
         telemetry: TelemetryChecker | None = None,

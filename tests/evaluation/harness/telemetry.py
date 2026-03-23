@@ -44,7 +44,7 @@ class TelemetryChecker:
         max_retries: Maximum number of retries for missing events.
     """
 
-    def __init__(
+    def __init__(  # noqa: D107
         self,
         es_url: str = DEFAULT_ES_URL,
         index_pattern: str = DEFAULT_INDEX_PATTERN,

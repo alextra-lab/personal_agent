@@ -17,6 +17,7 @@ import httpx
 import structlog
 
 from tests.evaluation.harness.models import (
+    AssertionResult,
     ConversationPath,
     PathResult,
     TelemetryAssertion,
@@ -65,7 +66,7 @@ class EvaluationRunner:
                 resp.raise_for_status()
                 data = resp.json()
                 return data.get("status") == "healthy"
-            except (httpx.HTTPError, httpx.ConnectError):
+            except (httpx.HTTPStatusError, httpx.TransportError):
                 return False
 
     async def create_session(self) -> str:
@@ -212,7 +213,7 @@ class EvaluationRunner:
         trace_id = data.get("trace_id", "")
 
         # Check telemetry assertions
-        assertion_results: tuple = ()
+        assertion_results: tuple[AssertionResult, ...] = ()
         if assertions:
             events = await self._telemetry.fetch_events(trace_id)
             assertion_results = tuple(

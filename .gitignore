@@ -75,5 +75,7 @@ experiments/*/results/
 
 current_session
 
-# Claude
+# Claude Code
 .claude/worktrees/
+.claude/todos/
+.claude/.cache/

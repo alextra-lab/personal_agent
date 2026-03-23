@@ -12,44 +12,50 @@ from personal_agent.brainstem.expansion import (
 class TestComputeExpansionBudget:
     def test_calm_system_returns_max(self) -> None:
         metrics = {
-            "cpu_percent": 20.0,
-            "memory_percent": 40.0,
-            "active_inference_count": 0,
+            "perf_system_cpu_load": 20.0,
+            "perf_system_mem_used": 40.0,
         }
         budget = compute_expansion_budget(metrics, max_budget=3)
         assert budget == 3
 
     def test_high_cpu_reduces_budget(self) -> None:
         metrics = {
-            "cpu_percent": 85.0,
-            "memory_percent": 40.0,
-            "active_inference_count": 0,
+            "perf_system_cpu_load": 85.0,
+            "perf_system_mem_used": 40.0,
         }
         budget = compute_expansion_budget(metrics, max_budget=3)
         assert budget < 3
 
     def test_high_memory_reduces_budget(self) -> None:
         metrics = {
-            "cpu_percent": 20.0,
-            "memory_percent": 88.0,
-            "active_inference_count": 0,
+            "perf_system_cpu_load": 20.0,
+            "perf_system_mem_used": 88.0,
         }
         budget = compute_expansion_budget(metrics, max_budget=3)
         assert budget < 3
 
     def test_active_inference_reduces_budget(self) -> None:
         metrics = {
-            "cpu_percent": 20.0,
-            "memory_percent": 40.0,
+            "perf_system_cpu_load": 20.0,
+            "perf_system_mem_used": 40.0,
             "active_inference_count": 2,
         }
         budget = compute_expansion_budget(metrics, max_budget=3)
         assert budget <= 1
 
+    def test_active_inference_defaults_to_zero(self) -> None:
+        """active_inference_count is optional — absent means 0, not a warning."""
+        metrics = {
+            "perf_system_cpu_load": 20.0,
+            "perf_system_mem_used": 40.0,
+        }
+        budget = compute_expansion_budget(metrics, max_budget=3)
+        assert budget == 3
+
     def test_extreme_pressure_returns_zero(self) -> None:
         metrics = {
-            "cpu_percent": 95.0,
-            "memory_percent": 95.0,
+            "perf_system_cpu_load": 95.0,
+            "perf_system_mem_used": 95.0,
             "active_inference_count": 3,
         }
         budget = compute_expansion_budget(metrics, max_budget=3)
@@ -61,8 +67,8 @@ class TestComputeExpansionBudget:
 
     def test_budget_never_negative(self) -> None:
         metrics = {
-            "cpu_percent": 100.0,
-            "memory_percent": 100.0,
+            "perf_system_cpu_load": 100.0,
+            "perf_system_mem_used": 100.0,
             "active_inference_count": 10,
         }
         budget = compute_expansion_budget(metrics, max_budget=3)

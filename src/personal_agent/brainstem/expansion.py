@@ -39,18 +39,19 @@ def compute_expansion_budget(
     """Compute how many concurrent sub-agents are safe to run.
 
     Args:
-        metrics: System metrics from brainstem sensors.
-            Expected keys: cpu_percent, memory_percent, active_inference_count.
+        metrics: System metrics from brainstem sensors (poll_system_metrics()).
+            Expected keys: perf_system_cpu_load, perf_system_mem_used.
+            Optional key: active_inference_count (defaults to 0 if absent).
         max_budget: Maximum expansion budget when fully calm.
 
     Returns:
         Number of safe concurrent sub-agents (0 to max_budget).
     """
-    cpu = metrics.get("cpu_percent")
-    memory = metrics.get("memory_percent")
-    active = metrics.get("active_inference_count")
+    cpu = metrics.get("perf_system_cpu_load")
+    memory = metrics.get("perf_system_mem_used")
+    active: int = metrics.get("active_inference_count", 0)
 
-    if cpu is None or memory is None or active is None:
+    if cpu is None or memory is None:
         logger.warning(
             "expansion_budget_missing_metrics",
             metrics=list(metrics.keys()),

@@ -347,3 +347,395 @@ CP_07 = ConversationPath(
         "If system is healthy, says so; if issues found, highlights them",
     ),
 )
+
+# ============================================================================
+# Category 2: Decomposition Strategies (CP-08 to CP-11)
+# ============================================================================
+
+CP_08 = ConversationPath(
+    path_id="CP-08",
+    name="SINGLE Strategy (Simple Question)",
+    category="Decomposition Strategies",
+    objective=(
+        "Verify that a simple, short question results in SINGLE strategy"
+    ),
+    turns=(
+        ConversationTurn(
+            user_message="What is dependency injection?",
+            expected_behavior=(
+                "Clear, concise explanation. No sub-agents. Single LLM call."
+            ),
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+                fld("decomposition_assessed", "complexity", "simple"),
+                fld("decomposition_assessed", "strategy", "single"),
+                absent("hybrid_expansion_start"),
+            ),
+        ),
+        ConversationTurn(
+            user_message="Can you give me a quick example in Python?",
+            expected_behavior="Another simple response. Still SINGLE.",
+            assertions=(
+                fld("decomposition_assessed", "strategy", "single"),
+                absent("hybrid_expansion_start"),
+            ),
+        ),
+    ),
+    quality_criteria=(
+        "Explanation is clear and accurate",
+        "Appropriate depth for a definitional question",
+        "Python example in Turn 2 is correct and illustrative",
+        "Fast response time (no expansion overhead)",
+    ),
+)
+
+CP_09 = ConversationPath(
+    path_id="CP-09",
+    name="HYBRID Strategy (Moderate Analysis)",
+    category="Decomposition Strategies",
+    objective=(
+        "Verify that a moderate-complexity analysis triggers HYBRID "
+        "with sub-agent expansion"
+    ),
+    turns=(
+        ConversationTurn(
+            user_message=(
+                "Research the advantages of event sourcing versus CRUD "
+                "for session storage, and evaluate their suitability "
+                "for a PostgreSQL-backed system."
+            ),
+            expected_behavior=(
+                "HYBRID expansion triggered. Sub-agents research "
+                "individual aspects. Final response synthesizes."
+            ),
+            assertions=(
+                fld("intent_classified", "task_type", "analysis"),
+                fld("decomposition_assessed", "complexity", "moderate"),
+                fld("decomposition_assessed", "strategy", "hybrid"),
+                present("hybrid_expansion_start"),
+                gte("hybrid_expansion_start", "sub_agent_count", 1),
+                present("hybrid_expansion_complete"),
+                gte("hybrid_expansion_complete", "successes", 1),
+            ),
+        ),
+        ConversationTurn(
+            user_message=(
+                "Given what you found, which approach would you "
+                "recommend for our use case?"
+            ),
+            expected_behavior=(
+                "Single follow-up referencing Turn 1 analysis."
+            ),
+            assertions=(
+                fld("intent_classified", "task_type", "analysis"),
+                fld("decomposition_assessed", "strategy", "single"),
+            ),
+        ),
+    ),
+    quality_criteria=(
+        "Response covers both event sourcing AND CRUD approaches",
+        "PostgreSQL-specific considerations addressed",
+        "Sub-agent contributions synthesized coherently",
+        "Turn 2 recommendation grounded in Turn 1 analysis",
+        "Quality noticeably better than a single-pass response",
+    ),
+)
+
+CP_10 = ConversationPath(
+    path_id="CP-10",
+    name="DECOMPOSE Strategy (Complex Multi-Part Analysis)",
+    category="Decomposition Strategies",
+    objective=(
+        "Verify that a complex multi-part request with 3+ action verbs "
+        "triggers DECOMPOSE"
+    ),
+    turns=(
+        ConversationTurn(
+            user_message=(
+                "Compare three approaches to distributed caching, "
+                "evaluate their performance under load, analyze the "
+                "cost implications for each, and recommend which fits "
+                "a system handling ten thousand requests per second."
+            ),
+            expected_behavior=(
+                "Full decomposition. Multiple sub-agents. "
+                "Comprehensive synthesized output."
+            ),
+            assertions=(
+                fld("intent_classified", "task_type", "analysis"),
+                fld("decomposition_assessed", "complexity", "complex"),
+                fld("decomposition_assessed", "strategy", "decompose"),
+                present("hybrid_expansion_start"),
+                gte("hybrid_expansion_start", "sub_agent_count", 2),
+                gte("hybrid_expansion_complete", "successes", 2),
+            ),
+        ),
+    ),
+    quality_criteria=(
+        "At least 3 caching approaches compared",
+        "Performance evaluation includes metrics or benchmarks",
+        "Cost analysis is concrete, not vague",
+        "Recommendation is specific with clear reasoning",
+        "Response well-structured with sections for each part",
+    ),
+)
+
+CP_11 = ConversationPath(
+    path_id="CP-11",
+    name="Complexity Escalation Across Turns",
+    category="Decomposition Strategies",
+    objective=(
+        "Verify that each turn is classified independently — "
+        "a simple first question doesn't lock the strategy"
+    ),
+    turns=(
+        ConversationTurn(
+            user_message="What is a knowledge graph?",
+            expected_behavior="Simple definitional answer. SINGLE strategy.",
+            assertions=(
+                fld("decomposition_assessed", "complexity", "simple"),
+                fld("decomposition_assessed", "strategy", "single"),
+                absent("hybrid_expansion_start"),
+            ),
+        ),
+        ConversationTurn(
+            user_message=(
+                "Compare Neo4j and Dgraph for entity storage, and "
+                "evaluate their query performance and Python ecosystem "
+                "support."
+            ),
+            expected_behavior=(
+                "Moderate analysis. HYBRID strategy. Sub-agents spawned."
+            ),
+            assertions=(
+                fld("intent_classified", "task_type", "analysis"),
+                fld("decomposition_assessed", "complexity", "moderate"),
+                fld("decomposition_assessed", "strategy", "hybrid"),
+                present("hybrid_expansion_start"),
+                gte("hybrid_expansion_start", "sub_agent_count", 1),
+            ),
+        ),
+        ConversationTurn(
+            user_message="Based on that comparison, which should we use?",
+            expected_behavior="Simple follow-up. Back to SINGLE strategy.",
+            assertions=(
+                fld("decomposition_assessed", "complexity", "simple"),
+                fld("decomposition_assessed", "strategy", "single"),
+                absent("hybrid_expansion_start"),
+            ),
+        ),
+    ),
+    quality_criteria=(
+        "Turn 1 is concise and accurate",
+        "Turn 2 is noticeably more detailed (HYBRID effect)",
+        "Turn 2 covers both databases across both dimensions",
+        "Turn 3 recommendation references Turn 2 analysis",
+        "No classification bleed-over between turns",
+    ),
+)
+
+# ============================================================================
+# Category 3: Memory System (CP-12 to CP-15)
+# ============================================================================
+
+CP_12 = ConversationPath(
+    path_id="CP-12",
+    name="Entity Seeding and Targeted Recall",
+    category="Memory System",
+    objective=(
+        "Verify that entities mentioned in conversation are captured "
+        "and can be recalled"
+    ),
+    turns=(
+        ConversationTurn(
+            user_message=(
+                "I've been working on a project called Project Atlas. "
+                "It's a data pipeline that processes satellite imagery "
+                "using Apache Kafka and Apache Spark."
+            ),
+            expected_behavior=(
+                "Responds to the topic. Entities captured: "
+                "Project Atlas, Apache Kafka, Apache Spark."
+            ),
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+                fld("decomposition_assessed", "strategy", "single"),
+            ),
+        ),
+        ConversationTurn(
+            user_message=(
+                "The team lead is Maria Chen and we're deploying to AWS "
+                "with a target of processing 500 images per hour."
+            ),
+            expected_behavior=(
+                "More context. Entities: Maria Chen, AWS."
+            ),
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+            ),
+        ),
+        ConversationTurn(
+            user_message="What do you know about Project Atlas?",
+            expected_behavior=(
+                "Triggers MEMORY_RECALL. Should reference the data "
+                "pipeline, Kafka, Spark, Maria Chen, and AWS."
+            ),
+            assertions=(
+                fld("intent_classified", "task_type", "memory_recall"),
+                fld("intent_classified", "confidence", 0.9),
+                fld("decomposition_assessed", "strategy", "single"),
+            ),
+        ),
+    ),
+    quality_criteria=(
+        "Turn 3 references Project Atlas by name",
+        "Mentions at least 3 of: pipeline, imagery, Kafka, Spark, Maria Chen, AWS",
+        "Information is accurate (not hallucinated)",
+        "Demonstrates synthesis, not just parroting",
+    ),
+)
+
+CP_13 = ConversationPath(
+    path_id="CP-13",
+    name="Broad Recall",
+    category="Memory System",
+    objective=(
+        "Verify that open-ended recall questions trigger the broad "
+        "recall path and return grouped results"
+    ),
+    turns=(
+        ConversationTurn(
+            user_message=(
+                "I've been evaluating Django and FastAPI for our new "
+                "web service. FastAPI seems faster but Django has more "
+                "batteries included."
+            ),
+            expected_behavior="Responds to the framework comparison.",
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+            ),
+        ),
+        ConversationTurn(
+            user_message=(
+                "We also need to decide between PostgreSQL and MongoDB "
+                "for the storage layer. Our data is mostly relational "
+                "but we have some document-like structures."
+            ),
+            expected_behavior="Responds to the database discussion.",
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+            ),
+        ),
+        ConversationTurn(
+            user_message="What topics have we covered in this conversation?",
+            expected_behavior=(
+                "MEMORY_RECALL with broad recall. Lists both the "
+                "framework and database topics."
+            ),
+            assertions=(
+                fld("intent_classified", "task_type", "memory_recall"),
+                fld("decomposition_assessed", "strategy", "single"),
+            ),
+        ),
+    ),
+    quality_criteria=(
+        "Identifies at least 2 distinct topics (web frameworks, databases)",
+        "Mentions specific technologies (Django, FastAPI, PostgreSQL, MongoDB)",
+        "Response is organized — groups topics",
+        "Captures key considerations (speed vs batteries, relational vs document)",
+        "Does not hallucinate topics not discussed",
+    ),
+)
+
+CP_14 = ConversationPath(
+    path_id="CP-14",
+    name="Multi-Entity Tracking",
+    category="Memory System",
+    objective=(
+        "Verify that when multiple entities are introduced, the agent "
+        "recalls the correct one"
+    ),
+    turns=(
+        ConversationTurn(
+            user_message=(
+                "Alice on our team is building a CI/CD automation tool "
+                "called BuildBot. She's using Python and GitHub Actions."
+            ),
+            expected_behavior="Responds about Alice and BuildBot.",
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+            ),
+        ),
+        ConversationTurn(
+            user_message=(
+                "Bob is working on a deployment tool called DeployTool. "
+                "He's focused on Terraform and AWS infrastructure."
+            ),
+            expected_behavior="Responds about Bob and DeployTool.",
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+            ),
+        ),
+        ConversationTurn(
+            user_message="What do you know about Alice and her work?",
+            expected_behavior=(
+                "Recalls Alice + BuildBot + Python + GitHub Actions. "
+                "Should NOT conflate with Bob's work."
+            ),
+            assertions=(
+                fld("intent_classified", "task_type", "memory_recall"),
+                fld("intent_classified", "confidence", 0.9),
+            ),
+        ),
+    ),
+    quality_criteria=(
+        "Correctly associates Alice with BuildBot, Python, GitHub Actions",
+        "Does NOT mention Bob, DeployTool, Terraform, or AWS",
+        "Demonstrates entity-relationship awareness",
+        "Clean separation between the two people",
+    ),
+)
+
+CP_15 = ConversationPath(
+    path_id="CP-15",
+    name="Memory-Informed Response",
+    category="Memory System",
+    objective=(
+        "Verify that earlier context shapes later responses, "
+        "not just generic knowledge"
+    ),
+    turns=(
+        ConversationTurn(
+            user_message=(
+                "I'm building a real-time dashboard using WebSockets "
+                "and React to monitor IoT sensor data produced by "
+                "industrial equipment."
+            ),
+            expected_behavior="Acknowledges the project details.",
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+            ),
+        ),
+        ConversationTurn(
+            user_message=(
+                "What technology stack would you recommend for the "
+                "backend of this project?"
+            ),
+            expected_behavior=(
+                "Recommendations compatible with WebSockets, IoT, "
+                "and real-time requirements. Not a generic answer."
+            ),
+            assertions=(
+                fld("intent_classified", "task_type", "analysis"),
+                fld("decomposition_assessed", "strategy", "single"),
+            ),
+        ),
+    ),
+    quality_criteria=(
+        "Recommendation explicitly references WebSockets from Turn 1",
+        "Addresses IoT/real-time requirements (not generic web stack)",
+        "Technologies compatible with stated stack",
+        "Does not recommend conflicting technologies",
+        "Feels like a conversation, not two isolated questions",
+    ),
+)

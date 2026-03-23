@@ -178,24 +178,40 @@ class PathResult:
 
     @property
     def total_assertions(self) -> int:
-        """Total number of telemetry assertions across all turns."""
+        """Total number of telemetry assertions across all turns.
+
+        Returns:
+            Sum of assertion counts across all TurnResults.
+        """
         return sum(len(t.assertion_results) for t in self.turns)
 
     @property
     def passed_assertions(self) -> int:
-        """Number of passed telemetry assertions."""
+        """Number of passed telemetry assertions.
+
+        Returns:
+            Count of AssertionResults where passed is True.
+        """
         return sum(
             1 for t in self.turns for a in t.assertion_results if a.passed
         )
 
     @property
     def failed_assertions(self) -> int:
-        """Number of failed telemetry assertions."""
+        """Number of failed telemetry assertions.
+
+        Returns:
+            total_assertions minus passed_assertions.
+        """
         return self.total_assertions - self.passed_assertions
 
     @property
     def total_time_ms(self) -> float:
-        """Total response time across all turns."""
+        """Total response time across all turns.
+
+        Returns:
+            Sum of response_time_ms for all TurnResults.
+        """
         return sum(t.response_time_ms for t in self.turns)
 
 
@@ -204,22 +220,54 @@ class PathResult:
 # ---------------------------------------------------------------------------
 
 def fld(event: str, key: str, value: str | float | int) -> FieldAssertion:
-    """Shorthand for FieldAssertion."""
+    """Shorthand for FieldAssertion.
+
+    Args:
+        event: The ES event_type to search for.
+        key: The field name to check.
+        value: The expected value.
+
+    Returns:
+        A FieldAssertion with the given parameters.
+    """
     return FieldAssertion(event_type=event, field_name=key, expected=value)
 
 
 def present(event: str) -> EventPresenceAssertion:
-    """Shorthand: assert event IS present."""
+    """Shorthand: assert event IS present.
+
+    Args:
+        event: The ES event_type to search for.
+
+    Returns:
+        An EventPresenceAssertion requiring the event to exist.
+    """
     return EventPresenceAssertion(event_type=event, present=True)
 
 
 def absent(event: str) -> EventPresenceAssertion:
-    """Shorthand: assert event is NOT present."""
+    """Shorthand: assert event is NOT present.
+
+    Args:
+        event: The ES event_type that must not exist.
+
+    Returns:
+        An EventPresenceAssertion requiring the event to be absent.
+    """
     return EventPresenceAssertion(event_type=event, present=False)
 
 
 def gte(event: str, key: str, threshold: float | int) -> FieldComparisonAssertion:
-    """Shorthand: assert field >= threshold."""
+    """Shorthand: assert field >= threshold.
+
+    Args:
+        event: The ES event_type to search for.
+        key: The field name to compare.
+        threshold: The numeric lower bound (inclusive).
+
+    Returns:
+        A FieldComparisonAssertion with operator ">=".
+    """
     return FieldComparisonAssertion(
         event_type=event, field_name=key, operator=">=", threshold=threshold,
     )

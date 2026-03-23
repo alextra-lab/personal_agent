@@ -136,10 +136,15 @@ class TelemetryChecker:
                     results.append(self._check_presence(events, assertion))
                 case FieldComparisonAssertion():
                     results.append(self._check_comparison(events, assertion))
+                case _:
+                    log.warning(
+                        "unknown_assertion_type",
+                        assertion_type=type(assertion).__name__,
+                    )
         return results
 
     def _find_events_by_type(
-        self, events: list[dict], event_type: str,
+        self, events: list[TelemetryEvent], event_type: str,
     ) -> list[TelemetryEvent]:
         """Filter events by event_type field.
 
@@ -156,7 +161,7 @@ class TelemetryChecker:
         ]
 
     def _check_field(
-        self, events: list[dict], assertion: FieldAssertion,
+        self, events: list[TelemetryEvent], assertion: FieldAssertion,
     ) -> AssertionResult:
         """Check a FieldAssertion.
 
@@ -207,7 +212,7 @@ class TelemetryChecker:
         )
 
     def _check_presence(
-        self, events: list[dict], assertion: EventPresenceAssertion,
+        self, events: list[TelemetryEvent], assertion: EventPresenceAssertion,
     ) -> AssertionResult:
         """Check an EventPresenceAssertion.
 
@@ -245,7 +250,7 @@ class TelemetryChecker:
             )
 
     def _check_comparison(
-        self, events: list[dict], assertion: FieldComparisonAssertion,
+        self, events: list[TelemetryEvent], assertion: FieldComparisonAssertion,
     ) -> AssertionResult:
         """Check a FieldComparisonAssertion.
 

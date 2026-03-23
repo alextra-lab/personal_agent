@@ -23,6 +23,7 @@ import argparse
 import asyncio
 import sys
 from pathlib import Path
+from typing import cast
 
 import structlog
 
@@ -160,7 +161,7 @@ async def main() -> None:
     generate_markdown_report(results, md_path)
 
     # Summary
-    summary = report["summary"]
+    summary = cast(dict[str, object], report["summary"])
     log.info(
         "evaluation_complete",
         paths_passed=summary["paths_passed"],
@@ -177,7 +178,7 @@ async def main() -> None:
     )
 
     # Exit code: 0 if all passed, 1 if any failed
-    if summary["paths_failed"] > 0:
+    if summary.get("paths_failed", 0):
         sys.exit(1)
 
 

@@ -124,7 +124,7 @@ class TestTelemetryChecker:
         self.checker = TelemetryChecker()
 
     def test_field_assertion_passes(self) -> None:
-        events = [
+        events: list[dict[str, object]] = [
             {"event_type": "intent_classified", "task_type": "analysis", "confidence": 0.8}
         ]
         results = self.checker.check_assertions(
@@ -136,7 +136,7 @@ class TestTelemetryChecker:
         assert results[0].actual_value == "analysis"
 
     def test_field_assertion_fails_wrong_value(self) -> None:
-        events = [
+        events: list[dict[str, object]] = [
             {"event_type": "intent_classified", "task_type": "conversational"}
         ]
         results = self.checker.check_assertions(
@@ -147,7 +147,7 @@ class TestTelemetryChecker:
         assert results[0].actual_value == "conversational"
 
     def test_field_assertion_fails_missing_event(self) -> None:
-        events = [
+        events: list[dict[str, object]] = [
             {"event_type": "other_event", "some_field": "value"}
         ]
         results = self.checker.check_assertions(
@@ -158,7 +158,7 @@ class TestTelemetryChecker:
         assert results[0].actual_value is None
 
     def test_field_assertion_case_insensitive(self) -> None:
-        events = [
+        events: list[dict[str, object]] = [
             {"event_type": "intent_classified", "task_type": "ANALYSIS"}
         ]
         results = self.checker.check_assertions(
@@ -168,7 +168,7 @@ class TestTelemetryChecker:
         assert results[0].passed is True
 
     def test_presence_assertion_found(self) -> None:
-        events = [
+        events: list[dict[str, object]] = [
             {"event_type": "hybrid_expansion_start", "sub_agent_count": 2}
         ]
         results = self.checker.check_assertions(
@@ -177,28 +177,28 @@ class TestTelemetryChecker:
         assert results[0].passed is True
 
     def test_presence_assertion_not_found(self) -> None:
-        events = [{"event_type": "other_event"}]
+        events: list[dict[str, object]] = [{"event_type": "other_event"}]
         results = self.checker.check_assertions(
             events, [present("hybrid_expansion_start")],
         )
         assert results[0].passed is False
 
     def test_absence_assertion_not_found(self) -> None:
-        events = [{"event_type": "other_event"}]
+        events: list[dict[str, object]] = [{"event_type": "other_event"}]
         results = self.checker.check_assertions(
             events, [absent("hybrid_expansion_start")],
         )
         assert results[0].passed is True
 
     def test_absence_assertion_found(self) -> None:
-        events = [{"event_type": "hybrid_expansion_start"}]
+        events: list[dict[str, object]] = [{"event_type": "hybrid_expansion_start"}]
         results = self.checker.check_assertions(
             events, [absent("hybrid_expansion_start")],
         )
         assert results[0].passed is False
 
     def test_comparison_assertion_passes(self) -> None:
-        events = [
+        events: list[dict[str, object]] = [
             {"event_type": "hybrid_expansion_complete", "successes": 3}
         ]
         results = self.checker.check_assertions(
@@ -207,7 +207,7 @@ class TestTelemetryChecker:
         assert results[0].passed is True
 
     def test_comparison_assertion_fails(self) -> None:
-        events = [
+        events: list[dict[str, object]] = [
             {"event_type": "hybrid_expansion_complete", "successes": 1}
         ]
         results = self.checker.check_assertions(
@@ -216,7 +216,7 @@ class TestTelemetryChecker:
         assert results[0].passed is False
 
     def test_multiple_assertions(self) -> None:
-        events = [
+        events: list[dict[str, object]] = [
             {"event_type": "intent_classified", "task_type": "analysis", "confidence": 0.8},
             {"event_type": "decomposition_assessed", "strategy": "hybrid"},
             {"event_type": "hybrid_expansion_start", "sub_agent_count": 2},
@@ -235,7 +235,7 @@ class TestTelemetryChecker:
 
     def test_event_field_fallback(self) -> None:
         """Verify checker also matches on 'event' field (not just 'event_type')."""
-        events = [
+        events: list[dict[str, object]] = [
             {"event": "intent_classified", "task_type": "analysis"}
         ]
         results = self.checker.check_assertions(

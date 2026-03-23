@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
+from typing import cast
 
 import structlog
 from elasticsearch import AsyncElasticsearch
@@ -137,7 +138,7 @@ class TelemetryChecker:
                 case FieldComparisonAssertion():
                     results.append(self._check_comparison(events, assertion))
                 case _:
-                    log.warning(
+                    log.warning(  # type: ignore[unreachable]
                         "unknown_assertion_type",
                         assertion_type=type(assertion).__name__,
                     )
@@ -200,11 +201,12 @@ class TelemetryChecker:
         expected_str = str(assertion.expected).lower()
         actual_str = str(actual).lower()
         passed = expected_str == actual_str
+        actual_typed = cast("str | float | int | None", actual)
 
         return AssertionResult(
             assertion=assertion,
             passed=passed,
-            actual_value=actual,
+            actual_value=actual_typed,
             message=(
                 f"{assertion.event_type}.{assertion.field_name}: "
                 f"expected={assertion.expected}, actual={actual}"
@@ -284,13 +286,14 @@ class TelemetryChecker:
                 ),
             )
 
+        actual_typed = cast("str | float | int | None", actual)
         try:
-            actual_num = float(actual)
+            actual_num = float(cast("str | float | int", actual))
         except (ValueError, TypeError):
             return AssertionResult(
                 assertion=assertion,
                 passed=False,
-                actual_value=actual,
+                actual_value=actual_typed,
                 message=(
                     f"Field '{assertion.field_name}' is not numeric: {actual}"
                 ),

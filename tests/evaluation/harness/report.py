@@ -31,7 +31,7 @@ def generate_json_report(
     passed_assertions = sum(r.passed_assertions for r in results)
     paths_passed = sum(1 for r in results if r.all_assertions_passed)
 
-    report = {
+    report: dict[str, object] = {
         "timestamp": datetime.now(tz=timezone.utc).isoformat(),
         "summary": {
             "total_paths": len(results),

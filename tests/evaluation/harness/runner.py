@@ -64,7 +64,7 @@ class EvaluationRunner:
             try:
                 resp = await client.get(f"{self._agent_url}/health")
                 resp.raise_for_status()
-                data = resp.json()
+                data: dict[str, object] = resp.json()
                 return data.get("status") == "healthy"
             except (httpx.HTTPStatusError, httpx.TransportError):
                 return False

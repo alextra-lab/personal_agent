@@ -16,7 +16,7 @@ uv sync
 cd slm_server && ./start.sh
 
 # Start Personal Agent Service (in new terminal)
-cd ~/Dev/personal_agent
+cd <project-root>
 uv run uvicorn personal_agent.service.app:app --reload --port 9000
 ```
 

@@ -223,7 +223,7 @@ When you're ready to proceed:
 **Command to start**:
 
 ```bash
-cd $HOME/Dev/personal_agent
+cd <project-root>
 uv sync  # Ensure dependencies current
 mkdir -p src/personal_agent/telemetry
 touch src/personal_agent/telemetry/__init__.py

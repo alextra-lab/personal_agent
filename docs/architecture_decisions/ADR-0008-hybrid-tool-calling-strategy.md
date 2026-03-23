@@ -197,6 +197,6 @@ Implement strict ReAct loop where model alternates between "Thought:" and "Actio
 **Test Cases**:
 1. **Reasoning Model (DeepSeek-R1)**: "List files in /tmp" → Uses `/v1/chat/completions` → Generates text-based tool call → Executes `list_directory` → Synthesizes response ✅
 2. **Function-Calling Model (Qwen3-4B)**: "List files in /tmp" → Uses `/v1/responses` exclusively → Native function call → Executes `list_directory` → Synthesizes response ✅
-3. **Environment Variable Expansion**: "What files are in $HOME/Dev?" → Correctly expands `$HOME` → Lists 54 entries ✅
+3. **Environment Variable Expansion**: "What files are in $HOME?" → Correctly expands `$HOME` → Lists directory entries ✅
 
 **Status**: ✅ PASSING (2026-01-01)

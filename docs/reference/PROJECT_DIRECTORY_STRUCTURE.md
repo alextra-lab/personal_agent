@@ -252,7 +252,7 @@ personal_agent/
 
 1. **Don't duplicate**: If content exists elsewhere, link to it
 2. **Don't use personal names in content**: Use "project owner", "user" in specs/examples; personal names only acceptable in document authoring metadata or validation records
-3. **Don't use literal personal paths**: Use `$HOME` or placeholders instead of `/Users/PersonalName/`
+3. **Don't use literal personal paths**: Use `$HOME`, `<project-root>`, or other neutral placeholders instead of machine-specific absolute paths (see `docs/reference/PATH_PRIVACY.md`)
 4. **Don't leave empty stubs**: Either populate or remove
 5. **Don't mix generated/manual**: Keep telemetry data separate from docs
 6. **Don't hard-code secrets**: Use templates and `.gitignore`

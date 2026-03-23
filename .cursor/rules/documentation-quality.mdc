@@ -17,6 +17,7 @@ globs: docs/**/*.md
 - [ ] **Tradeoffs explicit** (acknowledges costs)
 - [ ] **Next steps clear** (actionable)
 - [ ] **No personal info** (use "project owner" not names)
+- [ ] **No machine-specific paths** (use `<project-root>`, `$HOME`; see `docs/reference/PATH_PRIVACY.md`)
 
 ### ADR Requirements
 - [ ] **Status** (Proposed/Accepted/Deprecated/Superseded)

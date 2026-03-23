@@ -54,7 +54,7 @@ cd personal_agent  # or wherever you cloned it
 Once SLM Server is working, test the agent:
 
 ```bash
-cd ~/Dev/personal_agent
+cd <project-root>
 
 # Test LLM client directly
 python -c "

@@ -264,7 +264,7 @@ mcp_filesystem_read:
   # User added these:
   allowed_paths:
     - "$HOME/Documents/**"
-    - "$HOME/Dev/personal_agent/**"
+    - "$HOME/**/personal_agent/**"
   forbidden_paths:
     - "**/.git/**"
     - "**/.env*"

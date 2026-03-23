@@ -228,7 +228,7 @@ curl -X POST "http://localhost:9000/chat?message=What is my system CPU usage?&se
 ### File Operations
 
 ```bash
-curl -X POST "http://localhost:9000/chat?message=List files in /Users/me/Documents&session_id=YOUR_SESSION_ID"
+curl -X POST "http://localhost:9000/chat?message=List files in $HOME/Documents&session_id=YOUR_SESSION_ID"
 ```
 
 ### Memory Queries

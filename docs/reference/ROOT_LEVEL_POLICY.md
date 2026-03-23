@@ -11,6 +11,7 @@
 - `pyproject.toml` — Python project configuration
 - `uv.lock` — Dependency lock file
 - `.gitignore` — Git exclusions
+- `.pre-commit-config.yaml` — Git hook definitions (path privacy and other checks)
 - `.python-version` — Python version specification (if needed)
 
 ### Essential Documentation

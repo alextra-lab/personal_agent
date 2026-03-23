@@ -171,13 +171,6 @@ def test_list_directory_with_home_env_var() -> None:
         assert result["entries"] is not None
         assert isinstance(result["entries"], list)
 
-        # Test with $HOME/Dev if it exists
-        dev_path = os.path.join(home_dir, "Dev")
-        if Path(dev_path).exists() and Path(dev_path).is_dir():
-            result2 = list_directory_executor("$HOME/Dev")
-            assert result2["success"] is True
-            assert result2["entries"] is not None
-
 
 _MOCK_METRICS = {
     "perf_system_cpu_load": 42.5,

@@ -12,7 +12,7 @@ Run comprehensive scenario testing to validate system behavior:
 
 ```bash
 # Activate virtual environment
-cd ~/Dev/personal_agent
+cd <project-root>
 source .venv/bin/activate
 
 # Run all scenarios (chat + coding + system health)

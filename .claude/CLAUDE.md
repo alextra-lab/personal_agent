@@ -363,7 +363,7 @@ Cherny's rule: **"The most important thing to get great results out of Claude Co
 
 ### 7. Model Routing Policy
 
-**Full policy:** `/Users/Alex/.claude/MODEL_ROUTING_POLICY.md` (global) · `.claude/MODEL_ROUTING_POLICY.md` (project copy)
+**Full policy:** `$HOME/.claude/MODEL_ROUTING_POLICY.md` (global) · `.claude/MODEL_ROUTING_POLICY.md` (project copy)
 
 **Decision tree — apply to every task, plan, issue, and subagent dispatch:**
 
@@ -527,7 +527,7 @@ Is it purely mechanical (copy/paste/run)?
 Cannot `git checkout main` from a worktree — main is checked out in the primary repo. Always merge from the primary:
 
 ```bash
-cd /Users/Alex/Dev/personal_agent && git merge <branch> --no-edit && git push origin main
+cd <path-to-primary-repo-clone> && git merge <branch> --no-edit && git push origin main
 ```
 
 ### Implementation Plan Naming Convention

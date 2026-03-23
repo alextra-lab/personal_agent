@@ -1327,7 +1327,7 @@ The architecture is **complete, coherent, and implementable**.
 **First command to run**:
 
 ```bash
-cd $HOME/Dev/personal_agent
+cd <project-root>
 uv sync  # Install dependencies
 mkdir -p src/personal_agent/telemetry
 touch src/personal_agent/telemetry/__init__.py

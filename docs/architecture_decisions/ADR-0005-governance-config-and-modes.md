@@ -237,7 +237,7 @@ tools:
     requires_approval_in_modes: ["ALERT", "DEGRADED", "RECOVERY"]
     forbidden_in_modes: ["LOCKDOWN"]
     allowed_paths:
-      - "$HOME/Dev/personal_agent/**"
+      - "$HOME/**/personal_agent/**"
       - "$HOME/Documents/agent_workspace/**"
     forbidden_paths:
       - "/System/**"

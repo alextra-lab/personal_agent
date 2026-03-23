@@ -402,6 +402,8 @@ curl http://localhost:9200/_cluster/health
 
 See [CODING_CONVENTIONS.md](docs/reference/CODING_CONVENTIONS.md) and [PR_REVIEW_RUBRIC.md](docs/reference/PR_REVIEW_RUBRIC.md).
 
+Path hygiene: do not commit machine-specific absolute paths or home layouts that fingerprint one machine. See [PATH_PRIVACY.md](docs/reference/PATH_PRIVACY.md). Run `uv run python scripts/check_no_personal_paths.py` (also wired in [`.pre-commit-config.yaml`](.pre-commit-config.yaml) via `pre-commit install`).
+
 ## License
 
 MIT License - See [LICENSE](LICENSE) file for details.

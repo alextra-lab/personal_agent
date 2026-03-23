@@ -55,7 +55,7 @@ sudo powermetrics -n 1 -i 1000 --samplers gpu_power
 ### 5. Test with agent
 
 ```bash
-cd ~/Dev/personal_agent
+cd <project-root>
 python -m personal_agent.ui.cli "Hello, test GPU metrics"
 
 # Check logs for:

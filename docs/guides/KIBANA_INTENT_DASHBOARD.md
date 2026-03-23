@@ -20,11 +20,11 @@ This matches the existing log index pattern used by the
 
 ## Event Reference
 
-The gateway pipeline emits a `gateway_pipeline_complete` structured log
+The gateway pipeline emits a `gateway_output` structured log
 event after every request. Filter all visualizations with:
 
 ```
-event: "gateway_pipeline_complete"
+event: "gateway_output"
 ```
 
 ### Available Fields
@@ -88,7 +88,7 @@ Shows which pattern signals fire most frequently.
 
 1. Navigate to **Kibana → Dashboard → Create new dashboard**
 2. Add each visualization created above
-3. Set the global filter: `event: "gateway_pipeline_complete"`
+3. Set the global filter: `event: "gateway_output"`
 4. Set a reasonable time range (e.g., Last 24 hours)
 5. Save as **"Intent Classification Dashboard"**
 

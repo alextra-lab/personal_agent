@@ -81,6 +81,15 @@ async def run_gateway_pipeline(
     # Stage 4: Intent Classification
     intent = classify_intent(user_message)
 
+    logger.info(
+        "intent_classified",
+        task_type=intent.task_type.value,
+        complexity=intent.complexity.value,
+        confidence=intent.confidence,
+        signals=intent.signals,
+        trace_id=trace_id,
+    )
+
     # Stage 5: Decomposition Assessment
     decomposition = assess_decomposition(intent=intent, governance=governance)
 
@@ -117,9 +126,9 @@ async def run_gateway_pipeline(
         degraded_stages=degraded_stages,
     )
 
-    # Telemetry event
+    # Summary telemetry event
     logger.info(
-        "gateway_pipeline_complete",
+        "gateway_output",
         task_type=intent.task_type.value,
         complexity=intent.complexity.value,
         confidence=intent.confidence,

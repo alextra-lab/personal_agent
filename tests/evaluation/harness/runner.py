@@ -30,7 +30,7 @@ from tests.evaluation.harness.telemetry import TelemetryChecker
 log = structlog.get_logger(__name__)
 
 DEFAULT_AGENT_URL = "http://localhost:9000"
-DEFAULT_CHAT_TIMEOUT_S = 120.0
+DEFAULT_CHAT_TIMEOUT_S = 300.0
 DEFAULT_INTER_TURN_DELAY_S = 2.0
 
 

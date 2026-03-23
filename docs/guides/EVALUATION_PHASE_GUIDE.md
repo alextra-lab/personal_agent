@@ -33,7 +33,7 @@ Slice 3 ("Intelligence") requires **data from real usage** to make good design d
   uv run uvicorn personal_agent.service.app:app --reload --port 9000  # separate terminal
   ```
 
-- [ ] **Verify telemetry is flowing** — Open Kibana (`localhost:5601`) and confirm events appear in `agent-logs-*` index. Look for `intent_classification` and `gateway_output` events specifically. These are new from Slice 1 & 2.
+- [ ] **Verify telemetry is flowing** — Open Kibana (`localhost:5601`) and confirm events appear in `agent-logs-*` index. Look for `intent_classified` and `gateway_output` events specifically. These are new from Slice 1 & 2.
 
 - [ ] **Run 10-20 varied conversations** — Cover the full intent spectrum. Try:
   - Simple questions (CONVERSATIONAL)

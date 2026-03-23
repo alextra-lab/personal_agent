@@ -85,8 +85,8 @@ class TestRunGatewayPipeline:
         assert result.governance.expansion_permitted is False
 
     @pytest.mark.asyncio
-    async def test_pipeline_emits_telemetry_event(self) -> None:
-        """Pipeline emits gateway_pipeline_complete structlog event."""
+    async def test_pipeline_emits_telemetry_events(self) -> None:
+        """Pipeline emits intent_classified and gateway_output structlog events."""
         import structlog.testing
 
         with structlog.testing.capture_logs() as cap_logs:
@@ -98,9 +98,21 @@ class TestRunGatewayPipeline:
                 mode=Mode.NORMAL,
                 memory_adapter=None,
             )
-        pipeline_events = [e for e in cap_logs if e.get("event") == "gateway_pipeline_complete"]
-        assert len(pipeline_events) == 1
-        evt = pipeline_events[0]
+
+        # intent_classified event (emitted after Stage 4)
+        intent_events = [e for e in cap_logs if e.get("event") == "intent_classified"]
+        assert len(intent_events) == 1
+        ie = intent_events[0]
+        assert "task_type" in ie
+        assert "complexity" in ie
+        assert "confidence" in ie
+        assert "signals" in ie
+        assert ie["trace_id"] == "t"
+
+        # gateway_output summary event (emitted at end of pipeline)
+        output_events = [e for e in cap_logs if e.get("event") == "gateway_output"]
+        assert len(output_events) == 1
+        evt = output_events[0]
         assert "task_type" in evt
         assert "complexity" in evt
         assert "trace_id" in evt
@@ -127,14 +139,21 @@ class TestRunGatewayPipeline:
                 mode=Mode.NORMAL,
                 memory_adapter=None,
             )
-        events = [
-            e for e in cap_logs if e.get("event") == "gateway_pipeline_complete"
+        # Check intent_classified event for analysis classification
+        intent_events = [
+            e for e in cap_logs if e.get("event") == "intent_classified"
         ]
-        assert len(events) == 1
-        evt = events[0]
-        assert evt["task_type"] == "analysis"
-        assert "confidence" in evt
-        assert evt["trace_id"] == "t"
+        assert len(intent_events) == 1
+        ie = intent_events[0]
+        assert ie["task_type"] == "analysis"
+        assert "confidence" in ie
+        assert ie["trace_id"] == "t"
+
+        # Check gateway_output summary event also present
+        output_events = [
+            e for e in cap_logs if e.get("event") == "gateway_output"
+        ]
+        assert len(output_events) == 1
 
     @pytest.mark.asyncio
     async def test_degraded_stages_tracked(self) -> None:
@@ -249,7 +268,7 @@ class TestRunGatewayPipeline:
 
     @pytest.mark.asyncio
     async def test_telemetry_includes_budget_fields(self) -> None:
-        """gateway_pipeline_complete event includes budget_trimmed and overflow_action."""
+        """gateway_output event includes budget_trimmed and overflow_action."""
         import structlog.testing
 
         with structlog.testing.capture_logs() as cap_logs:
@@ -261,7 +280,7 @@ class TestRunGatewayPipeline:
                 mode=Mode.NORMAL,
                 memory_adapter=None,
             )
-        events = [e for e in cap_logs if e.get("event") == "gateway_pipeline_complete"]
+        events = [e for e in cap_logs if e.get("event") == "gateway_output"]
         assert len(events) == 1
         evt = events[0]
         assert "budget_trimmed" in evt

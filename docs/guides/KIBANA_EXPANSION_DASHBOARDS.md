@@ -17,8 +17,8 @@ vs. stays calm (SINGLE) and whether expansion helps.
 
 | Viz | Type | Field | Notes |
 |-----|------|-------|-------|
-| Decomposition strategy distribution | Pie chart | `strategy` where `event: gateway_pipeline_complete` | Shows SINGLE/HYBRID/DECOMPOSE/DELEGATE split |
-| Expansion over time | Time series | `strategy` where `event: gateway_pipeline_complete` | Filter strategy != SINGLE |
+| Decomposition strategy distribution | Pie chart | `strategy` where `event: gateway_output` | Shows SINGLE/HYBRID/DECOMPOSE/DELEGATE split |
+| Expansion over time | Time series | `strategy` where `event: gateway_output` | Filter strategy != SINGLE |
 | Sub-agent spawn rate | Time series | Count where `event: sub_agent_complete` | Shows expansion volume |
 | Sub-agent success rate | Metric | `success` where `event: sub_agent_complete` | Percentage true |
 | Sub-agent duration distribution | Histogram | `duration_ms` where `event: sub_agent_complete` | Latency profile |
@@ -26,7 +26,7 @@ vs. stays calm (SINGLE) and whether expansion helps.
 
 ### Saved Search
 
-- Filter: `event: gateway_pipeline_complete OR event: sub_agent_complete OR event: expansion_budget_computed`
+- Filter: `event: gateway_output OR event: sub_agent_complete OR event: expansion_budget_computed`
 - Sort: `@timestamp` descending
 
 ---

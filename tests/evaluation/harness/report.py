@@ -17,7 +17,7 @@ from tests.evaluation.harness.models import PathResult
 def generate_json_report(
     results: Sequence[PathResult],
     output_path: Path | None = None,
-) -> dict:
+) -> dict[str, object]:
     """Generate a JSON report from evaluation results.
 
     Args:
@@ -49,7 +49,7 @@ def generate_json_report(
                 else 0.0
             ),
             "total_response_time_ms": sum(r.total_time_ms for r in results),
-            "avg_response_time_ms": (
+            "avg_turn_response_time_ms": (
                 sum(r.total_time_ms for r in results) / sum(
                     len(r.turns) for r in results
                 )
@@ -145,7 +145,9 @@ def generate_markdown_report(
 
         for turn in r.turns:
             lines.append(f"**Turn {turn.turn_index + 1}** ({turn.response_time_ms:.0f} ms)")
-            lines.append(f"- **Sent:** {turn.user_message[:100]}...")
+            msg = turn.user_message
+            display = msg[:100] + "..." if len(msg) > 100 else msg
+            lines.append(f"- **Sent:** {display}")
             lines.append(f"- **Trace:** `{turn.trace_id}`")
 
             for a in turn.assertion_results:
@@ -174,7 +176,7 @@ def generate_markdown_report(
 
 def _group_by_category(
     results: Sequence[PathResult],
-) -> dict[str, dict]:
+) -> dict[str, dict[str, int]]:
     """Group results by category with pass/fail counts.
 
     Args:
@@ -183,7 +185,7 @@ def _group_by_category(
     Returns:
         Dict mapping category name to {"total": int, "passed": int}.
     """
-    categories: dict[str, dict] = {}
+    categories: dict[str, dict[str, int]] = {}
     for r in results:
         if r.category not in categories:
             categories[r.category] = {"total": 0, "passed": 0}
@@ -193,7 +195,7 @@ def _group_by_category(
     return categories
 
 
-def _serialize_path(r: PathResult) -> dict:
+def _serialize_path(r: PathResult) -> dict[str, object]:
     """Serialize a PathResult to a JSON-compatible dict.
 
     Args:

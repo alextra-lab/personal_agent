@@ -103,6 +103,7 @@ addopts = [
 markers = [
   "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
   "requires_llm_server: marks tests that require LLM server running",
+  "evaluation: marks evaluation path tests (require live agent on port 9000)",
 ]
 
 # -----------------------------

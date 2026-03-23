@@ -138,18 +138,14 @@ class EvaluationRunner:
                     path_id=path.path_id,
                     turn=i + 1,
                     trace_id=turn_result.trace_id,
-                    assertions_passed=sum(
-                        1 for a in turn_result.assertion_results if a.passed
-                    ),
+                    assertions_passed=sum(1 for a in turn_result.assertion_results if a.passed),
                     assertions_total=len(turn_result.assertion_results),
                     response_time_ms=turn_result.response_time_ms,
                 )
 
         result.completed_at = datetime.now(tz=timezone.utc)
         result.all_assertions_passed = all(
-            a.passed
-            for t in result.turns
-            for a in t.assertion_results
+            a.passed for t in result.turns for a in t.assertion_results
         )
 
         log.info(
@@ -164,7 +160,8 @@ class EvaluationRunner:
         return result
 
     async def run_paths(
-        self, paths: Sequence[ConversationPath],
+        self,
+        paths: Sequence[ConversationPath],
     ) -> list[PathResult]:
         """Execute multiple conversation paths sequentially.
 
@@ -218,9 +215,7 @@ class EvaluationRunner:
         assertion_results: tuple[AssertionResult, ...] = ()
         if assertions:
             events = await self._telemetry.fetch_events(trace_id)
-            assertion_results = tuple(
-                self._telemetry.check_assertions(events, assertions)
-            )
+            assertion_results = tuple(self._telemetry.check_assertions(events, assertions))
 
         return TurnResult(
             turn_index=turn_index,

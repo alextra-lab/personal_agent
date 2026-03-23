@@ -14,6 +14,7 @@ from typing import Literal
 # Assertion types
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class FieldAssertion:
     """Assert a field value in a specific telemetry event type.
@@ -69,6 +70,7 @@ TelemetryAssertion = FieldAssertion | EventPresenceAssertion | FieldComparisonAs
 # Conversation structure
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class ConversationTurn:
     """A single turn in a conversation path.
@@ -110,6 +112,7 @@ class ConversationPath:
 # ---------------------------------------------------------------------------
 # Result types
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class AssertionResult:
@@ -191,9 +194,7 @@ class PathResult:
         Returns:
             Count of AssertionResults where passed is True.
         """
-        return sum(
-            1 for t in self.turns for a in t.assertion_results if a.passed
-        )
+        return sum(1 for t in self.turns for a in t.assertion_results if a.passed)
 
     @property
     def failed_assertions(self) -> int:
@@ -217,6 +218,7 @@ class PathResult:
 # ---------------------------------------------------------------------------
 # Assertion builder helpers (compact syntax for dataset.py)
 # ---------------------------------------------------------------------------
+
 
 def fld(event: str, key: str, value: str | float | int) -> FieldAssertion:
     """Shorthand for FieldAssertion.
@@ -268,5 +270,8 @@ def gte(event: str, key: str, threshold: float | int) -> FieldComparisonAssertio
         A FieldComparisonAssertion with operator ">=".
     """
     return FieldComparisonAssertion(
-        event_type=event, field_name=key, operator=">=", threshold=threshold,
+        event_type=event,
+        field_name=key,
+        operator=">=",
+        threshold=threshold,
     )

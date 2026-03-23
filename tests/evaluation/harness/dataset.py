@@ -39,9 +39,7 @@ CP_01 = ConversationPath(
     turns=(
         ConversationTurn(
             user_message="Hey, how's it going?",
-            expected_behavior=(
-                "Responds conversationally. No tool calls. No sub-agents."
-            ),
+            expected_behavior=("Responds conversationally. No tool calls. No sub-agents."),
             assertions=(
                 fld("intent_classified", "task_type", "conversational"),
                 fld("intent_classified", "confidence", 0.7),
@@ -52,12 +50,9 @@ CP_01 = ConversationPath(
             ),
         ),
         ConversationTurn(
-            user_message=(
-                "Tell me something interesting you've learned recently."
-            ),
+            user_message=("Tell me something interesting you've learned recently."),
             expected_behavior=(
-                "Continues conversational tone. May draw on general "
-                "knowledge. No tool calls."
+                "Continues conversational tone. May draw on general knowledge. No tool calls."
             ),
             assertions=(
                 fld("intent_classified", "task_type", "conversational"),
@@ -78,8 +73,7 @@ CP_02 = ConversationPath(
     name="Memory Recall Intent",
     category="Intent Classification",
     objective=(
-        "Verify that 'have we discussed' triggers MEMORY_RECALL "
-        "classification and broad recall"
+        "Verify that 'have we discussed' triggers MEMORY_RECALL classification and broad recall"
     ),
     turns=(
         ConversationTurn(
@@ -97,9 +91,7 @@ CP_02 = ConversationPath(
             ),
         ),
         ConversationTurn(
-            user_message=(
-                "What have we discussed in our conversations so far?"
-            ),
+            user_message=("What have we discussed in our conversations so far?"),
             expected_behavior=(
                 "Triggers memory recall. Should reference the "
                 "recommendation engine topic from Turn 1."
@@ -143,12 +135,8 @@ CP_03 = ConversationPath(
         ),
         ConversationTurn(
             user_message="Which would you lean toward for our case and why?",
-            expected_behavior=(
-                "Provides a recommendation grounded in the prior analysis."
-            ),
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            expected_behavior=("Provides a recommendation grounded in the prior analysis."),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
     ),
     quality_criteria=(
@@ -166,10 +154,7 @@ CP_04 = ConversationPath(
     objective="Verify that 'Plan' triggers PLANNING classification",
     turns=(
         ConversationTurn(
-            user_message=(
-                "Plan the next steps for adding user authentication "
-                "to our API service."
-            ),
+            user_message=("Plan the next steps for adding user authentication to our API service."),
             expected_behavior=(
                 "Produces a structured plan with discrete steps, "
                 "rough ordering, and considerations."
@@ -182,12 +167,8 @@ CP_04 = ConversationPath(
             ),
         ),
         ConversationTurn(
-            user_message=(
-                "What should we tackle first, and what can we defer?"
-            ),
-            expected_behavior=(
-                "Prioritizes the steps with reasoning."
-            ),
+            user_message=("What should we tackle first, and what can we defer?"),
+            expected_behavior=("Prioritizes the steps with reasoning."),
             assertions=(),
         ),
     ),
@@ -231,13 +212,8 @@ CP_05 = ConversationPath(
                 "references, missing required keys, and deeply nested "
                 "structures beyond 10 levels."
             ),
-            expected_behavior=(
-                "Follow-up delegation. Enriches the task with test "
-                "requirements."
-            ),
-            assertions=(
-                fld("intent_classified", "task_type", "delegation"),
-            ),
+            expected_behavior=("Follow-up delegation. Enriches the task with test requirements."),
+            assertions=(fld("intent_classified", "task_type", "delegation"),),
         ),
         ConversationTurn(
             user_message=(
@@ -245,12 +221,9 @@ CP_05 = ConversationPath(
                 "sure Claude Code doesn't need to ask follow-up questions?"
             ),
             expected_behavior=(
-                "Explains DelegationPackage contents: relevant_files, "
-                "conventions, known_pitfalls."
+                "Explains DelegationPackage contents: relevant_files, conventions, known_pitfalls."
             ),
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
     ),
     quality_criteria=(
@@ -267,18 +240,14 @@ CP_06 = ConversationPath(
     name="Self-Improvement Intent",
     category="Intent Classification",
     objective=(
-        "Verify that self-referential improvement questions trigger "
-        "SELF_IMPROVE classification"
+        "Verify that self-referential improvement questions trigger SELF_IMPROVE classification"
     ),
     turns=(
         ConversationTurn(
             user_message=(
-                "What improvements would you suggest to your own "
-                "memory and recall system?"
+                "What improvements would you suggest to your own memory and recall system?"
             ),
-            expected_behavior=(
-                "Discusses potential improvements to its own architecture."
-            ),
+            expected_behavior=("Discusses potential improvements to its own architecture."),
             assertions=(
                 fld("intent_classified", "task_type", "self_improve"),
                 fld("intent_classified", "confidence", 0.85),
@@ -286,10 +255,7 @@ CP_06 = ConversationPath(
             ),
         ),
         ConversationTurn(
-            user_message=(
-                "Which of those would have the biggest impact on "
-                "your usefulness to me?"
-            ),
+            user_message=("Which of those would have the biggest impact on your usefulness to me?"),
             expected_behavior="Prioritizes suggestions with reasoning.",
             assertions=(),
         ),
@@ -306,10 +272,7 @@ CP_07 = ConversationPath(
     path_id="CP-07",
     name="Tool Use Intent",
     category="Intent Classification",
-    objective=(
-        "Verify that explicit tool-use language triggers TOOL_USE "
-        "classification"
-    ),
+    objective=("Verify that explicit tool-use language triggers TOOL_USE classification"),
     turns=(
         ConversationTurn(
             user_message="List the tools you currently have access to.",
@@ -326,14 +289,8 @@ CP_07 = ConversationPath(
             ),
         ),
         ConversationTurn(
-            user_message=(
-                "Read the system log and tell me if anything "
-                "looks concerning."
-            ),
-            expected_behavior=(
-                "Calls self_telemetry_query or reads log output. "
-                "Reports findings."
-            ),
+            user_message=("Read the system log and tell me if anything looks concerning."),
+            expected_behavior=("Calls self_telemetry_query or reads log output. Reports findings."),
             assertions=(
                 fld("intent_classified", "task_type", "tool_use"),
                 present("tool_call_completed"),
@@ -356,15 +313,11 @@ CP_08 = ConversationPath(
     path_id="CP-08",
     name="SINGLE Strategy (Simple Question)",
     category="Decomposition Strategies",
-    objective=(
-        "Verify that a simple, short question results in SINGLE strategy"
-    ),
+    objective=("Verify that a simple, short question results in SINGLE strategy"),
     turns=(
         ConversationTurn(
             user_message="What is dependency injection?",
-            expected_behavior=(
-                "Clear, concise explanation. No sub-agents. Single LLM call."
-            ),
+            expected_behavior=("Clear, concise explanation. No sub-agents. Single LLM call."),
             assertions=(
                 fld("intent_classified", "task_type", "conversational"),
                 fld("decomposition_assessed", "complexity", "simple"),
@@ -394,8 +347,7 @@ CP_09 = ConversationPath(
     name="HYBRID Strategy (Moderate Analysis)",
     category="Decomposition Strategies",
     objective=(
-        "Verify that a moderate-complexity analysis triggers HYBRID "
-        "with sub-agent expansion"
+        "Verify that a moderate-complexity analysis triggers HYBRID with sub-agent expansion"
     ),
     turns=(
         ConversationTurn(
@@ -420,12 +372,9 @@ CP_09 = ConversationPath(
         ),
         ConversationTurn(
             user_message=(
-                "Given what you found, which approach would you "
-                "recommend for our use case?"
+                "Given what you found, which approach would you recommend for our use case?"
             ),
-            expected_behavior=(
-                "Single follow-up referencing Turn 1 analysis."
-            ),
+            expected_behavior=("Single follow-up referencing Turn 1 analysis."),
             assertions=(
                 fld("intent_classified", "task_type", "analysis"),
                 fld("decomposition_assessed", "strategy", "single"),
@@ -445,10 +394,7 @@ CP_10 = ConversationPath(
     path_id="CP-10",
     name="DECOMPOSE Strategy (Complex Multi-Part Analysis)",
     category="Decomposition Strategies",
-    objective=(
-        "Verify that a complex multi-part request with 3+ action verbs "
-        "triggers DECOMPOSE"
-    ),
+    objective=("Verify that a complex multi-part request with 3+ action verbs triggers DECOMPOSE"),
     turns=(
         ConversationTurn(
             user_message=(
@@ -458,8 +404,7 @@ CP_10 = ConversationPath(
                 "a system handling ten thousand requests per second."
             ),
             expected_behavior=(
-                "Full decomposition. Multiple sub-agents. "
-                "Comprehensive synthesized output."
+                "Full decomposition. Multiple sub-agents. Comprehensive synthesized output."
             ),
             assertions=(
                 fld("intent_classified", "task_type", "analysis"),
@@ -504,9 +449,7 @@ CP_11 = ConversationPath(
                 "evaluate their query performance and Python ecosystem "
                 "support."
             ),
-            expected_behavior=(
-                "Moderate analysis. HYBRID strategy. Sub-agents spawned."
-            ),
+            expected_behavior=("Moderate analysis. HYBRID strategy. Sub-agents spawned."),
             assertions=(
                 fld("intent_classified", "task_type", "analysis"),
                 fld("decomposition_assessed", "complexity", "moderate"),
@@ -542,10 +485,7 @@ CP_12 = ConversationPath(
     path_id="CP-12",
     name="Entity Seeding and Targeted Recall",
     category="Memory System",
-    objective=(
-        "Verify that entities mentioned in conversation are captured "
-        "and can be recalled"
-    ),
+    objective=("Verify that entities mentioned in conversation are captured and can be recalled"),
     turns=(
         ConversationTurn(
             user_message=(
@@ -567,12 +507,8 @@ CP_12 = ConversationPath(
                 "The team lead is Maria Chen and we're deploying to AWS "
                 "with a target of processing 500 images per hour."
             ),
-            expected_behavior=(
-                "More context. Entities: Maria Chen, AWS."
-            ),
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            expected_behavior=("More context. Entities: Maria Chen, AWS."),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
             user_message="What do you know about Project Atlas?",
@@ -611,9 +547,7 @@ CP_13 = ConversationPath(
                 "batteries included."
             ),
             expected_behavior="Responds to the framework comparison.",
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
             user_message=(
@@ -622,15 +556,12 @@ CP_13 = ConversationPath(
                 "but we have some document-like structures."
             ),
             expected_behavior="Responds to the database discussion.",
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
             user_message="What topics have we covered in this conversation?",
             expected_behavior=(
-                "MEMORY_RECALL with broad recall. Lists both the "
-                "framework and database topics."
+                "MEMORY_RECALL with broad recall. Lists both the framework and database topics."
             ),
             assertions=(
                 fld("intent_classified", "task_type", "memory_recall"),
@@ -652,8 +583,7 @@ CP_14 = ConversationPath(
     name="Multi-Entity Tracking",
     category="Memory System",
     objective=(
-        "Verify that when multiple entities are introduced, the agent "
-        "recalls the correct one"
+        "Verify that when multiple entities are introduced, the agent recalls the correct one"
     ),
     turns=(
         ConversationTurn(
@@ -662,9 +592,7 @@ CP_14 = ConversationPath(
                 "called BuildBot. She's using Python and GitHub Actions."
             ),
             expected_behavior="Responds about Alice and BuildBot.",
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
             user_message=(
@@ -672,9 +600,7 @@ CP_14 = ConversationPath(
                 "He's focused on Terraform and AWS infrastructure."
             ),
             expected_behavior="Responds about Bob and DeployTool.",
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
             user_message="What do you know about Alice and her work?",
@@ -700,10 +626,7 @@ CP_15 = ConversationPath(
     path_id="CP-15",
     name="Memory-Informed Response",
     category="Memory System",
-    objective=(
-        "Verify that earlier context shapes later responses, "
-        "not just generic knowledge"
-    ),
+    objective=("Verify that earlier context shapes later responses, not just generic knowledge"),
     turns=(
         ConversationTurn(
             user_message=(
@@ -712,14 +635,11 @@ CP_15 = ConversationPath(
                 "industrial equipment."
             ),
             expected_behavior="Acknowledges the project details.",
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
             user_message=(
-                "What technology stack would you recommend for the "
-                "backend of this project?"
+                "What technology stack would you recommend for the backend of this project?"
             ),
             expected_behavior=(
                 "Recommendations compatible with WebSockets, IoT, "
@@ -778,9 +698,7 @@ CP_16 = ConversationPath(
                 "Which pattern would you recommend for a system with "
                 "both low-latency and high-throughput requirements?"
             ),
-            expected_behavior=(
-                "Follow-up referencing Turn 1 analysis. SINGLE strategy."
-            ),
+            expected_behavior=("Follow-up referencing Turn 1 analysis. SINGLE strategy."),
             assertions=(
                 fld("intent_classified", "task_type", "analysis"),
                 fld("decomposition_assessed", "strategy", "single"),
@@ -800,10 +718,7 @@ CP_17 = ConversationPath(
     path_id="CP-17",
     name="Sub-Agent Concurrency",
     category="Expansion & Sub-Agents",
-    objective=(
-        "Verify that DECOMPOSE spawns multiple sub-agents and "
-        "synthesizes all results"
-    ),
+    objective=("Verify that DECOMPOSE spawns multiple sub-agents and synthesizes all results"),
     turns=(
         ConversationTurn(
             user_message=(
@@ -814,8 +729,7 @@ CP_17 = ConversationPath(
                 "fits our workload of ten thousand requests per second."
             ),
             expected_behavior=(
-                "DECOMPOSE triggered. Multiple sub-agents. "
-                "All results synthesized."
+                "DECOMPOSE triggered. Multiple sub-agents. All results synthesized."
             ),
             assertions=(
                 fld("intent_classified", "task_type", "analysis"),
@@ -840,10 +754,7 @@ CP_18 = ConversationPath(
     path_id="CP-18",
     name="Expansion Budget Enforcement",
     category="Expansion & Sub-Agents",
-    objective=(
-        "Verify that expansion_budget forces SINGLE under resource "
-        "pressure"
-    ),
+    objective=("Verify that expansion_budget forces SINGLE under resource pressure"),
     setup_notes=(
         "Requires system resource pressure. Before running:\n"
         "1. Run `stress --cpu 4 --timeout 60s` to push CPU above 70%\n"
@@ -887,8 +798,7 @@ CP_19 = ConversationPath(
     name="Long Conversation Trimming",
     category="Context Management",
     objective=(
-        "Verify that long conversations are trimmed intelligently — "
-        "important context preserved"
+        "Verify that long conversations are trimmed intelligently — important context preserved"
     ),
     turns=(
         ConversationTurn(
@@ -898,62 +808,47 @@ CP_19 = ConversationPath(
                 "communicating over HTTP."
             ),
             expected_behavior="Establishes foundational context.",
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
-            user_message=(
-                "Our primary database is PostgreSQL for transactional "
-                "data."
-            ),
+            user_message=("Our primary database is PostgreSQL for transactional data."),
             expected_behavior="Adds more context.",
             assertions=(),
         ),
         ConversationTurn(
             user_message=(
-                "We also use Elasticsearch for logging and Neo4j for "
-                "our knowledge graph."
+                "We also use Elasticsearch for logging and Neo4j for our knowledge graph."
             ),
             expected_behavior="More context.",
             assertions=(),
         ),
         ConversationTurn(
             user_message=(
-                "The deployment is on Docker Compose locally and "
-                "Kubernetes in production."
+                "The deployment is on Docker Compose locally and Kubernetes in production."
             ),
             expected_behavior="More context.",
             assertions=(),
         ),
         ConversationTurn(
-            user_message=(
-                "We've been having issues with service discovery "
-                "between containers."
-            ),
+            user_message=("We've been having issues with service discovery between containers."),
             expected_behavior="Introduces a problem.",
             assertions=(),
         ),
         ConversationTurn(
-            user_message=(
-                "I tried using Consul but it added too much "
-                "operational overhead."
-            ),
+            user_message=("I tried using Consul but it added too much operational overhead."),
             expected_behavior="Adds history.",
             assertions=(),
         ),
         ConversationTurn(
             user_message=(
-                "We're now evaluating DNS-based service discovery "
-                "versus Envoy sidecar proxies."
+                "We're now evaluating DNS-based service discovery versus Envoy sidecar proxies."
             ),
             expected_behavior="Current state.",
             assertions=(),
         ),
         ConversationTurn(
             user_message=(
-                "The team is leaning toward Envoy because it also "
-                "handles load balancing."
+                "The team is leaning toward Envoy because it also handles load balancing."
             ),
             expected_behavior="Team preference.",
             assertions=(),
@@ -967,17 +862,9 @@ CP_19 = ConversationPath(
             assertions=(),
         ),
         ConversationTurn(
-            user_message=(
-                "Going back to the beginning — what was our primary "
-                "database again?"
-            ),
-            expected_behavior=(
-                "Should still know PostgreSQL despite potential "
-                "context trimming."
-            ),
-            assertions=(
-                fld("intent_classified", "task_type", "memory_recall"),
-            ),
+            user_message=("Going back to the beginning — what was our primary database again?"),
+            expected_behavior=("Should still know PostgreSQL despite potential context trimming."),
+            assertions=(fld("intent_classified", "task_type", "memory_recall"),),
         ),
     ),
     quality_criteria=(
@@ -992,16 +879,11 @@ CP_20 = ConversationPath(
     path_id="CP-20",
     name="Progressive Token Budget Management",
     category="Context Management",
-    objective=(
-        "Verify that tool-heavy conversations manage token budgets "
-        "correctly"
-    ),
+    objective=("Verify that tool-heavy conversations manage token budgets correctly"),
     turns=(
         ConversationTurn(
             user_message="Run the system health check.",
-            expected_behavior=(
-                "Calls self_telemetry_query(health). Large tool output."
-            ),
+            expected_behavior=("Calls self_telemetry_query(health). Large tool output."),
             assertions=(
                 fld("intent_classified", "task_type", "conversational"),
                 present("tool_call_completed"),
@@ -1009,31 +891,17 @@ CP_20 = ConversationPath(
         ),
         ConversationTurn(
             user_message="Now show me the recent error details.",
-            expected_behavior=(
-                "Calls self_telemetry_query(errors). More tool output."
-            ),
-            assertions=(
-                present("tool_call_completed"),
-            ),
+            expected_behavior=("Calls self_telemetry_query(errors). More tool output."),
+            assertions=(present("tool_call_completed"),),
         ),
         ConversationTurn(
             user_message="Also check the system metrics.",
-            expected_behavior=(
-                "Calls system_metrics_snapshot. Even more tool output."
-            ),
-            assertions=(
-                present("tool_call_completed"),
-            ),
+            expected_behavior=("Calls system_metrics_snapshot. Even more tool output."),
+            assertions=(present("tool_call_completed"),),
         ),
         ConversationTurn(
-            user_message=(
-                "Summarize everything you've found — is the system "
-                "healthy overall?"
-            ),
-            expected_behavior=(
-                "Synthesizes all three tool results. Context may "
-                "need trimming."
-            ),
+            user_message=("Summarize everything you've found — is the system healthy overall?"),
+            expected_behavior=("Synthesizes all three tool results. Context may need trimming."),
             assertions=(),
         ),
     ),
@@ -1061,12 +929,10 @@ CP_21 = ConversationPath(
     turns=(
         ConversationTurn(
             user_message=(
-                "How is the system doing right now? I want to know "
-                "about CPU and memory usage."
+                "How is the system doing right now? I want to know about CPU and memory usage."
             ),
             expected_behavior=(
-                "Calls system_metrics_snapshot tool despite "
-                "CONVERSATIONAL classification."
+                "Calls system_metrics_snapshot tool despite CONVERSATIONAL classification."
             ),
             assertions=(
                 fld("intent_classified", "task_type", "conversational"),
@@ -1075,9 +941,7 @@ CP_21 = ConversationPath(
         ),
         ConversationTurn(
             user_message="Is that normal for our setup?",
-            expected_behavior=(
-                "Interprets metrics with context."
-            ),
+            expected_behavior=("Interprets metrics with context."),
             assertions=(),
         ),
     ),
@@ -1093,34 +957,20 @@ CP_22 = ConversationPath(
     path_id="CP-22",
     name="Self-Telemetry Query",
     category="Tools & Self-Inspection",
-    objective=(
-        "Verify the agent can introspect its own operational health"
-    ),
+    objective=("Verify the agent can introspect its own operational health"),
     turns=(
         ConversationTurn(
-            user_message=(
-                "Show me your error rate and performance metrics "
-                "over the past hour."
-            ),
+            user_message=("Show me your error rate and performance metrics over the past hour."),
             expected_behavior=(
                 "Calls self_telemetry_query with query_type='health' "
                 "or 'performance' and window='1h'."
             ),
-            assertions=(
-                present("tool_call_completed"),
-            ),
+            assertions=(present("tool_call_completed"),),
         ),
         ConversationTurn(
-            user_message=(
-                "Are there any specific errors I should be worried "
-                "about?"
-            ),
-            expected_behavior=(
-                "Calls self_telemetry_query with query_type='errors'."
-            ),
-            assertions=(
-                present("tool_call_completed"),
-            ),
+            user_message=("Are there any specific errors I should be worried about?"),
+            expected_behavior=("Calls self_telemetry_query with query_type='errors'."),
+            assertions=(present("tool_call_completed"),),
         ),
     ),
     quality_criteria=(
@@ -1135,10 +985,7 @@ CP_23 = ConversationPath(
     path_id="CP-23",
     name="Search Memory Tool (Explicit)",
     category="Tools & Self-Inspection",
-    objective=(
-        "Verify that the agent uses the search_memory tool when "
-        "explicitly asked"
-    ),
+    objective=("Verify that the agent uses the search_memory tool when explicitly asked"),
     turns=(
         ConversationTurn(
             user_message=(
@@ -1146,28 +993,16 @@ CP_23 = ConversationPath(
                 "particularly consensus algorithms like Raft and Paxos."
             ),
             expected_behavior="Establishes context for memory.",
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
-            user_message=(
-                "I'm also interested in how CRDTs enable conflict-free "
-                "replication."
-            ),
+            user_message=("I'm also interested in how CRDTs enable conflict-free replication."),
             expected_behavior="More context.",
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
-            user_message=(
-                "Search your memory for anything related to distributed "
-                "systems."
-            ),
-            expected_behavior=(
-                "Triggers search_memory tool."
-            ),
+            user_message=("Search your memory for anything related to distributed systems."),
+            expected_behavior=("Triggers search_memory tool."),
             assertions=(
                 fld("intent_classified", "task_type", "tool_use"),
                 present("tool_call_completed"),
@@ -1190,10 +1025,7 @@ CP_24 = ConversationPath(
     path_id="CP-24",
     name="Ambiguous Intent",
     category="Edge Cases",
-    objective=(
-        "Verify that priority-ordered classification handles "
-        "ambiguous messages correctly"
-    ),
+    objective=("Verify that priority-ordered classification handles ambiguous messages correctly"),
     turns=(
         ConversationTurn(
             user_message=(
@@ -1211,12 +1043,10 @@ CP_24 = ConversationPath(
         ),
         ConversationTurn(
             user_message=(
-                "Actually, before fixing anything, just analyze the "
-                "failure patterns first."
+                "Actually, before fixing anything, just analyze the failure patterns first."
             ),
             expected_behavior=(
-                "Clearer intent: 'analyze' → ANALYSIS. "
-                "Demonstrates user can redirect."
+                "Clearer intent: 'analyze' → ANALYSIS. Demonstrates user can redirect."
             ),
             assertions=(
                 fld("intent_classified", "task_type", "analysis"),
@@ -1251,8 +1081,7 @@ CP_25 = ConversationPath(
         ),
         ConversationTurn(
             user_message=(
-                "Analyze the impact of adding a caching layer between "
-                "our API and database."
+                "Analyze the impact of adding a caching layer between our API and database."
             ),
             expected_behavior="Analysis request.",
             assertions=(
@@ -1261,26 +1090,16 @@ CP_25 = ConversationPath(
             ),
         ),
         ConversationTurn(
-            user_message=(
-                "Write a function that implements a simple LRU cache "
-                "in Python."
-            ),
-            expected_behavior=(
-                "Delegation request. Different intent from Turn 2."
-            ),
+            user_message=("Write a function that implements a simple LRU cache in Python."),
+            expected_behavior=("Delegation request. Different intent from Turn 2."),
             assertions=(
                 fld("intent_classified", "task_type", "delegation"),
                 fld("decomposition_assessed", "strategy", "delegate"),
             ),
         ),
         ConversationTurn(
-            user_message=(
-                "What have we discussed about caching in this "
-                "conversation?"
-            ),
-            expected_behavior=(
-                "Memory recall. References Turns 2 and 3."
-            ),
+            user_message=("What have we discussed about caching in this conversation?"),
+            expected_behavior=("Memory recall. References Turns 2 and 3."),
             assertions=(
                 fld("intent_classified", "task_type", "memory_recall"),
                 fld("decomposition_assessed", "strategy", "single"),
@@ -1301,13 +1120,31 @@ CP_25 = ConversationPath(
 # ============================================================================
 
 ALL_PATHS: tuple[ConversationPath, ...] = (
-    CP_01, CP_02, CP_03, CP_04, CP_05, CP_06, CP_07,
-    CP_08, CP_09, CP_10, CP_11,
-    CP_12, CP_13, CP_14, CP_15,
-    CP_16, CP_17, CP_18,
-    CP_19, CP_20,
-    CP_21, CP_22, CP_23,
-    CP_24, CP_25,
+    CP_01,
+    CP_02,
+    CP_03,
+    CP_04,
+    CP_05,
+    CP_06,
+    CP_07,
+    CP_08,
+    CP_09,
+    CP_10,
+    CP_11,
+    CP_12,
+    CP_13,
+    CP_14,
+    CP_15,
+    CP_16,
+    CP_17,
+    CP_18,
+    CP_19,
+    CP_20,
+    CP_21,
+    CP_22,
+    CP_23,
+    CP_24,
+    CP_25,
 )
 
 PATHS_BY_ID: dict[str, ConversationPath] = {p.path_id: p for p in ALL_PATHS}

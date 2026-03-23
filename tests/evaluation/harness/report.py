@@ -37,22 +37,16 @@ def generate_json_report(
             "total_paths": len(results),
             "paths_passed": paths_passed,
             "paths_failed": len(results) - paths_passed,
-            "path_pass_rate": (
-                paths_passed / len(results) if results else 0.0
-            ),
+            "path_pass_rate": (paths_passed / len(results) if results else 0.0),
             "total_assertions": total_assertions,
             "assertions_passed": passed_assertions,
             "assertions_failed": total_assertions - passed_assertions,
             "assertion_pass_rate": (
-                passed_assertions / total_assertions
-                if total_assertions > 0
-                else 0.0
+                passed_assertions / total_assertions if total_assertions > 0 else 0.0
             ),
             "total_response_time_ms": sum(r.total_time_ms for r in results),
             "avg_turn_response_time_ms": (
-                sum(r.total_time_ms for r in results) / sum(
-                    len(r.turns) for r in results
-                )
+                sum(r.total_time_ms for r in results) / sum(len(r.turns) for r in results)
                 if any(r.turns for r in results)
                 else 0.0
             ),
@@ -88,9 +82,7 @@ def generate_markdown_report(
     lines: list[str] = []
     lines.append("# Evaluation Results Report")
     lines.append("")
-    lines.append(
-        f"**Generated:** {datetime.now(tz=timezone.utc).isoformat()}"
-    )
+    lines.append(f"**Generated:** {datetime.now(tz=timezone.utc).isoformat()}")
     lines.append("")
 
     # Summary
@@ -99,18 +91,11 @@ def generate_markdown_report(
     lines.append("| Metric | Value |")
     lines.append("|--------|-------|")
     lines.append(f"| Paths Passed | {paths_passed}/{len(results)} |")
-    lines.append(
-        f"| Assertions Passed | {passed_assertions}/{total_assertions} |"
-    )
-    rate = (
-        passed_assertions / total_assertions * 100
-        if total_assertions > 0
-        else 0.0
-    )
+    lines.append(f"| Assertions Passed | {passed_assertions}/{total_assertions} |")
+    rate = passed_assertions / total_assertions * 100 if total_assertions > 0 else 0.0
     lines.append(f"| Assertion Pass Rate | {rate:.1f}% |")
     avg_ms = (
-        sum(r.total_time_ms for r in results)
-        / sum(len(r.turns) for r in results)
+        sum(r.total_time_ms for r in results) / sum(len(r.turns) for r in results)
         if any(r.turns for r in results)
         else 0.0
     )
@@ -138,9 +123,7 @@ def generate_markdown_report(
         lines.append(f"### {status} {r.path_id}: {r.path_name}")
         lines.append("")
         lines.append(f"**Category:** {r.category} | **Session:** `{r.session_id}`")
-        lines.append(
-            f"**Assertions:** {r.passed_assertions}/{r.total_assertions} passed"
-        )
+        lines.append(f"**Assertions:** {r.passed_assertions}/{r.total_assertions} passed")
         lines.append("")
 
         for turn in r.turns:

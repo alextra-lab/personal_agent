@@ -55,8 +55,7 @@ async def test_conversation_path(
             for a in turn.assertion_results:
                 if not a.passed:
                     failures.append(
-                        f"  Turn {turn.turn_index + 1} "
-                        f"(trace={turn.trace_id}): {a.message}"
+                        f"  Turn {turn.turn_index + 1} (trace={turn.trace_id}): {a.message}"
                     )
         failure_msg = (
             f"{path.path_id} ({path.name}): "

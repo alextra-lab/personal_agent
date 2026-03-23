@@ -57,7 +57,8 @@ class TelemetryChecker:
         self._max_retries = max_retries
 
     async def fetch_events(
-        self, trace_id: str,
+        self,
+        trace_id: str,
     ) -> list[TelemetryEvent]:
         """Fetch all telemetry events for a given trace_id.
 
@@ -145,7 +146,9 @@ class TelemetryChecker:
         return results
 
     def _find_events_by_type(
-        self, events: list[TelemetryEvent], event_type: str,
+        self,
+        events: list[TelemetryEvent],
+        event_type: str,
     ) -> list[TelemetryEvent]:
         """Filter events by event_type field.
 
@@ -157,12 +160,13 @@ class TelemetryChecker:
             Filtered list of events matching event_type.
         """
         return [
-            e for e in events
-            if e.get("event_type") == event_type or e.get("event") == event_type
+            e for e in events if e.get("event_type") == event_type or e.get("event") == event_type
         ]
 
     def _check_field(
-        self, events: list[TelemetryEvent], assertion: FieldAssertion,
+        self,
+        events: list[TelemetryEvent],
+        assertion: FieldAssertion,
     ) -> AssertionResult:
         """Check a FieldAssertion.
 
@@ -192,8 +196,7 @@ class TelemetryChecker:
                 passed=False,
                 actual_value=None,
                 message=(
-                    f"Field '{assertion.field_name}' not found in "
-                    f"'{assertion.event_type}' event"
+                    f"Field '{assertion.field_name}' not found in '{assertion.event_type}' event"
                 ),
             )
 
@@ -214,7 +217,9 @@ class TelemetryChecker:
         )
 
     def _check_presence(
-        self, events: list[TelemetryEvent], assertion: EventPresenceAssertion,
+        self,
+        events: list[TelemetryEvent],
+        assertion: EventPresenceAssertion,
     ) -> AssertionResult:
         """Check an EventPresenceAssertion.
 
@@ -252,7 +257,9 @@ class TelemetryChecker:
             )
 
     def _check_comparison(
-        self, events: list[TelemetryEvent], assertion: FieldComparisonAssertion,
+        self,
+        events: list[TelemetryEvent],
+        assertion: FieldComparisonAssertion,
     ) -> AssertionResult:
         """Check a FieldComparisonAssertion.
 
@@ -281,8 +288,7 @@ class TelemetryChecker:
                 passed=False,
                 actual_value=None,
                 message=(
-                    f"Field '{assertion.field_name}' not found in "
-                    f"'{assertion.event_type}' event"
+                    f"Field '{assertion.field_name}' not found in '{assertion.event_type}' event"
                 ),
             )
 
@@ -294,9 +300,7 @@ class TelemetryChecker:
                 assertion=assertion,
                 passed=False,
                 actual_value=actual_typed,
-                message=(
-                    f"Field '{assertion.field_name}' is not numeric: {actual}"
-                ),
+                message=(f"Field '{assertion.field_name}' is not numeric: {actual}"),
             )
 
         ops = {

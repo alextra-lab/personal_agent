@@ -28,6 +28,7 @@ from tests.evaluation.harness.telemetry import TelemetryChecker
 # Data model tests
 # ---------------------------------------------------------------------------
 
+
 class TestModels:
     """Tests for frozen dataclasses and builder helpers."""
 
@@ -122,6 +123,7 @@ class TestModels:
 # Telemetry checker tests (mocked ES)
 # ---------------------------------------------------------------------------
 
+
 class TestTelemetryChecker:
     """Tests for TelemetryChecker.check_assertions (no ES needed)."""
 
@@ -156,9 +158,7 @@ class TestTelemetryChecker:
 
     def test_field_assertion_fails_missing_event(self) -> None:
         """Verify field assertion fails when event type is absent."""
-        events: list[dict[str, object]] = [
-            {"event_type": "other_event", "some_field": "value"}
-        ]
+        events: list[dict[str, object]] = [{"event_type": "other_event", "some_field": "value"}]
         results = self.checker.check_assertions(
             events,
             [fld("intent_classified", "task_type", "analysis")],
@@ -183,7 +183,8 @@ class TestTelemetryChecker:
             {"event_type": "hybrid_expansion_start", "sub_agent_count": 2}
         ]
         results = self.checker.check_assertions(
-            events, [present("hybrid_expansion_start")],
+            events,
+            [present("hybrid_expansion_start")],
         )
         assert results[0].passed is True
 
@@ -191,7 +192,8 @@ class TestTelemetryChecker:
         """Verify presence assertion fails when event is missing."""
         events: list[dict[str, object]] = [{"event_type": "other_event"}]
         results = self.checker.check_assertions(
-            events, [present("hybrid_expansion_start")],
+            events,
+            [present("hybrid_expansion_start")],
         )
         assert results[0].passed is False
 
@@ -199,7 +201,8 @@ class TestTelemetryChecker:
         """Verify absence assertion passes when event is missing."""
         events: list[dict[str, object]] = [{"event_type": "other_event"}]
         results = self.checker.check_assertions(
-            events, [absent("hybrid_expansion_start")],
+            events,
+            [absent("hybrid_expansion_start")],
         )
         assert results[0].passed is True
 
@@ -207,7 +210,8 @@ class TestTelemetryChecker:
         """Verify absence assertion fails when event is present."""
         events: list[dict[str, object]] = [{"event_type": "hybrid_expansion_start"}]
         results = self.checker.check_assertions(
-            events, [absent("hybrid_expansion_start")],
+            events,
+            [absent("hybrid_expansion_start")],
         )
         assert results[0].passed is False
 
@@ -217,7 +221,8 @@ class TestTelemetryChecker:
             {"event_type": "hybrid_expansion_complete", "successes": 3}
         ]
         results = self.checker.check_assertions(
-            events, [gte("hybrid_expansion_complete", "successes", 2)],
+            events,
+            [gte("hybrid_expansion_complete", "successes", 2)],
         )
         assert results[0].passed is True
 
@@ -227,7 +232,8 @@ class TestTelemetryChecker:
             {"event_type": "hybrid_expansion_complete", "successes": 1}
         ]
         results = self.checker.check_assertions(
-            events, [gte("hybrid_expansion_complete", "successes", 2)],
+            events,
+            [gte("hybrid_expansion_complete", "successes", 2)],
         )
         assert results[0].passed is False
 
@@ -252,9 +258,7 @@ class TestTelemetryChecker:
 
     def test_event_field_fallback(self) -> None:
         """Verify checker also matches on 'event' field (not just 'event_type')."""
-        events: list[dict[str, object]] = [
-            {"event": "intent_classified", "task_type": "analysis"}
-        ]
+        events: list[dict[str, object]] = [{"event": "intent_classified", "task_type": "analysis"}]
         results = self.checker.check_assertions(
             events,
             [fld("intent_classified", "task_type", "analysis")],

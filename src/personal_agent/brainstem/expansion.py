@@ -55,8 +55,9 @@ def compute_expansion_budget(
         logger.warning(
             "expansion_budget_missing_metrics",
             metrics=list(metrics.keys()),
+            fallback="max_budget",
         )
-        return 0
+        return max_budget
 
     budget = max_budget
 

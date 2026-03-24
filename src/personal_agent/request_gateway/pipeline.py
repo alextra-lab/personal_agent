@@ -93,6 +93,15 @@ async def run_gateway_pipeline(
     # Stage 5: Decomposition Assessment
     decomposition = assess_decomposition(intent=intent, governance=governance)
 
+    logger.info(
+        "decomposition_assessed",
+        task_type=intent.task_type.value,
+        complexity=intent.complexity.value,
+        strategy=decomposition.strategy.value,
+        reason=decomposition.reason,
+        trace_id=trace_id,
+    )
+
     # Stage 6+7: Context Assembly + Budget
     context = await assemble_context(
         user_message=user_message,

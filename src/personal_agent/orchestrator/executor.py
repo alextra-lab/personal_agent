@@ -1249,6 +1249,23 @@ async def step_llm_call(
             else:
                 system_prompt = f"{tool_awareness}\n\n{tool_prompt}"
 
+        # HYBRID decomposition prompt: instruct the LLM to produce a numbered
+        # task list so parse_decomposition_plan() can extract SubAgentSpecs.
+        # Only inject on the first LLM call (before sub-agents have run).
+        if ctx.expansion_strategy is not None and ctx.sub_agent_results is None:
+            hybrid_prompt = (
+                "\n\n## Decomposition Instructions\n"
+                "Break your response into a numbered list of independent sub-tasks "
+                "(1. ..., 2. ..., 3. ...). Each item should be a self-contained "
+                "task that can be researched or answered independently. "
+                "Keep to 2-4 sub-tasks. After the sub-tasks complete, you will "
+                "synthesize their results into a final answer."
+            )
+            if system_prompt:
+                system_prompt = f"{system_prompt}{hybrid_prompt}"
+            else:
+                system_prompt = hybrid_prompt.strip()
+
         # Call LocalLLMClient.respond()
         # Pass previous_response_id for stateful /v1/responses API
         max_retries_override: int | None = 1 if tools else None

@@ -61,9 +61,10 @@ class TestComputeExpansionBudget:
         budget = compute_expansion_budget(metrics, max_budget=3)
         assert budget == 0
 
-    def test_missing_metrics_returns_zero(self) -> None:
+    def test_missing_metrics_returns_max_budget(self) -> None:
+        """When metrics are unavailable, assume idle and permit full expansion."""
         budget = compute_expansion_budget({}, max_budget=3)
-        assert budget == 0
+        assert budget == 3
 
     def test_budget_never_negative(self) -> None:
         metrics = {

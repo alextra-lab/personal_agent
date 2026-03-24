@@ -200,11 +200,39 @@ class EvaluationRunner:
             TurnResult with response and assertion outcomes.
         """
         start = time.monotonic()
-        resp = await client.post(
-            f"{self._agent_url}/chat",
-            params={"message": user_message, "session_id": session_id},
-        )
-        resp.raise_for_status()
+        try:
+            resp = await client.post(
+                f"{self._agent_url}/chat",
+                params={"message": user_message, "session_id": session_id},
+            )
+            resp.raise_for_status()
+        except httpx.ReadTimeout:
+            elapsed_ms = (time.monotonic() - start) * 1000
+            log.warning(
+                "turn_timeout",
+                turn_index=turn_index,
+                elapsed_ms=elapsed_ms,
+                timeout_s=self._chat_timeout_s,
+            )
+            # Mark all assertions as failed due to timeout
+            timeout_results = tuple(
+                AssertionResult(
+                    assertion=a,
+                    passed=False,
+                    actual_value=None,
+                    message=f"Turn timed out after {elapsed_ms:.0f}ms",
+                )
+                for a in assertions
+            )
+            return TurnResult(
+                turn_index=turn_index,
+                user_message=user_message,
+                response_text=f"[TIMEOUT after {elapsed_ms:.0f}ms]",
+                trace_id="",
+                assertion_results=timeout_results,
+                response_time_ms=elapsed_ms,
+            )
+
         elapsed_ms = (time.monotonic() - start) * 1000
 
         data = resp.json()

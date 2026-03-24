@@ -64,7 +64,7 @@
             "success": { "type": "boolean" },
             "error": { "type": "text" },
             "latency_ms": { "type": "float" },
-            "output": { "type": "flattened" }
+            "output": { "type": "text", "index": false }
           }
         }
       }

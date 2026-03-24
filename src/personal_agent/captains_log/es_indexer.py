@@ -9,6 +9,7 @@ enable idempotent backfill replay (FRE-30).
 """
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -23,13 +24,13 @@ CAPTURES_INDEX_PREFIX = "agent-captains-captures"
 def normalize_capture_doc_for_es(doc: dict[str, Any]) -> dict[str, Any]:
     """Ensure capture document conforms to ES captains-captures mapping.
 
-    The index template defines tool_results[].output as type \"flattened\",
-    which requires an object. When a tool returns a string (or other
-    non-dict), indexing fails with document_parsing_exception. This
-    normalizer wraps non-object output in {\"value\": ...}.
+    The index template maps tool_results[].output as ``text`` (index: false).
+    Tool outputs can be dicts, lists, or other non-string types which ES
+    rejects for a text field. This normalizer JSON-serializes any non-string
+    output so it always arrives as a plain string.
 
     Args:
-        doc: Capture document (e.g. from TaskCapture.model_dump(mode=\"json\")).
+        doc: Capture document (e.g. from TaskCapture.model_dump(mode="json")).
 
     Returns:
         New dict safe to index; input is not mutated.
@@ -39,11 +40,11 @@ def normalize_capture_doc_for_es(doc: dict[str, Any]) -> dict[str, Any]:
     normalized: list[dict[str, Any]] = []
     for item in doc["tool_results"]:
         if not isinstance(item, dict):
-            normalized.append({"value": item})
+            normalized.append({"output": str(item)})
             continue
         output = item.get("output")
-        if not isinstance(output, dict):
-            item = {**item, "output": {"value": output}}
+        if output is not None and not isinstance(output, str):
+            item = {**item, "output": json.dumps(output, default=str)}
         normalized.append(item)
     return {**doc, "tool_results": normalized}
 

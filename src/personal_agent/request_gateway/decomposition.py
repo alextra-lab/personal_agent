@@ -59,7 +59,7 @@ def assess_decomposition(
 
     strategy, reason = _apply_matrix(intent.task_type, intent.complexity)
 
-    logger.debug(
+    logger.info(
         "decomposition_assessed",
         task_type=intent.task_type.value,
         complexity=intent.complexity.value,

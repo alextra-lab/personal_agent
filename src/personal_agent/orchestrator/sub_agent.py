@@ -19,6 +19,7 @@ from typing import Any
 
 import structlog
 
+from personal_agent.llm_client.types import ModelRole
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
 
 logger = structlog.get_logger(__name__)
@@ -80,6 +81,7 @@ async def run_sub_agent(
 
         response = await asyncio.wait_for(
             llm_client.respond(
+                role=ModelRole.STANDARD,
                 messages=messages,
                 max_tokens=spec.max_tokens,
             ),

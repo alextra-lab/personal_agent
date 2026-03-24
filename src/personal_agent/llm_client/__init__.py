@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from personal_agent.config import ModelConfigError, load_model_config
     from personal_agent.llm_client.claude import ClaudeClient
     from personal_agent.llm_client.client import LocalLLMClient
+    from personal_agent.llm_client.factory import LLMClient, get_llm_client
 else:
     # Lazy import to avoid circular dependency at runtime
     # Re-export from config module with deprecation warning
@@ -45,6 +46,14 @@ else:
             from personal_agent.llm_client.client import LocalLLMClient
 
             return LocalLLMClient
+        if name == "LLMClient":
+            from personal_agent.llm_client.factory import LLMClient
+
+            return LLMClient
+        if name == "get_llm_client":
+            from personal_agent.llm_client.factory import get_llm_client
+
+            return get_llm_client
         if name in ("ModelConfigError", "load_model_config"):
             import personal_agent.config
 
@@ -79,4 +88,6 @@ __all__ = [
     "ClaudeClient",
     "CostTrackerService",
     "ToolCallingStrategy",
+    "LLMClient",
+    "get_llm_client",
 ]

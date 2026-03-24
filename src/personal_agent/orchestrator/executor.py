@@ -1127,8 +1127,10 @@ async def step_llm_call(
     )
 
     try:
-        # Create LLM client instance
-        llm_client = LocalLLMClient()
+        # Create LLM client — dispatches to LocalLLMClient or ClaudeClient based on provider
+        from personal_agent.llm_client.factory import get_llm_client
+
+        llm_client = get_llm_client(role_name=model_role.value)
 
         # Get tools for this model role and mode
         # Per spec (ORCHESTRATOR_CORE_SPEC_v0.1.md): synthesis should use tools=None

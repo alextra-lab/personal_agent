@@ -5,9 +5,16 @@ ModelDefinition loaded out of config/models.yaml (ADR-0031). Only secrets
 (api_key) and operational controls (budget) come from settings.
 """
 
+from __future__ import annotations
+
+import json
 import time
-from typing import Any
-from uuid import UUID
+from typing import TYPE_CHECKING, Any
+from uuid import UUID, uuid4
+
+if TYPE_CHECKING:
+    from personal_agent.llm_client.types import LLMResponse, ModelRole, ToolCall
+    from personal_agent.telemetry.trace import TraceContext
 
 from anthropic import AsyncAnthropic
 
@@ -235,3 +242,253 @@ class ClaudeClient:
             0.0, self.weekly_budget_usd - summary["weekly_cost_usd"]
         )
         return summary
+
+    @property
+    def model_configs(self) -> dict[str, Any]:
+        """Expose model configs for executor compatibility.
+
+        Returns:
+            Dict mapping role names to ModelDefinition objects.
+        """
+        from personal_agent.config import load_model_config
+
+        config = load_model_config()
+        return config.models
+
+    @staticmethod
+    def _convert_tools_to_anthropic(
+        tools: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Convert OpenAI-format tool definitions to Anthropic format.
+
+        Args:
+            tools: OpenAI-format tool definitions.
+
+        Returns:
+            Anthropic-format tool definitions.
+        """
+        anthropic_tools: list[dict[str, Any]] = []
+        for tool in tools:
+            func = tool.get("function", {})
+            anthropic_tools.append(
+                {
+                    "name": func.get("name", ""),
+                    "description": func.get("description", ""),
+                    "input_schema": func.get("parameters", {"type": "object", "properties": {}}),
+                }
+            )
+        return anthropic_tools
+
+    @staticmethod
+    def _convert_messages_to_anthropic(
+        messages: list[dict[str, Any]],
+    ) -> tuple[str | None, list[dict[str, Any]]]:
+        """Convert OpenAI-format messages to Anthropic format.
+
+        Extracts system message (separate parameter in Anthropic API) and
+        converts tool-result messages to Anthropic's tool_result content blocks.
+
+        Args:
+            messages: OpenAI-format message list.
+
+        Returns:
+            Tuple of (system_text, anthropic_messages).
+        """
+        system_text: str | None = None
+        anthropic_msgs: list[dict[str, Any]] = []
+
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+
+            if role == "system":
+                system_text = content
+                continue
+
+            if role == "tool":
+                anthropic_msgs.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": msg.get("tool_call_id", ""),
+                                "content": content or "",
+                            }
+                        ],
+                    }
+                )
+                continue
+
+            if role == "assistant" and msg.get("tool_calls"):
+                blocks: list[dict[str, Any]] = []
+                if content:
+                    blocks.append({"type": "text", "text": content})
+                for tc in msg["tool_calls"]:
+                    func = tc.get("function", {})
+                    args_str = func.get("arguments", "{}")
+                    try:
+                        args = json.loads(args_str) if isinstance(args_str, str) else args_str
+                    except (json.JSONDecodeError, TypeError):
+                        args = {}
+                    blocks.append(
+                        {
+                            "type": "tool_use",
+                            "id": tc.get("id", str(uuid4())),
+                            "name": func.get("name", ""),
+                            "input": args,
+                        }
+                    )
+                anthropic_msgs.append({"role": "assistant", "content": blocks})
+                continue
+
+            if role in ("user", "assistant"):
+                anthropic_msgs.append({"role": role, "content": content or ""})
+
+        return system_text, anthropic_msgs
+
+    async def respond(
+        self,
+        role: ModelRole,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        response_format: dict[str, Any] | None = None,  # noqa: ARG002
+        system_prompt: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        timeout_s: float | None = None,  # noqa: ARG002
+        max_retries: int | None = None,  # noqa: ARG002
+        reasoning_effort: str | None = None,  # noqa: ARG002
+        trace_ctx: TraceContext | None = None,
+        previous_response_id: str | None = None,  # noqa: ARG002
+        priority: Any = None,  # noqa: ARG002
+        priority_timeout: float | None = None,  # noqa: ARG002
+    ) -> LLMResponse:
+        """Make an LLM call via Anthropic API, matching LocalLLMClient interface.
+
+        Converts OpenAI-format messages/tools to Anthropic format, calls the API,
+        and returns a normalized LLMResponse.
+
+        Args:
+            role: Model role (unused — ClaudeClient always uses self.model).
+            messages: OpenAI-format message list.
+            tools: Optional OpenAI-format tool definitions.
+            tool_choice: Tool choice ("auto", "none", "any", or specific).
+            response_format: Unused (Anthropic uses a different mechanism).
+            system_prompt: Optional system prompt (merged with system message).
+            max_tokens: Max output tokens.
+            temperature: Sampling temperature.
+            timeout_s: Unused (Anthropic SDK handles its own timeouts).
+            max_retries: Unused (Anthropic SDK has built-in retry logic).
+            reasoning_effort: Unused (not supported by Anthropic API).
+            trace_ctx: Trace context for telemetry.
+            previous_response_id: Unused (not supported by Anthropic API).
+            priority: Unused (no local concurrency control needed).
+            priority_timeout: Unused.
+
+        Returns:
+            LLMResponse with normalized structure.
+        """
+        from personal_agent.llm_client.types import LLMResponse
+
+        del role  # unused — ClaudeClient always uses self.model
+
+        await self._check_weekly_budget()
+
+        system_from_msgs, anthropic_msgs = self._convert_messages_to_anthropic(messages)
+        system = system_prompt or system_from_msgs
+
+        create_params: dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": max_tokens or self.max_tokens,
+            "messages": anthropic_msgs,
+        }
+        if system:
+            create_params["system"] = system
+        if temperature is not None:
+            create_params["temperature"] = temperature
+        if tools:
+            create_params["tools"] = self._convert_tools_to_anthropic(tools)
+            if tool_choice == "none":
+                pass  # Anthropic has no "none" equivalent — omit tool_choice
+            elif tool_choice in ("auto", None):
+                create_params["tool_choice"] = {"type": "auto"}
+            elif tool_choice == "any":
+                create_params["tool_choice"] = {"type": "any"}
+            elif isinstance(tool_choice, dict) and "function" in tool_choice:
+                create_params["tool_choice"] = {
+                    "type": "tool",
+                    "name": tool_choice["function"]["name"],
+                }
+
+        if self.cost_tracker.pool is None:
+            await self.cost_tracker.connect()
+
+        trace_uuid: UUID | None = None
+        if trace_ctx is not None:
+            try:
+                trace_uuid = UUID(str(trace_ctx.trace_id))
+            except (ValueError, AttributeError):
+                pass
+
+        t0 = time.monotonic()
+        response = await self.client.messages.create(**create_params)
+        latency_ms = int((time.monotonic() - t0) * 1000)
+
+        content_text = ""
+        tool_calls: list[ToolCall] = []
+        for block in response.content:
+            if block.type == "text":
+                content_text += block.text
+            elif block.type == "tool_use":
+                from personal_agent.llm_client.types import ToolCall as ToolCallType
+
+                tool_calls.append(
+                    ToolCallType(
+                        id=block.id,
+                        name=block.name,
+                        arguments=json.dumps(block.input),
+                    )
+                )
+
+        input_tokens = response.usage.input_tokens
+        output_tokens = response.usage.output_tokens
+        cost_usd = _estimate_cost(self.model, input_tokens, output_tokens)
+
+        await self.cost_tracker.record_api_call(
+            provider="anthropic",
+            model=self.model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=cost_usd,
+            trace_id=trace_uuid,
+            purpose="orchestrator",
+            latency_ms=latency_ms,
+        )
+
+        log.info(
+            "claude_respond_completed",
+            model=self.model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost_usd=cost_usd,
+            latency_ms=latency_ms,
+            tool_calls_count=len(tool_calls),
+            trace_id=str(trace_uuid) if trace_uuid else None,
+            component="claude_client",
+        )
+
+        return LLMResponse(
+            role="assistant",
+            content=content_text,
+            tool_calls=tool_calls,
+            reasoning_trace=None,
+            usage={
+                "prompt_tokens": input_tokens,
+                "completion_tokens": output_tokens,
+                "total_tokens": input_tokens + output_tokens,
+            },
+            response_id=response.id,
+            raw={"stop_reason": response.stop_reason},
+        )

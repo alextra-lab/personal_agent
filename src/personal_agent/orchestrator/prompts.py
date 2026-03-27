@@ -43,7 +43,10 @@ Rules:
 - Provide ALL required parameters (e.g., list_directory requires {"path": "..."}).
 - For large directories, prefer calling list_directory with include_details=false and/or max_entries (unless the user explicitly asked for every entry).
 - After tool results are returned, synthesize a final natural-language answer. Do NOT request the same tool again unless the path/args must change.
-- Whenever the user asks about current events, recent news, CVEs, product versions, or anything requiring live web data, call mcp_perplexity_ask for quick lookups or mcp_perplexity_research for deeper research instead of answering from your own knowledge."""
+- Whenever the user asks about current events, recent news, CVEs, product versions, or anything requiring live web data, call web_search for quick lookups (free, private, multi-engine). Pass categories='it' for technical queries, 'science' for research, 'news' for current events, 'weather' for forecasts.
+- After web_search returns URLs, use mcp_fetch_content to read full page content when snippets are insufficient.
+- Use mcp_perplexity_ask only when you specifically need a synthesized answer with citations, or when web_search results are insufficient for a complex question.
+- Do NOT answer from your own knowledge when live information is needed; always search first."""
 
 
 TOOL_USE_NATIVE_PROMPT = f"""You are a tool-using assistant.
@@ -65,10 +68,13 @@ If you call a tool, do NOT answer the user yet — wait for the tool result firs
 
 {_TOOL_RULES}
 
-Example:
+Examples:
 
-User: "What CVEs affect OpenSSH this month?"
-[TOOL_REQUEST]{{"name": "mcp_perplexity_ask", "arguments": {{"messages": [{{"role": "user", "content": "CVEs affecting OpenSSH this month"}}]}}}}[END_TOOL_REQUEST]
+User: "What's the latest version of FastAPI?"
+[TOOL_REQUEST]{{"name": "web_search", "arguments": {{"query": "FastAPI latest version 2026", "categories": "it"}}}}[END_TOOL_REQUEST]
+
+User: "Give me a comprehensive comparison of React vs Svelte with citations"
+[TOOL_REQUEST]{{"name": "mcp_perplexity_ask", "arguments": {{"messages": [{{"role": "user", "content": "comprehensive comparison React vs Svelte 2026 with benchmarks"}}]}}}}[END_TOOL_REQUEST]
 """
 
 
@@ -141,10 +147,15 @@ def get_tool_awareness_prompt() -> str:
 
         tool_names_lower = [t.name.lower() for t in tools]
         capabilities = []
+        if any("web_search" == n for n in tool_names_lower):
+            capabilities.append(
+                "private web search via SearXNG "
+                "(multi-engine, categories: general/it/science/news/weather)"
+            )
         if any("perplexity" in n for n in tool_names_lower):
-            capabilities.append("internet search via Perplexity")
+            capabilities.append("AI-synthesized research via Perplexity (for deep questions with citations)")
         if any("duckduckgo" in n for n in tool_names_lower):
-            capabilities.append("web search via DuckDuckGo")
+            capabilities.append("web search via DuckDuckGo (fallback)")
         if any("browser" in n or "playwright" in n for n in tool_names_lower):
             capabilities.append("browser automation")
         if any("elasticsearch" in n for n in tool_names_lower):

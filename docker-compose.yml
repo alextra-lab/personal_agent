@@ -70,6 +70,22 @@ services:
       timeout: 5s
       retries: 5
 
+  # SearXNG metasearch engine for private web search (ADR-0034)
+  searxng:
+    image: searxng/searxng:latest
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8888
+    volumes:
+      - ./config/searxng:/etc/searxng:rw
+    ports:
+      - "8888:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
 volumes:
   postgres_data:
   es_data:

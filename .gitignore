@@ -79,3 +79,6 @@ current_session
 .claude/worktrees/
 .claude/todos/
 .claude/.cache/
+
+# SearXNG generated files (ADR-0034)
+config/searxng/uwsgi.ini

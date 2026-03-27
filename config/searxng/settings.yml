@@ -1,0 +1,116 @@
+# SearXNG configuration for personal agent (ADR-0034)
+# Docs: https://docs.searxng.org/admin/settings/
+
+use_default_settings: true
+
+general:
+  instance_name: "PersonalAgent Search"
+  debug: false
+  enable_metrics: true
+
+search:
+  safe_search: 0
+  default_lang: "en"
+  formats:
+    - html
+    - json
+
+server:
+  bind_address: "0.0.0.0"
+  port: 8080
+  secret_key: "personal-agent-searxng-secret-change-me-32chars"
+  limiter: false
+  public_instance: false
+
+ui:
+  default_theme: simple
+  results_on_new_tab: false
+
+engines:
+  # ── General web search ──────────────────────────────────
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+
+  - name: brave
+    engine: brave
+    shortcut: br
+    disabled: false
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    disabled: false
+
+  # ── IT / Development ────────────────────────────────────
+  - name: stackoverflow
+    engine: stackoverflow
+    shortcut: so
+    disabled: false
+    categories: it
+
+  - name: github
+    engine: github
+    shortcut: gh
+    disabled: false
+    categories: it
+
+  - name: mdn
+    engine: mdn
+    shortcut: mdn
+    disabled: false
+    categories: it
+
+  - name: pypi
+    engine: pypi
+    shortcut: pypi
+    disabled: false
+    categories: it
+
+  # ── Science / Research ──────────────────────────────────
+  - name: arxiv
+    engine: arxiv
+    shortcut: ax
+    disabled: false
+    categories: science
+
+  - name: semantic scholar
+    engine: semantic_scholar
+    shortcut: ss
+    disabled: false
+    categories: science
+
+  # ── News ────────────────────────────────────────────────
+  - name: google news
+    engine: google_news
+    shortcut: gn
+    disabled: false
+    categories: news
+
+  - name: bing news
+    engine: bing_news
+    shortcut: bn
+    disabled: false
+    categories: news
+
+  # ── Weather ─────────────────────────────────────────────
+  - name: wttr.in
+    engine: wttr
+    shortcut: wttr
+    disabled: false
+    categories: weather
+
+outgoing:
+  request_timeout: 8
+  max_request_timeout: 15
+  useragent_suffix: ""
+  # Uncomment to route through a proxy:
+  # proxies:
+  #   all://:
+  #     - socks5h://tor:9050

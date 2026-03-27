@@ -191,6 +191,27 @@ class AppConfig(BaseSettings):
         default_factory=list, description="List of MCP server names to enable (empty = all)"
     )
 
+    # SearXNG web search (ADR-0034)
+    searxng_base_url: str = Field(
+        default="http://localhost:8888",
+        description="SearXNG instance base URL",
+    )
+    searxng_timeout_seconds: int = Field(
+        default=12,
+        ge=1,
+        description="Timeout for SearXNG search requests",
+    )
+    searxng_default_categories: str = Field(
+        default="general",
+        description="Default SearXNG categories (comma-separated)",
+    )
+    searxng_max_results: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Maximum results to return per search",
+    )
+
     @field_validator("mcp_gateway_command", mode="before")
     @classmethod
     def parse_gateway_command(cls, v: str | list[str]) -> list[str]:

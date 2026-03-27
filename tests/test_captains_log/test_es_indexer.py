@@ -83,7 +83,7 @@ class TestScheduleESIndex:
 
     @pytest.mark.asyncio
     async def test_schedule_es_index_normalizes_captures_tool_results_output(self) -> None:
-        """Captures index gets tool_results[].output wrapped when string (ES flattened expects object)."""
+        """Captures index gets tool_results[].output serialized: strings pass through, dicts become JSON strings."""
         called: list[tuple[str, dict, str | None]] = []
 
         async def indexer(index_name: str, document: dict, doc_id: str | None = None) -> None:
@@ -105,14 +105,18 @@ class TestScheduleESIndex:
             await asyncio.sleep(0.05)
             assert len(called) == 1
             doc = called[0][1]
-            assert doc["tool_results"][0]["output"] == {"value": "stdout text"}
-            assert doc["tool_results"][1]["output"] == {"path": "/tmp/x", "content": "hi"}
+            assert doc["tool_results"][0]["output"] == "stdout text"
+            assert doc["tool_results"][1]["output"] == '{"path": "/tmp/x", "content": "hi"}'
         finally:
             set_es_indexer(None)
 
 
 class TestNormalizeCaptureDocForES:
-    """Test normalize_capture_doc_for_es (tool_results[].output must be object for ES flattened)."""
+    """Test normalize_capture_doc_for_es.
+
+    ES maps tool_results[].output as ``text`` (index: false).
+    Non-string outputs (dicts, lists, None) must be JSON-serialized to strings.
+    """
 
     def test_passthrough_when_no_tool_results(self) -> None:
         """Doc without tool_results is returned unchanged."""
@@ -124,8 +128,8 @@ class TestNormalizeCaptureDocForES:
         doc = {"trace_id": "t1", "tool_results": "invalid"}
         assert normalize_capture_doc_for_es(doc) == doc
 
-    def test_wraps_string_output_in_value(self) -> None:
-        """String output is wrapped as {\"value\": output}."""
+    def test_string_output_unchanged(self) -> None:
+        """String output passes through unchanged — already a valid ES text value."""
         doc = {
             "trace_id": "t1",
             "tool_results": [
@@ -133,11 +137,11 @@ class TestNormalizeCaptureDocForES:
             ],
         }
         out = normalize_capture_doc_for_es(doc)
-        assert out["tool_results"][0]["output"] == {"value": "hello"}
-        assert doc["tool_results"][0]["output"] == "hello"  # input unchanged
+        assert out["tool_results"][0]["output"] == "hello"
+        assert doc["tool_results"][0]["output"] == "hello"  # input not mutated
 
-    def test_leaves_dict_output_unchanged(self) -> None:
-        """Dict output is not wrapped."""
+    def test_serializes_dict_output(self) -> None:
+        """Dict output is JSON-serialized to a string so ES text field accepts it."""
         doc = {
             "trace_id": "t1",
             "tool_results": [
@@ -145,10 +149,11 @@ class TestNormalizeCaptureDocForES:
             ],
         }
         out = normalize_capture_doc_for_es(doc)
-        assert out["tool_results"][0]["output"] == {"key": "val"}
+        assert out["tool_results"][0]["output"] == '{"key": "val"}'
+        assert doc["tool_results"][0]["output"] == {"key": "val"}  # input not mutated
 
-    def test_wraps_non_dict_output(self) -> None:
-        """None, list, or number output is wrapped as {\"value\": ...} (ES flattened expects object)."""
+    def test_serializes_non_string_output(self) -> None:
+        """None, list, and number outputs are JSON-serialized to strings."""
         doc = {
             "trace_id": "t1",
             "tool_results": [
@@ -158,12 +163,12 @@ class TestNormalizeCaptureDocForES:
             ],
         }
         out = normalize_capture_doc_for_es(doc)
-        assert out["tool_results"][0]["output"] == {"value": None}
-        assert out["tool_results"][1]["output"] == {"value": [1, 2]}
-        assert out["tool_results"][2]["output"] == {"value": 42}
+        assert out["tool_results"][0]["output"] == "null"
+        assert out["tool_results"][1]["output"] == "[1, 2]"
+        assert out["tool_results"][2]["output"] == "42"
 
     def test_non_dict_item_wrapped_as_value(self) -> None:
-        """Non-dict list item is replaced with {\"value\": item}."""
+        """Non-dict list item (malformed tool_result) is coerced to a string."""
         doc = {"trace_id": "t1", "tool_results": ["broken"]}
         out = normalize_capture_doc_for_es(doc)
         assert out["tool_results"] == [{"value": "broken"}]

@@ -1,12 +1,12 @@
 #!/bin/bash
-# Initialize all Phase 2.1 services (PostgreSQL, Elasticsearch, Neo4j)
+# Initialize all services (PostgreSQL, Elasticsearch, Neo4j, SearXNG)
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-echo "=== Phase 2.1 Service Initialization ==="
+echo "=== Service Initialization ==="
 echo ""
 
 # Check if docker-compose is running
@@ -44,6 +44,14 @@ if ! docker ps | grep -q "personal_agent"; then
     sleep 2
   done
   echo "✓ Neo4j is ready"
+
+  # Wait for SearXNG
+  echo "Checking SearXNG..."
+  until curl -s http://localhost:8888/healthz > /dev/null 2>&1; do
+    echo "  Waiting for SearXNG..."
+    sleep 2
+  done
+  echo "✓ SearXNG is ready"
   echo ""
 else
   echo "Docker services already running"
@@ -67,6 +75,7 @@ echo "  Elasticsearch: http://localhost:9200"
 echo "  Kibana:        http://localhost:5601"
 echo "  Neo4j Browser: http://localhost:7474"
 echo "  Neo4j Bolt:    bolt://localhost:7687"
+echo "  SearXNG:       http://localhost:8888"
 echo ""
 echo "Next steps:"
 echo "  1. Install dependencies: uv sync"

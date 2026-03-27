@@ -1,6 +1,6 @@
 # ADR-0034: SearXNG Self-Hosted Web Search Integration
 
-**Status**: Proposed
+**Status**: Accepted
 **Date**: 2026-03-27
 **Deciders**: Project owner
 **Extends**: ADR-0011 (MCP Gateway Integration), ADR-0026 (search_memory native tool)
@@ -66,7 +66,7 @@ Add SearXNG to `docker-compose.yml` alongside Postgres, Elasticsearch, Neo4j, an
     Agent (Python) ───── httpx GET ───────────────────┘
 ```
 
-SearXNG has no state that needs persisting (no volume mount required for MVP). Configuration is mounted from `config/searxng/settings.yml`.
+SearXNG has no persistent data (no named data volume required for MVP). Configuration is bind-mounted from `config/searxng/settings.yml`. Note: SearXNG generates a random `secret_key` on first start and may write `uwsgi.ini` into the config directory — both are gitignored.
 
 ### D2: Implement `web_search` as a Native In-Process Tool
 

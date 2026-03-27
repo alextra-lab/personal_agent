@@ -26,6 +26,10 @@ from personal_agent.tools.system_health import (
     system_metrics_snapshot_executor,
     system_metrics_snapshot_tool,
 )
+from personal_agent.tools.web import (
+    web_search_executor,
+    web_search_tool,
+)
 from personal_agent.tools.types import ToolDefinition, ToolParameter, ToolResult
 
 __all__ = [
@@ -50,6 +54,7 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
     - list_directory: List directory contents
     - system_metrics_snapshot: Get system health metrics
     - search_memory: Query memory graph (ADR-0026)
+    - web_search: Private web search via SearXNG (ADR-0034)
 
     Args:
         registry: Tool registry to register tools with.
@@ -59,6 +64,7 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
     registry.register(system_metrics_snapshot_tool, system_metrics_snapshot_executor)
     registry.register(search_memory_tool, search_memory_executor)
     registry.register(self_telemetry_query_tool, self_telemetry_query_executor)
+    registry.register(web_search_tool, web_search_executor)  # ADR-0034
 
 
 # Global singleton registry

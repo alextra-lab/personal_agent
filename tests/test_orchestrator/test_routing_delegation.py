@@ -109,9 +109,14 @@ class TestPromptConstants:
         assert len(TOOL_USE_SYSTEM_PROMPT) <= baselines["tool_use_system_prompt_max_chars"]
 
     def test_tool_use_prompt_contains_perplexity_guidance(self) -> None:
-        """Tool-use prompt must include examples for both perplexity tools."""
+        """Tool-use prompt must reference web_search as primary and mcp_perplexity_ask as fallback.
+
+        ADR-0034: mcp_perplexity_research is no longer referenced in the default guidance;
+        web_search (SearXNG) is the primary search tool, mcp_perplexity_ask is the fallback
+        for synthesized answers with citations.
+        """
+        assert "web_search" in TOOL_USE_SYSTEM_PROMPT
         assert "mcp_perplexity_ask" in TOOL_USE_SYSTEM_PROMPT
-        assert "mcp_perplexity_research" in TOOL_USE_SYSTEM_PROMPT
 
     def test_get_router_prompt_returns_router_system_prompt(self) -> None:
         """get_router_prompt() must return the ROUTER_SYSTEM_PROMPT constant."""

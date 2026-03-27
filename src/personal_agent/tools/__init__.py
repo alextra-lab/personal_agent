@@ -17,20 +17,20 @@ from personal_agent.tools.memory_search import (
     search_memory_executor,
     search_memory_tool,
 )
+from personal_agent.tools.registry import ToolRegistry
 from personal_agent.tools.self_telemetry import (
     self_telemetry_query_executor,
     self_telemetry_query_tool,
 )
-from personal_agent.tools.registry import ToolRegistry
 from personal_agent.tools.system_health import (
     system_metrics_snapshot_executor,
     system_metrics_snapshot_tool,
 )
+from personal_agent.tools.types import ToolDefinition, ToolParameter, ToolResult
 from personal_agent.tools.web import (
     web_search_executor,
     web_search_tool,
 )
-from personal_agent.tools.types import ToolDefinition, ToolParameter, ToolResult
 
 __all__ = [
     # Core exports

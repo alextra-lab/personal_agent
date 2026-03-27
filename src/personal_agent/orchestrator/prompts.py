@@ -153,7 +153,9 @@ def get_tool_awareness_prompt() -> str:
                 "(multi-engine, categories: general/it/science/news/weather)"
             )
         if any("perplexity" in n for n in tool_names_lower):
-            capabilities.append("AI-synthesized research via Perplexity (for deep questions with citations)")
+            capabilities.append(
+                "AI-synthesized research via Perplexity (for deep questions with citations)"
+            )
         if any("duckduckgo" in n for n in tool_names_lower):
             capabilities.append("web search via DuckDuckGo (fallback)")
         if any("browser" in n or "playwright" in n for n in tool_names_lower):

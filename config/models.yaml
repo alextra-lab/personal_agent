@@ -1,13 +1,13 @@
-# Model configuration (ADR-0031: single source of truth for all model identity)
+# Model configuration (ADR-0031 + ADR-0033: two-tier taxonomy + LiteLLM)
 #
-# This file owns ALL model parameters — both local (LM Studio) and cloud (Anthropic, OpenAI).
-# Only secrets (API keys) and operational controls (budgets) belong in .env / settings.py.
+# ── Model Taxonomy (ADR-0033) ──────────────────────────────────────
+#   PRIMARY:    Orchestrator brain (reasoning, tool calling, decomposition)
+#   SUB_AGENT:  Focused task completion (no thinking, fast, bounded output)
 #
-# ── Process-to-model assignments ──────────────────────────────────────────────
-# Each key below maps a background process to a model role defined in models:
-#   entity_extraction_role  →  Second Brain memory graph extraction
-#   captains_log_role       →  Captain's Log self-reflection generation
-#   insights_role           →  Insights Engine pattern analysis
+# ── Rules (ADR-0031) ───────────────────────────────────────────────
+#   "Which model does X use?"  → This file (role assignment + model def)
+#   "What is my API key?"      → .env (secret, gitignored)
+#   "How much can I spend?"    → .env (operational runtime control)
 #
 # ── Model definition fields ───────────────────────────────────────────────────
 # Required for all models:
@@ -24,6 +24,7 @@
 #   top_k            Passed via extra_body (vLLM/LM Studio extension)
 #   disable_thinking Hard-disables thinking via chat_template_kwargs (Qwen3.5+)
 #   thinking_budget_tokens  Caps thinking tokens via extra_body (Qwen3.5+)
+#   min_concurrency  Floor for adaptive concurrency (ADR-0033)
 #
 # Cloud-model fields:
 #   provider         "anthropic" | "openai"  ← selects which SDK to dispatch to
@@ -36,150 +37,176 @@ captains_log_role: claude_sonnet
 insights_role: claude_sonnet
 
 models:
-  # Router role removed in Cognitive Architecture Redesign v2 (Slice 1).
-  # Intent classification is now deterministic (request_gateway/intent.py).
-  # See: docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md Section 3.10
-  #
-  # router:
-  #   id: "liquid/lfm2.5-1.2b"
-  #   context_length: 32768
-  #   quantization: "bf16"
-  #   max_concurrency: 4
-  #   default_timeout: 10
-  #   temperature: 0.1
-  #   top_p: 0.1
-  #   top_k: 50
-  #   presence_penalty: 1.05
-  #   supports_function_calling: false
-  #   tool_calling_strategy: "disabled"
-  #   provider_type: "local"
-  #   endpoint: "http://localhost:8000/v1"
+  # ── Tier 1: Primary Agent ───────────────────────────────────────
+  primary:
+    # Orchestrator brain: deep reasoning, tool calling, decomposition planning.
+    # Thinking enabled with bounded budget. Single concurrent (GPU-limited).
+    # Renamed from "reasoning" (ADR-0033).
+    id: "unsloth/qwen3.5-35-A3B"
+    context_length: 64000
+    quantization: "8bit"
+    min_concurrency: 1
+    max_concurrency: 1
+    default_timeout: 180  # seconds (35B model: ~40s thinking + ~30s JSON generation)
+    temperature: 0.6      # Qwen3.5 thinking mode recommended
+    top_p: 0.95           # Qwen3.5 thinking mode recommended
+    top_k: 20             # Qwen3.5 recommended (passed via extra_body)
+    thinking_budget_tokens: 3000  # Cap thinking tokens to limit over-generation (ADR-0023)
+    supports_function_calling: true
+    tool_calling_strategy: "native"  # Qwen3.5 chat template supports tools natively
+    provider_type: "local"
+    endpoint: "http://localhost:8000/v1"
 
-  standard:
-    # Default "workhorse" model: general answers + tool orchestration, non-thinking fast path.
-    # disable_thinking sends chat_template_kwargs enable_thinking=False via extra_body (ADR-0023).
-    # Sampling params: Qwen3.5 non-thinking mode recommendations.
+  # ── Tier 2: Sub-Agent ───────────────────────────────────────────
+  sub_agent:
+    # Focused single-task completion for HYBRID expansion sub-agents.
+    # No thinking. Lower temperature for deterministic output. Bounded tokens.
+    # Renamed from "standard" (ADR-0033). Parameters tuned for focused tasks.
     id: "unsloth/qwen3.5-9b"
     context_length: 32768
     quantization: "8bit"
-    max_concurrency: 2
-    default_timeout: 45  # seconds
-    temperature: 0.7     # Qwen3.5 non-thinking recommended
-    top_p: 0.8           # Qwen3.5 non-thinking recommended
-    top_k: 20            # Qwen3.5 recommended (passed via extra_body)
-    presence_penalty: 1.5  # Reduces repetition in non-thinking mode
+    min_concurrency: 1
+    max_concurrency: 3
+    default_timeout: 90  # seconds
+    temperature: 0.4     # Lower for deterministic focused output
+    top_p: 0.8
+    top_k: 20
+    presence_penalty: 0.5  # Focused, coherent output
+    max_tokens: 2048        # Bounded output for summary-length sub-task results
     disable_thinking: true  # Hard disable via chat_template_kwargs (ADR-0023)
     supports_function_calling: true
     tool_calling_strategy: "native"  # Qwen3.5 chat template supports tools natively
     provider_type: "local"
-    endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
-    #endpoint: "http://127.0.0.1:1234/v1"
+    endpoint: "http://localhost:8000/v1"
 
-  reasoning:
-    # Deep reasoning model with bounded thinking budget (ADR-0023).
-    # thinking_budget_tokens caps thinking token spend; sampling params per Qwen3.5 thinking mode.
-    id: "unsloth/qwen3.5-35-A3B"
-    context_length: 64000  # Optimized from 128K for MVP
-    quantization: "8bit"
-    max_concurrency: 1  # Increased from 1 (smaller footprint enables parallelism)
-    default_timeout: 180  # seconds (35B model: ~40s thinking + ~30s JSON generation)
-    temperature: 0.6     # Qwen3.5 thinking mode recommended
-    top_p: 0.95          # Qwen3.5 thinking mode recommended
-    top_k: 20            # Qwen3.5 recommended (passed via extra_body)
-    thinking_budget_tokens: 3000  # Cap thinking tokens to limit over-generation (ADR-0023)
-    supports_function_calling: true
-    tool_calling_strategy: "native"  # Qwen3.5 chat template supports tools natively
-    provider_type: "local"
-    endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
-    #endpoint: "http://127.0.0.1:1234/v1"
-
-  coding:
-    # Fallback: devstral not loaded, reuse standard model for coding tasks
-    #id: "mistralai/devstral-small-2-2512"
-    id: "unsloth/qwen3.5-9b"
-    context_length: 32768
-    quantization: "8bit"
-    max_concurrency: 1
-    default_timeout: 45  # seconds
-    temperature: 0.2
-    disable_thinking: true
-    supports_function_calling: true
-    tool_calling_strategy: "native"  # Qwen3.5 chat template supports tools natively
-    provider_type: "local"
-    endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
-    #endpoint: "http://127.0.0.1:1234/v1"
-
-  # EXPERIMENTAL: Alternative models for A/B testing (not loaded by default)
+  # ── Experimental / A/B Testing ──────────────────────────────────
   reasoning_heavy:
     # Deep reasoning model with bounded thinking budget (ADR-0023).
-    # thinking_budget_tokens caps thinking token spend; sampling params per Qwen3.5 thinking mode.
     id: "qwen3.5-35b-a3b"
-    context_length: 64000  # Optimized from 128K for MVP
+    context_length: 64000
     quantization: "8bit"
-    max_concurrency: 1  # Increased from 1 (smaller footprint enables parallelism)
-    default_timeout: 180  # seconds (35B model: ~40s thinking + ~30s JSON generation)
-    temperature: 0.6     # Qwen3.5 thinking mode recommended
-    top_p: 0.95          # Qwen3.5 thinking mode recommended
-    top_k: 20            # Qwen3.5 recommended (passed via extra_body)
-    thinking_budget_tokens: 3000  # Cap thinking tokens to limit over-generation (ADR-0023)
+    min_concurrency: 1
+    max_concurrency: 1
+    default_timeout: 180
+    temperature: 0.6
+    top_p: 0.95
+    top_k: 20
+    thinking_budget_tokens: 3000
     supports_function_calling: true
     provider_type: "local"
-    endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
-    #endpoint: "http://127.0.0.1:1234/v1"
-
-  reasoning_baseline:
-    # Deep reasoning model with bounded thinking budget (ADR-0023).
-    # thinking_budget_tokens caps thinking token spend; sampling params per Qwen3.5 thinking mode.
-    id: "qwen3.5-35b-a3b"
-    context_length: 64000  # Optimized from 128K for MVP
-    quantization: "8bit"
-    max_concurrency: 2  # Increased from 1 (smaller footprint enables parallelism)
-    default_timeout: 180  # seconds (35B model: ~40s thinking + ~30s JSON generation)
-    temperature: 0.6     # Qwen3.5 thinking mode recommended
-    top_p: 0.95          # Qwen3.5 thinking mode recommended
-    top_k: 20            # Qwen3.5 recommended (passed via extra_body)
-    thinking_budget_tokens: 3000  # Cap thinking tokens to limit over-generation (ADR-0023)
-    supports_function_calling: true
-    provider_type: "local"
-    endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
-    #endpoint: "http://127.0.0.1:1234/v1"
+    endpoint: "http://localhost:8000/v1"
 
   coding_large_context:
     # For large codebase analysis (future evaluation; high-memory MoE model)
     id: "qwen/qwen3-coder-next"
     context_length: 128000
     quantization: "4bit"
+    min_concurrency: 1
     max_concurrency: 1
     default_timeout: 60
     temperature: 0.2
-    #endpoint: "http://localhost:8000/v1"  # Optional: override base URL for this model
 
-  # ── Cloud models (ADR-0031) ────────────────────────────────────────────────
+  # ── Cloud Models (ADR-0031) ─────────────────────────────────────
   # API key is NOT stored here — set AGENT_ANTHROPIC_API_KEY / AGENT_OPENAI_API_KEY in .env
   # provider_type: "cloud" opts out of local GPU concurrency control (ADR-0029)
 
   claude_sonnet:
     # Anthropic Claude Sonnet — used for background reasoning tasks
     # (entity extraction, Captain's Log reflection, insights analysis)
-    #
-    # Use the undated alias ("claude-sonnet-4-5") for the latest patch of that
-    # minor version, or a pinned dated string once you confirm it's available
-    # on your API plan. Update this single ID to switch all three processes.
+    # LiteLLM model string: "anthropic/claude-sonnet-4-6" (prefixed at call time)
     id: "claude-sonnet-4-6"
     provider: "anthropic"
     provider_type: "cloud"
     max_tokens: 8192
     context_length: 200000
+    min_concurrency: 1
     max_concurrency: 10
     default_timeout: 60
 
   # openai_o4_mini:
   #   # OpenAI o4-mini — A/B test candidate for background reasoning tasks
   #   # Uncomment and set AGENT_OPENAI_API_KEY to use
+  #   # LiteLLM model string: "openai/o4-mini"
   #   id: "o4-mini"
   #   provider: "openai"
   #   provider_type: "cloud"
   #   max_tokens: 8192
   #   context_length: 128000
+  #   min_concurrency: 1
   #   max_concurrency: 10
   #   default_timeout: 60
+
+  # gemini_pro:
+  #   # Google Gemini 2.5 Pro — deep research / long-context
+  #   # LiteLLM model string: "gemini/gemini-2.5-pro"
+  #   id: "gemini-2.5-pro"
+  #   provider: "google"
+  #   provider_type: "cloud"
+  #   max_tokens: 8192
+  #   context_length: 1000000
+  #   min_concurrency: 1
+  #   max_concurrency: 10
+  #   default_timeout: 120
+
+# ── Delegation Targets (Slice 3 — schema defined, not invoked) ────
+# These are AGENTS, not models. They have their own runtimes, models,
+# and execution environments. Invoked via DelegationPackage, not respond().
+# See ADR-0033 D5 for interface contract design.
+#
+# delegation_targets:
+#   claude_code:
+#     description: "Claude Code CLI for coding and refactoring tasks"
+#     interface: "cli"
+#     command: "claude"
+#     auth_method: "api_key"
+#     auth_env_var: "ANTHROPIC_API_KEY"
+#     model: "claude-sonnet-4-6"
+#     max_turns: 20
+#     timeout_seconds: 600
+#     cost_model: "per_token"
+#     estimated_cost_per_task_usd: 0.50
+#     capabilities:
+#       - code_generation
+#       - refactoring
+#       - testing
+#       - debugging
+#       - file_editing
+#     input_format: "text"
+#     output_format: "text+diffs"
+#     requires_working_directory: true
+#     sandboxed: false
+#
+#   codex:
+#     description: "OpenAI Codex for sandboxed code execution"
+#     interface: "api"
+#     base_url: "https://api.openai.com/v1"
+#     auth_method: "api_key"
+#     auth_env_var: "OPENAI_API_KEY"
+#     model: "codex-mini"
+#     timeout_seconds: 300
+#     cost_model: "per_task"
+#     capabilities:
+#       - code_generation
+#       - code_execution
+#     input_format: "text+files"
+#     output_format: "text+artifacts"
+#     requires_working_directory: false
+#     sandboxed: true
+#
+#   deep_research:
+#     description: "SOTA model for deep research with grounding"
+#     interface: "api"
+#     auth_method: "api_key"
+#     auth_env_var: "GOOGLE_API_KEY"
+#     model: "gemini-2.5-pro"
+#     timeout_seconds: 900
+#     cost_model: "per_token"
+#     capabilities:
+#       - research
+#       - analysis
+#       - long_context
+#       - grounding
+#     input_format: "text"
+#     output_format: "text+citations"
+#     requires_working_directory: false
+#     sandboxed: false

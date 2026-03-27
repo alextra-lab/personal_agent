@@ -40,8 +40,8 @@ class ModelDefinition(BaseModel):
         id: Model identifier. For local models this is the LM Studio slug
             (e.g., "qwen3.5-35b-a3b"). For cloud models this is the provider's
             model name (e.g., "claude-sonnet-4-5-20250514", "o4-mini").
-        provider: Cloud provider name. "anthropic" dispatches to ClaudeClient;
-            "openai" dispatches to OpenAIClient (future). None means local model.
+        provider: Cloud provider name. "anthropic", "openai", etc. dispatch to LiteLLMClient.
+            None means local model via LocalLLMClient.
         max_tokens: Maximum output tokens for this model. Primarily useful for
             cloud models where output length is billed per token. None = provider
             default / LocalLLMClient call-site default.
@@ -77,7 +77,7 @@ class ModelDefinition(BaseModel):
         None,
         description=(
             "Cloud provider for dispatch (ADR-0031). "
-            "'anthropic' = ClaudeClient, 'openai' = OpenAIClient. "
+            "'anthropic', 'openai', etc. = LiteLLMClient. "
             "None = local model via LocalLLMClient."
         ),
     )
@@ -107,6 +107,15 @@ class ModelDefinition(BaseModel):
         ),
     )
     max_concurrency: int = Field(..., ge=1, description="Maximum concurrent requests")
+    min_concurrency: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "Floor for adaptive concurrency control (ADR-0033). "
+            "Brainstem cannot reduce effective concurrency below this value. "
+            "Must be <= max_concurrency."
+        ),
+    )
     default_timeout: int = Field(..., ge=1, description="Default timeout in seconds")
     temperature: float | None = Field(
         default=None,
@@ -175,6 +184,16 @@ class ModelDefinition(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _min_max_concurrency(self) -> "ModelDefinition":
+        """Ensure min_concurrency does not exceed max_concurrency."""
+        if self.min_concurrency > self.max_concurrency:
+            raise ValueError(
+                f"min_concurrency ({self.min_concurrency}) must be <= "
+                f"max_concurrency ({self.max_concurrency})"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _derive_tool_calling_strategy(self) -> "ModelDefinition":
         """Derive tool_calling_strategy from supports_function_calling when not set."""
         if self.tool_calling_strategy is None:
@@ -206,27 +225,27 @@ class ModelConfig(BaseModel):
 
     Attributes:
         models: Dictionary mapping role names to their configuration. Includes both
-            local model roles (router, standard, reasoning, coding) and cloud model
+            local model roles (primary, sub_agent) and cloud model
             entries (e.g. claude_sonnet, openai_o4_mini).
         entity_extraction_role: Role key used for Second Brain entity extraction.
             Must be a key in models. Cloud models are identified by their provider field.
         captains_log_role: Role key used for Captain's Log reflection generation.
-            Must be a key in models. Defaults to "reasoning" (local fallback).
+            Must be a key in models. Defaults to "primary" (local fallback).
         insights_role: Role key used for Insights Engine analysis.
-            Must be a key in models. Defaults to "reasoning" (local fallback).
+            Must be a key in models. Defaults to "primary" (local fallback).
     """
 
     models: dict[str, ModelDefinition] = Field(..., description="Model configurations by role")
     entity_extraction_role: str = Field(
-        default="reasoning",
+        default="primary",
         description="Role used for entity extraction: a key in models",
     )
     captains_log_role: str = Field(
-        default="reasoning",
+        default="primary",
         description="Role used for Captain's Log reflection: a key in models",
     )
     insights_role: str = Field(
-        default="reasoning",
+        default="primary",
         description="Role used for Insights Engine LLM calls: a key in models",
     )
 
@@ -265,11 +284,11 @@ class ModelConfig(BaseModel):
             return value
 
         # Backward-compatible fallback: if the field was omitted and defaulted to
-        # "reasoning", choose a viable role from the provided models dict.
+        # "primary", choose a viable role from the provided models dict.
         explicitly_set = field_name in self.model_fields_set
-        if not explicitly_set and value == "reasoning":
+        if not explicitly_set and value == "primary":
             if self.models:
-                return "reasoning" if "reasoning" in self.models else next(iter(self.models))
+                return "primary" if "primary" in self.models else next(iter(self.models))
             return value
 
         # Legacy sentinel: "claude" was the old magic string for entity_extraction_role.

@@ -12,7 +12,7 @@ Usage:
     with timer.span("session_lookup"):
         session = await repo.get(session_id)
 
-    with timer.span("llm_call", model_role="router"):
+    with timer.span("llm_call", model_role="primary"):
         response = await client.respond(...)
 
     breakdown = timer.to_breakdown()

@@ -4,16 +4,13 @@ This module provides structured entity and relationship extraction from
 conversation text using local reasoning models (Qwen 8B, LFM 1.2B) or Claude 4.5.
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import orjson
 
 from personal_agent.config import load_model_config, settings
 from personal_agent.llm_client import InferenceSlotTimeout, LLMTimeout, LocalLLMClient, ModelRole
 from personal_agent.telemetry import get_logger
-
-if TYPE_CHECKING:
-    from personal_agent.llm_client.claude import ClaudeClient
 
 log = get_logger(__name__)
 
@@ -112,24 +109,16 @@ Return ONLY valid JSON (no markdown fences, no explanation):
 async def extract_entities_and_relationships(
     user_message: str,
     assistant_response: str,
-    claude_client: "ClaudeClient | None" = None,
 ) -> dict[str, Any]:
     """Extract entities and relationships from conversation.
 
-    Dispatches to a cloud provider (Anthropic, OpenAI) or a local SLM based on
-    the entity_extraction_role defined in config/models.yaml (ADR-0031).
-    Cloud dispatch is driven by ModelDefinition.provider; no magic strings.
-
-    When the configured role is a cloud model (provider="anthropic") and no
-    claude_client is injected, one is created automatically from the model
-    definition. This fixes the prior bug where Claude was silently skipped when
-    the consolidator was constructed without an explicit client.
+    Dispatches to a cloud provider or a local SLM based on the
+    entity_extraction_role defined in config/models.yaml (ADR-0031).
+    Cloud dispatch uses LiteLLMClient; local dispatch uses LocalLLMClient.
 
     Args:
         user_message: User's message.
         assistant_response: Assistant's response.
-        claude_client: Optional pre-constructed ClaudeClient. When None and the
-            configured model is an Anthropic model, a client is created internally.
 
     Returns:
         Dict with entities, relationships, entity_names, and summary.
@@ -155,31 +144,28 @@ async def extract_entities_and_relationships(
 
     try:
         # Call appropriate LLM and extract content
-        if provider == "anthropic":
-            # Cloud path: Anthropic Claude
-            if claude_client is None:
-                from personal_agent.llm_client.claude import ClaudeClient
+        if provider is not None:
+            # Cloud path: any provider via LiteLLM
+            from personal_agent.llm_client.factory import get_llm_client
 
-                claude_client = ClaudeClient(
-                    model_id=model_def.id,  # type: ignore[union-attr]
-                    max_tokens=model_def.max_tokens or 8192,  # type: ignore[union-attr]
-                )
+            cloud_client = get_llm_client(role_name=entity_extraction_role)
             log.debug(
-                "entity_extraction_using_anthropic",
+                "entity_extraction_using_cloud",
                 model_id=model_def.id if model_def else None,
+                provider=provider,
             )
 
-            claude_response = await claude_client.chat_completion(
+            cloud_response = await cloud_client.respond(
+                role=ModelRole.PRIMARY,
                 messages=[{"role": "user", "content": prompt}],
-                system=_EXTRACTION_SYSTEM_PROMPT,
-                purpose="entity_extraction",
+                system_prompt=_EXTRACTION_SYSTEM_PROMPT,
             )
-            content = claude_response.get("content", "")
+            content = cloud_response["content"]
             model_used = model_def.id if model_def else entity_extraction_role
         else:
             # Local SLM path
             local_client = LocalLLMClient()
-            model_role = ModelRole.from_str(entity_extraction_role) or ModelRole.REASONING
+            model_role = ModelRole.from_str(entity_extraction_role) or ModelRole.PRIMARY
 
             log.debug(
                 "entity_extraction_calling_local_llm",

@@ -109,10 +109,8 @@ class LocalLLMClient:
             else:
                 # Fallback to spec defaults if config missing
                 fallback_timeouts = {
-                    ModelRole.ROUTER: 30,  # Increased for thinking models
-                    ModelRole.STANDARD: 45,
-                    ModelRole.REASONING: 60,
-                    ModelRole.CODING: 45,
+                    ModelRole.PRIMARY: 60,
+                    ModelRole.SUB_AGENT: 45,
                 }
                 self._role_timeouts[role] = fallback_timeouts.get(role, self.timeout_seconds)
 
@@ -148,7 +146,7 @@ class LocalLLMClient:
         - Error handling and classification
 
         Args:
-            role: Model role (router, reasoning, coding).
+            role: Model role (primary, sub_agent).
             messages: List of message dicts with role and content.
             tools: Optional list of tool definitions for function calling.
             tool_choice: Tool choice parameter ("auto", "none", or specific tool).
@@ -538,7 +536,7 @@ class LocalLLMClient:
         LocalLLMClient.
 
         Args:
-            role: Model role (ROUTER, REASONING, CODING, STANDARD) for model selection.
+            role: Model role (PRIMARY, SUB_AGENT) for model selection.
 
         Returns:
             Configured dspy.LM instance ready to use with dspy.configure().
@@ -552,7 +550,7 @@ class LocalLLMClient:
             >>> from personal_agent.llm_client import LocalLLMClient, ModelRole
             >>>
             >>> client = LocalLLMClient()
-            >>> lm = client.get_dspy_lm(role=ModelRole.REASONING)
+            >>> lm = client.get_dspy_lm(role=ModelRole.PRIMARY)
             >>> dspy.configure(lm=lm)
             >>>
             >>> class MySignature(dspy.Signature):

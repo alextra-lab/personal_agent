@@ -210,7 +210,7 @@ class InferenceConcurrencyController:
         """Register a model role with its concurrency limits.
 
         Args:
-            role: Model role name (e.g., "router", "reasoning").
+            role: Model role name (e.g., "primary", "sub_agent").
             max_concurrency: Maximum concurrent requests for this model.
             endpoint: Model-specific endpoint URL. None uses default.
             provider_type: "local", "managed", or "cloud". None auto-detects.

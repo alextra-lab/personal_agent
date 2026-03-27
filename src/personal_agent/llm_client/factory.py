@@ -1,14 +1,15 @@
-"""LLM client factory — dispatches to LocalLLMClient or ClaudeClient based on provider.
+"""LLM client factory — dispatches to LocalLLMClient or LiteLLMClient based on provider_type.
 
-The factory reads model configuration from models.yaml and returns the
-appropriate client for the given role's provider field (ADR-0031).
+Two-path dispatch (ADR-0033):
+  provider_type == "local"  →  LocalLLMClient (GPU-aware concurrency, thinking budget, tools)
+  provider_type == "cloud"  →  LiteLLMClient (all cloud providers via litellm.acompletion())
 
 Usage:
     from personal_agent.llm_client.factory import get_llm_client
     from personal_agent.llm_client.types import ModelRole
 
-    client = get_llm_client(role_name="standard")
-    response = await client.respond(role=ModelRole.STANDARD, messages=[...])
+    client = get_llm_client(role_name="primary")
+    response = await client.respond(role=ModelRole.PRIMARY, messages=[...])
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
 
 
 class LLMClient(Protocol):
-    """Structural protocol for LLM clients (LocalLLMClient and ClaudeClient).
+    """Structural protocol for LLM clients (LocalLLMClient and LiteLLMClient).
 
     Both clients must implement respond() with this signature so the executor
     can use either interchangeably. Extra client-specific params (priority,
@@ -51,38 +52,40 @@ class LLMClient(Protocol):
         ...
 
 
-def get_llm_client(role_name: str = "standard") -> Any:
-    """Return the appropriate LLM client for a given role's provider.
+def get_llm_client(role_name: str = "primary") -> Any:
+    """Return the appropriate LLM client for a given role's provider_type.
 
-    Reads the provider field from models.yaml for the specified role.
-    If provider is "anthropic", returns a ClaudeClient configured with
-    the role's model definition. Otherwise returns a LocalLLMClient.
+    Reads provider_type from models.yaml for the specified role.
+    "local" → LocalLLMClient (hardware-specific optimizations: GPU concurrency,
+    thinking budget, tool filtering). Any other value → LiteLLMClient (cloud,
+    all providers via litellm.acompletion()).
 
     Args:
-        role_name: The model role name to look up (default: "standard").
+        role_name: The model role name to look up in models.yaml (default: "primary").
 
     Returns:
-        An LLM client instance matching the role's provider.
+        An LLM client instance matching the role's provider_type.
 
     Examples:
-        >>> # With local models.yaml (provider: null)
-        >>> client = get_llm_client("standard")
+        >>> # With local models.yaml (provider_type: "local")
+        >>> client = get_llm_client("primary")
         >>> type(client).__name__
         'LocalLLMClient'
 
-        >>> # With baseline models.yaml (provider: "anthropic")
-        >>> client = get_llm_client("standard")
+        >>> # With baseline models.yaml (provider_type: "cloud", provider: "anthropic")
+        >>> client = get_llm_client("primary")
         >>> type(client).__name__
-        'ClaudeClient'
+        'LiteLLMClient'
     """
     config = load_model_config()
     model_def = config.models.get(role_name)
 
-    if model_def and model_def.provider == "anthropic":
-        from personal_agent.llm_client.claude import ClaudeClient
+    if model_def and model_def.provider_type != "local":
+        from personal_agent.llm_client.litellm_client import LiteLLMClient
 
-        return ClaudeClient(
+        return LiteLLMClient(
             model_id=model_def.id,
+            provider=model_def.provider or "anthropic",
             max_tokens=model_def.max_tokens or 8192,
         )
 

@@ -9,7 +9,6 @@ enable idempotent backfill replay (FRE-30).
 """
 
 import asyncio
-import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -40,11 +39,11 @@ def normalize_capture_doc_for_es(doc: dict[str, Any]) -> dict[str, Any]:
     normalized: list[dict[str, Any]] = []
     for item in doc["tool_results"]:
         if not isinstance(item, dict):
-            normalized.append({"output": str(item)})
+            normalized.append({"value": item})
             continue
         output = item.get("output")
-        if output is not None and not isinstance(output, str):
-            item = {**item, "output": json.dumps(output, default=str)}
+        if not isinstance(output, dict):
+            item = {**item, "output": {"value": output}}
         normalized.append(item)
     return {**doc, "tool_results": normalized}
 

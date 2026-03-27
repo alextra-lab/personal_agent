@@ -283,7 +283,7 @@ class BenchmarkEvaluator:
 
         return BenchmarkResult(
             task_id=task.id,
-            model_role=ModelRole.REASONING,  # Will be set by caller
+            model_role=ModelRole.PRIMARY,  # Will be set by caller
             model_id="",  # Will be set by caller
             response=response,
             success=success,
@@ -507,8 +507,8 @@ async def main():
     parser.add_argument(
         "--model",
         type=str,
-        choices=["router", "reasoning", "coding", "all"],
-        default="reasoning",
+        choices=["primary", "sub_agent", "all"],
+        default="primary",
         help="Model role to benchmark",
     )
     parser.add_argument(
@@ -525,7 +525,7 @@ async def main():
     benchmark = ModelBenchmark()
 
     if args.model == "all":
-        roles = [ModelRole.ROUTER, ModelRole.REASONING, ModelRole.CODING]
+        roles = [ModelRole.PRIMARY, ModelRole.SUB_AGENT]
     else:
         roles = [ModelRole(args.model)]
 

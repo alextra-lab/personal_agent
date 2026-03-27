@@ -7,6 +7,10 @@ for the primary agent to synthesize.
 
 Gateway decides IF to expand. Agent decides HOW. This module does the HOW.
 
+Sub-agent client isolation (ADR-0033): execute_hybrid() creates its own client
+via get_llm_client("sub_agent") — sub-agents always use the sub_agent model
+config, never inheriting the primary agent's client.
+
 See: docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md Section 4.4
 """
 
@@ -74,24 +78,31 @@ def parse_decomposition_plan(
 
 async def execute_hybrid(
     specs: Sequence[SubAgentSpec],
-    llm_client: object,
     trace_id: str,
     max_concurrent: int | None = None,
 ) -> list[SubAgentResult]:
     """Execute sub-agents concurrently within the expansion budget.
+
+    Creates a dedicated sub_agent LLM client via factory (ADR-0033 client isolation).
+    Sub-agents always use the sub_agent model config — they never inherit the primary
+    agent's client or model.
 
     Uses an asyncio.Semaphore to limit concurrent sub-agent calls.
     All sub-agents run; partial failures do not abort the batch.
 
     Args:
         specs: Sub-agent specifications from decomposition planning.
-        llm_client: LLM client for sub-agent inference.
         trace_id: Parent request trace identifier.
         max_concurrent: Max concurrent sub-agents (None = config default).
 
     Returns:
         List of SubAgentResults in the same order as specs.
     """
+    from personal_agent.llm_client.factory import get_llm_client
+
+    # Sub-agent client isolation: always use "sub_agent" role config (ADR-0033)
+    sub_agent_client = get_llm_client(role_name="sub_agent")
+
     max_conc = max_concurrent or settings.expansion_budget_max
     semaphore = asyncio.Semaphore(max(1, max_conc))
 
@@ -106,7 +117,7 @@ async def execute_hybrid(
         async with semaphore:
             return await run_sub_agent(
                 spec=spec,
-                llm_client=llm_client,
+                llm_client=sub_agent_client,
                 trace_id=trace_id,
             )
 

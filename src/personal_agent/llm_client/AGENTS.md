@@ -34,7 +34,7 @@ client = LocalLLMClient(base_url="http://localhost:1234/v1")
 trace_ctx = TraceContext.new_trace()
 
 response = await client.respond(
-    role=ModelRole.REASONING,
+    role=ModelRole.PRIMARY,
     messages=[{"role": "user", "content": "Analyze this task: ..."}],
     trace_ctx=trace_ctx,
 )
@@ -57,7 +57,7 @@ class ExtractUser(dspy.Signature):
 
 # 2. Configure DSPy with LocalLLMClient
 client = LocalLLMClient()
-lm = client.get_dspy_lm(role=ModelRole.REASONING)
+lm = client.get_dspy_lm(role=ModelRole.PRIMARY)
 dspy.configure(lm=lm)
 
 # 3. Create predictor (use ChainOfThought for complex reasoning)
@@ -118,7 +118,7 @@ class GenerateReflection(dspy.Signature):
 
 # Configure and use
 client = LocalLLMClient()
-lm = client.get_dspy_lm(role=ModelRole.REASONING)
+lm = client.get_dspy_lm(role=ModelRole.PRIMARY)
 dspy.configure(lm=lm)
 
 reflection_generator = dspy.ChainOfThought(GenerateReflection)

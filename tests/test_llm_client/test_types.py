@@ -16,15 +16,20 @@ class TestModelRole:
     """Test ModelRole enum."""
 
     def test_model_role_values(self) -> None:
-        """Test that ModelRole has expected values."""
-        assert ModelRole.ROUTER == "router"
-        assert ModelRole.REASONING == "reasoning"
-        assert ModelRole.CODING == "coding"
+        """Test that ModelRole has exactly two values: PRIMARY and SUB_AGENT."""
+        assert ModelRole.PRIMARY == "primary"
+        assert ModelRole.SUB_AGENT == "sub_agent"
+
+    def test_model_role_exactly_two_members(self) -> None:
+        """Test that ModelRole has exactly two members (ADR-0033 two-tier taxonomy)."""
+        assert len(list(ModelRole)) == 2
 
     def test_model_role_string_representation(self) -> None:
         """Test that ModelRole values are strings."""
-        assert isinstance(ModelRole.ROUTER.value, str)
-        assert ModelRole.ROUTER.value == "router"
+        assert isinstance(ModelRole.PRIMARY.value, str)
+        assert ModelRole.PRIMARY.value == "primary"
+        assert isinstance(ModelRole.SUB_AGENT.value, str)
+        assert ModelRole.SUB_AGENT.value == "sub_agent"
 
 
 class TestToolCall:

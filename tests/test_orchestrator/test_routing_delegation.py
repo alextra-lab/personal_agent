@@ -41,7 +41,7 @@ def _load_baselines() -> dict[str, Any]:
         return json.load(f)
 
 
-def _make_llm_response(content: str, role: ModelRole = ModelRole.STANDARD) -> dict[str, Any]:
+def _make_llm_response(content: str, role: ModelRole = ModelRole.PRIMARY) -> dict[str, Any]:
     return {
         "role": "assistant",
         "content": content,
@@ -135,26 +135,26 @@ class TestPromptConstants:
 class TestHeuristicGate:
     """Heuristic pre-router gate should bypass LLM for high-confidence inputs."""
 
-    def test_heuristic_delegates_code_to_coding(self) -> None:
-        """Stack-trace / code-like input should route to CODING via heuristic."""
+    def test_heuristic_delegates_code_to_primary(self) -> None:
+        """Stack-trace / code-like input should route to PRIMARY via heuristic."""
         result = heuristic_routing("Debug this stack trace: Traceback ... def foo():")
-        assert result["target_model"] == ModelRole.CODING
+        assert result["target_model"] == ModelRole.PRIMARY
         assert result["used_heuristics"] is True
 
-    def test_heuristic_delegates_tool_intent_to_standard(self) -> None:
-        """Explicit web/tool intent should route to STANDARD via heuristic."""
+    def test_heuristic_delegates_tool_intent_to_primary(self) -> None:
+        """Explicit web/tool intent should route to PRIMARY via heuristic."""
         result = heuristic_routing("Please search the web for the latest Rust news")
-        assert result["target_model"] == ModelRole.STANDARD
+        assert result["target_model"] == ModelRole.PRIMARY
 
-    def test_heuristic_delegates_formal_proof_to_reasoning(self) -> None:
-        """Formal proof style prompts should route to REASONING via heuristic."""
+    def test_heuristic_delegates_formal_proof_to_primary(self) -> None:
+        """Formal proof style prompts should route to PRIMARY via heuristic."""
         result = heuristic_routing("Prove rigorously with formal multi-step analysis")
-        assert result["target_model"] == ModelRole.REASONING
+        assert result["target_model"] == ModelRole.PRIMARY
 
-    def test_heuristic_low_confidence_returns_standard_fallback(self) -> None:
-        """Short ambiguous queries fall back to STANDARD (LLM routing will take over)."""
+    def test_heuristic_low_confidence_returns_primary_fallback(self) -> None:
+        """Short ambiguous queries fall back to PRIMARY (LLM routing will take over)."""
         result = heuristic_routing("Hi")
-        assert result["target_model"] == ModelRole.STANDARD
+        assert result["target_model"] == ModelRole.PRIMARY
 
 
 # ---------------------------------------------------------------------------
@@ -164,21 +164,17 @@ class TestHeuristicGate:
 
 @pytest.mark.asyncio
 class TestLLMDelegation:
-    """Verify router delegates to the correct model via LLM call for various query types."""
+    """Verify PRIMARY model handles all query types directly (ADR-0033 two-tier taxonomy)."""
 
-    @patch("personal_agent.orchestrator.executor.LocalLLMClient")
-    async def test_router_delegates_factual_to_standard(
-        self, mock_client_class: Any, monkeypatch: Any
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    async def test_primary_handles_factual_query(
+        self, mock_get_llm_client: Any
     ) -> None:
-        """Factual queries with no live-data requirement should route to STANDARD."""
-        monkeypatch.setattr(settings, "routing_policy", "llm_only")
+        """Factual queries are handled by PRIMARY in a single LLM call (no router)."""
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
-        mock_client_class.return_value = mock_client
-        mock_client.respond.side_effect = [
-            _make_llm_response(_router_json("STANDARD")),
-            _make_llm_response("The capital of France is Paris."),
-        ]
+        mock_get_llm_client.return_value = mock_client
+        mock_client.respond.return_value = _make_llm_response("The capital of France is Paris.")
 
         orchestrator = Orchestrator()
         result = await orchestrator.handle_user_request(
@@ -188,24 +184,19 @@ class TestLLMDelegation:
             channel=Channel.CHAT,
         )
 
-        assert mock_client.respond.call_count == 2
-        second_call = mock_client.respond.call_args_list[1]
-        assert second_call.kwargs["role"] == ModelRole.STANDARD
+        assert mock_client.respond.call_count == 1
+        assert mock_client.respond.call_args_list[0].kwargs["role"] == ModelRole.PRIMARY
         assert "Paris" in result["reply"]
 
-    @patch("personal_agent.orchestrator.executor.LocalLLMClient")
-    async def test_router_delegates_live_data_to_standard(
-        self, mock_client_class: Any, monkeypatch: Any
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    async def test_primary_handles_live_data_query(
+        self, mock_get_llm_client: Any
     ) -> None:
-        """Live-data queries should route to STANDARD (tool-capable) not REASONING."""
-        monkeypatch.setattr(settings, "routing_policy", "llm_only")
+        """Live-data queries go to PRIMARY (tool-capable) in a single LLM call."""
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
-        mock_client_class.return_value = mock_client
-        mock_client.respond.side_effect = [
-            _make_llm_response(_router_json("STANDARD")),
-            _make_llm_response("It is currently sunny in Paris."),
-        ]
+        mock_get_llm_client.return_value = mock_client
+        mock_client.respond.return_value = _make_llm_response("It is currently sunny in Paris.")
 
         orchestrator = Orchestrator()
         await orchestrator.handle_user_request(
@@ -215,22 +206,20 @@ class TestLLMDelegation:
             channel=Channel.CHAT,
         )
 
-        second_call = mock_client.respond.call_args_list[1]
-        assert second_call.kwargs["role"] == ModelRole.STANDARD
+        assert mock_client.respond.call_count == 1
+        assert mock_client.respond.call_args_list[0].kwargs["role"] == ModelRole.PRIMARY
 
-    @patch("personal_agent.orchestrator.executor.LocalLLMClient")
-    async def test_router_delegates_reasoning_explicit(
-        self, mock_client_class: Any, monkeypatch: Any
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    async def test_primary_handles_reasoning_query(
+        self, mock_get_llm_client: Any
     ) -> None:
-        """Step-by-step proof queries should route to REASONING."""
-        monkeypatch.setattr(settings, "routing_policy", "llm_only")
+        """Reasoning queries go directly to PRIMARY without a separate router call."""
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
-        mock_client_class.return_value = mock_client
-        mock_client.respond.side_effect = [
-            _make_llm_response(_router_json("REASONING", confidence=0.95)),
-            _make_llm_response("Proof: assume sqrt(2) = p/q in lowest terms ..."),
-        ]
+        mock_get_llm_client.return_value = mock_client
+        mock_client.respond.return_value = _make_llm_response(
+            "Proof: assume sqrt(2) = p/q in lowest terms ..."
+        )
 
         orchestrator = Orchestrator()
         await orchestrator.handle_user_request(
@@ -240,22 +229,20 @@ class TestLLMDelegation:
             channel=Channel.CHAT,
         )
 
-        second_call = mock_client.respond.call_args_list[1]
-        assert second_call.kwargs["role"] == ModelRole.REASONING
+        assert mock_client.respond.call_count == 1
+        assert mock_client.respond.call_args_list[0].kwargs["role"] == ModelRole.PRIMARY
 
-    @patch("personal_agent.orchestrator.executor.LocalLLMClient")
-    async def test_router_delegates_research_synthesis_to_reasoning(
-        self, mock_client_class: Any, monkeypatch: Any
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    async def test_primary_handles_research_synthesis(
+        self, mock_get_llm_client: Any
     ) -> None:
-        """Research synthesis queries should route to REASONING."""
-        monkeypatch.setattr(settings, "routing_policy", "llm_only")
+        """Research synthesis queries go to PRIMARY — no dedicated reasoning tier."""
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
-        mock_client_class.return_value = mock_client
-        mock_client.respond.side_effect = [
-            _make_llm_response(_router_json("REASONING", confidence=0.92)),
-            _make_llm_response("Recent research on attention mechanisms shows ..."),
-        ]
+        mock_get_llm_client.return_value = mock_client
+        mock_client.respond.return_value = _make_llm_response(
+            "Recent research on attention mechanisms shows ..."
+        )
 
         orchestrator = Orchestrator()
         await orchestrator.handle_user_request(
@@ -265,33 +252,29 @@ class TestLLMDelegation:
             channel=Channel.CHAT,
         )
 
-        second_call = mock_client.respond.call_args_list[1]
-        assert second_call.kwargs["role"] == ModelRole.REASONING
+        assert mock_client.respond.call_count == 1
+        assert mock_client.respond.call_args_list[0].kwargs["role"] == ModelRole.PRIMARY
 
-    @patch("personal_agent.orchestrator.executor.LocalLLMClient")
-    async def test_invalid_router_output_falls_back_to_standard(
-        self, mock_client_class: Any, monkeypatch: Any
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    async def test_all_queries_use_exactly_one_llm_call(
+        self, mock_get_llm_client: Any
     ) -> None:
-        """Malformed router JSON should fall back to STANDARD via heuristic."""
-        monkeypatch.setattr(settings, "routing_policy", "llm_only")
+        """Any user query results in exactly one LLM call to PRIMARY (ADR-0033: no router)."""
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
-        mock_client_class.return_value = mock_client
-        mock_client.respond.side_effect = [
-            _make_llm_response('{"confidence": 0.9}'),  # missing target_model
-            _make_llm_response("Fallback STANDARD answer."),
-        ]
+        mock_get_llm_client.return_value = mock_client
+        mock_client.respond.return_value = _make_llm_response("Answer.")
 
         orchestrator = Orchestrator()
         await orchestrator.handle_user_request(
-            session_id="test-fallback",
+            session_id="test-single-call",
             user_message="Tell me something interesting",
             mode=Mode.NORMAL,
             channel=Channel.CHAT,
         )
 
-        second_call = mock_client.respond.call_args_list[1]
-        assert second_call.kwargs["role"] == ModelRole.STANDARD
+        assert mock_client.respond.call_count == 1
+        assert mock_client.respond.call_args_list[0].kwargs["role"] == ModelRole.PRIMARY
 
 
 # ---------------------------------------------------------------------------
@@ -301,21 +284,17 @@ class TestLLMDelegation:
 
 @pytest.mark.asyncio
 class TestToolPromptAssembly:
-    """Verify TOOL_USE_SYSTEM_PROMPT is assembled correctly for tool-capable roles."""
+    """Verify TOOL_USE_SYSTEM_PROMPT is assembled correctly for the PRIMARY role (ADR-0033)."""
 
-    @patch("personal_agent.orchestrator.executor.LocalLLMClient")
-    async def test_standard_role_receives_tool_use_prompt(
-        self, mock_client_class: Any, monkeypatch: Any
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    async def test_primary_role_receives_tool_use_prompt(
+        self, mock_client_class: Any
     ) -> None:
-        """STANDARD model call must include TOOL_USE_SYSTEM_PROMPT in its system prompt."""
-        monkeypatch.setattr(settings, "routing_policy", "llm_only")
+        """PRIMARY model call must include TOOL_USE_SYSTEM_PROMPT in its system prompt."""
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
-        mock_client.respond.side_effect = [
-            _make_llm_response(_router_json("STANDARD")),
-            _make_llm_response("Here is the info."),
-        ]
+        mock_client.respond.return_value = _make_llm_response("Here is the info.")
 
         orchestrator = Orchestrator()
         await orchestrator.handle_user_request(
@@ -325,25 +304,21 @@ class TestToolPromptAssembly:
             channel=Channel.CHAT,
         )
 
-        standard_call = mock_client.respond.call_args_list[1]
-        system_prompt = standard_call.kwargs.get("system_prompt") or ""
+        primary_call = mock_client.respond.call_args_list[0]
+        system_prompt = primary_call.kwargs.get("system_prompt") or ""
         assert TOOL_USE_SYSTEM_PROMPT in system_prompt, (
-            "STANDARD model call must include TOOL_USE_SYSTEM_PROMPT"
+            "PRIMARY model call must include TOOL_USE_SYSTEM_PROMPT"
         )
 
-    @patch("personal_agent.orchestrator.executor.LocalLLMClient")
-    async def test_reasoning_role_receives_tool_use_prompt(
-        self, mock_client_class: Any, monkeypatch: Any
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    async def test_primary_role_receives_tool_use_prompt_for_research(
+        self, mock_client_class: Any
     ) -> None:
-        """REASONING model call must include TOOL_USE_SYSTEM_PROMPT in its system prompt."""
-        monkeypatch.setattr(settings, "routing_policy", "llm_only")
+        """PRIMARY model call must include TOOL_USE_SYSTEM_PROMPT for research queries."""
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
-        mock_client.respond.side_effect = [
-            _make_llm_response(_router_json("REASONING")),
-            _make_llm_response("Deep research synthesis answer."),
-        ]
+        mock_client.respond.return_value = _make_llm_response("Deep research synthesis answer.")
 
         orchestrator = Orchestrator()
         await orchestrator.handle_user_request(
@@ -353,50 +328,43 @@ class TestToolPromptAssembly:
             channel=Channel.CHAT,
         )
 
-        reasoning_call = mock_client.respond.call_args_list[1]
-        system_prompt = reasoning_call.kwargs.get("system_prompt") or ""
+        primary_call = mock_client.respond.call_args_list[0]
+        system_prompt = primary_call.kwargs.get("system_prompt") or ""
         assert TOOL_USE_SYSTEM_PROMPT in system_prompt
 
-    @patch("personal_agent.orchestrator.executor.LocalLLMClient")
-    async def test_router_call_does_not_receive_tool_use_prompt(
-        self, mock_client_class: Any, monkeypatch: Any
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    async def test_primary_call_includes_tool_use_prompt(
+        self, mock_client_class: Any
     ) -> None:
-        """Router call must NOT include TOOL_USE_SYSTEM_PROMPT."""
-        monkeypatch.setattr(settings, "routing_policy", "llm_only")
+        """PRIMARY call must include TOOL_USE_SYSTEM_PROMPT — no separate router call (ADR-0033)."""
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
-        mock_client.respond.side_effect = [
-            _make_llm_response(_router_json("STANDARD")),
-            _make_llm_response("Answer."),
-        ]
+        mock_client.respond.return_value = _make_llm_response("Answer.")
 
         orchestrator = Orchestrator()
         await orchestrator.handle_user_request(
-            session_id="test-router-no-tool-prompt",
+            session_id="test-primary-tool-prompt",
             user_message="What is Python?",
             mode=Mode.NORMAL,
             channel=Channel.CHAT,
         )
 
-        router_call = mock_client.respond.call_args_list[0]
-        system_prompt = router_call.kwargs.get("system_prompt") or ""
-        assert TOOL_USE_SYSTEM_PROMPT not in system_prompt
-        assert "mcp_perplexity_ask" not in system_prompt
+        assert mock_client.respond.call_count == 1
+        primary_call = mock_client.respond.call_args_list[0]
+        system_prompt = primary_call.kwargs.get("system_prompt") or ""
+        assert TOOL_USE_SYSTEM_PROMPT in system_prompt
+        assert "mcp_perplexity_ask" in system_prompt
 
-    @patch("personal_agent.orchestrator.executor.LocalLLMClient")
+    @patch("personal_agent.llm_client.factory.get_llm_client")
     async def test_assembled_tool_prompt_within_baseline(
-        self, mock_client_class: Any, monkeypatch: Any
+        self, mock_client_class: Any
     ) -> None:
-        """System prompt assembled for a STANDARD tool call must meet minimum size baseline."""
-        monkeypatch.setattr(settings, "routing_policy", "llm_only")
+        """System prompt assembled for a PRIMARY tool call must meet minimum size baseline."""
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
-        mock_client.respond.side_effect = [
-            _make_llm_response(_router_json("STANDARD")),
-            _make_llm_response("Answer."),
-        ]
+        mock_client.respond.return_value = _make_llm_response("Answer.")
 
         orchestrator = Orchestrator()
         await orchestrator.handle_user_request(
@@ -407,37 +375,33 @@ class TestToolPromptAssembly:
         )
 
         baselines = _load_baselines()
-        standard_call = mock_client.respond.call_args_list[1]
-        system_prompt = standard_call.kwargs.get("system_prompt") or ""
+        primary_call = mock_client.respond.call_args_list[0]
+        system_prompt = primary_call.kwargs.get("system_prompt") or ""
         assert len(system_prompt) >= baselines["standard_with_tools_system_prompt_min_chars"], (
-            f"STANDARD system prompt too short ({len(system_prompt)} chars). "
+            f"PRIMARY system prompt too short ({len(system_prompt)} chars). "
             "Tool-use guidance may have been stripped."
         )
 
-    @patch("personal_agent.orchestrator.executor.LocalLLMClient")
-    async def test_router_memory_not_injected(
-        self, mock_client_class: Any, monkeypatch: Any
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    async def test_primary_call_excludes_routing_instructions(
+        self, mock_client_class: Any
     ) -> None:
-        """Router call must not receive memory context injection."""
-        monkeypatch.setattr(settings, "routing_policy", "llm_only")
+        """PRIMARY call must not receive routing classification instructions (ADR-0033: no router)."""
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
-        mock_client.respond.side_effect = [
-            _make_llm_response(_router_json("STANDARD")),
-            _make_llm_response("Answer."),
-        ]
+        mock_client.respond.return_value = _make_llm_response("Answer.")
 
         orchestrator = Orchestrator()
         await orchestrator.handle_user_request(
-            session_id="test-router-memory",
+            session_id="test-no-routing-instructions",
             user_message="What is Python?",
             mode=Mode.NORMAL,
             channel=Channel.CHAT,
         )
 
-        router_call = mock_client.respond.call_args_list[0]
-        system_prompt = router_call.kwargs.get("system_prompt") or ""
+        primary_call = mock_client.respond.call_args_list[0]
+        system_prompt = primary_call.kwargs.get("system_prompt") or ""
         assert "Relevant Past Conversations" not in system_prompt
         assert "Memory Graph" not in system_prompt
 
@@ -451,7 +415,7 @@ class TestToolPromptAssembly:
 class TestHeuristicBypass:
     """High-confidence heuristic routes should bypass the router LLM call entirely."""
 
-    @patch("personal_agent.orchestrator.executor.LocalLLMClient")
+    @patch("personal_agent.llm_client.factory.get_llm_client")
     async def test_high_confidence_heuristic_skips_router_llm(
         self, mock_client_class: Any, monkeypatch: Any
     ) -> None:
@@ -473,4 +437,4 @@ class TestHeuristicBypass:
 
         assert mock_client.respond.call_count == 1
         call = mock_client.respond.call_args_list[0]
-        assert call.kwargs["role"] == ModelRole.CODING
+        assert call.kwargs["role"] == ModelRole.PRIMARY

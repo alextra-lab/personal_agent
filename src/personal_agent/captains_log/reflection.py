@@ -147,18 +147,16 @@ async def generate_reflection_entry(
     _captains_log_model_def = _model_config.models.get(_model_config.captains_log_role)
     _captains_log_provider = _captains_log_model_def.provider if _captains_log_model_def else None
 
-    # ── Cloud path (Anthropic / OpenAI) ──────────────────────────────────────
-    if _captains_log_provider == "anthropic":
+    # ── Cloud path (any provider via LiteLLM) ────────────────────────────────
+    if _captains_log_provider is not None:
         try:
-            from personal_agent.llm_client.claude import ClaudeClient
+            from personal_agent.llm_client.factory import get_llm_client
 
-            _claude_client = ClaudeClient(
-                model_id=_captains_log_model_def.id,  # type: ignore[union-attr]
-                max_tokens=_captains_log_model_def.max_tokens or 8192,  # type: ignore[union-attr]
-            )
+            _cloud_client = get_llm_client(role_name=_model_config.captains_log_role)
             log.info(
-                "captains_log_using_anthropic",
+                "captains_log_using_cloud",
                 model_id=_captains_log_model_def.id,  # type: ignore[union-attr]
+                provider=_captains_log_provider,
                 trace_id=trace_id,
                 component="reflection",
             )
@@ -170,14 +168,14 @@ async def generate_reflection_entry(
                 reply_length=reply_length,
                 telemetry_summary=telemetry_summary,
             )
-            _cloud_response = await _claude_client.chat_completion(
+            _cloud_response = await _cloud_client.respond(
+                role=ModelRole.PRIMARY,
                 messages=[{"role": "user", "content": prompt}],
-                purpose="captains_log",
-                trace_id=None,  # trace_id here is a str; ClaudeClient expects UUID | None
+                temperature=0.3,
             )
-            _content = _cloud_response.get("content", "")
+            _content = _cloud_response["content"]
             if not _content:
-                raise ValueError("Claude returned empty response for Captain's Log reflection")
+                raise ValueError("Cloud LLM returned empty response for Captain's Log reflection")
 
             reflection_data = _parse_reflection_response(_content)
             string_metrics, structured_metrics = extract_metrics_from_summary(metrics_summary)
@@ -203,9 +201,8 @@ async def generate_reflection_entry(
             log.info(
                 "captains_log_cloud_reflection_succeeded",
                 model_id=_captains_log_model_def.id,  # type: ignore[union-attr]
-                input_tokens=_cloud_response.get("usage", {}).get("input_tokens"),
-                output_tokens=_cloud_response.get("usage", {}).get("output_tokens"),
-                latency_ms=_cloud_response.get("latency_ms"),
+                input_tokens=_cloud_response["usage"].get("prompt_tokens"),
+                output_tokens=_cloud_response["usage"].get("completion_tokens"),
                 has_proposal=entry.proposed_change is not None,
                 trace_id=trace_id,
                 component="reflection",
@@ -290,7 +287,7 @@ async def generate_reflection_entry(
 
         # Call LLM with manual prompt (reasoning model)
         response = await llm_client.respond(
-            role=ModelRole.REASONING,
+            role=ModelRole.PRIMARY,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,  # Lower temperature for structured output
             max_tokens=3000,  # Increased for reasoning models with thinking process

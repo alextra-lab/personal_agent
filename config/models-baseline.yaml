@@ -1,10 +1,10 @@
-# Foundation model baseline configuration (ADR-0031)
+# Foundation model baseline configuration (ADR-0031 + ADR-0033)
 #
 # Usage:
 #   AGENT_MODEL_CONFIG_PATH=config/models-baseline.yaml \
 #     uv run uvicorn personal_agent.service.app:app --reload --port 9000
 #
-# Purpose: Swaps primary agent roles (standard, reasoning, coding) to Claude Sonnet
+# Purpose: Swaps primary agent roles (primary, sub_agent) to Claude Sonnet
 # so the evaluation harness can establish a capability ceiling for the 25 CPs.
 #
 # Results in: telemetry/evaluation/run-foundation-baseline/
@@ -19,35 +19,26 @@ captains_log_role: claude_sonnet
 insights_role: claude_sonnet
 
 models:
-  standard:
-    # Replaces unsloth/qwen3.5-9b for evaluation baseline
+  primary:
+    # Replaces unsloth/qwen3.5-35-A3B for evaluation baseline (renamed from "reasoning")
     id: "claude-sonnet-4-6"
     provider: "anthropic"
     provider_type: "cloud"
     max_tokens: 8192
     context_length: 200000
-    max_concurrency: 10
-    default_timeout: 60
-    tool_calling_strategy: "native"
-
-  reasoning:
-    # Replaces unsloth/qwen3.5-35-A3B for evaluation baseline
-    id: "claude-sonnet-4-6"
-    provider: "anthropic"
-    provider_type: "cloud"
-    max_tokens: 8192
-    context_length: 200000
+    min_concurrency: 1
     max_concurrency: 10
     default_timeout: 120
     tool_calling_strategy: "native"
 
-  coding:
-    # Replaces unsloth/qwen3.5-9b coding variant for evaluation baseline
+  sub_agent:
+    # Replaces unsloth/qwen3.5-9b for evaluation baseline (renamed from "standard")
     id: "claude-sonnet-4-6"
     provider: "anthropic"
     provider_type: "cloud"
     max_tokens: 8192
     context_length: 200000
+    min_concurrency: 1
     max_concurrency: 10
     default_timeout: 60
     tool_calling_strategy: "native"
@@ -59,5 +50,6 @@ models:
     provider_type: "cloud"
     max_tokens: 8192
     context_length: 200000
+    min_concurrency: 1
     max_concurrency: 10
     default_timeout: 60

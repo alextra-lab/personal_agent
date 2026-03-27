@@ -106,7 +106,7 @@ async def manual_routing_decision(query: str) -> RoutingResult:
     )
 
     response = await llm_client.respond(
-        role=ModelRole.ROUTER,
+        role=ModelRole.PRIMARY,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3,
         max_tokens=500,
@@ -128,7 +128,7 @@ async def manual_routing_decision(query: str) -> RoutingResult:
         # Fallback to STANDARD delegation
         return {
             "decision": RoutingDecision.DELEGATE,
-            "target_model": ModelRole.STANDARD,
+            "target_model": ModelRole.SUB_AGENT,
             "confidence": 0.5,
             "reasoning_depth": 5,
             "reason": f"Parse error: {e}, defaulting to STANDARD",
@@ -148,7 +148,7 @@ async def manual_routing_decision(query: str) -> RoutingResult:
         try:
             result["target_model"] = ModelRole.from_str(data["target_model"])
         except (ValueError, AttributeError):
-            result["target_model"] = ModelRole.STANDARD
+            result["target_model"] = ModelRole.SUB_AGENT
 
     if "response" in data:
         result["response"] = data["response"]
@@ -219,7 +219,7 @@ def dspy_routing_decision(query: str) -> RoutingResult:
         try:
             routing_result["target_model"] = ModelRole.from_str(result.target_model)
         except (ValueError, AttributeError):
-            routing_result["target_model"] = ModelRole.STANDARD
+            routing_result["target_model"] = ModelRole.SUB_AGENT
 
     if result.routing_decision == "HANDLE" and result.response:
         routing_result["response"] = result.response
@@ -247,13 +247,13 @@ def evaluate_routing_accuracy(result: RoutingResult, expected_category: str) -> 
 
     if expected_category == "simple":
         # Simple queries should be HANDLE or DELEGATE to STANDARD
-        return decision == RoutingDecision.HANDLE or target == ModelRole.STANDARD
+        return decision == RoutingDecision.HANDLE or target == ModelRole.SUB_AGENT
     elif expected_category == "code":
         # Code queries should DELEGATE to CODING
-        return decision == RoutingDecision.DELEGATE and target == ModelRole.CODING
+        return decision == RoutingDecision.DELEGATE and target == ModelRole.PRIMARY
     elif expected_category == "reasoning":
         # Reasoning queries should DELEGATE to REASONING
-        return decision == RoutingDecision.DELEGATE and target == ModelRole.REASONING
+        return decision == RoutingDecision.DELEGATE and target == ModelRole.PRIMARY
     elif expected_category in ("complex", "tool"):
         # Complex/tool queries should DELEGATE (usually to STANDARD)
         return decision == RoutingDecision.DELEGATE

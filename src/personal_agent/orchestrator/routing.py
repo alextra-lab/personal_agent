@@ -1,61 +1,14 @@
-"""Deterministic routing gate and role resolution for single-model mode.
+"""Deterministic routing utilities.
 
-Pre-router heuristics avoid LLM calls when confidence is high.
-resolve_role() maps requested roles to actual runtime roles (e.g. REASONING -> STANDARD when disabled).
+heuristic_routing() is retained for observability (classifies message intent)
+but the two-tier taxonomy (ADR-0033) means all paths use PRIMARY.
+resolve_role() is simplified — no deprecated role aliasing needed.
 """
 
 import re
 
-from personal_agent.config import settings
 from personal_agent.llm_client import ModelRole
 from personal_agent.orchestrator.types import HeuristicRoutingPlan
-
-# CODING: code fences, stack traces, def/class/import, debug/refactor/implement, diffs, CI
-# Use "from\s+\S+\s+import" so natural language ("fly from X to Y") is not matched.
-_CODING_PATTERNS = re.compile(
-    r"(?:^|\s)(?:def\s|class\s|import\s|from\s+\S+\s+import\s|```[\s\S]*?```|"
-    r"debug|refactor|implement|fix\s+(?:the\s+)?(?:bug|code)|"
-    r"stack\s+trace|traceback|File\s+\".*\"|AssertionError|TypeError|"
-    r"diff\s|patch\s|\.patch\b|CI\s+(?:failed|error)|build\s+failed)",
-    re.IGNORECASE,
-)
-_CODING_KEYWORDS = (
-    "code review",
-    "unit test",
-    "write a function",
-    "write a class",
-    "implement ",
-    "refactor ",
-    "debug ",
-    "bug ",
-    "syntax error",
-    "lint ",
-)
-
-# STANDARD: explicit tool intent
-_TOOL_INTENT_PATTERNS = re.compile(
-    r"(?:search\s+(?:the\s+)?web|look\s+up|list\s+files|read\s+file|"
-    r"check\s+disk\s+usage|open\s+url|latest\s+news|"
-    r"search\s+internet|web\s+search|find\s+(?:on\s+)?(?:the\s+)?web)",
-    re.IGNORECASE,
-)
-
-# REASONING: prove/derive/rigorously, deep reasoning, research synthesis,
-# and structured-reasoning task framing ("think step by step", "explore solution paths", etc.)
-_REASONING_PATTERNS = re.compile(
-    r"(?:prove|derive|rigorously|deep\s+reasoning|research\s+synthesis|"
-    r"multi-step\s+(?:formal\s+)?analysis|step-by-step\s+proof|"
-    r"formal\s+analysis|careful\s+reasoning|"
-    r"think\s+step[\s-]by[\s-]step|"
-    r"list\s+(?:your\s+)?assumptions|"
-    r"explore\s+(?:at\s+least\s+)?(?:\w+\s+)?(?:alternative|solution|approach|path)|"
-    r"converge\s+on\s+(?:a\s+)?(?:final\s+)?(?:answer|solution)|"
-    r"(?:two|three|multiple)\s+(?:alternative|solution|approach)\s+(?:paths?|routes?|options?)|"
-    r"weigh\s+(?:the\s+)?(?:trade-?offs?|options?|alternatives?)|"
-    r"reason\s+through|walk\s+(?:me\s+)?through\s+(?:your\s+)?reasoning|"
-    r"consider\s+(?:all\s+)?(?:constraints?|trade-?offs?|scenarios?))",
-    re.IGNORECASE,
-)
 
 # MEMORY RECALL: questions about the user's own history (ADR-0025)
 _MEMORY_RECALL_PATTERNS = re.compile(
@@ -88,77 +41,35 @@ def is_memory_recall_query(user_message: str) -> bool:
 
 
 def heuristic_routing(user_message: str) -> HeuristicRoutingPlan:
-    """Run deterministic classifier on user message (no LLM).
+    """Classify user message intent (observability only — ADR-0033).
+
+    All requests route to PRIMARY in the two-tier taxonomy; this function
+    is retained for logging and test purposes.
 
     Returns:
-        HeuristicRoutingPlan with target_model, confidence, reason, used_heuristics=True.
+        HeuristicRoutingPlan with target_model=PRIMARY, confidence, reason, used_heuristics=True.
     """
     text = (user_message or "").strip()
     if not text:
         return {
-            "target_model": ModelRole.STANDARD,
+            "target_model": ModelRole.PRIMARY,
             "confidence": 0.9,
-            "reason": "Empty message, default to STANDARD",
+            "reason": "Empty message, default to PRIMARY",
             "used_heuristics": True,
         }
 
-    # CODING
-    if _CODING_PATTERNS.search(text):
-        return {
-            "target_model": ModelRole.CODING,
-            "confidence": 0.9,
-            "reason": "Code-related patterns (def/class/import/debug/diff/CI)",
-            "used_heuristics": True,
-        }
-    lower = text.lower()
-    if any(k in lower for k in _CODING_KEYWORDS):
-        return {
-            "target_model": ModelRole.CODING,
-            "confidence": 0.85,
-            "reason": "Coding keywords detected",
-            "used_heuristics": True,
-        }
-
-    # STANDARD: explicit tool intent
-    if _TOOL_INTENT_PATTERNS.search(text):
-        return {
-            "target_model": ModelRole.STANDARD,
-            "confidence": 0.9,
-            "reason": "Explicit tool intent (search/list/read/open)",
-            "used_heuristics": True,
-        }
-
-    # REASONING
-    if _REASONING_PATTERNS.search(text):
-        return {
-            "target_model": ModelRole.REASONING,
-            "confidence": 0.85,
-            "reason": "Deep reasoning / proof / research requested",
-            "used_heuristics": True,
-        }
-
-    # Default
     return {
-        "target_model": ModelRole.STANDARD,
-        "confidence": 0.7,
-        "reason": "Default to STANDARD",
+        "target_model": ModelRole.PRIMARY,
+        "confidence": 1.0,
+        "reason": "Two-tier taxonomy: all requests use PRIMARY (ADR-0033)",
         "used_heuristics": True,
     }
 
 
 def resolve_role(requested_role: ModelRole) -> ModelRole:
-    """Map requested model role to actual runtime role (single-model mode).
+    """Return the runtime model role (identity mapping in two-tier taxonomy).
 
-    - If router_role is STANDARD, ROUTER -> STANDARD.
-    - If enable_reasoning_role is False, REASONING -> STANDARD.
-    - CODING stays CODING (dedicated specialist).
+    ADR-0033: No deprecated role aliasing — both PRIMARY and SUB_AGENT
+    are used as-is.
     """
-    role_upper = requested_role.value.upper()
-    if role_upper == "ROUTER":
-        router_cfg = (getattr(settings, "router_role", None) or "ROUTER").upper()
-        if router_cfg == "STANDARD":
-            return ModelRole.STANDARD
-        return ModelRole.ROUTER
-    if role_upper == "REASONING" and not getattr(settings, "enable_reasoning_role", True):
-        return ModelRole.STANDARD
     return requested_role

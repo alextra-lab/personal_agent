@@ -30,23 +30,17 @@ class TestLocalLLMClient:
         config_file.write_text(
             """
 models:
-  router:
-    id: "test-router"
-    context_length: 8192
-    quantization: "8bit"
-    max_concurrency: 4
-    default_timeout: 5
-  reasoning:
-    id: "test-reasoning"
+  primary:
+    id: "test-primary"
     context_length: 32768
     quantization: "8bit"
     max_concurrency: 2
     default_timeout: 60
-  coding:
-    id: "test-coding"
+  sub_agent:
+    id: "test-sub-agent"
     context_length: 32768
     quantization: "8bit"
-    max_concurrency: 2
+    max_concurrency: 4
     default_timeout: 45
 """
         )
@@ -84,7 +78,7 @@ models:
 
             trace_ctx = TraceContext.new_trace()
             response = await client.respond(
-                role=ModelRole.ROUTER,
+                role=ModelRole.PRIMARY,
                 messages=[{"role": "user", "content": "Hello"}],
                 trace_ctx=trace_ctx,
             )
@@ -112,7 +106,7 @@ models:
 
             trace_ctx = TraceContext.new_trace()
             await client.respond(
-                role=ModelRole.REASONING,
+                role=ModelRole.PRIMARY,
                 messages=[{"role": "user", "content": "Test"}],
                 system_prompt="You are a helpful assistant.",
                 trace_ctx=trace_ctx,
@@ -170,7 +164,7 @@ models:
             ]
 
             response = await client.respond(
-                role=ModelRole.CODING,
+                role=ModelRole.PRIMARY,
                 messages=[{"role": "user", "content": "Read a file"}],
                 tools=tools,
                 trace_ctx=trace_ctx,
@@ -190,7 +184,7 @@ models:
             trace_ctx = TraceContext.new_trace()
             with pytest.raises(LLMTimeout):
                 await client.respond(
-                    role=ModelRole.ROUTER,
+                    role=ModelRole.PRIMARY,
                     messages=[{"role": "user", "content": "Test"}],
                     trace_ctx=trace_ctx,
                 )
@@ -206,7 +200,7 @@ models:
             trace_ctx = TraceContext.new_trace()
             with pytest.raises(LLMConnectionError):
                 await client.respond(
-                    role=ModelRole.ROUTER,
+                    role=ModelRole.PRIMARY,
                     messages=[{"role": "user", "content": "Test"}],
                     trace_ctx=trace_ctx,
                 )
@@ -227,7 +221,7 @@ models:
             trace_ctx = TraceContext.new_trace()
             with pytest.raises(LLMRateLimit):
                 await client.respond(
-                    role=ModelRole.ROUTER,
+                    role=ModelRole.PRIMARY,
                     messages=[{"role": "user", "content": "Test"}],
                     trace_ctx=trace_ctx,
                 )
@@ -248,7 +242,7 @@ models:
             trace_ctx = TraceContext.new_trace()
             with pytest.raises(LLMServerError):
                 await client.respond(
-                    role=ModelRole.ROUTER,
+                    role=ModelRole.PRIMARY,
                     messages=[{"role": "user", "content": "Test"}],
                     trace_ctx=trace_ctx,
                 )
@@ -278,7 +272,7 @@ models:
             mock_response_obj.json.return_value = None  # None response will cause error
             with pytest.raises((LLMInvalidResponse, LLMClientError)):
                 await client.respond(
-                    role=ModelRole.ROUTER,
+                    role=ModelRole.PRIMARY,
                     messages=[{"role": "user", "content": "Test"}],
                     trace_ctx=trace_ctx,
                 )
@@ -307,7 +301,7 @@ models:
 
             trace_ctx = TraceContext.new_trace()
             response = await client.respond(
-                role=ModelRole.ROUTER,
+                role=ModelRole.PRIMARY,
                 messages=[{"role": "user", "content": "Test"}],
                 trace_ctx=trace_ctx,
             )
@@ -346,7 +340,7 @@ models:
 
         with pytest.raises(ModelConfigError, match="No configuration found for role"):
             await client_empty.respond(
-                role=ModelRole.ROUTER,  # Router not in empty config
+                role=ModelRole.PRIMARY,  # Router not in empty config
                 messages=[{"role": "user", "content": "Test"}],
                 trace_ctx=trace_ctx,
             )
@@ -367,7 +361,7 @@ models:
             trace_ctx = TraceContext.new_trace()
             with pytest.raises(LLMClientError):
                 await client.respond(
-                    role=ModelRole.ROUTER,
+                    role=ModelRole.PRIMARY,
                     messages=[{"role": "user", "content": "Test"}],
                     trace_ctx=trace_ctx,
                 )
@@ -379,25 +373,18 @@ models:
         config_file.write_text(
             """
 models:
-  router:
-    id: "test-router"
+  primary:
+    id: "test-primary"
     endpoint: "http://localhost:8001/v1"
-    context_length: 8192
-    quantization: "8bit"
-    max_concurrency: 4
-    default_timeout: 5
-  reasoning:
-    id: "test-reasoning"
-    endpoint: "http://localhost:8002/v1"
     context_length: 32768
     quantization: "8bit"
     max_concurrency: 2
     default_timeout: 60
-  coding:
-    id: "test-coding"
+  sub_agent:
+    id: "test-sub-agent"
     context_length: 32768
     quantization: "8bit"
-    max_concurrency: 2
+    max_concurrency: 4
     default_timeout: 45
 """
         )
@@ -423,7 +410,7 @@ models:
             trace_ctx = TraceContext.new_trace()
 
             await client.respond(
-                role=ModelRole.ROUTER,
+                role=ModelRole.PRIMARY,
                 messages=[{"role": "user", "content": "Test"}],
                 trace_ctx=trace_ctx,
             )
@@ -431,7 +418,7 @@ models:
             assert "http://localhost:8001/v1/chat/completions" in str(call_args)
 
             await client.respond(
-                role=ModelRole.CODING,
+                role=ModelRole.SUB_AGENT,
                 messages=[{"role": "user", "content": "Test"}],
                 trace_ctx=trace_ctx,
             )
@@ -449,7 +436,7 @@ models:
             trace_ctx = TraceContext.new_trace()
             with pytest.raises(LLMConnectionError):
                 await client.respond(
-                    role=ModelRole.ROUTER,
+                    role=ModelRole.PRIMARY,
                     messages=[{"role": "user", "content": "Test"}],
                     trace_ctx=trace_ctx,
                 )
@@ -461,12 +448,12 @@ models:
         config_file.write_text(
             """
 models:
-  router:
-    id: "test-router"
-    context_length: 8192
+  primary:
+    id: "test-primary"
+    context_length: 32768
     quantization: "8bit"
-    max_concurrency: 4
-    default_timeout: 5
+    max_concurrency: 2
+    default_timeout: 60
     temperature: 0.15
 """
         )
@@ -486,7 +473,7 @@ models:
 
             trace_ctx = TraceContext.new_trace()
             await client.respond(
-                role=ModelRole.ROUTER,
+                role=ModelRole.PRIMARY,
                 messages=[{"role": "user", "content": "Test"}],
                 trace_ctx=trace_ctx,
             )
@@ -501,12 +488,12 @@ models:
         config_file.write_text(
             """
 models:
-  router:
-    id: "test-router"
-    context_length: 8192
+  primary:
+    id: "test-primary"
+    context_length: 32768
     quantization: "8bit"
-    max_concurrency: 4
-    default_timeout: 5
+    max_concurrency: 2
+    default_timeout: 60
     temperature: 0.15
 """
         )
@@ -526,7 +513,7 @@ models:
 
             trace_ctx = TraceContext.new_trace()
             await client.respond(
-                role=ModelRole.ROUTER,
+                role=ModelRole.PRIMARY,
                 messages=[{"role": "user", "content": "Test"}],
                 temperature=0.6,
                 trace_ctx=trace_ctx,
@@ -557,7 +544,7 @@ models:
 
             trace_ctx = TraceContext.new_trace()
             await client.respond(
-                role=ModelRole.ROUTER,
+                role=ModelRole.PRIMARY,
                 messages=[{"role": "user", "content": "Test"}],
                 response_format=response_format,
                 trace_ctx=trace_ctx,

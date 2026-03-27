@@ -123,7 +123,7 @@ async def main() -> None:
 
         # Extract model IDs from config
         models = []
-        for role in [ModelRole.ROUTER, ModelRole.REASONING, ModelRole.CODING]:
+        for role in [ModelRole.PRIMARY, ModelRole.SUB_AGENT]:
             role_config = model_configs.get(role.value)
             model_id = role_config.id if role_config else None
             if model_id:
@@ -135,9 +135,8 @@ async def main() -> None:
         print("   Falling back to hardcoded model IDs")
         # Fallback to hardcoded values
         models = [
-            (ModelRole.ROUTER, "qwen/qwen3-4b-2507"),
-            (ModelRole.REASONING, "deepseek-r1-distill-qwen-14b"),
-            (ModelRole.CODING, "mistralai/devstral-small-2-2512"),
+            (ModelRole.PRIMARY, "qwen/qwen3-35b-a22b"),
+            (ModelRole.SUB_AGENT, "qwen/qwen3-8b"),
         ]
 
     print("=" * 70)

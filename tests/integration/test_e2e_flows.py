@@ -59,7 +59,7 @@ def _e2e_patches() -> Generator[Any, None, None]:
     try:
         with (
             patch("personal_agent.orchestrator.executor.settings") as mock_settings,
-            patch("personal_agent.orchestrator.executor.LocalLLMClient") as mock_llm_class,
+            patch("personal_agent.llm_client.factory.get_llm_client") as mock_llm_class,
             patch("personal_agent.captains_log.background.run_in_background", lambda coro: None),
             patch("personal_agent.captains_log.capture.write_capture"),
         ):
@@ -109,24 +109,17 @@ async def test_e2e_simple_chat_query():
 
 
 @pytest.mark.asyncio
-async def test_e2e_complex_chat_delegation():
-    """Test complex query delegated from router to reasoning model."""
+async def test_e2e_complex_chat_primary():
+    """Test complex query handled directly by PRIMARY model (two-tier taxonomy, ADR-0033)."""
     with _e2e_patches() as mock_llm_class:
         mock_llm = AsyncMock()
         mock_llm_class.return_value = mock_llm
 
-        mock_llm.respond.side_effect = [
-            _make_llm_response(
-                content=_routing_delegate("STANDARD", "Complex question"),
-                model="qwen3-router",
-                usage={"prompt_tokens": 100, "completion_tokens": 30},
-            ),
-            _make_llm_response(
-                content="Python is a high-level programming language known for its simplicity and readability.",
-                model="qwen3-standard",
-                usage={"prompt_tokens": 120, "completion_tokens": 25},
-            ),
-        ]
+        mock_llm.respond.return_value = _make_llm_response(
+            content="Python is a high-level programming language known for its simplicity and readability.",
+            model="qwen3-primary",
+            usage={"prompt_tokens": 120, "completion_tokens": 25},
+        )
 
         orchestrator = Orchestrator()
         result = await orchestrator.handle_user_request(
@@ -138,7 +131,7 @@ async def test_e2e_complex_chat_delegation():
 
         assert result["reply"]
         assert "python" in result["reply"].lower()
-        assert len(result["steps"]) >= 2
+        assert len(result["steps"]) >= 1
 
 
 # ============================================================================

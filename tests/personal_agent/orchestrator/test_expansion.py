@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -42,9 +42,13 @@ class TestParseDecompositionPlan:
 
 class TestExecuteHybrid:
     @pytest.mark.asyncio
-    async def test_runs_sub_agents_and_returns_results(self) -> None:
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    async def test_runs_sub_agents_and_returns_results(
+        self, mock_get_llm_client: AsyncMock
+    ) -> None:
         mock_client = AsyncMock()
         mock_client.respond = AsyncMock(return_value="Sub-agent result text")
+        mock_get_llm_client.return_value = mock_client
 
         specs = [
             SubAgentSpec(
@@ -65,7 +69,6 @@ class TestExecuteHybrid:
 
         results = await execute_hybrid(
             specs=specs,
-            llm_client=mock_client,
             trace_id="test",
             max_concurrent=2,
         )
@@ -74,7 +77,10 @@ class TestExecuteHybrid:
         assert all(r.success for r in results)
 
     @pytest.mark.asyncio
-    async def test_partial_failure_returns_all_results(self) -> None:
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    async def test_partial_failure_returns_all_results(
+        self, mock_get_llm_client: AsyncMock
+    ) -> None:
         call_count = 0
 
         async def flaky_respond(*args: object, **kwargs: object) -> str:
@@ -86,6 +92,7 @@ class TestExecuteHybrid:
 
         mock_client = AsyncMock()
         mock_client.respond = flaky_respond
+        mock_get_llm_client.return_value = mock_client
 
         specs = [
             SubAgentSpec(
@@ -100,7 +107,6 @@ class TestExecuteHybrid:
 
         results = await execute_hybrid(
             specs=specs,
-            llm_client=mock_client,
             trace_id="test",
             max_concurrent=2,
         )
@@ -111,7 +117,8 @@ class TestExecuteHybrid:
         assert len(successes) == 1
 
     @pytest.mark.asyncio
-    async def test_respects_max_concurrent(self) -> None:
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    async def test_respects_max_concurrent(self, mock_get_llm_client: AsyncMock) -> None:
         concurrent_count = 0
         max_observed = 0
 
@@ -125,6 +132,7 @@ class TestExecuteHybrid:
 
         mock_client = AsyncMock()
         mock_client.respond = tracking_respond
+        mock_get_llm_client.return_value = mock_client
 
         specs = [
             SubAgentSpec(
@@ -139,7 +147,6 @@ class TestExecuteHybrid:
 
         await execute_hybrid(
             specs=specs,
-            llm_client=mock_client,
             trace_id="test",
             max_concurrent=1,
         )

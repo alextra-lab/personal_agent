@@ -32,7 +32,7 @@ class SubAgentSpec:
         tools: Tool names the sub-agent is allowed to invoke (empty = none).
         background: Background context injected into the sub-agent's system
             prompt (parent task summary, constraints, etc.).
-        model_role: Model role to use for inference (STANDARD, REASONING, etc.).
+        model_role: Model role to use for inference. Defaults to SUB_AGENT (ADR-0033).
     """
 
     task: str
@@ -42,7 +42,7 @@ class SubAgentSpec:
     timeout_seconds: float = 120.0
     tools: list[str] = field(default_factory=list)
     background: str = ""
-    model_role: ModelRole = ModelRole.STANDARD
+    model_role: ModelRole = ModelRole.SUB_AGENT
 
 
 @dataclass(frozen=True)

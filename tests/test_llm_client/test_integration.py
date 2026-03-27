@@ -33,7 +33,7 @@ async def test_real_llm_call_router_model() -> None:
 
     # Make the call
     response = await client.respond(
-        role=ModelRole.ROUTER,
+        role=ModelRole.PRIMARY,
         messages=messages,
         trace_ctx=trace_ctx,
     )
@@ -84,7 +84,7 @@ async def test_real_llm_call_with_fallback() -> None:
     messages = [{"role": "user", "content": "Reply with just: OK"}]
 
     response = await client.respond(
-        role=ModelRole.ROUTER,
+        role=ModelRole.PRIMARY,
         messages=messages,
         trace_ctx=trace_ctx,
     )
@@ -105,7 +105,7 @@ async def test_real_llm_call_all_roles() -> None:
 
     test_message = "Say 'test' and nothing else."
 
-    for role in [ModelRole.ROUTER, ModelRole.REASONING, ModelRole.CODING]:
+    for role in [ModelRole.PRIMARY, ModelRole.PRIMARY, ModelRole.PRIMARY]:
         try:
             response = await client.respond(
                 role=role,

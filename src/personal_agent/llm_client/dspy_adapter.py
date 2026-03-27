@@ -7,7 +7,7 @@ Usage:
     from personal_agent.llm_client.dspy_adapter import configure_dspy_lm
 
     # Configure DSPy once at module level
-    lm = configure_dspy_lm(role=ModelRole.REASONING)
+    lm = configure_dspy_lm(role=ModelRole.PRIMARY)
     dspy.configure(lm=lm)
 
     # Use DSPy signatures
@@ -57,7 +57,7 @@ def configure_dspy_lm(
     given role in models.yaml.
 
     Args:
-        role: Model role (ROUTER, REASONING, CODING, STANDARD) to lookup model.
+        role: Model role (PRIMARY, SUB_AGENT) to lookup model.
         base_url: Optional LM Studio base URL. Defaults to settings.llm_base_url.
         timeout_s: Optional timeout in seconds. Defaults to settings.llm_timeout_seconds.
 
@@ -73,7 +73,7 @@ def configure_dspy_lm(
         >>> from personal_agent.llm_client.types import ModelRole
         >>> import dspy
         >>>
-        >>> lm = configure_dspy_lm(role=ModelRole.REASONING)
+        >>> lm = configure_dspy_lm(role=ModelRole.PRIMARY)
         >>> dspy.configure(lm=lm)
         >>>
         >>> class MySignature(dspy.Signature):
@@ -151,7 +151,7 @@ def configure_dspy_lm(
 def create_dspy_predictor(
     signature: type,
     module_type: str = "chain_of_thought",
-    role: ModelRole = ModelRole.REASONING,
+    role: ModelRole = ModelRole.PRIMARY,
     base_url: str | None = None,
     timeout_s: int | None = None,
 ) -> Any:
@@ -163,7 +163,7 @@ def create_dspy_predictor(
     Args:
         signature: DSPy signature class defining input/output fields.
         module_type: Type of DSPy module. Options: "predict", "chain_of_thought", "react".
-        role: Model role for model selection. Defaults to REASONING.
+        role: Model role for model selection. Defaults to PRIMARY.
         base_url: Optional LM Studio base URL.
         timeout_s: Optional timeout in seconds.
 

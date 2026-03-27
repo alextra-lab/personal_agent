@@ -82,8 +82,8 @@ def load_model_config(config_path: Path | str | None = None) -> ModelConfig:
     Example:
         >>> from personal_agent.config import load_model_config
         >>> config = load_model_config()
-        >>> print(config.models["router"].id)
-        qwen/qwen3-4b-thinking-2507
+        >>> print(config.models["primary"].id)
+        qwen/qwen3-35b-a22b
     """
     if config_path is None:
         # Use unified config system (ADR-0007)

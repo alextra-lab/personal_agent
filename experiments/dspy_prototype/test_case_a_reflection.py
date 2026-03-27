@@ -96,7 +96,7 @@ async def manual_reflection_generation(
     )
 
     response = await llm_client.respond(
-        role=ModelRole.REASONING,
+        role=ModelRole.PRIMARY,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3,
         max_tokens=3000,

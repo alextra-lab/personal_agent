@@ -16,7 +16,7 @@ Performance (from E-008):
 
 Design:
 - Uses DSPy ChainOfThought for reasoning + structured output
-- Configured with REASONING model (qwen/qwen3-8b)
+- Configured with PRIMARY model
 - Telemetry-integrated (trace_id, latency, parse failures)
 - Fallback to manual approach if DSPy unavailable (handled by caller)
 - Deterministic metrics extraction (ADR-0014) - no LLM for metrics formatting
@@ -228,11 +228,11 @@ def generate_reflection_dspy(
         # Configure DSPy with REASONING model
         # Use dspy.context() instead of dspy.configure() for background tasks
         # (Captain's Log reflection runs in a different async task)
-        lm = llm_client.get_dspy_lm(role=ModelRole.REASONING)
+        lm = llm_client.get_dspy_lm(role=ModelRole.PRIMARY)
 
         log.info(
             "dspy_configured_for_reflection",
-            model_role="reasoning",
+            model_role="primary",
             trace_id=trace_id,
             component="reflection_dspy",
         )

@@ -214,7 +214,7 @@ Output ONLY valid JSON, nothing else."""
         try:
             trace_ctx = TraceContext.new_trace()
             response = await self.client.respond(
-                role=ModelRole.ROUTER,
+                role=ModelRole.PRIMARY,
                 messages=[{"role": "user", "content": judge_prompt}],
                 trace_ctx=trace_ctx,
             )

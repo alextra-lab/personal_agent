@@ -38,24 +38,20 @@ dependencies = [
   "dspy>=3.1.0",          # DSPy framework for Captain's Log reflection (ChainOfThought) - ADR-0010
   "mcp>=1.0.0,<2.0.0",    # Model Context Protocol SDK for MCP Gateway integration - ADR-0011
   "pre-commit>=3.5.0",    # git hooks (required for all contributors)
-
   # Service layer (Phase 2.1)
   "fastapi>=0.109.0",     # async web framework for service API
   "uvicorn[standard]>=0.27.0",  # ASGI server for FastAPI
-
   # Database (PostgreSQL with async support)
   "sqlalchemy[asyncio]>=2.0.25",  # async ORM for database operations
   "asyncpg>=0.29.0",      # async PostgreSQL driver
   "alembic>=1.13.0",      # database migrations
-
   # Elasticsearch (async logging and search)
   "elasticsearch[async]>=8.11.0,<9.0.0",  # async Elasticsearch client (8.x for ES 8.19)
-
   # Neo4j (Phase 2.2 - memory graph)
   "neo4j>=5.15.0",        # Neo4j driver for knowledge graph
-
   # Claude API (Phase 2.2 - second brain). Optional at runtime: only loaded when using Claude.
   "anthropic>=0.18.0",
+  "litellm>=1.82.1",
 ]
 
 [project.scripts]

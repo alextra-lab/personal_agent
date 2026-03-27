@@ -9,7 +9,7 @@ import re
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from personal_agent.captains_log.capture import TaskCapture, read_captures
 from personal_agent.config import load_model_config
@@ -17,9 +17,6 @@ from personal_agent.memory.models import Entity, Relationship, SessionNode, Turn
 from personal_agent.memory.service import MemoryService
 from personal_agent.second_brain.entity_extraction import extract_entities_and_relationships
 from personal_agent.telemetry import get_logger
-
-if TYPE_CHECKING:
-    from personal_agent.llm_client.claude import ClaudeClient
 
 log = get_logger(__name__)
 
@@ -41,16 +38,13 @@ class SecondBrainConsolidator:
     def __init__(
         self,
         memory_service: MemoryService | None = None,
-        claude_client: "ClaudeClient | None" = None,
     ) -> None:  # noqa: D107
         """Initialize consolidator with optional dependencies.
 
         Args:
-            memory_service: Optional memory service (creates new if None)
-            claude_client: Optional Claude client (creates new if None)
+            memory_service: Optional memory service (creates new if None).
         """
         self.memory_service = memory_service or MemoryService()
-        self.claude_client = claude_client
 
         # Ensure memory service is connected
         if not self.memory_service.connected:
@@ -105,27 +99,6 @@ class SecondBrainConsolidator:
         # Ensure memory service is connected
         if not self.memory_service.connected:
             await self.memory_service.connect()
-
-        # entity_extraction.py auto-creates ClaudeClient when the configured role
-        # is a cloud model (provider="anthropic"). Pre-warm it here so connection
-        # errors surface early (before iterating over captures) and so the same
-        # client instance is reused across all captures in this consolidation run.
-        model_def = model_config.models.get(entity_extraction_role)
-        if not self.claude_client and model_def and model_def.provider == "anthropic":
-            try:
-                from personal_agent.llm_client.claude import ClaudeClient
-
-                self.claude_client = ClaudeClient(
-                    model_id=model_def.id,
-                    max_tokens=model_def.max_tokens or 8192,
-                )
-            except (ImportError, ValueError) as e:
-                log.warning(
-                    "claude_client_unavailable_fallback_to_local",
-                    error=str(e),
-                    fallback_model=entity_extraction_role,
-                )
-                # Will use local SLM instead; claude_client stays None
 
         # Process each capture (skip ones already in the graph to avoid duplicate work)
         turns_created = 0
@@ -321,7 +294,6 @@ class SecondBrainConsolidator:
         extraction_result = await extract_entities_and_relationships(
             capture.user_message,
             extraction_response,
-            self.claude_client,  # Optional: uses local SLM if None
         )
 
         # If extraction fell back (LLM error/crash), skip writing to Neo4j entirely.

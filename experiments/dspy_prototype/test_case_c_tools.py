@@ -61,7 +61,7 @@ async def manual_tool_agent(query: str) -> str:
 
         tools = tool_layer.registry.get_tool_definitions_for_llm(mode=Mode.NORMAL)
         response = await llm_client.respond(
-            role=ModelRole.STANDARD,
+            role=ModelRole.SUB_AGENT,
             messages=messages,
             tools=tools,
             trace_ctx=trace_ctx,

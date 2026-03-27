@@ -22,7 +22,7 @@ class TestSubAgentSpec:
         assert spec.timeout_seconds == 120.0
         assert spec.tools == []
         assert spec.background == ""
-        assert spec.model_role == ModelRole.STANDARD
+        assert spec.model_role == ModelRole.SUB_AGENT
 
     def test_full_construction(self) -> None:
         """All fields set explicitly."""
@@ -35,14 +35,14 @@ class TestSubAgentSpec:
             timeout_seconds=60.0,
             tools=["search", "read_file"],
             background="Parent task: architecture review.",
-            model_role=ModelRole.REASONING,
+            model_role=ModelRole.PRIMARY,
         )
         assert spec.output_format == "json"
         assert spec.max_tokens == 2048
         assert spec.timeout_seconds == 60.0
         assert spec.tools == ["search", "read_file"]
         assert spec.background == "Parent task: architecture review."
-        assert spec.model_role == ModelRole.REASONING
+        assert spec.model_role == ModelRole.PRIMARY
 
     def test_immutability(self) -> None:
         """SubAgentSpec is frozen — mutation raises AttributeError."""

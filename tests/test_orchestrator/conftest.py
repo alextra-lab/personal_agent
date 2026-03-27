@@ -1,8 +1,8 @@
 """Conftest for orchestrator tests.
 
-Prevents reflection from calling the live reasoning model in unit tests.
+Prevents reflection from calling the live primary model in unit tests.
 The reflection path (executor → generate_reflection_entry → reflection_dspy →
-ModelRole.REASONING) creates its own LocalLLMClient internally, bypassing any
+ModelRole.PRIMARY) creates its own LocalLLMClient internally, bypassing any
 executor-level patches. This fixture blocks that path for all non-integration tests.
 """
 
@@ -22,10 +22,8 @@ def configure_mock_llm_client_model_configs(mock_client: AsyncMock) -> None:
     mock_def = MagicMock()
     mock_def.effective_tool_strategy = ToolCallingStrategy.NATIVE
     mock_client.model_configs = {
-        "router": mock_def,
-        "standard": mock_def,
-        "reasoning": mock_def,
-        "coding": mock_def,
+        "primary": mock_def,
+        "sub_agent": mock_def,
     }
 
 

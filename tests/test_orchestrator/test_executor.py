@@ -111,7 +111,7 @@ class TestMemoryRecallHelpers:
         assert result[1]["turn_count"] == 5
 
 
-@patch("personal_agent.orchestrator.executor.LocalLLMClient")
+@patch("personal_agent.llm_client.factory.get_llm_client")
 @pytest.mark.asyncio
 async def test_execute_simple_task(mock_client_class) -> None:
     """Test executing a simple task through the state machine."""
@@ -152,7 +152,7 @@ async def test_execute_simple_task(mock_client_class) -> None:
     assert "llm_call" in step_types
 
 
-@patch("personal_agent.orchestrator.executor.LocalLLMClient")
+@patch("personal_agent.llm_client.factory.get_llm_client")
 @pytest.mark.asyncio
 async def test_execute_task_with_code_channel(mock_client_class) -> None:
     """Test executing a task with CODE_TASK channel."""
@@ -179,7 +179,7 @@ async def test_execute_task_with_code_channel(mock_client_class) -> None:
     assert len(result["steps"]) > 0
 
 
-@patch("personal_agent.orchestrator.executor.LocalLLMClient")
+@patch("personal_agent.llm_client.factory.get_llm_client")
 @pytest.mark.asyncio
 async def test_execute_task_updates_session(mock_client_class) -> None:
     """Test that executing a task updates session messages."""
@@ -212,7 +212,7 @@ async def test_execute_task_updates_session(mock_client_class) -> None:
     assert user_messages[0]["content"] == "Test message"
 
 
-@patch("personal_agent.orchestrator.executor.LocalLLMClient")
+@patch("personal_agent.llm_client.factory.get_llm_client")
 @pytest.mark.asyncio
 async def test_execute_task_preserves_context(mock_client_class) -> None:
     """Test that execution context is preserved through state machine."""
@@ -246,7 +246,7 @@ async def test_execute_task_preserves_context(mock_client_class) -> None:
     assert ctx.user_message == original_user_message
 
 
-@patch("personal_agent.orchestrator.executor.LocalLLMClient")
+@patch("personal_agent.llm_client.factory.get_llm_client")
 @pytest.mark.asyncio
 async def test_execute_task_state_transitions(mock_client_class) -> None:
     """Test that state machine transitions through expected states."""
@@ -279,7 +279,7 @@ async def test_execute_task_state_transitions(mock_client_class) -> None:
     assert "error" not in result or not result.get("error")
 
 
-@patch("personal_agent.orchestrator.executor.LocalLLMClient")
+@patch("personal_agent.llm_client.factory.get_llm_client")
 @pytest.mark.asyncio
 async def test_execute_task_with_different_modes(mock_client_class) -> None:
     """Test executing tasks with different operational modes."""
@@ -307,7 +307,7 @@ async def test_execute_task_with_different_modes(mock_client_class) -> None:
         assert len(result["reply"]) > 0
 
 
-@patch("personal_agent.orchestrator.executor.LocalLLMClient")
+@patch("personal_agent.llm_client.factory.get_llm_client")
 @pytest.mark.asyncio
 async def test_execute_task_error_handling(mock_client_class) -> None:
     """Test that errors are handled gracefully and don't crash."""
@@ -345,7 +345,7 @@ async def test_execute_task_error_handling(mock_client_class) -> None:
 class TestToolUsingFlow:
     """Tests for tool-using flow in orchestrator."""
 
-    @patch("personal_agent.orchestrator.executor.LocalLLMClient")
+    @patch("personal_agent.llm_client.factory.get_llm_client")
     @pytest.mark.asyncio
     async def test_llm_call_with_tools_passed_to_client(self, mock_client_class):
         """Test that tools are passed to LLM client when available."""
@@ -379,7 +379,7 @@ class TestToolUsingFlow:
         # Tools should be a list (may be empty if no tools available in mode)
         assert tools_arg is None or isinstance(tools_arg, list)
 
-    @patch("personal_agent.orchestrator.executor.LocalLLMClient")
+    @patch("personal_agent.llm_client.factory.get_llm_client")
     @pytest.mark.asyncio
     async def test_tool_calls_executed_when_returned_from_llm(self, mock_client_class):
         """Test that tool calls from LLM are executed and results appended."""
@@ -387,25 +387,7 @@ class TestToolUsingFlow:
         configure_mock_llm_client_model_configs(mock_client)
         mock_client_class.return_value = mock_client
 
-        # Mock router response (DELEGATE to REASONING) - CHAT channel goes through router first
-        router_response = {
-            "role": "assistant",
-            "content": json.dumps(
-                {
-                    "routing_decision": "DELEGATE",
-                    "target_model": "REASONING",
-                    "confidence": 0.9,
-                    "reasoning_depth": 5,
-                    "reason": "Tool usage required",
-                }
-            ),
-            "tool_calls": [],
-            "reasoning_trace": None,
-            "usage": {"total_tokens": 80},
-            "raw": {},
-        }
-
-        # Mock reasoning model response with tool calls
+        # Mock PRIMARY response with tool calls (ADR-0033: no router, PRIMARY called directly)
         tool_call_id = "call_123"
         mock_response_with_tools = {
             "role": "assistant",
@@ -433,7 +415,6 @@ class TestToolUsingFlow:
         }
 
         mock_client.respond.side_effect = [
-            router_response,
             mock_response_with_tools,
             synthesis_response,
         ]
@@ -446,17 +427,17 @@ class TestToolUsingFlow:
             channel=Channel.CHAT,
         )
 
-        # Verify LLM was called three times (router, reasoning with tools, synthesis)
+        # Verify LLM was called twice (PRIMARY with tools, then synthesis after tool execution)
         assert mock_client.respond.call_count >= 2
 
-        # Verify second call (reasoning) had tools
-        second_call = mock_client.respond.call_args_list[1]
-        assert second_call.kwargs.get("tools") is not None
+        # Verify first call (PRIMARY) had tools available
+        first_call = mock_client.respond.call_args_list[0]
+        assert first_call.kwargs.get("tools") is not None
 
-        # Verify third call had tool results in messages
-        if mock_client.respond.call_count >= 3:
-            third_call = mock_client.respond.call_args_list[2]
-            messages = third_call.kwargs.get("messages", [])
+        # Verify second call had tool results in messages
+        if mock_client.respond.call_count >= 2:
+            second_call = mock_client.respond.call_args_list[1]
+            messages = second_call.kwargs.get("messages", [])
             tool_messages = [m for m in messages if m.get("role") == "tool"]
             assert len(tool_messages) > 0
 
@@ -464,7 +445,7 @@ class TestToolUsingFlow:
         step_types = [step["type"] for step in result["steps"]]
         assert "tool_call" in step_types
 
-    @patch("personal_agent.orchestrator.executor.LocalLLMClient")
+    @patch("personal_agent.llm_client.factory.get_llm_client")
     @pytest.mark.asyncio
     async def test_tool_execution_stores_results_in_context(self, mock_client_class):
         """Test that tool execution results are stored in context."""
@@ -519,7 +500,7 @@ class TestToolUsingFlow:
         assert "tool_name" in tool_step["metadata"]
         assert "success" in tool_step["metadata"]
 
-    @patch("personal_agent.orchestrator.executor.LocalLLMClient")
+    @patch("personal_agent.llm_client.factory.get_llm_client")
     @pytest.mark.asyncio
     async def test_multiple_tool_calls_executed_sequentially(self, mock_client_class):
         """Test that multiple tool calls are executed sequentially."""
@@ -580,7 +561,7 @@ class TestToolUsingFlow:
             tool_messages = [m for m in messages if m.get("role") == "tool"]
             assert len(tool_messages) == 2
 
-    @patch("personal_agent.orchestrator.executor.LocalLLMClient")
+    @patch("personal_agent.llm_client.factory.get_llm_client")
     @pytest.mark.asyncio
     async def test_tool_execution_error_handled_gracefully(self, mock_client_class):
         """Test that tool execution errors are handled gracefully."""
@@ -634,7 +615,7 @@ class TestToolUsingFlow:
             # Tool step should exist even if tool failed
             assert "tool_name" in tool_steps[0]["metadata"]
 
-    @patch("personal_agent.orchestrator.executor.LocalLLMClient")
+    @patch("personal_agent.llm_client.factory.get_llm_client")
     @pytest.mark.asyncio
     async def test_search_memory_tool_called_when_llm_requests_it(self, mock_client_class):
         """Integration: agent executes search_memory when LLM returns that tool call (ADR-0026)."""
@@ -643,7 +624,7 @@ class TestToolUsingFlow:
         mock_client_class.return_value = mock_client
         # Provide model_configs so executor can access model_config.id during synthesis
         mock_client.model_configs = {
-            "REASONING": MagicMock(id="reasoning-model"),
+            "primary": MagicMock(id="primary-model"),
         }
 
         turn = TurnNode(

@@ -1,7 +1,7 @@
 """Type definitions for the LLM client module.
 
-This module defines the core types used by the LocalLLMClient:
-- ModelRole: Enum for different model roles (router, reasoning, coding)
+This module defines the core types used by the LLM clients:
+- ModelRole: Two-tier model taxonomy (PRIMARY + SUB_AGENT) — ADR-0033
 - LLMResponse: Response structure from LLM calls
 - ToolCall: Tool call structure for function calling
 - Error classes: Hierarchy of LLM client errors
@@ -14,19 +14,20 @@ from typing_extensions import TypedDict
 
 
 class ModelRole(str, Enum):
-    """Model roles for different use cases.
+    """Model roles mapping to entries in config/models.yaml.
 
-    These map to configured models in config/models.yaml.
+    Tier 1 (Primary): The orchestrator brain — reasoning, tool calling, decomposition.
+    Tier 2 (Sub-Agent): Focused single-task completion — no thinking, fast inference.
+
+    See ADR-0033 for the two-tier taxonomy rationale.
     """
 
-    ROUTER = "router"
-    STANDARD = "standard"
-    REASONING = "reasoning"
-    CODING = "coding"
+    PRIMARY = "primary"  # Tier 1: orchestrator brain
+    SUB_AGENT = "sub_agent"  # Tier 2: focused task completion
 
     @classmethod
     def from_str(cls, value: str) -> "ModelRole | None":
-        """Convert string to ModelRole enum.
+        """Convert string to ModelRole enum (case-insensitive).
 
         Args:
             value: String representation (case-insensitive).

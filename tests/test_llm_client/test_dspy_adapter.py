@@ -82,9 +82,9 @@ class ReasoningTask(dspy.Signature):
 # ============================================================================
 
 
-def test_configure_dspy_lm_with_reasoning_role():
-    """Test DSPy LM configuration with REASONING role."""
-    lm = configure_dspy_lm(role=ModelRole.REASONING)
+def test_configure_dspy_lm_with_primary_role():
+    """Test DSPy LM configuration with PRIMARY role."""
+    lm = configure_dspy_lm(role=ModelRole.PRIMARY)
 
     # Verify LM instance is created
     assert lm is not None
@@ -94,9 +94,9 @@ def test_configure_dspy_lm_with_reasoning_role():
     assert lm.model.startswith("openai/")
 
 
-def test_configure_dspy_lm_with_router_role():
-    """Test DSPy LM configuration with ROUTER role."""
-    lm = configure_dspy_lm(role=ModelRole.ROUTER)
+def test_configure_dspy_lm_with_sub_agent_role():
+    """Test DSPy LM configuration with SUB_AGENT role."""
+    lm = configure_dspy_lm(role=ModelRole.SUB_AGENT)
 
     assert lm is not None
     assert hasattr(lm, "model")
@@ -117,7 +117,7 @@ def test_configure_dspy_lm_with_invalid_role():
 def test_configure_dspy_lm_with_custom_base_url():
     """Test DSPy LM configuration with custom base_url."""
     custom_url = "http://custom:1234"
-    lm = configure_dspy_lm(role=ModelRole.REASONING, base_url=custom_url)
+    lm = configure_dspy_lm(role=ModelRole.PRIMARY, base_url=custom_url)
 
     assert lm is not None
     # Note: Can't easily verify internal base_url, but no exception means it worked
@@ -126,7 +126,7 @@ def test_configure_dspy_lm_with_custom_base_url():
 def test_configure_dspy_lm_with_custom_timeout():
     """Test DSPy LM configuration with custom timeout."""
     custom_timeout = 60
-    lm = configure_dspy_lm(role=ModelRole.REASONING, timeout_s=custom_timeout)
+    lm = configure_dspy_lm(role=ModelRole.PRIMARY, timeout_s=custom_timeout)
 
     assert lm is not None
 
@@ -138,7 +138,7 @@ def test_configure_dspy_lm_with_custom_timeout():
 
 def test_llm_client_get_dspy_lm(llm_client):
     """Test LocalLLMClient.get_dspy_lm() method."""
-    lm = llm_client.get_dspy_lm(role=ModelRole.REASONING)
+    lm = llm_client.get_dspy_lm(role=ModelRole.PRIMARY)
 
     assert lm is not None
     assert hasattr(lm, "model")
@@ -153,7 +153,7 @@ def test_llm_client_get_dspy_lm_uses_client_config(llm_client):
         timeout_seconds=60,
     )
 
-    lm = custom_client.get_dspy_lm(role=ModelRole.REASONING)
+    lm = custom_client.get_dspy_lm(role=ModelRole.PRIMARY)
 
     # Verify LM is created (no exception means config was passed correctly)
     assert lm is not None
@@ -169,7 +169,7 @@ def test_llm_client_get_dspy_lm_uses_client_config(llm_client):
 async def test_dspy_predict_simple_question(llm_client):
     """Test basic DSPy Predict module with simple question."""
     # Configure DSPy
-    lm = llm_client.get_dspy_lm(role=ModelRole.REASONING)
+    lm = llm_client.get_dspy_lm(role=ModelRole.PRIMARY)
     dspy.configure(lm=lm)
 
     # Create predictor
@@ -197,7 +197,7 @@ async def test_dspy_predict_simple_question(llm_client):
 async def test_dspy_chain_of_thought_reasoning(llm_client):
     """Test DSPy ChainOfThought module (recommended for Captain's Log)."""
     # Configure DSPy
-    lm = llm_client.get_dspy_lm(role=ModelRole.REASONING)
+    lm = llm_client.get_dspy_lm(role=ModelRole.PRIMARY)
     dspy.configure(lm=lm)
 
     # Create ChainOfThought predictor
@@ -223,7 +223,7 @@ async def test_dspy_chain_of_thought_reasoning(llm_client):
 async def test_dspy_chain_of_thought_with_empty_fields(llm_client):
     """Test ChainOfThought handles optional/empty fields correctly."""
     # Configure DSPy
-    lm = llm_client.get_dspy_lm(role=ModelRole.REASONING)
+    lm = llm_client.get_dspy_lm(role=ModelRole.PRIMARY)
     dspy.configure(lm=lm)
 
     # Signature with optional field
@@ -253,7 +253,7 @@ async def test_create_dspy_predictor_predict():
     predictor = create_dspy_predictor(
         signature=SimpleQuestion,
         module_type="predict",
-        role=ModelRole.REASONING,
+        role=ModelRole.PRIMARY,
     )
 
     result = predictor(question="What is Python?")
@@ -270,7 +270,7 @@ async def test_create_dspy_predictor_chain_of_thought():
     predictor = create_dspy_predictor(
         signature=ReasoningTask,
         module_type="chain_of_thought",
-        role=ModelRole.REASONING,
+        role=ModelRole.PRIMARY,
         timeout_s=45,
     )
 
@@ -299,7 +299,7 @@ def test_create_dspy_predictor_invalid_module_type():
         create_dspy_predictor(
             signature=SimpleQuestion,
             module_type="invalid_type",
-            role=ModelRole.REASONING,
+            role=ModelRole.PRIMARY,
         )
 
 
@@ -316,7 +316,7 @@ def test_configure_dspy_lm_without_dspy_raises_import_error(monkeypatch):
     monkeypatch.setattr(adapter_module, "dspy", None)
 
     with pytest.raises(ImportError, match="dspy package is required"):
-        configure_dspy_lm(role=ModelRole.REASONING)
+        configure_dspy_lm(role=ModelRole.PRIMARY)
 
 
 # ============================================================================
@@ -336,7 +336,7 @@ async def test_dspy_chain_of_thought_latency_baseline(llm_client):
     import time
 
     # Configure DSPy
-    lm = llm_client.get_dspy_lm(role=ModelRole.REASONING)
+    lm = llm_client.get_dspy_lm(role=ModelRole.PRIMARY)
     dspy.configure(lm=lm)
 
     # Create ChainOfThought predictor

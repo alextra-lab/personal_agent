@@ -25,6 +25,15 @@ tool_categories:
     examples: ["check_disk_space", "check_process_health"]
 
 tools:
+  # Native web search via SearXNG (ADR-0034)
+  web_search:
+    category: "network"
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
+    risk_level: "low"
+    requires_approval: false
+    timeout_seconds: 15
+    rate_limit_per_hour: 120
+
   read_file:
     category: "read_only"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"]
@@ -376,7 +385,7 @@ tools:
     allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
-    description_override: "Fetch and parse the full text of a specific webpage URL. Use when you already have a URL and want to read its content. Prefer mcp_perplexity_ask or mcp_search when you need to find information without a known URL."
+    description_override: "Fetch and parse the full text of a specific webpage URL. Use when you already have a URL and want to read its content. Prefer web_search or mcp_search when you need to find information without a known URL."
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -498,7 +507,7 @@ tools:
     allowed_in_modes: ['NORMAL', 'DEGRADED']
     risk_level: "medium"
     requires_approval: false
-    description_override: "Search the internet using Perplexity AI and get a direct answer with citations. Use for factual questions, current events, CVEs, or any question requiring live web data. Prefer this over mcp_perplexity_research for most queries — it is faster. Do NOT answer from your own knowledge when live information is needed; always call this tool instead. Input: messages array with {role: 'user', content: 'your question'}."
+    description_override: "Get a synthesized answer with citations from Perplexity AI. Use when you need a pre-digested summary with source links — e.g. multi-factor comparisons, nuanced technical explanations, or when web_search snippets are insufficient. For routine factual lookups, prefer web_search (faster, free, private). Prefer this over mcp_perplexity_research unless broad multi-source coverage is specifically needed. Input: messages array with {role: 'user', content: 'your question'}."
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []
@@ -550,7 +559,7 @@ tools:
     allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
     risk_level: "low"
     requires_approval: false
-    description_override: "Search DuckDuckGo and return a list of result links and snippets. Use when you want to browse raw search results or pick specific URLs to read with mcp_fetch_content. For direct answers with citations, prefer mcp_perplexity_ask."
+    description_override: "Search DuckDuckGo and return a list of result links and snippets. Fallback search tool if web_search (SearXNG) is unavailable. For most searches, prefer web_search which aggregates multiple engines."
     # Customize as needed:
     # forbidden_paths: []
     # allowed_paths: []

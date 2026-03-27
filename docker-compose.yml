@@ -76,7 +76,7 @@ services:
     environment:
       - SEARXNG_BASE_URL=http://localhost:8888
     volumes:
-      - ./config/searxng:/etc/searxng:rw
+      - ./docker/searxng:/etc/searxng:rw
     ports:
       - "8888:8080"
     restart: unless-stopped

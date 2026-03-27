@@ -81,4 +81,4 @@ current_session
 .claude/.cache/
 
 # SearXNG generated files (ADR-0034)
-config/searxng/uwsgi.ini
+docker/searxng/uwsgi.ini

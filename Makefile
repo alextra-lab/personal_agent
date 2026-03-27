@@ -7,7 +7,7 @@ help:
 	@echo "Run from project root so uv uses .venv (e.g. cd /path/to/personal_agent)."
 	@echo ""
 	@echo "Usage:"
-	@echo "  make infra-up         Start Docker infrastructure (PostgreSQL, Elasticsearch, Neo4j, Kibana)"
+	@echo "  make infra-up         Start Docker infrastructure (PostgreSQL, Elasticsearch, Neo4j, Kibana, SearXNG)"
 	@echo "  make infra-down       Stop and remove Docker containers"
 	@echo "  make dev              Start the agent service with hot-reload (run 'make infra-up' first)"
 	@echo "  make stop             Stop Docker containers (preserves data volumes)"

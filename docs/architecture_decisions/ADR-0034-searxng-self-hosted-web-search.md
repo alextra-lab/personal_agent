@@ -66,7 +66,7 @@ Add SearXNG to `docker-compose.yml` alongside Postgres, Elasticsearch, Neo4j, an
     Agent (Python) ───── httpx GET ───────────────────┘
 ```
 
-SearXNG has no persistent data (no named data volume required for MVP). Configuration is bind-mounted from `config/searxng/settings.yml`. Note: SearXNG generates a random `secret_key` on first start and may write `uwsgi.ini` into the config directory — both are gitignored.
+SearXNG has no persistent data (no named data volume required for MVP). Configuration is bind-mounted from `docker/searxng/settings.yml`. Note: SearXNG generates a random `secret_key` on first start and may write `uwsgi.ini` into the config directory — both are gitignored.
 
 ### D2: Implement `web_search` as a Native In-Process Tool
 
@@ -105,7 +105,7 @@ The orchestrator prompt instructs the agent to prefer `web_search` for routine l
 
 ### D4: SearXNG Configuration
 
-Engine selection and search behavior are configured in `config/searxng/settings.yml`, not in Python code. This keeps search engine policy separate from application logic.
+Engine selection and search behavior are configured in `docker/searxng/settings.yml`, not in Python code. This keeps search engine policy separate from application logic.
 
 Key configuration decisions:
 - **Default engines**: Google, Brave, DuckDuckGo (general); StackOverflow, GitHub (IT); arXiv, Semantic Scholar (science); wttr.in (weather)
@@ -218,7 +218,7 @@ Update the system prompt to instruct the agent:
 ## Acceptance Criteria
 
 - [ ] SearXNG service defined in `docker-compose.yml`, starts with `docker compose up`
-- [ ] `config/searxng/settings.yml` exists with configured engines (general, IT, science categories)
+- [ ] `docker/searxng/settings.yml` exists with configured engines (general, IT, science categories)
 - [ ] `src/personal_agent/tools/web.py` exists with `web_search` tool definition and executor
 - [ ] `web_search` registered in `register_mvp_tools()` in `tools/__init__.py`
 - [ ] `web_search` appears in `registry.list_tools()` output

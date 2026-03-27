@@ -17,7 +17,7 @@ queries to third-party servers. The planned native `web_search` tool
 ## Proposal
 
 1. Add a SearXNG Docker container to `docker-compose.yml`
-2. Create `config/searxng/settings.yml` with engine configuration
+2. Create `docker/searxng/settings.yml` with engine configuration
 3. Implement `web_search` as a native in-process tool in `src/personal_agent/tools/web.py`
 4. Register in the tool registry, governance config, and orchestrator prompts
 
@@ -34,7 +34,7 @@ queries to third-party servers. The planned native `web_search` tool
     environment:
       - SEARXNG_BASE_URL=http://localhost:8888
     volumes:
-      - ./config/searxng:/etc/searxng:rw
+      - ./docker/searxng:/etc/searxng:rw
     ports:
       - "8888:8080"
     restart: unless-stopped
@@ -47,12 +47,12 @@ queries to third-party servers. The planned native `web_search` tool
 
 Notes:
 - Port 8888 on host maps to 8080 inside container (avoids conflicts with other services)
-- `config/searxng/` is mounted read-write because SearXNG writes a generated secret key on first start
+- `docker/searxng/` is mounted read-write because SearXNG writes a generated secret key on first start
 - No named volume needed — SearXNG has no persistent state worth preserving
 - Health check uses SearXNG's built-in `/healthz` endpoint
 - `restart: unless-stopped` keeps it running after host reboots
 
-### `config/searxng/settings.yml`
+### `docker/searxng/settings.yml`
 
 ```yaml
 # SearXNG configuration for personal agent (ADR-0034)
@@ -175,11 +175,16 @@ outgoing:
 
 ### `.gitignore` update
 
-SearXNG writes a `uwsgi.ini` to the config dir on startup. Add:
+SearXNG writes generated files to the config dir on startup. Add:
 
 ```
-config/searxng/uwsgi.ini
+docker/searxng/uwsgi.ini
 ```
+
+Note: If SearXNG rewrites `settings.yml` to inject a generated `secret_key`, the file
+will appear modified in `git status`. To avoid this, set a stable secret in
+`settings.yml` before first start (any string ≥ 32 characters). Alternatively, accept
+the empty default and gitignore the generated change.
 
 ---
 
@@ -233,8 +238,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from personal_agent.telemetry import get_logger
-from personal_agent.tools.types import ToolDefinition, ToolParameter, ToolResult
+import httpx
+
+from personal_agent.config import settings
+from personal_agent.telemetry import TraceContext, get_logger
+from personal_agent.tools.executor import ToolExecutionError
+from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
 
@@ -319,40 +328,45 @@ web_search_tool = ToolDefinition(
 
 ```python
 async def web_search_executor(
-    args: dict[str, Any],
-    ctx: Any | None = None,
-) -> ToolResult:
+    query: str = "",
+    categories: str | None = None,
+    engines: str | None = None,
+    language: str = "en",
+    time_range: str | None = None,
+    max_results: int | None = None,
+    ctx: TraceContext | None = None,
+) -> dict[str, Any]:
     """Execute a web search via the local SearXNG instance.
 
+    Follows the same executor contract as ``search_memory_executor``:
+    keyword arguments matching the tool's parameter names, optional
+    ``ctx`` for tracing, returns a plain dict (the ``ToolExecutionLayer``
+    wraps it in a ``ToolResult``), and raises ``ToolExecutionError`` on
+    failure.
+
     Args:
-        args: Tool arguments matching web_search_tool parameters.
+        query: Search query text.
+        categories: Comma-separated SearXNG categories (default from config).
+        engines: Comma-separated engine names (overrides categories).
+        language: BCP-47 language code.
+        time_range: Time filter ('day', 'week', 'month', 'year').
+        max_results: Maximum results to return (1-50, default from config).
         ctx: Optional trace context for logging.
 
     Returns:
-        ToolResult with structured search results or error.
+        Dict with ``results``, ``result_count``, ``suggestions``,
+        ``infoboxes``, and query metadata.
+
+    Raises:
+        ToolExecutionError: When SearXNG is unreachable, times out,
+            or returns an unparseable response.
     """
-    import httpx
-
-    from personal_agent.config import settings
-
-    query: str = args.get("query", "").strip()
+    query = (query or "").strip()
     if not query:
-        return ToolResult(
-            tool_name="web_search",
-            success=False,
-            output={},
-            error="query parameter is required and cannot be empty.",
-            latency_ms=0,
-        )
+        raise ToolExecutionError("query parameter is required and cannot be empty.")
 
-    categories: str = args.get("categories") or settings.searxng_default_categories
-    engines: str | None = args.get("engines")
-    language: str = args.get("language", "en")
-    time_range: str | None = args.get("time_range")
-    max_results: int = min(
-        max(int(args.get("max_results") or settings.searxng_max_results), 1),
-        50,
-    )
+    categories = categories or settings.searxng_default_categories
+    capped_max = min(max(int(max_results or settings.searxng_max_results), 1), 50)
 
     trace_id = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
 
@@ -377,9 +391,6 @@ async def web_search_executor(
     if time_range:
         params["time_range"] = time_range
 
-    import time as _time
-    t0 = _time.monotonic()
-
     try:
         async with httpx.AsyncClient(
             timeout=settings.searxng_timeout_seconds,
@@ -390,94 +401,67 @@ async def web_search_executor(
             )
             response.raise_for_status()
 
-        latency_ms = (_time.monotonic() - t0) * 1000
         data = response.json()
 
-        results = []
-        for item in (data.get("results") or [])[:max_results]:
-            results.append({
-                "title": item.get("title", ""),
-                "url": item.get("url", ""),
-                "snippet": item.get("content", ""),
-                "engine": item.get("engine", ""),
-                "score": item.get("score"),
-            })
-
-        output = {
-            "results": results,
-            "result_count": len(results),
-            "suggestions": data.get("suggestions", []),
-            "infoboxes": [
-                {
-                    "title": ib.get("infobox", ""),
-                    "content": ib.get("content", "")[:500],
-                    "urls": [u.get("url") for u in ib.get("urls", [])[:3]],
-                }
-                for ib in (data.get("infoboxes") or [])[:2]
-            ],
-            "query": query,
-            "categories_used": categories,
-            "engines_used": engines,
-        }
-
-        log.info(
-            "web_search_completed",
-            trace_id=trace_id,
-            result_count=len(results),
-            latency_ms=round(latency_ms, 1),
-        )
-
-        return ToolResult(
-            tool_name="web_search",
-            success=True,
-            output=output,
-            latency_ms=round(latency_ms, 1),
-        )
-
-    except httpx.ConnectError:
-        latency_ms = (_time.monotonic() - t0) * 1000
+    except httpx.ConnectError as exc:
         error_msg = (
             f"Cannot connect to SearXNG at {settings.searxng_base_url}. "
             "Is the searxng Docker service running?"
         )
         log.error("web_search_connect_failed", trace_id=trace_id, error=error_msg)
-        return ToolResult(
-            tool_name="web_search",
-            success=False,
-            output={},
-            error=error_msg,
-            latency_ms=round(latency_ms, 1),
-        )
+        raise ToolExecutionError(error_msg) from exc
 
-    except httpx.TimeoutException:
-        latency_ms = (_time.monotonic() - t0) * 1000
+    except httpx.TimeoutException as exc:
         error_msg = (
             f"SearXNG request timed out after {settings.searxng_timeout_seconds}s."
         )
         log.error("web_search_timeout", trace_id=trace_id, error=error_msg)
-        return ToolResult(
-            tool_name="web_search",
-            success=False,
-            output={},
-            error=error_msg,
-            latency_ms=round(latency_ms, 1),
-        )
+        raise ToolExecutionError(error_msg) from exc
 
-    except Exception as e:
-        latency_ms = (_time.monotonic() - t0) * 1000
+    except Exception as exc:
         log.error(
             "web_search_failed",
             trace_id=trace_id,
-            error=str(e),
+            error=str(exc),
             exc_info=True,
         )
-        return ToolResult(
-            tool_name="web_search",
-            success=False,
-            output={},
-            error=str(e),
-            latency_ms=round(latency_ms, 1),
-        )
+        raise ToolExecutionError(str(exc)) from exc
+
+    results = [
+        {
+            "title": item.get("title", ""),
+            "url": item.get("url", ""),
+            "snippet": item.get("content", ""),
+            "engine": item.get("engine", ""),
+            "score": item.get("score"),
+        }
+        for item in (data.get("results") or [])[:capped_max]
+    ]
+
+    output: dict[str, Any] = {
+        "results": results,
+        "result_count": len(results),
+        "suggestions": data.get("suggestions", []),
+        "infoboxes": [
+            {
+                "title": ib.get("infobox", ""),
+                "content": ib.get("content", "")[:500],
+                "urls": [u.get("url") for u in ib.get("urls", [])[:3]],
+            }
+            for ib in (data.get("infoboxes") or [])[:2]
+        ],
+        "query": query,
+        "categories_used": categories,
+        "engines_used": engines,
+    }
+
+    log.info(
+        "web_search_completed",
+        trace_id=trace_id,
+        result_count=len(results),
+    )
+
+    return output
 ```
 
 ### Registration in `tools/__init__.py`
@@ -637,8 +621,8 @@ if any("duckduckgo" in n for n in tool_names_lower):
 | File | Action | Description |
 |------|--------|-------------|
 | `docker-compose.yml` | **Modify** | Add `searxng` service |
-| `config/searxng/settings.yml` | **Create** | SearXNG engine and server configuration |
-| `.gitignore` | **Modify** | Add `config/searxng/uwsgi.ini` |
+| `docker/searxng/settings.yml` | **Create** | SearXNG engine and server configuration |
+| `.gitignore` | **Modify** | Add `docker/searxng/uwsgi.ini` |
 | `src/personal_agent/config/settings.py` | **Modify** | Add `searxng_*` settings fields |
 | `src/personal_agent/tools/web.py` | **Create** | Tool definition + executor |
 | `src/personal_agent/tools/__init__.py` | **Modify** | Import and register `web_search` |
@@ -653,19 +637,22 @@ if any("duckduckgo" in n for n in tool_names_lower):
 
 ### Unit tests (`tests/test_tools/test_web_search.py`)
 
-These mock `httpx` responses — no SearXNG container needed:
+These mock `httpx` responses — no SearXNG container needed.
+The executor returns `dict[str, Any]` on success and raises `ToolExecutionError` on failure
+(the `ToolExecutionLayer` wraps both into `ToolResult`):
 
-1. **Happy path**: Mock SearXNG JSON response → verify `ToolResult.success`, `output.results` structure
-2. **Empty query**: Verify `success=False`, descriptive error
-3. **Categories parameter**: Verify `categories` is passed in query params
-4. **Engines parameter**: Verify `engines` overrides categories
+1. **Happy path**: Mock SearXNG JSON response → verify returned dict has `results`, `result_count`, `suggestions`
+2. **Empty query**: Verify raises `ToolExecutionError` with descriptive message
+3. **Categories parameter**: Verify `categories` is passed in query params to httpx
+4. **Engines parameter**: Verify `engines` overrides categories in query params
 5. **Time range**: Verify `time_range` is passed through
 6. **Max results capping**: Request 100 results → verify capped at 50
-7. **Connection error**: Mock `httpx.ConnectError` → verify `success=False`, helpful error message
-8. **Timeout**: Mock `httpx.TimeoutException` → verify `success=False`, timeout message
-9. **Malformed JSON**: Mock non-JSON response → verify `success=False`
-10. **Empty results**: Mock response with zero results → verify `success=True`, `result_count=0`
+7. **Connection error**: Mock `httpx.ConnectError` → verify raises `ToolExecutionError`
+8. **Timeout**: Mock `httpx.TimeoutException` → verify raises `ToolExecutionError`
+9. **Malformed JSON**: Mock non-JSON response → verify raises `ToolExecutionError`
+10. **Empty results**: Mock response with zero results → verify returns dict with `result_count=0`
 11. **Infobox handling**: Mock response with infoboxes → verify truncation and structure
+12. **LOCKDOWN mode blocked**: Execute via `ToolExecutionLayer` with mode=LOCKDOWN → verify `ToolResult(success=False)` with permission denied
 
 ### Integration test (`tests/test_tools/test_web_search_integration.py`)
 
@@ -689,10 +676,11 @@ Per project testing standards:
 - [ ] `curl 'http://localhost:8888/search?q=python&format=json'` returns structured JSON with results
 - [ ] `web_search` tool appears in `registry.list_tools()` output
 - [ ] `web_search` appears in `get_tool_awareness_prompt()` capability list
-- [ ] `web_search(query="python asyncio", categories="it")` returns `ToolResult(success=True)` with structured results containing titles, URLs, snippets, engines
-- [ ] `web_search(query="...")` returns `ToolResult(success=False)` with descriptive error when SearXNG is down
+- [ ] `web_search_executor(query="python asyncio", categories="it")` returns dict with structured results containing titles, URLs, snippets, engines
+- [ ] `web_search_executor(query="...")` raises `ToolExecutionError` with descriptive message when SearXNG is down
+- [ ] `ToolExecutionLayer.execute_tool("web_search", ...)` wraps executor dict into `ToolResult(success=True)`
 - [ ] Governance allows `web_search` in NORMAL, ALERT, DEGRADED modes
-- [ ] Governance blocks `web_search` in LOCKDOWN and RECOVERY modes
+- [ ] Governance blocks `web_search` in LOCKDOWN and RECOVERY modes (not in `allowed_modes`; unit test asserts `ToolExecutionLayer` returns permission-denied `ToolResult`)
 - [ ] Orchestrator prompt instructs agent to prefer `web_search` over Perplexity for routine lookups
 - [ ] `_TOOL_RULES` references `web_search` as default; Perplexity reserved for synthesized answers (5.1)
 - [ ] `TOOL_USE_PROMPT_INJECTED` example uses `web_search` as primary example (5.2)
@@ -712,7 +700,7 @@ Per project testing standards:
 - **Image/video search**: Only text results in MVP. Categories `images`/`videos` can be enabled later.
 - **Search result caching**: No caching layer in MVP. SearXNG has no built-in result cache. Can add Redis or in-memory TTL cache in a follow-up if latency is a concern.
 - **Custom SearXNG plugins**: Use stock engine configuration. Custom SearXNG plugins (e.g., for internal wikis) are a future extension.
-- **Tor/VPN routing**: Optional in config but not configured by default. Document how to enable in `config/searxng/settings.yml` comments.
+- **Tor/VPN routing**: Optional in config but not configured by default. Document how to enable in `docker/searxng/settings.yml` comments.
 
 ---
 

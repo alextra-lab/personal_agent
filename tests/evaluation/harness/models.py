@@ -63,7 +63,28 @@ class FieldComparisonAssertion:
     kind: Literal["comparison"] = "comparison"
 
 
-TelemetryAssertion = FieldAssertion | EventPresenceAssertion | FieldComparisonAssertion
+@dataclass(frozen=True)
+class Neo4jAssertion:
+    """Assert a condition on Neo4j graph state via Cypher query.
+
+    Runs after all conversation turns complete. The checker executes the
+    Cypher query and verifies the result count meets ``min_result_count``.
+
+    Args:
+        description: Human-readable description of what is being checked.
+        cypher_query: Cypher query to execute. May use ``$session_id`` parameter.
+        min_result_count: Minimum rows the query must return to pass.
+    """
+
+    description: str
+    cypher_query: str
+    min_result_count: int = 1
+    kind: Literal["neo4j"] = "neo4j"
+
+
+TelemetryAssertion = (
+    FieldAssertion | EventPresenceAssertion | FieldComparisonAssertion | Neo4jAssertion
+)
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +128,8 @@ class ConversationPath:
     turns: tuple[ConversationTurn, ...]
     quality_criteria: tuple[str, ...] = ()
     setup_notes: str | None = None
+    post_path_assertions: tuple[Neo4jAssertion, ...] = ()
+    post_path_delay_s: float = 5.0
 
 
 # ---------------------------------------------------------------------------
@@ -177,24 +200,29 @@ class PathResult:
     all_assertions_passed: bool = False
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    post_path_assertion_results: list[AssertionResult] = field(default_factory=list)
 
     @property
     def total_assertions(self) -> int:
-        """Total number of telemetry assertions across all turns.
+        """Total number of assertions across all turns plus post-path.
 
         Returns:
-            Sum of assertion counts across all TurnResults.
+            Sum of assertion counts across all TurnResults plus post-path assertions.
         """
-        return sum(len(t.assertion_results) for t in self.turns)
+        return sum(len(t.assertion_results) for t in self.turns) + len(
+            self.post_path_assertion_results
+        )
 
     @property
     def passed_assertions(self) -> int:
-        """Number of passed telemetry assertions.
+        """Number of passed assertions.
 
         Returns:
-            Count of AssertionResults where passed is True.
+            Count of AssertionResults where passed is True, including post-path.
         """
-        return sum(1 for t in self.turns for a in t.assertion_results if a.passed)
+        return sum(1 for t in self.turns for a in t.assertion_results if a.passed) + sum(
+            1 for a in self.post_path_assertion_results if a.passed
+        )
 
     @property
     def failed_assertions(self) -> int:
@@ -274,4 +302,56 @@ def gte(event: str, key: str, threshold: float | int) -> FieldComparisonAssertio
         field_name=key,
         operator=">=",
         threshold=threshold,
+    )
+
+
+def neo4j_entity(name: str) -> Neo4jAssertion:
+    """Shorthand: assert a named entity exists in Neo4j.
+
+    Args:
+        name: Entity name to search for (exact match).
+
+    Returns:
+        Neo4jAssertion checking entity existence.
+    """
+    return Neo4jAssertion(
+        description=f"Entity '{name}' exists in Neo4j",
+        cypher_query=f"MATCH (e:Entity {{name: '{name}'}}) RETURN e LIMIT 1",
+        min_result_count=1,
+    )
+
+
+def neo4j_promoted(name: str) -> Neo4jAssertion:
+    """Shorthand: assert an entity has been promoted to semantic memory.
+
+    Args:
+        name: Entity name to check.
+
+    Returns:
+        Neo4jAssertion checking memory_type='semantic'.
+    """
+    return Neo4jAssertion(
+        description=f"Entity '{name}' promoted to semantic memory",
+        cypher_query=(
+            f"MATCH (e:Entity {{name: '{name}'}}) WHERE e.memory_type = 'semantic' RETURN e LIMIT 1"
+        ),
+        min_result_count=1,
+    )
+
+
+def neo4j_cypher(description: str, query: str, min_result_count: int = 1) -> Neo4jAssertion:
+    """Shorthand: assert a custom Cypher query returns enough rows.
+
+    Args:
+        description: Human description of the check.
+        query: Raw Cypher query.
+        min_result_count: Minimum rows expected.
+
+    Returns:
+        Neo4jAssertion with the given query.
+    """
+    return Neo4jAssertion(
+        description=description,
+        cypher_query=query,
+        min_result_count=min_result_count,
     )

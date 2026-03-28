@@ -49,7 +49,7 @@ def parse_args() -> argparse.Namespace:
 
     Returns:
         Parsed argument namespace with paths, category, agent_url,
-        es_url, output_dir, and skip_setup attributes.
+        es_url, neo4j_uri, output_dir, and skip_setup attributes.
     """
     parser = argparse.ArgumentParser(
         description="Run evaluation conversation paths against the live agent",

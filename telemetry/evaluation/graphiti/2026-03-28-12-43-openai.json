@@ -1,0 +1,65 @@
+{
+  "run_id": "2026-03-28-12-43-openai",
+  "config": {
+    "llm": "openai",
+    "llm_model": "gpt-4.1-mini",
+    "small_model": "gpt-4.1-nano",
+    "embedder": "text-embedding-3-small",
+    "episodes": 5,
+    "scale_episodes": 10
+  },
+  "scenarios": {
+    "entity_dedup": {
+      "seshat": {
+        "dedup": {
+          "raw_mentions": 40,
+          "unique_entities_created": 500,
+          "expected_canonical": 10,
+          "dedup_ratio": 12.5,
+          "false_positives": 0,
+          "false_negatives": 490
+        },
+        "ingest_timing": {
+          "p50_ms": 1.17,
+          "p95_ms": 1.85,
+          "mean_ms": 1.24,
+          "count": 40
+        },
+        "notes": "Seshat uses Neo4j MERGE on exact entity name — no fuzzy/semantic dedup."
+      },
+      "graphiti": {
+        "dedup": {
+          "raw_mentions": 40,
+          "unique_entities_created": 10,
+          "expected_canonical": 10,
+          "dedup_ratio": 0.25,
+          "false_positives": 0,
+          "false_negatives": 0
+        },
+        "ingest_timing": {
+          "p50_ms": 5849.23,
+          "p95_ms": 8804.29,
+          "mean_ms": 6160.32,
+          "count": 40
+        },
+        "token_usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "notes": "Graphiti uses three-tier dedup: vector similarity + BM25 + LLM reasoning."
+      }
+    }
+  },
+  "cost": {
+    "seshat": {
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "estimated_cost_usd": 0.0
+    },
+    "graphiti": {
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "estimated_cost_usd": 0.0
+    }
+  }
+}

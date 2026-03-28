@@ -1,0 +1,713 @@
+{
+  "run_id": "2026-03-28-14-38-anthropic",
+  "config": {
+    "llm": "anthropic",
+    "llm_model": "claude-haiku-4-5-20251001",
+    "small_model": "claude-haiku-4-5-20251001",
+    "embedder": "text-embedding-3-small",
+    "episodes": 50,
+    "scale_episodes": 500
+  },
+  "scenarios": {
+    "episodic_retrieval": {
+      "seshat": {
+        "ingest": {
+          "p50_ms": 0.97,
+          "p95_ms": 1.71,
+          "mean_ms": 1.05,
+          "count": 50
+        },
+        "query": {
+          "p50_ms": 2.41,
+          "p95_ms": 11.4,
+          "mean_ms": 3.14,
+          "count": 10
+        },
+        "retrieval": {
+          "avg_precision": 0.0,
+          "avg_recall": 0.0,
+          "query_count": 10,
+          "queries": [
+            {
+              "query": "Neo4j",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 3.847416999633424,
+              "expected_count": 0,
+              "returned_count": 17
+            },
+            {
+              "query": "Claude Code",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 1.7389580025337636,
+              "expected_count": 0,
+              "returned_count": 2
+            },
+            {
+              "query": "Python",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 11.40529100666754,
+              "expected_count": 0,
+              "returned_count": 20
+            },
+            {
+              "query": "Elasticsearch",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 2.9108329908922315,
+              "expected_count": 0,
+              "returned_count": 9
+            },
+            {
+              "query": "Machine Learning",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 1.2564999924506992,
+              "expected_count": 0,
+              "returned_count": 0
+            },
+            {
+              "query": "FastAPI",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 2.9970409959787503,
+              "expected_count": 0,
+              "returned_count": 2
+            },
+            {
+              "query": "Graphiti",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 1.0567499994067475,
+              "expected_count": 0,
+              "returned_count": 0
+            },
+            {
+              "query": "Memory Consolidation",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 3.353374995640479,
+              "expected_count": 0,
+              "returned_count": 1
+            },
+            {
+              "query": "Docker",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 1.919999995152466,
+              "expected_count": 0,
+              "returned_count": 3
+            },
+            {
+              "query": "Cognitive Architecture",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 0.9760419925441965,
+              "expected_count": 0,
+              "returned_count": 0
+            }
+          ]
+        }
+      },
+      "graphiti": {
+        "ingest": {
+          "p50_ms": 8224.08,
+          "p95_ms": 14025.36,
+          "mean_ms": 8573.99,
+          "count": 50
+        },
+        "query": {
+          "p50_ms": 325.89,
+          "p95_ms": 357.02,
+          "mean_ms": 329.72,
+          "count": 10
+        },
+        "retrieval": {
+          "avg_precision": 0.7,
+          "avg_recall": 0.7,
+          "query_count": 10,
+          "queries": [
+            {
+              "query": "Neo4j",
+              "precision": 1.0,
+              "recall": 1.0,
+              "latency_ms": 357.03441700024996,
+              "expected_count": 1,
+              "returned_count": 1
+            },
+            {
+              "query": "Claude Code",
+              "precision": 1.0,
+              "recall": 1.0,
+              "latency_ms": 327.3216660018079,
+              "expected_count": 1,
+              "returned_count": 1
+            },
+            {
+              "query": "Python",
+              "precision": 1.0,
+              "recall": 1.0,
+              "latency_ms": 338.1613749952521,
+              "expected_count": 1,
+              "returned_count": 1
+            },
+            {
+              "query": "Elasticsearch",
+              "precision": 1.0,
+              "recall": 1.0,
+              "latency_ms": 323.6849999957485,
+              "expected_count": 1,
+              "returned_count": 1
+            },
+            {
+              "query": "Machine Learning",
+              "precision": 1.0,
+              "recall": 1.0,
+              "latency_ms": 315.67749999521766,
+              "expected_count": 1,
+              "returned_count": 1
+            },
+            {
+              "query": "FastAPI",
+              "precision": 1.0,
+              "recall": 1.0,
+              "latency_ms": 324.4791670003906,
+              "expected_count": 1,
+              "returned_count": 1
+            },
+            {
+              "query": "Graphiti",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 305.817415995989,
+              "expected_count": 1,
+              "returned_count": 0
+            },
+            {
+              "query": "Memory Consolidation",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 315.17837499268353,
+              "expected_count": 1,
+              "returned_count": 0
+            },
+            {
+              "query": "Docker",
+              "precision": 1.0,
+              "recall": 1.0,
+              "latency_ms": 341.9590830017114,
+              "expected_count": 1,
+              "returned_count": 1
+            },
+            {
+              "query": "Cognitive Architecture",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 347.96554199419916,
+              "expected_count": 1,
+              "returned_count": 0
+            }
+          ]
+        },
+        "token_usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      }
+    },
+    "semantic_consolidation": {
+      "seshat": {
+        "entity_count": 100,
+        "entities": [
+          {
+            "name": "Python",
+            "type": "Technology",
+            "mentions": 32
+          },
+          {
+            "name": "PostgreSQL",
+            "type": "Technology",
+            "mentions": 21
+          },
+          {
+            "name": "Paris",
+            "type": "Location",
+            "mentions": 17
+          },
+          {
+            "name": "Neo4j",
+            "type": "Technology",
+            "mentions": 17
+          },
+          {
+            "name": "Kubernetes",
+            "type": "Technology",
+            "mentions": 15
+          },
+          {
+            "name": "Redis",
+            "type": "Technology",
+            "mentions": 13
+          },
+          {
+            "name": "Docker Compose",
+            "type": "Technology",
+            "mentions": 12
+          },
+          {
+            "name": "Eventual Consistency",
+            "type": "Concept",
+            "mentions": 12
+          },
+          {
+            "name": "Memcached",
+            "type": "Technology",
+            "mentions": 12
+          },
+          {
+            "name": "GraphQL",
+            "type": "Technology",
+            "mentions": 10
+          },
+          {
+            "name": "Linkerd",
+            "type": "Technology",
+            "mentions": 10
+          },
+          {
+            "name": "AWS",
+            "type": "Technology",
+            "mentions": 10
+          },
+          {
+            "name": "Service Mesh",
+            "type": "Concept",
+            "mentions": 10
+          },
+          {
+            "name": "Microservices Architecture",
+            "type": "Concept",
+            "mentions": 9
+          },
+          {
+            "name": "Elasticsearch",
+            "type": "Technology",
+            "mentions": 9
+          },
+          {
+            "name": "Apache Kafka",
+            "type": "Technology",
+            "mentions": 9
+          },
+          {
+            "name": "Project Atlas",
+            "type": "Organization",
+            "mentions": 9
+          },
+          {
+            "name": "REST",
+            "type": "Concept",
+            "mentions": 8
+          },
+          {
+            "name": "JWT",
+            "type": "Technology",
+            "mentions": 8
+          },
+          {
+            "name": "LRU Cache",
+            "type": "Concept",
+            "mentions": 8
+          }
+        ],
+        "turns_with_entities": 10,
+        "notes": "Seshat stores entities explicitly during ingestion; no auto-extraction in this test path."
+      },
+      "graphiti": {
+        "entity_count": 10,
+        "entities": [
+          {
+            "name": "component",
+            "summary": "Dependency Injection achieves loose coupling between components in an application\nComponents receive their dependencies injected from the outside rather than creating their own\nUserService is an example component in the dependency injection pattern",
+            "labels": [
+              "Entity"
+            ]
+          },
+          {
+            "name": "dependencies",
+            "summary": "Components receive their dependencies injected from the outside rather than creating their own\nDependencies can include database connections\nDependencies can include services",
+            "labels": [
+              "Entity"
+            ]
+          },
+          {
+            "name": "System",
+            "summary": "Assistant ran a system health check\nCPU is a component of the system with 16 cores and 11.2% load\nMemory is a system component with 71.5% utilization out of 128 GB total capacity\nDisk is a system component with 277 GB free space out of 926 GB total capacity\nGPU is a system component with elevated temperature at 70.7°C and 0.52% load\nThe system has no errors detected in the last 24 hours",
+            "labels": [
+              "Entity"
+            ]
+          },
+          {
+            "name": "REST",
+            "summary": "Microservices architecture uses REST for communication",
+            "labels": [
+              "Entity"
+            ]
+          },
+          {
+            "name": "REST",
+            "summary": "REST is an implementation of synchronous HTTP communication using JSON format\nREST is widely used for simple CRUD operations in microservices\ngRPC is recommended as the optimal choice compared to REST for systems requiring both low-latency and high-throughput",
+            "labels": [
+              "Entity"
+            ]
+          },
+          {
+            "name": "REST",
+            "summary": "REST is generally the safer and recommended choice for small teams building internal APIs\nREST is used by small teams for building internal APIs\nREST has simpler syntax and lower learning curve advantages for small teams compared to GraphQL\nThe Assistant recommends REST as the preferred choice for a small team building internal APIs\nREST is built on HTTP, which provides standard built-in caching mechanisms\nREST provides simpler debugging and monitoring for small teams through standard HTTP tools",
+            "labels": [
+              "Entity"
+            ]
+          },
+          {
+            "name": "UUID",
+            "summary": "PostgreSQL supports the UUID extension for unique identifier generation",
+            "labels": [
+              "Entity"
+            ]
+          },
+          {
+            "name": "Main implementation",
+            "summary": "The src/jsonconfig.py file contains the main implementation",
+            "labels": [
+              "Entity"
+            ]
+          },
+          {
+            "name": "internal tools",
+            "summary": "GraphQL is recommended when internal tools require complex nested data fetching that would otherwise require multiple round-trips",
+            "labels": [
+              "Entity"
+            ]
+          },
+          {
+            "name": "Dependencies",
+            "summary": "The requirements.txt file documents project dependencies",
+            "labels": [
+              "Entity"
+            ]
+          }
+        ],
+        "fact_count": 10,
+        "facts": [
+          {
+            "fact": "Neo4j stores and manages the knowledge graph",
+            "valid_at": "2026-03-28 14:38:56.780540+00:00",
+            "invalid_at": "2026-03-28 14:38:56.780557+00:00"
+          },
+          {
+            "fact": "The user's system uses Neo4j for knowledge graph functionality",
+            "valid_at": "2026-03-28 14:38:56.780557+00:00",
+            "invalid_at": "None"
+          },
+          {
+            "fact": "The Assistant provides an explanation of what a knowledge graph is and its core components",
+            "valid_at": "2026-03-28 14:38:56.780467+00:00",
+            "invalid_at": "None"
+          },
+          {
+            "fact": "Neo4j uses a Labeled Property Graph model where nodes represent entities and relationships represent connections, with both supporting key-value properties",
+            "valid_at": "None",
+            "invalid_at": "None"
+          },
+          {
+            "fact": "Machine Learning is an example entity that can be represented as a node in a knowledge graph",
+            "valid_at": "None",
+            "invalid_at": "None"
+          },
+          {
+            "fact": "Paris is an example entity that can be represented as a node in a knowledge graph",
+            "valid_at": "None",
+            "invalid_at": "None"
+          },
+          {
+            "fact": "Albert Einstein is an example entity that can be represented as a node in a knowledge graph",
+            "valid_at": "None",
+            "invalid_at": "None"
+          },
+          {
+            "fact": "Neo4j enables graph traversals through its relationship-focused data model",
+            "valid_at": "2026-03-28 14:38:56.780540+00:00",
+            "invalid_at": "None"
+          },
+          {
+            "fact": "Neo4j can be used for fraud detection through relationship analysis",
+            "valid_at": "2026-03-28 14:38:56.780540+00:00",
+            "invalid_at": "None"
+          },
+          {
+            "fact": "Neo4j can be used to power recommendations",
+            "valid_at": "2026-03-28 14:38:56.780540+00:00",
+            "invalid_at": "None"
+          }
+        ],
+        "token_usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "notes": "Graphiti auto-extracts entities and facts on add_episode — no separate consolidation step."
+      }
+    },
+    "temporal_queries": {
+      "seshat": {
+        "query_timing": {
+          "p50_ms": 4.38,
+          "p95_ms": 5.14,
+          "mean_ms": 4.51,
+          "count": 3
+        },
+        "temporal_queries": [
+          {
+            "recency_days": 7,
+            "results_count": 50,
+            "has_relevance_scores": true
+          },
+          {
+            "recency_days": 14,
+            "results_count": 50,
+            "has_relevance_scores": true
+          },
+          {
+            "recency_days": 30,
+            "results_count": 50,
+            "has_relevance_scores": true
+          }
+        ],
+        "notes": "Seshat supports recency_days filtering only — no point-in-time or bi-temporal queries."
+      },
+      "graphiti": {
+        "query_timing": {
+          "p50_ms": 6.51,
+          "p95_ms": 7.32,
+          "mean_ms": 6.76,
+          "count": 3
+        },
+        "temporal_queries": [
+          {
+            "recency_days": 7,
+            "episodes_retrieved": 50,
+            "temporal_edge_results": 10
+          },
+          {
+            "recency_days": 14,
+            "episodes_retrieved": 50,
+            "temporal_edge_results": 10
+          },
+          {
+            "recency_days": 30,
+            "episodes_retrieved": 50,
+            "temporal_edge_results": 10
+          }
+        ],
+        "token_usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "notes": "Graphiti supports bi-temporal model (valid_at/invalid_at) + episode retrieval by reference_time."
+      }
+    },
+    "entity_dedup": {
+      "seshat": {
+        "dedup": {
+          "raw_mentions": 40,
+          "unique_entities_created": 467,
+          "expected_canonical": 10,
+          "dedup_ratio": 11.675,
+          "false_positives": 0,
+          "false_negatives": 457
+        },
+        "ingest_timing": {
+          "p50_ms": 1.07,
+          "p95_ms": 1.79,
+          "mean_ms": 1.18,
+          "count": 40
+        },
+        "notes": "Seshat uses Neo4j MERGE on exact entity name — no fuzzy/semantic dedup."
+      },
+      "graphiti": {
+        "dedup": {
+          "raw_mentions": 40,
+          "unique_entities_created": 10,
+          "expected_canonical": 10,
+          "dedup_ratio": 0.25,
+          "false_positives": 0,
+          "false_negatives": 0
+        },
+        "ingest_timing": {
+          "p50_ms": 5785.98,
+          "p95_ms": 10644.6,
+          "mean_ms": 5988.12,
+          "count": 40
+        },
+        "token_usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "notes": "Graphiti uses three-tier dedup: vector similarity + BM25 + LLM reasoning."
+      }
+    },
+    "consolidation_lifecycle": {
+      "seshat": {
+        "store_timing": {
+          "p50_ms": 1.17,
+          "p95_ms": 2.1,
+          "mean_ms": 1.25,
+          "count": 10
+        },
+        "promote_timing": {
+          "p50_ms": 7.44,
+          "p95_ms": 7.44,
+          "mean_ms": 7.44,
+          "count": 1
+        },
+        "promoted_count": 5,
+        "skipped_count": 0,
+        "errors": [],
+        "lifecycle_steps": [
+          "1. Store episode (create_conversation + create_entity)",
+          "2. Build PromotionCandidate from entity stats",
+          "3. Run run_promotion_pipeline()",
+          "4. Entity gains memory_type='semantic'"
+        ]
+      },
+      "graphiti": {
+        "ingest_timing": {
+          "p50_ms": 9054.67,
+          "p95_ms": 16378.83,
+          "mean_ms": 9339.03,
+          "count": 10
+        },
+        "entities_created": 10,
+        "facts_created": 10,
+        "token_usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "lifecycle_steps": [
+          "1. add_episode() — extracts entities, resolves/deduplicates, creates edges",
+          "2. No separate promotion step needed",
+          "3. Entities are immediately searchable via hybrid search",
+          "4. Contradiction detection auto-invalidates superseded facts"
+        ],
+        "notes": "Graphiti collapses working→episodic→semantic into a single add_episode call."
+      }
+    },
+    "scaling": {
+      "seshat": {
+        "ingest_total": {
+          "p50_ms": 6.6,
+          "p95_ms": 8.22,
+          "mean_ms": 6.44,
+          "count": 500
+        },
+        "checkpoints": [
+          {
+            "episodes_ingested": 100,
+            "ingest_mean_ms": 6.01,
+            "query": {
+              "p50_ms": 3.25,
+              "p95_ms": 5.52,
+              "mean_ms": 3.98,
+              "count": 3
+            }
+          },
+          {
+            "episodes_ingested": 250,
+            "ingest_mean_ms": 6.5,
+            "query": {
+              "p50_ms": 3.97,
+              "p95_ms": 5.63,
+              "mean_ms": 4.24,
+              "count": 3
+            }
+          },
+          {
+            "episodes_ingested": 500,
+            "ingest_mean_ms": 6.44,
+            "query": {
+              "p50_ms": 3.78,
+              "p95_ms": 5.72,
+              "mean_ms": 4.3,
+              "count": 3
+            }
+          }
+        ]
+      },
+      "graphiti": {
+        "ingest_total": {
+          "p50_ms": 7029.32,
+          "p95_ms": 10763.65,
+          "mean_ms": 7484.15,
+          "count": 500
+        },
+        "checkpoints": [
+          {
+            "episodes_ingested": 100,
+            "ingest_mean_ms": 7580.24,
+            "query": {
+              "p50_ms": 183.55,
+              "p95_ms": 193.73,
+              "mean_ms": 178.78,
+              "count": 3
+            },
+            "token_usage": {
+              "input_tokens": 0,
+              "output_tokens": 0
+            }
+          },
+          {
+            "episodes_ingested": 250,
+            "ingest_mean_ms": 7661.77,
+            "query": {
+              "p50_ms": 186.75,
+              "p95_ms": 197.22,
+              "mean_ms": 182.06,
+              "count": 3
+            },
+            "token_usage": {
+              "input_tokens": 0,
+              "output_tokens": 0
+            }
+          },
+          {
+            "episodes_ingested": 500,
+            "ingest_mean_ms": 7484.15,
+            "query": {
+              "p50_ms": 191.93,
+              "p95_ms": 219.69,
+              "mean_ms": 193.64,
+              "count": 3
+            },
+            "token_usage": {
+              "input_tokens": 0,
+              "output_tokens": 0
+            }
+          }
+        ]
+      }
+    }
+  },
+  "cost": {
+    "seshat": {
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "estimated_cost_usd": 0.0
+    },
+    "graphiti": {
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "estimated_cost_usd": 0.0
+    }
+  }
+}

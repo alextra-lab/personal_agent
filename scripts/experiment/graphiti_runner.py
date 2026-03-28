@@ -142,7 +142,8 @@ async def run_scenario_1_episodic(
         start = time.perf_counter()
         async with timed(query_timing):
             # Node search finds entities matching the query
-            node_results = await graphiti.search(canonical, config=NODE_HYBRID_SEARCH_RRF)
+            search_results = await graphiti.search_(canonical, config=NODE_HYBRID_SEARCH_RRF)
+            node_results = search_results.nodes
             # Also run edge search for latency comparison
             edge_results = await graphiti.search(canonical)
         latency = (time.perf_counter() - start) * 1000
@@ -180,7 +181,8 @@ async def run_scenario_2_semantic(
     Examine what Graphiti auto-extracted after ingestion.
     """
     # Search for all entities (node search)
-    nodes = await graphiti.search("*", config=NODE_HYBRID_SEARCH_RRF)
+    search_results = await graphiti.search_("*", config=NODE_HYBRID_SEARCH_RRF)
+    nodes = search_results.nodes
 
     entities = []
     for node in nodes:
@@ -282,7 +284,8 @@ async def run_scenario_4_dedup(
             variation_count += 1
 
     # Count unique entities Graphiti created
-    all_nodes = await graphiti.search("*", config=NODE_HYBRID_SEARCH_RRF)
+    search_results = await graphiti.search_("*", config=NODE_HYBRID_SEARCH_RRF)
+    all_nodes = search_results.nodes
     unique_count = len(all_nodes) if all_nodes else 0
 
     dedup.raw_mentions = variation_count
@@ -314,7 +317,8 @@ async def run_scenario_5_lifecycle(
     await ingest_episodes(graphiti, episodes[:10], ingest_timing)
 
     # Check what Graphiti produced — entities, edges, communities
-    nodes = await graphiti.search("*", config=NODE_HYBRID_SEARCH_RRF)
+    search_results = await graphiti.search_("*", config=NODE_HYBRID_SEARCH_RRF)
+    nodes = search_results.nodes
     edges = await graphiti.search("relationships")
 
     token_usage = _get_token_usage(graphiti)

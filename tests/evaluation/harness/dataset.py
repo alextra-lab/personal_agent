@@ -867,7 +867,10 @@ CP_19 = ConversationPath(
         ConversationTurn(
             user_message=("Going back to the beginning — what was our primary database again?"),
             expected_behavior=("Should still know PostgreSQL despite potential context trimming."),
-            assertions=(fld("intent_classified", "task_type", "memory_recall"),),
+            assertions=(
+                fld("intent_classified", "task_type", "memory_recall"),
+                present("context_budget_applied"),
+            ),
         ),
     ),
     quality_criteria=(
@@ -875,6 +878,7 @@ CP_19 = ConversationPath(
         "If trimmed, important foundational facts were retained",
         "Conversation feels coherent throughout",
         "Agent doesn't forget mid-conversation",
+        "context_budget_applied event fires on Turn 10 with correct trimmed/overflow_action fields",
     ),
 )
 
@@ -905,7 +909,7 @@ CP_20 = ConversationPath(
         ConversationTurn(
             user_message=("Summarize everything you've found — is the system healthy overall?"),
             expected_behavior=("Synthesizes all three tool results. Context may need trimming."),
-            assertions=(),
+            assertions=(present("context_budget_applied"),),
         ),
     ),
     quality_criteria=(
@@ -913,6 +917,7 @@ CP_20 = ConversationPath(
         "Turn 4 synthesizes findings coherently",
         "If trimmed, most recent tool results preserved",
         "Agent identifies any genuine issues",
+        "context_budget_applied event fires on Turn 4 with correct trimmed/overflow_action fields",
     ),
 )
 

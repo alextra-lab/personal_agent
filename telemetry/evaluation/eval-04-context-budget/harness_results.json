@@ -1,0 +1,350 @@
+{
+  "timestamp": "2026-03-28T20:34:03.807038+00:00",
+  "summary": {
+    "total_paths": 3,
+    "paths_passed": 1,
+    "paths_failed": 2,
+    "path_pass_rate": 0.3333333333333333,
+    "total_assertions": 12,
+    "assertions_passed": 10,
+    "assertions_failed": 2,
+    "assertion_pass_rate": 0.8333333333333334,
+    "total_response_time_ms": 405145.04962594947,
+    "avg_turn_response_time_ms": 16881.04373441456
+  },
+  "by_category": {
+    "Context Management": {
+      "total": 2,
+      "passed": 1
+    },
+    "Memory Quality": {
+      "total": 1,
+      "passed": 0
+    }
+  },
+  "paths": [
+    {
+      "path_id": "CP-19",
+      "path_name": "Long Conversation Trimming",
+      "category": "Context Management",
+      "session_id": "cbe4a611-9cea-4ebe-8bae-f0cb882047e3",
+      "all_passed": false,
+      "assertions_passed": 2,
+      "assertions_total": 3,
+      "total_time_ms": 190475.03337496892,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Let's talk about our system architecture. We use a microservices pattern with FastAPI services communicating over HTTP.",
+          "response_text": "That's a solid architecture choice! Let me share some insights about that setup:\n\n## FastAPI Microservices Architecture\n\n### Key Advantages\n- **Async-native**: FastAPI's async/await support handles many concurrent connections efficiently, which is crucial for microservices that often have I/O-bound workloads\n- **Automatic docs**: Built-in Swagger/OpenAPI documentation makes inter-service communication straightforward\n- **Type safety**: Pydantic models provide request/response validation, reducin",
+          "trace_id": "fa61f31e-9626-40ce-b251-83f05234215c",
+          "response_time_ms": 8806.650458005606,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Our primary database is PostgreSQL for transactional data.",
+          "response_text": "PostgreSQL is a great choice for transactional data in a microservices architecture. It's robust, ACID-compliant, and has excellent ecosystem support.\n\n## PostgreSQL in Microservices\n\n### Common Patterns\n- **Database per Service**: Each service owns its own PostgreSQL instance, enforcing data encapsulation and autonomy\n- **Shared Database**: Multiple services access the same database (less common now, can create coupling)\n- **Polyglot Persistence**: PostgreSQL for transactional, with other datab",
+          "trace_id": "7d46b492-732a-44f7-9118-27a6e8745f97",
+          "response_time_ms": 12912.46858399245,
+          "assertions": []
+        },
+        {
+          "turn_index": 2,
+          "user_message": "We also use Elasticsearch for logging and Neo4j for our knowledge graph.",
+          "response_text": "Excellent! That's a solid polyglot persistence setup. Each database is serving a specific purpose:\n\n## Your Database Stack\n\n### PostgreSQL (Transactional)\n- Core business data with ACID guarantees\n- Relational data with complex queries\n\n### Elasticsearch (Logging)\n- **Full-text search** capabilities for log analysis\n- **Time-series data** handling (great for logs with timestamps)\n- **Aggregations** for metrics and dashboards\n- **Scalable** for high-volume log ingestion\n- Commonly paired with **E",
+          "trace_id": "a36c3411-2e00-4171-82f4-73ea1cb666dd",
+          "response_time_ms": 17687.32858399744,
+          "assertions": []
+        },
+        {
+          "turn_index": 3,
+          "user_message": "The deployment is on Docker Compose locally and Kubernetes in production.",
+          "response_text": "That's a classic and sensible deployment strategy. Docker Compose for local development and Kubernetes for production is the industry standard approach for good reason.\n\n## Your Deployment Architecture\n\n### Docker Compose (Local Development)\n**Benefits:**\n- **Simplicity**: Single `docker-compose.yml` defines all services\n- **Fast iteration**: Quick restarts, easy service isolation\n- **Cost-free**: No cloud costs for local development\n- **Consistency**: Same container images as production\n\n**Typi",
+          "trace_id": "9f25979c-df10-4953-9d7a-1149b4f97e4d",
+          "response_time_ms": 15004.920375009533,
+          "assertions": []
+        },
+        {
+          "turn_index": 4,
+          "user_message": "We've been having issues with service discovery between containers.",
+          "response_text": "Service discovery is a common pain point in microservices. Let me help you troubleshoot based on your environment.\n\n## Docker Compose Issues\n\n### Common Problems\n1. **Network isolation**: Services not on the same network\n2. **Hostname resolution**: Container names should work on the same network\n3. **Port conflicts**: Multiple services binding to same port\n4. **Startup ordering**: Services trying to connect before dependencies are ready\n\n### Quick Fixes\n```yaml\n# Ensure services share a network\n",
+          "trace_id": "46173421-f7ad-49f6-9edf-472eb6de195b",
+          "response_time_ms": 15504.946499990183,
+          "assertions": []
+        },
+        {
+          "turn_index": 5,
+          "user_message": "I tried using Consul but it added too much operational overhead.",
+          "response_text": "That's a very common experience! Consul is powerful but often overkill for many teams. Here are lighter-weight alternatives:\n\n## Docker Compose Solutions\n\n### Use Built-in DNS (No Extra Service Needed)\nDocker Compose already provides service discovery via container names:\n\n```yaml\nservices:\n  api:\n    environment:\n      - DATABASE_URL=postgresql://postgres:password@postgres:5432/app\n      - ELASTICSEARCH_URL=http://elasticsearch:9200\n      - NEO4J_URL=neo4j://neo4j:7687\n```\n\n**Key points:**\n- Us",
+          "trace_id": "4812e7fd-0813-4d24-8de9-5d9e0d754bd3",
+          "response_time_ms": 16642.693124988,
+          "assertions": []
+        },
+        {
+          "turn_index": 6,
+          "user_message": "We're now evaluating DNS-based service discovery versus Envoy sidecar proxies.",
+          "response_text": "Good comparison. Both approaches solve service discovery but with different trade-offs. Here's a breakdown:\n\n## DNS-Based Service Discovery\n\n### How It Works\n- **Kubernetes Services**: Built-in DNS, automatically created for each Service\n- **Consul DNS**: Query Consul's DNS interface for service addresses\n- **CoreDNS**: Kubernetes default, can be extended with plugins\n\n### Pros\n- **Simple**: No additional infrastructure for basic discovery\n- **Native**: Kubernetes Services work out of the box\n- ",
+          "trace_id": "21787afa-847e-4aa0-b18c-5a9d0f5a7a44",
+          "response_time_ms": 23610.03520799568,
+          "assertions": []
+        },
+        {
+          "turn_index": 7,
+          "user_message": "The team is leaning toward Envoy because it also handles load balancing.",
+          "response_text": "Great choice! Envoy is excellent for load balancing and provides a lot of value beyond just service discovery. Let me outline the key aspects for your setup:\n\n## Envoy Load Balancing Features\n\n### Supported Algorithms\n- **Round Robin** (default)\n- **Least Request**\n- **Random**\n- **Ring Hash** (consistent hashing for session affinity)\n- **Maglev** (consistent hashing)\n- **Weighted**\n\n### Types of Load Balancing\n1. **Client-side**: Envoy in each sidecar routes to upstream services\n2. **Server-sid",
+          "trace_id": "7143d1a9-5812-4a55-b17a-db9f8b5f1321",
+          "response_time_ms": 23734.420749999117,
+          "assertions": []
+        },
+        {
+          "turn_index": 8,
+          "user_message": "But I'm worried about the memory overhead of running Envoy sidecars on every service.",
+          "response_text": "That's a very valid concern. Memory overhead is one of the biggest operational headaches with service meshes. Here's the reality:\n\n## Actual Memory Usage\n\n| Implementation | Memory per Sidecar |\n|----------------|-------------------|\n| **Envoy standalone** | 50-100 MB |\n| **Istio sidecar** | 100-200 MB |\n| **Linkerd sidecar** | 30-50 MB |\n\nFor a 100-service deployment, that's **5-20 GB extra memory** just for sidecars.\n\n## Ways to Reduce Overhead\n\n### 1. **Don't Inject Sidecars Everywhere**\nOnly",
+          "trace_id": "844ec764-988a-407c-8a56-f81d7f8e3700",
+          "response_time_ms": 20816.24983299116,
+          "assertions": []
+        },
+        {
+          "turn_index": 9,
+          "user_message": "Going back to the beginning \u2014 what was our primary database again?",
+          "response_text": "Based on our previous architecture discussions, your primary database is **PostgreSQL 16** (specifically utilizing **pgvector** for embedding storage).",
+          "trace_id": "bfa379a0-abf1-4d35-9343-389f0eb6e818",
+          "response_time_ms": 35755.319957999745,
+          "assertions": [
+            {
+              "passed": false,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=conversational",
+              "actual_value": "conversational"
+            },
+            {
+              "passed": true,
+              "message": "Event 'context_budget_applied': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 10: correctly identifies PostgreSQL as primary database",
+        "If trimmed, important foundational facts were retained",
+        "Conversation feels coherent throughout",
+        "Agent doesn't forget mid-conversation",
+        "context_budget_applied event fires on Turn 10 with correct trimmed/overflow_action fields"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-20",
+      "path_name": "Progressive Token Budget Management",
+      "category": "Context Management",
+      "session_id": "8f573f9e-140c-4ec9-9e65-cf2197a593bf",
+      "all_passed": true,
+      "assertions_passed": 5,
+      "assertions_total": 5,
+      "total_time_ms": 72017.25562599313,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Run the system health check.",
+          "response_text": "## System Health Check Results \u2705\n\n| Metric | Status | Value |\n|--------|--------|-------|\n| **CPU Load** | \u2705 Healthy | 3.6% (16 cores) |\n| **Memory** | \u2705 Good | 72% used / 35.8GB available |\n| **Disk Space** | \u2705 Excellent | 1.26GB used / 281.79GB free |\n| **GPU Power** | \u2705 Normal | ~0.01W |\n| **GPU Load** | \u2705 Low | 0.18% |\n| **GPU Temp** | \u26a0\ufe0f Moderate | 69.47\u00b0C |\n\n**Overall Status:** System is operating normally. All critical metrics are within acceptable ranges. GPU temperature is slightly elev",
+          "trace_id": "637e3bee-e43d-4191-adee-e3b7d6c37a4c",
+          "response_time_ms": 13134.906082996167,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            },
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Now show me the recent error details.",
+          "response_text": "# Recent Error Report \ud83d\udea8\n\n## Summary (Last 24 Hours)\n| Metric | Value |\n|--------|-------|\n| **Total Errors** | 1,554 |\n| **Task Failed** | 518 |\n| **Model Call Error** | 1,036 |\n| **Component** | executor (100%) |\n| **Trend** | Stable |\n\n## Most Recent Errors\n| Timestamp | Type | Error Summary |\n|-----------|------|---------------|\n| 2026-03-28 20:07:27 | task_failed | Request to http://localhost:8000/v1/chat/completions timed out after 180.0s |\n| 2026-03-28 20:06:05 | task_failed | Request to h",
+          "trace_id": "0fbcf476-4f2f-4097-ae52-dc441dcc04cc",
+          "response_time_ms": 19237.399959005415,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "Also check the system metrics.",
+          "response_text": "# \ud83d\udcca System Status Final Report\n\n## 1. System Health Check \u2705\n\n| Metric | Status | Value |\n|--------|--------|-------|\n| **CPU Load** | \u2705 Healthy | 3.6% (16 cores) |\n| **Memory** | \u2705 Good | 72% used / 35.8GB available |\n| **Disk Space** | \u2705 Excellent | 1.26GB used / 281.79GB free |\n| **GPU Power** | \u2705 Normal | ~0.01W |\n| **GPU Load** | \u2705 Low | 0.18% |\n| **GPU Temp** | \u26a0\ufe0f Moderate | 69.47\u00b0C |\n\n## 2. Recent Error Report \ud83d\udea8\n\n| Metric | Value |\n|--------|-------|\n| **Total Errors (24h)** | 1,554 |\n| **",
+          "trace_id": "a2b52fbf-130c-4239-bf00-5bd7c02ae016",
+          "response_time_ms": 24900.279541994678,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        },
+        {
+          "turn_index": 3,
+          "user_message": "Summarize everything you've found \u2014 is the system healthy overall?",
+          "response_text": "# \ud83d\udccb System Health Summary\n\n## Overall Assessment: \u26a0\ufe0f **Mixed**\n\nThe system shows a **split health profile** \u2014 hardware is healthy, but the application layer has significant issues.\n\n---\n\n## \u2705 Hardware/System Layer: HEALTHY\n\n| Component | Status | Details |\n|-----------|--------|---------|\n| **CPU** | \u2705 Excellent | 4.8% load across 16 cores |\n| **Memory** | \u2705 Good | 71.3% used, 36.67GB available |\n| **Disk** | \u2705 Excellent | Only 1.26GB used of 926GB |\n| **GPU** | \u2705 Healthy | 0.35% load, 66.41\u00b0C (",
+          "trace_id": "15488589-998c-4711-82e2-1b65a30468c8",
+          "response_time_ms": 14744.67004199687,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'context_budget_applied': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Each tool call returns valid data",
+        "Turn 4 synthesizes findings coherently",
+        "If trimmed, most recent tool results preserved",
+        "Agent identifies any genuine issues",
+        "context_budget_applied event fires on Turn 4 with correct trimmed/overflow_action fields"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-28",
+      "path_name": "Context Budget Trimming Audit",
+      "category": "Memory Quality",
+      "session_id": "e2fb216e-83a1-45c8-a33f-eb35303a8c98",
+      "all_passed": false,
+      "assertions_passed": 3,
+      "assertions_total": 4,
+      "total_time_ms": 142652.76062498742,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Our production system uses PostgreSQL 16 as the primary database with pgvector for embeddings.",
+          "response_text": "Got it. Your production system is running PostgreSQL 16 with pgvector for embedding storage and similarity search. That's a solid setup for RAG applications, semantic search, or any ML-powered features.\n\nHow can I help? I can assist with:\n\n- **Query optimization** for vector similarity searches (`<->`, `<=>`, `<#>` operators)\n- **Index tuning** (HNSW, IVFFlat configurations)\n- **Migration planning** (upgrading PostgreSQL versions, pgvector updates)\n- **Performance troubleshooting** (slow queries",
+          "trace_id": "5c8c92b3-2717-4836-9b28-cdddbcab736b",
+          "response_time_ms": 6116.763332989649,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "We chose PostgreSQL specifically because we needed ACID guarantees for our financial transaction processing.",
+          "response_text": "That's a smart architectural choice. PostgreSQL is indeed one of the few databases that can handle both transactional workloads with full ACID compliance and vector operations in a single system. This avoids the complexity of maintaining separate transactional and vector databases.\n\nGiven your setup (PostgreSQL 16 + pgvector + financial transactions), here are some key considerations:\n\n**ACID + Vector Workload Balance:**\n- **Transaction isolation levels** - Ensure your `READ COMMITTED` or `SERIA",
+          "trace_id": "716a1460-784a-4f5b-b7ce-441440f02726",
+          "response_time_ms": 8596.278917000745,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "The API layer is FastAPI with Pydantic v2 for validation.",
+          "response_text": "Perfect stack. FastAPI + Pydantic v2 is a modern, type-safe choice that plays well with PostgreSQL and async operations.\n\n**FastAPI + Pydantic v2 + PostgreSQL 16 + pgvector** gives you:\n- **Async database connections** via `asyncpg` or `SQLModel`\n- **Strong typing** across the stack (Pydantic models \u2194 SQLAlchemy models \u2194 JSON responses)\n- **Automatic OpenAPI docs** for your API\n- **Vector search endpoints** with request/response validation\n\n**Integration patterns I can help with:**\n- **Async SQL",
+          "trace_id": "b665ed4e-fd67-4184-a4f2-c65320b4fce6",
+          "response_time_ms": 10576.34012500057,
+          "assertions": []
+        },
+        {
+          "turn_index": 3,
+          "user_message": "We use Redis for session caching and rate limiting.",
+          "response_text": "Excellent addition. Redis is the right choice for both session caching and rate limiting in a high-performance system.\n\n**Your full stack:**\n- **Database:** PostgreSQL 16 + pgvector (ACID transactions + vector search)\n- **API:** FastAPI + Pydantic v2 (async, typed)\n- **Cache/Rate Limit:** Redis (sessions + throttling)\n\n**Integration patterns I can help with:**\n\n**Redis for Sessions:**\n- **Session storage** with TTL-based expiration\n- **Distributed sessions** across FastAPI instances\n- **Session ",
+          "trace_id": "d8d13aa5-ffd7-4fc6-9e80-3babce01095e",
+          "response_time_ms": 13004.67641701107,
+          "assertions": []
+        },
+        {
+          "turn_index": 4,
+          "user_message": "Our observability stack is Prometheus plus Grafana with OpenTelemetry instrumentation.",
+          "response_text": "Perfect. Your observability stack is well-designed for a production system.\n\n**Complete stack overview:**\n- **Database:** PostgreSQL 16 + pgvector (ACID + vector search)\n- **API:** FastAPI + Pydantic v2 (async, typed)\n- **Cache/Rate Limit:** Redis (sessions + throttling)\n- **Observability:** Prometheus + Grafana + OpenTelemetry\n\n**OpenTelemetry integration points:**\n- **PostgreSQL** - Database instrumentation (queries, latency, connection pool metrics)\n- **FastAPI** - HTTP request tracing, span ",
+          "trace_id": "407d1416-a987-4ef3-9ba5-0f42a1b73d0f",
+          "response_time_ms": 14504.729958003736,
+          "assertions": []
+        },
+        {
+          "turn_index": 5,
+          "user_message": "We deploy using ArgoCD with Kustomize overlays across three environments: dev, staging, production.",
+          "response_text": "Great. Your deployment setup is solid for multi-environment management.\n\n**Complete stack overview:**\n- **Database:** PostgreSQL 16 + pgvector (ACID + vector search)\n- **API:** FastAPI + Pydantic v2 (async, typed)\n- **Cache/Rate Limit:** Redis (sessions + throttling)\n- **Observability:** Prometheus + Grafana + OpenTelemetry\n- **Deployment:** ArgoCD + Kustomize (GitOps across dev/staging/prod)\n\n**Kustomize + ArgoCD patterns:**\n- **Base + overlays** - Environment-specific configurations (replicas,",
+          "trace_id": "739a09c7-c13e-4832-a42b-fcdab02726c1",
+          "response_time_ms": 14416.029040992726,
+          "assertions": []
+        },
+        {
+          "turn_index": 6,
+          "user_message": "The CI pipeline uses GitHub Actions with matrix builds for Python 3.11 and 3.12.",
+          "response_text": "Solid CI setup. GitHub Actions with matrix builds for Python 3.11/3.12 ensures compatibility across versions while catching environment-specific bugs early.\n\n**Complete stack overview:**\n- **Database:** PostgreSQL 16 + pgvector\n- **API:** FastAPI + Pydantic v2\n- **Cache:** Redis (sessions + rate limiting)\n- **Observability:** Prometheus + Grafana + OpenTelemetry\n- **Deployment:** ArgoCD + Kustomize (dev/staging/prod)\n- **CI:** GitHub Actions (matrix builds: Python 3.11, 3.12)\n\n**CI/CD integratio",
+          "trace_id": "f5a4a333-5948-4316-93b8-b2db2446a8cb",
+          "response_time_ms": 16257.096458997694,
+          "assertions": []
+        },
+        {
+          "turn_index": 7,
+          "user_message": "We also have a Celery worker fleet for async job processing backed by RabbitMQ.",
+          "response_text": "Excellent. Celery + RabbitMQ is a robust choice for async job processing, especially for long-running tasks like embedding generation or batch operations.\n\n**Complete stack overview:**\n- **Database:** PostgreSQL 16 + pgvector\n- **API:** FastAPI + Pydantic v2\n- **Cache:** Redis (sessions + rate limiting)\n- **Observability:** Prometheus + Grafana + OpenTelemetry\n- **Deployment:** ArgoCD + Kustomize (dev/staging/prod)\n- **CI:** GitHub Actions (Python 3.11/3.12 matrix)\n- **Async Workers:** Celery + ",
+          "trace_id": "49e2a84e-1e2d-4126-bd2a-b2b751986fff",
+          "response_time_ms": 14399.366999990889,
+          "assertions": []
+        },
+        {
+          "turn_index": 8,
+          "user_message": "Run a full system health check, then tell me about any issues, and also check the recent error log.",
+          "response_text": "## System Health Check Results\n\n### \u2705 **System Metrics (OS Level) - Healthy**\n\n| Metric | Status | Value |\n|--------|--------|-------|\n| CPU Load | \u2705 Normal | 1.09, 1.47, 1.68 (avg) |\n| Memory | \u2705 OK | 71.5% used (36.5GB available) |\n| Disk | \u2705 Healthy | 1.26GB used of 926GB |\n| GPU | \u2705 Idle | 19% load, 70\u00b0C temp |\n| Error Report | \u2705 None | No system-level errors |\n\n### \u26a0\ufe0f **Cannot Verify - Application Layer**\n\nI do not have access to check:\n\n| Component | What to Check |\n|-----------|----------",
+          "trace_id": "7580e591-9cef-4caa-ba1d-a6f05643d8c6",
+          "response_time_ms": 29598.559082995052,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        },
+        {
+          "turn_index": 9,
+          "user_message": "Given everything we've discussed about our stack, what is our primary database and why did we choose it?",
+          "response_text": "## Primary Database: PostgreSQL 16 + pgvector\n\n**Why you chose it:**\n\n1. **ACID Compliance** - Critical for data integrity, especially for business data and transactional operations\n\n2. **Vector Search** - The `pgvector` extension enables similarity search directly in the database, eliminating the need for a separate vector database like Pinecone or Milvus\n\n3. **Unified Stack** - Single database handles both traditional relational data AND vector embeddings, simplifying your architecture\n\n4. **F",
+          "trace_id": "e3426279-1a61-440e-bff5-a49802e24332",
+          "response_time_ms": 15182.920292005292,
+          "assertions": [
+            {
+              "passed": false,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 10 correctly identifies PostgreSQL 16 as primary database",
+        "Turn 10 mentions ACID guarantees or financial transaction context",
+        "If context was trimmed, foundational facts (PostgreSQL, financial) survived",
+        "gateway_output.budget_trimmed field accurately reflects trimming decision",
+        "If overflow_action is 'dropped_oldest_history', recent tool output is preserved",
+        "If overflow_action is 'dropped_memory_context', session history is preserved"
+      ],
+      "post_path_assertions": []
+    }
+  ]
+}

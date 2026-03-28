@@ -1,0 +1,177 @@
+{
+  "run_at": "2026-03-28T20:34:03.807639+00:00",
+  "settings": {
+    "context_budget_comfortable_tokens": 32000,
+    "context_budget_max_tokens": 65536,
+    "token_estimation": "word_count * 1.3",
+    "trimming_priority": [
+      "1. dropped_oldest_history",
+      "2. dropped_memory_context",
+      "3. dropped_tool_definitions"
+    ]
+  },
+  "stress_tests": [
+    {
+      "scenario": "Distributed Systems Deep Dive",
+      "session_id": "faf56e84-dbcf-4784-830e-35d8c7c7334f",
+      "max_token_count": 1645,
+      "any_trimmed": false,
+      "first_trim_turn": null,
+      "observations": [
+        {
+          "turn": 1,
+          "trace_id": "0f50036b-5352-478d-b3b1-8917f6201779",
+          "token_count": 31,
+          "trimmed": false,
+          "overflow_action": "none",
+          "has_memory": false,
+          "has_tools": false,
+          "message_count": 1
+        },
+        {
+          "turn": 2,
+          "trace_id": "b2819f41-9ac8-4aec-bd5d-0c69775d915f",
+          "token_count": 165,
+          "trimmed": false,
+          "overflow_action": "none",
+          "has_memory": false,
+          "has_tools": false,
+          "message_count": 3
+        },
+        {
+          "turn": 3,
+          "trace_id": "deffd634-b9de-4a49-a210-41b6360e9b4a",
+          "token_count": 353,
+          "trimmed": false,
+          "overflow_action": "none",
+          "has_memory": false,
+          "has_tools": false,
+          "message_count": 5
+        },
+        {
+          "turn": 4,
+          "trace_id": "cf2f4613-bf45-4e5c-8fa2-d41ca3302aa0",
+          "token_count": 621,
+          "trimmed": false,
+          "overflow_action": "none",
+          "has_memory": false,
+          "has_tools": false,
+          "message_count": 7
+        },
+        {
+          "turn": 5,
+          "trace_id": "ea8a2c20-fc48-474d-aa0a-a02e5070557b",
+          "token_count": 850,
+          "trimmed": false,
+          "overflow_action": "none",
+          "has_memory": false,
+          "has_tools": false,
+          "message_count": 9
+        },
+        {
+          "turn": 6,
+          "trace_id": "f83f97d3-f154-4497-878e-bf27041290f0",
+          "token_count": 1121,
+          "trimmed": false,
+          "overflow_action": "none",
+          "has_memory": false,
+          "has_tools": false,
+          "message_count": 11
+        },
+        {
+          "turn": 7,
+          "trace_id": "0720f0f8-3011-4e3a-bb3c-a334ab327d60",
+          "token_count": 1309,
+          "trimmed": false,
+          "overflow_action": "none",
+          "has_memory": false,
+          "has_tools": false,
+          "message_count": 11
+        },
+        {
+          "turn": 8,
+          "trace_id": "c3c2afff-dbdc-4f1d-8068-38a647443c22",
+          "token_count": 1430,
+          "trimmed": false,
+          "overflow_action": "none",
+          "has_memory": false,
+          "has_tools": false,
+          "message_count": 11
+        },
+        {
+          "turn": 9,
+          "trace_id": "65166c5f-e493-4e4e-8c5c-da616d333d20",
+          "token_count": 1467,
+          "trimmed": false,
+          "overflow_action": "none",
+          "has_memory": false,
+          "has_tools": false,
+          "message_count": 11
+        },
+        {
+          "turn": 10,
+          "trace_id": "671700ad-d814-4946-9db7-8799b23d4ffc",
+          "token_count": 1563,
+          "trimmed": false,
+          "overflow_action": "none",
+          "has_memory": false,
+          "has_tools": false,
+          "message_count": 11
+        },
+        {
+          "turn": 11,
+          "trace_id": "79915a07-24aa-41ba-8f69-647a9b80d26a",
+          "token_count": 1645,
+          "trimmed": false,
+          "overflow_action": "none",
+          "has_memory": false,
+          "has_tools": false,
+          "message_count": 11
+        },
+        {
+          "turn": 12,
+          "trace_id": "2f02c3c8-9a76-4b4b-bc5c-ae754c2312dc",
+          "token_count": 1536,
+          "trimmed": false,
+          "overflow_action": "none",
+          "has_memory": false,
+          "has_tools": false,
+          "message_count": 11
+        }
+      ],
+      "recall_turn_11_excerpt": "**Primary Database:** PostgreSQL 16 + Patroni + PgBouncer\n\n**Why chosen:** I don't have the specific decision context from our conversation \u2014 you've shared the stack but not the rationale behind each choice.\n\n**What I know about your setup:**\n- **PostgreSQL 16** as the primary relational database\n- **Patroni** for high availability and automatic failover\n- **PgBouncer** for connection pooling\n\n**Common reasons teams choose this combination:**\n- PostgreSQL's reliability and feature set\n- Patroni ",
+      "recall_turn_12_excerpt": "**Full Stack Architecture Summary:**\n\n1. **Infrastructure & Development**: Kubernetes 1.29 with Istio service mesh, Backstage developer portal, Tilt+kind for local development, and Karpenter autoscaling (60% spot) managing $340K/month cloud spend via Kubecost.\n\n2. **Data & AI**: PostgreSQL 16 (HA with Patroni, connection pooling via PgBouncer, pgvector for embeddings), Qdrant on-prem for vector search, Redis Cluster for sessions/rate limiting, Kafka 3.6 (KRaft) for messaging, with MLflow+Kubeflo"
+    }
+  ],
+  "harness": {
+    "assertions_passed": 10,
+    "assertions_total": 12,
+    "paths": [
+      {
+        "path_id": "CP-19",
+        "all_passed": false,
+        "passed": 2,
+        "total": 3
+      },
+      {
+        "path_id": "CP-20",
+        "all_passed": true,
+        "passed": 5,
+        "total": 5
+      },
+      {
+        "path_id": "CP-28",
+        "all_passed": false,
+        "passed": 3,
+        "total": 4
+      }
+    ]
+  },
+  "summary": {
+    "max_tokens_observed": 1645,
+    "budget_ceiling": 65536,
+    "budget_utilisation_pct": 2.51007080078125,
+    "trimming_triggered": false,
+    "overflow_actions_observed": []
+  }
+}

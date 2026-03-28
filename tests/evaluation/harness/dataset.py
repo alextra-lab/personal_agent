@@ -1,4 +1,4 @@
-"""All 25 evaluation conversation paths as Python data structures.
+"""All 29 evaluation conversation paths as Python data structures.
 
 Each path mirrors the specification in docs/research/EVALUATION_DATASET.md.
 Uses compact builder helpers from models.py for assertion definitions.
@@ -11,6 +11,7 @@ Organized by capability category:
 - Category 5: Context Management (CP-19 to CP-20)
 - Category 6: Tools & Self-Inspection (CP-21 to CP-23)
 - Category 7: Edge Cases (CP-24 to CP-25)
+- Category 8: Memory Quality (CP-26 to CP-29)
 """
 
 from __future__ import annotations
@@ -21,6 +22,8 @@ from tests.evaluation.harness.models import (
     absent,
     fld,
     gte,
+    neo4j_entity,
+    neo4j_promoted,
     present,
 )
 
@@ -1116,6 +1119,332 @@ CP_25 = ConversationPath(
 )
 
 # ============================================================================
+# Category 8: Memory Quality (CP-26 to CP-29)
+# ============================================================================
+
+CP_26 = ConversationPath(
+    path_id="CP-26",
+    name="Memory Promotion Quality",
+    category="Memory Quality",
+    objective=(
+        "Verify that entities seeded across multiple turns are extracted, "
+        "stored in Neo4j, and promoted to semantic memory with accurate facts"
+    ),
+    turns=(
+        ConversationTurn(
+            user_message=(
+                "I'm building a service called DataForge. It uses Apache Flink "
+                "for stream processing and stores results in ClickHouse."
+            ),
+            expected_behavior=(
+                "Responds to the topic. Entities captured: "
+                "DataForge, Apache Flink, ClickHouse."
+            ),
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+                fld("decomposition_assessed", "strategy", "single"),
+            ),
+        ),
+        ConversationTurn(
+            user_message=(
+                "The project lead is Priya Sharma. We're targeting "
+                "a throughput of 50,000 events per second on GCP."
+            ),
+            expected_behavior=(
+                "More context. Entities: Priya Sharma, GCP."
+            ),
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+            ),
+        ),
+        ConversationTurn(
+            user_message=(
+                "DataForge also integrates with Grafana for real-time "
+                "monitoring and uses Kafka as the ingestion layer "
+                "before Flink processes the data."
+            ),
+            expected_behavior=(
+                "Third turn enriching the entity graph: "
+                "Grafana, Kafka, reinforces Flink connection."
+            ),
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+            ),
+        ),
+        ConversationTurn(
+            user_message="What do you remember about the DataForge project?",
+            expected_behavior=(
+                "Memory recall. Should reference DataForge, Flink, "
+                "ClickHouse, Priya Sharma, GCP, Grafana, and Kafka."
+            ),
+            assertions=(
+                fld("intent_classified", "task_type", "memory_recall"),
+                fld("decomposition_assessed", "strategy", "single"),
+                present("memory_enrichment_completed"),
+            ),
+        ),
+    ),
+    quality_criteria=(
+        "Turn 4 references DataForge by name",
+        "Mentions at least 5 of: Flink, ClickHouse, Priya Sharma, GCP, Grafana, Kafka",
+        "Information is accurate (no hallucinated technologies or people)",
+        "Demonstrates entity-relationship awareness (Kafka -> Flink -> ClickHouse pipeline)",
+        "Does not confuse entities from other conversations",
+    ),
+    setup_notes=(
+        "Requires consolidation scheduler to have run after entity seeding.\n"
+        "The post_path_delay_s (default 5s) plus Neo4jChecker retries (4x3s)\n"
+        "allow up to ~17 seconds for promotion. If the consolidation interval\n"
+        "is longer, increase post_path_delay_s or trigger manually."
+    ),
+    post_path_assertions=(
+        neo4j_entity("DataForge"),
+        neo4j_entity("Apache Flink"),
+        neo4j_entity("ClickHouse"),
+        neo4j_entity("Priya Sharma"),
+        neo4j_promoted("DataForge"),
+    ),
+    post_path_delay_s=5.0,
+)
+
+CP_27 = ConversationPath(
+    path_id="CP-27",
+    name="Memory-Informed Context Assembly",
+    category="Memory Quality",
+    objective=(
+        "Verify that when Seshat has relevant memory from prior turns, "
+        "it appears in assembled context and the memory_enrichment_completed "
+        "event shows entities discovered"
+    ),
+    turns=(
+        ConversationTurn(
+            user_message=(
+                "I'm working on a machine learning pipeline called "
+                "SentinelML that uses PyTorch for model training and "
+                "MLflow for experiment tracking."
+            ),
+            expected_behavior="Seeds entities: SentinelML, PyTorch, MLflow.",
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+            ),
+        ),
+        ConversationTurn(
+            user_message=(
+                "SentinelML runs on Kubernetes with GPU node pools. "
+                "The inference endpoint uses TorchServe behind an "
+                "Istio service mesh."
+            ),
+            expected_behavior=(
+                "More context: Kubernetes, GPU, TorchServe, Istio."
+            ),
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+            ),
+        ),
+        ConversationTurn(
+            user_message=(
+                "What infrastructure changes would you recommend for "
+                "scaling SentinelML to handle 10x the current inference load?"
+            ),
+            expected_behavior=(
+                "Analysis request. Should use memory context about "
+                "the existing stack (PyTorch, TorchServe, K8s, Istio) "
+                "to give a specific — not generic — scaling recommendation."
+            ),
+            assertions=(
+                fld("intent_classified", "task_type", "analysis"),
+                fld("decomposition_assessed", "strategy", "single"),
+                present("memory_enrichment_completed"),
+            ),
+        ),
+    ),
+    quality_criteria=(
+        "Turn 3 response explicitly references SentinelML by name",
+        "Recommends scaling TorchServe specifically (not generic model serving)",
+        "Addresses Kubernetes GPU node pool scaling",
+        "Mentions Istio service mesh considerations for load balancing",
+        "Advice is stack-specific, not generic cloud scaling advice",
+        "Response demonstrates memory-informed reasoning, not generic knowledge",
+    ),
+)
+
+CP_28 = ConversationPath(
+    path_id="CP-28",
+    name="Context Budget Trimming Audit",
+    category="Memory Quality",
+    objective=(
+        "Verify that when context budget is exceeded, trimming decisions "
+        "are logged with specific overflow_action and foundational facts "
+        "are preserved in the response"
+    ),
+    turns=(
+        ConversationTurn(
+            user_message=(
+                "Our production system uses PostgreSQL 16 as the primary "
+                "database with pgvector for embeddings."
+            ),
+            expected_behavior="Establishes foundational architectural fact.",
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+            ),
+        ),
+        ConversationTurn(
+            user_message=(
+                "We chose PostgreSQL specifically because we needed ACID "
+                "guarantees for our financial transaction processing."
+            ),
+            expected_behavior="Reinforces importance of PostgreSQL (financial context).",
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+            ),
+        ),
+        ConversationTurn(
+            user_message=(
+                "The API layer is FastAPI with Pydantic v2 for validation."
+            ),
+            expected_behavior="More context.",
+            assertions=(),
+        ),
+        ConversationTurn(
+            user_message="We use Redis for session caching and rate limiting.",
+            expected_behavior="More context.",
+            assertions=(),
+        ),
+        ConversationTurn(
+            user_message=(
+                "Our observability stack is Prometheus plus Grafana "
+                "with OpenTelemetry instrumentation."
+            ),
+            expected_behavior="More context.",
+            assertions=(),
+        ),
+        ConversationTurn(
+            user_message=(
+                "We deploy using ArgoCD with Kustomize overlays "
+                "across three environments: dev, staging, production."
+            ),
+            expected_behavior="More context.",
+            assertions=(),
+        ),
+        ConversationTurn(
+            user_message=(
+                "The CI pipeline uses GitHub Actions with matrix builds "
+                "for Python 3.11 and 3.12."
+            ),
+            expected_behavior="More context.",
+            assertions=(),
+        ),
+        ConversationTurn(
+            user_message=(
+                "We also have a Celery worker fleet for async job processing "
+                "backed by RabbitMQ."
+            ),
+            expected_behavior="More context.",
+            assertions=(),
+        ),
+        ConversationTurn(
+            user_message=(
+                "Run a full system health check, then tell me about "
+                "any issues, and also check the recent error log."
+            ),
+            expected_behavior=(
+                "Tool-heavy turn that adds to context pressure. "
+                "Multiple tool calls generate large outputs."
+            ),
+            assertions=(
+                present("tool_call_completed"),
+            ),
+        ),
+        ConversationTurn(
+            user_message=(
+                "Given everything we've discussed about our stack, "
+                "what is our primary database and why did we choose it?"
+            ),
+            expected_behavior=(
+                "Should still recall PostgreSQL 16 and ACID/financial "
+                "context despite potential trimming. Check budget_trimmed "
+                "field in gateway_output."
+            ),
+            assertions=(
+                fld("intent_classified", "task_type", "memory_recall"),
+            ),
+        ),
+    ),
+    quality_criteria=(
+        "Turn 10 correctly identifies PostgreSQL 16 as primary database",
+        "Turn 10 mentions ACID guarantees or financial transaction context",
+        "If context was trimmed, foundational facts (PostgreSQL, financial) survived",
+        "gateway_output.budget_trimmed field accurately reflects trimming decision",
+        "If overflow_action is 'dropped_oldest_history', recent tool output is preserved",
+        "If overflow_action is 'dropped_memory_context', session history is preserved",
+    ),
+)
+
+CP_29 = ConversationPath(
+    path_id="CP-29",
+    name="Delegation Package Completeness",
+    category="Memory Quality",
+    objective=(
+        "Verify that delegation packages contain sufficient context, "
+        "memory excerpts, acceptance criteria, and known pitfalls — "
+        "not just correct classification"
+    ),
+    turns=(
+        ConversationTurn(
+            user_message=(
+                "Our API uses FastAPI with SQLAlchemy 2.0 async sessions "
+                "and Alembic for migrations. The models are in "
+                "src/models/ and the routes in src/routes/."
+            ),
+            expected_behavior="Seeds project context for delegation enrichment.",
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+            ),
+        ),
+        ConversationTurn(
+            user_message=(
+                "We had a bug last week where a migration dropped a column "
+                "that was still referenced by an API endpoint. The tests "
+                "didn't catch it because we were mocking the database."
+            ),
+            expected_behavior="Seeds a known pitfall for delegation context.",
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+            ),
+        ),
+        ConversationTurn(
+            user_message=(
+                "Use Claude Code to add a new REST endpoint for bulk user "
+                "imports with CSV upload support, input validation, and "
+                "proper error reporting for malformed rows."
+            ),
+            expected_behavior=(
+                "Classifies as DELEGATION. The delegation package should "
+                "include: (1) context about FastAPI + SQLAlchemy stack, "
+                "(2) memory of the migration bug as a known pitfall, "
+                "(3) acceptance criteria covering CSV parsing, validation, "
+                "and error reporting, (4) relevant file paths."
+            ),
+            assertions=(
+                fld("intent_classified", "task_type", "delegation"),
+                fld("decomposition_assessed", "strategy", "delegate"),
+                present("delegation_package_created"),
+                gte("delegation_package_created", "criteria_count", 1),
+                gte("delegation_package_created", "context_items", 0),
+            ),
+        ),
+    ),
+    quality_criteria=(
+        "Delegation package references FastAPI + SQLAlchemy from Turn 1",
+        "Package includes the migration bug from Turn 2 as a known pitfall",
+        "Acceptance criteria cover CSV parsing, validation, and error reporting",
+        "Package includes relevant file paths (src/models/, src/routes/)",
+        "Task description is self-contained for an agent with no prior context",
+        "Package complexity estimate is reasonable (MODERATE or COMPLEX)",
+    ),
+)
+
+# ============================================================================
 # Registry: all paths for easy import
 # ============================================================================
 
@@ -1145,6 +1474,10 @@ ALL_PATHS: tuple[ConversationPath, ...] = (
     CP_23,
     CP_24,
     CP_25,
+    CP_26,
+    CP_27,
+    CP_28,
+    CP_29,
 )
 
 PATHS_BY_ID: dict[str, ConversationPath] = {p.path_id: p for p in ALL_PATHS}

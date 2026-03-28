@@ -25,6 +25,7 @@ from tests.evaluation.harness.models import (
     TelemetryAssertion,
     TurnResult,
 )
+from tests.evaluation.harness.neo4j_checker import Neo4jChecker
 from tests.evaluation.harness.telemetry import TelemetryChecker
 
 log = structlog.get_logger(__name__)
@@ -40,6 +41,7 @@ class EvaluationRunner:
     Args:
         agent_url: Base URL of the agent service.
         telemetry: TelemetryChecker instance for assertion verification.
+        neo4j_checker: Optional Neo4jChecker for post-path graph assertions.
         chat_timeout_s: Timeout for POST /chat requests.
         inter_turn_delay_s: Delay between turns to allow ES indexing.
     """
@@ -48,11 +50,13 @@ class EvaluationRunner:
         self,
         agent_url: str = DEFAULT_AGENT_URL,
         telemetry: TelemetryChecker | None = None,
+        neo4j_checker: Neo4jChecker | None = None,
         chat_timeout_s: float = DEFAULT_CHAT_TIMEOUT_S,
         inter_turn_delay_s: float = DEFAULT_INTER_TURN_DELAY_S,
     ) -> None:
         self._agent_url = agent_url
         self._telemetry = telemetry or TelemetryChecker()
+        self._neo4j_checker = neo4j_checker
         self._chat_timeout_s = chat_timeout_s
         self._inter_turn_delay_s = inter_turn_delay_s
 
@@ -143,9 +147,38 @@ class EvaluationRunner:
                     response_time_ms=turn_result.response_time_ms,
                 )
 
+        # Run post-path Neo4j assertions (if any)
+        if path.post_path_assertions and self._neo4j_checker:
+            if path.post_path_delay_s > 0:
+                log.info(
+                    "post_path_delay",
+                    path_id=path.path_id,
+                    delay_s=path.post_path_delay_s,
+                )
+                await asyncio.sleep(path.post_path_delay_s)
+
+            post_results = await self._neo4j_checker.check_assertions(
+                path.post_path_assertions,
+            )
+            result.post_path_assertion_results = post_results
+
+            log.info(
+                "post_path_assertions_checked",
+                path_id=path.path_id,
+                passed=sum(1 for r in post_results if r.passed),
+                total=len(post_results),
+            )
+        elif path.post_path_assertions and not self._neo4j_checker:
+            log.warning(
+                "post_path_assertions_skipped_no_checker",
+                path_id=path.path_id,
+                assertion_count=len(path.post_path_assertions),
+            )
+
         result.completed_at = datetime.now(tz=timezone.utc)
-        result.all_assertions_passed = all(
-            a.passed for t in result.turns for a in t.assertion_results
+        result.all_assertions_passed = (
+            all(a.passed for t in result.turns for a in t.assertion_results)
+            and all(a.passed for a in result.post_path_assertion_results)
         )
 
         log.info(

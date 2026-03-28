@@ -138,6 +138,14 @@ def generate_markdown_report(
                 lines.append(f"  - {icon} {a.message}")
             lines.append("")
 
+        # Post-path assertions (Neo4j)
+        if r.post_path_assertion_results:
+            lines.append("**Post-Path Assertions (Neo4j):**")
+            for a in r.post_path_assertion_results:
+                icon = "✅" if a.passed else "❌"
+                lines.append(f"  - {icon} {a.message}")
+            lines.append("")
+
         # Quality criteria (for human eval)
         if r.quality_criteria:
             lines.append("**Quality Criteria (Human Eval):**")
@@ -215,4 +223,12 @@ def _serialize_path(r: PathResult) -> dict[str, object]:
             for t in r.turns
         ],
         "quality_criteria": list(r.quality_criteria),
+        "post_path_assertions": [
+            {
+                "passed": a.passed,
+                "message": a.message,
+                "actual_value": a.actual_value,
+            }
+            for a in r.post_path_assertion_results
+        ],
     }

@@ -25,8 +25,8 @@ OPENAI_CONFIG = LLMConfig(
 
 ANTHROPIC_CONFIG = LLMConfig(
     name="graphiti-anthropic",
-    medium_model="claude-haiku-4-5-20251001",
-    small_model="claude-haiku-4-5-20251001",
+    medium_model="claude-haiku-4-5",
+    small_model="claude-haiku-4-5",
 )
 
 LLM_CONFIGS: dict[str, LLMConfig] = {

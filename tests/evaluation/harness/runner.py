@@ -176,10 +176,9 @@ class EvaluationRunner:
             )
 
         result.completed_at = datetime.now(tz=timezone.utc)
-        result.all_assertions_passed = (
-            all(a.passed for t in result.turns for a in t.assertion_results)
-            and all(a.passed for a in result.post_path_assertion_results)
-        )
+        result.all_assertions_passed = all(
+            a.passed for t in result.turns for a in t.assertion_results
+        ) and all(a.passed for a in result.post_path_assertion_results)
 
         log.info(
             "path_execution_completed",

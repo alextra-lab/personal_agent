@@ -60,9 +60,7 @@ class TestNeo4jChecker:
         )
 
     @pytest.mark.asyncio
-    async def test_check_assertion_passes_when_rows_returned(
-        self, checker: Neo4jChecker
-    ) -> None:
+    async def test_check_assertion_passes_when_rows_returned(self, checker: Neo4jChecker) -> None:
         """AssertionResult.passed is True when driver returns rows >= min_result_count."""
         assertion = Neo4jAssertion(
             description="entity exists",
@@ -91,9 +89,7 @@ class TestNeo4jChecker:
         mock_session.run.assert_called_once_with(assertion.cypher_query, name="Foo")
 
     @pytest.mark.asyncio
-    async def test_check_assertion_fails_when_no_rows(
-        self, checker: Neo4jChecker
-    ) -> None:
+    async def test_check_assertion_fails_when_no_rows(self, checker: Neo4jChecker) -> None:
         """AssertionResult.passed is False when driver returns 0 rows."""
         assertion = Neo4jAssertion(
             description="entity exists",

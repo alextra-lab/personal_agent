@@ -337,9 +337,7 @@ def neo4j_promoted(name: str) -> Neo4jAssertion:
     return Neo4jAssertion(
         description=f"Entity '{name}' promoted to semantic memory",
         cypher_query=(
-            "MATCH (e:Entity {name: $name}) "
-            "WHERE e.memory_type = 'semantic' "
-            "RETURN e LIMIT 1"
+            "MATCH (e:Entity {name: $name}) WHERE e.memory_type = 'semantic' RETURN e LIMIT 1"
         ),
         query_params=(("name", name),),
         min_result_count=1,

@@ -1137,8 +1137,7 @@ CP_26 = ConversationPath(
                 "for stream processing and stores results in ClickHouse."
             ),
             expected_behavior=(
-                "Responds to the topic. Entities captured: "
-                "DataForge, Apache Flink, ClickHouse."
+                "Responds to the topic. Entities captured: DataForge, Apache Flink, ClickHouse."
             ),
             assertions=(
                 fld("intent_classified", "task_type", "conversational"),
@@ -1150,12 +1149,8 @@ CP_26 = ConversationPath(
                 "The project lead is Priya Sharma. We're targeting "
                 "a throughput of 50,000 events per second on GCP."
             ),
-            expected_behavior=(
-                "More context. Entities: Priya Sharma, GCP."
-            ),
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            expected_behavior=("More context. Entities: Priya Sharma, GCP."),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
             user_message=(
@@ -1167,9 +1162,7 @@ CP_26 = ConversationPath(
                 "Third turn enriching the entity graph: "
                 "Grafana, Kafka, reinforces Flink connection."
             ),
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
             user_message="What do you remember about the DataForge project?",
@@ -1224,9 +1217,7 @@ CP_27 = ConversationPath(
                 "MLflow for experiment tracking."
             ),
             expected_behavior="Seeds entities: SentinelML, PyTorch, MLflow.",
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
             user_message=(
@@ -1234,12 +1225,8 @@ CP_27 = ConversationPath(
                 "The inference endpoint uses TorchServe behind an "
                 "Istio service mesh."
             ),
-            expected_behavior=(
-                "More context: Kubernetes, GPU, TorchServe, Istio."
-            ),
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            expected_behavior=("More context: Kubernetes, GPU, TorchServe, Istio."),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
             user_message=(
@@ -1284,9 +1271,7 @@ CP_28 = ConversationPath(
                 "database with pgvector for embeddings."
             ),
             expected_behavior="Establishes foundational architectural fact.",
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
             user_message=(
@@ -1294,14 +1279,10 @@ CP_28 = ConversationPath(
                 "guarantees for our financial transaction processing."
             ),
             expected_behavior="Reinforces importance of PostgreSQL (financial context).",
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
-            user_message=(
-                "The API layer is FastAPI with Pydantic v2 for validation."
-            ),
+            user_message=("The API layer is FastAPI with Pydantic v2 for validation."),
             expected_behavior="More context.",
             assertions=(),
         ),
@@ -1328,16 +1309,14 @@ CP_28 = ConversationPath(
         ),
         ConversationTurn(
             user_message=(
-                "The CI pipeline uses GitHub Actions with matrix builds "
-                "for Python 3.11 and 3.12."
+                "The CI pipeline uses GitHub Actions with matrix builds for Python 3.11 and 3.12."
             ),
             expected_behavior="More context.",
             assertions=(),
         ),
         ConversationTurn(
             user_message=(
-                "We also have a Celery worker fleet for async job processing "
-                "backed by RabbitMQ."
+                "We also have a Celery worker fleet for async job processing backed by RabbitMQ."
             ),
             expected_behavior="More context.",
             assertions=(),
@@ -1351,9 +1330,7 @@ CP_28 = ConversationPath(
                 "Tool-heavy turn that adds to context pressure. "
                 "Multiple tool calls generate large outputs."
             ),
-            assertions=(
-                present("tool_call_completed"),
-            ),
+            assertions=(present("tool_call_completed"),),
         ),
         ConversationTurn(
             user_message=(
@@ -1365,9 +1342,7 @@ CP_28 = ConversationPath(
                 "context despite potential trimming. Check budget_trimmed "
                 "field in gateway_output."
             ),
-            assertions=(
-                fld("intent_classified", "task_type", "memory_recall"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "memory_recall"),),
         ),
     ),
     quality_criteria=(
@@ -1397,9 +1372,7 @@ CP_29 = ConversationPath(
                 "src/models/ and the routes in src/routes/."
             ),
             expected_behavior="Seeds project context for delegation enrichment.",
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
             user_message=(
@@ -1408,9 +1381,7 @@ CP_29 = ConversationPath(
                 "didn't catch it because we were mocking the database."
             ),
             expected_behavior="Seeds a known pitfall for delegation context.",
-            assertions=(
-                fld("intent_classified", "task_type", "conversational"),
-            ),
+            assertions=(fld("intent_classified", "task_type", "conversational"),),
         ),
         ConversationTurn(
             user_message=(

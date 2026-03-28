@@ -150,6 +150,31 @@ async def run_experiment(config: ExperimentConfig) -> dict[str, Any]:
         scenarios["scaling"] = {"seshat": seshat_s6, "graphiti": graphiti_s6}
         print("  Done.\n")
 
+    # Aggregate cost from Graphiti token usage across scenarios
+    graphiti_cost: dict[str, Any] = {"input_tokens": 0, "output_tokens": 0}
+    for scenario_data in scenarios.values():
+        g = scenario_data.get("graphiti", {})
+        tu = g.get("token_usage", {})
+        graphiti_cost["input_tokens"] += tu.get("input_tokens", 0)
+        graphiti_cost["output_tokens"] += tu.get("output_tokens", 0)
+        # Check scaling checkpoints too
+        for cp in g.get("checkpoints", []):
+            cpu = cp.get("token_usage", {})
+            graphiti_cost["input_tokens"] += cpu.get("input_tokens", 0)
+            graphiti_cost["output_tokens"] += cpu.get("output_tokens", 0)
+
+    # Estimate costs based on model pricing
+    llm_cfg = config.llm_config
+    if "claude" in llm_cfg.medium_model:
+        input_rate, output_rate = 1.00, 5.00  # Haiku pricing per MTok
+    else:
+        input_rate, output_rate = 0.40, 1.60  # gpt-4.1-mini pricing per MTok
+    graphiti_cost["estimated_cost_usd"] = round(
+        (graphiti_cost["input_tokens"] / 1_000_000) * input_rate
+        + (graphiti_cost["output_tokens"] / 1_000_000) * output_rate,
+        4,
+    )
+
     # Assemble results
     results = {
         "run_id": run_id,
@@ -162,10 +187,15 @@ async def run_experiment(config: ExperimentConfig) -> dict[str, Any]:
             "scale_episodes": config.scale_episodes,
         },
         "scenarios": scenarios,
+        "cost": {
+            "seshat": {"input_tokens": 0, "output_tokens": 0, "estimated_cost_usd": 0.0},
+            "graphiti": graphiti_cost,
+        },
     }
 
     # Clean up experiment data from Seshat (don't pollute production graph)
-    await seshat_runner.clean_experiment_data(seshat_service)
+    all_session_ids = list({ep.session_id for ep in quality_episodes + scale_episodes})
+    await seshat_runner.clean_experiment_data(seshat_service, session_ids=all_session_ids)
 
     # Disconnect
     await seshat_service.disconnect()

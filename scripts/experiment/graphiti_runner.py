@@ -133,24 +133,31 @@ async def run_scenario_1_episodic(
     # Ingest
     await ingest_episodes(graphiti, episodes, ingest_timing)
 
-    # Query by each canonical entity name
+    # Query by each canonical entity name using node search
+    # Node search returns entities, which we can compare against expected entities.
+    # Edge search returns facts (edges) with different UUIDs from episodes,
+    # so node search gives a more meaningful comparison.
     ground_truth = get_ground_truth()
     for canonical in ground_truth["canonical_entities"]:
         start = time.perf_counter()
         async with timed(query_timing):
-            # Edge search for facts about this entity
-            results = await graphiti.search(canonical)
+            # Node search finds entities matching the query
+            node_results = await graphiti.search(canonical, config=NODE_HYBRID_SEARCH_RRF)
+            # Also run edge search for latency comparison
+            edge_results = await graphiti.search(canonical)
         latency = (time.perf_counter() - start) * 1000
 
-        # Expected: episodes that mention this canonical entity
-        expected_ids = {ep.turn_id for ep in episodes if canonical in ep.entities}
-        # Graphiti returns edges, not episodes — map source_node_uuid to check coverage
-        returned_ids = {str(r.uuid) for r in results} if results else set()
+        # For Graphiti, measure whether it found the entity (node-level match)
+        # rather than episode-level match, since Graphiti's search model differs
+        found_names = {getattr(n, "name", "").lower() for n in (node_results or [])}
+        expected_found = canonical.lower() in found_names or any(
+            canonical.lower() in name for name in found_names
+        )
 
         retrieval.add_query(
             query_text=canonical,
-            expected_ids=expected_ids,
-            returned_ids=returned_ids,
+            expected_ids={canonical},  # single expected entity
+            returned_ids={canonical} if expected_found else set(),
             latency_ms=latency,
         )
 

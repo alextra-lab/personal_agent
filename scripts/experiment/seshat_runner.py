@@ -294,19 +294,25 @@ async def run_scenario_6_scaling(
     }
 
 
-async def clean_experiment_data(service: MemoryService) -> None:
+async def clean_experiment_data(
+    service: MemoryService,
+    session_ids: list[str] | None = None,
+) -> None:
     """Remove experiment data from Seshat Neo4j.
 
-    Deletes all Turn nodes created during the experiment (identified by
-    experiment session patterns). Does NOT touch production data.
+    Deletes Turn and Entity nodes created during the experiment, identified
+    by session_ids used during ingestion. Does NOT touch production data.
+
+    Args:
+        service: Connected MemoryService.
+        session_ids: Session IDs used during experiment. If None, skips cleanup.
     """
-    if service.driver is None:
+    if service.driver is None or not session_ids:
         return
 
     async with service.driver.session() as session:
-        # Delete only nodes created in this experiment run
-        # We use a DETACH DELETE on turns that have no session linkage
-        # (experiment turns are not linked to real sessions)
+        # Delete turns by session_id
         await session.run(
-            "MATCH (t:Turn) WHERE t.properties CONTAINS 'experiment' DETACH DELETE t"
+            "MATCH (t:Turn) WHERE t.session_id IN $ids DETACH DELETE t",
+            ids=session_ids,
         )

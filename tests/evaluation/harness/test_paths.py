@@ -1,4 +1,4 @@
-"""Parameterized pytest tests for all 25 evaluation conversation paths.
+"""Parameterized pytest tests for all 29 evaluation conversation paths.
 
 Each path runs as a separate test case. Tests are marked with
 @pytest.mark.evaluation and require the live agent service.
@@ -57,6 +57,9 @@ async def test_conversation_path(
                     failures.append(
                         f"  Turn {turn.turn_index + 1} (trace={turn.trace_id}): {a.message}"
                     )
+        for a in result.post_path_assertion_results:
+            if not a.passed:
+                failures.append(f"  Post-path: {a.message}")
         failure_msg = (
             f"{path.path_id} ({path.name}): "
             f"{result.failed_assertions}/{result.total_assertions} "

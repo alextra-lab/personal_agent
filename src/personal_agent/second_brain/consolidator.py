@@ -14,6 +14,7 @@ from typing import Any
 from personal_agent.captains_log.capture import TaskCapture, read_captures
 from personal_agent.config import load_model_config
 from personal_agent.memory.models import Entity, Relationship, SessionNode, TurnNode
+from personal_agent.memory.promote import run_promotion_pipeline
 from personal_agent.memory.service import MemoryService
 from personal_agent.second_brain.entity_extraction import extract_entities_and_relationships
 from personal_agent.telemetry import get_logger
@@ -158,6 +159,20 @@ class SecondBrainConsolidator:
         # Build Session nodes for every session that received new turns this run
         sessions_created = await self._consolidate_sessions(captures, sessions_with_new_turns)
 
+        # Promote qualifying entities from episodic → semantic memory
+        entities_promoted = 0
+        if turns_created > 0:
+            candidates = await self.memory_service.get_promotion_candidates(
+                min_mentions=1, exclude_already_promoted=True
+            )
+            if candidates:
+                promotion_result = await run_promotion_pipeline(
+                    service=self.memory_service,
+                    candidates=candidates,
+                    trace_id="consolidation",
+                )
+                entities_promoted = promotion_result.promoted_count
+
         summary = {
             "captures_processed": len(captures),
             "captures_skipped": captures_skipped,
@@ -165,6 +180,7 @@ class SecondBrainConsolidator:
             "sessions_created": sessions_created,
             "entities_created": entities_created,
             "relationships_created": relationships_created,
+            "entities_promoted": entities_promoted,
         }
 
         log.info(

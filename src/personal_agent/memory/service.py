@@ -1,5 +1,6 @@
 """Neo4j memory service for knowledge graph operations."""
 
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -12,6 +13,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency in test en
     AsyncGraphDatabase = None  # type: ignore[assignment]
 
 from personal_agent.config.settings import get_settings
+from personal_agent.memory.fact import PromotionCandidate
 from personal_agent.memory.models import (
     Entity,
     EntityNode,
@@ -972,3 +974,88 @@ class MemoryService:
                 exc_info=True,
             )
             return False
+
+    async def get_promotion_candidates(
+        self,
+        min_mentions: int = 1,
+        exclude_already_promoted: bool = True,
+    ) -> Sequence[PromotionCandidate]:
+        """Query Neo4j for entities eligible for episodic→semantic promotion.
+
+        Args:
+            min_mentions: Minimum mention count to include an entity.
+            exclude_already_promoted: If True, skip entities already promoted
+                to semantic memory.
+
+        Returns:
+            Sequence of PromotionCandidate ordered by mention count descending.
+        """
+        if not self.driver:
+            log.warning("get_promotion_candidates_no_driver")
+            return []
+
+        where_clause = "WHERE e.mention_count >= $min_mentions"
+        if exclude_already_promoted:
+            where_clause += " AND (e.memory_type IS NULL OR e.memory_type <> 'semantic')"
+
+        query = f"""
+        MATCH (e:Entity)
+        {where_clause}
+        OPTIONAL MATCH (e)<-[:DISCUSSES]-(t:Turn)
+        WITH e, collect(t.turn_id) AS turn_ids
+        RETURN e.name AS name,
+               e.entity_type AS entity_type,
+               coalesce(e.mention_count, 1) AS mention_count,
+               e.first_seen AS first_seen,
+               e.last_seen AS last_seen,
+               e.description AS description,
+               turn_ids
+        ORDER BY e.mention_count DESC
+        """
+
+        try:
+            async with self.driver.session() as session:
+                result = await session.run(query, min_mentions=min_mentions)
+                records = await result.data()
+
+            now = datetime.now(timezone.utc)
+            candidates: list[PromotionCandidate] = []
+            for row in records:
+                first_seen = row.get("first_seen")
+                last_seen = row.get("last_seen")
+                # Neo4j returns its own DateTime type — convert to timezone-aware Python datetime
+                if hasattr(first_seen, "to_native"):
+                    first_seen = first_seen.to_native()
+                elif isinstance(first_seen, str):
+                    first_seen = datetime.fromisoformat(first_seen)
+                if isinstance(first_seen, datetime) and first_seen.tzinfo is None:
+                    first_seen = first_seen.replace(tzinfo=timezone.utc)
+                if hasattr(last_seen, "to_native"):
+                    last_seen = last_seen.to_native()
+                elif isinstance(last_seen, str):
+                    last_seen = datetime.fromisoformat(last_seen)
+                if isinstance(last_seen, datetime) and last_seen.tzinfo is None:
+                    last_seen = last_seen.replace(tzinfo=timezone.utc)
+                candidates.append(
+                    PromotionCandidate(
+                        entity_name=row["name"],
+                        entity_type=row.get("entity_type") or "unknown",
+                        mention_count=row["mention_count"],
+                        first_seen=first_seen or now,
+                        last_seen=last_seen or now,
+                        source_turn_ids=[t for t in (row.get("turn_ids") or []) if t],
+                        description=row.get("description"),
+                    )
+                )
+
+            log.info(
+                "promotion_candidates_queried",
+                total=len(candidates),
+                min_mentions=min_mentions,
+                exclude_promoted=exclude_already_promoted,
+            )
+            return candidates
+
+        except Exception:
+            log.warning("get_promotion_candidates_failed", exc_info=True)
+            return []

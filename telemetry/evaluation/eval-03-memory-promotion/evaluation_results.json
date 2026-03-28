@@ -1,0 +1,285 @@
+{
+  "timestamp": "2026-03-28T18:06:18.198261+00:00",
+  "summary": {
+    "total_paths": 4,
+    "paths_passed": 4,
+    "paths_failed": 0,
+    "path_pass_rate": 1.0,
+    "total_assertions": 17,
+    "assertions_passed": 17,
+    "assertions_failed": 0,
+    "assertion_pass_rate": 1.0,
+    "total_response_time_ms": 380240.59291699086,
+    "avg_turn_response_time_ms": 34567.326628817355
+  },
+  "by_category": {
+    "Memory System": {
+      "total": 4,
+      "passed": 4
+    }
+  },
+  "paths": [
+    {
+      "path_id": "CP-12",
+      "path_name": "Entity Seeding and Targeted Recall",
+      "category": "Memory System",
+      "session_id": "5602f371-8762-4427-8469-56751c37a32e",
+      "all_passed": true,
+      "assertions_passed": 6,
+      "assertions_total": 6,
+      "total_time_ms": 194202.86604099965,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "I've been working on a project called Project Atlas. It's a data pipeline that processes satellite imagery using Apache Kafka and Apache Spark.",
+          "response_text": "That sounds like an interesting project! A data pipeline for processing satellite imagery using Apache Kafka and Apache Spark is a powerful combination. Kafka can handle the high-throughput streaming of satellite data, while Spark can perform distributed processing and analytics on that imagery.\n\nHow can I help you with Project Atlas? Are you looking for assistance with:\n\n- Architecture design or optimization?\n- Code examples or implementation details?\n- Troubleshooting specific issues?\n- Best p",
+          "trace_id": "68fde068-c054-4454-9a60-9e5e4bcdb275",
+          "response_time_ms": 4695.80954099365,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "The team lead is Maria Chen and we're deploying to AWS with a target of processing 500 images per hour.",
+          "response_text": "Thanks for the additional context! So Project Atlas is:\n\n- **Team Lead**: Maria Chen\n- **Infrastructure**: AWS deployment\n- **Throughput Target**: 500 images/hour (that's about 8-9 images per minute)\n\nThat's a solid throughput target for satellite imagery processing. Depending on the image resolution and complexity of the processing pipeline, you'll want to ensure your Kafka cluster and Spark configuration are sized appropriately for that load.\n\nWhat would you like help with? For example:\n\n- **A",
+          "trace_id": "e78bdb36-19f9-4c60-bcc4-1fb3f74f0f6d",
+          "response_time_ms": 6340.180125000188,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "What do you know about Project Atlas?",
+          "response_text": "Error: The request took too long to process. Please try again with a simpler request. (Debug: LLMTimeout: Request to http:[path] timed out after 180.0s)",
+          "trace_id": "a32283d8-76e9-42a9-a06d-e679def68b9c",
+          "response_time_ms": 183166.8763750058,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            },
+            {
+              "passed": true,
+              "message": "intent_classified.confidence: expected=0.9, actual=0.9",
+              "actual_value": 0.9
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 3 references Project Atlas by name",
+        "Mentions at least 3 of: pipeline, imagery, Kafka, Spark, Maria Chen, AWS",
+        "Information is accurate (not hallucinated)",
+        "Demonstrates synthesis, not just parroting"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-13",
+      "path_name": "Broad Recall",
+      "category": "Memory System",
+      "session_id": "4bd641e6-2b15-4786-9a26-3a3c2e8bb408",
+      "all_passed": true,
+      "assertions_passed": 4,
+      "assertions_total": 4,
+      "total_time_ms": 125711.59762400202,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "I've been evaluating Django and FastAPI for our new web service. FastAPI seems faster but Django has more batteries included.",
+          "response_text": "Your assessment is accurate. Here is a concise comparison to help you finalize your decision:\n\n**FastAPI**\n*   **Performance:** Significantly faster (often 2-3x Django) due to ASGI and native async/await support.\n*   **Ecosystem:** Minimalist (\"batteries not included\"). You select your own ORM (SQLAlchemy, etc.), authentication, and validation tools.\n*   **Documentation:** Auto-generates interactive OpenAPI docs (Swagger UI/ReDoc) based on type hints.\n*   **Best For:** High-performance microserv",
+          "trace_id": "a6d6060c-4ae4-44c0-8eb9-037421bb3f9c",
+          "response_time_ms": 64690.825790996314,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "We also need to decide between PostgreSQL and MongoDB for the storage layer. Our data is mostly relational but we have some document-like structures.",
+          "response_text": "**Recommendation: PostgreSQL**\n\nGiven that your data is **mostly relational**, PostgreSQL is the superior choice. Here is why:\n\n1.  **JSONB Support:** PostgreSQL includes a native `JSONB` data type that allows you to store and query semi-structured document-like data efficiently within the same relational database. You get the best of both worlds without needing a second database.\n2.  **Data Integrity:** Since the core data is relational, you need ACID compliance, foreign key constraints, and co",
+          "trace_id": "883a6191-9fba-45ab-9692-39fbf3932f10",
+          "response_time_ms": 51106.349916008185,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "What topics have we covered in this conversation?",
+          "response_text": "Here are the topics we've covered in this conversation:\n\n1. **Web Framework Selection** \u2014 Django vs FastAPI comparison for a new web service, including performance, ecosystem (\"batteries included\" vs. minimal), and use case recommendations.\n\n2. **Database Selection** \u2014 PostgreSQL vs MongoDB for the storage layer, given that the data is mostly relational with some document-like structures. We discussed JSONB support, ACID compliance, framework compatibility, and operational simplicity.\n\nBoth topi",
+          "trace_id": "fa2823f4-5cf3-4de0-ac2f-7838e1c6f114",
+          "response_time_ms": 9914.421916997526,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Identifies at least 2 distinct topics (web frameworks, databases)",
+        "Mentions specific technologies (Django, FastAPI, PostgreSQL, MongoDB)",
+        "Response is organized \u2014 groups topics",
+        "Captures key considerations (speed vs batteries, relational vs document)",
+        "Does not hallucinate topics not discussed"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-14",
+      "path_name": "Multi-Entity Tracking",
+      "category": "Memory System",
+      "session_id": "39f4fb9e-5ae8-4dd8-8396-30c656f22f73",
+      "all_passed": true,
+      "assertions_passed": 4,
+      "assertions_total": 4,
+      "total_time_ms": 19180.030958988937,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Alice on our team is building a CI/CD automation tool called BuildBot. She's using Python and GitHub Actions.",
+          "response_text": "Thanks for sharing that context! Alice is building BuildBot, a CI/CD automation tool using Python and GitHub Actions. That's an interesting project\u2014combining Python for the core logic with GitHub Actions for the CI/CD pipeline orchestration is a solid approach.\n\nIf you or Alice have any questions about:\n- Python best practices for CI/CD tools\n- GitHub Actions configuration and workflows\n- CI/CD automation patterns and design\n- Integrating BuildBot with other tools or services\n\nJust let me know! ",
+          "trace_id": "a10c6b7b-00cb-4b33-8a1f-c8c9952508bf",
+          "response_time_ms": 6861.37670899916,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Bob is working on a deployment tool called DeployTool. He's focused on Terraform and AWS infrastructure.",
+          "response_text": "Got it! Bob is building DeployTool, a deployment tool focused on Terraform and AWS infrastructure. That's a powerful combination\u2014Terraform for infrastructure as code and AWS for cloud deployment is a very common and effective stack.\n\nIf you or Bob have questions about:\n- Terraform best practices and patterns\n- AWS infrastructure design and deployment\n- CI/CD integration with Terraform workflows\n- Infrastructure as code (IaC) security and testing\n- AWS services and their Terraform providers\n\nFeel",
+          "trace_id": "3a1eb45a-240d-44d4-92c0-e3b6dcdc6f06",
+          "response_time_ms": 4878.257499993197,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "What do you know about Alice and her work?",
+          "response_text": "Based on what you've shared and my memory, here's what I know about Alice:\n\n**Project:** Alice is building **BuildBot**, a CI/CD automation tool for your team.\n\n**Technology Stack:**\n- **Python** - Used for building BuildBot and related automation logic\n- **GitHub Actions** - Used for CI/CD pipeline orchestration\n\nThat's a solid combination for a CI/CD tool\u2014Python provides great flexibility for building the automation logic, while GitHub Actions offers a well-integrated CI/CD platform that's eas",
+          "trace_id": "ea081e7d-5f53-41aa-992f-c001d9672735",
+          "response_time_ms": 7440.39674999658,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            },
+            {
+              "passed": true,
+              "message": "intent_classified.confidence: expected=0.9, actual=0.9",
+              "actual_value": 0.9
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Correctly associates Alice with BuildBot, Python, GitHub Actions",
+        "Does NOT mention Bob, DeployTool, Terraform, or AWS",
+        "Demonstrates entity-relationship awareness",
+        "Clean separation between the two people"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-15",
+      "path_name": "Memory-Informed Response",
+      "category": "Memory System",
+      "session_id": "4aaa212e-fc10-48e2-b20c-65198f5f0fa1",
+      "all_passed": true,
+      "assertions_passed": 3,
+      "assertions_total": 3,
+      "total_time_ms": 41146.09829300025,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "I'm building a real-time dashboard using WebSockets and React to monitor IoT sensor data produced by industrial equipment.",
+          "response_text": "That sounds like a powerful setup for industrial monitoring. To help you move forward, could you specify which aspect you need assistance with? Common areas for this architecture include:\n\n1.  **WebSocket Management:** Handling reconnection logic, heartbeat keep-alives, and connection state in React.\n2.  **State Optimization:** Efficiently updating the UI with high-frequency sensor data without triggering excessive re-renders (e.g., using `useRef` or memoization).\n3.  **Data Visualization:** Ren",
+          "trace_id": "2785ae27-f4fc-4e6c-84e7-9a97aff23760",
+          "response_time_ms": 28435.84908399498,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "What technology stack would you recommend for the backend of this project?",
+          "response_text": "For a real-time IoT monitoring backend with WebSockets and React, here's my recommended technology stack:\n\n## Backend Options\n\n### **Node.js + Socket.io** (Most Popular)\n- **Pros:** \n  - Excellent WebSocket support with automatic reconnection and fallback\n  - Huge ecosystem (npm packages for IoT protocols, time-series DBs)\n  - JavaScript/TypeScript on both frontend and backend\n  - Great for high-concurrency I/O operations\n- **Cons:** Single-threaded event loop (can be a bottleneck for CPU-heavy ",
+          "trace_id": "75c0548e-07b7-4979-b43a-6fc619b6d467",
+          "response_time_ms": 12710.24920900527,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Recommendation explicitly references WebSockets from Turn 1",
+        "Addresses IoT/real-time requirements (not generic web stack)",
+        "Technologies compatible with stated stack",
+        "Does not recommend conflicting technologies",
+        "Feels like a conversation, not two isolated questions"
+      ],
+      "post_path_assertions": []
+    }
+  ]
+}

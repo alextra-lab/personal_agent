@@ -68,16 +68,19 @@ class Neo4jAssertion:
     """Assert a condition on Neo4j graph state via Cypher query.
 
     Runs after all conversation turns complete. The checker executes the
-    Cypher query and verifies the result count meets ``min_result_count``.
+    Cypher query with ``query_params`` and verifies the result count
+    meets ``min_result_count``.
 
     Args:
         description: Human-readable description of what is being checked.
-        cypher_query: Cypher query to execute. May use ``$session_id`` parameter.
+        cypher_query: Cypher query to execute. Use ``$param`` syntax for parameters.
+        query_params: Parameters to pass to the Cypher query.
         min_result_count: Minimum rows the query must return to pass.
     """
 
     description: str
     cypher_query: str
+    query_params: tuple[tuple[str, str | int | float], ...] = ()
     min_result_count: int = 1
     kind: Literal["neo4j"] = "neo4j"
 
@@ -316,7 +319,8 @@ def neo4j_entity(name: str) -> Neo4jAssertion:
     """
     return Neo4jAssertion(
         description=f"Entity '{name}' exists in Neo4j",
-        cypher_query=f"MATCH (e:Entity {{name: '{name}'}}) RETURN e LIMIT 1",
+        cypher_query="MATCH (e:Entity {name: $name}) RETURN e LIMIT 1",
+        query_params=(("name", name),),
         min_result_count=1,
     )
 
@@ -333,8 +337,11 @@ def neo4j_promoted(name: str) -> Neo4jAssertion:
     return Neo4jAssertion(
         description=f"Entity '{name}' promoted to semantic memory",
         cypher_query=(
-            f"MATCH (e:Entity {{name: '{name}'}}) WHERE e.memory_type = 'semantic' RETURN e LIMIT 1"
+            "MATCH (e:Entity {name: $name}) "
+            "WHERE e.memory_type = 'semantic' "
+            "RETURN e LIMIT 1"
         ),
+        query_params=(("name", name),),
         min_result_count=1,
     )
 

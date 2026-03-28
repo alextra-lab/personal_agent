@@ -70,6 +70,23 @@ services:
       timeout: 5s
       retries: 5
 
+  # Neo4j 5.26 for Graphiti experiment (EVAL-02 / FRE-147)
+  neo4j-experiment:
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: neo4j/graphiti_experiment
+      NEO4J_PLUGINS: '["apoc"]'
+    ports:
+      - "7688:7687"
+      - "7475:7474"
+    volumes:
+      - neo4j_experiment_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # SearXNG metasearch engine for private web search (ADR-0034)
   searxng:
     image: searxng/searxng:latest
@@ -90,3 +107,4 @@ volumes:
   postgres_data:
   es_data:
   neo4j_data:
+  neo4j_experiment_data:

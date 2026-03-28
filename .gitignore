@@ -46,11 +46,14 @@ telemetry/captains_log/**/*.json
 # Captain's Log ES backfill checkpoint (FRE-30)
 telemetry/captains_log/es_backfill_checkpoint.json
 
-# Evaluation results and reports (runtime artifacts, regeneratable)
+# Evaluation harness per-run results (regeneratable from re-runs)
 telemetry/evaluation/evaluation_report*.md
 telemetry/evaluation/evaluation_results*.md
 telemetry/evaluation/evaluation_results*.json
 # Note: EVALUATION_TOOLS_USAGE.md is documentation and should be tracked
+
+# Evaluation research results ARE tracked — they back architectural decisions
+# telemetry/evaluation/run-*/ and telemetry/evaluation/graphiti/ are committed
 
 # IDE files (additional)
 .vscode/

@@ -21,6 +21,27 @@
 | Slice 3: Intelligence (proactive memory, programmatic delegation, self-improvement) | — | `specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md` Section 8.3 | Evaluation data from current usage phase |
 | Phase 2.3 remaining (data lifecycle, adaptive thresholds) | [Project 2.3](https://linear.app/frenchforest/project/23-homeostasis-and-feedback-dbce3b171536) | `plans/PHASE_2.3_PLAN.md` | Qwen3.5 integration |
 
+### Pre-Slice 3 Design Constraints (from Evaluation Phase)
+
+**EVAL-03 critical finding** (`docs/research/EVAL_03_MEMORY_PROMOTION_REPORT.md`):
+
+The episodic→semantic promotion stability score prevents organic promotion:
+
+```python
+score = min(mention_count / 100.0, 0.5) + min(days_span / 90.0, 0.5)
+```
+
+An entity needs **50 mentions** or **90 days** of spread to reach a meaningful score. In 456 captures over 5 days, no entity promotes organically. The current 990 semantic entities were force-promoted for evaluation.
+
+**Required before Slice 3 proactive memory feature can work:**
+- Redesign the promotion threshold — options: recency boost, relative top-N, or lower `min_mentions` to 3–5
+- Validate cross-session recall (entities seeded in session A recalled in session B via Neo4j query, not session history)
+
+**What's working well:**
+- Entity extraction (gpt-4.1-nano): ~100% accuracy across people, projects, technologies, decisions
+- Session-scoped memory recall: 100% across 5 diverse scenarios
+- Promotion pipeline mechanics: wired and functional (FRE-148)
+
 ## Backlog (needs approval)
 
 | Work Item | Linear | Spec / ADR |

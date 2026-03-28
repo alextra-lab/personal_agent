@@ -1,0 +1,713 @@
+{
+  "run_id": "2026-03-28-12-48-openai",
+  "config": {
+    "llm": "openai",
+    "llm_model": "gpt-4.1-mini",
+    "small_model": "gpt-4.1-nano",
+    "embedder": "text-embedding-3-small",
+    "episodes": 50,
+    "scale_episodes": 500
+  },
+  "scenarios": {
+    "episodic_retrieval": {
+      "seshat": {
+        "ingest": {
+          "p50_ms": 1.32,
+          "p95_ms": 10.5,
+          "mean_ms": 2.04,
+          "count": 50
+        },
+        "query": {
+          "p50_ms": 2.03,
+          "p95_ms": 23.16,
+          "mean_ms": 4.01,
+          "count": 10
+        },
+        "retrieval": {
+          "avg_precision": 0.0,
+          "avg_recall": 0.0,
+          "query_count": 10,
+          "queries": [
+            {
+              "query": "Neo4j",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 23.164625003119,
+              "expected_count": 0,
+              "returned_count": 20
+            },
+            {
+              "query": "Claude Code",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 2.420541990431957,
+              "expected_count": 0,
+              "returned_count": 4
+            },
+            {
+              "query": "Python",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 3.1266669975593686,
+              "expected_count": 0,
+              "returned_count": 20
+            },
+            {
+              "query": "Elasticsearch",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 2.8476250008679926,
+              "expected_count": 0,
+              "returned_count": 11
+            },
+            {
+              "query": "Machine Learning",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 1.0283750016242266,
+              "expected_count": 0,
+              "returned_count": 0
+            },
+            {
+              "query": "FastAPI",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 1.8373750062892213,
+              "expected_count": 0,
+              "returned_count": 2
+            },
+            {
+              "query": "Graphiti",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 0.8156670082826167,
+              "expected_count": 0,
+              "returned_count": 0
+            },
+            {
+              "query": "Memory Consolidation",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 1.7542910063639283,
+              "expected_count": 0,
+              "returned_count": 1
+            },
+            {
+              "query": "Docker",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 2.2293329966487363,
+              "expected_count": 0,
+              "returned_count": 5
+            },
+            {
+              "query": "Cognitive Architecture",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 0.9222079970641062,
+              "expected_count": 0,
+              "returned_count": 0
+            }
+          ]
+        }
+      },
+      "graphiti": {
+        "ingest": {
+          "p50_ms": 9548.58,
+          "p95_ms": 21533.04,
+          "mean_ms": 10811.98,
+          "count": 50
+        },
+        "query": {
+          "p50_ms": 357.29,
+          "p95_ms": 394.07,
+          "mean_ms": 353.43,
+          "count": 10
+        },
+        "retrieval": {
+          "avg_precision": 0.7,
+          "avg_recall": 0.7,
+          "query_count": 10,
+          "queries": [
+            {
+              "query": "Neo4j",
+              "precision": 1.0,
+              "recall": 1.0,
+              "latency_ms": 394.081416001427,
+              "expected_count": 1,
+              "returned_count": 1
+            },
+            {
+              "query": "Claude Code",
+              "precision": 1.0,
+              "recall": 1.0,
+              "latency_ms": 316.64729199837893,
+              "expected_count": 1,
+              "returned_count": 1
+            },
+            {
+              "query": "Python",
+              "precision": 1.0,
+              "recall": 1.0,
+              "latency_ms": 341.8457079969812,
+              "expected_count": 1,
+              "returned_count": 1
+            },
+            {
+              "query": "Elasticsearch",
+              "precision": 1.0,
+              "recall": 1.0,
+              "latency_ms": 369.4810829911148,
+              "expected_count": 1,
+              "returned_count": 1
+            },
+            {
+              "query": "Machine Learning",
+              "precision": 1.0,
+              "recall": 1.0,
+              "latency_ms": 325.77583300007973,
+              "expected_count": 1,
+              "returned_count": 1
+            },
+            {
+              "query": "FastAPI",
+              "precision": 1.0,
+              "recall": 1.0,
+              "latency_ms": 369.15820799185894,
+              "expected_count": 1,
+              "returned_count": 1
+            },
+            {
+              "query": "Graphiti",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 380.1851250027539,
+              "expected_count": 1,
+              "returned_count": 0
+            },
+            {
+              "query": "Memory Consolidation",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 322.62729200010654,
+              "expected_count": 1,
+              "returned_count": 0
+            },
+            {
+              "query": "Docker",
+              "precision": 1.0,
+              "recall": 1.0,
+              "latency_ms": 362.5685419974616,
+              "expected_count": 1,
+              "returned_count": 1
+            },
+            {
+              "query": "Cognitive Architecture",
+              "precision": 0.0,
+              "recall": 0.0,
+              "latency_ms": 352.019708006992,
+              "expected_count": 1,
+              "returned_count": 0
+            }
+          ]
+        },
+        "token_usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        }
+      }
+    },
+    "semantic_consolidation": {
+      "seshat": {
+        "entity_count": 100,
+        "entities": [
+          {
+            "name": "Python",
+            "type": "Technology",
+            "mentions": 32
+          },
+          {
+            "name": "PostgreSQL",
+            "type": "Technology",
+            "mentions": 29
+          },
+          {
+            "name": "Kubernetes",
+            "type": "Technology",
+            "mentions": 21
+          },
+          {
+            "name": "Neo4j",
+            "type": "Technology",
+            "mentions": 20
+          },
+          {
+            "name": "Paris",
+            "type": "Location",
+            "mentions": 17
+          },
+          {
+            "name": "Redis",
+            "type": "Technology",
+            "mentions": 14
+          },
+          {
+            "name": "Apache Kafka",
+            "type": "Technology",
+            "mentions": 14
+          },
+          {
+            "name": "AWS",
+            "type": "Technology",
+            "mentions": 14
+          },
+          {
+            "name": "Service Mesh",
+            "type": "Concept",
+            "mentions": 13
+          },
+          {
+            "name": "Docker Compose",
+            "type": "Technology",
+            "mentions": 13
+          },
+          {
+            "name": "Linkerd",
+            "type": "Technology",
+            "mentions": 13
+          },
+          {
+            "name": "Microservices Architecture",
+            "type": "Concept",
+            "mentions": 12
+          },
+          {
+            "name": "Memcached",
+            "type": "Technology",
+            "mentions": 12
+          },
+          {
+            "name": "Eventual Consistency",
+            "type": "Concept",
+            "mentions": 12
+          },
+          {
+            "name": "Istio",
+            "type": "Technology",
+            "mentions": 11
+          },
+          {
+            "name": "Project Atlas",
+            "type": "Organization",
+            "mentions": 11
+          },
+          {
+            "name": "GraphQL",
+            "type": "Technology",
+            "mentions": 11
+          },
+          {
+            "name": "Elasticsearch",
+            "type": "Technology",
+            "mentions": 11
+          },
+          {
+            "name": "Apache Spark",
+            "type": "Technology",
+            "mentions": 11
+          },
+          {
+            "name": "GitHub Actions",
+            "type": "Technology",
+            "mentions": 10
+          }
+        ],
+        "turns_with_entities": 10,
+        "notes": "Seshat stores entities explicitly during ingestion; no auto-extraction in this test path."
+      },
+      "graphiti": {
+        "entity_count": 10,
+        "entities": [
+          {
+            "name": "entities",
+            "summary": "Nodes (entities) represent entities.\nEdges (relationships) define connections between entities in a knowledge graph.",
+            "labels": [
+              "Entity"
+            ]
+          },
+          {
+            "name": "component",
+            "summary": "A component uses dependencies such as database connections, services, or other objects",
+            "labels": [
+              "Entity"
+            ]
+          },
+          {
+            "name": "IDE",
+            "summary": "Type hints provide excellent support for IDE",
+            "labels": [
+              "Entity"
+            ]
+          },
+          {
+            "name": "Type hints",
+            "summary": "Type hints provide excellent support for IDE",
+            "labels": [
+              "Entity"
+            ]
+          },
+          {
+            "name": "dependencies",
+            "summary": "A component uses dependencies such as database connections, services, or other objects\nDependencies include database connections\nDependencies include services\nDependencies include other objects",
+            "labels": [
+              "Entity"
+            ]
+          },
+          {
+            "name": "sessions",
+            "summary": "Assistant requests details about sessions to provide a tailored recommendation for the session storage approach",
+            "labels": [
+              "Entity"
+            ]
+          },
+          {
+            "name": "/login",
+            "summary": "The Registration & Login Endpoints include the /login endpoint to authenticate users and issue tokens",
+            "labels": [
+              "Entity"
+            ]
+          },
+          {
+            "name": "src/",
+            "summary": "project-root/ contains the src/ directory.\nsrc/ contains the jsonconfig.py file which has the main implementation.",
+            "labels": [
+              "Entity"
+            ]
+          },
+          {
+            "name": "REST",
+            "summary": "Microservices & Architecture involves REST protocol for networking",
+            "labels": [
+              "Entity"
+            ]
+          },
+          {
+            "name": "REST",
+            "summary": "REST is generally recommended for small teams building internal APIs due to its simplicity, lower learning curve, and mature tooling\nAssistant prefers REST for the user's case due to several reasons\nREST works seamlessly with standard HTTP tools\nREST supports built-in HTTP caching",
+            "labels": [
+              "Entity"
+            ]
+          }
+        ],
+        "fact_count": 10,
+        "facts": [
+          {
+            "fact": "Edges (relationships) define connections between entities in a knowledge graph.",
+            "valid_at": "2026-03-28 12:48:04+00:00",
+            "invalid_at": "None"
+          },
+          {
+            "fact": "A knowledge graph contains edges (relationships) which define connections between entities.",
+            "valid_at": "2026-03-28 12:48:04+00:00",
+            "invalid_at": "None"
+          },
+          {
+            "fact": "User uses Neo4j for their knowledge graph",
+            "valid_at": "2026-03-28 12:48:04+00:00",
+            "invalid_at": "None"
+          },
+          {
+            "fact": "A knowledge graph includes nodes (entities) which represent real-world objects, concepts, or entities.",
+            "valid_at": "2026-03-28 12:48:04+00:00",
+            "invalid_at": "None"
+          },
+          {
+            "fact": "Paris exemplifies nodes (entities) in a knowledge graph.",
+            "valid_at": "2026-03-28 12:48:04+00:00",
+            "invalid_at": "None"
+          },
+          {
+            "fact": "Neo4j is used by User for managing their knowledge graph.",
+            "valid_at": "2026-03-28 12:48:04.452759+00:00",
+            "invalid_at": "None"
+          },
+          {
+            "fact": "Machine Learning exemplifies a node (entity) in a knowledge graph.",
+            "valid_at": "2026-03-28 12:48:04+00:00",
+            "invalid_at": "None"
+          },
+          {
+            "fact": "Albert Einstein is an example of nodes (entities) in a knowledge graph.",
+            "valid_at": "2026-03-28 12:48:04+00:00",
+            "invalid_at": "None"
+          },
+          {
+            "fact": "Neo4j uses a labeled property graph model for entity storage where nodes represent entities and relationships represent connections",
+            "valid_at": "2026-03-28 12:48:04+00:00",
+            "invalid_at": "None"
+          },
+          {
+            "fact": "The graph-based personal memory system stores entities such as locations, persons, organizations, technologies, topics, concepts, and events",
+            "valid_at": "2026-03-28 12:48:04+00:00",
+            "invalid_at": "None"
+          }
+        ],
+        "token_usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "notes": "Graphiti auto-extracts entities and facts on add_episode — no separate consolidation step."
+      }
+    },
+    "temporal_queries": {
+      "seshat": {
+        "query_timing": {
+          "p50_ms": 3.56,
+          "p95_ms": 13.18,
+          "mean_ms": 6.63,
+          "count": 3
+        },
+        "temporal_queries": [
+          {
+            "recency_days": 7,
+            "results_count": 50,
+            "has_relevance_scores": true
+          },
+          {
+            "recency_days": 14,
+            "results_count": 50,
+            "has_relevance_scores": true
+          },
+          {
+            "recency_days": 30,
+            "results_count": 50,
+            "has_relevance_scores": true
+          }
+        ],
+        "notes": "Seshat supports recency_days filtering only — no point-in-time or bi-temporal queries."
+      },
+      "graphiti": {
+        "query_timing": {
+          "p50_ms": 8.01,
+          "p95_ms": 19.06,
+          "mean_ms": 11.41,
+          "count": 3
+        },
+        "temporal_queries": [
+          {
+            "recency_days": 7,
+            "episodes_retrieved": 50,
+            "temporal_edge_results": 10
+          },
+          {
+            "recency_days": 14,
+            "episodes_retrieved": 50,
+            "temporal_edge_results": 10
+          },
+          {
+            "recency_days": 30,
+            "episodes_retrieved": 50,
+            "temporal_edge_results": 10
+          }
+        ],
+        "token_usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "notes": "Graphiti supports bi-temporal model (valid_at/invalid_at) + episode retrieval by reference_time."
+      }
+    },
+    "entity_dedup": {
+      "seshat": {
+        "dedup": {
+          "raw_mentions": 40,
+          "unique_entities_created": 500,
+          "expected_canonical": 10,
+          "dedup_ratio": 12.5,
+          "false_positives": 0,
+          "false_negatives": 490
+        },
+        "ingest_timing": {
+          "p50_ms": 1.4,
+          "p95_ms": 2.07,
+          "mean_ms": 1.48,
+          "count": 40
+        },
+        "notes": "Seshat uses Neo4j MERGE on exact entity name — no fuzzy/semantic dedup."
+      },
+      "graphiti": {
+        "dedup": {
+          "raw_mentions": 40,
+          "unique_entities_created": 10,
+          "expected_canonical": 10,
+          "dedup_ratio": 0.25,
+          "false_positives": 0,
+          "false_negatives": 0
+        },
+        "ingest_timing": {
+          "p50_ms": 6766.07,
+          "p95_ms": 13949.44,
+          "mean_ms": 7488.33,
+          "count": 40
+        },
+        "token_usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "notes": "Graphiti uses three-tier dedup: vector similarity + BM25 + LLM reasoning."
+      }
+    },
+    "consolidation_lifecycle": {
+      "seshat": {
+        "store_timing": {
+          "p50_ms": 1.05,
+          "p95_ms": 1.87,
+          "mean_ms": 1.13,
+          "count": 10
+        },
+        "promote_timing": {
+          "p50_ms": 32.61,
+          "p95_ms": 32.61,
+          "mean_ms": 32.61,
+          "count": 1
+        },
+        "promoted_count": 5,
+        "skipped_count": 0,
+        "errors": [],
+        "lifecycle_steps": [
+          "1. Store episode (create_conversation + create_entity)",
+          "2. Build PromotionCandidate from entity stats",
+          "3. Run run_promotion_pipeline()",
+          "4. Entity gains memory_type='semantic'"
+        ]
+      },
+      "graphiti": {
+        "ingest_timing": {
+          "p50_ms": 18695.19,
+          "p95_ms": 33482.63,
+          "mean_ms": 19337.02,
+          "count": 10
+        },
+        "entities_created": 10,
+        "facts_created": 10,
+        "token_usage": {
+          "input_tokens": 0,
+          "output_tokens": 0
+        },
+        "lifecycle_steps": [
+          "1. add_episode() — extracts entities, resolves/deduplicates, creates edges",
+          "2. No separate promotion step needed",
+          "3. Entities are immediately searchable via hybrid search",
+          "4. Contradiction detection auto-invalidates superseded facts"
+        ],
+        "notes": "Graphiti collapses working→episodic→semantic into a single add_episode call."
+      }
+    },
+    "scaling": {
+      "seshat": {
+        "ingest_total": {
+          "p50_ms": 7.2,
+          "p95_ms": 9.27,
+          "mean_ms": 7.48,
+          "count": 500
+        },
+        "checkpoints": [
+          {
+            "episodes_ingested": 100,
+            "ingest_mean_ms": 8.47,
+            "query": {
+              "p50_ms": 5.62,
+              "p95_ms": 7.85,
+              "mean_ms": 6.31,
+              "count": 3
+            }
+          },
+          {
+            "episodes_ingested": 250,
+            "ingest_mean_ms": 7.53,
+            "query": {
+              "p50_ms": 4.24,
+              "p95_ms": 6.27,
+              "mean_ms": 4.81,
+              "count": 3
+            }
+          },
+          {
+            "episodes_ingested": 500,
+            "ingest_mean_ms": 7.48,
+            "query": {
+              "p50_ms": 4.21,
+              "p95_ms": 5.92,
+              "mean_ms": 4.73,
+              "count": 3
+            }
+          }
+        ]
+      },
+      "graphiti": {
+        "ingest_total": {
+          "p50_ms": 8883.74,
+          "p95_ms": 14765.6,
+          "mean_ms": 9657.49,
+          "count": 500
+        },
+        "checkpoints": [
+          {
+            "episodes_ingested": 100,
+            "ingest_mean_ms": 9295.81,
+            "query": {
+              "p50_ms": 173.81,
+              "p95_ms": 174.15,
+              "mean_ms": 173.6,
+              "count": 3
+            },
+            "token_usage": {
+              "input_tokens": 0,
+              "output_tokens": 0
+            }
+          },
+          {
+            "episodes_ingested": 250,
+            "ingest_mean_ms": 9821.66,
+            "query": {
+              "p50_ms": 186.61,
+              "p95_ms": 242.47,
+              "mean_ms": 202.21,
+              "count": 3
+            },
+            "token_usage": {
+              "input_tokens": 0,
+              "output_tokens": 0
+            }
+          },
+          {
+            "episodes_ingested": 500,
+            "ingest_mean_ms": 9657.49,
+            "query": {
+              "p50_ms": 200.92,
+              "p95_ms": 212.08,
+              "mean_ms": 198.55,
+              "count": 3
+            },
+            "token_usage": {
+              "input_tokens": 0,
+              "output_tokens": 0
+            }
+          }
+        ]
+      }
+    }
+  },
+  "cost": {
+    "seshat": {
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "estimated_cost_usd": 0.0
+    },
+    "graphiti": {
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "estimated_cost_usd": 0.0
+    }
+  }
+}

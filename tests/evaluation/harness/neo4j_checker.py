@@ -137,7 +137,7 @@ class Neo4jChecker:
                     )
                     await asyncio.sleep(self._retry_delay_s)
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — neo4j is optional; can't import specific exceptions
                 log.warning(
                     "neo4j_assertion_error",
                     description=assertion.description,

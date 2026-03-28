@@ -32,7 +32,7 @@
 #   provider_type    "cloud" (set explicitly for ADR-0029 concurrency pass-through)
 
 # ── Process-to-model assignments ──────────────────────────────────────────────
-entity_extraction_role: claude_sonnet
+entity_extraction_role: gpt-5.4-nano
 captains_log_role: claude_sonnet
 insights_role: claude_sonnet
 
@@ -123,18 +123,30 @@ models:
     max_concurrency: 10
     default_timeout: 60
 
-  # openai_o4_mini:
-  #   # OpenAI o4-mini — A/B test candidate for background reasoning tasks
-  #   # Uncomment and set AGENT_OPENAI_API_KEY to use
-  #   # LiteLLM model string: "openai/o4-mini"
-  #   id: "o4-mini"
-  #   provider: "openai"
-  #   provider_type: "cloud"
-  #   max_tokens: 8192
-  #   context_length: 128000
-  #   min_concurrency: 1
-  #   max_concurrency: 10
-  #   default_timeout: 60
+  gpt-5.4-nano:
+    # OpenAI GPT-5.4 Nano — entity extraction, structured output tasks
+    # Cheapest cloud model with strong structured output quality
+    # Pricing: $0.20/$1.25 per MTok (input/output)
+    id: "gpt-5.4-nano"
+    provider: "openai"
+    provider_type: "cloud"
+    max_tokens: 4096
+    context_length: 128000
+    min_concurrency: 1
+    max_concurrency: 10
+    default_timeout: 60
+
+  gpt-5.4-mini:
+    # OpenAI GPT-5.4 Mini — higher-quality background reasoning
+    # Pricing: $0.75/$4.50 per MTok (input/output)
+    id: "gpt-5.4-mini"
+    provider: "openai"
+    provider_type: "cloud"
+    max_tokens: 8192
+    context_length: 128000
+    min_concurrency: 1
+    max_concurrency: 10
+    default_timeout: 60
 
   # gemini_pro:
   #   # Google Gemini 2.5 Pro — deep research / long-context

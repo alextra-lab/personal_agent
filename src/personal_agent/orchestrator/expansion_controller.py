@@ -146,6 +146,20 @@ class ExpansionController:
         )
         result.sub_agent_results = sub_results
 
+        # Check for total failure
+        if sub_results and all(not r.success for r in sub_results):
+            result.degraded = True
+            result.degradation_reason = "All sub-agents failed"
+            logger.warning(
+                "graceful_degradation_triggered",
+                phase="executor",
+                reason="all_subagents_failed",
+                trace_id=trace_id,
+            )
+        elif not sub_results:
+            result.degraded = True
+            result.degradation_reason = "No sub-agent results"
+
         # --- Build synthesis context ---
         result.synthesis_context = self._build_synthesis_context(
             plan=plan,

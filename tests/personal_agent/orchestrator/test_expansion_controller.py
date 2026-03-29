@@ -224,3 +224,67 @@ class TestExpansionControllerExecute:
         assert len(result.sub_agent_results) == 3
         assert result.successful_count == 2
         assert result.failed_count == 1
+
+
+class TestGracefulDegradation:
+    @pytest.fixture
+    def controller(self) -> ExpansionController:
+        return ExpansionController()
+
+    @pytest.fixture
+    def mock_llm(self) -> AsyncMock:
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value=_make_plan_json(3))
+        return client
+
+    @pytest.mark.asyncio
+    async def test_all_subagents_fail_degraded_response(
+        self, controller: ExpansionController, mock_llm: AsyncMock
+    ) -> None:
+        """All sub-agents fail → degraded=True."""
+        mock_results = [
+            _make_sub_agent_result(f"task_{i}", success=False)
+            for i in range(3)
+        ]
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            result = await controller.execute(
+                query="Compare Redis, Memcached, and Hazelcast",
+                strategy="HYBRID",
+                llm_client=mock_llm,
+                trace_id="test-trace",
+                messages=[],
+            )
+
+        assert result.degraded is True
+        assert result.failed_count == 3
+
+    @pytest.mark.asyncio
+    async def test_synthesis_context_notes_failures(
+        self, controller: ExpansionController, mock_llm: AsyncMock
+    ) -> None:
+        """Partial failure → synthesis context includes failure notes."""
+        mock_results = [
+            _make_sub_agent_result("task_0", success=True, summary="Redis is fast"),
+            _make_sub_agent_result("task_1", success=False),
+            _make_sub_agent_result("task_2", success=True, summary="Hazelcast scales"),
+        ]
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            result = await controller.execute(
+                query="Compare Redis, Memcached, and Hazelcast",
+                strategy="HYBRID",
+                llm_client=mock_llm,
+                trace_id="test-trace",
+                messages=[],
+            )
+
+        assert "FAILED" in result.synthesis_context
+        assert "Redis is fast" in result.synthesis_context
+        assert "Hazelcast scales" in result.synthesis_context

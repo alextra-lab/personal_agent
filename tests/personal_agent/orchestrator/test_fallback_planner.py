@@ -18,11 +18,15 @@ class TestHybridFallback:
         assert isinstance(plan, ExpansionPlan)
         assert plan.is_fallback is True
         assert plan.strategy == "HYBRID"
-        # Should extract entities and create tasks
-        assert len(plan.tasks) >= 2
-        assert len(plan.tasks) <= 4  # HYBRID caps at 3 + synthesis
-        # Last task should be synthesis/recommendation
-        assert any("synth" in t.name.lower() or "recommend" in t.name.lower() for t in plan.tasks)
+        # 3 entities + 1 synthesis = 4 tasks
+        assert len(plan.tasks) == 4
+        # Entity names should be clean (no trailing "for our session caching")
+        entity_task_names = [t.name for t in plan.tasks[:-1]]
+        assert "evaluate_redis" in entity_task_names
+        assert "evaluate_memcached" in entity_task_names
+        assert "evaluate_hazelcast" in entity_task_names
+        # Last task is synthesis
+        assert "synth" in plan.tasks[-1].name.lower() or "recommend" in plan.tasks[-1].name.lower()
 
     def test_enumerated_dimensions(self) -> None:
         """HYBRID with explicit dimensions → one task per dimension."""
@@ -31,7 +35,21 @@ class TestHybridFallback:
             strategy="HYBRID",
         )
         assert plan.is_fallback is True
-        assert len(plan.tasks) >= 2
+        # 3 dimensions + 1 synthesis = 4 tasks
+        assert len(plan.tasks) == 4
+
+    def test_vs_pattern(self) -> None:
+        """X vs Y pattern → two entities extracted cleanly."""
+        plan = generate_fallback_plan(
+            query="Compare Redis vs Memcached for caching",
+            strategy="HYBRID",
+        )
+        assert plan.is_fallback is True
+        # 2 entities + 1 synthesis = 3 tasks
+        assert len(plan.tasks) == 3
+        entity_task_names = [t.name for t in plan.tasks[:-1]]
+        assert "evaluate_redis" in entity_task_names
+        assert "evaluate_memcached" in entity_task_names
 
     def test_no_entities_generic_split(self) -> None:
         """No enumerable structure → generic 2-task split."""
@@ -45,15 +63,19 @@ class TestHybridFallback:
 
 class TestDecomposeFallback:
     def test_enumerated_entities(self) -> None:
-        """DECOMPOSE with entities → one task per evaluation axis + recommendation."""
+        """DECOMPOSE with entities → one task per entity + recommendation."""
         plan = generate_fallback_plan(
             query="Evaluate Redis, Memcached, and Hazelcast for 10k rps microservices",
             strategy="DECOMPOSE",
         )
         assert plan.is_fallback is True
         assert plan.strategy == "DECOMPOSE"
-        assert len(plan.tasks) >= 3
-        assert len(plan.tasks) <= 6  # DECOMPOSE allows more tasks
+        # 3 entities + 1 synthesis = 4 tasks
+        assert len(plan.tasks) == 4
+        entity_task_names = [t.name for t in plan.tasks[:-1]]
+        assert "evaluate_redis" in entity_task_names
+        assert "evaluate_memcached" in entity_task_names
+        assert "evaluate_hazelcast" in entity_task_names
 
     def test_generic_decompose(self) -> None:
         """No enumerable structure → 2-task split."""

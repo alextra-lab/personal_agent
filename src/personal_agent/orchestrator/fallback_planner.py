@@ -31,7 +31,13 @@ _COMMA_LIST_RE = re.compile(
 )
 
 _VS_RE = re.compile(
-    r"([\w\s]+?)\s+(?:vs\.?|versus)\s+([\w\s]+)",
+    r"\b([\w\-\.]+)\s+(?:vs\.?|versus)\s+([\w\-\.]+)",
+    re.IGNORECASE,
+)
+
+# Strip trailing prepositional phrases from extracted entities
+_TRAILING_PREP_RE = re.compile(
+    r"\s+(?:for|in|on|of|across|with|to|about|from|using|against)\s+.*$",
     re.IGNORECASE,
 )
 
@@ -77,6 +83,12 @@ def generate_fallback_plan(
     return plan
 
 
+def _clean_entity(raw: str) -> str:
+    """Strip trailing prepositional phrases from an extracted entity name."""
+    cleaned = _TRAILING_PREP_RE.sub("", raw).strip()
+    return cleaned if cleaned else raw.strip()
+
+
 def _extract_entities(query: str) -> list[str]:
     """Extract enumerated entities or dimensions from the query.
 
@@ -92,16 +104,16 @@ def _extract_entities(query: str) -> list[str]:
     match = _COMMA_LIST_RE.search(query)
     if match:
         raw = match.group(1)
-        # Split on commas and "and"/"or"
-        parts = re.split(r",\s*|\s+and\s+|\s+or\s+", raw)
-        entities = [p.strip() for p in parts if p.strip()]
+        # Split on commas (optionally followed by "and"/"or") and standalone "and"/"or"
+        parts = re.split(r",\s*(?:and\s+|or\s+)?|\s+and\s+|\s+or\s+", raw)
+        entities = [_clean_entity(p) for p in parts if p.strip()]
         if len(entities) >= 2:
             return entities
 
     # Try "X vs Y" pattern
     match = _VS_RE.search(query)
     if match:
-        return [match.group(1).strip(), match.group(2).strip()]
+        return [_clean_entity(match.group(1)), _clean_entity(match.group(2))]
 
     return []
 

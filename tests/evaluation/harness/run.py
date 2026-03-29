@@ -74,9 +74,14 @@ def parse_args() -> argparse.Namespace:
         help="Elasticsearch URL (default: http://localhost:9200)",
     )
     parser.add_argument(
+        "--run-id",
+        help="Run identifier in EVAL-{NN}-{slug} format (e.g., EVAL-09-slice3-baseline). "
+        "Creates a subdirectory under --output-dir for this run's reports.",
+    )
+    parser.add_argument(
         "--output-dir",
         default="telemetry/evaluation",
-        help="Directory for output reports (default: telemetry/evaluation)",
+        help="Base directory for output reports (default: telemetry/evaluation)",
     )
     parser.add_argument(
         "--neo4j-uri",
@@ -170,6 +175,9 @@ async def main() -> None:
 
     # Generate reports
     output_dir = Path(args.output_dir)
+    if args.run_id:
+        output_dir = output_dir / args.run_id
+    output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / "evaluation_results.json"
     md_path = output_dir / "evaluation_results.md"
 

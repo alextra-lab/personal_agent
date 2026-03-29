@@ -148,6 +148,31 @@ models:
     max_concurrency: 10
     default_timeout: 60
 
+  # ── Embedding Model (Seshat Memory — ADR-0035) ─────────────────
+  embedding:
+    # Qwen3-Embedding-0.6B via slm_server (llama.cpp GGUF)
+    # Instruction-aware, Matryoshka (flexible dims), 768d default
+    # One-way door: changing model requires rebuilding all Neo4j vectors
+    id: "Qwen/Qwen3-Embedding-0.6B"
+    provider_type: "local"
+    endpoint: "http://localhost:8503/v1"
+    context_length: 32768
+    max_concurrency: 1
+    default_timeout: 60
+    supports_function_calling: false
+
+  # ── Reranker Model (Seshat Memory — ADR-0035) ──────────────────
+  reranker:
+    # Qwen3-Reranker-0.6B via slm_server (llama.cpp GGUF, /v1/rerank)
+    # Cross-attention re-scoring of top-K retrieval candidates
+    id: "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
+    provider_type: "local"
+    endpoint: "http://localhost:8504/v1"
+    context_length: 8192
+    max_concurrency: 1
+    default_timeout: 120
+    supports_function_calling: false
+
   # gemini_pro:
   #   # Google Gemini 2.5 Pro — deep research / long-context
   #   # LiteLLM model string: "gemini/gemini-2.5-pro"

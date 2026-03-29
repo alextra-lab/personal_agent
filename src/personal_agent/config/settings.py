@@ -297,14 +297,12 @@ class AppConfig(BaseSettings):
         description="Max time for synthesis phase in expansion controller",
     )
 
-    # --- Embedding configuration (ADR-0035) ---
-    embedding_model: str = Field(
-        default="text-embedding-3-small",
-        description="OpenAI embedding model name (or 'nomic-embed-text' for local)",
-    )
+    # --- Embedding & Reranker configuration (ADR-0035) ---
+    # Model identity (id, endpoint) lives in config/models.yaml — ADR-0031.
+    # Only runtime knobs belong here.
     embedding_dimensions: int = Field(
-        default=1536,
-        description="Embedding vector dimensions (1536 for text-embedding-3-small)",
+        default=768,
+        description="Embedding vector dimensions (768 for Qwen3-Embedding-0.6B)",
     )
     embedding_batch_size: int = Field(
         default=20,
@@ -313,6 +311,14 @@ class AppConfig(BaseSettings):
     dedup_similarity_threshold: float = Field(
         default=0.85,
         description="Cosine similarity threshold for entity deduplication",
+    )
+    reranker_enabled: bool = Field(
+        default=True,
+        description="Enable cross-attention reranker in memory query pipeline",
+    )
+    reranker_top_k: int = Field(
+        default=10,
+        description="Number of top candidates to re-score with reranker",
     )
 
     # Paths (for domain config loaders)

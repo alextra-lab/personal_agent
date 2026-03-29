@@ -165,6 +165,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             memory_service = MemoryService()
             await memory_service.connect()
             log.info("memory_service_initialized")
+            # Ensure Neo4j vector index exists for embedding search (idempotent)
+            try:
+                await memory_service.ensure_vector_index()
+                log.info("neo4j_vector_index_ensured")
+            except Exception as idx_e:
+                log.warning("neo4j_vector_index_setup_failed", error=str(idx_e))
         except Exception as e:
             log.warning(
                 "memory_service_connect_failed",

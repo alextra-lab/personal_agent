@@ -617,7 +617,7 @@ class MemoryService:
                 vector_results: list[Any] = []
                 if query_text:
                     try:
-                        query_embedding = await generate_embedding(query_text)
+                        query_embedding = await generate_embedding(query_text, mode="query")
                         if any(x != 0.0 for x in query_embedding):
                             vector_result = await session.run(
                                 """
@@ -648,9 +648,44 @@ class MemoryService:
                     if "name" in vr and "score" in vr:
                         vector_scores[vr["name"]] = float(vr["score"])
 
+                # --- Reranker: re-score candidates via cross-attention ---
+                reranker_scores: dict[str, float] = {}
+                current_settings = get_settings()
+                if (
+                    current_settings.reranker_enabled
+                    and query_text
+                    and len(conversations) > 1
+                ):
+                    try:
+                        from personal_agent.memory.reranker import rerank  # noqa: PLC0415
+
+                        docs = [
+                            c.summary or c.user_message or ""
+                            for c in conversations
+                        ]
+                        rerank_results = await rerank(
+                            query=query_text,
+                            documents=docs,
+                            top_k=current_settings.reranker_top_k,
+                        )
+                        # Map conversation turn_id to normalized reranker score
+                        if rerank_results:
+                            max_score = max(r.score for r in rerank_results)
+                            for rr in rerank_results:
+                                if rr.index < len(conversations):
+                                    norm = rr.score / max_score if max_score > 0 else 0.0
+                                    reranker_scores[conversations[rr.index].turn_id] = norm
+                    except Exception as rerank_exc:
+                        log.warning(
+                            "reranker_integration_failed",
+                            error=str(rerank_exc),
+                        )
+
                 # Calculate plausibility/relevance scores
                 relevance_scores = await self._calculate_relevance_scores(
-                    conversations, query, vector_scores=vector_scores
+                    conversations, query,
+                    vector_scores=vector_scores,
+                    reranker_scores=reranker_scores,
                 )
 
                 log.info(
@@ -856,37 +891,49 @@ class MemoryService:
         conversations: list[TurnNode],
         query: MemoryQuery,
         vector_scores: dict[str, float] | None = None,
+        reranker_scores: dict[str, float] | None = None,
     ) -> dict[str, float]:
         """Calculate relevance/plausibility scores for conversations.
 
-        Scoring factors (when vector_scores is None or empty):
-        1. Recency: More recent conversations score higher (0-0.4)
-        2. Entity match: Conversations with more query entities score higher (0-0.4)
-        3. Entity importance: Entities with higher mention counts boost score (0-0.2)
+        Scoring factors depend on which signals are available:
 
-        When vector_scores are provided (hybrid mode), weights are redistributed:
-        1. Recency: 0-0.3 (reduced from 0.4)
-        2. Entity match: 0-0.3 (reduced from 0.4)
-        3. Entity importance: 0-0.15 (reduced from 0.2)
-        4. Vector similarity: 0-0.25 (new — cosine distance from embedding search)
+        Base weights (no vector, no reranker):
+        1. Recency: 0-0.4
+        2. Entity match: 0-0.4
+        3. Entity importance: 0-0.2
+
+        Hybrid (vector only):
+        1. Recency: 0-0.3
+        2. Entity match: 0-0.3
+        3. Entity importance: 0-0.15
+        4. Vector similarity: 0-0.25
+
+        Full pipeline (vector + reranker):
+        1. Recency: 0-0.20
+        2. Entity match: 0-0.20
+        3. Entity importance: 0-0.10
+        4. Vector similarity: 0-0.15
+        5. Reranker score: 0-0.35
 
         Args:
-            conversations: List of conversations to score
-            query: Original query with entity filters
+            conversations: List of conversations to score.
+            query: Original query with entity filters.
             vector_scores: Optional dict mapping entity name to cosine similarity
-                score (0-1) from vector index search.  When provided, weights
-                are redistributed to include a vector similarity component.
+                score (0-1) from vector index search.
+            reranker_scores: Optional dict mapping turn_id to normalized reranker
+                relevance score (0-1) from cross-attention reranking.
 
         Returns:
-            Dict mapping conversation_id to relevance score (0.0-1.0)
+            Dict mapping conversation_id to relevance score (0.0-1.0).
         """
         if not conversations:
             return {}
 
         scores: dict[str, float] = {}
 
-        # Normalize optional vector_scores to a concrete dict (simplifies type narrowing)
+        # Normalize optional score dicts to concrete dicts (simplifies type narrowing)
         _vector_scores: dict[str, float] = vector_scores if vector_scores is not None else {}
+        _reranker_scores: dict[str, float] = reranker_scores if reranker_scores is not None else {}
 
         # Normalize all timestamps to naive UTC to avoid mixed tz comparisons
         now = datetime.utcnow()
@@ -921,18 +968,27 @@ class MemoryService:
             except Exception as e:
                 log.warning("entity_importance_fetch_failed", error=str(e))
 
-        # Determine weight scheme based on whether vector scores are available
+        # Determine weight scheme based on available signals
         use_vector = bool(_vector_scores)
-        if use_vector:
+        use_reranker = bool(_reranker_scores)
+        if use_vector and use_reranker:
+            w_recency = 0.20
+            w_entity_match = 0.20
+            w_importance = 0.10
+            w_vector = 0.15
+            w_reranker = 0.35
+        elif use_vector:
             w_recency = 0.30
             w_entity_match = 0.30
             w_importance = 0.15
             w_vector = 0.25
+            w_reranker = 0.0
         else:
             w_recency = 0.40
             w_entity_match = 0.40
             w_importance = 0.20
             w_vector = 0.0
+            w_reranker = 0.0
 
         # Calculate scores for each conversation
         for conv in conversations:
@@ -951,13 +1007,23 @@ class MemoryService:
                     conv_has_vector_hit = True
                     best_vector_score = max(entity_vector_scores)
 
+            # Check if this conversation has a reranker score
+            conv_reranker_score = _reranker_scores.get(conv.turn_id, 0.0)
+            conv_has_reranker = use_reranker and conv.turn_id in _reranker_scores
+
             if conv_has_vector_hit:
                 cw_recency, cw_entity, cw_importance, cw_vector = (
                     w_recency, w_entity_match, w_importance, w_vector,
                 )
+                cw_reranker = w_reranker if conv_has_reranker else 0.0
             else:
-                # Non-hybrid weights for this conversation
-                cw_recency, cw_entity, cw_importance, cw_vector = 0.40, 0.40, 0.20, 0.0
+                # Non-hybrid weights for this conversation (redistribute reranker weight)
+                if conv_has_reranker:
+                    cw_recency, cw_entity, cw_importance, cw_vector = 0.25, 0.25, 0.15, 0.0
+                    cw_reranker = 0.35
+                else:
+                    cw_recency, cw_entity, cw_importance, cw_vector = 0.40, 0.40, 0.20, 0.0
+                    cw_reranker = 0.0
 
             score = 0.0
 
@@ -991,6 +1057,10 @@ class MemoryService:
             # 4. Vector similarity score (hybrid mode only)
             if conv_has_vector_hit:
                 score += best_vector_score * cw_vector
+
+            # 5. Reranker score (cross-attention relevance)
+            if conv_has_reranker:
+                score += conv_reranker_score * cw_reranker
 
             scores[conv.turn_id] = min(score, 1.0)  # Cap at 1.0
 

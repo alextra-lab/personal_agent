@@ -65,7 +65,7 @@ class TestHybridQueryMemory:
         with patch(
             "personal_agent.memory.service.generate_embedding",
             new_callable=AsyncMock,
-            return_value=[0.1] * 1536,
+            return_value=[0.1] * 768,
         ) as mock_embed:
             query = MemoryQuery(entity_names=["Redis"], limit=10)
             await service.query_memory(query, query_text="Tell me about Redis caching")
@@ -180,3 +180,52 @@ class TestRelevanceScoring:
         assert scores["t1"] > scores["t2"]
         # t2 should NOT be deflated — non-hybrid weights apply
         assert scores["t2"] > 0.1
+
+    @pytest.mark.asyncio
+    async def test_reranker_scores_boost_relevance(self, service: MemoryService) -> None:
+        """With reranker_scores, matching conversations get the reranker component."""
+        conv = _make_turn("t1", key_entities=["Redis"], minutes_ago=0)
+        query = MemoryQuery(entity_names=["Redis"], limit=10)
+
+        scores_no_rerank = await service._calculate_relevance_scores(
+            [conv], query, vector_scores={"Redis": 0.9}, reranker_scores=None
+        )
+        scores_with_rerank = await service._calculate_relevance_scores(
+            [conv], query, vector_scores={"Redis": 0.9}, reranker_scores={"t1": 0.95}
+        )
+
+        # Reranker should boost the score
+        assert scores_with_rerank["t1"] > scores_no_rerank["t1"]
+
+    @pytest.mark.asyncio
+    async def test_reranker_without_vector_still_works(self, service: MemoryService) -> None:
+        """Reranker scores should work even without vector scores."""
+        conv = _make_turn("t1", key_entities=["Redis"], minutes_ago=0)
+        query = MemoryQuery(entity_names=["Redis"], limit=10)
+
+        scores_base = await service._calculate_relevance_scores(
+            [conv], query, vector_scores=None, reranker_scores=None
+        )
+        scores_rerank_only = await service._calculate_relevance_scores(
+            [conv], query, vector_scores=None, reranker_scores={"t1": 0.8}
+        )
+
+        # Reranker alone should boost score when vector is absent
+        assert scores_rerank_only["t1"] > scores_base["t1"]
+
+    @pytest.mark.asyncio
+    async def test_empty_reranker_scores_uses_hybrid_weights(
+        self, service: MemoryService
+    ) -> None:
+        """Empty reranker_scores dict should behave like None (no reranker)."""
+        conv = _make_turn("t1", key_entities=["Redis"], minutes_ago=0)
+        query = MemoryQuery(entity_names=["Redis"], limit=10)
+
+        scores_none = await service._calculate_relevance_scores(
+            [conv], query, vector_scores={"Redis": 0.9}, reranker_scores=None
+        )
+        scores_empty = await service._calculate_relevance_scores(
+            [conv], query, vector_scores={"Redis": 0.9}, reranker_scores={}
+        )
+
+        assert scores_none["t1"] == pytest.approx(scores_empty["t1"], abs=0.001)

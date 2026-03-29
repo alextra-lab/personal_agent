@@ -52,8 +52,11 @@ telemetry/evaluation/evaluation_results*.md
 telemetry/evaluation/evaluation_results*.json
 # Note: EVALUATION_TOOLS_USAGE.md is documentation and should be tracked
 
+# Category-level test runs (debugging artifacts, not evaluation baselines)
+telemetry/evaluation/EVAL-cat-*/
+
 # Evaluation research results ARE tracked — they back architectural decisions
-# telemetry/evaluation/run-*/ and telemetry/evaluation/graphiti/ are committed
+# EVAL-NN-*/ directories (named baselines) are committed
 
 # IDE files (additional)
 .vscode/

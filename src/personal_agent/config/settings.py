@@ -275,6 +275,28 @@ class AppConfig(BaseSettings):
         description="Maximum tokens per sub-agent response",
     )
 
+    # --- Expansion controller (ADR-0036) ---
+    orchestration_mode: str = Field(
+        default="enforced",
+        description="Expansion enforcement mode: 'enforced' (gateway binding) or 'autonomous' (LLM decides)",
+    )
+    planner_timeout_seconds: float = Field(
+        default=15.0,
+        description="Max time for LLM planner phase in expansion controller",
+    )
+    worker_timeout_seconds: float = Field(
+        default=45.0,
+        description="Max time per sub-agent worker in expansion dispatch",
+    )
+    worker_global_timeout_seconds: float = Field(
+        default=90.0,
+        description="Max total time for all sub-agent workers combined",
+    )
+    synthesis_timeout_seconds: float = Field(
+        default=25.0,
+        description="Max time for synthesis phase in expansion controller",
+    )
+
     # Paths (for domain config loaders)
     governance_config_path: Path = Field(
         default=Path("config/governance"), description="Path to governance config directory"

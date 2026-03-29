@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from personal_agent.llm_client import ModelRole
+from personal_agent.orchestrator.expansion_types import SubAgentMode
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ class SubAgentSpec:
         background: Background context injected into the sub-agent's system
             prompt (parent task summary, constraints, etc.).
         model_role: Model role to use for inference. Defaults to SUB_AGENT (ADR-0033).
+        mode: Execution mode — PARALLEL_INFERENCE or TOOLED_SEQUENTIAL (ADR-0036).
     """
 
     task: str
@@ -43,6 +45,7 @@ class SubAgentSpec:
     tools: list[str] = field(default_factory=list)
     background: str = ""
     model_role: ModelRole = ModelRole.SUB_AGENT
+    mode: SubAgentMode = SubAgentMode.PARALLEL_INFERENCE
 
 
 @dataclass(frozen=True)

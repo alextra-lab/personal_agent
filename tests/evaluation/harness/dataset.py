@@ -694,6 +694,8 @@ CP_16 = ConversationPath(
                 gte("hybrid_expansion_start", "sub_agent_count", 1),
                 present("hybrid_expansion_complete"),
                 gte("hybrid_expansion_complete", "successes", 1),
+                present("planner_started"),          # Layer 2: planner was invoked
+                present("expansion_dispatch_started"),  # Layer 2: sub-agents dispatched
             ),
         ),
         ConversationTurn(
@@ -741,6 +743,9 @@ CP_17 = ConversationPath(
                 present("hybrid_expansion_start"),
                 gte("hybrid_expansion_start", "sub_agent_count", 2),
                 gte("hybrid_expansion_complete", "successes", 2),
+                present("planner_started"),
+                present("expansion_dispatch_started"),
+                absent("user_visible_timeout"),  # Layer 4: no raw timeout to user
             ),
         ),
     ),
@@ -879,6 +884,205 @@ CP_19 = ConversationPath(
         "Conversation feels coherent throughout",
         "Agent doesn't forget mid-conversation",
         "context_budget_applied event fires on Turn 10 with correct trimmed/overflow_action fields",
+    ),
+)
+
+CP_19_V2 = ConversationPath(
+    path_id="CP-19-v2",
+    name="Implicit Recall — 'again' cue",
+    category="Context Management",
+    objective="Verify recall controller catches 'again' backward-reference",
+    turns=(
+        ConversationTurn(
+            user_message="We need to pick a primary database for the project. Let's go with PostgreSQL.",
+            expected_behavior="Acknowledges PostgreSQL choice",
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+            ),
+        ),
+        ConversationTurn(
+            user_message="Now let's discuss the API framework. We should use FastAPI.",
+            expected_behavior="Acknowledges FastAPI choice",
+            assertions=(),
+        ),
+        ConversationTurn(
+            user_message="What was our primary database again?",
+            expected_behavior="Recalls PostgreSQL from earlier in session",
+            assertions=(
+                fld("intent_classified", "task_type", "memory_recall"),
+                present("recall_cue_detected"),
+            ),
+        ),
+    ),
+    quality_criteria=(
+        "Correctly identifies PostgreSQL as primary database",
+        "Recall controller reclassifies from CONVERSATIONAL to MEMORY_RECALL",
+        "Agent does not claim ignorance or ask user to repeat",
+    ),
+)
+
+CP_19_V3 = ConversationPath(
+    path_id="CP-19-v3",
+    name="Implicit Recall — 'earlier' cue",
+    category="Context Management",
+    objective="Verify recall controller catches 'earlier' backward-reference",
+    turns=(
+        ConversationTurn(
+            user_message="We decided to use Redis for our caching layer.",
+            expected_behavior="Acknowledges Redis choice",
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+            ),
+        ),
+        ConversationTurn(
+            user_message="Let's move on to discussing monitoring.",
+            expected_behavior="Topic shift",
+            assertions=(),
+        ),
+        ConversationTurn(
+            user_message="Going back to earlier — what caching system did we pick?",
+            expected_behavior="Recalls Redis from session",
+            assertions=(
+                fld("intent_classified", "task_type", "memory_recall"),
+                present("recall_cue_detected"),
+            ),
+        ),
+    ),
+    quality_criteria=(
+        "Correctly identifies Redis as caching system",
+        "Recall controller reclassifies from CONVERSATIONAL to MEMORY_RECALL",
+    ),
+)
+
+CP_19_V4 = ConversationPath(
+    path_id="CP-19-v4",
+    name="Implicit Recall — 'remind me' cue",
+    category="Context Management",
+    objective="Verify recall controller catches 'remind me' cue",
+    turns=(
+        ConversationTurn(
+            user_message="For the message queue, let's use RabbitMQ.",
+            expected_behavior="Acknowledges RabbitMQ choice",
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+            ),
+        ),
+        ConversationTurn(
+            user_message="Actually, let's also consider the deployment strategy.",
+            expected_behavior="Topic shift",
+            assertions=(),
+        ),
+        ConversationTurn(
+            user_message="Remind me what we decided on the message queue?",
+            expected_behavior="Recalls RabbitMQ from session",
+            assertions=(
+                fld("intent_classified", "task_type", "memory_recall"),
+                present("recall_cue_detected"),
+            ),
+        ),
+    ),
+    quality_criteria=(
+        "Correctly identifies RabbitMQ as message queue",
+        "Recall controller reclassifies from CONVERSATIONAL to MEMORY_RECALL",
+    ),
+)
+
+CP_19_V5 = ConversationPath(
+    path_id="CP-19-v5",
+    name="Implicit Recall — 'what did we decide' cue",
+    category="Context Management",
+    objective="Verify recall controller catches 'what did we decide' cue",
+    turns=(
+        ConversationTurn(
+            user_message="For the CI/CD pipeline, we should go with GitHub Actions.",
+            expected_behavior="Acknowledges GitHub Actions choice",
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+            ),
+        ),
+        ConversationTurn(
+            user_message="Let me also think about the testing strategy.",
+            expected_behavior="Topic shift",
+            assertions=(),
+        ),
+        ConversationTurn(
+            user_message="What did we decide on the CI/CD pipeline?",
+            expected_behavior="Recalls GitHub Actions from session",
+            assertions=(
+                fld("intent_classified", "task_type", "memory_recall"),
+                present("recall_cue_detected"),
+            ),
+        ),
+    ),
+    quality_criteria=(
+        "Correctly identifies GitHub Actions as CI/CD choice",
+        "Recall controller reclassifies from CONVERSATIONAL to MEMORY_RECALL",
+    ),
+)
+
+CP_19_V6 = ConversationPath(
+    path_id="CP-19-v6",
+    name="Implicit Recall — 'back to the beginning' cue",
+    category="Context Management",
+    objective="Verify recall controller catches 'back to the beginning' cue",
+    turns=(
+        ConversationTurn(
+            user_message="Our main programming language will be Python 3.12.",
+            expected_behavior="Acknowledges Python choice",
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+            ),
+        ),
+        ConversationTurn(
+            user_message="We also need a frontend framework. Let's use React.",
+            expected_behavior="Acknowledges React",
+            assertions=(),
+        ),
+        ConversationTurn(
+            user_message="Going back to the beginning — what was our main programming language?",
+            expected_behavior="Recalls Python 3.12 from session",
+            assertions=(
+                fld("intent_classified", "task_type", "memory_recall"),
+                present("recall_cue_detected"),
+            ),
+        ),
+    ),
+    quality_criteria=(
+        "Correctly identifies Python 3.12 as main language",
+        "Recall controller reclassifies from CONVERSATIONAL to MEMORY_RECALL",
+    ),
+)
+
+CP_19_V7 = ConversationPath(
+    path_id="CP-19-v7",
+    name="Implicit Recall — 'the X we discussed' cue",
+    category="Context Management",
+    objective="Verify recall controller catches 'the X we discussed' resumptive reference",
+    turns=(
+        ConversationTurn(
+            user_message="We should use Terraform for infrastructure as code.",
+            expected_behavior="Acknowledges Terraform choice",
+            assertions=(
+                fld("intent_classified", "task_type", "conversational"),
+            ),
+        ),
+        ConversationTurn(
+            user_message="Let's also set up monitoring with Grafana.",
+            expected_behavior="Topic shift",
+            assertions=(),
+        ),
+        ConversationTurn(
+            user_message="The infrastructure tool we discussed earlier — can you confirm what it was?",
+            expected_behavior="Recalls Terraform from session",
+            assertions=(
+                fld("intent_classified", "task_type", "memory_recall"),
+                present("recall_cue_detected"),
+            ),
+        ),
+    ),
+    quality_criteria=(
+        "Correctly identifies Terraform as infrastructure tool",
+        "Recall controller reclassifies from CONVERSATIONAL to MEMORY_RECALL",
     ),
 )
 
@@ -1444,6 +1648,12 @@ ALL_PATHS: tuple[ConversationPath, ...] = (
     CP_17,
     CP_18,
     CP_19,
+    CP_19_V2,
+    CP_19_V3,
+    CP_19_V4,
+    CP_19_V5,
+    CP_19_V6,
+    CP_19_V7,
     CP_20,
     CP_21,
     CP_22,

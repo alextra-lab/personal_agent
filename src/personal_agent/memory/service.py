@@ -13,6 +13,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency in test en
     AsyncGraphDatabase = None  # type: ignore[assignment]
 
 from personal_agent.config.settings import get_settings
+from personal_agent.memory.embeddings import generate_embedding
 from personal_agent.memory.fact import PromotionCandidate
 from personal_agent.memory.models import (
     Entity,
@@ -318,21 +319,54 @@ class MemoryService:
             return 0
 
     async def create_entity(self, entity: Entity) -> str:
-        """Create or update an entity node.
+        """Create or update an entity node with dedup and optional embedding.
 
         Args:
-            entity: Entity to create
+            entity: Entity to create.
 
         Returns:
-            Entity ID (name-based)
+            Entity ID (name-based, may be canonical name if deduplicated).
         """
         if not self.connected or not self.driver:
             log.warning("neo4j_not_connected")
             return ""
 
         try:
+            # Generate embedding if not provided
+            embedding = entity.embedding
+            if embedding is None and entity.description:
+                embed_text = f"{entity.name}: {entity.description}"
+                embedding = await generate_embedding(embed_text)
+
+            # Dedup check
+            effective_name = entity.name
+            if embedding and any(x != 0.0 for x in embedding):
+                async with self.driver.session() as session:
+                    from personal_agent.memory.dedup import (  # noqa: PLC0415
+                        DedupDecision,
+                        check_entity_duplicate,
+                    )
+
+                    dedup_result = await check_entity_duplicate(
+                        name=entity.name,
+                        entity_type=entity.entity_type,
+                        embedding=embedding,
+                        neo4j_session=session,
+                    )
+                    if (
+                        dedup_result.decision == DedupDecision.MERGE_EXISTING
+                        and dedup_result.canonical_name
+                    ):
+                        effective_name = dedup_result.canonical_name
+                        log.info(
+                            "entity_deduplicated",
+                            original_name=entity.name,
+                            canonical_name=effective_name,
+                            similarity=dedup_result.similarity_score,
+                        )
+
+            # Proceed with MERGE using effective_name
             async with self.driver.session() as session:
-                # Build SET clause conditionally for optional fields
                 set_clauses = [
                     "e.entity_id = COALESCE(e.entity_id, $entity_id)",
                     "e.entity_type = $entity_type",
@@ -343,16 +377,16 @@ class MemoryService:
                     "e.first_seen = COALESCE(e.first_seen, datetime())",
                 ]
                 params: dict[str, Any] = {
-                    "name": entity.name,
-                    "entity_id": entity.name,
+                    "name": effective_name,
+                    "entity_id": effective_name,
                     "entity_type": entity.entity_type,
                     "description": entity.description,
                     "properties": orjson.dumps(entity.properties).decode(),
                 }
 
-                if entity.embedding is not None:
+                if embedding is not None:
                     set_clauses.append("e.embedding = $embedding")
-                    params["embedding"] = entity.embedding
+                    params["embedding"] = embedding
 
                 if entity.coordinates is not None:
                     set_clauses.append(
@@ -373,7 +407,7 @@ class MemoryService:
 
                 result = await session.run(query, **params)
                 record = await result.single()
-                entity_id: str = record["entity_id"] if record else entity.name
+                entity_id: str = record["entity_id"] if record else effective_name
                 log.info("entity_created", entity_id=entity_id, entity_type=entity.entity_type)
                 return entity_id
         except Exception as e:

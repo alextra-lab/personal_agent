@@ -338,10 +338,11 @@ class MemoryService:
                 embed_text = f"{entity.name}: {entity.description}"
                 embedding = await generate_embedding(embed_text)
 
-            # Dedup check
+            # Single session for dedup check + MERGE write (atomicity)
             effective_name = entity.name
-            if embedding and any(x != 0.0 for x in embedding):
-                async with self.driver.session() as session:
+            async with self.driver.session() as session:
+                # Dedup check
+                if embedding and any(x != 0.0 for x in embedding):
                     from personal_agent.memory.dedup import (  # noqa: PLC0415
                         DedupDecision,
                         check_entity_duplicate,
@@ -365,8 +366,7 @@ class MemoryService:
                             similarity=dedup_result.similarity_score,
                         )
 
-            # Proceed with MERGE using effective_name
-            async with self.driver.session() as session:
+                # MERGE using effective_name
                 set_clauses = [
                     "e.entity_id = COALESCE(e.entity_id, $entity_id)",
                     "e.entity_type = $entity_type",

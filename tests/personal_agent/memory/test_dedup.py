@@ -7,7 +7,7 @@ near-duplicate explosion (40 mentions → 500 nodes → should be ~10).
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -16,6 +16,15 @@ from personal_agent.memory.dedup import (
     DedupResult,
     check_entity_duplicate,
 )
+
+
+@pytest.fixture(autouse=True)
+def _pin_dedup_settings() -> None:
+    """Pin dedup threshold so tests are independent of config."""
+    mock_settings = MagicMock()
+    mock_settings.dedup_similarity_threshold = 0.85
+    with patch("personal_agent.memory.dedup.get_settings", return_value=mock_settings):
+        yield  # type: ignore[misc]
 
 
 class TestCheckEntityDuplicate:

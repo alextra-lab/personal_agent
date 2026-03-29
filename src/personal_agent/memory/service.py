@@ -511,7 +511,9 @@ class MemoryService:
         Args:
             query: Query parameters
             feedback_key: Optional session/user key for implicit feedback tracking.
-            query_text: Optional original user query text for rephrase detection.
+            query_text: Optional original user query text. When provided,
+                generates a vector embedding for hybrid similarity search
+                and enables implicit rephrase detection for feedback tracking.
 
         Returns:
             MemoryQueryResult with conversations, entities, and relationships
@@ -637,7 +639,7 @@ class MemoryService:
                         log.warning(
                             "vector_search_failed",
                             error=str(vec_exc),
-                            query_text=query_text[:100],
+                            query_text_length=len(query_text),
                         )
 
                 # Build vector_scores dict for relevance calculation
@@ -934,27 +936,49 @@ class MemoryService:
 
         # Calculate scores for each conversation
         for conv in conversations:
+            # Per-conversation vector overlap check: if this conversation has
+            # no entities matching the vector results, fall back to non-hybrid
+            # weights to avoid score deflation (the 0.25 vector slot would be 0).
+            conv_has_vector_hit = False
+            best_vector_score = 0.0
+            if use_vector and conv.key_entities:
+                entity_vector_scores = [
+                    _vector_scores[entity]
+                    for entity in conv.key_entities
+                    if entity in _vector_scores
+                ]
+                if entity_vector_scores:
+                    conv_has_vector_hit = True
+                    best_vector_score = max(entity_vector_scores)
+
+            if conv_has_vector_hit:
+                cw_recency, cw_entity, cw_importance, cw_vector = (
+                    w_recency, w_entity_match, w_importance, w_vector,
+                )
+            else:
+                # Non-hybrid weights for this conversation
+                cw_recency, cw_entity, cw_importance, cw_vector = 0.40, 0.40, 0.20, 0.0
+
             score = 0.0
 
             # 1. Recency score
             if time_range > 0:
                 age_seconds = (now - _to_naive_utc(conv.timestamp)).total_seconds()
                 recency_ratio = 1.0 - (age_seconds / time_range)
-                score += recency_ratio * w_recency
+                score += recency_ratio * cw_recency
             else:
-                score += w_recency  # All same timestamp
+                score += cw_recency  # All same timestamp
 
             # 2. Entity match score
             if query.entity_names:
                 matched_entities = set(query.entity_names) & set(conv.key_entities)
                 match_ratio = len(matched_entities) / len(query.entity_names)
-                score += match_ratio * w_entity_match
+                score += match_ratio * cw_entity
             else:
-                score += w_entity_match * 0.5  # No entity filter, give neutral score
+                score += cw_entity * 0.5  # No entity filter, give neutral score
 
             # 3. Entity importance score
             if entity_importance:
-                # Average importance of matched entities
                 matched_importances = [
                     entity_importance.get(entity, 0.0)
                     for entity in conv.key_entities
@@ -962,18 +986,11 @@ class MemoryService:
                 ]
                 if matched_importances:
                     avg_importance = sum(matched_importances) / len(matched_importances)
-                    score += avg_importance * w_importance
+                    score += avg_importance * cw_importance
 
             # 4. Vector similarity score (hybrid mode only)
-            if use_vector and conv.key_entities:
-                # Take the max vector score across entities mentioned in this turn
-                entity_vector_scores = [
-                    _vector_scores.get(entity, 0.0)
-                    for entity in conv.key_entities
-                    if entity in _vector_scores
-                ]
-                if entity_vector_scores:
-                    score += max(entity_vector_scores) * w_vector
+            if conv_has_vector_hit:
+                score += best_vector_score * cw_vector
 
             scores[conv.turn_id] = min(score, 1.0)  # Cap at 1.0
 

@@ -748,8 +748,58 @@ async def step_init(
         ):
             ctx.expansion_strategy = gw.decomposition.strategy.value
             ctx.expansion_constraints = gw.decomposition.constraints or {}
+
+            if settings.orchestration_mode == "enforced":
+                from personal_agent.llm_client.factory import get_llm_client
+                from personal_agent.orchestrator.expansion_controller import (
+                    ExpansionController,
+                )
+
+                llm_client = get_llm_client(role_name=ModelRole.PRIMARY.value)
+                controller = ExpansionController()
+                expansion_result = await controller.execute(
+                    query=ctx.messages[-1].get("content", "") if ctx.messages else "",
+                    strategy=gw.decomposition.strategy.value.upper(),
+                    llm_client=llm_client,
+                    trace_id=ctx.trace_id,
+                    messages=ctx.messages,
+                    constraints=ctx.expansion_constraints,
+                )
+
+                ctx.expansion_plan = expansion_result.plan
+                ctx.sub_agent_results = expansion_result.sub_agent_results
+                ctx.expansion_phase_results = expansion_result.phase_results
+
+                # Build synthesis context and append to messages
+                if expansion_result.sub_agent_results:
+                    synthesis_msg = {
+                        "role": "user",
+                        "content": (
+                            f"{expansion_result.synthesis_context}\n"
+                            "The sub-tasks above have been completed. "
+                            "Synthesize the results into a coherent response "
+                            "for the user's original question."
+                        ),
+                    }
+                    ctx.messages.append(synthesis_msg)
+
+                log.info(
+                    "expansion_controller_complete",
+                    mode="enforced",
+                    plan_is_fallback=expansion_result.plan.is_fallback if expansion_result.plan else None,
+                    sub_agent_count=len(expansion_result.sub_agent_results),
+                    successful=expansion_result.successful_count,
+                    degraded=expansion_result.degraded,
+                    trace_id=ctx.trace_id,
+                )
+
+                # Go directly to synthesis LLM call
+                return TaskState.LLM_CALL
+
+            # Autonomous mode — existing behavior
             log.info(
                 "step_init_expansion_flagged",
+                mode="autonomous",
                 strategy=gw.decomposition.strategy.value,
                 constraints=gw.decomposition.constraints,
                 trace_id=ctx.trace_id,
@@ -1078,10 +1128,13 @@ async def step_llm_call(
             else:
                 system_prompt = f"{tool_awareness}\n\n{tool_prompt}"
 
-        # HYBRID decomposition prompt: instruct the LLM to produce a numbered
-        # task list so parse_decomposition_plan() can extract SubAgentSpecs.
-        # Only inject on the first LLM call (before sub-agents have run).
-        if ctx.expansion_strategy is not None and ctx.sub_agent_results is None:
+        # HYBRID decomposition prompt (autonomous mode only — enforced mode
+        # uses the expansion controller which has already run by this point).
+        if (
+            ctx.expansion_strategy is not None
+            and ctx.sub_agent_results is None
+            and settings.orchestration_mode == "autonomous"
+        ):
             hybrid_prompt = (
                 "\n\n## Decomposition Instructions\n"
                 "Break your response into a numbered list of independent sub-tasks "
@@ -1231,8 +1284,12 @@ async def step_llm_call(
         # Unwrap it to avoid returning JSON to the user.
         response_content = _unwrap_embedded_response_json(response_content)
 
-        # --- HYBRID expansion hook ---
-        if ctx.expansion_strategy is not None and ctx.sub_agent_results is None:
+        # --- HYBRID expansion hook (autonomous mode only) ---
+        if (
+            ctx.expansion_strategy is not None
+            and ctx.sub_agent_results is None
+            and settings.orchestration_mode == "autonomous"
+        ):
             from personal_agent.orchestrator.expansion import (
                 execute_hybrid,
                 parse_decomposition_plan,

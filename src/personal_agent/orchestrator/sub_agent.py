@@ -19,6 +19,7 @@ from typing import Any
 
 import structlog
 
+from personal_agent.orchestrator.expansion_types import SubAgentMode
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
 
 logger = structlog.get_logger(__name__)
@@ -78,24 +79,37 @@ async def run_sub_agent(
             }
         )
 
-        response = await asyncio.wait_for(
-            llm_client.respond(
-                role=spec.model_role,
+        if spec.mode == SubAgentMode.TOOLED_SEQUENTIAL and spec.tools:
+            # Tooled mode: mini tool-use loop (max 3 iterations)
+            response_content = await _run_tooled_loop(
                 messages=messages,
-                max_tokens=spec.max_tokens,
-            ),
-            timeout=spec.timeout_seconds,
-        )
+                llm_client=llm_client,
+                spec=spec,
+                trace_id=trace_id,
+                task_id=task_id,
+            )
+        else:
+            # Default: single inference call
+            response_content = str(
+                await asyncio.wait_for(
+                    llm_client.respond(
+                        role=spec.model_role,
+                        messages=messages,
+                        max_tokens=spec.max_tokens,
+                    ),
+                    timeout=spec.timeout_seconds,
+                )
+            )
 
         duration_ms = int(time.monotonic() * 1000) - start_ms
 
         result = SubAgentResult(
             task_id=task_id,
             spec_task=spec.task,
-            summary=str(response),
-            full_output=str(response),
+            summary=response_content[:2000],  # Cap summary length
+            full_output=response_content,
             tools_used=[],
-            token_count=len(str(response).split()),
+            token_count=len(response_content.split()),
             duration_ms=duration_ms,
             success=True,
             error=None,
@@ -140,3 +154,54 @@ async def run_sub_agent(
     )
 
     return result
+
+
+async def _run_tooled_loop(
+    messages: list[dict[str, Any]],
+    llm_client: Any,
+    spec: SubAgentSpec,
+    trace_id: str,
+    task_id: str,
+    max_iterations: int = 3,
+) -> str:
+    """Run a mini tool-use loop for TOOLED_SEQUENTIAL sub-agents.
+
+    The sub-agent can call tools and incorporate results before producing
+    its final answer. Currently returns the first response directly —
+    tool parsing is wired when the LLM client exposes tool_calls.
+
+    Args:
+        messages: Initial message context.
+        llm_client: LLM client.
+        spec: Sub-agent specification.
+        trace_id: Trace identifier.
+        task_id: Sub-agent task identifier.
+        max_iterations: Max tool-use rounds before forcing final answer.
+
+    Returns:
+        Final response content string.
+    """
+    for iteration in range(max_iterations):
+        response = await asyncio.wait_for(
+            llm_client.respond(
+                role=spec.model_role,
+                messages=messages,
+                max_tokens=spec.max_tokens,
+            ),
+            timeout=spec.timeout_seconds,
+        )
+
+        response_str = str(response)
+
+        # TODO: Parse tool calls from response when LLM client exposes them.
+        # For now, return the response directly.
+        logger.info(
+            "sub_agent_tooled_iteration",
+            task_id=task_id,
+            iteration=iteration,
+            trace_id=trace_id,
+        )
+
+        return response_str
+
+    return ""  # Unreachable but satisfies type checker

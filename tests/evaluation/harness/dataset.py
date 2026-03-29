@@ -1022,9 +1022,9 @@ CP_19_V5 = ConversationPath(
 
 CP_19_V6 = ConversationPath(
     path_id="CP-19-v6",
-    name="Implicit Recall — 'back to the beginning' cue",
+    name="Implicit Recall — 'refresh my memory' cue",
     category="Context Management",
-    objective="Verify recall controller catches 'back to the beginning' cue",
+    objective="Verify recall controller catches 'refresh my memory' cue",
     turns=(
         ConversationTurn(
             user_message="Our main programming language will be Python 3.12.",
@@ -1039,7 +1039,7 @@ CP_19_V6 = ConversationPath(
             assertions=(),
         ),
         ConversationTurn(
-            user_message="Going back to the beginning — what was our main programming language?",
+            user_message="Refresh my memory — what was our main programming language?",
             expected_behavior="Recalls Python 3.12 from session",
             assertions=(
                 fld("intent_classified", "task_type", "memory_recall"),
@@ -1072,7 +1072,7 @@ CP_19_V7 = ConversationPath(
             assertions=(),
         ),
         ConversationTurn(
-            user_message="The infrastructure tool we discussed earlier — can you confirm what it was?",
+            user_message="The tool we discussed earlier — can you confirm what it was?",
             expected_behavior="Recalls Terraform from session",
             assertions=(
                 fld("intent_classified", "task_type", "memory_recall"),

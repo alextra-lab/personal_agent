@@ -1,4 +1,4 @@
-"""Parameterized pytest tests for all 29 evaluation conversation paths.
+"""Parameterized pytest tests for all 35 evaluation conversation paths.
 
 Each path runs as a separate test case. Tests are marked with
 @pytest.mark.evaluation and require the live agent service.

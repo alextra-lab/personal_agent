@@ -113,10 +113,18 @@ def run_recall_controller(
             candidates=[],
         )
 
+    scan_messages = list(session_messages[-max_scan_turns:])
     candidates = _scan_session_facts(
         noun_phrases=noun_phrases,
-        session_messages=list(session_messages[-max_scan_turns:]),
+        session_messages=scan_messages,
         max_candidates=max_candidates,
+    )
+
+    logger.info(
+        "recall_session_scan",
+        noun_phrases=noun_phrases,
+        turns_scanned=len(scan_messages),
+        candidates_found=len(candidates),
     )
 
     if not candidates:
@@ -207,6 +215,7 @@ def _scan_session_facts(
         List of RecallCandidate sorted by confidence (descending).
     """
     candidates: list[RecallCandidate] = []
+    seen_facts: set[tuple[int, str]] = set()
     total_turns = len(session_messages)
 
     for i, msg in enumerate(reversed(session_messages)):
@@ -230,6 +239,12 @@ def _scan_session_facts(
                 # Score by recency (newer = higher)
                 turn_index = total_turns - 1 - i
                 recency_score = 1.0 - (i / max(total_turns, 1))
+
+                # Deduplicate by (turn, fact) to avoid wasting slots
+                fact_key = (turn_index, matching_sentence)
+                if fact_key in seen_facts:
+                    continue
+                seen_facts.add(fact_key)
 
                 candidates.append(
                     RecallCandidate(

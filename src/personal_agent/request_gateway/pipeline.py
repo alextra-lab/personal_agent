@@ -24,6 +24,7 @@ from personal_agent.request_gateway.context import assemble_context
 from personal_agent.request_gateway.decomposition import assess_decomposition
 from personal_agent.request_gateway.governance import evaluate_governance
 from personal_agent.request_gateway.intent import classify_intent
+from personal_agent.request_gateway.recall_controller import run_recall_controller
 from personal_agent.request_gateway.types import (
     GatewayOutput,
     IntentResult,
@@ -92,8 +93,6 @@ async def run_gateway_pipeline(
     )
 
     # Stage 4b — Recall Controller (ADR-0037)
-    from personal_agent.request_gateway.recall_controller import run_recall_controller
-
     recall_result = run_recall_controller(
         intent=intent,
         user_message=user_message,

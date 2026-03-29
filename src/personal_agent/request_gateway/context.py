@@ -145,19 +145,17 @@ async def assemble_context(
             trace_id=trace_id,
         )
 
-    # Inject session fact candidates from recall controller
+    # Inject session fact candidates from recall controller (as system message
+    # in the main message list, not memory_context, to avoid schema mismatch
+    # and budget-trimming that silently drops memory_context items).
     if recall_context and recall_context.reclassified and recall_context.candidates:
-        recall_section = "\n## Session Fact Recall\n"
+        recall_section = "## Session Fact Recall\n"
         recall_section += "The user appears to be referring to something discussed earlier.\n"
         recall_section += "Relevant facts from the conversation:\n"
         for c in recall_context.candidates:
             recall_section += f'- Turn {c.source_turn}: "{c.fact}" (matched: "{c.noun_phrase}")\n'
-        recall_section += "\nUse these facts to answer accurately. Do not claim you don't know.\n"
-
-        if memory_context is None:
-            memory_context = [{"role": "system", "content": recall_section}]
-        else:
-            memory_context.append({"role": "system", "content": recall_section})
+        recall_section += "\nUse these facts to answer accurately. Do not claim you don't know."
+        messages.append({"role": "system", "content": recall_section})
 
     # Add the current user message
     messages.append({"role": "user", "content": user_message})

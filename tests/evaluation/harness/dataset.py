@@ -1,4 +1,4 @@
-"""All 29 evaluation conversation paths as Python data structures.
+"""All 35 evaluation conversation paths as Python data structures.
 
 Each path mirrors the specification in docs/research/EVALUATION_DATASET.md.
 Uses compact builder helpers from models.py for assertion definitions.

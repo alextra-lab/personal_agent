@@ -20,6 +20,7 @@ from personal_agent.memory.protocol import BroadRecallResult, MemoryProtocol
 from personal_agent.request_gateway.types import (
     AssembledContext,
     IntentResult,
+    RecallResult,
     TaskType,
 )
 
@@ -110,6 +111,7 @@ async def assemble_context(
     intent: IntentResult,
     memory_adapter: MemoryProtocol | None,
     trace_id: str,
+    recall_context: RecallResult | None = None,
 ) -> AssembledContext:
     """Assemble the full context for the primary agent.
 
@@ -123,6 +125,7 @@ async def assemble_context(
         intent: Classified intent from Stage 4.
         memory_adapter: Seshat protocol adapter (None if unavailable).
         trace_id: Request trace identifier.
+        recall_context: Recall controller result from Stage 4b (None if not triggered).
 
     Returns:
         AssembledContext with messages and metadata.
@@ -141,6 +144,20 @@ async def assemble_context(
             memory_adapter=memory_adapter,
             trace_id=trace_id,
         )
+
+    # Inject session fact candidates from recall controller
+    if recall_context and recall_context.reclassified and recall_context.candidates:
+        recall_section = "\n## Session Fact Recall\n"
+        recall_section += "The user appears to be referring to something discussed earlier.\n"
+        recall_section += "Relevant facts from the conversation:\n"
+        for c in recall_context.candidates:
+            recall_section += f'- Turn {c.source_turn}: "{c.fact}" (matched: "{c.noun_phrase}")\n'
+        recall_section += "\nUse these facts to answer accurately. Do not claim you don't know.\n"
+
+        if memory_context is None:
+            memory_context = [{"role": "system", "content": recall_section}]
+        else:
+            memory_context.append({"role": "system", "content": recall_section})
 
     # Add the current user message
     messages.append({"role": "user", "content": user_message})

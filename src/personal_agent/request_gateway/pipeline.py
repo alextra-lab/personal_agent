@@ -26,6 +26,7 @@ from personal_agent.request_gateway.governance import evaluate_governance
 from personal_agent.request_gateway.intent import classify_intent
 from personal_agent.request_gateway.types import (
     GatewayOutput,
+    IntentResult,
     TaskType,
 )
 
@@ -90,6 +91,23 @@ async def run_gateway_pipeline(
         trace_id=trace_id,
     )
 
+    # Stage 4b — Recall Controller (ADR-0037)
+    from personal_agent.request_gateway.recall_controller import run_recall_controller
+
+    recall_result = run_recall_controller(
+        intent=intent,
+        user_message=user_message,
+        session_messages=session_messages,
+    )
+
+    if recall_result is not None and recall_result.reclassified:
+        intent = IntentResult(
+            task_type=TaskType.MEMORY_RECALL,
+            complexity=intent.complexity,
+            confidence=0.85,
+            signals=[*intent.signals, "recall_cue_reclassified", recall_result.trigger_cue],
+        )
+
     # Stage 5: Decomposition Assessment
     decomposition = assess_decomposition(intent=intent, governance=governance)
 
@@ -109,6 +127,7 @@ async def run_gateway_pipeline(
         intent=intent,
         memory_adapter=memory_adapter,
         trace_id=trace_id,
+        recall_context=recall_result,
     )
     context = apply_budget(
         context=context,
@@ -133,6 +152,7 @@ async def run_gateway_pipeline(
         session_id=session_id,
         trace_id=trace_id,
         degraded_stages=degraded_stages,
+        recall_context=recall_result,
     )
 
     # Summary telemetry event

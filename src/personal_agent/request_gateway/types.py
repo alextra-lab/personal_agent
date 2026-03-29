@@ -131,6 +131,40 @@ class AssembledContext:
 
 
 @dataclass(frozen=True)
+class RecallCandidate:
+    """A session fact candidate for recall injection.
+
+    Args:
+        fact: The extracted fact text (e.g., "Primary database is PostgreSQL").
+        source_turn: Turn index in session_messages where the fact was found.
+        noun_phrase: The matched noun phrase from the user's query.
+        confidence: Relevance score (0.0–1.0), weighted by recency × specificity.
+    """
+
+    fact: str
+    source_turn: int
+    noun_phrase: str
+    confidence: float
+
+
+@dataclass(frozen=True)
+class RecallResult:
+    """Output of the recall controller (Stage 4b).
+
+    Args:
+        reclassified: Whether the intent was changed from CONVERSATIONAL to MEMORY_RECALL.
+        original_task_type: The pre-reclassification task type.
+        trigger_cue: Which cue pattern matched (for telemetry).
+        candidates: Session fact candidates (max 3).
+    """
+
+    reclassified: bool
+    original_task_type: TaskType
+    trigger_cue: str
+    candidates: list[RecallCandidate] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class GatewayOutput:
     """Complete output of the request gateway pipeline.
 
@@ -144,6 +178,7 @@ class GatewayOutput:
         session_id: Active session identifier.
         trace_id: Request trace identifier.
         degraded_stages: Stages that degraded gracefully (for telemetry).
+        recall_context: Recall controller result (Stage 4b), if triggered.
     """
 
     intent: IntentResult
@@ -153,3 +188,4 @@ class GatewayOutput:
     session_id: str
     trace_id: str
     degraded_stages: list[str] = field(default_factory=list)
+    recall_context: RecallResult | None = None

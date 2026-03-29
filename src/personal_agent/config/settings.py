@@ -297,6 +297,24 @@ class AppConfig(BaseSettings):
         description="Max time for synthesis phase in expansion controller",
     )
 
+    # --- Embedding configuration (ADR-0035) ---
+    embedding_model: str = Field(
+        default="text-embedding-3-small",
+        description="OpenAI embedding model name (or 'nomic-embed-text' for local)",
+    )
+    embedding_dimensions: int = Field(
+        default=1536,
+        description="Embedding vector dimensions (1536 for text-embedding-3-small)",
+    )
+    embedding_batch_size: int = Field(
+        default=20,
+        description="Max items per embedding API call",
+    )
+    dedup_similarity_threshold: float = Field(
+        default=0.85,
+        description="Cosine similarity threshold for entity deduplication",
+    )
+
     # Paths (for domain config loaders)
     governance_config_path: Path = Field(
         default=Path("config/governance"), description="Path to governance config directory"

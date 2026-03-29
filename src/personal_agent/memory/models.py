@@ -13,6 +13,9 @@ class Entity(BaseModel):
     entity_type: str  # "Person", "Place", "Topic", "Concept", etc.
     description: str | None = None
     properties: dict[str, Any] = Field(default_factory=dict)
+    embedding: list[float] | None = None
+    coordinates: tuple[float, float] | None = None  # (latitude, longitude)
+    geocoded: bool = False
 
 
 class Relationship(BaseModel):

@@ -332,26 +332,46 @@ class MemoryService:
 
         try:
             async with self.driver.session() as session:
-                result = await session.run(
-                    """
-                    MERGE (e:Entity {name: $name})
-                    SET e.entity_id = COALESCE(e.entity_id, $entity_id),
-                        e.entity_type = $entity_type,
-                        e.description = $description,
-                        e.properties = $properties,
-                        e.last_seen = datetime(),
-                        e.mention_count = COALESCE(e.mention_count, 0) + 1,
-                        e.first_seen = COALESCE(e.first_seen, datetime())
-                    RETURN e.name as entity_id
-                    """,
-                    name=entity.name,
-                    entity_id=entity.name,
-                    entity_type=entity.entity_type,
-                    description=entity.description,
-                    properties=orjson.dumps(
-                        entity.properties
-                    ).decode(),  # Serialize dict to JSON string
+                # Build SET clause conditionally for optional fields
+                set_clauses = [
+                    "e.entity_id = COALESCE(e.entity_id, $entity_id)",
+                    "e.entity_type = $entity_type",
+                    "e.description = $description",
+                    "e.properties = $properties",
+                    "e.last_seen = datetime()",
+                    "e.mention_count = COALESCE(e.mention_count, 0) + 1",
+                    "e.first_seen = COALESCE(e.first_seen, datetime())",
+                ]
+                params: dict[str, Any] = {
+                    "name": entity.name,
+                    "entity_id": entity.name,
+                    "entity_type": entity.entity_type,
+                    "description": entity.description,
+                    "properties": orjson.dumps(entity.properties).decode(),
+                }
+
+                if entity.embedding is not None:
+                    set_clauses.append("e.embedding = $embedding")
+                    params["embedding"] = entity.embedding
+
+                if entity.coordinates is not None:
+                    set_clauses.append(
+                        "e.location = point({latitude: $latitude, longitude: $longitude})"
+                    )
+                    params["latitude"] = entity.coordinates[0]
+                    params["longitude"] = entity.coordinates[1]
+
+                if entity.geocoded:
+                    set_clauses.append("e.geocoded = $geocoded")
+                    params["geocoded"] = entity.geocoded
+
+                query = (
+                    "MERGE (e:Entity {name: $name})\n"
+                    "SET " + ",\n    ".join(set_clauses) + "\n"
+                    "RETURN e.name as entity_id"
                 )
+
+                result = await session.run(query, **params)
                 record = await result.single()
                 entity_id: str = record["entity_id"] if record else entity.name
                 log.info("entity_created", entity_id=entity_id, entity_type=entity.entity_type)
@@ -359,6 +379,44 @@ class MemoryService:
         except Exception as e:
             log.error("entity_creation_failed", error=str(e), exc_info=True)
             return ""
+
+    async def ensure_vector_index(self) -> bool:
+        """Create Neo4j vector index on Entity.embedding if not exists.
+
+        Requires Neo4j 5.11+.
+
+        Returns:
+            True if index exists or was created successfully.
+        """
+        if not self.connected or not self.driver:
+            return False
+
+        try:
+            current_settings = get_settings()
+            async with self.driver.session() as session:
+                await session.run(
+                    """
+                    CREATE VECTOR INDEX entity_embedding IF NOT EXISTS
+                    FOR (e:Entity)
+                    ON (e.embedding)
+                    OPTIONS {
+                        indexConfig: {
+                            `vector.dimensions`: $dimensions,
+                            `vector.similarity_function`: 'cosine'
+                        }
+                    }
+                    """,
+                    dimensions=current_settings.embedding_dimensions,
+                )
+                log.info(
+                    "vector_index_ensured",
+                    index_name="entity_embedding",
+                    dimensions=current_settings.embedding_dimensions,
+                )
+                return True
+        except Exception as e:
+            log.error("vector_index_creation_failed", error=str(e), exc_info=True)
+            return False
 
     async def create_relationship(self, relationship: Relationship) -> bool:
         """Create a relationship between nodes.

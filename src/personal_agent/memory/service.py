@@ -611,8 +611,45 @@ class MemoryService:
                             )
                         )
 
+                # --- Hybrid: vector similarity search ---
+                vector_results: list[Any] = []
+                if query_text:
+                    try:
+                        query_embedding = await generate_embedding(query_text)
+                        if any(x != 0.0 for x in query_embedding):
+                            vector_result = await session.run(
+                                """
+                                CALL db.index.vector.queryNodes(
+                                    'entity_embedding', $top_k, $embedding
+                                )
+                                YIELD node, score
+                                RETURN node.name AS name,
+                                       node.entity_type AS entity_type,
+                                       node.description AS description,
+                                       score
+                                ORDER BY score DESC
+                                """,
+                                top_k=min(query.limit, 20),
+                                embedding=query_embedding,
+                            )
+                            vector_results = await vector_result.data()
+                    except Exception as vec_exc:
+                        log.warning(
+                            "vector_search_failed",
+                            error=str(vec_exc),
+                            query_text=query_text[:100],
+                        )
+
+                # Build vector_scores dict for relevance calculation
+                vector_scores: dict[str, float] = {}
+                for vr in vector_results:
+                    if "name" in vr and "score" in vr:
+                        vector_scores[vr["name"]] = float(vr["score"])
+
                 # Calculate plausibility/relevance scores
-                relevance_scores = await self._calculate_relevance_scores(conversations, query)
+                relevance_scores = await self._calculate_relevance_scores(
+                    conversations, query, vector_scores=vector_scores
+                )
 
                 log.info(
                     "memory_query_completed",
@@ -813,18 +850,30 @@ class MemoryService:
         return previous_result_count <= 1
 
     async def _calculate_relevance_scores(
-        self, conversations: list[TurnNode], query: MemoryQuery
+        self,
+        conversations: list[TurnNode],
+        query: MemoryQuery,
+        vector_scores: dict[str, float] | None = None,
     ) -> dict[str, float]:
         """Calculate relevance/plausibility scores for conversations.
 
-        Scoring factors:
+        Scoring factors (when vector_scores is None or empty):
         1. Recency: More recent conversations score higher (0-0.4)
         2. Entity match: Conversations with more query entities score higher (0-0.4)
         3. Entity importance: Entities with higher mention counts boost score (0-0.2)
 
+        When vector_scores are provided (hybrid mode), weights are redistributed:
+        1. Recency: 0-0.3 (reduced from 0.4)
+        2. Entity match: 0-0.3 (reduced from 0.4)
+        3. Entity importance: 0-0.15 (reduced from 0.2)
+        4. Vector similarity: 0-0.25 (new — cosine distance from embedding search)
+
         Args:
             conversations: List of conversations to score
             query: Original query with entity filters
+            vector_scores: Optional dict mapping entity name to cosine similarity
+                score (0-1) from vector index search.  When provided, weights
+                are redistributed to include a vector similarity component.
 
         Returns:
             Dict mapping conversation_id to relevance score (0.0-1.0)
@@ -833,6 +882,9 @@ class MemoryService:
             return {}
 
         scores: dict[str, float] = {}
+
+        # Normalize optional vector_scores to a concrete dict (simplifies type narrowing)
+        _vector_scores: dict[str, float] = vector_scores if vector_scores is not None else {}
 
         # Normalize all timestamps to naive UTC to avoid mixed tz comparisons
         now = datetime.utcnow()
@@ -867,27 +919,40 @@ class MemoryService:
             except Exception as e:
                 log.warning("entity_importance_fetch_failed", error=str(e))
 
+        # Determine weight scheme based on whether vector scores are available
+        use_vector = bool(_vector_scores)
+        if use_vector:
+            w_recency = 0.30
+            w_entity_match = 0.30
+            w_importance = 0.15
+            w_vector = 0.25
+        else:
+            w_recency = 0.40
+            w_entity_match = 0.40
+            w_importance = 0.20
+            w_vector = 0.0
+
         # Calculate scores for each conversation
         for conv in conversations:
             score = 0.0
 
-            # 1. Recency score (0-0.4)
+            # 1. Recency score
             if time_range > 0:
                 age_seconds = (now - _to_naive_utc(conv.timestamp)).total_seconds()
                 recency_ratio = 1.0 - (age_seconds / time_range)
-                score += recency_ratio * 0.4
+                score += recency_ratio * w_recency
             else:
-                score += 0.4  # All same timestamp
+                score += w_recency  # All same timestamp
 
-            # 2. Entity match score (0-0.4)
+            # 2. Entity match score
             if query.entity_names:
                 matched_entities = set(query.entity_names) & set(conv.key_entities)
                 match_ratio = len(matched_entities) / len(query.entity_names)
-                score += match_ratio * 0.4
+                score += match_ratio * w_entity_match
             else:
-                score += 0.2  # No entity filter, give neutral score
+                score += w_entity_match * 0.5  # No entity filter, give neutral score
 
-            # 3. Entity importance score (0-0.2)
+            # 3. Entity importance score
             if entity_importance:
                 # Average importance of matched entities
                 matched_importances = [
@@ -897,7 +962,18 @@ class MemoryService:
                 ]
                 if matched_importances:
                     avg_importance = sum(matched_importances) / len(matched_importances)
-                    score += avg_importance * 0.2
+                    score += avg_importance * w_importance
+
+            # 4. Vector similarity score (hybrid mode only)
+            if use_vector and conv.key_entities:
+                # Take the max vector score across entities mentioned in this turn
+                entity_vector_scores = [
+                    _vector_scores.get(entity, 0.0)
+                    for entity in conv.key_entities
+                    if entity in _vector_scores
+                ]
+                if entity_vector_scores:
+                    score += max(entity_vector_scores) * w_vector
 
             scores[conv.turn_id] = min(score, 1.0)  # Cap at 1.0
 

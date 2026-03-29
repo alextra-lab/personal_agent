@@ -19,6 +19,8 @@ from personal_agent.request_gateway.types import GatewayOutput
 
 if TYPE_CHECKING:
     from personal_agent.orchestrator.channels import Channel
+    from personal_agent.orchestrator.expansion_types import ExpansionPlan, PhaseResult
+    from personal_agent.orchestrator.sub_agent_types import SubAgentResult
     from personal_agent.telemetry.request_timer import RequestTimer
 
 
@@ -189,9 +191,9 @@ class ExecutionContext:
     # --- Expansion controller state (Slice 3, ADR-0036) ---
     expansion_strategy: str | None = None
     expansion_constraints: dict[str, Any] | None = None
-    sub_agent_results: list[Any] | None = None
-    expansion_plan: Any | None = None  # ExpansionPlan (avoid circular import)
-    expansion_phase_results: list[Any] = field(default_factory=list)  # list[PhaseResult]
+    sub_agent_results: list["SubAgentResult"] | None = None
+    expansion_plan: "ExpansionPlan | None" = None
+    expansion_phase_results: list["PhaseResult"] = field(default_factory=list)
 
 
 class OrchestratorStep(TypedDict):

@@ -323,7 +323,7 @@ class ExpansionController:
         ]
 
         try:
-            sub_results: list[SubAgentResult] = await asyncio.wait_for(
+            raw_results = await asyncio.wait_for(
                 asyncio.gather(
                     *[
                         run_sub_agent(
@@ -333,13 +333,24 @@ class ExpansionController:
                         )
                         for spec in specs
                     ],
-                    return_exceptions=False,
+                    return_exceptions=True,
                 ),
                 timeout=settings.worker_global_timeout_seconds,
             )
+            # Filter out exceptions — keep only successful SubAgentResult objects
+            sub_results: list[SubAgentResult] = [
+                r for r in raw_results if isinstance(r, SubAgentResult)
+            ]
+            failed_count = len(raw_results) - len(sub_results)
+            if failed_count > 0:
+                logger.warning(
+                    "expansion_dispatch_partial_failure",
+                    total=len(raw_results),
+                    failed=failed_count,
+                    trace_id=trace_id,
+                )
         except asyncio.TimeoutError:
-            # Global timeout cancels all tasks — partial recovery not possible
-            # with asyncio.gather. Future: switch to asyncio.wait for partial results.
+            # Global timeout cancels all tasks
             logger.warning("expansion_dispatch_global_timeout", trace_id=trace_id)
             sub_results = []
             result.degraded = True

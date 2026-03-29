@@ -44,6 +44,10 @@ async def generate_embedding(text: str | None) -> list[float]:
     if not text or not text.strip():
         return [0.0] * dimensions
 
+    if not settings.openai_api_key:
+        logger.debug("embedding_skipped_no_api_key")
+        return [0.0] * dimensions
+
     try:
         response = await _call_openai_embeddings(
             texts=[text],
@@ -92,6 +96,9 @@ async def generate_embeddings_batch(texts: list[str]) -> list[list[float]]:
         return [[0.0] * settings.embedding_dimensions for _ in texts]
 
 
+_openai_client: Any = None
+
+
 async def _call_openai_embeddings(
     texts: list[str],
     model: str,
@@ -107,12 +114,14 @@ async def _call_openai_embeddings(
     Returns:
         OpenAI API response object with .data[].embedding.
     """
-    import openai
+    global _openai_client  # noqa: PLW0603
+    if _openai_client is None:
+        import openai
 
-    settings = get_settings()
-    client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+        settings = get_settings()
+        _openai_client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
 
-    return await client.embeddings.create(
+    return await _openai_client.embeddings.create(
         model=model,
         input=texts,
         dimensions=dimensions,

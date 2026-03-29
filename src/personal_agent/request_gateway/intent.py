@@ -36,11 +36,12 @@ _CODING_PATTERNS: re.Pattern[str] = re.compile(
     r"(?i)"
     r"(?:```)"
     r"|(?:(?:def|class|import|from)\s+\w+)"
-    r"|(?:(?:debug|refactor|implement|fix|write)\s+(?:the\s+|this\s+|a\s+|my\s+)?"
-    r"(?:code|function|class|module|test|endpoint|bug|CI|pipeline|failure))"
+    r"|(?:(?:debug|refactor|implement|fix|write|add)\s+(?:the\s+|this\s+|a\s+|an\s+|my\s+|new\s+)?"
+    r"(?:code|function|class|module|test|endpoint|route|api|bug|CI|pipeline|failure))"
     r"|(?:traceback|stack\s*trace|error\s*log)"
     r"|(?:(?:unit|integration)\s*test)"
-    r"|(?:pull\s*request|PR\s+review|code\s+review)",
+    r"|(?:pull\s*request|PR\s+review|code\s+review)"
+    r"|(?:use\s+(?:claude\s+code|codex|copilot|cursor)\s+to\s+)",
 )
 
 _CODING_KEYWORDS: tuple[str, ...] = (
@@ -51,6 +52,8 @@ _CODING_KEYWORDS: tuple[str, ...] = (
     "fix the bug",
     "implement the",
     "add an endpoint",
+    "add a new endpoint",
+    "use claude code",
     "refactor",
 )
 

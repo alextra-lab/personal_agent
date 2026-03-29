@@ -415,9 +415,11 @@ class MemoryService:
             return ""
 
     async def ensure_vector_index(self) -> bool:
-        """Create Neo4j vector index on Entity.embedding if not exists.
+        """Create Neo4j vector index on Entity.embedding, recreating if dimensions changed.
 
-        Requires Neo4j 5.11+.
+        Drops and recreates the index when the configured embedding dimensions differ
+        from what is already indexed (e.g. after switching from 768-dim to 1024-dim
+        embeddings). Requires Neo4j 5.11+.
 
         Returns:
             True if index exists or was created successfully.
@@ -427,7 +429,34 @@ class MemoryService:
 
         try:
             current_settings = get_settings()
+            target_dims = current_settings.embedding_dimensions
+
             async with self.driver.session() as session:
+                # Check existing index dimensions
+                result = await session.run(
+                    """
+                    SHOW VECTOR INDEXES
+                    YIELD name, options
+                    WHERE name = 'entity_embedding'
+                    RETURN options
+                    """,
+                )
+                rows = await result.data()
+                if rows:
+                    existing_dims = (
+                        rows[0].get("options", {})
+                        .get("indexConfig", {})
+                        .get("vector.dimensions")
+                    )
+                    if existing_dims is not None and int(existing_dims) != target_dims:
+                        log.warning(
+                            "vector_index_dimension_mismatch",
+                            existing_dims=existing_dims,
+                            target_dims=target_dims,
+                            action="drop_and_recreate",
+                        )
+                        await session.run("DROP INDEX entity_embedding IF EXISTS")
+
                 await session.run(
                     """
                     CREATE VECTOR INDEX entity_embedding IF NOT EXISTS
@@ -440,12 +469,12 @@ class MemoryService:
                         }
                     }
                     """,
-                    dimensions=current_settings.embedding_dimensions,
+                    dimensions=target_dims,
                 )
                 log.info(
                     "vector_index_ensured",
                     index_name="entity_embedding",
-                    dimensions=current_settings.embedding_dimensions,
+                    dimensions=target_dims,
                 )
                 return True
         except Exception as e:

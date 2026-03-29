@@ -18,8 +18,8 @@ from personal_agent.memory.embeddings import (
     generate_embeddings_batch,
 )
 
-# Dimensions match Qwen3-Embedding-0.6B default
-_DIMS = 768
+# Dimensions match Qwen3-Embedding-0.6B native output
+_DIMS = 1024
 
 
 def _mock_response(vectors: list[list[float]]) -> MagicMock:

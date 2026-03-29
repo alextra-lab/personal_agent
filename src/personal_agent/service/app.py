@@ -472,6 +472,7 @@ async def chat(
                 mode=Mode.NORMAL,  # From brainstem in future
                 memory_adapter=memory_adapter,
                 expansion_budget=expansion_budget,
+                full_session_messages=db_messages,
             )
     except Exception as e:
         log.warning(

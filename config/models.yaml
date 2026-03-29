@@ -33,8 +33,10 @@
 
 # ── Process-to-model assignments ──────────────────────────────────────────────
 entity_extraction_role: gpt-5.4-nano
-captains_log_role: claude_sonnet
-insights_role: claude_sonnet
+captains_log_role: gpt-5.4-nano
+insights_role: gpt-5.4-nano
+# captains_log_role: claude_sonnet
+# insights_role: claude_sonnet
 
 models:
   # ── Tier 1: Primary Agent ───────────────────────────────────────
@@ -63,7 +65,7 @@ models:
     # No thinking. Lower temperature for deterministic output. Bounded tokens.
     # Renamed from "standard" (ADR-0033). Parameters tuned for focused tasks.
     id: "unsloth/qwen3.5-9b"
-    context_length: 32768
+    context_length: 16384
     quantization: "8bit"
     min_concurrency: 1
     max_concurrency: 3

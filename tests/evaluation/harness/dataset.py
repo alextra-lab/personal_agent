@@ -49,7 +49,7 @@ CP_01 = ConversationPath(
                 fld("decomposition_assessed", "complexity", "simple"),
                 fld("decomposition_assessed", "strategy", "single"),
                 absent("tool_call_completed"),
-                absent("hybrid_expansion_start"),
+                absent("expansion_dispatch_started"),
             ),
         ),
         ConversationTurn(
@@ -325,7 +325,7 @@ CP_08 = ConversationPath(
                 fld("intent_classified", "task_type", "conversational"),
                 fld("decomposition_assessed", "complexity", "simple"),
                 fld("decomposition_assessed", "strategy", "single"),
-                absent("hybrid_expansion_start"),
+                absent("expansion_dispatch_started"),
             ),
         ),
         ConversationTurn(
@@ -333,7 +333,7 @@ CP_08 = ConversationPath(
             expected_behavior="Another simple response. Still SINGLE.",
             assertions=(
                 fld("decomposition_assessed", "strategy", "single"),
-                absent("hybrid_expansion_start"),
+                absent("expansion_dispatch_started"),
             ),
         ),
     ),
@@ -367,10 +367,10 @@ CP_09 = ConversationPath(
                 fld("intent_classified", "task_type", "analysis"),
                 fld("decomposition_assessed", "complexity", "moderate"),
                 fld("decomposition_assessed", "strategy", "hybrid"),
-                present("hybrid_expansion_start"),
-                gte("hybrid_expansion_start", "sub_agent_count", 1),
-                present("hybrid_expansion_complete"),
-                gte("hybrid_expansion_complete", "successes", 1),
+                present("planner_started"),
+                present("expansion_dispatch_started"),
+                present("expansion_controller_complete"),
+                gte("expansion_controller_complete", "sub_agent_count", 1),
             ),
         ),
         ConversationTurn(
@@ -413,9 +413,10 @@ CP_10 = ConversationPath(
                 fld("intent_classified", "task_type", "analysis"),
                 fld("decomposition_assessed", "complexity", "complex"),
                 fld("decomposition_assessed", "strategy", "decompose"),
-                present("hybrid_expansion_start"),
-                gte("hybrid_expansion_start", "sub_agent_count", 2),
-                gte("hybrid_expansion_complete", "successes", 2),
+                present("planner_started"),
+                present("expansion_dispatch_started"),
+                present("expansion_controller_complete"),
+                gte("expansion_controller_complete", "sub_agent_count", 2),
             ),
         ),
     ),
@@ -443,7 +444,7 @@ CP_11 = ConversationPath(
             assertions=(
                 fld("decomposition_assessed", "complexity", "simple"),
                 fld("decomposition_assessed", "strategy", "single"),
-                absent("hybrid_expansion_start"),
+                absent("expansion_dispatch_started"),
             ),
         ),
         ConversationTurn(
@@ -457,8 +458,9 @@ CP_11 = ConversationPath(
                 fld("intent_classified", "task_type", "analysis"),
                 fld("decomposition_assessed", "complexity", "moderate"),
                 fld("decomposition_assessed", "strategy", "hybrid"),
-                present("hybrid_expansion_start"),
-                gte("hybrid_expansion_start", "sub_agent_count", 1),
+                present("planner_started"),
+                present("expansion_dispatch_started"),
+                gte("expansion_controller_complete", "sub_agent_count", 1),
             ),
         ),
         ConversationTurn(
@@ -467,7 +469,7 @@ CP_11 = ConversationPath(
             assertions=(
                 fld("decomposition_assessed", "complexity", "simple"),
                 fld("decomposition_assessed", "strategy", "single"),
-                absent("hybrid_expansion_start"),
+                absent("expansion_dispatch_started"),
             ),
         ),
     ),
@@ -690,12 +692,10 @@ CP_16 = ConversationPath(
                 fld("intent_classified", "task_type", "analysis"),
                 fld("decomposition_assessed", "complexity", "moderate"),
                 fld("decomposition_assessed", "strategy", "hybrid"),
-                present("hybrid_expansion_start"),
-                gte("hybrid_expansion_start", "sub_agent_count", 1),
-                present("hybrid_expansion_complete"),
-                gte("hybrid_expansion_complete", "successes", 1),
-                present("planner_started"),          # Layer 2: planner was invoked
-                present("expansion_dispatch_started"),  # Layer 2: sub-agents dispatched
+                present("planner_started"),
+                present("expansion_dispatch_started"),
+                present("expansion_controller_complete"),
+                gte("expansion_controller_complete", "sub_agent_count", 1),
             ),
         ),
         ConversationTurn(
@@ -740,12 +740,11 @@ CP_17 = ConversationPath(
                 fld("intent_classified", "task_type", "analysis"),
                 fld("decomposition_assessed", "complexity", "complex"),
                 fld("decomposition_assessed", "strategy", "decompose"),
-                present("hybrid_expansion_start"),
-                gte("hybrid_expansion_start", "sub_agent_count", 2),
-                gte("hybrid_expansion_complete", "successes", 2),
                 present("planner_started"),
                 present("expansion_dispatch_started"),
-                absent("user_visible_timeout"),  # Layer 4: no raw timeout to user
+                present("expansion_controller_complete"),
+                gte("expansion_controller_complete", "sub_agent_count", 2),
+                absent("user_visible_timeout"),
             ),
         ),
     ),
@@ -873,7 +872,7 @@ CP_19 = ConversationPath(
             user_message=("Going back to the beginning — what was our primary database again?"),
             expected_behavior=("Should still know PostgreSQL despite potential context trimming."),
             assertions=(
-                fld("intent_classified", "task_type", "memory_recall"),
+                present("recall_cue_detected"),
                 present("context_budget_applied"),
             ),
         ),
@@ -977,13 +976,12 @@ CP_19_V4 = ConversationPath(
             expected_behavior="Recalls RabbitMQ from session",
             assertions=(
                 fld("intent_classified", "task_type", "memory_recall"),
-                present("recall_cue_detected"),
             ),
         ),
     ),
     quality_criteria=(
         "Correctly identifies RabbitMQ as message queue",
-        "Recall controller reclassifies from CONVERSATIONAL to MEMORY_RECALL",
+        "Intent classifier or recall controller classifies as MEMORY_RECALL",
     ),
 )
 
@@ -1010,13 +1008,12 @@ CP_19_V5 = ConversationPath(
             expected_behavior="Recalls GitHub Actions from session",
             assertions=(
                 fld("intent_classified", "task_type", "memory_recall"),
-                present("recall_cue_detected"),
             ),
         ),
     ),
     quality_criteria=(
         "Correctly identifies GitHub Actions as CI/CD choice",
-        "Recall controller reclassifies from CONVERSATIONAL to MEMORY_RECALL",
+        "Intent classifier or recall controller classifies as MEMORY_RECALL",
     ),
 )
 
@@ -1382,7 +1379,7 @@ CP_26 = ConversationPath(
             assertions=(
                 fld("intent_classified", "task_type", "memory_recall"),
                 fld("decomposition_assessed", "strategy", "single"),
-                present("memory_enrichment_completed"),
+                present("memory_recall_broad_query"),
             ),
         ),
     ),

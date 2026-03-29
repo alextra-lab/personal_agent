@@ -95,6 +95,9 @@ class BrainstemScheduler:
         )
 
         # Configuration from settings
+        self.resource_gating_enabled = getattr(
+            settings, "second_brain_resource_gating_enabled", True
+        )
         self.idle_time_seconds = getattr(
             settings, "second_brain_idle_time_seconds", 300
         )  # 5 minutes
@@ -216,6 +219,9 @@ class BrainstemScheduler:
             time_since_last = (datetime.now(timezone.utc) - self.last_consolidation).total_seconds()
             if time_since_last < self.min_consolidation_interval_seconds:
                 return False
+
+        if not self.resource_gating_enabled:
+            return True
 
         # Check idle time
         if self.last_request_time:

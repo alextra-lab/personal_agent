@@ -16,7 +16,7 @@ from typing import Any
 
 import structlog
 
-from personal_agent.memory.protocol import BroadRecallResult, MemoryProtocol
+from personal_agent.memory.protocol import BroadRecallResult, MemoryProtocol, MemoryRecallQuery
 from personal_agent.request_gateway.types import (
     AssembledContext,
     IntentResult,
@@ -96,9 +96,43 @@ async def _query_memory_for_intent(
             )
             return _format_broad_recall_context(broad)
 
-        # For other intents, no memory enrichment in Slice 1.
-        # Slice 2 adds entity-name matching and task-type-specific recall.
-        return None
+        # Entity-name matching for analysis and other task types (Slice 2).
+        # Extract capitalised words > 3 chars as potential entity names.
+        words = user_message.split()
+        entity_names = [
+            w.strip('",.:;!?') for w in words if len(w) > 3 and w[0].isupper()
+        ]
+        if not entity_names:
+            return None
+
+        query = MemoryRecallQuery(
+            entity_names=entity_names[:5],
+            recency_days=30,
+            limit=5,
+            query_text=user_message,
+        )
+        result = await memory_adapter.recall(query, trace_id=trace_id)
+        context: list[dict[str, Any]] = []
+        for entity in result.entities:
+            context.append(
+                {
+                    "type": "entity",
+                    "name": entity.get("name", "unknown"),
+                    "entity_type": entity.get("entity_type"),
+                    "description": entity.get("description"),
+                    "mention_count": entity.get("mention_count", 0),
+                }
+            )
+        for ep in result.episodes:
+            context.append(
+                {
+                    "type": "episode",
+                    "user_message": ep.get("user_message"),
+                    "summary": ep.get("summary") or ep.get("user_message", "")[:200],
+                    "key_entities": ep.get("key_entities", []),
+                }
+            )
+        return context if context else None
 
     except Exception:
         logger.exception("memory_query_failed", trace_id=trace_id)

@@ -25,6 +25,7 @@ from typing import Any
 import structlog
 
 from personal_agent.config import get_settings
+from personal_agent.llm_client.types import ModelRole
 from personal_agent.orchestrator.expansion_types import (
     ExpansionPhase,
     ExpansionPlan,
@@ -205,7 +206,7 @@ class ExpansionController:
 
             raw_response = await asyncio.wait_for(
                 llm_client.respond(
-                    role="sub_agent",
+                    role=ModelRole.SUB_AGENT,
                     messages=planner_messages,
                     max_tokens=1024,
                     response_format={"type": "json_object"},
@@ -214,7 +215,7 @@ class ExpansionController:
             )
 
             duration_ms = time.monotonic() * 1000 - start_ms
-            plan = _validate_plan_json(str(raw_response), strategy)
+            plan = _validate_plan_json(raw_response["content"], strategy)
 
             if plan is not None:
                 result.phase_results.append(

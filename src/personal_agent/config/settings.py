@@ -281,16 +281,16 @@ class AppConfig(BaseSettings):
         description="Expansion enforcement mode: 'enforced' (gateway binding) or 'autonomous' (LLM decides)",
     )
     planner_timeout_seconds: float = Field(
-        default=15.0,
+        default=30.0,
         description="Max time for LLM planner phase in expansion controller",
     )
     worker_timeout_seconds: float = Field(
-        default=45.0,
+        default=60.0,
         description="Max time per sub-agent worker in expansion dispatch",
     )
     worker_global_timeout_seconds: float = Field(
-        default=90.0,
-        description="Max total time for all sub-agent workers combined",
+        default=180.0,
+        description="Max total time for all sub-agent workers combined (serial GPU)",
     )
     synthesis_timeout_seconds: float = Field(
         default=25.0,
@@ -301,8 +301,8 @@ class AppConfig(BaseSettings):
     # Model identity (id, endpoint) lives in config/models.yaml — ADR-0031.
     # Only runtime knobs belong here.
     embedding_dimensions: int = Field(
-        default=768,
-        description="Embedding vector dimensions (768 for Qwen3-Embedding-0.6B)",
+        default=1024,
+        description="Embedding vector dimensions (1024 native for Qwen3-Embedding-0.6B)",
     )
     embedding_batch_size: int = Field(
         default=20,
@@ -392,6 +392,14 @@ class AppConfig(BaseSettings):
     enable_memory_graph: bool = Field(default=False, description="Enable memory graph (Phase 2.2)")
 
     # Second Brain Scheduling (Phase 2.2)
+    second_brain_resource_gating_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable idle-time and CPU/memory gating before consolidation. "
+            "Set False when entity extraction uses a remote model and local "
+            "resource pressure is irrelevant."
+        ),
+    )
     second_brain_idle_time_seconds: float = Field(
         default=300.0, description="Idle time before consolidation (5 minutes)"
     )

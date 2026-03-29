@@ -733,6 +733,11 @@ async def step_init(
         # Use pre-assembled memory context
         if gw.context.memory_context:
             ctx.memory_context = gw.context.memory_context
+            log.info(
+                "memory_enrichment_completed",
+                trace_id=ctx.trace_id,
+                conversations_found=len(gw.context.memory_context),
+            )
         log.info(
             "step_init_gateway_path",
             trace_id=ctx.trace_id,
@@ -742,7 +747,53 @@ async def step_init(
         )
         from personal_agent.request_gateway.types import DecompositionStrategy
 
-        if gw.decomposition.strategy in (
+        if gw.decomposition.strategy == DecompositionStrategy.DELEGATE:
+            from personal_agent.request_gateway.delegation import compose_delegation_package
+
+            # Build memory excerpt and pitfalls from gateway context
+            mem_items = gw.context.memory_context or []
+            memory_excerpt: list[dict[str, str | float]] = [
+                {
+                    "type": str(item.get("type", "episode")),
+                    "summary": str(
+                        item.get("summary") or item.get("description") or item.get("name", "")
+                    ),
+                }
+                for item in mem_items[:5]
+            ]
+            known_pitfalls: list[str] = [
+                str(item.get("summary") or item.get("description") or "")
+                for item in mem_items
+                if item.get("type") == "episode"
+            ][:3]
+
+            # Extract acceptance criteria from user message using "with X, Y, Z" split
+            raw = ctx.user_message
+            acceptance_criteria: list[str] = []
+            if " with " in raw.lower():
+                after_with = raw[raw.lower().index(" with ") + 6 :]
+                parts = [p.strip().rstrip(".,;") for p in after_with.replace(" and ", ",").split(",")]
+                acceptance_criteria = [p for p in parts if len(p) > 3][:5]
+            if not acceptance_criteria:
+                acceptance_criteria = ["Implementation meets requirements described in the task"]
+
+            relevant_files: list[str] = []
+            for word in raw.split():
+                stripped = word.strip('",.:;!?()')
+                if "/" in stripped and stripped.startswith("src/"):
+                    relevant_files.append(stripped)
+
+            compose_delegation_package(
+                task_description=ctx.user_message,
+                trace_id=ctx.trace_id,
+                acceptance_criteria=acceptance_criteria,
+                known_pitfalls=known_pitfalls or None,
+                memory_excerpt=memory_excerpt or None,
+                relevant_files=relevant_files or None,
+            )
+            # Fall through to LLM call — primary agent responds with delegation package
+
+        elif gw.decomposition.strategy in (
             DecompositionStrategy.HYBRID,
             DecompositionStrategy.DECOMPOSE,
         ):

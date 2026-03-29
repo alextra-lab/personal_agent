@@ -47,9 +47,19 @@ _RECALL_CUE_PATTERNS: re.Pattern[str] = re.compile(
     r"|(?:the\s+\w+\s+(?:we|I)\s+(?:discussed|mentioned|talked\s+about|decided\s+on|chose|picked))",
 )
 
-# Noun phrase extraction: simple heuristic — captures up to 3 words after a determiner.
+# Noun phrase extraction: simple heuristic — captures up to 3 words after a possessive/
+# demonstrative determiner.
 _NOUN_PHRASE_RE = re.compile(
     r"(?:our|the|that|my)\s+([\w]+(?:\s+[\w]+){0,2})",
+    re.IGNORECASE,
+)
+
+# Interrogative noun phrases: "what/which + [non-auxiliary] noun(s)".
+# Negative lookahead prevents matching "what was/is/are..." where no useful noun follows.
+_INTERROG_NOUN_RE = re.compile(
+    r"(?:what|which)\s+"
+    r"(?!(?:was|were|is|are|did|does|do|have|had|will|would|could|should|if|when|that)\b)"
+    r"([\w]+(?:\s+[\w]+)?)",
     re.IGNORECASE,
 )
 
@@ -59,11 +69,21 @@ _TRAILING_STOP_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Trailing verb phrases and pronouns to strip (e.g., "tool we discussed" → "tool",
+# "caching system did" → "caching system")
+_TRAILING_VERB_RE = re.compile(
+    r"\s+(?:we|i|you|they|he|she|did|does|was|were|is|are|have|had"
+    r"|pick|picked|chose|choose|use|used|discuss|discussed|mention|mentioned"
+    r"|decide|decided|do)(?:\s+.*)?$",
+    re.IGNORECASE,
+)
+
 
 def run_recall_controller(
     intent: IntentResult,
     user_message: str,
     session_messages: Sequence[dict[str, str]],
+    trace_id: str = "",
     max_candidates: int = 3,
     max_scan_turns: int = 20,
 ) -> RecallResult | None:
@@ -73,6 +93,7 @@ def run_recall_controller(
         intent: Stage 4 intent classification result.
         user_message: Current user message.
         session_messages: Conversation history (most recent last).
+        trace_id: Request trace identifier for telemetry correlation.
         max_candidates: Max session fact candidates to return.
         max_scan_turns: Max turns to scan in session history.
 
@@ -84,6 +105,7 @@ def run_recall_controller(
         logger.debug(
             "recall_controller_skipped",
             original_task_type=intent.task_type.value,
+            trace_id=trace_id,
         )
         return None
 
@@ -96,6 +118,7 @@ def run_recall_controller(
         "recall_cue_detected",
         cue_pattern=cue,
         message_excerpt=user_message[:80],
+        trace_id=trace_id,
     )
 
     # Gate 3: Noun phrase extraction + session fact scan
@@ -105,6 +128,7 @@ def run_recall_controller(
             "recall_cue_false_positive",
             cue_pattern=cue,
             reason="no_noun_phrase",
+            trace_id=trace_id,
         )
         return RecallResult(
             reclassified=False,
@@ -125,6 +149,7 @@ def run_recall_controller(
         noun_phrases=noun_phrases,
         turns_scanned=len(scan_messages),
         candidates_found=len(candidates),
+        trace_id=trace_id,
     )
 
     if not candidates:
@@ -132,6 +157,7 @@ def run_recall_controller(
             "recall_cue_false_positive",
             cue_pattern=cue,
             reason="no_session_match",
+            trace_id=trace_id,
         )
         return RecallResult(
             reclassified=False,
@@ -148,6 +174,7 @@ def run_recall_controller(
         trigger_cue=cue,
         top_candidate_fact=candidates[0].fact[:100],
         confidence=0.85,
+        trace_id=trace_id,
     )
 
     return RecallResult(
@@ -185,13 +212,15 @@ def _extract_noun_phrases(message: str) -> list[str]:
     Returns:
         List of extracted noun phrases (lowercase, deduplicated).
     """
-    matches = _NOUN_PHRASE_RE.findall(message)
-    # Deduplicate and clean, stripping trailing stop words
+    all_matches = _NOUN_PHRASE_RE.findall(message) + _INTERROG_NOUN_RE.findall(message)
+    # Deduplicate and clean, stripping verb phrases and stop words
     seen: set[str] = set()
     phrases: list[str] = []
-    for m in matches:
-        # Strip trailing stop words before lowercasing
-        stripped = _TRAILING_STOP_RE.sub("", m).strip()
+    for m in all_matches:
+        # Strip trailing verb phrases (e.g., "tool we discussed" → "tool")
+        stripped = _TRAILING_VERB_RE.sub("", m).strip()
+        # Strip trailing query-artifact stop words
+        stripped = _TRAILING_STOP_RE.sub("", stripped).strip()
         cleaned = stripped.lower()
         if cleaned and cleaned not in seen and len(cleaned) > 2:
             seen.add(cleaned)
@@ -224,12 +253,27 @@ def _scan_session_facts(
             continue
 
         for phrase in noun_phrases:
-            if phrase.lower() in content.lower():
+            phrase_lower = phrase.lower()
+            content_lower = content.lower()
+            # Full phrase match first; fall back to individual significant words
+            # for multi-word phrases (handles "caching system" matching "caching layer")
+            phrase_found = phrase_lower in content_lower
+            if not phrase_found and " " in phrase_lower:
+                phrase_found = any(
+                    w in content_lower for w in phrase_lower.split() if len(w) > 3
+                )
+            if phrase_found:
                 # Extract the sentence containing the match
                 sentences = re.split(r"[.!?\n]", content)
+                search_terms = [phrase_lower] + (
+                    [w for w in phrase_lower.split() if len(w) > 3]
+                    if " " in phrase_lower
+                    else []
+                )
                 matching_sentence = ""
                 for s in sentences:
-                    if phrase.lower() in s.lower():
+                    s_lower = s.lower()
+                    if any(t in s_lower for t in search_terms):
                         matching_sentence = s.strip()
                         break
 

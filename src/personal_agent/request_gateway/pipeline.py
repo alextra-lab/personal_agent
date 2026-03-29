@@ -43,6 +43,7 @@ async def run_gateway_pipeline(
     memory_adapter: MemoryProtocol | None = None,
     expansion_budget: int | None = None,
     max_context_tokens: int | None = None,
+    full_session_messages: Sequence[dict[str, Any]] | None = None,
 ) -> GatewayOutput:
     """Run the full request gateway pipeline.
 
@@ -52,12 +53,16 @@ async def run_gateway_pipeline(
     Args:
         user_message: The user's message text.
         session_id: Active session identifier.
-        session_messages: Prior conversation messages (OpenAI format).
+        session_messages: Prior conversation messages (OpenAI format), truncated
+            to the context window budget.
         trace_id: Request trace identifier.
         mode: Current brainstem operational mode.
         memory_adapter: Seshat protocol adapter (None if unavailable).
         expansion_budget: Remaining expansion slots (None = read from settings).
         max_context_tokens: Context token ceiling (None = read from settings).
+        full_session_messages: Complete untruncated session history, used by the
+            recall controller so it can scan beyond the context window limit.
+            Falls back to session_messages when None.
 
     Returns:
         GatewayOutput with intent, governance, decomposition, and context.
@@ -93,10 +98,13 @@ async def run_gateway_pipeline(
     )
 
     # Stage 4b — Recall Controller (ADR-0037)
+    # Use full_session_messages when available so the recall controller can
+    # scan beyond the context-window truncation limit.
     recall_result = run_recall_controller(
         intent=intent,
         user_message=user_message,
-        session_messages=session_messages,
+        session_messages=full_session_messages if full_session_messages is not None else session_messages,
+        trace_id=trace_id,
     )
 
     if recall_result is not None and recall_result.reclassified:
@@ -105,6 +113,15 @@ async def run_gateway_pipeline(
             complexity=intent.complexity,
             confidence=0.85,
             signals=[*intent.signals, "recall_cue_reclassified", recall_result.trigger_cue],
+        )
+        logger.info(
+            "intent_classified",
+            task_type=intent.task_type.value,
+            complexity=intent.complexity.value,
+            confidence=intent.confidence,
+            signals=intent.signals,
+            trace_id=trace_id,
+            reclassified_by="recall_controller",
         )
 
     # Stage 5: Decomposition Assessment

@@ -162,9 +162,11 @@ async def _call_embeddings_api(
             base_url=endpoint,
         )
 
+    settings = get_settings()
     return await _openai_client.embeddings.create(
         model=model,
         input=texts,
+        dimensions=settings.embedding_dimensions,
     )
 
 

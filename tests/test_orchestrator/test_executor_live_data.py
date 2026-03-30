@@ -1,14 +1,14 @@
-"""Regression tests for live-data tool routing heuristics."""
+"""Regression tests for live-data tool routing heuristics.
 
-from personal_agent.orchestrator.executor import _requires_live_data_lookup
+Skipped: `_requires_live_data_lookup` was removed from `executor.py`; routing now
+uses gateway + tools. Delete this module when live-data heuristics are re-specified.
+"""
 
+from __future__ import annotations
 
-def test_requires_live_data_lookup_weather_query() -> None:
-    """Weather-style requests should trigger live data lookup."""
-    assert _requires_live_data_lookup("How long is it expected rain in Forqualgier?")
+import pytest
 
-
-def test_requires_live_data_lookup_static_query() -> None:
-    """Static knowledge requests should not trigger live data lookup."""
-    assert not _requires_live_data_lookup("Explain how TLS handshake works.")
-
+pytest.skip(
+    "Obsolete: _requires_live_data_lookup no longer exists on executor",
+    allow_module_level=True,
+)

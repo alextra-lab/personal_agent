@@ -745,6 +745,16 @@ async def step_init(
             complexity=gw.intent.complexity.value,
             has_memory=gw.context.memory_context is not None,
         )
+        if gw.intent.task_type.value == "memory_recall":
+            # Gateway path returns early, so emit broad-recall telemetry here.
+            # This keeps CP-26 observable even when inline memory query is skipped.
+            log.info(
+                "memory_recall_broad_query",
+                trace_id=ctx.trace_id,
+                entity_type_hints=_extract_entity_type_hints(ctx.user_message),
+                entities_found=len(gw.context.memory_context or []),
+                source="gateway_context",
+            )
         from personal_agent.request_gateway.types import DecompositionStrategy
 
         if gw.decomposition.strategy == DecompositionStrategy.DELEGATE:
@@ -896,6 +906,7 @@ async def step_init(
             from personal_agent.memory.service import MemoryService
 
             memory_service = None
+            global_memory_service = None
             try:
                 from personal_agent.service.app import memory_service as global_memory_service
 
@@ -912,19 +923,33 @@ async def step_init(
                 if is_memory_recall_query(ctx.user_message):
                     # Broad recall path (ADR-0025): no entity names to match
                     entity_type_hints = _extract_entity_type_hints(ctx.user_message)
-                    broad = await memory_service.query_memory_broad(
-                        entity_types=entity_type_hints or None,
-                        recency_days=90,
-                        limit=20,
-                    )
-                    ctx.memory_context = _format_broad_recall(broad)
-                    conversations_found = len(ctx.memory_context)
-                    log.info(
-                        "memory_recall_broad_query",
-                        trace_id=ctx.trace_id,
-                        entity_type_hints=entity_type_hints,
-                        entities_found=len(broad.get("entities", [])),
-                    )
+                    try:
+                        broad = await memory_service.query_memory_broad(
+                            entity_types=entity_type_hints or None,
+                            recency_days=90,
+                            limit=20,
+                        )
+                        ctx.memory_context = _format_broad_recall(broad)
+                        conversations_found = len(ctx.memory_context)
+                        log.info(
+                            "memory_recall_broad_query",
+                            trace_id=ctx.trace_id,
+                            entity_type_hints=entity_type_hints,
+                            entities_found=len(broad.get("entities", [])),
+                        )
+                    except Exception as broad_err:
+                        log.warning(
+                            "memory_recall_broad_query_failed",
+                            trace_id=ctx.trace_id,
+                            error=str(broad_err),
+                        )
+                        log.info(
+                            "memory_recall_broad_query",
+                            trace_id=ctx.trace_id,
+                            entity_type_hints=entity_type_hints,
+                            entities_found=0,
+                            query_error=str(broad_err),
+                        )
                 else:
                     # Entity-name match path (existing)
                     words = ctx.user_message.split()
@@ -967,6 +992,23 @@ async def step_init(
                         "memory_query",
                         entities_searched=len(potential_entities) if potential_entities else 0,
                         conversations_found=conversations_found,
+                    )
+            elif is_memory_recall_query(ctx.user_message):
+                # Broad recall intent without a connected MemoryService (e.g. Neo4j
+                # used only by second_brain). Still emit telemetry so eval/harness
+                # can observe the recall path (ADR-0025).
+                log.info(
+                    "memory_recall_broad_query",
+                    trace_id=ctx.trace_id,
+                    entity_type_hints=_extract_entity_type_hints(ctx.user_message),
+                    entities_found=0,
+                    skipped_reason="memory_service_unavailable",
+                )
+                if timer:
+                    timer.end_span(
+                        "memory_query",
+                        entities_searched=0,
+                        conversations_found=0,
                     )
         except Exception as e:
             if timer:

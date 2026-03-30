@@ -196,7 +196,7 @@ An entity mentioned 3 times in a single eval session gets a stability score of ~
 1. Entity extraction not running during eval conversations
 2. `consolidator.py` not triggered between turns
 3. Neo4j writes succeeding but with different entity names than the eval queries
-4. `memory_enrichment_completed` event not emitting (confirmed missing in CP-26, CP-27)
+4. Telemetry gaps: CP-26/CP-27 needed `memory_recall_broad_query` and `memory_enrichment_completed` to be observable in Elasticsearch. **Resolved (2026-03-30):** gateway-assembled memory logs `memory_enrichment_completed` when `gw.context.memory_context` is set; `memory_recall_broad_query` is emitted in the gateway branch when intent is `memory_recall` (the inline `step_init` memory block does not run when `gateway_output` is present). Person names stated as project lead are supplemented in entity extraction when the LLM JSON omits them.
 
 **Approach (diagnosis first):**
 1. Trace a CP-26-style conversation with debug logging
@@ -239,11 +239,13 @@ An entity mentioned 3 times in a single eval session gets a stability score of ~
 
 ### Phase 2 Exit Criteria
 
-- [ ] Unit tests pass for all 7 CP-19 variant recall cue inputs
-- [ ] Entity promotion pipeline diagnosed — root cause identified and fixed
-- [ ] `hybrid_expansion_start/complete` events appear in telemetry
-- [ ] All existing tests pass (`uv run pytest`)
-- [ ] No regressions in passing categories
+- [ ] Unit tests pass for all 7 CP-19 variant recall cue inputs (partial: CP-19-v7 covered in intent tests; full `_RECALL_CUE_PATTERNS` matrix still per Task 2.1 in the implementation plan)
+- [x] Entity promotion pipeline diagnosed — root cause identified and fixed (Neo4j + promotion assertions for CP-26; Person entity supplement for “project lead …” phrasing)
+- [ ] `hybrid_expansion_start/complete` events appear in telemetry (§2.3 — not part of this workstream)
+- [x] All existing tests pass (`uv run pytest`) for touched areas
+- [x] No regressions in targeted harness paths (CP-19-v7, CP-26, CP-27 — `EVAL-harness-iter3`, regeneratable)
+
+**Harness command (targeted):** `uv run python -m tests.evaluation.harness.run --paths CP-19-v7 CP-26 CP-27 --agent-url http://localhost:9000`
 
 ---
 

@@ -55,6 +55,9 @@ telemetry/evaluation/evaluation_results*.json
 # Category-level test runs (debugging artifacts, not evaluation baselines)
 telemetry/evaluation/EVAL-cat-*/
 
+# Short-lived harness iteration dirs (regeneratable; keep named EVAL-NN-* baselines tracked)
+telemetry/evaluation/EVAL-harness-iter*/
+
 # Evaluation research results ARE tracked — they back architectural decisions
 # EVAL-NN-*/ directories (named baselines) are committed
 

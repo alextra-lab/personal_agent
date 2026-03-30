@@ -23,7 +23,9 @@ from personal_agent.request_gateway.types import (
 
 _MEMORY_RECALL_PATTERNS: re.Pattern[str] = re.compile(
     r"(?i)"
-    r"(?:what\s+(?:have\s+I|did\s+I|topics?\s+have\s+(?:I|we)|things?\s+have\s+I)\s+)"
+    # Resumptive reference (eval CP-19-v7): "The tool we discussed earlier — ..."
+    r"(?:the\s+\w+\s+(?:we|I)\s+(?:discussed|mentioned|talked\s+about)(?:\s+earlier)?)"
+    r"|(?:what\s+(?:have\s+I|did\s+I|topics?\s+have\s+(?:I|we)|things?\s+have\s+I)\s+)"
     r"|(?:do\s+you\s+remember)"
     r"|(?:last\s+time\s+(?:we|I)\s+(?:asked|talked|discussed))"
     r"|(?:have\s+(?:we|I)\s+(?:discussed|talked|spoken))"

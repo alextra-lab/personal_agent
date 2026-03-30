@@ -13,6 +13,7 @@ from personal_agent.orchestrator.types import HeuristicRoutingPlan
 # MEMORY RECALL: questions about the user's own history (ADR-0025)
 _MEMORY_RECALL_PATTERNS = re.compile(
     r"(?:"
+    r"what\s+do\s+you\s+remember(?:\s+about)?|"
     r"what\s+(?:have\s+I|did\s+I|topics?\s+have\s+I|things?\s+have\s+I)|"
     r"have\s+I\s+(?:ever|asked|mentioned|talked|discussed)|"
     r"did\s+I\s+(?:ask|mention|talk|discuss)|"

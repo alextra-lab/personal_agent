@@ -1,7 +1,7 @@
 """Tests for routing: heuristic classification + two-tier model taxonomy (ADR-0033)."""
 
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -19,7 +19,6 @@ from personal_agent.orchestrator.routing import (
 )
 from personal_agent.orchestrator.types import ExecutionContext
 from tests.test_orchestrator.conftest import configure_mock_llm_client_model_configs
-from unittest.mock import MagicMock
 
 
 class TestRoutingHelpers:
@@ -60,6 +59,8 @@ class TestRoutingHelpers:
             "Remind me about that project",
             "What else have we talked about?",
             "What have we discussed so far?",
+            # Eval CP-26 turn 4: broad recall (executor memory_recall_broad_query)
+            "What do you remember about the DataForge project?",
         ]
         for msg in positive:
             assert is_memory_recall_query(msg), f"Expected recall: {msg!r}"
@@ -113,9 +114,7 @@ class TestRoutingFlow:
     """Integration tests for orchestrator routing with two-tier taxonomy (ADR-0033)."""
 
     @patch("personal_agent.llm_client.factory.get_llm_client")
-    async def test_chat_request_uses_primary_model(
-        self, mock_client_class: Any
-    ) -> None:
+    async def test_chat_request_uses_primary_model(self, mock_client_class: Any) -> None:
         """All chat requests route directly to PRIMARY — no router LLM call (ADR-0033)."""
         mock_client = AsyncMock()
         configure_mock_llm_client_model_configs(mock_client)
@@ -131,7 +130,7 @@ class TestRoutingFlow:
         }
 
         orchestrator = Orchestrator()
-        result = await orchestrator.handle_user_request(
+        await orchestrator.handle_user_request(
             session_id="test-session",
             user_message="What is Python?",
             mode=Mode.NORMAL,

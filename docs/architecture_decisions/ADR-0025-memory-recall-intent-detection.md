@@ -349,6 +349,12 @@ if model_role != ModelRole.ROUTER and ctx.memory_context and len(ctx.memory_cont
         # ... existing code unchanged
 ```
 
+### Gateway output path (`executor.step_init`)
+
+When the HTTP service runs the request gateway first, `ctx.gateway_output` is set and `step_init` returns before the **inline** memory graph block (the block that calls `is_memory_recall_query` and `query_memory_broad`). Broad recall is still classified in the gateway (`intent_classified` with `task_type=memory_recall`), and memory context may be assembled there.
+
+**Telemetry:** For eval observability (e.g. CP-26 turn 4), the executor logs `memory_recall_broad_query` in the gateway branch when `gw.intent.task_type` is `memory_recall`, with `source=gateway_context`. The inline block remains the path when `gateway_output` is absent (non-gateway execution).
+
 ---
 
 ## Alternatives Considered

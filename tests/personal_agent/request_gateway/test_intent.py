@@ -17,6 +17,8 @@ class TestMemoryRecall:
             "What topics have we discussed?",
             "Last time we talked about Neo4j, what did I say?",
             "What did I decide about the architecture?",
+            # Eval CP-19-v7: resumptive "the X we discussed earlier"
+            "The tool we discussed earlier — can you confirm what it was?",
         ],
     )
     def test_memory_recall_detected(self, message: str) -> None:

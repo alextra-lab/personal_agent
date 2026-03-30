@@ -19,6 +19,7 @@ from __future__ import annotations
 from tests.evaluation.harness.models import (
     ConversationPath,
     ConversationTurn,
+    SessionSpec,
     absent,
     fld,
     gte,
@@ -1622,6 +1623,140 @@ CP_29 = ConversationPath(
 )
 
 # ============================================================================
+# Category 9: Cross-Session Recall (CP-30 to CP-31) — Phase 4 additions
+# ============================================================================
+
+CP_30 = ConversationPath(
+    path_id="CP-30",
+    name="Cross-Session Entity Recall",
+    category="Cross-Session Recall",
+    objective=(
+        "Verify entities seeded in one session are recalled in a new session. "
+        "Requires consolidation between sessions."
+    ),
+    sessions=(
+        SessionSpec(
+            turns=(
+                ConversationTurn(
+                    user_message=(
+                        "We're evaluating DataForge for our data processing pipeline. "
+                        "It's a distributed framework similar to Apache Flink."
+                    ),
+                    expected_behavior="Agent acknowledges DataForge and Flink.",
+                    assertions=(
+                        present("intent_classified"),
+                    ),
+                ),
+                ConversationTurn(
+                    user_message=(
+                        "Our team lead Priya Sharma has experience with both tools. "
+                        "She recommends DataForge for our ClickHouse integration."
+                    ),
+                    expected_behavior="Agent acknowledges entities (Priya, ClickHouse).",
+                    assertions=(
+                        present("intent_classified"),
+                    ),
+                ),
+                ConversationTurn(
+                    user_message=(
+                        "Let's go with DataForge then. It handles our volume "
+                        "requirements and Priya can lead the integration."
+                    ),
+                    expected_behavior="Agent confirms the decision.",
+                    assertions=(
+                        present("intent_classified"),
+                    ),
+                ),
+            ),
+            post_session_delay_s=15.0,
+        ),
+        SessionSpec(
+            turns=(
+                ConversationTurn(
+                    user_message="What was that data processing tool we discussed?",
+                    expected_behavior=(
+                        "Agent recalls DataForge from previous session via memory."
+                    ),
+                    assertions=(
+                        fld("intent_classified", "task_type", "memory_recall"),
+                        present("recall_cue_detected"),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    post_path_assertions=(
+        neo4j_entity("DataForge"),
+        neo4j_entity("Apache Flink"),
+        neo4j_entity("ClickHouse"),
+    ),
+    post_path_delay_s=10.0,
+    setup_notes=(
+        "Cross-session path: Session 1 seeds entities, 15s consolidation delay, "
+        "Session 2 queries them. Requires Neo4j and consolidator running."
+    ),
+)
+
+CP_31 = ConversationPath(
+    path_id="CP-31",
+    name="Cross-Session Decision Recall",
+    category="Cross-Session Recall",
+    objective=(
+        "Verify a technical decision made in one session can be recalled in "
+        "a new session through the memory system."
+    ),
+    sessions=(
+        SessionSpec(
+            turns=(
+                ConversationTurn(
+                    user_message=(
+                        "I need to pick a primary database for the new project. "
+                        "Options are PostgreSQL, MySQL, or CockroachDB."
+                    ),
+                    expected_behavior="Agent discusses database options.",
+                    assertions=(
+                        present("intent_classified"),
+                    ),
+                ),
+                ConversationTurn(
+                    user_message=(
+                        "After reviewing the requirements, let's go with PostgreSQL. "
+                        "It has the best JSONB support and our team knows it well."
+                    ),
+                    expected_behavior="Agent acknowledges PostgreSQL decision.",
+                    assertions=(
+                        present("intent_classified"),
+                    ),
+                ),
+            ),
+            post_session_delay_s=15.0,
+        ),
+        SessionSpec(
+            turns=(
+                ConversationTurn(
+                    user_message="What database did we decide on?",
+                    expected_behavior=(
+                        "Agent recalls PostgreSQL decision from previous session."
+                    ),
+                    assertions=(
+                        fld("intent_classified", "task_type", "memory_recall"),
+                        present("recall_cue_detected"),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    post_path_assertions=(
+        neo4j_entity("PostgreSQL"),
+    ),
+    post_path_delay_s=10.0,
+    setup_notes=(
+        "Cross-session path: Session 1 establishes a decision, 15s consolidation, "
+        "Session 2 queries it. Requires Neo4j and consolidator running."
+    ),
+)
+
+# ============================================================================
 # Registry: all paths for easy import
 # ============================================================================
 
@@ -1661,6 +1796,8 @@ ALL_PATHS: tuple[ConversationPath, ...] = (
     CP_27,
     CP_28,
     CP_29,
+    CP_30,
+    CP_31,
 )
 
 PATHS_BY_ID: dict[str, ConversationPath] = {p.path_id: p for p in ALL_PATHS}

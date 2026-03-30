@@ -17,6 +17,7 @@ from typing import Any
 import structlog
 
 from personal_agent.memory.protocol import BroadRecallResult, MemoryProtocol, MemoryRecallQuery
+from personal_agent.request_gateway.state_document import build_state_document
 from personal_agent.request_gateway.types import (
     AssembledContext,
     IntentResult,
@@ -169,6 +170,11 @@ async def assemble_context(
 
     # Include session history
     messages.extend(session_messages)
+
+    # Prepend structured state document for multi-turn sessions (Phase 4.5).
+    state_doc = build_state_document(session_messages, trace_id=trace_id)
+    if state_doc:
+        messages.insert(0, {"role": "system", "content": state_doc})
 
     # Query memory if adapter is available
     if memory_adapter is not None:

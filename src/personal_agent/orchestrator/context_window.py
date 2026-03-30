@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from personal_agent.telemetry import get_logger
@@ -46,12 +47,14 @@ def apply_context_window(
     strategy: str = "truncate",
     trace_id: str | None = None,
     session_id: str | None = None,
+    compressed_summary: str | None = None,
 ) -> list[dict[str, Any]]:
     """Trim conversation history to fit within token budget.
 
     Keeps the first message (session opener/system context) and prefers recent
     messages. If the conversation overflows, older middle context is dropped
-    and a marker is inserted to signal truncation.
+    and either a compressed summary (if available from async compression) or
+    a static truncation marker is inserted.
 
     Args:
         messages: Full message history in OpenAI-style format.
@@ -60,6 +63,9 @@ def apply_context_window(
         strategy: Window strategy. MVP supports only ``truncate``.
         trace_id: Optional trace identifier for telemetry.
         session_id: Optional session identifier for telemetry.
+        compressed_summary: Pre-computed summary of earlier turns from async
+            compression (ADR-0038). When provided and turns are evicted, this
+            replaces the static ``[Earlier messages truncated]`` marker.
 
     Returns:
         Trimmed message list that fits the available budget.
@@ -127,7 +133,22 @@ def apply_context_window(
     remaining = messages[1:]
 
     first_tokens = estimate_message_tokens(first_message)
-    marker_tokens = estimate_message_tokens(TRUNCATION_MARKER)
+
+    # Choose summary marker: compressed summary when available, else static marker.
+    if compressed_summary:
+        summary_marker: dict[str, str] = {
+            "role": "system",
+            "content": compressed_summary,
+        }
+        log.info(
+            "context_compression_used",
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+    else:
+        summary_marker = TRUNCATION_MARKER
+
+    marker_tokens = estimate_message_tokens(summary_marker)
     tail_budget = max(0, available_budget - first_tokens)
 
     tail_reversed: list[dict[str, Any]] = []
@@ -144,18 +165,19 @@ def apply_context_window(
 
     output_messages: list[dict[str, Any]] = [first_message]
     if dropped_count > 0 and first_tokens + marker_tokens <= available_budget:
-        output_messages.append(TRUNCATION_MARKER)
+        output_messages.append(summary_marker)
 
     output_messages.extend(tail_messages)
 
     # Keep most-recent context if marker or retained history pushed us over budget.
     while len(output_messages) > 1 and estimate_messages_tokens(output_messages) > available_budget:
-        if output_messages[1:2] == [TRUNCATION_MARKER]:
+        if output_messages[1:2] == [summary_marker]:
             output_messages.pop(1)
             continue
         output_messages.pop(1)
 
     output_tokens = estimate_messages_tokens(output_messages)
+    truncated = len(output_messages) < len(messages)
     log.info(
         "context_window_applied",
         trace_id=trace_id,
@@ -165,8 +187,19 @@ def apply_context_window(
         estimated_input_tokens=input_tokens,
         estimated_output_tokens=output_tokens,
         strategy="truncate",
-        truncated=len(output_messages) < len(messages),
+        truncated=truncated,
     )
+
+    # KV cache stability: log prefix hash for cross-turn comparison (ADR-0038 §4.6).
+    if output_messages:
+        prefix_hash = compute_prefix_hash(output_messages[0])
+        log.debug(
+            "context_prefix_stable",
+            prefix_hash=prefix_hash,
+            session_id=session_id,
+            trace_id=trace_id,
+        )
+
     return output_messages
 
 
@@ -226,3 +259,28 @@ def _evict_old_tool_errors(
             total=len(messages),
         )
     return filtered + protected_tail
+
+
+# ---------------------------------------------------------------------------
+# KV cache prefix stability (Phase 4.6)
+# ---------------------------------------------------------------------------
+
+
+def compute_prefix_hash(message: dict[str, Any]) -> str:
+    """Compute a short hash of a message for prefix stability tracking.
+
+    Used to detect unexpected changes to the system prompt between turns,
+    which would invalidate provider-side KV caches.
+
+    Args:
+        message: The first message (system prompt) to hash.
+
+    Returns:
+        Hex digest (first 12 chars of SHA-256).
+    """
+    content = message.get("content", "")
+    if not isinstance(content, str):
+        content = str(content)
+    role = message.get("role", "")
+    raw = f"{role}:{content}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:12]

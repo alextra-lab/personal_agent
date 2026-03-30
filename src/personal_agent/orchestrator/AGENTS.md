@@ -1,27 +1,34 @@
 # Orchestrator
 
-Deterministic state machine for task execution.
+Deterministic state machine for task execution with active context management.
 
-**Spec**: `../../docs/architecture/ORCHESTRATOR_CORE_SPEC_v0.1.md`
-**ADR**: `../../docs/architecture_decisions/ADR-0006-orchestrator-runtime-structure.md`
+**Spec**: `../../docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md`, `../../docs/specs/CONTEXT_INTELLIGENCE_SPEC.md`
+**ADRs**: ADR-0006 (runtime structure), ADR-0038 (context compressor), ADR-0033 (model taxonomy)
 
 ## Responsibilities
 
 - Execute task graph (channels → state transitions)
 - Invoke cognitive modules (planner, critic, executor)
 - Maintain session state and history
+- Manage context window with rolling LLM summarization
+- Coordinate async background compression between turns
 - Coordinate with governance for permissions
 - Emit telemetry for all transitions
 
 ## Structure
 
-```
+```text
 orchestrator/
-├── __init__.py      # Exports: Orchestrator, TaskGraph, State
-├── executor.py      # Main execution loop
-├── channels.py      # Channel definitions
-├── session.py       # Session management
-└── types.py         # Pydantic models
+├── __init__.py              # Exports
+├── executor.py              # Main execution loop + compression trigger
+├── context_window.py        # Token budgeting, truncation, KV cache prefix
+├── context_compressor.py    # LLM-based summarization of evicted turns (ADR-0038)
+├── compression_manager.py   # Async compression lifecycle + cross-turn state
+├── channels.py              # Channel definitions
+├── session.py               # Session management
+├── routing.py               # Intent-based routing
+├── expansion_controller.py  # Sub-agent expansion
+└── types.py                 # Pydantic models
 ```
 
 ## Constraints

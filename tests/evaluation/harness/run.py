@@ -58,6 +58,7 @@ CATEGORY_SLUGS: dict[str, str] = {
     "memory_system": "Memory System",
     "tools_self_inspection": "Tools & Self-Inspection",
     "edge_cases": "Edge Cases",
+    "cross_session": "Cross-Session Recall",
 }
 
 

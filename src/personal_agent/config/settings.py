@@ -357,6 +357,18 @@ class AppConfig(BaseSettings):
         description="Context window strategy. Supported: 'truncate'.",
     )
 
+    # Context Compression (ADR-0038)
+    context_compression_enabled: bool = Field(
+        default=True,
+        description="Enable async context compression of evicted turns.",
+    )
+    context_compression_threshold_ratio: float = Field(
+        default=0.65,
+        gt=0.0,
+        le=1.0,
+        description="Fire compression when estimated tokens exceed this fraction of context_window_max_tokens.",
+    )
+
     # Database (Postgres)
     database_url: str = Field(
         default="postgresql+asyncpg://agent:agent_dev_password@localhost:5432/personal_agent",

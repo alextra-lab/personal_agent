@@ -18,12 +18,14 @@ class ModelRole(str, Enum):
 
     Tier 1 (Primary): The orchestrator brain — reasoning, tool calling, decomposition.
     Tier 2 (Sub-Agent): Focused single-task completion — no thinking, fast inference.
+    Compressor: Lightweight summarization of evicted context turns (ADR-0038).
 
     See ADR-0033 for the two-tier taxonomy rationale.
     """
 
     PRIMARY = "primary"  # Tier 1: orchestrator brain
     SUB_AGENT = "sub_agent"  # Tier 2: focused task completion
+    COMPRESSOR = "compressor"  # Context compression / summarization
 
     @classmethod
     def from_str(cls, value: str) -> "ModelRole | None":

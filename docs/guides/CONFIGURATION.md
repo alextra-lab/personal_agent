@@ -31,7 +31,7 @@ The environment is set via `APP_ENV` environment variable (defaults to `developm
 
 **Location**: `config/` directory
 
-- **`config/models.yaml`** - LLM model configurations (router, planner, executor models)
+- **`config/models.yaml`** - LLM model configurations (primary, sub_agent, compressor roles)
 - **`config/governance/`** - Governance policies (modes, safety, tools, models)
   - `modes.yaml` - Operational mode thresholds (NORMAL, ALERT, DEGRADED, etc.)
   - `safety.yaml` - Safety policies and constraints
@@ -98,6 +98,17 @@ ORCHESTRATOR_MAX_TOOL_ITERATIONS=5    # Default: 3 (prevents loops)
 MCP_GATEWAY_ENABLED=true              # Default: false
 MCP_GATEWAY_TIMEOUT_SECONDS=60        # Default: 30
 ```
+
+**Context Compression** - Control LLM-based rolling summarization (ADR-0038):
+
+```bash
+# In .env file
+CONTEXT_COMPRESSION_ENABLED=true            # Default: true
+CONTEXT_COMPRESSION_THRESHOLD_RATIO=0.65    # Default: 0.65 (fire at 65% of context budget)
+```
+
+When enabled, evicted conversation turns are asynchronously summarized by the `compressor` model
+(`gpt-5.4-nano` in `config/models.yaml`) and injected as a system message on the next turn.
 
 **Request Monitoring** - Control system metrics collection:
 

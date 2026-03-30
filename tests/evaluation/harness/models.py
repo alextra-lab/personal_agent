@@ -111,15 +111,37 @@ class ConversationTurn:
 
 
 @dataclass(frozen=True)
+class SessionSpec:
+    """A session within a multi-session conversation path.
+
+    Used by cross-session eval paths (CP-30+) where entities are seeded
+    in one session and queried in another.
+
+    Args:
+        turns: Conversation turns for this session.
+        post_session_delay_s: Delay after closing this session to allow
+            background consolidation (entity extraction, promotion).
+    """
+
+    turns: tuple[ConversationTurn, ...]
+    post_session_delay_s: float = 10.0
+
+
+@dataclass(frozen=True)
 class ConversationPath:
     """A complete multi-turn conversation path for evaluation.
+
+    Single-session paths use ``turns`` directly. Multi-session paths
+    (e.g., cross-session recall) use ``sessions`` instead — each
+    ``SessionSpec`` gets its own session_id and consolidation window.
 
     Args:
         path_id: Identifier like "CP-01".
         name: Human-readable name.
         category: Category from the capability matrix.
         objective: What this path tests.
-        turns: Ordered sequence of conversation turns.
+        turns: Ordered sequence of conversation turns (single-session paths).
+        sessions: Ordered sessions for multi-session paths (overrides turns).
         quality_criteria: Human evaluation checkboxes.
         setup_notes: Optional setup instructions (e.g., for CP-18 resource pressure).
     """
@@ -128,7 +150,8 @@ class ConversationPath:
     name: str
     category: str
     objective: str
-    turns: tuple[ConversationTurn, ...]
+    turns: tuple[ConversationTurn, ...] = ()
+    sessions: tuple[SessionSpec, ...] = ()
     quality_criteria: tuple[str, ...] = ()
     setup_notes: str | None = None
     post_path_assertions: tuple[Neo4jAssertion, ...] = ()

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from personal_agent.config import settings
 from personal_agent.llm_client import ModelRole
+from personal_agent.orchestrator import compression_manager
 from personal_agent.orchestrator.context_window import (
     apply_context_window,
     estimate_messages_tokens,
@@ -871,12 +872,17 @@ async def step_init(
     if timer:
         timer.start_span("context_window")
     input_messages_count = len(ctx.messages)
+
+    # Retrieve pre-computed compression summary if available (ADR-0038).
+    _summary = compression_manager.get_summary(ctx.session_id) if ctx.session_id else None
+
     ctx.messages = apply_context_window(
         ctx.messages,
         max_tokens=settings.context_window_max_tokens,
         strategy=settings.conversation_context_strategy,
         trace_id=ctx.trace_id,
         session_id=ctx.session_id,
+        compressed_summary=_summary,
     )
     estimated_tokens = estimate_messages_tokens(ctx.messages)
     if timer:
@@ -1869,6 +1875,14 @@ async def execute_task_safe(
                     "description": f"Task failed: {sanitized_error}",
                     "metadata": {"error_type": type(ctx.error).__name__},
                 }
+            )
+
+        # Trigger async context compression if threshold crossed (ADR-0038).
+        if ctx.session_id:
+            compression_manager.maybe_trigger_compression(
+                session_id=ctx.session_id,
+                messages=ctx.messages,
+                trace_id=ctx.trace_id,
             )
 
         log.info(

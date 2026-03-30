@@ -1,7 +1,7 @@
 # Conversation Continuity Spec
 
 **Date**: 2026-02-22
-**Status**: Partially Implemented — `context_window.py` implements token-aware truncation and session hydration. LLM summarization and further context work are deferred to `CONTEXT_INTELLIGENCE_SPEC.md`.
+**Status**: Implemented — `context_window.py` implements token-aware truncation with LLM-based rolling summarization (ADR-0038). Evicted turns are compressed by `context_compressor.py` via async background compression (`compression_manager.py`) when `context_compression_enabled=True`. Structured context assembly via `state_document.py`. See `CONTEXT_INTELLIGENCE_SPEC.md` Phase 4 for full details.
 **Phase**: 2.6 Conversational Agent MVP
 **Related**: ADR-0018 (Seshat), Architecture Assessment 2026-02-22, `CLI_SERVICE_CLIENT_SPEC.md`
 

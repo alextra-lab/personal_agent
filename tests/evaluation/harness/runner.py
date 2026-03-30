@@ -22,6 +22,7 @@ from tests.evaluation.harness.models import (
     AssertionResult,
     ConversationPath,
     PathResult,
+    SessionSpec,
     TelemetryAssertion,
     TurnResult,
 )
@@ -93,8 +94,9 @@ class EvaluationRunner:
     async def run_path(self, path: ConversationPath) -> PathResult:
         """Execute a complete conversation path.
 
-        Creates a fresh session, sends each turn sequentially,
-        checks telemetry assertions after each turn.
+        For single-session paths (``turns`` set), creates one session and runs
+        all turns. For multi-session paths (``sessions`` set), creates a new
+        session per ``SessionSpec``, with consolidation delays between sessions.
 
         Args:
             path: The conversation path to execute.
@@ -102,6 +104,12 @@ class EvaluationRunner:
         Returns:
             PathResult with all turn results and assertion outcomes.
         """
+        if path.sessions:
+            return await self._run_multi_session_path(path)
+        return await self._run_single_session_path(path)
+
+    async def _run_single_session_path(self, path: ConversationPath) -> PathResult:
+        """Execute a single-session conversation path."""
         session_id = await self.create_session()
         result = PathResult(
             path_id=path.path_id,
@@ -133,7 +141,6 @@ class EvaluationRunner:
                 )
                 result.turns.append(turn_result)
 
-                # Delay between turns to allow ES indexing
                 if i < len(path.turns) - 1:
                     await asyncio.sleep(self._inter_turn_delay_s)
 
@@ -147,7 +154,89 @@ class EvaluationRunner:
                     response_time_ms=turn_result.response_time_ms,
                 )
 
-        # Run post-path Neo4j assertions (if any)
+        self._run_post_path_assertions(path, result)
+        return result
+
+    async def _run_multi_session_path(self, path: ConversationPath) -> PathResult:
+        """Execute a multi-session conversation path (cross-session recall)."""
+        first_session_id = await self.create_session()
+        result = PathResult(
+            path_id=path.path_id,
+            path_name=path.name,
+            category=path.category,
+            session_id=first_session_id,
+            quality_criteria=path.quality_criteria,
+            started_at=datetime.now(tz=timezone.utc),
+        )
+
+        total_turns = sum(len(s.turns) for s in path.sessions)
+        log.info(
+            "multi_session_path_started",
+            path_id=path.path_id,
+            path_name=path.name,
+            session_count=len(path.sessions),
+            total_turns=total_turns,
+        )
+
+        global_turn_index = 0
+        for sess_idx, session_spec in enumerate(path.sessions):
+            session_id = first_session_id if sess_idx == 0 else await self.create_session()
+
+            log.info(
+                "session_started",
+                path_id=path.path_id,
+                session_index=sess_idx,
+                session_id=session_id,
+                turn_count=len(session_spec.turns),
+            )
+
+            async with httpx.AsyncClient(
+                timeout=self._chat_timeout_s,
+            ) as client:
+                for i, turn in enumerate(session_spec.turns):
+                    turn_result = await self._execute_turn(
+                        client=client,
+                        session_id=session_id,
+                        turn_index=global_turn_index,
+                        user_message=turn.user_message,
+                        assertions=turn.assertions,
+                    )
+                    result.turns.append(turn_result)
+                    global_turn_index += 1
+
+                    if i < len(session_spec.turns) - 1:
+                        await asyncio.sleep(self._inter_turn_delay_s)
+
+                    log.info(
+                        "turn_executed",
+                        path_id=path.path_id,
+                        session_index=sess_idx,
+                        turn=global_turn_index,
+                        trace_id=turn_result.trace_id,
+                        assertions_passed=sum(
+                            1 for a in turn_result.assertion_results if a.passed
+                        ),
+                        assertions_total=len(turn_result.assertion_results),
+                        response_time_ms=turn_result.response_time_ms,
+                    )
+
+            # Wait for consolidation between sessions (not after last session)
+            if sess_idx < len(path.sessions) - 1 and session_spec.post_session_delay_s > 0:
+                log.info(
+                    "inter_session_consolidation_wait",
+                    path_id=path.path_id,
+                    session_index=sess_idx,
+                    delay_s=session_spec.post_session_delay_s,
+                )
+                await asyncio.sleep(session_spec.post_session_delay_s)
+
+        self._run_post_path_assertions(path, result)
+        return result
+
+    async def _run_post_path_assertions(
+        self, path: ConversationPath, result: PathResult
+    ) -> None:
+        """Run post-path Neo4j assertions and finalize result."""
         if path.post_path_assertions and self._neo4j_checker:
             if path.post_path_delay_s > 0:
                 log.info(
@@ -188,8 +277,6 @@ class EvaluationRunner:
             failed=result.failed_assertions,
             total_time_ms=result.total_time_ms,
         )
-
-        return result
 
     async def run_paths(
         self,

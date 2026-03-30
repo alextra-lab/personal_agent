@@ -17,4 +17,9 @@ Evaluation findings, experiment reports, and research notes.
 ## Active Research
 
 - `DELEGATION_OUTCOME_LOG.md` — Ongoing delegation tracking
-- `EVALUATION_DATASET.md` — Eval harness scenario definitions
+- `EVALUATION_DATASET.md` — Eval harness scenario definitions (37 paths including cross-session)
+
+## Phase 4 Design Specs (in `docs/specs/`)
+
+- `PROACTIVE_MEMORY_DESIGN.md` — Multi-signal relevance scoring for automatic memory injection (ADR-0039)
+- `RECALL_CLASSIFIER_L2_DESIGN.md` — Embedding-based implicit reference detection for recall controller

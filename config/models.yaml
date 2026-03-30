@@ -150,6 +150,21 @@ models:
     max_concurrency: 10
     default_timeout: 60
 
+  # ── Tier 3: Context Compressor (ADR-0038) ────────────────────────
+  compressor:
+    # Lightweight summarization of evicted context turns.
+    # Runs asynchronously between turns when token threshold is crossed.
+    # Cloud nano chosen for: low cost ($0.20/$1.25/MTok), strong structured
+    # output, high concurrency (no GPU contention with local primary).
+    id: "gpt-5.4-nano"
+    provider: "openai"
+    provider_type: "cloud"
+    max_tokens: 512
+    context_length: 128000
+    min_concurrency: 1
+    max_concurrency: 5
+    default_timeout: 30
+
   # ── Embedding Model (Seshat Memory — ADR-0035) ─────────────────
   embedding:
     # Qwen3-Embedding-0.6B via slm_server (llama.cpp GGUF)

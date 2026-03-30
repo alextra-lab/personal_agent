@@ -1,7 +1,7 @@
-# Evaluation Dataset — 25 Conversation Paths
+# Evaluation Dataset — 37 Conversation Paths
 
-**Date:** 2026-03-23
-**Phase:** Slices 1 & 2 Evaluation
+**Date:** 2026-03-23 (updated 2026-03-30 — Phase 4 cross-session paths)
+**Phase:** Slices 1–2 Evaluation + Context Intelligence Phase 4
 **Companion:** `docs/guides/EVALUATION_PHASE_GUIDE.md`
 **Purpose:** Structured, repeatable evaluation of every major capability in the redesigned backend
 
@@ -11,7 +11,7 @@
 
 ### What This Is
 
-25 multi-turn conversation paths organized by system capability (Capability Matrix). Each path exercises a specific subsystem and includes:
+37 multi-turn conversation paths organized by system capability (Capability Matrix). Each path exercises a specific subsystem and includes:
 
 - **Turn table:** Exact user messages to send, plus expected agent behavior
 - **Telemetry assertions:** Machine-verifiable via Elasticsearch or structured logs
@@ -914,6 +914,29 @@ async def run_conversation_path(path: ConversationPath) -> PathResult:
 ```
 
 This sketch is not production code — it illustrates the automation pattern. A full implementation would be a Slice 3 or post-evaluation deliverable.
+
+---
+
+---
+
+## Context Intelligence Paths (Phase 4)
+
+Paths CP-26 through CP-31 were added as part of the Context Intelligence Phase 4 work. CP-30 and CP-31 use the **multi-session runner** via `SessionSpec` to validate cross-session recall.
+
+| Path | Category | Description |
+|------|----------|-------------|
+| CP-30 | Cross-Session Recall | Cross-Session Entity Recall — entities learned in session 1 recalled in session 2 |
+| CP-31 | Cross-Session Recall | Cross-Session Decision Recall — decisions from session 1 referenced in session 2 |
+
+Multi-session paths are defined in `tests/evaluation/harness/dataset.py` using `SessionSpec` tuples with configurable `post_session_delay_s` for inter-session consolidation windows.
+
+**Running cross-session paths:**
+
+```bash
+uv run python -m tests.evaluation.harness.run --categories cross_session
+```
+
+**Reference:** `tests/evaluation/harness/models.py` for `SessionSpec` / `ConversationPath.sessions`, `CONTEXT_INTELLIGENCE_SPEC.md` Phase 4.
 
 ---
 

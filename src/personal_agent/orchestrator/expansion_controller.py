@@ -137,6 +137,13 @@ class ExpansionController:
             result.degradation_reason = "No valid plan produced"
             return result
 
+        if strategy.upper() == "HYBRID":
+            logger.info(
+                "hybrid_expansion_start",
+                sub_agent_count=len(plan.tasks),
+                trace_id=trace_id,
+            )
+
         # --- Phase 2: Dispatch ---
         sub_results = await self._run_dispatch(
             plan=plan,
@@ -166,6 +173,15 @@ class ExpansionController:
             plan=plan,
             sub_results=sub_results,
         )
+
+        if strategy.upper() == "HYBRID":
+            logger.info(
+                "hybrid_expansion_complete",
+                total=len(sub_results),
+                successes=result.successful_count,
+                failures=result.failed_count,
+                trace_id=trace_id,
+            )
 
         return result
 

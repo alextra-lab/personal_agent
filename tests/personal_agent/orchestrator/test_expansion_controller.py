@@ -121,6 +121,32 @@ class TestExpansionControllerExecute:
         assert all(r.success for r in result.sub_agent_results)
 
     @pytest.mark.asyncio
+    async def test_hybrid_emits_start_and_complete_telemetry(
+        self,
+        controller: ExpansionController,
+        mock_llm: AsyncMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """HYBRID expansion emits hybrid_expansion_start and hybrid_expansion_complete (eval contract)."""
+        caplog.set_level("INFO", logger="personal_agent.orchestrator.expansion_controller")
+        mock_results = [_make_sub_agent_result(f"task_{i}") for i in range(3)]
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            await controller.execute(
+                query="Compare Redis, Memcached, and Hazelcast",
+                strategy="HYBRID",
+                llm_client=mock_llm,
+                trace_id="test-trace-hybrid-events",
+                messages=[{"role": "user", "content": "Compare Redis, Memcached, and Hazelcast"}],
+            )
+
+        assert "hybrid_expansion_start" in caplog.text
+        assert "hybrid_expansion_complete" in caplog.text
+
+    @pytest.mark.asyncio
     async def test_fallback_on_invalid_plan(
         self, controller: ExpansionController, mock_llm: AsyncMock
     ) -> None:

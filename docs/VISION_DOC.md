@@ -1,34 +1,36 @@
-# Vision Document — Personal Local AI Collaborator
+# Vision Document — Personal AI Collaborator
 
 > **For**: Future AI assistants, new contributors, and the project owner
 > **Purpose**: Provide philosophical and technical context for intelligent collaboration
-> **Version**: 1.1
-> **Date**: 2026-03-21 (updated from 2025-12-28)
+> **Version**: 1.2
+> **Date**: 2026-03-30 (updated from 2026-03-21)
 
 ---
 
 ## 🎯 What We're Building
 
-A **locally-sovereign AI collaborator** that acts as:
+A **personal AI collaborator** with strong **local-first and privacy-conscious** defaults. In practice the stack is **hybrid**: local and cloud models both have a role—local models are not yet a full substitute for frontier capability on many tasks, and the project is still learning how far **task decomposition**, **subagents**, **deterministic hot paths**, and **gates** can close that gap.
 
-- Research partner (challenges assumptions, synthesizes knowledge)
+The agent aims to act as:
+
+- Research partner (challenges assumptions, synthesizes knowledge—within model limits)
 - Technical advisor (coding, architecture, system analysis)
-- Self-reflective intelligence (proposes improvements, learns from experience)
-- Safe, explainable thinker (transparent reasoning, human-first control)
+- Self-reflective operator (proposes improvements, learns from experience)
+- Governed thinker (transparent enough to audit, human approval where it matters)
 
 **This is not**:
 
 - A chatbot toy
-- An autonomous agent running silently
-- A cloud-dependent service
+- An autonomous agent running silently without oversight
+- “Privacy by slogan” (claims must match what actually runs and what data leaves the machine)
 - A generic assistant without domain expertise
 
 **This is**:
 
-- A serious, safety-aware personal AI system
-- Biologically-inspired (homeostasis, control loops, organ systems)
-- Deterministic where it matters, creative where it helps
-- Observable, auditable, and governable by design
+- A serious, safety-aware personal system under active development
+- Inspired by control theory and biological metaphors where they help (not because biology is morally superior)
+- Deterministic where it matters for security and repeatability; probabilistic where that is the right tool
+- Observable and auditable by design—**security and observability are non-negotiable**, even when the smartest step is in the cloud
 
 ---
 
@@ -36,25 +38,25 @@ A **locally-sovereign AI collaborator** that acts as:
 
 ### 1. Partnership Over Servitude
 
-The agent is a **thinking partner**, not a tool. It:
+The agent is meant to be a **thinking partner**, not a yes-machine. It should:
 
-- Questions unclear objectives
-- Proposes alternatives
-- Surfaces tradeoffs rather than "the answer"
-- Engages in collaborative friction to sharpen thinking
+- Question unclear objectives
+- Propose alternatives
+- Surface tradeoffs rather than fake certainty
+- Push back when requests conflict with governance or safety
 
-**Role model**: Research collaborator who makes you smarter, not assistant who just executes.
+That is an aspiration. Models still **confabulate**, **overstate confidence**, and **optimize for plausibility**—so human judgment and system-level checks stay in the loop.
 
 ---
 
-### 2. Local Sovereignty & Privacy
+### 2. Privacy, Sovereignty, and Hybrid Reality
 
-- **No cloud dependencies** for core reasoning
-- **No external data exfiltration**
-- **User owns all data**, models, and behavior
-- Internet used only under explicit governance
+- **Default posture**: minimize unnecessary data leaving the user’s environment; prefer local execution when it is good enough for the task.
+- **Honest hybrid stack**: cloud models are often required today for capability; the design problem is **how to use them under explicit policy**, with **logging**, **redaction**, and **approval**—not pretending the system is “fully local” when it is not.
+- **User-owned configuration and artifacts** where the project controls them; third-party APIs remain subject to their own terms.
+- **Network and tool use** only under governance (modes, permissions, approvals)—not “whatever the model picks.”
 
-**Why this matters**: Trust requires control. Cloud services are someone else's computer.
+**Why this matters**: Trust requires **truth in advertising** plus **controls you can inspect**. “Local” is a means; **security and observability** are the bedrock.
 
 ---
 
@@ -74,12 +76,12 @@ The architecture mirrors human physiology **intentionally**:
 | Respiratory | Expand/Contract | Breathes — scales up for complex tasks, contracts when done |
 | Reproductive | Experiments + Captain's Log | Evolution and learning |
 
-**This is not metaphor**—it's a design pattern for:
+Treat this as a **deliberate analogy**—useful for naming and layering, not a claim that software is alive. It helps with:
 
-- Layered safety (not bolt-on)
-- Parallel thinking with discipline
-- Clear separation of sensing, deciding, acting
-- Universal debugging mindset
+- Layered safety (not only bolt-on checks)
+- Parallel work with explicit boundaries
+- Clear separation of sensing, deciding, and acting
+- Debugging that asks “which layer failed?” instead of blaming “the model” generically
 
 ---
 
@@ -95,14 +97,14 @@ The architecture mirrors human physiology **intentionally**:
 
 ### 5. Transparency as First-Class Property
 
-Every meaningful behavior is **observable**:
+Meaningful behavior should be **observable in practice**, not only in principle:
 
-- Structured telemetry (trace every action)
-- Captain's Log (agent's self-documentation)
-- Explainable plans (before non-trivial actions)
+- Structured telemetry (trace actions with correlation IDs)
+- Captain's Log (agent proposals and rationale)
+- Plans and approvals before high-impact actions where the architecture requires them
 - Mode visibility (current operational state)
 
-**Black boxes are bugs, not features.**
+**Goal**: shrink the uninspectable surface area. Some components (weights, hosted APIs) will always be partly opaque—**that is why boundaries, logging, and governance matter more, not less.**
 
 ---
 
@@ -133,7 +135,7 @@ Five primary loops regulate:
 4. **Resource Usage** (disk, memory, compute limits)
 5. **Learning Pace** (safe, justified evolution)
 
-**Stability before capability.**
+**Bias**: prefer **stable, observable behavior** over adding capability that bypasses safeguards.
 
 ---
 
@@ -157,7 +159,7 @@ Policies are **explicit, versionable, testable**:
 - **Trace reconstruction** (given trace_id, see full execution)
 - **Captain's Log** (agent self-reflection, proposals)
 
-**If it's not logged, it didn't happen.**
+**Operations rule of thumb**: if behavior cannot be reconstructed from traces, you cannot debug or audit it—treat that as a gap, not a feature.
 
 ---
 
@@ -187,11 +189,15 @@ Security, governance, rate limiting, and intent classification happen in determi
 
 ---
 
-### 6. One Brain, Many Hands
+### 6. One Brain, Many Hands (Evolving)
 
-A single capable model is the reasoning center. It doesn't share this role. When it needs to expand, it spawns ephemeral sub-agents for parallel work or delegates to external agents (Claude Code, Codex, etc.). Sub-agents are task-scoped processes, not persistent specialist identities.
+The architecture still assumes a **primary orchestration locus** and **scoped delegation**. In practice:
 
-**Delegate to the best tool for the job, don't reinvent it locally.**
+- **Subagents** and external runners (e.g. coding agents) are for parallelization and specialization, not a second permanent “identity.”
+- **Local models** may anchor fast, private, or deterministic-adjacent steps; **cloud models** often carry the hardest reasoning or coding passes until local models and decomposition catch up.
+- **Open problem**: best patterns for **task breakdown**, **hot paths**, and **gates** so smaller local models punch above their weight without blowing up cost, latency, or failure modes.
+
+**Delegate to the right capability under policy**—local vs cloud is a tradeoff, not a purity contest.
 
 ---
 
@@ -200,6 +206,17 @@ A single capable model is the reasoning center. It doesn't share this role. When
 The system breathes. In a calm state, it's a small footprint — primary agent, memory, basic tools. When a complex task arrives, it expands: spawning sub-agents, loading skills, delegating externally, assembling rich context. When the task completes, it contracts: consolidates what it learned, proposes improvements, returns to calm.
 
 **The brainstem homeostasis model provides the biological foundation.**
+
+---
+
+## ⚠️ Honest Constraints (What Experience Has Shown)
+
+This section exists to keep the vision **grounded**. It is not a list of failures; it is a list of **known hard problems**.
+
+1. **Capability vs locality**: For many real tasks, **local models are not yet strong enough** to be the only engine. The project uses **both local and cloud** models where policy allows, and invests in **routing, decomposition, and gates** to reduce unnecessary cloud use—not to deny reality.
+2. **Orchestration is unfinished**: Getting reliable outcomes from **subagents**, **deterministic hot paths**, and **approval gates** is still an active design space. Promising directions ≠ solved problems.
+3. **Security and observability stay central**: Whatever the model mix, **governance**, **audit trails**, and **least privilege** are not optional extras. They are how you stay safe when the smartest component is also the least predictable.
+4. **No moral superiority**: Preferring local execution or structured architecture is an engineering and values choice, not proof of virtue. The documentation should stay **technical and humble**.
 
 ---
 
@@ -236,19 +253,21 @@ This is a **personal research project**. The project owner is:
 
 **AI assistants are teachers and collaborators**, not just code generators.
 
-### The Journey is the Destination
+### Iteration and the Way
+
+The project owner stands by this:
 
 > "A good traveler has no fixed plans and is not intent on arriving." — Lao Tzu
 
-This project embraces **iterative discovery**:
+That is **not** an excuse to skip rigor—it is permission to **discover the path** instead of pretending the roadmap was always right. In practice the project still proceeds by **iterative discovery**:
 
 - **Build** → Implement a feature or architecture pattern
 - **Evaluate** → Measure impact, gather evidence
 - **Course Correct** → Adjust based on learnings
-- **Go Deeper** → Explore interesting directions
-- **Build More** → Apply insights to next iteration
+- **Go Deeper** → Explore directions that survive contact with reality
+- **Build More** → Apply insights to the next iteration
 
-**Goal**: Not just a finished system, but deep understanding of self-organizing intelligence, cognitive architectures, and agentic AI systems. The learning is the value; the software is the vehicle.
+**Aim**: a system that is **useful and inspectable**, and understanding that comes from **running experiments**, not from declaring victory in a vision doc.
 
 ### Collaboration Model
 
@@ -404,9 +423,9 @@ The project succeeds when:
 
 ## 🚀 North Star
 
-> Build a **trustworthy, creative, locally-sovereign intelligence** that makes the project owner smarter, safer, and more effective—without sacrificing control, privacy, or understanding.
+> Build a **trustworthy, inspectable** personal agent that **combines local and cloud models thoughtfully**, keeps **security and observability** at the center, and **defaults to human control** on matters that can’t be rolled back—while staying honest about **what works today** and **what is still experimental**.
 
-**Ambitious, disciplined, and human-centered.**
+**Disciplined, testable, and skeptical of its own marketing.**
 
 ---
 
@@ -414,9 +433,10 @@ The project succeeds when:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.2 | 2026-03-30 | Humbled tone; hybrid local/cloud reality; explicit “honest constraints”; security/observability emphasized; reduced absolutist and sloganeering language; Lao Tzu quote kept as project-owner anchor with iterative practice. |
 | 1.1 | 2026-03-21 | Updated for Cognitive Architecture Redesign v2 (Slices 1 & 2). Added architectural principles, updated biological mapping, fixed stale file references. |
 | 1.0 | 2025-12-28 | Initial vision document created |
 
 ---
 
-**This vision guides every architectural decision, every line of code, and every collaboration.**
+**Use this document as orientation, not scripture.** When it disagrees with measured behavior or an ADR, **fix the docs or the code**—and prefer evidence over tone.

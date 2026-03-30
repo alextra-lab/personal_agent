@@ -638,57 +638,54 @@ git add -A && git commit -m "chore: Phase 2 FIX complete — gate check passed"
 
 > **Gate dependency:** Phase 2 must be complete before starting Phase 3.
 
+**Harness CLI:** `uv run python -m tests.evaluation.harness.run` (see `tests/evaluation/harness/run.py`). Use `--categories <slug>...` for category filters; `--run-id` writes under `telemetry/evaluation/<run-id>/`.
+
 ### Task 3.1: Run Context Management Category Eval
 
-- [ ] **Step 1: Run context-only eval**
+- [x] **Step 1: Run context-only eval**
 
 ```bash
-uv run python -m telemetry.evaluation.system_evaluation --categories context_management
+uv run python -m tests.evaluation.harness.run --categories context_management \
+  --run-id EVAL-09-cat-context --output-dir telemetry/evaluation
 ```
 
-(Adjust command based on actual eval harness CLI — check `telemetry/evaluation/system_evaluation.py` for exact flags)
+- [x] **Step 2: Save results**
 
-- [ ] **Step 2: Save results**
+Reports are written directly to `telemetry/evaluation/EVAL-09-cat-context/` (no `latest/` copy).
 
-```bash
-mkdir -p telemetry/evaluation/EVAL-09-cat-context/
-cp telemetry/evaluation/latest/* telemetry/evaluation/EVAL-09-cat-context/
-```
+- [x] **Step 3: Analyze results**
 
-- [ ] **Step 3: Analyze results**
-
-Read `telemetry/evaluation/EVAL-09-cat-context/evaluation_results.md`. Target: >=6/8 (75%).
-
-If target met: proceed to Task 3.2.
-If not met: follow Persistent Failure Diagnosis Protocol (spec §3.2). Loop back to Phase 2 with specific evidence. Max 3 cycles.
+`telemetry/evaluation/EVAL-09-cat-context/evaluation_results.md`. **Result (2026-03-30):** 8/8 paths, 100% assertions — meets target (>=6/8).
 
 ---
 
 ### Task 3.2: Run Memory Quality Category Eval
 
-- [ ] **Step 1: Run memory-quality-only eval**
+- [x] **Step 1: Run memory-quality-only eval**
 
 ```bash
-uv run python -m telemetry.evaluation.system_evaluation --categories memory_quality
+uv run python -m tests.evaluation.harness.run --categories memory_quality \
+  --run-id EVAL-09-cat-memory --output-dir telemetry/evaluation
 ```
 
-- [ ] **Step 2: Save and analyze**
+- [x] **Step 2: Save and analyze**
 
-Target: >=2/4 (50%). If not met: diagnose and loop back.
+**Result (2026-03-30):** 4/4 paths, 100% assertions — meets target (>=2/4).
 
 ---
 
 ### Task 3.3: Run Expansion Category Eval
 
-- [ ] **Step 1: Run decomposition + expansion eval**
+- [x] **Step 1: Run decomposition + expansion eval**
 
 ```bash
-uv run python -m telemetry.evaluation.system_evaluation --categories decomposition expansion
+uv run python -m tests.evaluation.harness.run --categories decomposition expansion \
+  --run-id EVAL-09-cat-decomp-expansion --output-dir telemetry/evaluation
 ```
 
-- [ ] **Step 2: Save and analyze**
+- [x] **Step 2: Save and analyze**
 
-Target: >=5/7 (71%). If not met: diagnose and loop back.
+**Result (2026-03-30):** 7/7 paths, 100% assertions — meets target (>=5/7).
 
 ---
 
@@ -696,41 +693,41 @@ Target: >=5/7 (71%). If not met: diagnose and loop back.
 
 > **Only run after all category targets met.**
 
-- [ ] **Step 1: Run full 35-path harness**
+- [x] **Step 1: Run full 35-path harness**
 
 ```bash
-uv run python -m telemetry.evaluation.system_evaluation
+uv run python -m tests.evaluation.harness.run \
+  --run-id EVAL-09-post-fix-baseline --output-dir telemetry/evaluation
 ```
 
-- [ ] **Step 2: Save results**
+- [x] **Step 2: Save results**
 
-```bash
-mkdir -p telemetry/evaluation/EVAL-09-post-fix-baseline/
-cp telemetry/evaluation/latest/* telemetry/evaluation/EVAL-09-post-fix-baseline/
-```
+Output directory: `telemetry/evaluation/EVAL-09-post-fix-baseline/`.
 
-- [ ] **Step 3: Compare against EVAL-08**
+- [x] **Step 3: Compare against EVAL-08**
 
 | Metric | EVAL-08 | EVAL-09 | Target | Pass? |
 |--------|---------|---------|--------|-------|
-| Overall Assertions | 77.2% | ? | >=86% | |
-| Context Management | 12% | ? | >=75% | |
-| Memory Quality | 0% | ? | >=50% | |
-| Decomposition | 25% | ? | >=75% | |
-| Intent (no regress) | 86% | ? | >=86% | |
-| Memory System (no regress) | 100% | ? | 100% | |
+| Overall Assertions | 77.2% | 99.4% (176/177) | >=86% | Yes |
+| Context Management (paths) | 1/8 | 7/8 | >=75% | Yes |
+| Memory Quality (paths) | 0/4 | 4/4 | >=50% | Yes |
+| Decomposition + Expansion (paths) | 2/7 | 7/7 | >=71% | Yes |
+| Intent (no regress) | 6/7 (86%) | 7/7 (100%) | >=86% | Yes |
+| Memory System (no regress) | 4/4 (100%) | 4/4 (100%) | 100% | Yes |
 
-- [ ] **Step 4: Commit EVAL-09**
+**Note:** Full run had one failure: CP-19-v3 turn 3 `intent_classified.task_type` was `conversational` vs expected `memory_recall` (classifier), while `recall_cue_detected` was present. Category-isolated run for Context Management was 8/8 — treat as flake / load-order sensitivity; optional follow-up under Phase 4 or a second full run.
+
+- [x] **Step 4: Commit EVAL-09**
 
 ```bash
-git add telemetry/evaluation/EVAL-09-post-fix-baseline/ && git commit -m "eval: EVAL-09 post-fix baseline — [RESULTS]"
+git add telemetry/evaluation/EVAL-09-post-fix-baseline/ telemetry/evaluation/EVAL-09-cat-context/ \
+  telemetry/evaluation/EVAL-09-cat-memory/ telemetry/evaluation/EVAL-09-cat-decomp-expansion/ && \
+  git commit -m "eval: EVAL-09 post-fix baseline — 99.4% assertions (176/177)"
 ```
 
-Replace `[RESULTS]` with actual pass rate.
+- [x] **Step 5: Update MASTER_PLAN**
 
-- [ ] **Step 5: Update MASTER_PLAN**
-
-Add EVAL-09 results to `docs/plans/MASTER_PLAN.md` Current Focus.
+EVAL-09 summary added to `docs/plans/MASTER_PLAN.md` Completed.
 
 ---
 

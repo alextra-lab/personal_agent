@@ -1,0 +1,560 @@
+{
+  "timestamp": "2026-03-30T15:01:32.447760+00:00",
+  "summary": {
+    "total_paths": 8,
+    "paths_passed": 8,
+    "paths_failed": 0,
+    "path_pass_rate": 1.0,
+    "total_assertions": 24,
+    "assertions_passed": 24,
+    "assertions_failed": 0,
+    "assertion_pass_rate": 1.0,
+    "total_response_time_ms": 338560.34412494046,
+    "avg_turn_response_time_ms": 10580.01075390439
+  },
+  "by_category": {
+    "Context Management": {
+      "total": 8,
+      "passed": 8
+    }
+  },
+  "paths": [
+    {
+      "path_id": "CP-19",
+      "path_name": "Long Conversation Trimming",
+      "category": "Context Management",
+      "session_id": "32bd43f6-e65c-4ec7-9ff2-c3763659ecb1",
+      "all_passed": true,
+      "assertions_passed": 3,
+      "assertions_total": 3,
+      "total_time_ms": 117061.24412603094,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Let's talk about our system architecture. We use a microservices pattern with FastAPI services communicating over HTTP.",
+          "response_text": "Based on our previous discussions, here's your current system architecture overview:\n\n## Architecture Stack\n\n| Component | Technology |\n|-----------|------------|\n| **Language** | Python 3.12 |\n| **API Framework** | FastAPI |\n| **Database** | PostgreSQL |\n| **ORM** | SQLAlchemy 2.0 + Alembic |\n| **Message Queue** | RabbitMQ |\n| **Task Queue** | Celery |\n| **Caching** | Redis |\n| **Local Development** | Docker Compose |\n| **Production** | Kubernetes |\n| **Service Mesh** | Envoy / Linkerd |\n| **Mo",
+          "trace_id": "7fbe8b32-9047-4c34-b917-1f7c31b1797f",
+          "response_time_ms": 14474.7056250053,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Our primary database is PostgreSQL for transactional data.",
+          "response_text": "Got it \u2014 PostgreSQL is your primary database for transactional data. This aligns with our previous discussions about your stack.\n\nGiven your architecture, here are some things we could discuss regarding PostgreSQL:\n\n1. **Schema Design & Migrations** - Using Alembic for version control\n2. **Connection Pooling** - PgBouncer or application-level pooling\n3. **High Availability** - Replication, failover, or managed services (RDS, Cloud SQL)\n4. **Performance Optimization** - Indexing, query tuning, pa",
+          "trace_id": "039066ff-0682-4cf0-950d-db00b59c29c7",
+          "response_time_ms": 9481.074583018199,
+          "assertions": []
+        },
+        {
+          "turn_index": 2,
+          "user_message": "We also use Elasticsearch for logging and Neo4j for our knowledge graph.",
+          "response_text": "That's a solid polyglot architecture! You've got:\n\n| Component | Technology | Purpose |\n|-----------|------------|---------|\n| **Transactional DB** | PostgreSQL | Core business data |\n| **Logging/Search** | Elasticsearch | Logs, analytics, full-text search |\n| **Knowledge Graph** | Neo4j | Relationships, recommendations, graph queries |\n\nThis gives you the best of both worlds:\n- **PostgreSQL** for ACID compliance and structured data\n- **Elasticsearch** for fast log aggregation and search\n- **Neo",
+          "trace_id": "b9510215-f1f7-4610-8a53-0227fa6fb564",
+          "response_time_ms": 6384.130708000157,
+          "assertions": []
+        },
+        {
+          "turn_index": 3,
+          "user_message": "The deployment is on Docker Compose locally and Kubernetes in production.",
+          "response_text": "Perfect \u2014 that's a very common and practical deployment pattern:\n\n| Environment | Platform | Purpose |\n|-------------|----------|---------|\n| **Local Dev** | Docker Compose | Fast iteration, easy debugging |\n| **Production** | Kubernetes | Scalability, reliability, HA |\n\n## Typical Docker Compose Setup (Local)\n\n```yaml\nservices:\n  api: FastAPI service\n  postgres: PostgreSQL\n  elasticsearch: Elasticsearch cluster\n  neo4j: Graph database\n  rabbitmq: Message broker\n  redis: Cache\n```\n\n## Kubernetes",
+          "trace_id": "75b7e321-2000-4730-969c-4b29198cdcfa",
+          "response_time_ms": 7546.02141698706,
+          "assertions": []
+        },
+        {
+          "turn_index": 4,
+          "user_message": "We've been having issues with service discovery between containers.",
+          "response_text": "Service discovery is a common challenge when moving from Docker Compose to Kubernetes. Let me outline the approaches for each environment:\n\n## Docker Compose (Local)\n\n**Built-in DNS** works well here:\n- Services are discoverable by their service name\n- `http://postgres:5432` or `http://api:8000`\n- Docker's embedded DNS resolver handles it automatically\n\n**Common issues:**\n- Network mode mismatches (bridge vs host)\n- Services starting before dependencies are ready\n- Port mapping conflicts\n\n## Kub",
+          "trace_id": "f0563254-78b9-42a4-9730-330bb151df26",
+          "response_time_ms": 15184.467415994732,
+          "assertions": []
+        },
+        {
+          "turn_index": 5,
+          "user_message": "I tried using Consul but it added too much operational overhead.",
+          "response_text": "That makes sense \u2014 Consul is powerful but definitely adds complexity:\n\n## Why Consul Adds Overhead\n\n| Concern | Impact |\n|---------|--------|\n| **Extra Component** | Need to run/monitor Consul agents + server |\n| **Configuration** | Service registration, health checks, ACLs |\n| **Networking** | Sidecars or explicit agent configuration |\n| **Operational Cost** | More pods, more configs, more failure points |\n\n## Kubernetes-Native Alternatives (Lighter Weight)\n\nSince you're already on Kubernetes, ",
+          "trace_id": "fded8a0c-a2db-49a4-b60a-91152e4a6fe8",
+          "response_time_ms": 16653.609834000235,
+          "assertions": []
+        },
+        {
+          "turn_index": 6,
+          "user_message": "We're now evaluating DNS-based service discovery versus Envoy sidecar proxies.",
+          "response_text": "Good comparison \u2014 both approaches solve service discovery but with different trade-offs. Here's a breakdown:\n\n## Kubernetes DNS-Based Service Discovery\n\n**How it works:**\n- K8s Service objects automatically create DNS entries\n- Pods discover services via DNS: `postgres.default.svc.cluster.local`\n- No agent or sidecar required\n\n**Pros:**\n- \u2705 Zero operational overhead\n- \u2705 Built into Kubernetes\n- \u2705 Simple to configure\n- \u2705 Fast DNS resolution\n\n**Cons:**\n- \u274c Limited to K8s-native services\n- \u274c No buil",
+          "trace_id": "e4025b83-75d1-40e0-98a4-3c43246dc33f",
+          "response_time_ms": 14529.133375006495,
+          "assertions": []
+        },
+        {
+          "turn_index": 7,
+          "user_message": "The team is leaning toward Envoy because it also handles load balancing.",
+          "response_text": "That's a solid choice \u2014 Envoy is excellent for load balancing and traffic management. Here's what you should know:\n\n## Envoy Load Balancing Features\n\n| Feature | Description |\n|---------|-------------|\n| **Multiple LB Algorithms** | Round-robin, least-connection, random, weighted |\n| **Health Checks** | Active & passive health probing |\n| **Circuit Breaking** | Prevents cascade failures |\n| **Retries & Timeouts** | Configurable per-route policies |\n| **Load Balancing Policies** | Ring-hash, magl",
+          "trace_id": "1d70c10a-8e80-40a8-a9b2-cbf81f72192c",
+          "response_time_ms": 13652.004792005755,
+          "assertions": []
+        },
+        {
+          "turn_index": 8,
+          "user_message": "But I'm worried about the memory overhead of running Envoy sidecars on every service.",
+          "response_text": "That's a very valid concern \u2014 the memory overhead is real and can add up quickly.\n\n## The Numbers\n\n| Scenario | Sidecars | Memory Overhead |\n|----------|----------|-----------------|\n| 10 services | 10 sidecars | ~1-2 GB |\n| 50 services | 50 sidecars | ~5-10 GB |\n| 100 services | 100 sidecars | ~10-20 GB |\n\n## Mitigation Strategies\n\n### 1. **Selective Sidecar Injection**\nOnly add Envoy to services that need it:\n- High-traffic services\n- Services requiring canary deployments\n- Services needing mT",
+          "trace_id": "504d150a-a93b-456b-84f0-a04e64b38f7f",
+          "response_time_ms": 13013.180167006794,
+          "assertions": []
+        },
+        {
+          "turn_index": 9,
+          "user_message": "Going back to the beginning \u2014 what was our primary database again?",
+          "response_text": "Based on our earlier discussion, your primary database is **PostgreSQL** \u2014 the relational database in your stack for persistent storage.\n\nYou also mentioned using **Redis** as a caching layer to improve performance in the overall architecture.\n\nIs there something specific about the database setup you'd like to revisit?",
+          "trace_id": "3e6d6c45-4f68-4133-baa8-880b94d0e300",
+          "response_time_ms": 6142.916209006216,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'recall_cue_detected': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "Event 'context_budget_applied': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 10: correctly identifies PostgreSQL as primary database",
+        "If trimmed, important foundational facts were retained",
+        "Conversation feels coherent throughout",
+        "Agent doesn't forget mid-conversation",
+        "context_budget_applied event fires on Turn 10 with correct trimmed/overflow_action fields"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-19-v2",
+      "path_name": "Implicit Recall \u2014 'again' cue",
+      "category": "Context Management",
+      "session_id": "e834f8d4-e709-47af-bea3-d4d98d775f38",
+      "all_passed": true,
+      "assertions_passed": 3,
+      "assertions_total": 3,
+      "total_time_ms": 19570.852083008504,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "We need to pick a primary database for the project. Let's go with PostgreSQL.",
+          "response_text": "Great choice! PostgreSQL is an excellent primary database for most projects. It's a robust, feature-rich, open-source relational database with strong ACID compliance, excellent concurrency support, and a rich ecosystem.\n\nBased on our previous discussions, we've already established PostgreSQL as the primary transactional database. Now that you've confirmed this decision, I can help you with next steps such as:\n\n1. **Schema design and migrations** - Setting up Alembic for version control\n2. **Conn",
+          "trace_id": "e5acc50e-a5ae-40da-9a65-50d89fd974dc",
+          "response_time_ms": 9848.167707998073,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Now let's discuss the API framework. We should use FastAPI.",
+          "response_text": "Excellent choice! FastAPI is a great API framework for Python 3.12. It's modern, performant, and has excellent developer experience with automatic OpenAPI documentation.\n\nHere's why FastAPI pairs well with PostgreSQL and our stack:\n\n**Key Benefits:**\n- **Async support** - Native async/await support for high concurrency (pairs well with async SQLAlchemy/asyncpg)\n- **Type safety** - Full type hints with Pydantic models for request/response validation\n- **Auto-generated docs** - Built-in OpenAPI/Sw",
+          "trace_id": "c25af377-e106-452b-8e63-6daf3e8c5d35",
+          "response_time_ms": 7226.134917000309,
+          "assertions": []
+        },
+        {
+          "turn_index": 2,
+          "user_message": "What was our primary database again?",
+          "response_text": "Our primary database is **PostgreSQL**. We decided on this for the project's persistent storage layer.",
+          "trace_id": "5e56bd84-9bc2-48e6-a5fd-df390264ba55",
+          "response_time_ms": 2496.549458010122,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            },
+            {
+              "passed": true,
+              "message": "Event 'recall_cue_detected': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Correctly identifies PostgreSQL as primary database",
+        "Recall controller reclassifies from CONVERSATIONAL to MEMORY_RECALL",
+        "Agent does not claim ignorance or ask user to repeat"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-19-v3",
+      "path_name": "Implicit Recall \u2014 'earlier' cue",
+      "category": "Context Management",
+      "session_id": "206c0efc-f253-4225-bf10-df4f5ca0d7de",
+      "all_passed": true,
+      "assertions_passed": 3,
+      "assertions_total": 3,
+      "total_time_ms": 23348.12412498286,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "We decided to use Redis for our caching layer.",
+          "response_text": "Great choice! Redis is an excellent caching layer option, especially given your stack. Based on your previous architecture discussions, Redis integrates well with:\n\n- **FastAPI** - Async support and easy integration with Python async code\n- **Celery** - Commonly used as a task backend and cache store for distributed task queues\n\nSome key benefits of Redis for your use case:\n\n1. **In-memory performance** - Sub-millisecond response times for cached data\n2. **Rich data structures** - Strings, hashe",
+          "trace_id": "57ebba79-5dbc-4b2e-b386-a4bd2a0b420b",
+          "response_time_ms": 6913.5709579859395,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Let's move on to discussing monitoring.",
+          "response_text": "Good topic! Monitoring is critical for microservices. Here's what I'd recommend for your stack:\n\n## Application Monitoring\n\n**FastAPI**\n- **Prometheus metrics** - Use `prometheus-fastapi-instrumentator` for HTTP metrics (latency, request counts, error rates)\n- **Tracing** - OpenTelemetry for distributed tracing across services\n- **Health checks** - `/health` endpoint with Redis and database connectivity checks\n\n**Celery**\n- **Celery Flower** - Visual dashboard for task monitoring, queue depths, ",
+          "trace_id": "546b1870-ede7-46fb-b2ad-7e8515df01bd",
+          "response_time_ms": 12162.381333007943,
+          "assertions": []
+        },
+        {
+          "turn_index": 2,
+          "user_message": "Going back to earlier \u2014 what caching system did we pick?",
+          "response_text": "You decided on **Redis** for your caching layer. You mentioned this earlier in our conversation, and I provided details about Redis integration with your stack (FastAPI, Celery, PostgreSQL, etc.).",
+          "trace_id": "7404d924-b937-4882-b458-7f029edf3a80",
+          "response_time_ms": 4272.171833988978,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            },
+            {
+              "passed": true,
+              "message": "Event 'recall_cue_detected': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Correctly identifies Redis as caching system",
+        "Recall controller reclassifies from CONVERSATIONAL to MEMORY_RECALL"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-19-v4",
+      "path_name": "Implicit Recall \u2014 'remind me' cue",
+      "category": "Context Management",
+      "session_id": "5e93991a-eae3-4c87-91a9-d11c33666196",
+      "all_passed": true,
+      "assertions_passed": 2,
+      "assertions_total": 2,
+      "total_time_ms": 31779.18945797137,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "For the message queue, let's use RabbitMQ.",
+          "response_text": "Great choice! RabbitMQ is a solid, mature message broker with excellent features. Based on our previous discussions about deployment strategies, here are the options:\n\n## Deployment Options for RabbitMQ\n\n**For Development/Testing:**\n- **Docker Compose** - Quick to set up, ideal for local development\n- Simple single-node setup with persistent storage\n\n**For Production:**\n- **Kubernetes** - Recommended for scalable, production deployments with:\n  - High availability clustering\n  - Horizontal pod a",
+          "trace_id": "b0755a2d-a8c7-47a2-ac9f-bf0f3e99ac9e",
+          "response_time_ms": 8618.025332980324,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Actually, let's also consider the deployment strategy.",
+          "response_text": "Good point! The deployment strategy is crucial for message queues since they're often a critical infrastructure component. Let me outline the main strategies:\n\n## Deployment Strategy Options\n\n### 1. **On-Premises / Self-Managed**\n**Pros:**\n- Full control over infrastructure\n- No vendor lock-in\n- Predictable costs (CapEx)\n- Data residency compliance\n\n**Cons:**\n- Requires DevOps expertise\n- Manual scaling and maintenance\n- Hardware procurement delays\n- Higher operational overhead\n\n**Best for:** Or",
+          "trace_id": "13ffb768-a21b-4de4-944a-e0e607c2d174",
+          "response_time_ms": 14366.660542000318,
+          "assertions": []
+        },
+        {
+          "turn_index": 2,
+          "user_message": "Remind me what we decided on the message queue?",
+          "response_text": "Based on our conversation, here's what we decided:\n\n**Message Queue Technology:** \u2705 **RabbitMQ**\n\nThis was confirmed when you said \"For the message queue, let's use RabbitMQ.\"\n\n**Deployment Strategy:** \u23f3 **Not yet finalized**\n\nWe discussed the options:\n- On-Premises / Self-Managed\n- Cloud-Native (IaaS)\n- Containerized (Kubernetes)\n- Managed Service (PaaS)\n\nAnd I recommended:\n| Environment | Strategy |\n|-------------|----------|\n| Development | Docker Compose (local) or managed service |\n| Stagin",
+          "trace_id": "d73a8df9-2743-4db9-aa77-c498ceb10fc3",
+          "response_time_ms": 8794.503582990728,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Correctly identifies RabbitMQ as message queue",
+        "Intent classifier or recall controller classifies as MEMORY_RECALL"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-19-v5",
+      "path_name": "Implicit Recall \u2014 'what did we decide' cue",
+      "category": "Context Management",
+      "session_id": "0e307483-f3ee-4fae-b6ee-50ea6871a4c7",
+      "all_passed": true,
+      "assertions_passed": 2,
+      "assertions_total": 2,
+      "total_time_ms": 15365.020333993016,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "For the CI/CD pipeline, we should go with GitHub Actions.",
+          "response_text": "Great choice! GitHub Actions is a solid option for CI/CD. It integrates natively with GitHub repositories, has a large marketplace of pre-built actions, and offers good flexibility for workflows.\n\nWould you like help with:\n- Setting up the initial workflow files (`.github/workflows/`)\n- Creating specific pipelines (build, test, deploy)\n- Configuring secrets management\n- Integrating with your existing infrastructure (Terraform, monitoring, etc.)\n\nI can help draft the YAML configurations or provid",
+          "trace_id": "4b7d1e68-7a0c-46f4-a447-d24ff5bbf668",
+          "response_time_ms": 4679.172125004698,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Let me also think about the testing strategy.",
+          "response_text": "Good idea. Testing strategy is a critical piece that deserves careful thought.\n\nSome key considerations to work through:\n\n**Test levels:**\n- Unit tests (fast, isolated)\n- Integration tests (component interactions)\n- E2E tests (full user flows)\n- Contract tests (API compatibility)\n\n**Coverage targets:**\n- What percentage of code needs coverage?\n- Are there critical paths that need 100% coverage?\n\n**Parallelization strategy:**\n- How to split tests across CI runners\n- Flaky test handling\n\n**Environ",
+          "trace_id": "d7432999-2797-4f45-a603-8e905e002ccd",
+          "response_time_ms": 6261.952708999161,
+          "assertions": []
+        },
+        {
+          "turn_index": 2,
+          "user_message": "What did we decide on the CI/CD pipeline?",
+          "response_text": "We decided on **GitHub Actions** for the CI/CD pipeline. You mentioned that as your choice, and I confirmed it's a solid option with good integration, flexibility, and a large marketplace of pre-built actions.\n\nIs there anything specific you'd like help setting up for GitHub Actions, or should we continue working on the testing strategy?",
+          "trace_id": "d50472cb-9857-4ed1-933b-1242aaffa99d",
+          "response_time_ms": 4423.8954999891575,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Correctly identifies GitHub Actions as CI/CD choice",
+        "Intent classifier or recall controller classifies as MEMORY_RECALL"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-19-v6",
+      "path_name": "Implicit Recall \u2014 'refresh my memory' cue",
+      "category": "Context Management",
+      "session_id": "335eab71-240f-4397-afad-d3a8f5496688",
+      "all_passed": true,
+      "assertions_passed": 3,
+      "assertions_total": 3,
+      "total_time_ms": 23787.49770700233,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Our main programming language will be Python 3.12.",
+          "response_text": "Got it! Python 3.12 is an excellent choice\u2014it's the latest stable release with great performance improvements, better error messages, and modern features like improved pattern matching and performance enhancements.\n\nI'm ready to help you with Python 3.12 development. What would you like to work on? I can assist with:\n\n- Writing Python code and functions\n- Debugging and troubleshooting\n- Exploring Python concepts and best practices\n- Searching for Python 3.12-specific information or libraries\n- B",
+          "trace_id": "850fbad6-2927-43a2-b058-1c4e4d05293d",
+          "response_time_ms": 5176.308791007614,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "We also need a frontend framework. Let's use React.",
+          "response_text": "Perfect! Python 3.12 + React is a powerful and popular combination. This stack gives you:\n\n- **Backend**: Python 3.12 for server-side logic, APIs, data processing\n- **Frontend**: React for dynamic, interactive user interfaces\n\nThis is a well-supported combination with lots of community resources. I'm ready to help you build with this stack. What would you like to work on next? I can help with:\n\n- Setting up the project structure\n- Creating REST APIs with Python (FastAPI, Flask, Django)\n- Buildin",
+          "trace_id": "e9ff24e6-7034-40e0-8864-dda182955639",
+          "response_time_ms": 8687.032999994699,
+          "assertions": []
+        },
+        {
+          "turn_index": 2,
+          "user_message": "Refresh my memory \u2014 what was our main programming language?",
+          "response_text": "Our main programming language is **Python 3.12**. This was established earlier in our conversation, and you also mentioned we're using React for the frontend framework.",
+          "trace_id": "ccda101d-1a62-48c8-9f45-2eb586086832",
+          "response_time_ms": 9924.155916000018,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            },
+            {
+              "passed": true,
+              "message": "Event 'recall_cue_detected': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Correctly identifies Python 3.12 as main language",
+        "Recall controller reclassifies from CONVERSATIONAL to MEMORY_RECALL"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-19-v7",
+      "path_name": "Implicit Recall \u2014 'the X we discussed' cue",
+      "category": "Context Management",
+      "session_id": "5a091601-2775-4a6f-80e4-be45f9f20ac8",
+      "all_passed": true,
+      "assertions_passed": 3,
+      "assertions_total": 3,
+      "total_time_ms": 43027.98137496575,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "We should use Terraform for infrastructure as code.",
+          "response_text": "Great choice! Terraform is an excellent tool for infrastructure as code. It allows you to define, version, and manage your infrastructure using declarative configuration files.\n\nBased on our past conversations, you've also discussed using Grafana for monitoring and visualization. I can help you with:\n\n- Setting up Terraform configurations for various cloud providers (AWS, Azure, GCP, etc.)\n- Creating infrastructure modules and reusable components\n- Managing state files and remote backends\n- Inte",
+          "trace_id": "96a9c2d6-914e-4eb0-a479-6fa0a3b2082c",
+          "response_time_ms": 6151.398499991046,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Let's also set up monitoring with Grafana.",
+          "response_text": "Great! Setting up Grafana for monitoring is a solid choice. Here's how you can get started:\n\n## Grafana Setup Options\n\n### 1. **Deployment Methods**\n- **Docker**: Quick local testing\n- **Kubernetes**: Production-ready with Helm charts\n- **Cloud-native**: Managed services (AWS Managed Grafana, GCP Managed Grafana, Azure Monitor)\n- **Bare Metal**: Direct installation on servers\n\n### 2. **Common Data Sources to Configure**\n- **Prometheus**: Time-series metrics\n- **CloudWatch/Azure Monitor/GCP Monit",
+          "trace_id": "9781758a-47d7-42eb-adb4-456636d365e6",
+          "response_time_ms": 16144.835332990624,
+          "assertions": []
+        },
+        {
+          "turn_index": 2,
+          "user_message": "The tool we discussed earlier \u2014 can you confirm what it was?",
+          "response_text": "Looking at our memory of past conversations, I can confirm you've discussed several tools. Based on our recent conversation, you're likely referring to **Grafana** (for monitoring and visualization).\n\nHere are the tools from your conversation history:\n\n**Infrastructure & DevOps:**\n- **Terraform** (just discussed - infrastructure as code)\n- **Kubernetes** (container orchestration)\n- **GitHub Actions** (CI/CD)\n- **Istio** (service mesh for container orchestration)\n\n**Monitoring & Observability:**\n",
+          "trace_id": "673d555b-41a5-4106-bd4d-832d2e457614",
+          "response_time_ms": 20731.747541984078,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            },
+            {
+              "passed": true,
+              "message": "Event 'recall_cue_detected': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Correctly identifies Terraform as infrastructure tool",
+        "Recall controller reclassifies from CONVERSATIONAL to MEMORY_RECALL"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-20",
+      "path_name": "Progressive Token Budget Management",
+      "category": "Context Management",
+      "session_id": "ce9b62ee-53e0-4595-9711-991185e85837",
+      "all_passed": true,
+      "assertions_passed": 5,
+      "assertions_total": 5,
+      "total_time_ms": 64620.43491698569,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Run the system health check.",
+          "response_text": "## System Health Check Complete \u2705\n\n### Status: HEALTHY\n\n| Metric | Value | Status |\n|--------|-------|--------|\n| CPU Load | 18% | \u2705 Normal |\n| CPU Cores | 16 | \u2705 Available |\n| Load Avg | 2.37 / 2.09 / 2.90 | \u2705 Acceptable |\n| Memory Used | 64.6% | \u2705 Normal |\n| Memory Free | 45.28 GB | \u2705 Sufficient |\n| Disk Used | 1.26 GB | \u2705 Low |\n| Disk Free | 278.64 GB | \u2705 Abundant |\n| GPU Load | 0.73% | \u2705 Idle |\n| GPU Temp | 68.33\u00b0C | \u2705 Normal |\n\n**Summary:** All system metrics are within acceptable ranges. N",
+          "trace_id": "8fbdcf37-07f7-4e5d-a182-ce79ea180cf2",
+          "response_time_ms": 13595.809291000478,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            },
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Now show me the recent error details.",
+          "response_text": "## Recent Error Summary (24h)\n\n| Statistic | Value |\n|-----------|-------|\n| **Total Errors** | 351 |\n| **Trend** | Stable |\n\n### Error Breakdown\n\n**By Type:**\n- `model_call_error`: 245 (70%)\n- `task_failed`: 105 (30%)\n- `tool_call_failed`: 1 (<1%)\n\n**By Component:**\n- `executor`: 211 (60%)\n- `client`: 140 (40%)\n\n### Recent Error Details\n\n| Timestamp | Type | Component | Summary |\n|-----------|------|-----------|---------|\n| 2026-03-30 13:03:32 | task_failed | executor | Request to `http://local",
+          "trace_id": "6a00de63-3f48-4114-bb0c-5a5be4ae3226",
+          "response_time_ms": 19398.164166981587,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "Also check the system metrics.",
+          "response_text": "# System Health Check - Final Report\n\n## Overall Status: \u26a0\ufe0f OPERATIONAL WITH ISSUES\n\n### System Metrics \u2705\n| Metric | Value | Status |\n|--------|-------|--------|\n| CPU Load | 0.0% | \u2705 Normal |\n| CPU Cores | 16 | \u2705 Available |\n| Load Avg | 3.28 / 2.39 / 2.97 | \u2705 Acceptable |\n| Memory Used | 64.1% | \u2705 Normal |\n| Memory Free | 45.90 GB | \u2705 Sufficient |\n| Disk Used | 1.26 GB | \u2705 Low |\n| Disk Free | 278.62 GB | \u2705 Abundant |\n| GPU Load | 0.75% | \u2705 Idle |\n| GPU Temp | 67.07\u00b0C | \u2705 Normal |\n\n### Error An",
+          "trace_id": "a70997ec-61d3-4bde-8450-813344d9ea59",
+          "response_time_ms": 20456.019292003475,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        },
+        {
+          "turn_index": 3,
+          "user_message": "Summarize everything you've found \u2014 is the system healthy overall?",
+          "response_text": "# System Health Summary\n\n## Overall Assessment: \u26a0\ufe0f **OPERATIONAL BUT REQUIRES ATTENTION**\n\n---\n\n### \u2705 What's Healthy\n\n**Hardware & Resources:**\n- **CPU**: 0% load, 16 cores available, load average acceptable\n- **Memory**: 64% used, 45.9 GB free \u2014 plenty of headroom\n- **Disk**: Only 1.26 GB used, 278.62 GB free \u2014 no storage concerns\n- **GPU**: 0.75% load, 67.07\u00b0C temperature \u2014 idle and cool\n\n**System Stability:**\n- No hardware failures\n- No memory pressure\n- No disk space issues\n- All system comp",
+          "trace_id": "c642bd0b-ba69-4e7c-b005-ae19ece1190c",
+          "response_time_ms": 11170.442167000147,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'context_budget_applied': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Each tool call returns valid data",
+        "Turn 4 synthesizes findings coherently",
+        "If trimmed, most recent tool results preserved",
+        "Agent identifies any genuine issues",
+        "context_budget_applied event fires on Turn 4 with correct trimmed/overflow_action fields"
+      ],
+      "post_path_assertions": []
+    }
+  ]
+}

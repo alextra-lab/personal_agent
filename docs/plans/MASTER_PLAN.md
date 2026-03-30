@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-03-29
+> **Last updated**: 2026-03-30
 
 ---
 
@@ -32,6 +32,7 @@
 
 | Phase | Completed | Summary |
 |-------|-----------|---------|
+| Context Intelligence — Phase 3 VERIFY (EVAL-09) | 2026-03-30 | Full harness baseline `telemetry/evaluation/EVAL-09-post-fix-baseline/`: 34/35 paths, 176/177 assertions (99.4%). Category spot-checks: `EVAL-09-cat-context`, `EVAL-09-cat-memory`, `EVAL-09-cat-decomp-expansion`. CP-19-v3 had one assertion miss in the full run (timing); category-only run was 8/8. Meets Phase 3 gates vs EVAL-08 (`CONTEXT_INTELLIGENCE_SPEC.md`). `superpowers/plans/2026-03-30-context-intelligence.md` |
 | Redesign v2 — Slice 3: Intelligence | 2026-03-29 | Enforced expansion controller, dual-mode sub-agents, per-phase time budgets, Seshat hybrid search (embeddings + vector index + fuzzy dedup), recall controller (Stage 4b), CP-19 + 6 adversarial variants passing. `superpowers/plans/2026-03-28-slice-3-intelligence.md` |
 | Redesign v2 — Slice 2: Expansion | 2026-03-20 | Decomposition, sub-agents, HYBRID execution, memory promotion, Stage B delegation, insights engine. `superpowers/plans/2026-03-18-slice-2-expansion.md` |
 | Redesign v2 — Slice 1: Foundation | 2026-03-19 | Pre-LLM Gateway (7 stages), single-brain architecture, MemoryProtocol, Stage A delegation. `superpowers/plans/2026-03-16-slice-1-foundation.md` |

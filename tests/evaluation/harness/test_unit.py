@@ -6,6 +6,8 @@ These do NOT require a running agent — they verify harness correctness.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from tests.evaluation.harness.models import (
@@ -22,6 +24,7 @@ from tests.evaluation.harness.models import (
     gte,
     present,
 )
+from tests.evaluation.harness.run import select_paths
 from tests.evaluation.harness.telemetry import TelemetryChecker
 
 # ---------------------------------------------------------------------------
@@ -117,6 +120,43 @@ class TestModels:
         assert result.passed_assertions == 1
         assert result.failed_assertions == 1
         assert result.total_time_ms == 150.0
+
+
+class TestSelectPaths:
+    """Tests for CLI path selection (no agent)."""
+
+    def test_categories_merges_decomposition_and_expansion(self) -> None:
+        """--categories decomposition expansion yields 7 unique paths in dataset order."""
+        args = SimpleNamespace(
+            paths=None,
+            categories=["decomposition", "expansion"],
+            category=None,
+            skip_setup=False,
+        )
+        paths = select_paths(args)
+        ids = [p.path_id for p in paths]
+        assert len(ids) == 7
+        assert len(set(ids)) == 7
+        assert set(ids) == {
+            "CP-08",
+            "CP-09",
+            "CP-10",
+            "CP-11",
+            "CP-16",
+            "CP-17",
+            "CP-18",
+        }
+
+    def test_categories_context_management_count(self) -> None:
+        """Context Management slug matches eight paths (CP-19 family + CP-20)."""
+        args = SimpleNamespace(
+            paths=None,
+            categories=["context_management"],
+            category=None,
+            skip_setup=False,
+        )
+        paths = select_paths(args)
+        assert len(paths) == 8
 
 
 # ---------------------------------------------------------------------------

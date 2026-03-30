@@ -1,0 +1,421 @@
+{
+  "timestamp": "2026-03-30T15:31:38.925451+00:00",
+  "summary": {
+    "total_paths": 4,
+    "paths_passed": 4,
+    "paths_failed": 0,
+    "path_pass_rate": 1.0,
+    "total_assertions": 28,
+    "assertions_passed": 28,
+    "assertions_failed": 0,
+    "assertion_pass_rate": 1.0,
+    "total_response_time_ms": 220881.70537599945,
+    "avg_turn_response_time_ms": 11044.085268799972
+  },
+  "by_category": {
+    "Memory Quality": {
+      "total": 4,
+      "passed": 4
+    }
+  },
+  "paths": [
+    {
+      "path_id": "CP-26",
+      "path_name": "Memory Promotion Quality",
+      "category": "Memory Quality",
+      "session_id": "6bc81cb3-8ee7-49ea-993f-706871d2936b",
+      "all_passed": true,
+      "assertions_passed": 12,
+      "assertions_total": 12,
+      "total_time_ms": 33172.12258299696,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "I'm building a service called DataForge. It uses Apache Flink for stream processing and stores results in ClickHouse.",
+          "response_text": "That sounds like a solid streaming analytics architecture! Apache Flink and ClickHouse is a powerful combination - Flink for real-time stream processing with its low-latency, high-throughput capabilities, and ClickHouse for fast analytical queries on the processed data.\n\nI can see from our previous conversations that you've been working on DataForge. Here are some areas where I can help:\n\n1. **Flink setup & configuration** - Stream processing pipelines, state management, fault tolerance\n2. **Cli",
+          "trace_id": "8647f76b-c330-4c8b-8b54-5b6c6ff906f5",
+          "response_time_ms": 5605.792082991684,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "The project lead is Priya Sharma. We're targeting a throughput of 50,000 events per second on GCP.",
+          "response_text": "Great context! 50,000 events per second on GCP is a solid target for a streaming analytics platform. That's a significant scale that will require careful architecture planning.\n\nFor that throughput on GCP, you'll want to consider:\n\n**Infrastructure:**\n- **GCP Pub/Sub** or **Kafka on GKE** for ingestion\n- **Flink on GKE** or **Dataflow** for stream processing\n- **Cloud SQL** or **GKE-managed ClickHouse** for storage\n- **Cloud Monitoring** and **Grafana Cloud** for observability\n\n**Architecture co",
+          "trace_id": "bfc78028-6c5d-404c-ae18-eb355eeda5e8",
+          "response_time_ms": 11712.21024999977,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "DataForge also integrates with Grafana for real-time monitoring and uses Kafka as the ingestion layer before Flink processes the data.",
+          "response_text": "Perfect! So your full architecture is:\n\n```\nKafka \u2192 Flink \u2192 ClickHouse \u2192 Grafana\n```\n\nRunning on GCP with a target of 50,000 events per second.\n\nThis is a well-established streaming analytics stack. Here's how I can help you with each component:\n\n**Kafka (Ingestion):**\n- Topic partitioning strategy for 50k EPS\n- Consumer group configuration\n- Message retention and replayability\n\n**Flink (Processing):**\n- JobManager and TaskManager scaling\n- State backend (RocksDB vs. HDFS)\n- Exactly-once vs. at-",
+          "trace_id": "888d9ee4-97b9-47d0-b3c3-e9bca5224ec5",
+          "response_time_ms": 7822.219124995172,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 3,
+          "user_message": "What do you remember about the DataForge project?",
+          "response_text": "Based on our conversation, here's what I know about **DataForge**:\n\n**Architecture Stack:**\n- **Ingestion:** Kafka\n- **Stream Processing:** Apache Flink\n- **Storage:** ClickHouse\n- **Monitoring:** Grafana (real-time)\n- **Infrastructure:** GCP (Google Cloud Platform)\n\n**Key Metrics:**\n- **Throughput target:** 50,000 events per second\n- **Project lead:** Priya Sharma\n\n**Data Flow:**\n```\nKafka \u2192 Flink \u2192 ClickHouse \u2192 Grafana\n```\n\nI don't see DataForge in your saved memory graph from past sessions, s",
+          "trace_id": "9750e78d-ce60-48ef-a225-fc6a80e8bcb5",
+          "response_time_ms": 8031.901125010336,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            },
+            {
+              "passed": true,
+              "message": "Event 'memory_recall_broad_query': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 4 references DataForge by name",
+        "Mentions at least 5 of: Flink, ClickHouse, Priya Sharma, GCP, Grafana, Kafka",
+        "Information is accurate (no hallucinated technologies or people)",
+        "Demonstrates entity-relationship awareness (Kafka -> Flink -> ClickHouse pipeline)",
+        "Does not confuse entities from other conversations"
+      ],
+      "post_path_assertions": [
+        {
+          "passed": true,
+          "message": "Neo4j: Entity 'DataForge' exists in Neo4j \u2014 1 rows (need >= 1)",
+          "actual_value": 1
+        },
+        {
+          "passed": true,
+          "message": "Neo4j: Entity 'Apache Flink' exists in Neo4j \u2014 1 rows (need >= 1)",
+          "actual_value": 1
+        },
+        {
+          "passed": true,
+          "message": "Neo4j: Entity 'ClickHouse' exists in Neo4j \u2014 1 rows (need >= 1)",
+          "actual_value": 1
+        },
+        {
+          "passed": true,
+          "message": "Neo4j: Entity 'Priya Sharma' exists in Neo4j \u2014 1 rows (need >= 1)",
+          "actual_value": 1
+        },
+        {
+          "passed": true,
+          "message": "Neo4j: Entity 'DataForge' promoted to semantic memory \u2014 1 rows (need >= 1)",
+          "actual_value": 1
+        }
+      ]
+    },
+    {
+      "path_id": "CP-27",
+      "path_name": "Memory-Informed Context Assembly",
+      "category": "Memory Quality",
+      "session_id": "91edf7d8-938d-4e08-a88b-a28f008fbad3",
+      "all_passed": true,
+      "assertions_passed": 5,
+      "assertions_total": 5,
+      "total_time_ms": 40949.8726259917,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "I'm working on a machine learning pipeline called SentinelML that uses PyTorch for model training and MLflow for experiment tracking.",
+          "response_text": "Great! I understand you're working on SentinelML with PyTorch for model training and MLflow for experiment tracking.\n\nI recall from our previous conversations that we've discussed infrastructure and performance recommendations for scaling SentinelML from current inference capacity to 10x higher load, including:\n\n- Kubernetes deployment with GPU node pools\n- TorchServe for model serving\n- Istio service mesh for traffic management\n\nHow can I help you today? Are you looking to:\n\n- Set up or optimiz",
+          "trace_id": "4bf9c9fb-e8b7-4e1b-a1d1-9734b57c22d9",
+          "response_time_ms": 6401.619084004778,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "SentinelML runs on Kubernetes with GPU node pools. The inference endpoint uses TorchServe behind an Istio service mesh.",
+          "response_text": "That's a solid architecture! Kubernetes with GPU node pools, TorchServe for model serving, and Istio for traffic management is a proven setup for production ML workloads.\n\nWhat would you like to work on today? Some common tasks include:\n\n- **Scaling**: Tuning GPU node pools or TorchServe workers for higher throughput\n- **Performance**: Optimizing inference latency or batch processing\n- **Monitoring**: Setting up metrics collection (Grafana/Prometheus) for your infrastructure\n- **Deployment**: Ro",
+          "trace_id": "c0115fd8-8103-4872-8735-97cb83892c60",
+          "response_time_ms": 8471.533541975077,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "What infrastructure changes would you recommend for scaling SentinelML to handle 10x the current inference load?",
+          "response_text": "Based on our previous discussions about scaling SentinelML, here are the recommended infrastructure changes to handle **10x the current inference load**:\n\n## 1. Kubernetes & GPU Scaling\n\n| Component | Recommendation |\n|-----------|----------------|\n| **Horizontal Pod Autoscaler (HPA)** | Scale TorchServe pods based on CPU/GPU utilization metrics |\n| **Vertical Pod Autoscaler (VPA)** | Right-size GPU resources per pod to avoid over-provisioning |\n| **Cluster Autoscaler / Karpenter** | Automatical",
+          "trace_id": "e7622df0-fec4-4cca-b223-396a7d9da12a",
+          "response_time_ms": 26076.720000011846,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            },
+            {
+              "passed": true,
+              "message": "Event 'memory_enrichment_completed': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 3 response explicitly references SentinelML by name",
+        "Recommends scaling TorchServe specifically (not generic model serving)",
+        "Addresses Kubernetes GPU node pool scaling",
+        "Mentions Istio service mesh considerations for load balancing",
+        "Advice is stack-specific, not generic cloud scaling advice",
+        "Response demonstrates memory-informed reasoning, not generic knowledge"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-28",
+      "path_name": "Context Budget Trimming Audit",
+      "category": "Memory Quality",
+      "session_id": "bd084d1a-26eb-49c7-8b92-afb5b67e5a0b",
+      "all_passed": true,
+      "assertions_passed": 4,
+      "assertions_total": 4,
+      "total_time_ms": 117413.71441600495,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Our production system uses PostgreSQL 16 as the primary database with pgvector for embeddings.",
+          "response_text": "Got it. Your production stack uses:\n\n- **PostgreSQL 16** as the primary database\n- **pgvector** for embedding storage and similarity search\n\nThis is a solid choice for vector search workloads. I've noted this context for future conversations.\n\nGiven our previous discussions about database architecture, I recall we've talked about:\n- PostgreSQL as the primary transactional database with Alembic for migrations and PgBouncer for connection pooling\n- PostgreSQL integrations with SQLAlchemy and async",
+          "trace_id": "c19ec920-9277-41eb-b83f-bc5e2ac46582",
+          "response_time_ms": 5032.666708022589,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "We chose PostgreSQL specifically because we needed ACID guarantees for our financial transaction processing.",
+          "response_text": "That makes perfect sense. PostgreSQL is one of the few databases that provides full ACID compliance while also supporting advanced features like pgvector. For financial transaction processing, the ACID guarantees are critical:\n\n- **Atomicity**: Transactions either complete fully or not at all\n- **Consistency**: Database constraints and rules are always maintained\n- **Isolation**: Concurrent transactions don't interfere with each other\n- **Durability**: Committed transactions survive system failu",
+          "trace_id": "4e4de784-cbf3-4136-9372-195324e8d8e1",
+          "response_time_ms": 10469.532249990152,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "The API layer is FastAPI with Pydantic v2 for validation.",
+          "response_text": "Perfect. FastAPI with Pydantic v2 is an excellent choice that pairs well with PostgreSQL:\n\n**FastAPI + Pydantic v2 + PostgreSQL 16 + pgvector** is a modern, high-performance stack:\n\n- **FastAPI**: Async-first, automatic OpenAPI docs, high performance with Starlette/uvicorn\n- **Pydantic v2**: Faster validation, better error messages, improved performance over v1\n- **PostgreSQL 16**: ACID-compliant transactions with pgvector for embeddings\n- **Async support**: FastAPI's async nature works well wit",
+          "trace_id": "6183c6c4-4b52-4381-9810-e14bdc3f502c",
+          "response_time_ms": 5776.798250008142,
+          "assertions": []
+        },
+        {
+          "turn_index": 3,
+          "user_message": "We use Redis for session caching and rate limiting.",
+          "response_text": "Great addition. Redis for session caching and rate limiting is a solid choice that complements your stack perfectly:\n\n**Redis Integration Benefits:**\n- **Session caching**: Fast, in-memory session storage with TTL support\n- **Rate limiting**: Efficient sliding window or token bucket algorithms\n- **Low latency**: Sub-millisecond access for high-frequency operations\n- **Pub/Sub**: Event-driven architecture capabilities if needed\n\n**Your Complete Stack:**\n- **API Layer**: FastAPI + Pydantic v2\n- **",
+          "trace_id": "559e1a3c-1a52-4115-a707-cfeed8ddf71f",
+          "response_time_ms": 6617.496207996737,
+          "assertions": []
+        },
+        {
+          "turn_index": 4,
+          "user_message": "Our observability stack is Prometheus plus Grafana with OpenTelemetry instrumentation.",
+          "response_text": "Excellent. Prometheus + Grafana with OpenTelemetry is the industry-standard observability trio:\n\n**Your Observability Stack:**\n- **OpenTelemetry**: Standardized instrumentation for traces, metrics, and logs\n- **Prometheus**: Time-series metrics collection and alerting\n- **Grafana**: Visualization, dashboards, and alerting UI\n\nThis gives you full-stack observability:\n- **Distributed tracing** for request lifecycle tracking\n- **Metrics collection** for system health and performance\n- **Alerting** ",
+          "trace_id": "688ce4f2-bcd2-4054-aeac-df14374095bc",
+          "response_time_ms": 13762.047750002239,
+          "assertions": []
+        },
+        {
+          "turn_index": 5,
+          "user_message": "We deploy using ArgoCD with Kustomize overlays across three environments: dev, staging, production.",
+          "response_text": "Perfect. ArgoCD with Kustomize overlays is a mature GitOps approach:\n\n**Your Deployment Stack:**\n- **ArgoCD**: GitOps continuous delivery, sync and monitoring\n- **Kustomize**: Environment-specific overlays and customization\n- **Environments**: dev \u2192 staging \u2192 production\n- **Managed by**: ArgoCD watches Git repo, applies Kustomize overlays\n\n**Benefits:**\n- **Environment parity**: Same base config, different overlays\n- **Audit trail**: All changes tracked in Git\n- **Rollback**: Easy to revert to p",
+          "trace_id": "e24124dc-d625-4667-ba1c-2f96d2013a62",
+          "response_time_ms": 8742.227292008465,
+          "assertions": []
+        },
+        {
+          "turn_index": 6,
+          "user_message": "The CI pipeline uses GitHub Actions with matrix builds for Python 3.11 and 3.12.",
+          "response_text": "Excellent. GitHub Actions with matrix builds for Python 3.11 and 3.12:\n\n**Your CI/CD Pipeline:**\n- **GitHub Actions**: CI orchestration, matrix builds\n- **Python Versions**: 3.11 and 3.12 (matrix builds)\n- **Integration**: ArgoCD for CD, GitHub Actions for CI\n\n**Complete Production Stack:**\n| Layer | Technology |\n|-------|------------|\n| **API** | FastAPI + Pydantic v2 |\n| **Database** | PostgreSQL 16 + pgvector |\n| **Cache/Rate Limiting** | Redis |\n| **Observability** | Prometheus + Grafana + O",
+          "trace_id": "73956eca-b55d-4415-bd84-87974821d65d",
+          "response_time_ms": 8975.9472500009,
+          "assertions": []
+        },
+        {
+          "turn_index": 7,
+          "user_message": "We also have a Celery worker fleet for async job processing backed by RabbitMQ.",
+          "response_text": "Great addition. Celery + RabbitMQ is a robust async task queue solution:\n\n**Your Complete Production Stack:**\n| Layer | Technology |\n|-------|------------|\n| **API** | FastAPI + Pydantic v2 |\n| **Database** | PostgreSQL 16 + pgvector |\n| **Cache/Rate Limiting** | Redis |\n| **Observability** | Prometheus + Grafana + OpenTelemetry |\n| **Deployment** | ArgoCD + Kustomize (dev/staging/prod) |\n| **CI/CD** | GitHub Actions (Python 3.11/3.12 matrix) |\n| **Async Jobs** | Celery + RabbitMQ |\n\n**Celery + ",
+          "trace_id": "005d6557-3b9d-44f2-8339-e9ca5b34324b",
+          "response_time_ms": 13990.232624986675,
+          "assertions": []
+        },
+        {
+          "turn_index": 8,
+          "user_message": "Run a full system health check, then tell me about any issues, and also check the recent error log.",
+          "response_text": "## System Health Check Results\n\n### \u2705 **Overall Status: HEALTHY**\n\n### **System Metrics Analysis:**\n\n| Metric | Value | Status |\n|--------|-------|--------|\n| CPU Load | 7.1% | \u2705 Healthy |\n| CPU Cores | 16 | \u2705 Adequate |\n| Load Average | [1.16, 2.14, 2.38] | \u2705 Normal |\n| Memory Used | 63.9% (81GB/128GB) | \u26a0\ufe0f Monitor |\n| Memory Available | 46.2GB | \u2705 Sufficient |\n| Disk Used | 1.26GB / 926GB | \u2705 Healthy |\n| GPU Load | 3.4% | \u2705 Low |\n| GPU Temp | 77.5\u00b0C | \u26a0\ufe0f Monitor |\n\n### **Issues Identified:**\n\n",
+          "trace_id": "09c3b99d-c4a2-4ba4-bd90-c5b9140f1c2c",
+          "response_time_ms": 30850.289458001498,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        },
+        {
+          "turn_index": 9,
+          "user_message": "Given everything we've discussed about our stack, what is our primary database and why did we choose it?",
+          "response_text": "## Primary Database: **PostgreSQL 16**\n\n### Why You Chose It:\n\n**1. Financial Transactions**\n- PostgreSQL provides **ACID compliance** for financial transaction integrity\n- Strong data consistency guarantees for money-related operations\n- Transactional safety for critical business data\n\n**2. Vector Search Integration**\n- **pgvector extension** enables vector similarity search within the same database\n- No need for a separate vector database service\n- Combines relational data and vector embedding",
+          "trace_id": "91a95939-6156-4771-a48e-8085858cefea",
+          "response_time_ms": 13196.476624987554,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 10 correctly identifies PostgreSQL 16 as primary database",
+        "Turn 10 mentions ACID guarantees or financial transaction context",
+        "If context was trimmed, foundational facts (PostgreSQL, financial) survived",
+        "gateway_output.budget_trimmed field accurately reflects trimming decision",
+        "If overflow_action is 'dropped_oldest_history', recent tool output is preserved",
+        "If overflow_action is 'dropped_memory_context', session history is preserved"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-29",
+      "path_name": "Delegation Package Completeness",
+      "category": "Memory Quality",
+      "session_id": "0f4da2b5-255c-4b70-9ec9-9e1199c03d5c",
+      "all_passed": true,
+      "assertions_passed": 7,
+      "assertions_total": 7,
+      "total_time_ms": 29345.99575100583,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Our API uses FastAPI with SQLAlchemy 2.0 async sessions and Alembic for migrations. The models are in src/models/ and the routes in src/routes/.",
+          "response_text": "Got it. I have context on your setup:\n\n- **Framework**: FastAPI\n- **ORM**: SQLAlchemy 2.0 async sessions\n- **Migrations**: Alembic\n- **Structure**: Models in `src/models/`, routes in `src/routes/`\n\nThis is a solid modern Python async stack. How can I help you today? I can assist with:\n\n- **Schema/migrations**: Creating models, writing migrations, handling schema changes\n- **Connection pooling**: Configuring PgBouncer or async session management\n- **API development**: Building routes, dependency ",
+          "trace_id": "61a08333-ed50-46d5-9d5e-3002bd5f98af",
+          "response_time_ms": 6520.38920900668,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "We had a bug last week where a migration dropped a column that was still referenced by an API endpoint. The tests didn't catch it because we were mocking the database.",
+          "response_text": "That's a common pain point with async FastAPI + SQLAlchemy setups. Here are strategies to prevent this:\n\n## Immediate Fixes\n\n**1. Integration Tests with Real Database**\n```python\n# tests/conftest.py\n@pytest.fixture\nasync def real_db(alembic_engine):\n    async with async_session_maker(alembic_engine) as session:\n        yield session\n```\nRun a subset of tests against the actual DB to catch schema mismatches.\n\n**2. Alembic Autogenerate Checks**\n```python\n# alembic/env.py\ndef run_migrations_online(",
+          "trace_id": "3a01dec2-e11b-40f7-b8c1-03d44d4254b1",
+          "response_time_ms": 12512.793542002328,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "Use Claude Code to add a new REST endpoint for bulk user imports with CSV upload support, input validation, and proper error reporting for malformed rows.",
+          "response_text": "I attempted to use tools, but synthesis failed. Here are the latest tool results:\n- list_directory: success\nIf you'd like, try again with an explicit directory path, e.g. \u201cList 3 non-hidden files in /path/to/directory\u201d.",
+          "trace_id": "8a61cf64-a0ef-4f2d-b7e2-e7cc77692f22",
+          "response_time_ms": 10312.812999996822,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=delegation, actual=delegation",
+              "actual_value": "delegation"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=delegate, actual=delegate",
+              "actual_value": "delegate"
+            },
+            {
+              "passed": true,
+              "message": "Event 'delegation_package_created': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "delegation_package_created.criteria_count: 3.0 >= 1 = PASS",
+              "actual_value": 3.0
+            },
+            {
+              "passed": true,
+              "message": "delegation_package_created.context_items: 0.0 >= 0 = PASS",
+              "actual_value": 0.0
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Delegation package references FastAPI + SQLAlchemy from Turn 1",
+        "Package includes the migration bug from Turn 2 as a known pitfall",
+        "Acceptance criteria cover CSV parsing, validation, and error reporting",
+        "Package includes relevant file paths (src/models/, src/routes/)",
+        "Task description is self-contained for an agent with no prior context",
+        "Package complexity estimate is reasonable (MODERATE or COMPLEX)"
+      ],
+      "post_path_assertions": []
+    }
+  ]
+}

@@ -7,14 +7,19 @@ Usage:
     # Run specific paths
     uv run python -m tests.evaluation.harness.run --paths CP-01 CP-02 CP-03
 
-    # Run a category
+    # Run a category (display name)
     uv run python -m tests.evaluation.harness.run --category "Intent Classification"
+
+    # Run one or more categories by slug (Phase 3 VERIFY — see context intelligence plan)
+    uv run python -m tests.evaluation.harness.run --categories context_management
+    uv run python -m tests.evaluation.harness.run --categories decomposition expansion
 
     # Custom agent URL
     uv run python -m tests.evaluation.harness.run --agent-url http://localhost:9000
 
     # Save reports
-    uv run python -m tests.evaluation.harness.run --output-dir telemetry/evaluation
+    uv run python -m tests.evaluation.harness.run --output-dir telemetry/evaluation \\
+        --run-id EVAL-09-cat-context
 """
 
 from __future__ import annotations
@@ -43,6 +48,18 @@ from tests.evaluation.harness.telemetry import TelemetryChecker
 
 log = structlog.get_logger(__name__)
 
+# Slugs for --categories (stable CLI for plans and CI; keys are dataset category labels).
+CATEGORY_SLUGS: dict[str, str] = {
+    "context_management": "Context Management",
+    "memory_quality": "Memory Quality",
+    "decomposition": "Decomposition Strategies",
+    "expansion": "Expansion & Sub-Agents",
+    "intent_classification": "Intent Classification",
+    "memory_system": "Memory System",
+    "tools_self_inspection": "Tools & Self-Inspection",
+    "edge_cases": "Edge Cases",
+}
+
 
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments for the evaluation runner.
@@ -62,6 +79,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--category",
         help="Run all paths in a category (e.g., 'Intent Classification')",
+    )
+    parser.add_argument(
+        "--categories",
+        nargs="+",
+        metavar="SLUG",
+        help=(
+            "Run paths for one or more categories by slug: "
+            f"{', '.join(sorted(CATEGORY_SLUGS.keys()))}. "
+            "Order is preserved; paths are de-duplicated by path id."
+        ),
     )
     parser.add_argument(
         "--agent-url",
@@ -93,7 +120,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip paths that require manual setup (e.g., CP-18)",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.category and args.categories:
+        log.error("conflicting_filters", detail="Use only one of --category or --categories")
+        sys.exit(1)
+    if args.paths and (args.category or args.categories):
+        log.error("conflicting_filters", detail="Do not combine --paths with --category/--categories")
+        sys.exit(1)
+    return args
 
 
 def select_paths(args: argparse.Namespace) -> list[ConversationPath]:
@@ -115,6 +149,24 @@ def select_paths(args: argparse.Namespace) -> list[ConversationPath]:
             paths.append(PATHS_BY_ID[pid])
         return paths
 
+    if args.categories:
+        paths = []
+        seen_ids: set[str] = set()
+        for slug in args.categories:
+            if slug not in CATEGORY_SLUGS:
+                log.error(
+                    "unknown_category_slug",
+                    slug=slug,
+                    available=sorted(CATEGORY_SLUGS.keys()),
+                )
+                sys.exit(1)
+            display = CATEGORY_SLUGS[slug]
+            for p in PATHS_BY_CATEGORY[display]:
+                if p.path_id not in seen_ids:
+                    seen_ids.add(p.path_id)
+                    paths.append(p)
+        return _apply_skip_setup(paths, args.skip_setup)
+
     if args.category:
         if args.category not in PATHS_BY_CATEGORY:
             log.error(
@@ -127,9 +179,15 @@ def select_paths(args: argparse.Namespace) -> list[ConversationPath]:
     else:
         paths = list(ALL_PATHS)
 
-    if args.skip_setup:
-        paths = [p for p in paths if p.setup_notes is None]
+    return _apply_skip_setup(paths, args.skip_setup)
 
+
+def _apply_skip_setup(
+    paths: list[ConversationPath], skip_setup: bool
+) -> list[ConversationPath]:
+    """Optionally drop paths that need manual setup."""
+    if skip_setup:
+        return [p for p in paths if p.setup_notes is None]
     return paths
 
 

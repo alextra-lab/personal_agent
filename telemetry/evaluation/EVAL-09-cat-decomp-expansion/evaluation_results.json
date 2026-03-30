@@ -1,0 +1,533 @@
+{
+  "timestamp": "2026-03-30T15:44:15.828033+00:00",
+  "summary": {
+    "total_paths": 7,
+    "paths_passed": 7,
+    "paths_failed": 0,
+    "path_pass_rate": 1.0,
+    "total_assertions": 52,
+    "assertions_passed": 52,
+    "assertions_failed": 0,
+    "assertion_pass_rate": 1.0,
+    "total_response_time_ms": 663260.1591659768,
+    "avg_turn_response_time_ms": 55271.67993049807
+  },
+  "by_category": {
+    "Decomposition Strategies": {
+      "total": 4,
+      "passed": 4
+    },
+    "Expansion & Sub-Agents": {
+      "total": 3,
+      "passed": 3
+    }
+  },
+  "paths": [
+    {
+      "path_id": "CP-08",
+      "path_name": "SINGLE Strategy (Simple Question)",
+      "category": "Decomposition Strategies",
+      "session_id": "c1e43650-94f5-4605-9391-e6ac54d53394",
+      "all_passed": true,
+      "assertions_passed": 6,
+      "assertions_total": 6,
+      "total_time_ms": 20127.92683299631,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "What is dependency injection?",
+          "response_text": "**Dependency Injection (DI)** is a design pattern used in software development to achieve **Inversion of Control (IoC)** between objects and their dependencies.\n\n## Core Concept\n\nInstead of an object creating its own dependencies, dependencies are **injected** into it from the outside. This decouples components and makes code more modular, testable, and maintainable.\n\n## How It Works\n\n**Without DI:**\n```java\nclass OrderService {\n    private PaymentProcessor paymentProcessor = new CreditCardProce",
+          "trace_id": "ccb4e03e-bb62-4e3d-b6be-84a8efc60978",
+          "response_time_ms": 7613.854583003558,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.complexity: expected=simple, actual=simple",
+              "actual_value": "simple"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_dispatch_started': not found (expected: absent)",
+              "actual_value": 0
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Can you give me a quick example in Python?",
+          "response_text": "Here's a quick Python example of dependency injection:\n\n```python\nfrom abc import ABC, abstractmethod\n\n# Define the interface\nclass PaymentProcessor(ABC):\n    @abstractmethod\n    def process_payment(self, amount: float) -> bool:\n        pass\n\n# Concrete implementations\nclass CreditCardProcessor(PaymentProcessor):\n    def process_payment(self, amount: float) -> bool:\n        print(f\"Processing ${amount} via credit card\")\n        return True\n\nclass PayPalProcessor(PaymentProcessor):\n    def proces",
+          "trace_id": "231f62f7-565b-425b-ac3b-17a506985be0",
+          "response_time_ms": 12514.07224999275,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_dispatch_started': not found (expected: absent)",
+              "actual_value": 0
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Explanation is clear and accurate",
+        "Appropriate depth for a definitional question",
+        "Python example in Turn 2 is correct and illustrative",
+        "Fast response time (no expansion overhead)"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-09",
+      "path_name": "HYBRID Strategy (Moderate Analysis)",
+      "category": "Decomposition Strategies",
+      "session_id": "6f4a6bc6-c1e2-49dc-b9a9-5178110d5996",
+      "all_passed": true,
+      "assertions_passed": 9,
+      "assertions_total": 9,
+      "total_time_ms": 69551.4071249927,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Research the advantages of event sourcing versus CRUD for session storage, and evaluate their suitability for a PostgreSQL-backed system.",
+          "response_text": "Based on the comprehensive research completed, here's a synthesis of the advantages and recommendations for event sourcing versus CRUD patterns in PostgreSQL-backed session storage:\n\n## Technical Advantages Comparison\n\n### Event Sourcing Advantages\n\n1. **Immutable Audit Trails**: Every session state change is recorded as an append-only event, providing a complete, tamper-proof history of user interactions and session lifecycle without overwriting previous data.\n\n2. **State Reconstruction**: The ",
+          "trace_id": "b2514e62-a72d-4c9d-ad1b-2fc75a5dfb46",
+          "response_time_ms": 58330.94420901034,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.complexity: expected=moderate, actual=moderate",
+              "actual_value": "moderate"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=hybrid, actual=hybrid",
+              "actual_value": "hybrid"
+            },
+            {
+              "passed": true,
+              "message": "Event 'planner_started': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_dispatch_started': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_controller_complete': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "expansion_controller_complete.sub_agent_count: 4.0 >= 1 = PASS",
+              "actual_value": 4.0
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Given what you found, which approach would you recommend for our use case?",
+          "response_text": "I'd be happy to give you a tailored recommendation, but I need to understand your specific use case first. Could you share some details about:\n\n1. **Session type**: What kind of sessions are you storing? (e.g., authentication tokens, shopping carts, user preferences, real-time collaboration state)\n\n2. **Scale**: What's your expected session volume? (e.g., concurrent sessions, daily sessions, growth rate)\n\n3. **Latency requirements**: How fast does session access need to be? (e.g., <10ms, <100ms,",
+          "trace_id": "55f40be1-7a86-4bd9-9cc9-f45d3115e693",
+          "response_time_ms": 11220.462915982353,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Response covers both event sourcing AND CRUD approaches",
+        "PostgreSQL-specific considerations addressed",
+        "Sub-agent contributions synthesized coherently",
+        "Turn 2 recommendation grounded in Turn 1 analysis",
+        "Quality noticeably better than a single-pass response"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-10",
+      "path_name": "DECOMPOSE Strategy (Complex Multi-Part Analysis)",
+      "category": "Decomposition Strategies",
+      "session_id": "b8402246-9ec0-4d9e-a7e5-ae492d91a4b4",
+      "all_passed": true,
+      "assertions_passed": 7,
+      "assertions_total": 7,
+      "total_time_ms": 57727.27570901043,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Compare three approaches to distributed caching, evaluate their performance under load, analyze the cost implications for each, and recommend which fits a system handling ten thousand requests per second.",
+          "response_text": "Based on my analysis of the three distributed caching approaches, here's a comprehensive comparison and recommendation for your system handling 10,000 requests per second:\n\n## Three Distributed Caching Approaches\n\n### 1. Client-Side Caching\nData stored directly within the application client (browser local storage, in-memory variables) to reduce network round trips. Best for static assets, API responses in SPAs, and data with low consistency requirements.\n\n### 2. Server-Side Caching\nCentralized c",
+          "trace_id": "8937e910-441b-4ee4-86e7-4b0cc6c1571e",
+          "response_time_ms": 57727.27570901043,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.complexity: expected=complex, actual=complex",
+              "actual_value": "complex"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=decompose, actual=decompose",
+              "actual_value": "decompose"
+            },
+            {
+              "passed": true,
+              "message": "Event 'planner_started': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_dispatch_started': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_controller_complete': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "expansion_controller_complete.sub_agent_count: 4.0 >= 2 = PASS",
+              "actual_value": 4.0
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "At least 3 caching approaches compared",
+        "Performance evaluation includes metrics or benchmarks",
+        "Cost analysis is concrete, not vague",
+        "Recommendation is specific with clear reasoning",
+        "Response well-structured with sections for each part"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-11",
+      "path_name": "Complexity Escalation Across Turns",
+      "category": "Decomposition Strategies",
+      "session_id": "877a9023-2481-45f5-91c6-84314d6c5ba4",
+      "all_passed": true,
+      "assertions_passed": 12,
+      "assertions_total": 12,
+      "total_time_ms": 150231.28974900465,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "What is a knowledge graph?",
+          "response_text": "A **knowledge graph** is a structured representation of knowledge that organizes information as a network of interconnected entities and their relationships. Think of it as a giant web where:\n\n- **Nodes** represent entities (people, places, things, concepts)\n- **Edges** represent relationships between those entities\n\n## Key Characteristics\n\n1. **Structured Data**: Unlike traditional databases that use tables, knowledge graphs store data in a graph format that captures semantic meaning.\n\n2. **Sem",
+          "trace_id": "2a4c6866-3d66-4ab8-866f-341c6a4f06a5",
+          "response_time_ms": 6943.1497500045225,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "decomposition_assessed.complexity: expected=simple, actual=simple",
+              "actual_value": "simple"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_dispatch_started': not found (expected: absent)",
+              "actual_value": 0
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Compare Neo4j and Dgraph for entity storage, and evaluate their query performance and Python ecosystem support.",
+          "response_text": "Based on the analysis results, here's a comprehensive comparison of Neo4j and Dgraph for entity storage:\n\n## Storage Mechanisms\n\n**Neo4j** uses **index-free adjacency**, where each node directly stores references to its connected nodes via pointers. This enables extremely fast relationship traversals since you don't need to look up indexes to find connected nodes. It's a single-node database by default with clustering options for production deployments.\n\n**Dgraph** is a **distributed graph datab",
+          "trace_id": "a5cb44f0-ec5d-41f3-9110-e4455bfb0a79",
+          "response_time_ms": 129382.57595800678,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.complexity: expected=moderate, actual=moderate",
+              "actual_value": "moderate"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=hybrid, actual=hybrid",
+              "actual_value": "hybrid"
+            },
+            {
+              "passed": true,
+              "message": "Event 'planner_started': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_dispatch_started': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "expansion_controller_complete.sub_agent_count: 4.0 >= 1 = PASS",
+              "actual_value": 4.0
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "Based on that comparison, which should we use?",
+          "response_text": "I need more context about your specific use case to give you a good recommendation. Here are the key questions:\n\n**1. Scale & Distribution**\n- How many entities do you expect to store? (Thousands? Millions? Billions?)\n- Do you need horizontal scaling across multiple servers/nodes?\n- Is your data distributed across different geographic regions?\n\n**2. Query Patterns**\n- What kind of traversals do you need? (2-3 hops? 10+ hops?)\n- Are your queries read-heavy or write-heavy?\n- Do you need complex re",
+          "trace_id": "86a7b3a3-6496-4aaf-bea1-7f9c0895599a",
+          "response_time_ms": 13905.56404099334,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "decomposition_assessed.complexity: expected=simple, actual=simple",
+              "actual_value": "simple"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_dispatch_started': not found (expected: absent)",
+              "actual_value": 0
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 1 is concise and accurate",
+        "Turn 2 is noticeably more detailed (HYBRID effect)",
+        "Turn 2 covers both databases across both dimensions",
+        "Turn 3 recommendation references Turn 2 analysis",
+        "No classification bleed-over between turns"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-16",
+      "path_name": "HYBRID Synthesis Quality",
+      "category": "Expansion & Sub-Agents",
+      "session_id": "c8f5cd59-313b-4403-b35c-d70471fa062e",
+      "all_passed": true,
+      "assertions_passed": 9,
+      "assertions_total": 9,
+      "total_time_ms": 174709.87470797263,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Research microservices communication patterns and evaluate the trade-offs between synchronous HTTP, asynchronous messaging, and gRPC.",
+          "response_text": "Based on the research results, here's a comprehensive evaluation of microservices communication patterns:\n\n## Synchronous HTTP Communication\n\n**Characteristics & Use Cases:**\n- **Request-Response Model:** Blocking calls where clients wait for responses\n- **Protocols:** REST over HTTP/1.1 or HTTP/2 with JSON/XML payloads\n- **Best for:** User-facing APIs, simple CRUD operations, legacy system integration, and scenarios requiring immediate feedback\n\n**Trade-offs:**\n- \u2705 **Pros:** Simple to implement",
+          "trace_id": "4962e558-a021-4b99-9bee-1ac1317b2c99",
+          "response_time_ms": 135914.37995797605,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.complexity: expected=moderate, actual=moderate",
+              "actual_value": "moderate"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=hybrid, actual=hybrid",
+              "actual_value": "hybrid"
+            },
+            {
+              "passed": true,
+              "message": "Event 'planner_started': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_dispatch_started': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_controller_complete': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "expansion_controller_complete.sub_agent_count: 4.0 >= 1 = PASS",
+              "actual_value": 4.0
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Which pattern would you recommend for a system with both low-latency and high-throughput requirements?",
+          "response_text": "For a system with both **low-latency and high-throughput requirements**, **gRPC** is the recommended communication pattern.\n\n### Why gRPC?\n*   **Binary Serialization:** Protocol Buffers (Protobuf) are significantly smaller and faster to serialize/deserialize than JSON/XML used in HTTP/REST.\n*   **HTTP/2 Multiplexing:** gRPC runs over HTTP/2, allowing multiple requests/responses over a single connection without head-of-line blocking, reducing connection overhead.\n*   **Streaming Support:** Native",
+          "trace_id": "2d73595a-b711-436f-85e3-af780c2f5b24",
+          "response_time_ms": 38795.49474999658,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "All three communication patterns covered (HTTP, async, gRPC)",
+        "Trade-offs are concrete (latency, complexity, tooling)",
+        "Response feels unified \u2014 not three stitched answers",
+        "Synthesis adds value (comparison table, decision framework)",
+        "Turn 2 recommendation grounded in Turn 1 analysis"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-17",
+      "path_name": "Sub-Agent Concurrency",
+      "category": "Expansion & Sub-Agents",
+      "session_id": "e8115642-a6a0-44aa-95fa-985fb583a3e2",
+      "all_passed": true,
+      "assertions_passed": 8,
+      "assertions_total": 8,
+      "total_time_ms": 97045.19450000953,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Compare the performance characteristics of Redis, Memcached, and Hazelcast for distributed caching. Analyze their memory management approaches and evaluate operational complexity. Recommend which fits our workload of ten thousand requests per second.",
+          "response_text": "Based on the analysis, here's a comprehensive comparison of Redis, Memcached, and Hazelcast for your 10k RPS distributed caching workload:\n\n## Performance Characteristics\n\n**Redis**: Delivers sub-millisecond latency with 10k RPS on a single instance. Its single-threaded command execution model provides consistent performance, scaling linearly with memory. Network I/O becomes a bottleneck only if the dataset exceeds RAM, triggering disk persistence. A standalone instance suffices, though replicat",
+          "trace_id": "cf1b9338-b84b-459e-8725-e40014bd7518",
+          "response_time_ms": 97045.19450000953,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.complexity: expected=complex, actual=complex",
+              "actual_value": "complex"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=decompose, actual=decompose",
+              "actual_value": "decompose"
+            },
+            {
+              "passed": true,
+              "message": "Event 'planner_started': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_dispatch_started': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_controller_complete': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "expansion_controller_complete.sub_agent_count: 5.0 >= 2 = PASS",
+              "actual_value": 5.0
+            },
+            {
+              "passed": true,
+              "message": "Event 'user_visible_timeout': not found (expected: absent)",
+              "actual_value": 0
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "All three caching systems compared",
+        "Performance includes throughput, latency, memory efficiency",
+        "Memory management differences explained",
+        "Operational complexity addressed",
+        "Final recommendation is specific and justified"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-18",
+      "path_name": "Expansion Budget Enforcement",
+      "category": "Expansion & Sub-Agents",
+      "session_id": "afb4fd09-5394-4715-99a2-ffd1a6b394c7",
+      "all_passed": true,
+      "assertions_passed": 1,
+      "assertions_total": 1,
+      "total_time_ms": 93867.19054199057,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Research the advantages of container orchestration and evaluate Kubernetes versus Docker Swarm for small engineering teams.",
+          "response_text": "# Container Orchestration: Advantages and Kubernetes vs Docker Swarm for Small Teams\n\n## Primary Advantages of Container Orchestration\n\nContainer orchestration provides several key benefits for software development:\n\n- **Automated Scaling:** Dynamically adjusts resource allocation based on demand to optimize performance and cost\n- **Self-Healing:** Automatically detects and restarts failed containers, reschedules tasks on healthy nodes, and maintains desired state\n- **Simplified Deployment:** St",
+          "trace_id": "8e230eb4-c32d-47ca-88cb-14d33a5e9c1a",
+          "response_time_ms": 93867.19054199057,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Under load: provides reasonable response (graceful degradation)",
+        "Under load: response less detailed than HYBRID version",
+        "Budget enforcement transparent in telemetry",
+        "Compare quality: SINGLE vs HYBRID version of same question"
+      ],
+      "post_path_assertions": []
+    }
+  ]
+}

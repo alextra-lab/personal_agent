@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from personal_agent.request_gateway.recall_controller import (
+    _RECALL_CUE_PATTERNS,
     _detect_recall_cues,
     _extract_noun_phrases,
     _scan_session_facts,
@@ -20,7 +21,6 @@ from personal_agent.request_gateway.recall_controller import (
 from personal_agent.request_gateway.types import (
     Complexity,
     IntentResult,
-    RecallResult,
     TaskType,
 )
 
@@ -164,3 +164,55 @@ class TestRunRecallController:
         )
         # Cue fires but no session fact corroboration → no reclassify
         assert result is None or result.reclassified is False
+
+
+@pytest.mark.parametrize(
+    ("text", "should_match"),
+    [
+        (
+            "Going back to the beginning — what was our primary database again?",
+            True,
+        ),
+        ("What was our primary database again?", True),
+        ("Going back to earlier — what caching system did we pick?", True),
+        ("Remind me what we decided on the message queue?", True),
+        ("What did we decide on the CI/CD pipeline?", True),
+        (
+            "Refresh my memory — what was our main programming language?",
+            True,
+        ),
+        (
+            "The tool we discussed earlier — can you confirm what it was?",
+            True,
+        ),
+        ("What is dependency injection?", False),
+        ("Tell me about Redis performance.", False),
+    ],
+)
+def test_recall_cue_patterns_cp19_variants(text: str, should_match: bool) -> None:
+    """Verify _RECALL_CUE_PATTERNS matches all CP-19 variant inputs."""
+    match = _RECALL_CUE_PATTERNS.search(text)
+    if should_match:
+        assert match is not None, f"Pattern should match: {text!r}"
+    else:
+        assert match is None, f"Pattern should NOT match: {text!r}"
+
+
+def test_recall_cue_telemetry_when_intent_already_memory_recall(caplog: pytest.LogCaptureFixture) -> None:
+    """recall_cue_detected is emitted even when Stage 4 already classified MEMORY_RECALL."""
+    caplog.set_level("INFO", logger="personal_agent.request_gateway.recall_controller")
+
+    intent = IntentResult(
+        task_type=TaskType.MEMORY_RECALL,
+        complexity=Complexity.SIMPLE,
+        confidence=0.9,
+        signals=["memory_recall_pattern"],
+    )
+    result = run_recall_controller(
+        intent=intent,
+        user_message="What did we decide on the CI/CD pipeline?",
+        session_messages=[],
+        trace_id="t-telemetry",
+    )
+    assert result is None
+    assert "recall_cue_detected" in caplog.text

@@ -100,26 +100,32 @@ def run_recall_controller(
     Returns:
         RecallResult if reclassification occurred, None if passed through.
     """
-    # Gate 1: Only CONVERSATIONAL enters
+    # Cue detection + telemetry before task-type gate: Stage 4 may already
+    # classify as MEMORY_RECALL (regex overlap with _MEMORY_RECALL_PATTERNS), but
+    # eval and operators still expect `recall_cue_detected` whenever the recall
+    # cue regex matches (ADR-0037 observability).
+    cue = _detect_recall_cues(user_message)
+    if cue is not None:
+        logger.info(
+            "recall_cue_detected",
+            cue_pattern=cue,
+            message_excerpt=user_message[:80],
+            trace_id=trace_id,
+        )
+
+    # Gate 1: Only CONVERSATIONAL enters reclassification
     if intent.task_type != TaskType.CONVERSATIONAL:
         logger.debug(
             "recall_controller_skipped",
             original_task_type=intent.task_type.value,
+            had_cue_match=cue is not None,
             trace_id=trace_id,
         )
         return None
 
-    # Gate 2: Cue pattern match
-    cue = _detect_recall_cues(user_message)
+    # Gate 2: Cue pattern match (same as telemetry above; kept explicit)
     if cue is None:
         return None
-
-    logger.info(
-        "recall_cue_detected",
-        cue_pattern=cue,
-        message_excerpt=user_message[:80],
-        trace_id=trace_id,
-    )
 
     # Gate 3: Noun phrase extraction + session fact scan
     noun_phrases = _extract_noun_phrases(user_message)

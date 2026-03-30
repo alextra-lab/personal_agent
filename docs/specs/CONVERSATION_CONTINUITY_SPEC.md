@@ -1,7 +1,7 @@
 # Conversation Continuity Spec
 
 **Date**: 2026-02-22
-**Status**: Proposed
+**Status**: Partially Implemented — `context_window.py` implements token-aware truncation and session hydration. LLM summarization and further context work are deferred to `CONTEXT_INTELLIGENCE_SPEC.md`.
 **Phase**: 2.6 Conversational Agent MVP
 **Related**: ADR-0018 (Seshat), Architecture Assessment 2026-02-22, `CLI_SERVICE_CLIENT_SPEC.md`
 

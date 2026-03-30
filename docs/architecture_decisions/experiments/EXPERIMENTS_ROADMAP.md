@@ -4,7 +4,22 @@
 
 **Philosophy:** **Measure → Experiment → Decide → Document → Iterate**
 
-**Last Updated:** 2026-01-18 (resolved numbering conflicts, created E-007 through E-009 specs)
+**Last Updated:** 2026-03-30
+
+---
+
+## Redesign v2 focus (2026)
+
+Active experiment themes align with **`docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md`** and **`docs/specs/CONTEXT_INTELLIGENCE_SPEC.md`**:
+
+| Area | Examples |
+|------|-----------|
+| **Context management** | Token budgets, recall controller, compression / summarization (see Context Intelligence spec) |
+| **Proactive memory** | `suggest_relevant()`, noise control, eval paths |
+| **Cross-session recall** | Seeded sessions, Neo4j checks, CP-style harness paths |
+| **Entity extraction / consolidation** | LangExtract (E-018), promotion pipeline, stability scoring |
+
+**Archived (historical only):** Three-stage routing and router-centric experiments (E-007 routing track, E-008/E-009 as originally framed) — source files are under **`docs/archive/`**; do not treat their “planned” status as current work.
 
 ---
 

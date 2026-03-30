@@ -17,6 +17,12 @@ These standards serve three goals:
 
 **Quality over cleverness.** If a pattern is hard to explain, it's probably wrong for this project.
 
+### Git workflow
+
+- **Commits:** Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`) — small, logical commits.
+- **Branches:** `feat/`, `fix/`, `docs/` as appropriate for larger work.
+- **Pre-push:** `uv run pytest`, `ruff check` / `ruff format`, `mypy` where applicable; see project `AGENTS.md` for commands.
+
 ### Path privacy in docs and examples
 
 Do not commit machine-specific filesystem paths (e.g. absolute paths under your OS account home, or home-relative directory layouts unique to one machine). Use placeholders such as `<project-root>` and `$HOME`. See [PATH_PRIVACY.md](PATH_PRIVACY.md) and run `uv run python scripts/check_no_personal_paths.py` before pushing.

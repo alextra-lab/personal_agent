@@ -361,7 +361,7 @@ Read in order:
 1. `README.md` — Project overview and current architecture diagram
 2. `docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md` — Current architecture specification
 3. `docs/plans/MASTER_PLAN.md` — Current priorities and status
-4. `docs/architecture/` — Historical architecture docs (for context on evolution)
+4. `docs/architecture/` — Living conceptual docs (homeostasis, mapping); v0.1 specs live in `docs/archive/` with `PRE_REDESIGN_SUMMARY.md`
 5. `docs/architecture_decisions/` — Key decisions and rationale
 
 ### 3. Follow Quality Standards

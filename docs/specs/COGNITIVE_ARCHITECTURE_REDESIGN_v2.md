@@ -1,7 +1,7 @@
 # Cognitive Architecture Redesign v2
 
 **Date**: 2026-03-16
-**Status**: Slices 1 & 2 Implemented — Evaluation Phase (building usage history and traces before Slice 3)
+**Status**: Slices 1–3 Implemented — Slice 3 complete (2026-03-29). Follow-on work (context intelligence, eval baselines) is tracked in `CONTEXT_INTELLIGENCE_SPEC.md` and `docs/plans/MASTER_PLAN.md`.
 **Phase**: 2.4 — Cognitive Architecture Redesign
 **Supersedes**: ADR-0017 (Three-Tier Multi-Agent Orchestration)
 **Evolves**: ADR-0018 (Seshat Memory Librarian Agent)
@@ -1341,6 +1341,8 @@ What this unblocks: programmatic delegation, proactive memory, dynamic skill
 loading, self-improvement loop closure.
 
 ### 8.3 Slice 3: Intelligence
+
+**Slice delivery status:** Complete (2026-03-29). The table and acceptance criteria below record the original scope; verification and stretch items may continue under the Context Intelligence program.
 
 **Theme: "The agent gets smarter about itself and its world"**
 

@@ -13,36 +13,34 @@
 **Component**: `llm_client`, inference infrastructure
 **Impact**: **Critical** - Blocks parallel tool execution and multi-agent coordination
 **Added**: 2025-12-31
-**Status**: Documented, scheduled for Phase 2
+**Status**: Open — throughput still bounded by common local servers’ sequential handling
 
 **Problem**:
 LM Studio processes requests **sequentially** - only one request per model at a time. Concurrent requests queue internally with no true parallelism.
 
 **Impact**:
 
-- **Parallel tool execution** (Phase 2): 3 tools requiring LLM calls will take 3x longer than optimal
-- **Multi-agent coordination** (Phase 5): Infeasible with sequential processing - agents can't work concurrently
-- **Background tasks**: Pre-warming, monitoring, etc. block main request flow
-- **User experience**: Slow response times for multi-step workflows
+- **Parallel tool execution:** Multiple tools that each hit the local inference server serialize — wall-clock can be N× a single call.
+- **Expansion / delegation:** Concurrent sub-agent or tool bursts may queue at the server.
+- **Background tasks:** Pre-warming, monitoring, or auxiliary LLM calls compete with the main request.
 
 **Current Workaround**:
 
-- MVP accepts this limitation (single-threaded orchestrator doesn't need parallelism yet)
-- Documented in E-007 for future evaluation
+- Orchestrator and gateway patterns still assume bounded concurrency; LM Studio (or equivalent) queues internally.
+- Acceptable for many workloads; revisit when evals show throughput as the bottleneck.
 
 **Resolution Plan**:
 
-- **Phase 2A**: Evaluate llama.cpp, MLX, and vLLM (E-007)
-- **Phase 2A**: Implement `InferenceServerAdapter` abstraction
-- **Phase 2A**: Benchmark concurrent throughput
-- **Phase 2B**: Switch to parallel-capable server if justified by data
+- Evaluate parallel-capable inference (see `docs/architecture_decisions/experiments/E-007a-inference-server-evaluation.md`).
+- Introduce an `InferenceServerAdapter`-style abstraction if we standardize on a non-sequential server.
+- Benchmark concurrent throughput against Slice 2+ expansion workloads.
 
-**Effort**: 10 days (design + implementation + evaluation)
+**Effort**: 10 days (design + implementation + evaluation) — rough order of magnitude
 
 **References**:
 
-- `./experiments/E-007-inference-server-evaluation.md`
-- `../plans/IMPLEMENTATION_ROADMAP.md` - Phase 2A
+- `docs/architecture_decisions/experiments/E-007a-inference-server-evaluation.md`
+- `docs/plans/MASTER_PLAN.md` — current priorities
 
 ---
 

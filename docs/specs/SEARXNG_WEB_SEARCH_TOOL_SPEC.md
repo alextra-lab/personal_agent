@@ -1,7 +1,7 @@
 # SearXNG Web Search Tool Spec
 
 **Date**: 2026-03-27
-**Status**: Proposed
+**Status**: Implemented
 **Phase**: Infrastructure + Native Tool
 **Related**: ADR-0034 (SearXNG self-hosted web search), ADR-0026 (search_memory pattern), ADR-0011 (MCP gateway)
 

@@ -1,79 +1,74 @@
 # Project Directory Structure — Personal Agent
 
-> **Purpose**: Canonical reference for project organization and filesystem hygiene
-> **Last Updated**: 2025-12-28
-> **Status**: Living document, updated as structure evolves
+> **Purpose**: Canonical reference for project organization and filesystem hygiene  
+> **Last Updated**: 2026-03-30  
+> **Status**: Living document — regenerate the tree below when layout changes materially
 
 ---
 
-## Directory Tree with Purpose
+## Directory tree (representative)
+
+Superseded v0.1 specs and old session logs live in **`docs/archive/`** (see `PRE_REDESIGN_SUMMARY.md` there). Active docs exclude that folder from “current reading” paths.
+
+```
+personal_agent/
+├── config/                    # Runtime YAML (gitignored except templates); see config/*.template
+├── docker/                    # compose services: postgres, elasticsearch, kibana, searxng, …
+├── docs/
+│   ├── architecture/          # Living conceptual docs (HOMEOSTASIS_MODEL, …); README points to Redesign v2
+│   ├── architecture_decisions/  # ADRs, HYPOTHESIS_LOG, experiments/, captains_log/, …
+│   ├── archive/               # Historical v0.1 + router-era material (not primary reading)
+│   ├── guides/                # How-tos (CONFIGURATION, MCP, Kibana, …)
+│   ├── plans/                 # MASTER_PLAN, sessions/, completed/
+│   ├── reference/             # Standards, directory structure (this file), PATH_PRIVACY
+│   ├── research/              # Eval reports, research notes, context_management_research.md
+│   ├── specs/                 # COGNITIVE_ARCHITECTURE_REDESIGN_v2, CONTEXT_INTELLIGENCE_SPEC, …
+│   ├── superpowers/plans/     # Slice / feature implementation plans
+│   ├── README.md
+│   └── VISION_DOC.md
+├── experiments/               # Standalone experiment code (dspy, langextract, …)
+├── functional-spec/
+├── governance/                # Meta governance README (policies live in config/governance/)
+├── src/personal_agent/        # Application package (orchestrator, request_gateway, memory, …)
+├── telemetry/                 # Runtime logs / eval output (gitignored)
+├── tests/                     # Mirror package layout under tests/personal_agent/
+├── pyproject.toml
+├── uv.lock
+├── README.md
+└── ROADMAP.md
+```
+
+### Top-level directories (from `find`, excluding .git, .venv, archive)
+
+```
+.
+./config
+./docker
+./docs
+./experiments
+./functional-spec
+./governance
+./src
+./telemetry
+./tests
+```
+
+---
+
+## Legacy detailed tree (deprecated — kept for naming patterns only)
+
+The block below is **not** maintained line-by-line. Prefer the tree above and **`docs/architecture/README.md`**.
 
 ```
 personal_agent/
 │
 ├── docs/                             # All documentation
-│   ├── architecture/                 # System design specifications
-│   │   ├── diagrams/                 # Architecture diagrams (C4, sequence, state)
-│   │   ├── BRAINSTEM_SERVICE_v0.1.md # Autonomic control specification
-│   │   ├── CONTROL_LOOPS_SENSORS_v0.1.md # Sensor definitions for homeostasis
-│   │   ├── HOMEOSTASIS_MODEL.md      # Control theory foundation
-│   │   ├── HUMAN_SYSTEMS_MAPPING.md  # Biological metaphor guide
-│   │   ├── LOCAL_LLM_CLIENT_SPEC_v0.1.md # Model client interface
-│   │   ├── ORCHESTRATOR_CORE_SPEC_v0.1.md # Orchestrator design
-│   │   ├── TOOL_EXECUTION_VALIDATION_SPEC_v0.1.md # Tool layer design
-│   │   └── system_architecture_v0.1.md # High-level system design
-│   │
-│   ├── architecture_decisions/       # ADRs, governance, experiments
-│   │   ├── captains_log/            # Agent self-improvement proposals
-│   │   │   └── README.md            # Explains Captain's Log purpose
-│   │   ├── config_proposals/        # Agent-generated config change proposals
-│   │   ├── experiments/             # Hypothesis-driven experiments (ADD/HDD)
-│   │   │   ├── E-001-orchestration-evaluation.md
-│   │   │   ├── E-002-planner-critic-quality.md
-│   │   │   └── E-003-safety-gateway-effectiveness.md
-│   │   ├── reviews/                 # Design review notes
-│   │   ├── ADR-000X-*.md            # Architecture Decision Records
-│   │   ├── AGENT_IDENTITY.md        # Agent behavior principles
-│   │   ├── GOVERNANCE_MODEL.md      # Governance philosophy
-│   │   ├── HYPOTHESIS_LOG.md        # Active hypotheses (HDD)
-│   │   ├── RISK_AND_TRADEOFFS.md    # Risk register
-│   │   └── RTM.md                   # Requirements Traceability Matrix
-│   │
-│   ├── plans/                        # Project plans and session logs
-│   │   ├── sprints/                 # Sprint plans (if using sprints)
-│   │   ├── sessions/                # Development session logs
-│   │   │   ├── SESSION_TEMPLATE.md  # Template for session logs
-│   │   │   └── SESSION-2025-12-28-*.md # Actual session logs
-│   │   ├── ACTION_ITEMS_2025-12-28.md # Current action items for project owner
-│   │   ├── IMPLEMENTATION_ROADMAP.md # Current: 4-week MVP roadmap
-│   │   ├── PROJECT_PLAN_v0.1.md     # Adaptive planning methodology
-│   │   ├── README.md                # Plans directory guide
-│   │   └── VELOCITY_TRACKING.md     # AI-assisted velocity metrics
-│   │
-│   ├── research/                     # Research notes and surveys
-│   │   ├── agent-safety.md
-│   │   ├── evaluation-observability.md
-│   │   ├── learning-self-improvement-patterns.md
-│   │   ├── mac-local-models.md
-│   │   ├── orchestration-survey.md
-│   │   ├── world-modeling.md
-│   │   └── README.md
-│   │
-│   ├── NOTES.md                      # Development notes
-│   ├── USAGE_GUIDE.md                # How to use the agent
-│   ├── VISION_DOC.md                 # Philosophical foundation and collaboration model
-│   ├── VALIDATION_CHECKLIST.md       # Quality standards for AI-generated docs
-│   ├── PR_REVIEW_RUBRIC.md           # Structured review framework for arch changes
-│   └── PROJECT_DIRECTORY_STRUCTURE.md # This file - canonical directory reference
+│   └── … (see current tree)
 │
 ├── config/                           # Runtime configuration (not in git except templates)
-│   ├── governance/                   # 📝 TO CREATE: Governance policies
-│   │   ├── modes.yaml                # Mode definitions and thresholds
-│   │   ├── tools.yaml                # Tool permissions
-│   │   ├── models.yaml               # Model constraints per mode
-│   │   └── safety.yaml               # Content filtering, rate limits
-│   ├── models.yaml.template          # Model endpoint configuration template
-│   └── .gitignore                    # Exclude secrets, local overrides
+│   ├── governance/                   # Governance policies (modes, tools, models)
+│   ├── kibana/                       # Dashboard ndjson / import helpers
+│   └── models.yaml.template          # Model endpoint configuration template
 │
 ├── functional-spec/                  # Product requirements
 │   └── functional_spec_v0.1.md       # MVP capabilities and scope
@@ -87,16 +82,16 @@ personal_agent/
 ├── src/                              # Source code (Python package)
 │   └── personal_agent/               # Main package
 │       ├── __init__.py
-│       ├── brainstem/                # 📝 TO CREATE: Autonomic control
+│       ├── brainstem/                # Autonomic control
 │       │   ├── __init__.py
 │       │   ├── mode_manager.py       # Mode state machine
 │       │   └── sensors.py            # Sensor polling
-│       ├── config/                   # 📝 TO CREATE: Unified configuration (ADR-0007)
+│       ├── config/                   # Unified configuration (ADR-0007)
 │       │   ├── __init__.py           # Exports: settings, AppConfig
 │       │   ├── settings.py           # AppConfig class
 │       │   ├── env_loader.py         # .env file loading
 │       │   └── validators.py         # Custom Pydantic validators
-│       ├── governance/               # 📝 TO CREATE: Policy enforcement
+│       ├── governance/               # Policy enforcement
 │       │   ├── __init__.py
 │       │   ├── config_loader.py      # Load/validate YAML configs
 │       │   └── models.py             # Pydantic schemas
@@ -199,7 +194,7 @@ personal_agent/
 
 | Item | Reason | Action |
 |------|--------|--------|
-| `governance/README.md` | Duplicate of governance docs elsewhere | Move content to `architecture_decisions/GOVERNANCE_MODEL.md` |
+| `governance/README.md` | Meta process vs `config/governance/` policies | Keep short; operational policies live in `config/governance/` (see ADR-0005) |
 | Empty stub files in root | No clear purpose | Document or remove |
 
 ---
@@ -341,12 +336,12 @@ echo "!config/*.yaml.template" >> .gitignore
 When a new AI assistant or developer joins:
 
 1. **Read this document first** to understand project organization
-2. **Check `VISION_DOC.md`** for high-level goals
-3. **Review `docs/plans/PROJECT_PLAN_v0.1.md`** for current work
+2. **Check `docs/VISION_DOC.md`** for high-level goals
+3. **Review `docs/plans/MASTER_PLAN.md`** for current work
 4. **Scan `docs/architecture_decisions/`** for key decisions
 5. **Look at recent `docs/plans/sessions/`** to see what's happening now
 
 ---
 
-**Last validated**: 2025-12-28
-**Next review**: After Week 1 implementation sprint
+**Last validated**: 2026-03-30  
+**Next review**: When repository layout changes or after major doc migrations

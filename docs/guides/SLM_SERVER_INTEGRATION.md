@@ -6,34 +6,27 @@ The Personal Agent uses a separate **SLM Server** (Small Language Model Server) 
 
 ## Architecture
 
+Redesign v2 uses a **single primary brain** plus the **request gateway** for classification and routing; the SLM Server is **inference infrastructure**, not a separate “router tier” inside the agent’s cognitive loop.
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Personal Agent Service                    │
-│                     (Port 9000)                             │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │
-│  │ Orchestrator │  │  Brainstem   │  │    Tools     │    │
-│  └──────┬───────┘  └──────────────┘  └──────────────┘    │
-│         │                                                   │
-│         │ LLM API Calls                                    │
-│         │ (OpenAI-compatible)                              │
-└─────────┼──────────────────────────────────────────────────┘
-          │
-          ▼
+│                 Personal Agent (orchestrator + gateway)      │
+│  Request gateway → primary agent → tools / memory / delegate   │
+│  LLM calls: OpenAI-compatible HTTP to configured endpoints       │
+└────────────────────────────┬──────────────────────────────────┘
+                             │
+                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                      SLM Server Router                       │
-│                        (Port 8000)                          │
-│                                                              │
-│  Route requests to specialized models based on task         │
-└────┬─────────┬─────────┬─────────┬──────────────────────────┘
-     │         │         │         │
-     ▼         ▼         ▼         ▼
-┌─────────┬─────────┬─────────┬─────────┐
-│ Router  │Standard │Reasoning│ Coding  │
-│ LFM 1.2B│Qwen 4B  │Qwen 8B  │Devstral │
-│Port 8500│Port 8501│Port 8502│Port 8503│
-└─────────┴─────────┴─────────┴─────────┘
-     MLX Backend (Apple Silicon optimized)
+│  SLM Server (separate repo) — exposes backends on ports 8000+  │
+│  Task routing / model selection is a service concern here;     │
+│  the agent selects roles via `config/models.yaml`, not ad-hoc  │
+│  multi-tier “router agents” in-app.                            │
+└────┬────────────┬────────────┬────────────┬───────────────────┘
+     ▼            ▼            ▼            ▼
+   (MLX backends: router/small/fast/coding models per slm_server config)
 ```
+
+**Ports:** `8000` is the SLM front door; backends (e.g. 8500–8503) match your `slm_server` layout — see that repo’s README.
 
 ## SLM Server Details
 

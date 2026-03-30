@@ -1,67 +1,27 @@
 # Architecture Documentation
 
-This directory contains detailed architecture specifications and design documents for the Personal Agent system.
+Living architecture for the Personal Agent lives in **`docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md`** (canonical). It supersedes ADR-0017 (three-tier multi-agent orchestration) and evolves ADR-0018 (Seshat).
 
-## Current Architecture (Redesign v2)
+**Concepts:** Pre-LLM request gateway (deterministic stages), single primary agent model, Seshat `MemoryProtocol`, expansion/contraction and delegation, brainstem-driven homeostasis.
 
-The primary architecture reference is the **[Cognitive Architecture Redesign v2](../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md)** specification. It supersedes ADR-0017 (Three-Tier Multi-Agent Orchestration) and evolves ADR-0018 (Seshat Memory Librarian).
+## Implementation status
 
-Key concepts: Pre-LLM Gateway (7-stage deterministic pipeline), single-brain primary agent (Qwen3.5-35B), Seshat MemoryProtocol, expansion/contraction via sub-agents and external delegation, brainstem-driven homeostasis.
+| Slice | Plan | Status |
+|-------|------|--------|
+| Slice 1: Foundation | [`2026-03-16-slice-1-foundation.md`](../superpowers/plans/2026-03-16-slice-1-foundation.md) | Complete |
+| Slice 2: Expansion | [`2026-03-18-slice-2-expansion.md`](../superpowers/plans/2026-03-18-slice-2-expansion.md) | Complete |
+| Slice 3: Intelligence | Redesign v2 §8.3 | Complete (2026-03-29) |
 
-Implementation plans:
-- [Slice 1: Foundation](../superpowers/plans/2026-03-16-slice-1-foundation.md) — Complete
-- [Slice 2: Expansion](../superpowers/plans/2026-03-18-slice-2-expansion.md) — Complete
-- Slice 3: Intelligence — Planned (see spec Section 8.3)
+Next evolution: **`docs/specs/CONTEXT_INTELLIGENCE_SPEC.md`** (active context management, eval follow-up).
 
-*Status: Evaluation phase — building real usage traces before Slice 3.*
+## Read next (in this directory)
 
-## Historical Architecture Documents
+- **[HOMEOSTASIS_MODEL.md](HOMEOSTASIS_MODEL.md)** — Modes, stability, control loops
+- **[HUMAN_SYSTEMS_MAPPING.md](HUMAN_SYSTEMS_MAPPING.md)** — Biological metaphor for subsystems
+- **[INSPIRATION_production_grade_system.md](INSPIRATION_production_grade_system.md)** — External reference patterns
 
-The documents below describe earlier architectural designs. They are retained for historical context. See the superseded banners at the top of each document for details.
+The `diagrams/` folder may hold supplemental figures; v0.1 C4 and nervous-system diagrams were moved to **`docs/archive/`** with a consolidated summary in **`docs/archive/PRE_REDESIGN_SUMMARY.md`**.
 
-## Core Architecture Documents
+## Historical material
 
-- **[System Architecture](system_architecture_v0.1.md)** - High-level system design and architectural objectives
-- **[Cognitive Agent Architecture](COGNITIVE_AGENT_ARCHITECTURE_v0.1.md)** - Brain-inspired cognitive architecture for the orchestrator *(historical — superseded by Redesign v2)*
-- **[Orchestrator Core Spec](ORCHESTRATOR_CORE_SPEC_v0.1.md)** - Orchestrator implementation interfaces and runtime structure *(historical — superseded by Redesign v2)*
-- **[Homeostasis Model](HOMEOSTASIS_MODEL.md)** - System stability and self-regulation mechanisms
-- **[Human Systems Mapping](HUMAN_SYSTEMS_MAPPING.md)** - Biological inspiration for system design
-
-## Service Specifications
-
-- **[Brainstem Service](BRAINSTEM_SERVICE_v0.1.md)** - Homeostasis and monitoring service
-- **[Local LLM Client Spec](LOCAL_LLM_CLIENT_SPEC_v0.1.md)** - LLM client interface and integration
-- **[Service Implementation Spec](SERVICE_IMPLEMENTATION_SPEC_v0.1.md)** - Service architecture and implementation details
-
-## Specialized Components
-
-- **[Intelligent Routing Patterns](INTELLIGENT_ROUTING_PATTERNS_v0.1.md)** - Model routing and selection strategies *(historical — superseded by Redesign v2)*
-- **[Router Self-Tuning Architecture](ROUTER_SELF_TUNING_ARCHITECTURE_v0.1.md)** - Adaptive routing optimization *(historical — superseded by Redesign v2)*
-- **[Control Loops & Sensors](CONTROL_LOOPS_SENSORS_v0.1.md)** - Monitoring and feedback mechanisms
-- **[Request Monitor Spec](REQUEST_MONITOR_SPEC_v0.1.md)** - Request monitoring and metrics
-- **[Request Monitor Orchestrator Integration](REQUEST_MONITOR_ORCHESTRATOR_INTEGRATION_v0.1.md)** - Integration patterns
-- **[System Health Monitoring Data Structures](SYSTEM_HEALTH_MONITORING_DATA_STRUCTURES_v0.1.md)** - Health monitoring schemas
-- **[Tool Execution Validation Spec](TOOL_EXECUTION_VALIDATION_SPEC_v0.1.md)** - Tool safety and validation
-
-## Technology & Stack
-
-- **[Stack and Language Choices](stack_and_language_choices_v0.1.md)** - Technology decisions and rationale
-
-## Diagrams
-
-- **[C4 Context and Container](diagrams/c4_context_and_container.md)** - System context and container diagrams
-- **[Nervous System Orchestration](diagrams/nervous_system_orchestration.md)** - Orchestration flow diagrams
-
-## Experiments
-
-- **[E-005: Router Parameter Passing Evaluation](experiments/E-005-router-parameter-passing-evaluation.md)**
-- **[E-006: Router Output Format Detection](experiments/E-006-router-output-format-detection.md)**
-- **[E-007: Thinking Router Model Optimization](experiments/E-007-thinking-router-model-optimization.md)**
-
-## Inspiration & Research
-
-- **[Production Grade System Inspiration](INSPIRATION_production_grade_system.md)** - Reference architectures and patterns
-
----
-
-**Note**: These documents are living specifications that evolve with the system. Version numbers (v0.1) indicate the current iteration of each document.
+Pre–Redesign v2 specifications (v0.1 orchestrator, router experiments, older diagrams) are **`docs/archive/`**, not here, to avoid contradicting the current gateway + single-brain design. Use the archive when you need provenance for past decisions.

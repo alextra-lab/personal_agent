@@ -30,22 +30,22 @@ Notes:
 ## H-002: Limited Multi-Agent Cognition Is Sufficient for MVP
 
 We believe that:
-A single Reasoning agent plus a Planner+Critic pattern on selected tasks will achieve most benefits of multi-agent reasoning without the instability and complexity of free conversational multi-agent systems.
+A **single primary agent** behind the **request gateway**, with **bounded delegation** (sub-agents / external tools) where needed, achieves most benefits of multi-agent coordination without unconstrained multi-agent chat.
 
 We will measure this by:
 
-- Comparing quality of output with vs without Critic.
-- Error rate in coding/system reasoning tasks.
+- Task success and quality on coding and system tasks vs. baselines.
+- Traceability of delegation (expansion, MCP, external agents) in telemetry.
 - User qualitative rating of “insightfulness” + correctness.
 
 Success Criteria:
 
-- ≥ 30% improvement in task quality when Critic used vs single-agent.
-- No need for larger agent teams in ≥ 80% of tasks.
+- Delegation paths remain explainable and governed (no silent free-form multi-agent loops).
+- No need for a separate Planner+Critic loop in the core path for ≥ 80% of tasks.
 - No major reproducibility regressions introduced.
 
 Status: Proposed
-Notes:
+Notes: Reframed 2026-03-30 for Redesign v2 (gateway + primary agent). Planner+Critic-era wording archived with pre–Redesign docs.
 
 ---
 

@@ -6,16 +6,15 @@ This directory contains research findings, external system analyses, and archite
 
 ## 📚 Index of Research Documents
 
-### Model & Routing Research (December 2025)
+### Model & routing research (December 2025 — archived sources)
 
-**Latest Research Analysis:**
+Router-era write-ups now live under **`../archive/`** (e.g. `model_orchestration_research_analysis_2025-12-31.md`, `router_prompt_patterns_best_practices_2025-12-31.md`, `RESEARCH_ANALYSIS_SUMMARY_2025-12-31.md`). Current architecture is **`../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md`**; use ADR-0008 and later ADRs for model stack truth.
 
-1. **Model Orchestration Research Analysis** ⭐ `model_orchestration_research_analysis_2025-12-31.md`
-   - Comprehensive analysis of small model performance for routing
-   - Single-agent vs multi-agent architecture comparison
-   - DeepSeek-R1, Qwen3, and Mistral model evaluations
-   - Quantization strategy recommendations
-   - **Status:** Complete, informs ADR-0008
+**Active research drivers (2026):**
+
+- **`EVAL_08_SLICE_3_PRIORITIES.md`** — Eval priorities that shaped Slice 3
+- **`context_management_research.md`** — Context window management (inputs to `CONTEXT_INTELLIGENCE_SPEC.md`)
+- **`EVALUATION_PHASE_FINDINGS.md`** — Cross-eval synthesis
 
 2. **Raw Research Data** `temp_perplexity_research.md`
    - Original Perplexity deep research output
@@ -23,11 +22,7 @@ This directory contains research findings, external system analyses, and archite
    - Architecture pattern descriptions
    - **Status:** Processed into analysis document, retained for reference
 
-**Related Architecture Documents:**
-
-- `../architecture/INTELLIGENT_ROUTING_PATTERNS_v0.1.md` — Routing pattern inspiration
-- `../architecture_decisions/ADR-0008-model-stack-course-correction.md` — Proposed changes
-- `../architecture_decisions/RESEARCH_ANALYSIS_SUMMARY_2025-12-31.md` — Executive summary
+**Related decisions:** `../architecture_decisions/ADR-0008-model-stack-course-correction.md` and subsequent ADRs
 
 ---
 
@@ -83,14 +78,15 @@ When evaluating or selecting models:
 3. **Consider hardware constraints** in `mac-local-models.md`
 4. **Align with governance** using findings in `agent-safety.md`
 
-### For Routing & Orchestration
+### For routing & orchestration
 
-When designing routing or orchestration logic:
+When designing gateway or orchestration behavior:
 
-1. **Study patterns** in `../architecture/INTELLIGENT_ROUTING_PATTERNS_v0.1.md`
-2. **Reference frameworks** in `orchestration-survey.md`
-3. **Apply safety constraints** from `agent-safety.md`
-4. **Implement evaluation** using `evaluation-observability.md` patterns
+1. **Start from** `../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md` (request gateway, single primary agent)
+2. **Historical router patterns** (if needed): `../archive/INTELLIGENT_ROUTING_PATTERNS_v0.1.md`
+3. **Reference frameworks** in `orchestration-survey.md`
+4. **Apply safety constraints** from `agent-safety.md`
+5. **Evaluate** using `evaluation-observability.md` patterns
 
 ---
 
@@ -106,16 +102,16 @@ Research Discovery → Analysis Document → Architecture Doc → ADR → Implem
                                                     Update Research ←
 ```
 
-### Example: Model Stack Evolution
+### Example: Model stack evolution (historical)
 
 1. **Research:** Perplexity research on DeepSeek-R1 models → `temp_perplexity_research.md`
-2. **Analysis:** Deep dive into findings → `model_orchestration_research_analysis_2025-12-31.md`
-3. **Architecture:** Pattern extraction → `../architecture/INTELLIGENT_ROUTING_PATTERNS_v0.1.md`
-4. **Decision:** Formal proposal → `../architecture_decisions/ADR-0008-model-stack-course-correction.md`
-5. **Summary:** Executive overview → `../architecture_decisions/RESEARCH_ANALYSIS_SUMMARY_2025-12-31.md`
-6. **Implementation:** Code changes based on ADR
-7. **Evaluation:** Benchmark results → `../architecture_decisions/experiments/E-004-reasoning-model-comparison.md`
-8. **Update:** Findings feed back into research knowledge base
+2. **Analysis:** Deep dive → `../archive/model_orchestration_research_analysis_2025-12-31.md`
+3. **Architecture (historical):** `../archive/INTELLIGENT_ROUTING_PATTERNS_v0.1.md`
+4. **Decision:** `../architecture_decisions/ADR-0008-model-stack-course-correction.md`
+5. **Summary:** `../archive/RESEARCH_ANALYSIS_SUMMARY_2025-12-31.md`
+6. **Implementation:** Code + `config/models.yaml`
+7. **Evaluation:** Harness outputs under `telemetry/evaluation/`
+8. **Update:** Findings feed back into this README and ADRs
 
 ---
 
@@ -224,17 +220,17 @@ Add research documents when:
 
 **Architecture:**
 - [Homeostasis Model](../architecture/HOMEOSTASIS_MODEL.md)
-- [Intelligent Routing Patterns](../architecture/INTELLIGENT_ROUTING_PATTERNS_v0.1.md)
-- [Local LLM Client Spec](../architecture/LOCAL_LLM_CLIENT_SPEC_v0.1.md)
+- [Redesign v2 (canonical)](../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md)
+- [Archived v0.1 routing patterns](../archive/INTELLIGENT_ROUTING_PATTERNS_v0.1.md)
 
 **Decisions:**
 - [ADR-0003: Model Stack](../architecture_decisions/ADR-0003-model-stack.md)
 - [ADR-0008: Model Stack Course Correction](../architecture_decisions/ADR-0008-model-stack-course-correction.md)
-- [Research Analysis Summary](../architecture_decisions/RESEARCH_ANALYSIS_SUMMARY_2025-12-31.md)
+- [Archived research summary](../archive/RESEARCH_ANALYSIS_SUMMARY_2025-12-31.md)
 
 **Implementation:**
-- [Implementation Roadmap](../plans/IMPLEMENTATION_ROADMAP.md)
-- [Model Configuration](../config/models.yaml)
+- [Master Plan](../plans/MASTER_PLAN.md)
+- Model configuration: `<project-root>/config/models.yaml` (see repo; not linked as web URL)
 
 ---
 
@@ -270,5 +266,5 @@ Add research documents when:
 
 ---
 
-**Last Updated:** 2026-03-10
-**Next Review:** After Phase 2 model evaluation (Month 2-3)
+**Last Updated:** 2026-03-30  
+**Next Review:** After Context Intelligence phase milestones (see `CONTEXT_INTELLIGENCE_SPEC.md`)

@@ -172,7 +172,7 @@ See `config/AGENTS.md` for detailed patterns.
 ## Project Context
 
 - **Vision & Philosophy**: See `../../docs/VISION_DOC.md`
-- **Directory Structure**: See `../../docs/PROJECT_DIRECTORY_STRUCTURE.md`
+- **Directory Structure**: See `../../docs/reference/PROJECT_DIRECTORY_STRUCTURE.md`
 - **Coding Standards**: See `../../docs/CODING_STANDARDS.md` (also enforced via Cursor rules)
 
 ## Before Implementing

@@ -2,7 +2,7 @@
 
 **Version**: 0.1  
 **Date**: 2026-04-01  
-**Status**: Draft  
+**Status**: Approved  
 **ADR**: ADR-0040 (Linear as Async Feedback Channel)  
 **Extends**: ADR-0030 (Captain's Log Dedup & Self-Improvement Pipeline)
 

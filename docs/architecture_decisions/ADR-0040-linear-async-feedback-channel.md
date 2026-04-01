@@ -1,6 +1,6 @@
 # ADR-0040: Linear as Async Feedback Channel for Self-Improvement
 
-**Status**: Proposed  
+**Status**: Approved  
 **Date**: 2026-04-01  
 **Deciders**: Project owner  
 **Extends**: ADR-0030 (Captain's Log Dedup & Self-Improvement Pipeline)  

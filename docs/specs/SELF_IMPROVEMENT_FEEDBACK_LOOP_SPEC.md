@@ -298,11 +298,27 @@ async def handle_approved(event: FeedbackEvent, client: LinearClient) -> None:
 
 ```python
 async def handle_rejected(event: FeedbackEvent, client: LinearClient) -> None:
-    """Archive issue. Suppress similar proposals for 30 days."""
+    """Archive issue. Suppress similar proposals for configured duration."""
+    issue = await client.get_issue(event.issue_id)
+
+    # 1. Extract fingerprint from issue description (embedded at creation time)
+    fingerprint = _extract_fingerprint(issue)
+
+    # 2. Write to suppression file (Guard 2 in §6.4)
+    if fingerprint:
+        _add_suppression(
+            fingerprint=fingerprint,
+            issue_id=event.issue_identifier,
+            duration_days=settings.feedback_suppression_days,
+        )
+
+    # 3. Capture feedback metadata locally (§3 history preservation)
+    _save_feedback_record(issue, feedback_label="Rejected")
+
+    # 4. Move to Canceled and archive to free budget slot
     await client.update_issue(event.issue_id, state="Canceled")
-    # Archive to free budget
-    # Record fingerprint suppression in CL manager
-    # Record in insights engine: negative feedback for this category
+
+    # 5. Record negative signal in insights engine
     ...
 ```
 
@@ -380,7 +396,109 @@ async def handle_duplicate(event: FeedbackEvent, client: LinearClient) -> None:
 
 No immediate action. The issue stays in its current state. The poller records the deferral timestamp. A future enhancement could revisit deferred issues after a configurable period (default 90 days).
 
-### 6.4 Re-evaluation loop guard
+### 6.4 Proposal re-emergence prevention
+
+**Problem**: The existing write-time fingerprint dedup (`manager._find_entry_by_fingerprint()`) only matches `AWAITING_APPROVAL` entries. Once an entry is promoted (status → `APPROVED`) or rejected and archived, a future reflection with the same fingerprint creates a new CL entry, accumulates `seen_count`, and gets promoted again — producing a duplicate Linear issue.
+
+```
+Reflection: "add retry logic" (fingerprint: abc123)
+  → CL entry (AWAITING_APPROVAL) → merged 5x → promoted → APPROVED
+  → Rejected in Linear → archived
+
+Two weeks later: reflection "add retry logic" again
+  → _find_entry_by_fingerprint() finds nothing (old entry is APPROVED)
+  → New CL entry created → accumulates → promoted again
+  → DUPLICATE Linear issue
+```
+
+**Solution**: Three complementary guards, each catching what the previous one misses.
+
+#### Guard 1: Expand CL write-time dedup (cheapest, catches most)
+
+Modify `_find_entry_by_fingerprint()` in `manager.py` to match **any** status, not just `AWAITING_APPROVAL`:
+
+```python
+def _find_entry_by_fingerprint(self, fingerprint: str) -> pathlib.Path | None:
+    for json_file in sorted(self.log_dir.glob("CL-*.json"), reverse=True):
+        try:
+            data = _json.loads(json_file.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        # ADR-0040: match ANY status, not just AWAITING_APPROVAL.
+        # If the entry is APPROVED/promoted, we still want to merge
+        # (increment seen_count) rather than create a new promotable entry.
+        pc = data.get("proposed_change")
+        if pc and pc.get("fingerprint") == fingerprint:
+            return json_file
+
+    return None
+```
+
+And update `_merge_into_existing()`: if the matched entry is `APPROVED` (already promoted), merge the observation (increment `seen_count`) but **do not** reset status back to `AWAITING_APPROVAL`. The entry stays promoted. This preserves the data (the agent keeps noticing this pattern) without triggering re-promotion.
+
+#### Guard 2: Suppression file for rejected proposals
+
+When a proposal is `Rejected`, the feedback handler writes to a suppression file:
+
+**Location**: `telemetry/feedback_history/suppressed_fingerprints.json`
+
+```python
+{
+    "abc123deadbeef01": {
+        "suppressed_until": "2026-05-15T00:00:00Z",
+        "reason": "Rejected via Linear feedback",
+        "issue_id": "FF-234",
+        "rejected_at": "2026-04-15T10:30:00Z"
+    }
+}
+```
+
+The CL manager's `save_entry()` checks this file **before** the fingerprint scan. If the fingerprint is suppressed and the suppression hasn't expired, the entry is silently dropped (or logged and discarded):
+
+```python
+# In save_entry(), before the fingerprint dedup scan:
+if fingerprint and self._is_suppressed(fingerprint):
+    log.info(
+        "captains_log_proposal_suppressed",
+        fingerprint=fingerprint,
+        reason="rejected_via_feedback",
+    )
+    return None  # or return a sentinel path
+```
+
+Suppression duration is configurable (`feedback_suppression_days`, default 30). After expiry, the proposal can re-emerge — this is intentional, because the codebase may have changed enough that the proposal is now valid.
+
+#### Guard 3: Promotion-time Linear search (last resort)
+
+Before creating a Linear issue, the promotion pipeline queries Linear to check for an existing issue with the same fingerprint embedded in the description:
+
+```python
+async def _check_linear_duplicate(self, fingerprint: str) -> str | None:
+    """Search Linear for an existing issue containing this fingerprint.
+
+    Returns:
+        Issue identifier if found, None otherwise.
+    """
+    results = await self._linear_client.list_issues(
+        team="FrenchForest",
+        label="Improvement",
+        query=fingerprint,
+    )
+    return results[0]["id"] if results else None
+```
+
+The promotion pipeline includes the fingerprint in the Linear issue description (it's already in the CL entry data). If a match is found, the pipeline links the CL entry to the existing issue instead of creating a new one.
+
+#### Summary of guards
+
+| Guard | Where | Catches | Cost |
+|-------|-------|---------|------|
+| Expanded fingerprint match | `manager.save_entry()` | Re-emergence after promotion | Disk scan (existing, cheap) |
+| Suppression file | `manager.save_entry()` | Re-emergence after rejection | JSON file read (very cheap) |
+| Linear search | `promotion.run()` | Anything that slipped through guards 1-2 | 1 API call per promotion (negligible at daily rate) |
+
+### 6.5 Re-evaluation loop guard
 
 To prevent infinite feedback loops (Deepen → Re-evaluated → Deepen → Re-evaluated → ...), cap re-evaluations at **2 per issue**. Track the count in comments or a dedicated field. After 2 re-evaluations, the agent posts a comment: "Maximum re-evaluation depth reached. Please provide specific guidance in a comment or approve/reject."
 
@@ -577,7 +695,9 @@ promotion_initial_cap: int = Field(
 |------|--------|
 | `src/personal_agent/captains_log/feedback.py` | **New**: `FeedbackPoller`, `FeedbackHandler`, handlers, `FeedbackRecord` |
 | `src/personal_agent/captains_log/linear_client.py` | **New**: Thin wrapper around `MCPGatewayAdapter` for Linear tools |
-| `src/personal_agent/captains_log/promotion.py` | Modify: accept MCP-backed `create_issue_fn`, default state → `Needs Approval` |
+| `src/personal_agent/captains_log/promotion.py` | Modify: accept MCP-backed `create_issue_fn`, default state → `Needs Approval`, add Linear-side dedup check |
+| `src/personal_agent/captains_log/manager.py` | Modify: expand `_find_entry_by_fingerprint()` to match any status; add suppression file check |
+| `telemetry/feedback_history/suppressed_fingerprints.json` | **New** (gitignored): rejected proposal suppression registry |
 | `src/personal_agent/brainstem/scheduler.py` | Modify: inject `create_issue_fn`, add daily feedback polling job |
 | `src/personal_agent/insights/engine.py` | Modify: add `analyze_feedback_patterns()` using local history |
 | `src/personal_agent/config/settings.py` | Modify: add feedback loop settings |
@@ -599,6 +719,9 @@ promotion_initial_cap: int = Field(
 | 3 | Update `PromotionPipeline` defaults (state, labels, cap) | S | Unit: verify defaults |
 | 4 | Create feedback labels in Linear (one-time setup) | S | Manual: verify in Linear UI |
 | 5 | Add issue budget monitoring | S | Unit: threshold logic |
+| 5a | Expand `_find_entry_by_fingerprint()` to match any status (not just AWAITING_APPROVAL) | S | Unit: verify merge into APPROVED entry doesn't re-promote |
+| 5b | Add suppression file check to `save_entry()` | S | Unit: suppressed fingerprint → entry silently dropped |
+| 5c | Add Linear-side dedup check in promotion pipeline | S | Unit: mock duplicate found → skip creation |
 
 ### Phase 2: Feedback loop
 

@@ -4,6 +4,7 @@ Self-reflective learning system for the Personal AI Agent.
 
 **Spec**: `../../docs/architecture/CAPTAINS_LOG_SPEC_v0.1.md`
 **ADR**: `../../docs/architecture_decisions/ADR-0010-structured-llm-outputs-via-pydantic.md`
+**Linear feedback (promotion + polling)**: `../../docs/specs/SELF_IMPROVEMENT_FEEDBACK_LOOP_SPEC.md`, ADR-0040, operator guide `../../docs/guides/LINEAR_FEEDBACK_LOOP.md`, env vars in `.env.example` (sections *Insights* and *Captain's Log → Linear*).
 **Prototype**: `experiments/dspy_prototype/test_case_a_reflection.py` (E-008)
 
 ## File Naming Convention

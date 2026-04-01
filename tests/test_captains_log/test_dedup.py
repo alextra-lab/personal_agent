@@ -260,14 +260,15 @@ class TestDedupOnWrite:
         files = list(log_dir.glob("CL-*.json"))
         assert len(files) == 2
 
-    def test_approved_entry_not_merged_into(self, tmp_path: pathlib.Path) -> None:
-        """Dedup only matches AWAITING_APPROVAL entries; APPROVED ones are skipped."""
+    def test_approved_entry_merged_same_fingerprint(self, tmp_path: pathlib.Path) -> None:
+        """ADR-0040: dedup matches any status; APPROVED entries still absorb same fingerprint."""
         log_dir = tmp_path / "captains_log"
         manager = CaptainLogManager(log_dir=log_dir)
 
         entry = self._make_entry(entry_id="CL-approved-001")
         with patch("personal_agent.captains_log.manager.schedule_es_index"):
             path1 = manager.save_entry(entry)
+        assert path1 is not None
 
         data = json.loads(path1.read_text())
         data["status"] = CaptainLogStatus.APPROVED.value
@@ -276,10 +277,14 @@ class TestDedupOnWrite:
         new_entry = self._make_entry(entry_id="CL-approved-002")
         with patch("personal_agent.captains_log.manager.schedule_es_index"):
             path2 = manager.save_entry(new_entry)
+        assert path2 is not None
 
-        assert path1 != path2
+        assert path1 == path2
         files = list(log_dir.glob("CL-*.json"))
-        assert len(files) == 2
+        assert len(files) == 1
+        final = json.loads(path1.read_text())
+        assert final["status"] == CaptainLogStatus.APPROVED.value
+        assert final["proposed_change"]["seen_count"] == 2
 
 
 class TestBackwardCompatibility:

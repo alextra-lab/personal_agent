@@ -2,7 +2,6 @@
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, cast
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
@@ -188,12 +187,46 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.metrics_daemon = metrics_daemon
     set_global_metrics_daemon(metrics_daemon)
 
+    # MCP gateway before brainstem scheduler so promotion/feedback can use Linear (ADR-0040).
+    if settings.mcp_gateway_enabled:
+        try:
+            from personal_agent.captains_log.linear_client import LinearClient
+            from personal_agent.mcp.gateway import MCPGatewayAdapter
+            from personal_agent.tools import get_default_registry
+
+            log.info("mcp_gateway_initializing", command=settings.mcp_gateway_command)
+            registry = get_default_registry()
+            mcp_adapter = MCPGatewayAdapter(registry)
+            await mcp_adapter.initialize()
+            log.info(
+                "mcp_gateway_initialized",
+                tools_count=len(mcp_adapter._mcp_tool_names),
+                tools=list(mcp_adapter._mcp_tool_names)[:10],  # Log first 10 tools
+            )
+            if mcp_adapter.client:
+                linear_client = LinearClient(mcp_adapter)
+            else:
+                linear_client = None
+        except Exception as e:
+            log.warning(
+                "mcp_gateway_init_failed",
+                error=sanitize_error_message(e),
+                error_type=type(e).__name__,
+                exc_info=True,
+            )
+            mcp_adapter = None
+            linear_client = None
+    else:
+        linear_client = None
+
     # Start Brainstem scheduler for second brain, lifecycle, and/or insights tasks.
     if (
         settings.enable_second_brain
         or settings.data_lifecycle_enabled
         or settings.insights_enabled
         or getattr(settings, "quality_monitor_enabled", True)
+        or getattr(settings, "promotion_pipeline_enabled", True)
+        or getattr(settings, "feedback_polling_enabled", True)
     ):
         es_client = (
             es_handler.es_logger.client
@@ -210,33 +243,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             backfill_es_logger=backfill_logger,
             memory_service=memory_service,
             metrics_daemon=metrics_daemon,
+            linear_client=linear_client,
         )
         await scheduler.start()
         log.info("brainstem_scheduler_started")
-
-    # Initialize MCP gateway (Phase 2.3+)
-    if settings.mcp_gateway_enabled:
-        try:
-            from personal_agent.mcp.gateway import MCPGatewayAdapter
-            from personal_agent.tools import get_default_registry
-
-            log.info("mcp_gateway_initializing", command=settings.mcp_gateway_command)
-            registry = get_default_registry()
-            mcp_adapter = MCPGatewayAdapter(registry)
-            await mcp_adapter.initialize()
-            log.info(
-                "mcp_gateway_initialized",
-                tools_count=len(mcp_adapter._mcp_tool_names),
-                tools=list(mcp_adapter._mcp_tool_names)[:10],  # Log first 10 tools
-            )
-        except Exception as e:
-            log.warning(
-                "mcp_gateway_init_failed",
-                error=sanitize_error_message(e),
-                error_type=type(e).__name__,
-                exc_info=True,
-            )
-            mcp_adapter = None
 
     log.info("service_ready", port=settings.service_port)
 

@@ -7,17 +7,24 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytest_asyncio
 
+import personal_agent.brainstem.scheduler as scheduler_module
 from personal_agent.brainstem.scheduler import BrainstemScheduler
 from personal_agent.brainstem.sensors.metrics_daemon import MetricsSample
 
 
 @pytest_asyncio.fixture
 async def scheduler():
-    """Create scheduler instance for testing."""
-    sched = BrainstemScheduler()
-    yield sched
-    if sched.running:
-        await sched.stop()
+    """Create scheduler instance for testing.
+
+    Force resource gating on so consolidation preconditions (idle/CPU/memory)
+    are evaluated; local .env may disable gating and would otherwise make
+    `_should_consolidate` return True early.
+    """
+    with patch.object(scheduler_module.settings, "second_brain_resource_gating_enabled", True):
+        sched = BrainstemScheduler()
+        yield sched
+        if sched.running:
+            await sched.stop()
 
 
 @pytest.mark.asyncio

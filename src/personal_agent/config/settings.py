@@ -488,6 +488,56 @@ class AppConfig(BaseSettings):
         description="UTC hour for weekly Captain's Log insight proposals",
     )
 
+    # Captain's Log promotion + Linear feedback loop (ADR-0040)
+    promotion_pipeline_enabled: bool = Field(
+        default=True,
+        description="Enable weekly Captain's Log → Linear promotion pipeline",
+    )
+    feedback_polling_enabled: bool = Field(
+        default=True,
+        description="Enable daily Linear feedback polling in brainstem scheduler",
+    )
+    feedback_polling_hour_utc: int = Field(
+        default=7,
+        ge=0,
+        le=23,
+        description="UTC hour for daily Linear feedback polling",
+    )
+    feedback_suppression_days: int = Field(
+        default=30,
+        ge=1,
+        description="Days to suppress re-promotion of fingerprint after Linear Rejected",
+    )
+    feedback_max_reevaluations: int = Field(
+        default=2,
+        ge=1,
+        description="Max Deepen/Too Vague response rounds per issue",
+    )
+    feedback_defer_revisit_days: int = Field(
+        default=90,
+        ge=7,
+        description="Days before revisiting a Deferred proposal (future archive hook)",
+    )
+    issue_budget_threshold: int = Field(
+        default=200,
+        ge=50,
+        le=250,
+        description="Pause promotion when non-archived Linear issues exceed this count",
+    )
+    promotion_initial_cap: int = Field(
+        default=5,
+        ge=1,
+        description="Max Linear issues created per promotion pipeline run",
+    )
+    linear_team_name: str = Field(
+        default="FrenchForest",
+        description="Linear team name for promotion and feedback (ADR-0040)",
+    )
+    linear_promotion_project: str = Field(
+        default="2.3 Homeostasis & Feedback",
+        description="Linear project name for promoted improvement issues",
+    )
+
 
 _settings: AppConfig | None = None
 

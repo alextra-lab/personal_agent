@@ -4,6 +4,7 @@ Autonomic control layer - manages operational modes and transitions.
 
 **Spec**: `../../docs/architecture/BRAINSTEM_SERVICE_v0.1.md`
 **Model**: `../../docs/architecture/HOMEOSTASIS_MODEL.md`
+**Linear promotion & feedback jobs** (scheduler): `../../docs/guides/LINEAR_FEEDBACK_LOOP.md` — promotion window is Sunday 10:00 UTC in `scheduler.py`; daily feedback hour is `AGENT_FEEDBACK_POLLING_HOUR_UTC`.
 
 ## Responsibilities
 

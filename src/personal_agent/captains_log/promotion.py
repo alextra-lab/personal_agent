@@ -19,11 +19,16 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from personal_agent.captains_log.linear_client import (
+    LinearClient,
+    extract_issue_identifier_from_description,
+)
 from personal_agent.captains_log.models import (
     CaptainLogEntry,
     CaptainLogStatus,
     ChangeCategory,
 )
+from personal_agent.config import settings
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
@@ -42,7 +47,7 @@ class PromotionCriteria(BaseModel):
     )
     min_age_days: int = Field(default=7, ge=0, description="Minimum days since first_seen")
     max_existing_linear_issues: int = Field(
-        default=20, ge=1, description="Cap on issues created per pipeline run"
+        default=5, ge=1, description="Cap on issues created per pipeline run (ADR-0040 default 5)"
     )
     excluded_categories: list[ChangeCategory] = Field(
         default_factory=list, description="Categories to skip during promotion"
@@ -114,6 +119,13 @@ def _format_linear_description(entry: CaptainLogEntry) -> str:
         "> Auto-promoted by ADR-0030 pipeline",
     ]
 
+    if pc.fingerprint:
+        lines += [
+            "",
+            f"**Fingerprint**: `{pc.fingerprint}`",
+            f"<!-- fingerprint: {pc.fingerprint} -->",
+        ]
+
     return "\n".join(lines)
 
 
@@ -136,6 +148,7 @@ class PromotionPipeline:
         log_dir: pathlib.Path | None = None,
         criteria: PromotionCriteria | None = None,
         create_issue_fn: LinearIssueCreator | None = None,
+        linear_client: LinearClient | None = None,
     ) -> None:
         """Initialize the promotion pipeline.
 
@@ -145,6 +158,7 @@ class PromotionPipeline:
             create_issue_fn: Async callable(title, team, description, priority,
                 labels, state, project) -> issue_identifier | None.
                 If None, promotable entries are identified but not pushed to Linear.
+            linear_client: Optional Linear MCP client for budget and duplicate checks.
         """
         if log_dir is None:
             project_root = pathlib.Path(__file__).parent.parent.parent.parent
@@ -152,6 +166,7 @@ class PromotionPipeline:
         self.log_dir = log_dir
         self.criteria = criteria or PromotionCriteria()
         self._create_issue_fn = create_issue_fn
+        self._linear_client = linear_client
 
     def scan_promotable_entries(self) -> list[CaptainLogEntry]:
         """Find all AWAITING_APPROVAL entries that meet promotion criteria.
@@ -229,11 +244,61 @@ class PromotionPipeline:
             log.info("promotion_pipeline_no_entries")
             return []
 
+        if self._create_issue_fn is not None and self._linear_client is not None:
+            try:
+                count = await self._linear_client.count_non_archived_issues(settings.linear_team_name)
+                if count > settings.issue_budget_threshold:
+                    log.warning(
+                        "issue_budget_promotion_paused",
+                        current_count=count,
+                        threshold=settings.issue_budget_threshold,
+                    )
+                    return []
+                if count > settings.issue_budget_threshold - 20:
+                    log.warning(
+                        "issue_budget_warning",
+                        current_count=count,
+                        threshold=settings.issue_budget_threshold,
+                    )
+            except Exception as budget_exc:
+                log.warning(
+                    "promotion_budget_check_failed",
+                    error=str(budget_exc),
+                    exc_info=True,
+                )
+
         capped = entries[: self.criteria.max_existing_linear_issues]
         promoted: list[dict[str, str]] = []
 
         for entry in capped:
             try:
+                fp = (
+                    entry.proposed_change.fingerprint
+                    if entry.proposed_change and entry.proposed_change.fingerprint
+                    else None
+                )
+                if self._linear_client is not None and fp:
+                    try:
+                        existing_id = await self._existing_linear_issue_for_fingerprint(fp)
+                    except Exception as dup_exc:
+                        log.warning(
+                            "promotion_linear_dedup_query_failed",
+                            entry_id=entry.entry_id,
+                            error=str(dup_exc),
+                        )
+                        existing_id = None
+                    if existing_id:
+                        log.info(
+                            "promotion_linear_duplicate_linked",
+                            entry_id=entry.entry_id,
+                            linear_issue_id=existing_id,
+                        )
+                        self._mark_promoted(entry, existing_id)
+                        promoted.append(
+                            {"entry_id": entry.entry_id, "linear_issue_id": existing_id}
+                        )
+                        continue
+
                 linear_id = await self._create_linear_issue(entry)
                 if linear_id:
                     self._mark_promoted(entry, linear_id)
@@ -251,6 +316,30 @@ class PromotionPipeline:
             promoted=len(promoted),
         )
         return promoted
+
+    async def _existing_linear_issue_for_fingerprint(self, fingerprint: str) -> str | None:
+        """Return Linear issue identifier if one already contains this fingerprint."""
+        if self._linear_client is None:
+            return None
+        fpl = fingerprint.lower().strip()
+        issues = await self._linear_client.list_issues(
+            team=settings.linear_team_name,
+            label="Improvement",
+            query=fingerprint,
+            includeArchived=False,
+            limit=50,
+        )
+        for issue in issues:
+            desc = str(issue.get("description") or "")
+            extracted = extract_issue_identifier_from_description(desc)
+            if extracted == fpl or fpl in desc.lower():
+                ident = issue.get("identifier")
+                if isinstance(ident, str):
+                    return ident
+                oid = issue.get("id")
+                if isinstance(oid, str):
+                    return oid
+        return None
 
     async def _create_linear_issue(self, entry: CaptainLogEntry) -> str | None:
         """Create a Linear issue for a promoted proposal.
@@ -279,18 +368,22 @@ class PromotionPipeline:
         try:
             linear_id = await self._create_issue_fn(
                 title,
-                "FrenchForest",
+                settings.linear_team_name,
                 description,
                 priority,
-                ["Improvement"],
-                "Backlog",
-                "2.3 Homeostasis & Feedback",
+                ["PersonalAgent", "Improvement"],
+                "Needs Approval",
+                settings.linear_promotion_project,
             )
             if linear_id:
                 log.info(
-                    "promotion_linear_issue_created",
+                    "promotion_issue_created",
                     entry_id=entry.entry_id,
-                    linear_id=linear_id,
+                    issue_id=linear_id,
+                    title=title[:120],
+                    category=pc.category.value if pc.category else None,
+                    scope=pc.scope.value if pc.scope else None,
+                    seen_count=pc.seen_count,
                     priority=priority,
                 )
             return linear_id

@@ -1,8 +1,9 @@
 """Proactive insights engine for cross-data pattern detection (FRE-24)."""
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from statistics import mean, pstdev
+from statistics import mean, median, pstdev
 
 from personal_agent.captains_log.es_indexer import schedule_es_index
 from personal_agent.captains_log.models import (
@@ -11,6 +12,7 @@ from personal_agent.captains_log.models import (
     Metric,
     ProposedChange,
 )
+from personal_agent.captains_log.suppression import feedback_history_dir
 from personal_agent.llm_client.cost_tracker import CostTrackerService
 from personal_agent.memory.service import MemoryService
 from personal_agent.telemetry import TaskPatternReport, TelemetryQueries, get_logger
@@ -337,6 +339,122 @@ class InsightsEngine:
             count=len(proposals),
         )
         return proposals
+
+    async def analyze_feedback_patterns(self, days: int = 30) -> list[Insight]:
+        """Summarize human feedback on promoted proposals from local history (ADR-0040).
+
+        Reads ``telemetry/feedback_history/*.json`` (excluding suppression registry).
+
+        Args:
+            days: Lookback window in days.
+
+        Returns:
+            High-level insights (acceptance mix, deepen signal, category tilt).
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        by_category: dict[str, dict[str, int]] = {}
+        label_counts: dict[str, int] = {}
+        times_to_fb: list[float] = []
+        n_records = 0
+
+        for path in feedback_history_dir().glob("*.json"):
+            if path.name == "suppressed_fingerprints.json":
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            fd_raw = data.get("feedback_date") or data.get("feedbackDate")
+            if isinstance(fd_raw, str):
+                try:
+                    fd = datetime.fromisoformat(fd_raw.replace("Z", "+00:00"))
+                except ValueError:
+                    fd = None
+            else:
+                fd = None
+            if fd and fd.tzinfo is None:
+                fd = fd.replace(tzinfo=timezone.utc)
+            if fd and fd < cutoff:
+                continue
+
+            label = str(data.get("feedback_label") or "")
+            if not label:
+                continue
+            n_records += 1
+            label_counts[label] = label_counts.get(label, 0) + 1
+            cat = data.get("category")
+            cat_key = str(cat) if cat else "unknown"
+            bucket = by_category.setdefault(cat_key, {"Approved": 0, "Rejected": 0, "other": 0})
+            if label == "Approved":
+                bucket["Approved"] += 1
+            elif label == "Rejected":
+                bucket["Rejected"] += 1
+            else:
+                bucket["other"] += 1
+            ttf = data.get("time_to_feedback_hours")
+            if isinstance(ttf, (int, float)):
+                times_to_fb.append(float(ttf))
+
+        insights: list[Insight] = []
+        if n_records == 0:
+            return insights
+
+        deepen_n = label_counts.get("Deepen", 0) + label_counts.get("Re-evaluated", 0)
+        approved_n = label_counts.get("Approved", 0)
+        rejected_n = label_counts.get("Rejected", 0)
+        deepen_rate = deepen_n / max(n_records, 1)
+        ar_denom = approved_n + rejected_n
+        accept_rate = (approved_n / ar_denom) if ar_denom else 0.0
+
+        insights.append(
+            Insight(
+                insight_type="feedback_summary",
+                title="Linear proposal feedback snapshot",
+                summary=(
+                    f"{n_records} feedback record(s) in {days}d: "
+                    f"accept_rate={accept_rate:.0%} (of approved+rejected), "
+                    f"deepen_signal_rate={deepen_rate:.0%}."
+                ),
+                confidence=0.7 if n_records >= 5 else 0.5,
+                evidence={
+                    "records": n_records,
+                    "approved": approved_n,
+                    "rejected": rejected_n,
+                    "deepen_related": deepen_n,
+                    "median_hours_to_feedback": round(median(times_to_fb), 2)
+                    if times_to_fb
+                    else 0.0,
+                },
+                actionable=True,
+            )
+        )
+
+        for cat, bucket in sorted(by_category.items(), key=lambda x: -(x[1]["Rejected"] + x[1]["Approved"])):
+            total = bucket["Approved"] + bucket["Rejected"]
+            if total < 2:
+                continue
+            rej_share = bucket["Rejected"] / total
+            if rej_share >= 0.6:
+                insights.append(
+                    Insight(
+                        insight_type="feedback_category",
+                        title=f"High rejection rate for '{cat}' proposals",
+                        summary=(
+                            f"{bucket['Rejected']}/{total} recorded feedbacks are Rejected "
+                            f"for category {cat}; consider tightening prompts or criteria."
+                        ),
+                        confidence=min(0.55 + 0.05 * total, 0.85),
+                        evidence={
+                            "category": cat,
+                            "approved": bucket["Approved"],
+                            "rejected": bucket["Rejected"],
+                        },
+                        actionable=True,
+                    )
+                )
+
+        log.info("insights_feedback_patterns_analyzed", days=days, records=n_records, insights=len(insights))
+        return insights
 
     def _build_resource_insights(
         self,

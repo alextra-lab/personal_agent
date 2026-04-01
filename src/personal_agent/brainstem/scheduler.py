@@ -5,14 +5,18 @@ when conditions are met (idle time, low resource usage). Also runs data
 lifecycle tasks (Phase 2.3): hourly disk check, daily archive, weekly purge.
 """
 
+from __future__ import annotations
+
 import asyncio
 from datetime import date, datetime, timezone
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from personal_agent.brainstem.sensors.sensors import poll_system_metrics
 from personal_agent.captains_log.es_indexer import schedule_es_index
+from personal_agent.captains_log.feedback import FeedbackPoller
+from personal_agent.captains_log.linear_client import LinearClient
 from personal_agent.captains_log.manager import CaptainLogManager
-from personal_agent.captains_log.promotion import PromotionPipeline
+from personal_agent.captains_log.promotion import PromotionCriteria, PromotionPipeline
 from personal_agent.config.settings import get_settings
 from personal_agent.insights import InsightsEngine
 from personal_agent.insights.engine import INSIGHTS_INDEX_PREFIX
@@ -25,6 +29,7 @@ from personal_agent.telemetry.queries import TelemetryQueries
 
 if TYPE_CHECKING:
     from elasticsearch import AsyncElasticsearch
+
     from personal_agent.brainstem.sensors.metrics_daemon import MetricsDaemon
 
 log = get_logger(__name__)
@@ -63,6 +68,7 @@ class BrainstemScheduler:
         memory_service: MemoryService | None = None,
         quality_monitor: ConsolidationQualityMonitor | None = None,
         metrics_daemon: "MetricsDaemon | None" = None,
+        linear_client: LinearClient | None = None,
     ) -> None:  # noqa: D107
         """Initialize scheduler with consolidation thresholds and optional lifecycle ES client."""
         self.running = False
@@ -86,7 +92,19 @@ class BrainstemScheduler:
         self._last_insights_week: tuple[int, int] | None = None  # (year, week)
         self._last_quality_check_date: date | None = None
         self._last_promotion_week: tuple[int, int] | None = None  # (year, week) ADR-0030
-        self.promotion_pipeline = PromotionPipeline()
+        self._last_feedback_date: date | None = None  # ADR-0040
+        promo_criteria = PromotionCriteria(
+            max_existing_linear_issues=settings.promotion_initial_cap,
+        )
+        self.promotion_pipeline = PromotionPipeline(
+            criteria=promo_criteria,
+            linear_client=linear_client,
+            create_issue_fn=(linear_client.create_issue if linear_client else None),
+        )
+        self.feedback_poller: FeedbackPoller | None = (
+            FeedbackPoller(linear_client) if linear_client else None
+        )
+        self.feedback_polling_hour_utc = settings.feedback_polling_hour_utc
         self.quality_monitor = quality_monitor or ConsolidationQualityMonitor(
             memory_service=memory_service,
             telemetry_queries=TelemetryQueries(
@@ -448,6 +466,29 @@ class BrainstemScheduler:
                         log.warning(
                             "promotion_pipeline_failed",
                             error=str(promo_err),
+                            exc_info=True,
+                        )
+
+                # Daily Linear feedback polling (ADR-0040)
+                if (
+                    self.feedback_poller is not None
+                    and getattr(settings, "feedback_polling_enabled", True)
+                    and now.hour == self.feedback_polling_hour_utc
+                    and (
+                        self._last_feedback_date is None or self._last_feedback_date != today
+                    )
+                ):
+                    events: list[Any] = []
+                    try:
+                        events = await self.feedback_poller.check_for_feedback()
+                        if events:
+                            await self.feedback_poller.process_feedback(events)
+                        self._last_feedback_date = today
+                        log.info("feedback_polling_completed", events_count=len(events))
+                    except Exception as poll_err:
+                        log.warning(
+                            "feedback_polling_failed",
+                            error=str(poll_err),
                             exc_info=True,
                         )
 

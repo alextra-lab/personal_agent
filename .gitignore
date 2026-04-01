@@ -46,6 +46,10 @@ telemetry/captains_log/**/*.json
 # Captain's Log ES backfill checkpoint (FRE-30)
 telemetry/captains_log/es_backfill_checkpoint.json
 
+# Linear feedback loop (ADR-0040) — local history and poller state
+telemetry/feedback_history/
+telemetry/feedback_poller_state.json
+
 # Evaluation harness per-run results (regeneratable from re-runs)
 telemetry/evaluation/evaluation_report*.md
 telemetry/evaluation/evaluation_results*.md

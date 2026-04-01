@@ -3,9 +3,11 @@
 import json
 import pathlib
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import personal_agent.captains_log.promotion as promotion_module
 from personal_agent.captains_log.dedup import compute_proposal_fingerprint
 from personal_agent.captains_log.models import (
     CaptainLogEntry,
@@ -72,6 +74,34 @@ class TestFormatLinearDescription:
         assert "llm_client" in desc
         assert "5" in desc
         assert "cpu: 45%" in desc
+
+    def test_includes_fingerprint_markers_when_present(self) -> None:
+        """ADR-0040: description embeds fingerprint for Linear dedup and rejection handling."""
+        fp = compute_proposal_fingerprint(
+            ChangeCategory.RELIABILITY, ChangeScope.LLM_CLIENT, "Add retry logic"
+        )
+        entry = CaptainLogEntry(
+            entry_id="CL-test-fp",
+            type=CaptainLogEntryType.REFLECTION,
+            title="Test",
+            rationale="Test",
+            proposed_change=ProposedChange(
+                what="Add retry logic",
+                why="Reliability",
+                how="Tenacity",
+                category=ChangeCategory.RELIABILITY,
+                scope=ChangeScope.LLM_CLIENT,
+                fingerprint=fp,
+                seen_count=3,
+            ),
+        )
+        desc = _format_linear_description(entry)
+        assert fp in desc
+        assert "<!-- fingerprint:" in desc
+
+    def test_default_promotion_cap_is_five(self) -> None:
+        """ADR-0040 default max issues per run."""
+        assert PromotionCriteria().max_existing_linear_issues == 5
 
     def test_handles_no_proposed_change(self) -> None:
         """Test that Linear description handles entries without proposed_change."""
@@ -276,6 +306,63 @@ class TestPromotionPipelineRun:
         pipeline = PromotionPipeline(log_dir=log_dir, create_issue_fn=failing_create)
         promoted = await pipeline.run()
         assert len(promoted) == 0
+
+    @pytest.mark.asyncio
+    async def test_issue_budget_pauses_promotion(self, tmp_path: pathlib.Path) -> None:
+        """ADR-0040: when non-archived Linear count exceeds threshold, skip creating issues."""
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        _write_entry(log_dir)
+
+        mock_create = AsyncMock(return_value="FF-1")
+        lc = MagicMock()
+        lc.count_non_archived_issues = AsyncMock(return_value=201)
+        lc.list_issues = AsyncMock(return_value=[])
+
+        with patch.object(promotion_module.settings, "issue_budget_threshold", 200):
+            pipeline = PromotionPipeline(
+                log_dir=log_dir,
+                criteria=PromotionCriteria(min_seen_count=3, min_age_days=7),
+                create_issue_fn=mock_create,
+                linear_client=lc,
+            )
+            promoted = await pipeline.run()
+        assert promoted == []
+        mock_create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_linear_duplicate_links_existing_issue(self, tmp_path: pathlib.Path) -> None:
+        """ADR-0040: fingerprint match in Linear links CL entry without new save_issue."""
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        fp_path = _write_entry(log_dir)
+        data = json.loads(fp_path.read_text())
+        fp = data["proposed_change"]["fingerprint"]
+
+        mock_create = AsyncMock(side_effect=AssertionError("save_issue should not be called"))
+
+        lc = MagicMock()
+        lc.count_non_archived_issues = AsyncMock(return_value=50)
+        lc.list_issues = AsyncMock(
+            return_value=[
+                {
+                    "id": "other-uuid",
+                    "identifier": "FF-EXISTING",
+                    "description": f"Prior\n<!-- fingerprint: {fp} -->\n",
+                }
+            ]
+        )
+
+        pipeline = PromotionPipeline(
+            log_dir=log_dir,
+            criteria=PromotionCriteria(min_seen_count=3, min_age_days=7),
+            create_issue_fn=mock_create,
+            linear_client=lc,
+        )
+        promoted = await pipeline.run()
+        assert len(promoted) == 1
+        assert promoted[0]["linear_issue_id"] == "FF-EXISTING"
+        mock_create.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_entries_returns_empty(self, tmp_path: pathlib.Path) -> None:

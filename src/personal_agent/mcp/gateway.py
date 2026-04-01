@@ -191,6 +191,31 @@ class MCPGatewayAdapter:
 
         return executor
 
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        """Invoke an MCP tool by name (raw gateway session).
+
+        Used by background jobs (e.g. LinearClient) that need MCP without going
+        through the tool registry.
+
+        Args:
+            name: MCP tool name as returned by the gateway (e.g. ``save_issue``).
+            arguments: Tool arguments per the MCP tool schema.
+
+        Returns:
+            Parsed tool result (structured content or JSON-decoded text).
+
+        Raises:
+            RuntimeError: If the gateway is not connected or the tool fails.
+        """
+        if not self.client:
+            raise RuntimeError("MCP gateway not connected")
+        try:
+            result = await self.client.call_tool(name, arguments)
+            return result if result else {}
+        except Exception as e:
+            log.error("mcp_gateway_call_tool_failed", tool=name, error=str(e), exc_info=True)
+            raise RuntimeError(f"MCP tool '{name}' failed: {e}") from e
+
     async def shutdown(self) -> None:
         """Shutdown gateway and cleanup resources."""
         if self.client:

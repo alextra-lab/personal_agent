@@ -14,9 +14,9 @@ from personal_agent.captains_log.es_indexer import schedule_es_index
 from personal_agent.captains_log.models import (
     CaptainLogEntry,
     CaptainLogEntryType,
-    CaptainLogStatus,
     TelemetryRef,
 )
+from personal_agent.captains_log.suppression import is_fingerprint_suppressed
 from personal_agent.telemetry import CAPTAINS_LOG_ENTRY_CREATED, get_logger
 
 log = get_logger(__name__)
@@ -172,31 +172,42 @@ class CaptainLogManager:
         self,
         entry: CaptainLogEntry,
         es_handler: "ElasticsearchHandler | None" = None,
-    ) -> pathlib.Path:
+    ) -> pathlib.Path | None:
         """Save a Captain's Log entry to a JSON file.
 
         ADR-0030 dedup: if the entry has a proposed_change with a fingerprint,
-        check for an existing AWAITING_APPROVAL entry that shares the same
+        check for an existing entry (any status) that shares the same
         fingerprint. When found, merge (increment seen_count) instead of
         writing a new file.
+
+        ADR-0040: if the fingerprint is under Linear rejection suppression,
+        skip the write and return None.
 
         Args:
             entry: The entry to write.
             es_handler: Optional Elasticsearch handler override.
 
         Returns:
-            Path to the written (or updated) file.
+            Path to the written (or updated) file, or None if suppressed.
 
         Raises:
             OSError: If file cannot be written.
         """
-        # --- ADR-0030: fingerprint-based dedup ---
+        # --- ADR-0040: rejection suppression ---
         fingerprint = (
             entry.proposed_change.fingerprint
             if entry.proposed_change and entry.proposed_change.fingerprint
             else None
         )
+        if fingerprint and is_fingerprint_suppressed(fingerprint):
+            log.info(
+                "captains_log_proposal_suppressed",
+                fingerprint=fingerprint,
+                reason="rejected_via_feedback",
+            )
+            return None
 
+        # --- ADR-0030 / ADR-0040: fingerprint-based dedup ---
         if fingerprint:
             existing_path = self._find_entry_by_fingerprint(fingerprint)
             if existing_path is not None:
@@ -241,10 +252,13 @@ class CaptainLogManager:
     # ------------------------------------------------------------------
 
     def _find_entry_by_fingerprint(self, fingerprint: str) -> pathlib.Path | None:
-        """Scan on-disk entries for an AWAITING_APPROVAL proposal with matching fingerprint.
+        """Scan on-disk entries for a proposal with matching fingerprint (any status).
+
+        ADR-0040: matches any status so promoted (APPROVED) entries still absorb
+        duplicate reflections without creating a new promotable CL file.
 
         Args:
-            fingerprint: The 16-char hex fingerprint to match.
+            fingerprint: The fingerprint to match.
 
         Returns:
             Path to the matching file, or None.
@@ -253,9 +267,6 @@ class CaptainLogManager:
             try:
                 data = _json.loads(json_file.read_text(encoding="utf-8"))
             except Exception:
-                continue
-
-            if data.get("status") != CaptainLogStatus.AWAITING_APPROVAL.value:
                 continue
 
             pc = data.get("proposed_change")
@@ -322,7 +333,7 @@ class CaptainLogManager:
         self,
         entry: CaptainLogEntry,
         es_handler: "ElasticsearchHandler | None" = None,
-    ) -> pathlib.Path:
+    ) -> pathlib.Path | None:
         """Write entry compatibility wrapper (delegates to save_entry)."""
         return self.save_entry(entry, es_handler=es_handler)
 
@@ -469,7 +480,7 @@ class CaptainLogManager:
 
         file_path = self.write_entry(entry)
 
-        if auto_commit:
+        if auto_commit and file_path is not None:
             self.commit_to_git(entry_id, file_path=file_path)
 
         return entry

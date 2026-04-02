@@ -1,6 +1,6 @@
 # ADR-0012: Request-Scoped Metrics Monitoring
 
-**Status:** Proposed
+**Status:** Accepted — request-scoped monitoring operational
 **Date:** 2026-01-17
 **Decision Owner:** Project Owner
 

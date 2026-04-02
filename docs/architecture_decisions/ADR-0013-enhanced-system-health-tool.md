@@ -1,6 +1,6 @@
 # ADR-0013: Enhanced System Health Tool with Historical Queries
 
-**Status:** Proposed
+**Status:** Accepted — system health tool with historical queries implemented
 **Date:** 2026-01-17
 **Decision Owner:** Project Owner
 

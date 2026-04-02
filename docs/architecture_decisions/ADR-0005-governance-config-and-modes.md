@@ -1,6 +1,6 @@
 # ADR-0005: Governance Configuration & Operational Modes
 
-**Status:** Proposed
+**Status:** Accepted — governance modes and brainstem mode manager operational
 **Date:** 2025-12-28
 **Decision Owner:** Project Owner
 

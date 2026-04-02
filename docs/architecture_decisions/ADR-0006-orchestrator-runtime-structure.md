@@ -1,6 +1,6 @@
 # ADR-0006: Orchestrator Runtime Structure & Execution Model
 
-**Status:** Proposed
+**Status:** Accepted — evolved by [Cognitive Architecture Redesign v2](../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md) (Pre-LLM Gateway absorbs routing complexity)
 **Date:** 2025-12-28
 **Decision Owner:** Project Owner
 

@@ -1,6 +1,6 @@
 # ADR-0003: Local Model Stack for Personal Agent MVP
 
-- Status: Proposed
+- Status: Superseded — by ADR-0008 (Course Correction), ADR-0031 (Config Consolidation), ADR-0033 (Multi-Provider Taxonomy), and [Cognitive Architecture Redesign v2](../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md) (single-brain architecture)
 - Date: 2025-12-28
 - Owners: Project Owner
 

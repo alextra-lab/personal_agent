@@ -1,6 +1,6 @@
 # ADR-0002 — Orchestrator Style: Deterministic Graph + Embedded Agents
 
-**Status:** Proposed / Draft
+**Status:** Accepted — evolved by [Cognitive Architecture Redesign v2](../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md)
 **Date:** 2025-12-28
 **Decision Owner:** Project Owner
 
@@ -222,9 +222,6 @@ Rejected:
 
 ## 8. Status and Next Steps
 
-- This ADR becomes binding once MVP orchestrator begins.
-- Future ADRs may refine:
-  - execution semantics,
-  - graph persistence format,
-  - agent role taxonomy,
-  - failure recovery strategy.
+- This ADR's core design (deterministic control + embedded LLM cognition) was implemented in the orchestrator state machine and has been operational since early 2026.
+- The [Cognitive Architecture Redesign v2](../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md) evolved the orchestrator by introducing a Pre-LLM Gateway that absorbs routing complexity, simplifying the state machine.
+- Execution semantics were refined in ADR-0006 (runtime structure), ADR-0029 (concurrency control), and the Redesign v2 spec.

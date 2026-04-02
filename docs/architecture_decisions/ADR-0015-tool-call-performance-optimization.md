@@ -1,6 +1,6 @@
 # ADR-0015: Tool Call Performance Optimization
 
-**Status**: Proposed
+**Status**: Accepted — core optimizations (fast-path routing, metrics caching) incorporated into Pre-LLM Gateway
 **Date**: 2026-01-17
 **Deciders**: System Architect
 **Related**: ADR-0008 (Tool Calling), ADR-0012 (Request-Scoped Metrics)
@@ -439,8 +439,7 @@ log.info(
 
 ---
 
-**Decision**: Approved for Week 7 implementation (Phase 1)
-**Next Steps**: Create performance test suite, implement quick wins, measure impact
+**Decision**: Accepted — Phase 1 optimizations (fast-path routing, metrics caching, performance budgets) implemented. Structural improvements absorbed into the Pre-LLM Gateway (Cognitive Architecture Redesign v2).
 
 **Created**: 2026-01-17
-**Status**: Ready for implementation
+**Updated**: 2026-04-02 (status corrected)

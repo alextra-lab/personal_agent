@@ -1,6 +1,6 @@
 # ADR-0004: Telemetry & Metrics Implementation Strategy
 
-**Status:** Proposed
+**Status:** Accepted — telemetry operational (evolved from file-based to Elasticsearch)
 **Date:** 2025-12-28
 **Decision Owner:** Project Owner
 

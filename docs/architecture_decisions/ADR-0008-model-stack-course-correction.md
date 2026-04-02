@@ -1,6 +1,6 @@
 # ADR-0008: Model Stack Course Correction Based on December 2025 Research
 
-**Status:** Proposed
+**Status:** Superseded — by [Cognitive Architecture Redesign v2](../specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md) (single-brain architecture replaces multi-role model stack), ADR-0031 (Config Consolidation), ADR-0033 (Multi-Provider Taxonomy)
 **Date:** 2025-12-31
 **Decision Owner:** Project Owner
 **Supersedes:** Portions of ADR-0003 (Model Stack)
@@ -846,12 +846,4 @@ models:
 
 ---
 
-**Document Status:** Proposed, Awaiting Approval
-**Next Actions:**
-1. Project owner review and approval
-2. Create benchmark framework (Week 4)
-3. Test DeepSeek-R1-14B locally (Week 4 or early Phase 2)
-4. Run A/B tests and document results
-5. Execute migration if tests pass
-
-**Decision Deadline:** Before Phase 2 begins (Month 2)
+**Document Status:** Superseded (2026-04-02) — The multi-role model stack described here was replaced by the single-brain architecture (Qwen3.5-35-A3B) in the Cognitive Architecture Redesign v2. Model configuration is now managed via ADR-0031 and ADR-0033.

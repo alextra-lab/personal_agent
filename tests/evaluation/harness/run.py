@@ -1,31 +1,44 @@
-"""Standalone CLI entry point for running evaluation paths.
+r"""Standalone CLI entry point for running evaluation paths.
+
+IMPORTANT — inference server load
+----------------------------------
+This harness fires 100+ real LLM inference calls sequentially against the local
+GPU server. Running it accidentally will monopolise the GPU for 60-90 minutes.
+
+You MUST set PERSONAL_AGENT_EVAL=1 before running:
+
+    PERSONAL_AGENT_EVAL=1 uv run python -m tests.evaluation.harness.run
 
 Usage:
     # Run all paths
-    uv run python -m tests.evaluation.harness.run
+    PERSONAL_AGENT_EVAL=1 uv run python -m tests.evaluation.harness.run
 
     # Run specific paths
-    uv run python -m tests.evaluation.harness.run --paths CP-01 CP-02 CP-03
+    PERSONAL_AGENT_EVAL=1 uv run python -m tests.evaluation.harness.run --paths CP-01 CP-02 CP-03
 
     # Run a category (display name)
-    uv run python -m tests.evaluation.harness.run --category "Intent Classification"
+    PERSONAL_AGENT_EVAL=1 uv run python -m tests.evaluation.harness.run --category "Intent Classification"
 
     # Run one or more categories by slug (Phase 3 VERIFY — see context intelligence plan)
-    uv run python -m tests.evaluation.harness.run --categories context_management
-    uv run python -m tests.evaluation.harness.run --categories decomposition expansion
+    PERSONAL_AGENT_EVAL=1 uv run python -m tests.evaluation.harness.run --categories context_management
+    PERSONAL_AGENT_EVAL=1 uv run python -m tests.evaluation.harness.run --categories decomposition expansion
 
     # Custom agent URL
-    uv run python -m tests.evaluation.harness.run --agent-url http://localhost:9000
+    PERSONAL_AGENT_EVAL=1 uv run python -m tests.evaluation.harness.run --agent-url http://localhost:9000
 
     # Save reports
-    uv run python -m tests.evaluation.harness.run --output-dir telemetry/evaluation \\
-        --run-id EVAL-09-cat-context
+    PERSONAL_AGENT_EVAL=1 uv run python -m tests.evaluation.harness.run \\
+        --output-dir telemetry/evaluation --run-id EVAL-09-cat-context
+
+    # Tune inter-path cooldown (default 8s; use 0 only on fast/multi-GPU servers)
+    PERSONAL_AGENT_EVAL=1 uv run python -m tests.evaluation.harness.run --inter-path-delay 12
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 from typing import cast
@@ -47,6 +60,32 @@ from tests.evaluation.harness.runner import EvaluationRunner
 from tests.evaluation.harness.telemetry import TelemetryChecker
 
 log = structlog.get_logger(__name__)
+
+# Safety gate: the eval harness fires 100+ real LLM inference calls against the
+# local GPU server. Running it accidentally (e.g. an AI agent doing `pytest tests/`)
+# will overload the inference server for 60-90 minutes. Require an explicit opt-in.
+_EVAL_ENV_VAR = "PERSONAL_AGENT_EVAL"
+
+
+def _check_eval_gate() -> None:
+    """Abort unless PERSONAL_AGENT_EVAL=1 is set in the environment.
+
+    This prevents accidental runs by AI agents or `pytest tests/` sweeps.
+    Set the variable explicitly when you intend to run the eval harness:
+
+        PERSONAL_AGENT_EVAL=1 uv run python -m tests.evaluation.harness.run
+    """
+    if os.environ.get(_EVAL_ENV_VAR) != "1":
+        log.error(
+            "eval_gate_blocked",
+            detail=(
+                f"Set {_EVAL_ENV_VAR}=1 to run the evaluation harness. "
+                "This harness fires 100+ LLM inference calls and will overload "
+                "a single-GPU inference server if run accidentally."
+            ),
+        )
+        sys.exit(1)
+
 
 # Slugs for --categories (stable CLI for plans and CI; keys are dataset category labels).
 CATEGORY_SLUGS: dict[str, str] = {
@@ -121,6 +160,25 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip paths that require manual setup (e.g., CP-18)",
     )
+    parser.add_argument(
+        "--inter-path-delay",
+        type=float,
+        default=8.0,
+        metavar="SECONDS",
+        help=(
+            "Cooldown between paths in seconds (default: 8.0). "
+            "Lets the inference server flush KV cache between paths. "
+            "Set to 0 to disable (not recommended on single-GPU servers)."
+        ),
+    )
+    parser.add_argument(
+        "--skip-responsiveness-probe",
+        action="store_true",
+        help=(
+            "Skip the inference responsiveness probe before running. "
+            "Use only when you are confident the server is not overloaded."
+        ),
+    )
     args = parser.parse_args()
     if args.category and args.categories:
         log.error("conflicting_filters", detail="Use only one of --category or --categories")
@@ -194,6 +252,8 @@ def _apply_skip_setup(
 
 async def main() -> None:
     """Main entry point."""
+    _check_eval_gate()
+
     args = parse_args()
     paths = select_paths(args)
 
@@ -205,6 +265,7 @@ async def main() -> None:
         "evaluation_starting",
         path_count=len(paths),
         path_ids=[p.path_id for p in paths],
+        inter_path_delay_s=args.inter_path_delay,
     )
 
     telemetry = TelemetryChecker(es_url=args.es_url)
@@ -218,13 +279,26 @@ async def main() -> None:
         agent_url=args.agent_url,
         telemetry=telemetry,
         neo4j_checker=neo4j if neo4j_connected else None,
+        inter_path_delay_s=args.inter_path_delay,
     )
 
-    # Health check
+    # Structural health check
     healthy = await runner.check_agent_health()
     if not healthy:
         log.error("agent_not_healthy", url=args.agent_url)
         sys.exit(1)
+
+    # Inference responsiveness probe — verifies the LLM server can accept work
+    # before queuing dozens of paths. Catches overloaded servers early.
+    if not args.skip_responsiveness_probe:
+        responsive = await runner.check_inference_responsive()
+        if not responsive:
+            log.error(
+                "inference_not_responsive",
+                url=args.agent_url,
+                hint="Pass --skip-responsiveness-probe to override (not recommended).",
+            )
+            sys.exit(1)
 
     # Run paths
     results = await runner.run_paths(paths)

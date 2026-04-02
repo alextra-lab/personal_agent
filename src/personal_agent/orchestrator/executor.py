@@ -715,15 +715,17 @@ async def step_init(
     timer = ctx.request_timer
 
     # Load session and build message history
+    session_message_count = 0
     if timer:
         timer.start_span("session_history_load")
-    session = session_manager.get_session(ctx.session_id)
-    session_message_count = 0
-    if session:
-        ctx.messages = list(session.messages)
-        session_message_count = len(ctx.messages)
-    if timer:
-        timer.end_span("session_history_load", message_count=session_message_count)
+    try:
+        session = session_manager.get_session(ctx.session_id)
+        if session:
+            ctx.messages = list(session.messages)
+            session_message_count = len(ctx.messages)
+    finally:
+        if timer:
+            timer.end_span("session_history_load", message_count=session_message_count)
 
     # Add new user message
     ctx.messages.append({"role": "user", "content": ctx.user_message})
@@ -783,7 +785,9 @@ async def step_init(
             acceptance_criteria: list[str] = []
             if " with " in raw.lower():
                 after_with = raw[raw.lower().index(" with ") + 6 :]
-                parts = [p.strip().rstrip(".,;") for p in after_with.replace(" and ", ",").split(",")]
+                parts = [
+                    p.strip().rstrip(".,;") for p in after_with.replace(" and ", ",").split(",")
+                ]
                 acceptance_criteria = [p for p in parts if len(p) > 3][:5]
             if not acceptance_criteria:
                 acceptance_criteria = ["Implementation meets requirements described in the task"]
@@ -848,7 +852,9 @@ async def step_init(
                 log.info(
                     "expansion_controller_complete",
                     mode="enforced",
-                    plan_is_fallback=expansion_result.plan.is_fallback if expansion_result.plan else None,
+                    plan_is_fallback=expansion_result.plan.is_fallback
+                    if expansion_result.plan
+                    else None,
                     sub_agent_count=len(expansion_result.sub_agent_results),
                     successful=expansion_result.successful_count,
                     degraded=expansion_result.degraded,
@@ -869,29 +875,31 @@ async def step_init(
         return TaskState.LLM_CALL
 
     # Apply context window controls before LLM usage to prevent overflow.
+    input_messages_count = len(ctx.messages)
+    estimated_tokens = 0
     if timer:
         timer.start_span("context_window")
-    input_messages_count = len(ctx.messages)
+    try:
+        # Retrieve pre-computed compression summary if available (ADR-0038).
+        _summary = compression_manager.get_summary(ctx.session_id) if ctx.session_id else None
 
-    # Retrieve pre-computed compression summary if available (ADR-0038).
-    _summary = compression_manager.get_summary(ctx.session_id) if ctx.session_id else None
-
-    ctx.messages = apply_context_window(
-        ctx.messages,
-        max_tokens=settings.context_window_max_tokens,
-        strategy=settings.conversation_context_strategy,
-        trace_id=ctx.trace_id,
-        session_id=ctx.session_id,
-        compressed_summary=_summary,
-    )
-    estimated_tokens = estimate_messages_tokens(ctx.messages)
-    if timer:
-        timer.end_span(
-            "context_window",
-            messages_in=input_messages_count,
-            messages_out=len(ctx.messages),
-            estimated_tokens=estimated_tokens,
+        ctx.messages = apply_context_window(
+            ctx.messages,
+            max_tokens=settings.context_window_max_tokens,
+            strategy=settings.conversation_context_strategy,
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            compressed_summary=_summary,
         )
+        estimated_tokens = estimate_messages_tokens(ctx.messages)
+    finally:
+        if timer:
+            timer.end_span(
+                "context_window",
+                messages_in=input_messages_count,
+                messages_out=len(ctx.messages),
+                estimated_tokens=estimated_tokens,
+            )
 
     log.info(
         "conversation_context_loaded",
@@ -1016,6 +1024,15 @@ async def step_init(
                         entities_searched=0,
                         conversations_found=0,
                     )
+            else:
+                # Memory graph enabled but service not connected and not a recall-only path.
+                if timer:
+                    timer.end_span(
+                        "memory_query",
+                        entities_searched=0,
+                        conversations_found=0,
+                        skipped_reason="memory_service_unavailable",
+                    )
         except Exception as e:
             if timer:
                 timer.end_span("memory_query", error=str(e))
@@ -1073,6 +1090,7 @@ async def step_llm_call(
         Next state (TOOL_EXECUTION, SYNTHESIS, or FAILED).
     """
     timer = ctx.request_timer
+    llm_span_name: str | None = None  # set once span is started; used to close span on exception
 
     # Determine which model to call
     if ctx.gateway_output is not None and ctx.selected_model_role is None:
@@ -1471,6 +1489,13 @@ async def step_llm_call(
 
     except Exception as e:
         duration_ms = int((time.time() - step_start_time) * 1000)
+        if timer and llm_span_name:
+            timer.end_span(
+                llm_span_name,
+                model_role=model_role.value,
+                error=str(e),
+                error_type=type(e).__name__,
+            )
         log.error(
             MODEL_CALL_ERROR,
             trace_id=ctx.trace_id,
@@ -1517,12 +1542,20 @@ async def step_tool_execution(
     timer = ctx.request_timer
     step_start_time = time.time()
 
+    tool_span_name: str | None = None
     if timer:
-        timer.start_span(f"tool_execution:{ctx.tool_iteration_count + 1}")
+        tool_span_name = f"tool_execution:{ctx.tool_iteration_count + 1}"
+        timer.start_span(tool_span_name)
 
     # Loop governance: prevent infinite tool execution cycles
     ctx.tool_iteration_count += 1
     if ctx.tool_iteration_count > settings.orchestrator_max_tool_iterations:
+        if timer and tool_span_name:
+            timer.end_span(
+                tool_span_name,
+                reason="iteration_limit",
+                iteration=ctx.tool_iteration_count,
+            )
         log.warning(
             "tool_iteration_limit_reached",
             trace_id=ctx.trace_id,
@@ -1543,10 +1576,17 @@ async def step_tool_execution(
         return TaskState.SYNTHESIS
 
     # Get tool execution layer
-    tool_layer = _get_tool_execution_layer()
+    try:
+        tool_layer = _get_tool_execution_layer()
+    except Exception as e:
+        if timer and tool_span_name:
+            timer.end_span(tool_span_name, error=str(e), error_type=type(e).__name__)
+        raise
 
     # Extract tool calls from the last assistant message
     if not ctx.messages:
+        if timer and tool_span_name:
+            timer.end_span(tool_span_name, error="no_messages_for_tool_execution")
         log.error(
             "no_messages_for_tool_execution",
             trace_id=ctx.trace_id,
@@ -1557,6 +1597,8 @@ async def step_tool_execution(
 
     last_message = ctx.messages[-1]
     if last_message.get("role") != "assistant":
+        if timer and tool_span_name:
+            timer.end_span(tool_span_name, error="last_message_not_assistant")
         log.error(
             "last_message_not_assistant",
             trace_id=ctx.trace_id,
@@ -1568,6 +1610,8 @@ async def step_tool_execution(
     # Extract tool calls (OpenAI format)
     tool_calls = last_message.get("tool_calls", [])
     if not tool_calls:
+        if timer and tool_span_name:
+            timer.end_span(tool_span_name, reason="no_tool_calls_in_message")
         log.warning(
             "no_tool_calls_in_message",
             trace_id=ctx.trace_id,
@@ -1777,9 +1821,9 @@ async def step_tool_execution(
     duration_ms = int((time.time() - step_start_time) * 1000)
 
     tool_names = [tc.get("function", {}).get("name", "unknown") for tc in tool_calls]
-    if timer:
+    if timer and tool_span_name:
         timer.end_span(
-            f"tool_execution:{ctx.tool_iteration_count}",
+            tool_span_name,
             tool_count=len(tool_calls),
             tool_names=tool_names,
         )
@@ -1822,19 +1866,23 @@ async def step_synthesis(
     if timer:
         timer.start_span("synthesis")
 
-    # Ensure final reply is set (should already be set from LLM call)
-    if not ctx.final_reply:
-        ctx.final_reply = "Task completed"  # Fallback
+    try:
+        # Ensure final reply is set (should already be set from LLM call)
+        if not ctx.final_reply:
+            ctx.final_reply = "Task completed"  # Fallback
 
-    # Update session with new messages
-    if timer:
-        timer.start_span("session_update")
-    session_manager.update_session(ctx.session_id, messages=ctx.messages)
-    if timer:
-        timer.end_span("session_update")
-
-    if timer:
-        timer.end_span("synthesis", reply_length=len(ctx.final_reply))
+        # Update session with new messages
+        if timer:
+            timer.start_span("session_update")
+        try:
+            session_manager.update_session(ctx.session_id, messages=ctx.messages)
+        finally:
+            if timer:
+                timer.end_span("session_update")
+    finally:
+        if timer:
+            reply = ctx.final_reply or ""
+            timer.end_span("synthesis", reply_length=len(reply))
 
     return TaskState.COMPLETED
 

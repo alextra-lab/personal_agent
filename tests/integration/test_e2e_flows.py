@@ -87,6 +87,7 @@ async def test_e2e_simple_chat_query():
     """Test simple chat query handled by router."""
     with _e2e_patches() as mock_llm_class:
         mock_llm = AsyncMock()
+        mock_llm.model_configs = {}
         mock_llm_class.return_value = mock_llm
 
         mock_llm.respond.return_value = _make_llm_response(
@@ -113,6 +114,7 @@ async def test_e2e_complex_chat_primary():
     """Test complex query handled directly by PRIMARY model (two-tier taxonomy, ADR-0033)."""
     with _e2e_patches() as mock_llm_class:
         mock_llm = AsyncMock()
+        mock_llm.model_configs = {}
         mock_llm_class.return_value = mock_llm
 
         mock_llm.respond.return_value = _make_llm_response(
@@ -144,6 +146,7 @@ async def test_e2e_system_health_with_tools():
     """Test system health query using tools."""
     with _e2e_patches() as mock_llm_class:
         mock_llm = AsyncMock()
+        mock_llm.model_configs = {}
         mock_llm_class.return_value = mock_llm
 
         mock_llm.respond.side_effect = [
@@ -265,6 +268,7 @@ async def test_e2e_mode_enforcement():
         patch("personal_agent.orchestrator.orchestrator.get_current_mode") as mock_get_mode,
     ):
         mock_llm = AsyncMock()
+        mock_llm.model_configs = {}
         mock_llm_class.return_value = mock_llm
         mock_get_mode.return_value = Mode.NORMAL
 
@@ -295,6 +299,7 @@ async def test_e2e_telemetry_trace_reconstruction():
     """Test that full execution can be reconstructed from telemetry."""
     with _e2e_patches() as mock_llm_class:
         mock_llm = AsyncMock()
+        mock_llm.model_configs = {}
         mock_llm_class.return_value = mock_llm
 
         mock_llm.respond.return_value = _make_llm_response(
@@ -328,6 +333,7 @@ async def test_e2e_simple_query_performance():
 
     with _e2e_patches() as mock_llm_class:
         mock_llm = AsyncMock()
+        mock_llm.model_configs = {}
         mock_llm_class.return_value = mock_llm
 
         mock_llm.respond.return_value = _make_llm_response(

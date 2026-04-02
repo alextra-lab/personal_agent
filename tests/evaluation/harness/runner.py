@@ -22,7 +22,6 @@ from tests.evaluation.harness.models import (
     AssertionResult,
     ConversationPath,
     PathResult,
-    SessionSpec,
     TelemetryAssertion,
     TurnResult,
 )
@@ -34,6 +33,13 @@ log = structlog.get_logger(__name__)
 DEFAULT_AGENT_URL = "http://localhost:9000"
 DEFAULT_CHAT_TIMEOUT_S = 300.0
 DEFAULT_INTER_TURN_DELAY_S = 2.0
+# Time to wait between paths — lets the inference server flush KV cache and
+# recover thermals before the next path starts. 0 = disabled (legacy behaviour).
+DEFAULT_INTER_PATH_DELAY_S = 8.0
+# Timeout for the responsiveness probe sent before each run. Shorter than
+# the full chat timeout so we fail fast on an overloaded server.
+_RESPONSIVENESS_PROBE_TIMEOUT_S = 20.0
+_RESPONSIVENESS_PROBE_MSG = "ping"
 
 
 class EvaluationRunner:
@@ -45,6 +51,8 @@ class EvaluationRunner:
         neo4j_checker: Optional Neo4jChecker for post-path graph assertions.
         chat_timeout_s: Timeout for POST /chat requests.
         inter_turn_delay_s: Delay between turns to allow ES indexing.
+        inter_path_delay_s: Cooldown between paths to let the inference server
+            recover. Set to 0 to disable. Default 8 s.
     """
 
     def __init__(  # noqa: D107
@@ -54,12 +62,14 @@ class EvaluationRunner:
         neo4j_checker: Neo4jChecker | None = None,
         chat_timeout_s: float = DEFAULT_CHAT_TIMEOUT_S,
         inter_turn_delay_s: float = DEFAULT_INTER_TURN_DELAY_S,
+        inter_path_delay_s: float = DEFAULT_INTER_PATH_DELAY_S,
     ) -> None:
         self._agent_url = agent_url
         self._telemetry = telemetry or TelemetryChecker()
         self._neo4j_checker = neo4j_checker
         self._chat_timeout_s = chat_timeout_s
         self._inter_turn_delay_s = inter_turn_delay_s
+        self._inter_path_delay_s = inter_path_delay_s
 
     async def check_agent_health(self) -> bool:
         """Verify the agent service is running and healthy.
@@ -74,6 +84,38 @@ class EvaluationRunner:
                 data: dict[str, object] = resp.json()
                 return data.get("status") == "healthy"
             except (httpx.HTTPStatusError, httpx.TransportError):
+                return False
+
+    async def check_inference_responsive(self) -> bool:
+        """Send a lightweight chat probe to verify the inference server can accept work.
+
+        Unlike ``check_agent_health`` (which only hits ``/health``), this sends a
+        real ``/chat`` request with a short timeout. A slow or overloaded inference
+        server will fail this probe, preventing the harness from queuing 100+
+        turns against a server that is already struggling.
+
+        Returns:
+            True if the agent responds within ``_RESPONSIVENESS_PROBE_TIMEOUT_S``.
+        """
+        async with httpx.AsyncClient(timeout=_RESPONSIVENESS_PROBE_TIMEOUT_S) as client:
+            try:
+                resp = await client.post(
+                    f"{self._agent_url}/chat",
+                    params={"message": _RESPONSIVENESS_PROBE_MSG, "session_id": "probe-session"},
+                )
+                resp.raise_for_status()
+                log.info("inference_responsiveness_probe_ok", timeout_s=_RESPONSIVENESS_PROBE_TIMEOUT_S)
+                return True
+            except (httpx.ReadTimeout, httpx.ConnectTimeout):
+                log.error(
+                    "inference_responsiveness_probe_timeout",
+                    timeout_s=_RESPONSIVENESS_PROBE_TIMEOUT_S,
+                    detail="Inference server did not respond within the probe window. "
+                    "The server may be overloaded. Aborting eval run.",
+                )
+                return False
+            except (httpx.HTTPStatusError, httpx.TransportError) as exc:
+                log.error("inference_responsiveness_probe_failed", error=str(exc))
                 return False
 
     async def create_session(self) -> str:
@@ -282,7 +324,11 @@ class EvaluationRunner:
         self,
         paths: Sequence[ConversationPath],
     ) -> list[PathResult]:
-        """Execute multiple conversation paths sequentially.
+        """Execute multiple conversation paths sequentially with inter-path cooldown.
+
+        A configurable delay (``inter_path_delay_s``) is inserted between paths to
+        let the inference server flush its KV cache and recover before the next path
+        starts. This prevents queue build-up on single-GPU servers.
 
         Args:
             paths: Conversation paths to execute.
@@ -291,9 +337,17 @@ class EvaluationRunner:
             List of PathResult for each path.
         """
         results: list[PathResult] = []
-        for path in paths:
+        for idx, path in enumerate(paths):
             result = await self.run_path(path)
             results.append(result)
+            if idx < len(paths) - 1 and self._inter_path_delay_s > 0:
+                log.info(
+                    "inter_path_cooldown",
+                    path_id=path.path_id,
+                    next_path_id=paths[idx + 1].path_id,
+                    delay_s=self._inter_path_delay_s,
+                )
+                await asyncio.sleep(self._inter_path_delay_s)
         return results
 
     async def _execute_turn(

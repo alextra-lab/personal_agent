@@ -77,11 +77,14 @@ dev = [
 # -----------------------------
 # Dependency overrides (security)
 # -----------------------------
-# Force minimum secure versions for transitive dependencies (see pip-audit).
-# diskcache CVE-2025-69872: no fix on PyPI yet; tracked in docs/DEPENDENCY_SECURITY.md.
+# Force minimum secure versions for transitive dependencies (see pip-audit / Dependabot).
+# diskcache CVE-2025-69872: no fixed release on PyPI yet (monitor upstream).
 [tool.uv]
 override-dependencies = [
-  "cryptography>=46.0.5",  # CVE-2026-26007: EC key validation
+  "aiohttp>=3.13.4",  # CVE-2026-22815, CVE-2026-34513–34520, CVE-2026-34525
+  "cryptography>=46.0.6",  # CVE-2026-26007, CVE-2026-34073
+  "pygments>=2.20.0",  # CVE-2026-4539
+  "requests>=2.33.0",  # CVE-2026-25645
 ]
 
 # -----------------------------

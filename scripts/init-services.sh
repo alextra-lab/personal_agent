@@ -1,5 +1,5 @@
 #!/bin/bash
-# Initialize all services (PostgreSQL, Elasticsearch, Neo4j, SearXNG)
+# Initialize all services (PostgreSQL, Elasticsearch, Neo4j, SearXNG, Redis)
 
 set -e
 
@@ -52,6 +52,14 @@ if ! docker ps | grep -q "personal_agent"; then
     sleep 2
   done
   echo "✓ SearXNG is ready"
+
+  # Wait for Redis
+  echo "Checking Redis..."
+  until docker-compose exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; do
+    echo "  Waiting for Redis..."
+    sleep 2
+  done
+  echo "✓ Redis is ready"
   echo ""
 else
   echo "Docker services already running"
@@ -76,6 +84,7 @@ echo "  Kibana:        http://localhost:5601"
 echo "  Neo4j Browser: http://localhost:7474"
 echo "  Neo4j Bolt:    bolt://localhost:7687"
 echo "  SearXNG:       http://localhost:8888"
+echo "  Redis:         localhost:6379"
 echo ""
 echo "Next steps:"
 echo "  1. Install dependencies: uv sync"

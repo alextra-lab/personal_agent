@@ -1,0 +1,97 @@
+---
+description: Linear MCP API patterns via Docker MCP toolkit. Use when creating, updating, or querying Linear issues or projects.
+alwaysApply: false
+---
+
+# Linear MCP Usage
+
+Linear is accessed via `user-MCP_DOCKER` server using `mcp-exec`. The Linear server must be added first.
+
+## Setup
+
+```
+mcp-exec → mcp-add → { "name": "linear" }
+```
+
+## Issue Operations
+
+### Create issue
+
+```json
+{ "name": "save_issue", "arguments": {
+  "team": "FrenchForest",
+  "title": "Issue title",
+  "description": "Markdown description",
+  "status": "Needs Approval",
+  "labels": ["Needs Approval", "PersonalAgent"],
+  "priority": 2
+}}
+```
+
+Priority values: 1 = Urgent, 2 = High, 3 = Medium, 4 = Low.
+
+### Update existing issue
+
+Use `id` (e.g. `"FRE-161"`) to update. Only pass fields you want to change.
+
+```json
+{ "name": "save_issue", "arguments": {
+  "team": "FrenchForest",
+  "id": "FRE-161",
+  "project": "Project Name",
+  "state": "Approved"
+}}
+```
+
+Key fields for updates: `project`, `state`, `labels`, `priority`, `title`, `description`.
+
+**CRITICAL:** Without `id`, `save_issue` always creates a new issue. Never pass `issueId` — it is ignored and creates duplicates.
+
+### Query issues
+
+```json
+{ "name": "list_issues", "arguments": {
+  "teamName": "FrenchForest",
+  "limit": 10
+}}
+```
+
+Filter: add `"query": "search text"` or `"status": "Approved"`.
+
+### Get single issue
+
+```json
+{ "name": "get_issue", "arguments": { "issueId": "FRE-161" }}
+```
+
+## Project Operations
+
+### Create project
+
+```json
+{ "name": "save_project", "arguments": {
+  "name": "Project Name",
+  "description": "Description",
+  "addTeams": ["FrenchForest"],
+  "labels": ["PersonalAgent"]
+}}
+```
+
+**Note:** `addTeams` (not `team`) is required for project creation.
+
+### Update project
+
+```json
+{ "name": "save_project", "arguments": {
+  "id": "uuid-here",
+  "labels": ["PersonalAgent"]
+}}
+```
+
+## Common Mistakes
+
+- Using `issueId` instead of `id` for updates (creates duplicates)
+- Using `team` instead of `addTeams` for project creation
+- Using `teamName` in `save_issue` (correct field is `team`)
+- Using string priority like `"Medium"` (must be numeric: 1–4)
+- Forgetting to add Linear server before first use (`mcp-add`)

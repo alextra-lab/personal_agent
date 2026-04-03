@@ -1,15 +1,34 @@
 """MCP Gateway adapter for tool execution layer."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from personal_agent.config import settings
 from personal_agent.mcp.client import MCPClientWrapper
 from personal_agent.mcp.governance import MCPGovernanceManager
 from personal_agent.mcp.types import mcp_tool_to_definition
+from personal_agent.mcp_server_allowlist import mcp_tool_matches_enabled_server
 from personal_agent.telemetry import get_logger
 from personal_agent.tools.registry import ToolRegistry
 
 log = get_logger(__name__)
+
+# Service lifespan may initialize MCP before the orchestrator runs. A second
+# MCPGatewayAdapter would spawn another gateway subprocess and hit
+# ``ValueError: Tool 'mcp_*' is already registered`` for every tool, so the
+# orchestrator reuses this instance when present.
+_active_mcp_gateway_adapter: MCPGatewayAdapter | None = None
+
+
+def get_active_mcp_gateway_adapter() -> MCPGatewayAdapter | None:
+    """Return the last successfully initialized gateway adapter, if any."""
+    return _active_mcp_gateway_adapter
+
+
+def _set_active_mcp_gateway_adapter(adapter: MCPGatewayAdapter | None) -> None:
+    global _active_mcp_gateway_adapter
+    _active_mcp_gateway_adapter = adapter
 
 
 class MCPGatewayAdapter:
@@ -66,6 +85,8 @@ class MCPGatewayAdapter:
             # Discover and register tools
             await self._discover_and_register_tools()
 
+            _set_active_mcp_gateway_adapter(self)
+
             log.info(
                 "mcp_gateway_initialized",
                 tools_count=len(self._mcp_tool_names),
@@ -89,22 +110,35 @@ class MCPGatewayAdapter:
         mcp_tools = await self.client.list_tools()
         log.info("mcp_tools_discovered", count=len(mcp_tools))
 
-        # Filter to allowed servers if configured.
-        # Uses substring match so server names like "elasticsearch" match tool
-        # names like "esql", "get_mappings", "list_indices" that share no
-        # common prefix with the server name.
+        # Filter to allowed servers if configured (substring + meta + aliases; see
+        # mcp_server_allowlist).
         allowed_servers = settings.mcp_gateway_enabled_servers
         if allowed_servers:
             original_count = len(mcp_tools)
-            mcp_tools = [
-                t for t in mcp_tools if any(s in t.get("name", "") for s in allowed_servers)
-            ]
+
+            def _tool_allowed(t: dict[str, Any]) -> bool:
+                return any(mcp_tool_matches_enabled_server(t, s) for s in allowed_servers)
+
+            mcp_tools = [t for t in mcp_tools if _tool_allowed(t)]
             log.info(
                 "mcp_tools_server_filtered",
                 before=original_count,
                 after=len(mcp_tools),
                 allowed_servers=allowed_servers,
             )
+
+        if not mcp_tools:
+            log.warning(
+                "mcp_tools_empty_after_discovery",
+                had_server_filter=bool(allowed_servers),
+                allowed_servers=list(allowed_servers) if allowed_servers else [],
+                hint=(
+                    "No MCP tools matched. Check gateway auth, Docker MCP, and "
+                    "AGENT_MCP_GATEWAY_ENABLED_SERVERS (substring + Linear meta + aliases in "
+                    "mcp_server_allowlist)."
+                ),
+            )
+            return
 
         # Initialize governance manager
         governance_mgr = MCPGovernanceManager()
@@ -114,6 +148,14 @@ class MCPGatewayAdapter:
             try:
                 # Get tool name with mcp_ prefix for governance lookup
                 mcp_tool_name = f"mcp_{mcp_tool.get('name', '')}"
+
+                if self.registry.get_tool(mcp_tool_name) is not None:
+                    log.debug(
+                        "mcp_tool_skip_already_registered",
+                        tool=mcp_tool_name,
+                    )
+                    self._mcp_tool_names.add(mcp_tool_name)
+                    continue
 
                 # Check for description override in governance config
                 description_override = governance_mgr.get_description_override(mcp_tool_name)
@@ -227,3 +269,5 @@ class MCPGatewayAdapter:
                 log.error("mcp_gateway_shutdown_error", error=str(e), exc_info=True)
             finally:
                 self.client = None
+        if get_active_mcp_gateway_adapter() is self:
+            _set_active_mcp_gateway_adapter(None)

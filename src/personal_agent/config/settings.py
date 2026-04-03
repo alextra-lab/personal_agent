@@ -188,7 +188,12 @@ class AppConfig(BaseSettings):
         default=60, ge=1, le=300, description="Timeout for MCP operations (seconds)"
     )
     mcp_gateway_enabled_servers: list[str] = Field(
-        default_factory=list, description="List of MCP server names to enable (empty = all)"
+        default_factory=list,
+        description=(
+            "MCP server ids to expose (empty = all). Matching uses tool name substrings, "
+            "Linear tool metadata (linear.app), and built-in aliases for tools whose names "
+            "omit the server id (see mcp_server_allowlist)."
+        ),
     )
 
     # SearXNG web search (ADR-0034)

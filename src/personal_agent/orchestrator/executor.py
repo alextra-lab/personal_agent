@@ -377,12 +377,24 @@ async def _initialize_mcp_gateway() -> None:
         return
 
     try:
-        from personal_agent.mcp.gateway import MCPGatewayAdapter
+        from personal_agent.mcp.gateway import (
+            MCPGatewayAdapter,
+            get_active_mcp_gateway_adapter,
+        )
 
         # Get or create registry
         global _tool_registry
         if _tool_registry is None:
             _tool_registry = get_default_registry()
+
+        existing = get_active_mcp_gateway_adapter()
+        if existing is not None and getattr(existing, "client", None) is not None:
+            _mcp_adapter = existing
+            log.info(
+                "mcp_gateway_reusing_existing_adapter",
+                tools_count=len(existing._mcp_tool_names),
+            )
+            return
 
         _mcp_adapter = MCPGatewayAdapter(_tool_registry)
         await _mcp_adapter.initialize()

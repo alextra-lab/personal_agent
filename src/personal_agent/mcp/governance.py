@@ -160,4 +160,6 @@ class MCPGovernanceManager:
             f.write("    # allowed_paths: []\n")
             f.write("    # timeout_seconds: 30\n")
 
+        self._config_cache = None
+
         log.debug("mcp_tool_config_appended", tool=tool_name, path=str(self.tools_config_path))

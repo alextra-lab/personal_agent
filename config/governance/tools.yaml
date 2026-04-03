@@ -577,3 +577,398 @@ tools:
     # forbidden_paths: []
     # allowed_paths: []
     # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.101313
+  # Create a new attachment on a specific Linear issue by uploading base64...
+  mcp_create_attachment:
+    category: "mcp"
+    #allowed_in_modes: ['NORMAL']
+    allowed_in_modes: []
+    risk_level: "high"
+    requires_approval: true
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.111239
+  # Create a new document in Linear
+  mcp_create_document:
+    category: "mcp"
+    #allowed_in_modes: ['NORMAL']
+    allowed_in_modes: []
+    risk_level: "high"
+    requires_approval: true
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.120996
+  # Create a new Linear issue label
+  mcp_create_issue_label:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL']
+    risk_level: "high"
+    requires_approval: true
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.130864
+  # Delete an attachment by ID
+  mcp_delete_attachment:
+    category: "mcp"
+    #allowed_in_modes: ['NORMAL']
+    allowed_in_modes: []
+    risk_level: "high"
+    requires_approval: true
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.141151
+  # Delete a comment from a Linear issue
+  mcp_delete_comment:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL']
+    risk_level: "high"
+    requires_approval: true
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.162161
+  # Extract and fetch images from markdown content. Use this to view scree...
+  mcp_extract_images:
+    category: "mcp"
+    #allowed_in_modes: ['NORMAL', 'DEGRADED']
+    allowed_in_modes: []
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.183457
+  # Retrieve an attachment's content by ID.
+  mcp_get_attachment:
+    category: "mcp"
+    #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    allowed_in_modes: []
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.194220
+  # Retrieve a Linear document by ID or slug
+  mcp_get_document:
+    category: "mcp"
+    #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    allowed_in_modes: []
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.204972
+  # Retrieve detailed information about an issue by ID, including attachme...
+  mcp_get_issue:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.215898
+  # Retrieve detailed information about an issue status in Linear by name ...
+  mcp_get_issue_status:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.237282
+  # Retrieve details of a specific milestone by ID or name
+  mcp_get_milestone:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.248234
+  # Retrieve details of a specific project in Linear
+  mcp_get_project:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.259610
+  # Retrieve details of a specific Linear team
+  mcp_get_team:
+    category: "mcp"
+    #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    allowed_in_modes: []
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.271125
+  # Retrieve details of a specific Linear user
+  mcp_get_user:
+    category: "mcp"
+    #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    allowed_in_modes: []
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.283135
+  # List comments for a specific Linear issue
+  mcp_list_comments:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.294992
+  # Retrieve cycles for a specific Linear team
+  mcp_list_cycles:
+    category: "mcp"
+    #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    allowed_in_modes: []
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.307400
+  # List documents in the user's Linear workspace
+  mcp_list_documents:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.332284
+  # List available issue labels in a Linear workspace or team
+  mcp_list_issue_labels:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.345099
+  # List available issue statuses in a Linear team
+  mcp_list_issue_statuses:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.357836
+  # List issues in the user's Linear workspace. For my issues, use "me" as...
+  mcp_list_issues:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.370771
+  # List all milestones in a Linear project
+  mcp_list_milestones:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.384075
+  # List available project labels in the Linear workspace
+  mcp_list_project_labels:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.397410
+  # List projects in the user's Linear workspace
+  mcp_list_projects:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.410660
+  # List teams in the user's Linear workspace
+  mcp_list_teams:
+    category: "mcp"
+    #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    allowed_in_modes: []
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.424384
+  # Retrieve users in the Linear workspace
+  mcp_list_users:
+    category: "mcp"
+    #allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    allowed_in_modes: []
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.480300
+  # Send a natural-language query to Linear and get a response. Use this t...
+  mcp_research:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.508730
+  # Create or update a comment on a Linear issue. If `id` is provided, upd...
+  mcp_save_comment:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.522800
+  # Create or update a Linear issue. If `id` is provided, updates the exis...
+  mcp_save_issue:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.536997
+  # Create or update a milestone in a Linear project. If `id` is provided,...
+  mcp_save_milestone:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.551880
+  # Create or update a Linear project. If `id` is provided, updates the ex...
+  mcp_save_project:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'DEGRADED']
+    risk_level: "medium"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.581717
+  # Search Linear's documentation to learn about features and usage
+  mcp_search_documentation:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL', 'ALERT', 'DEGRADED']
+    risk_level: "low"
+    requires_approval: false
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30
+
+  # Auto-discovered: 2026-04-03T18:57:35.611133
+  # Update an existing Linear document
+  mcp_update_document:
+    category: "mcp"
+    allowed_in_modes: ['NORMAL']
+    risk_level: "high"
+    requires_approval: true
+    # Customize as needed:
+    # forbidden_paths: []
+    # allowed_paths: []
+    # timeout_seconds: 30

@@ -628,6 +628,22 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                     tool_results=ctx.tool_results,
                 )
                 write_capture(capture)
+
+                # Publish request.captured event (ADR-0041)
+                from personal_agent.captains_log.background import (
+                    run_in_background as _run_bg,
+                )
+                from personal_agent.events.bus import get_event_bus
+                from personal_agent.events.models import (
+                    STREAM_REQUEST_CAPTURED,
+                    RequestCapturedEvent,
+                )
+
+                event = RequestCapturedEvent(
+                    trace_id=ctx.trace_id,
+                    session_id=ctx.session_id,
+                )
+                _run_bg(get_event_bus().publish(STREAM_REQUEST_CAPTURED, event))
             except Exception as e:
                 # Don't fail task if capture fails
                 log.warning(

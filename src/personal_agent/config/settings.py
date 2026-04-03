@@ -398,6 +398,38 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # Event Bus (ADR-0041 — Redis Streams)
+    event_bus_enabled: bool = Field(
+        default=False,
+        description="Enable Redis Streams event bus. When False, a no-op bus is used and polling continues.",
+    )
+    event_bus_redis_url: str = Field(
+        default="redis://localhost:6379/0",
+        description="Redis connection URL for the event bus",
+    )
+    event_bus_consumer_poll_interval_ms: int = Field(
+        default=100,
+        ge=10,
+        le=10000,
+        description="Consumer XREADGROUP block timeout in milliseconds",
+    )
+    event_bus_max_retries: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        description="Maximum delivery attempts before routing to dead-letter stream",
+    )
+    event_bus_dead_letter_stream: str = Field(
+        default="stream:dead_letter",
+        description="Stream name for dead-letter events",
+    )
+    event_bus_ack_timeout_seconds: int = Field(
+        default=300,
+        ge=10,
+        le=3600,
+        description="Seconds before an unacknowledged message is considered stuck",
+    )
+
     # Feature flags
     use_service_mode: bool = Field(default=True, description="Enable service mode")
     enable_second_brain: bool = Field(default=False, description="Enable second brain (Phase 2.2)")

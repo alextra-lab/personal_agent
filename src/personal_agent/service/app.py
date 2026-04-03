@@ -37,6 +37,7 @@ memory_service: MemoryService | None = None
 scheduler: BrainstemScheduler | None = None
 metrics_daemon: MetricsDaemon | None = None
 mcp_adapter: "MCPGatewayAdapter | None" = None  # type: ignore  # noqa: F821
+consumer_runner: "ConsumerRunner | None" = None  # type: ignore  # noqa: F821
 
 # Fire-and-forget assistant message appends: session_id -> task (FRE-51).
 # Next request for same session awaits this so history is consistent before hydration.
@@ -120,7 +121,7 @@ async def _preflight_check_tcp(service: str, host: str, port: int) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan management."""
-    global es_handler, memory_service, scheduler, metrics_daemon, mcp_adapter
+    global es_handler, memory_service, scheduler, metrics_daemon, mcp_adapter, consumer_runner
 
     # Startup
     log.info("service_starting")
@@ -187,6 +188,28 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.metrics_daemon = metrics_daemon
     set_global_metrics_daemon(metrics_daemon)
 
+    # Event bus (ADR-0041): Redis Streams or NoOpBus based on feature flag
+    from personal_agent.events.bus import NoOpBus, set_global_event_bus
+    from personal_agent.events.consumer import ConsumerRunner
+
+    if settings.event_bus_enabled:
+        try:
+            from personal_agent.events.redis_backend import RedisStreamBus
+
+            redis_bus = await RedisStreamBus.connect()
+            set_global_event_bus(redis_bus)
+            log.info("event_bus_redis_initialized")
+        except Exception as e:
+            log.warning(
+                "event_bus_redis_connect_failed",
+                error=str(e),
+                remedy="Falling back to NoOpBus. Polling continues as normal.",
+            )
+            set_global_event_bus(NoOpBus())
+    else:
+        set_global_event_bus(NoOpBus())
+        log.info("event_bus_disabled_using_noop")
+
     # MCP gateway before brainstem scheduler so promotion/feedback can use Linear (ADR-0040).
     if settings.mcp_gateway_enabled:
         try:
@@ -248,12 +271,51 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await scheduler.start()
         log.info("brainstem_scheduler_started")
 
+    # Wire event bus consumer: consolidator listens for request.captured (ADR-0041)
+    from personal_agent.events.bus import get_event_bus
+    from personal_agent.events.models import (
+        CG_CONSOLIDATOR,
+        STREAM_REQUEST_CAPTURED,
+        EventBase,
+    )
+    from personal_agent.events.redis_backend import RedisStreamBus
+
+    active_bus = get_event_bus()
+    if isinstance(active_bus, RedisStreamBus) and scheduler is not None:
+
+        async def _on_request_captured(event: EventBase) -> None:
+            """Route request.captured events to the scheduler."""
+            if scheduler is not None:
+                await scheduler.on_request_captured(
+                    trace_id=getattr(event, "trace_id", "unknown"),
+                    session_id=getattr(event, "session_id", "unknown"),
+                )
+
+        await active_bus.subscribe(
+            stream=STREAM_REQUEST_CAPTURED,
+            group=CG_CONSOLIDATOR,
+            consumer_name="consolidator-0",
+            handler=_on_request_captured,
+        )
+        consumer_runner = ConsumerRunner(active_bus)
+        await consumer_runner.start()
+        log.info("event_bus_consumer_runner_started")
+
     log.info("service_ready", port=settings.service_port)
 
     yield
 
     # Shutdown
     log.info("service_shutting_down")
+
+    # Stop event bus consumers first (before scheduler)
+    if consumer_runner is not None:
+        await consumer_runner.stop()
+        consumer_runner = None
+    active_bus_shutdown = get_event_bus()
+    if not isinstance(active_bus_shutdown, NoOpBus):
+        await active_bus_shutdown.close()
+    set_global_event_bus(NoOpBus())
 
     set_global_metrics_daemon(None)
     daemon = cast(MetricsDaemon | None, getattr(app.state, "metrics_daemon", None))

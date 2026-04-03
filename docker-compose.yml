@@ -103,8 +103,23 @@ services:
       timeout: 5s
       retries: 3
 
+  # Redis 7 for event bus (ADR-0041)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   es_data:
   neo4j_data:
   neo4j_experiment_data:
+  redis_data:

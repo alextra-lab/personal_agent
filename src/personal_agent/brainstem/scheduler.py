@@ -197,6 +197,29 @@ class BrainstemScheduler:
         """
         self.notify_request_end()
 
+    async def on_request_captured(self, trace_id: str, session_id: str) -> None:
+        """Event-driven handler for ``request.captured`` events (ADR-0041).
+
+        Called by the event bus consumer instead of waiting for the polling
+        loop. Converges on the same ``_should_consolidate`` /
+        ``_trigger_consolidation`` path so the min-interval gate still applies.
+
+        Args:
+            trace_id: Request trace identifier.
+            session_id: Session that originated the request.
+        """
+        if not settings.enable_second_brain:
+            return
+
+        log.info(
+            "event_request_captured_received",
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+
+        if await self._should_consolidate():
+            await self._trigger_consolidation()
+
     async def _monitoring_loop(self) -> None:
         """Background monitoring loop that checks conditions and triggers consolidation."""
         while self.running:
@@ -474,9 +497,7 @@ class BrainstemScheduler:
                     self.feedback_poller is not None
                     and getattr(settings, "feedback_polling_enabled", True)
                     and now.hour == self.feedback_polling_hour_utc
-                    and (
-                        self._last_feedback_date is None or self._last_feedback_date != today
-                    )
+                    and (self._last_feedback_date is None or self._last_feedback_date != today)
                 ):
                     events: list[Any] = []
                     try:

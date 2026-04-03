@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-03
+> **Last updated**: 2026-04-04
 
 ---
 
@@ -10,7 +10,7 @@
 
 | # | Work Item | Linear | Spec / ADR | Status |
 |---|-----------|--------|------------|--------|
-| 1 | Event Bus — Redis Streams (Phases 2–4) | [Project](https://linear.app/frenchforest/project/event-bus-redis-streams-d0b2f16e97ed) | ADR-0041 | FRE-157 Phase 1 Done |
+| 1 | Event Bus — Redis Streams (Phases 3–4) | [Project](https://linear.app/frenchforest/project/event-bus-redis-streams-d0b2f16e97ed) | ADR-0041 | FRE-158 Phase 2 Done; next FRE-159 |
 | 2 | EVAL-10 run (Context Intelligence final verification) | — | `specs/CONTEXT_INTELLIGENCE_SPEC.md` | Pending |
 
 ## Upcoming — Needs Approval
@@ -20,7 +20,7 @@ All projects below are in **Needs Approval** status. Ordered by recommended impl
 | # | Project | Linear | ADR / Spec | Depends On |
 |---|---------|--------|------------|------------|
 | 3 | CLI-First Tool Migration | [Project](https://linear.app/frenchforest/project/cli-first-tool-migration-5b948aeb13bb) | ADR-0028 | FRE-99 (Done) |
-| 4 | Knowledge Graph Freshness | [Project](https://linear.app/frenchforest/project/knowledge-graph-freshness-b2aba76fd737) | ADR-0042 | Event Bus Phase 1 (FRE-157) |
+| 4 | Knowledge Graph Freshness | [Project](https://linear.app/frenchforest/project/knowledge-graph-freshness-b2aba76fd737) | ADR-0042 | Event Bus Phases 1–2 (FRE-157, FRE-158) |
 | 5 | Proactive Memory | [Project](https://linear.app/frenchforest/project/proactive-memory-67df0f9bb76e) | ADR-0039, `specs/PROACTIVE_MEMORY_DESIGN.md` | — (Seshat/Neo4j complete) |
 | 6 | Linear Async Feedback Channel | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | ADR-0030 pipeline (exists) |
 | 7 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2, `specs/RECALL_CLASSIFIER_L2_DESIGN.md` | Proactive Memory (FRE-176) |
@@ -54,6 +54,7 @@ Linear Feedback Channel (ADR-0040)  ← independent, can run in parallel
 
 | Phase | Completed | Summary |
 |-------|-----------|---------|
+| Event Bus Phase 2 (FRE-158) | 2026-04-04 | `request.completed` → `cg:es-indexer` + `cg:session-writer`; `parse_stream_event`; consumer retries + dead-letter; `/chat` durable when bus enabled; FRE-51 session waiter. |
 | Event Bus Phase 1 (FRE-157) | 2026-04-03 | Redis 7 infra, EventBus protocol, RedisStreamBus, ConsumerRunner, `request.captured` → consolidator migration. Feature flag off by default; polling fallback retained. |
 | ADR-0028 research (CLI vs MCP) | 2026-04-02 | FRE-99 complete. ADR accepted: hybrid three-tier model (native > CLI > MCP). Implementation project created. |
 | Context Intelligence — Phase 4 ENHANCE | 2026-03-30 | Rolling LLM summarization (ADR-0038), async compression, structured context assembly, KV cache prefix stability, cross-session eval (CP-30/CP-31), proactive memory design (ADR-0039), recall classifier L2 design. EVAL-10 pending. |
@@ -74,7 +75,7 @@ Linear Feedback Channel (ADR-0040)  ← independent, can run in parallel
 | ADR | Title | Status |
 |-----|-------|--------|
 | 0042 | Knowledge Graph Freshness via Access Tracking | Proposed |
-| 0041 | Event Bus — Redis Streams | Accepted (Phase 1 implemented) |
+| 0041 | Event Bus — Redis Streams | Accepted (Phases 1–2 implemented) |
 | 0040 | Linear as Async Feedback Channel | Approved |
 | 0039 | Proactive Memory via `suggest_relevant()` | Proposed |
 | 0038 | Context Compressor Model | Accepted (implemented) |

@@ -6,9 +6,14 @@ import pytest
 
 from personal_agent.events.models import (
     CG_CONSOLIDATOR,
+    CG_ES_INDEXER,
+    CG_SESSION_WRITER,
     STREAM_REQUEST_CAPTURED,
+    STREAM_REQUEST_COMPLETED,
     EventBase,
     RequestCapturedEvent,
+    RequestCompletedEvent,
+    parse_stream_event,
 )
 
 
@@ -61,11 +66,72 @@ class TestRequestCapturedEvent:
         assert restored == event
 
 
+class TestRequestCompletedEvent:
+    """RequestCompletedEvent model tests."""
+
+    def test_event_type(self) -> None:
+        event = RequestCompletedEvent(
+            trace_id="t1",
+            session_id="s1",
+            assistant_response="hi",
+            trace_summary={"total_duration_ms": 1.0, "total_steps": 0, "phases_summary": {}},
+            trace_breakdown=[],
+        )
+        assert event.event_type == "request.completed"
+
+    def test_serialization_roundtrip(self) -> None:
+        event = RequestCompletedEvent(
+            trace_id="t1",
+            session_id="s1",
+            assistant_response="reply",
+            trace_summary={"total_duration_ms": 2.5, "total_steps": 1, "phases_summary": {"a": 1}},
+            trace_breakdown=[{"phase": "setup", "name": "n", "sequence": 1}],
+        )
+        data = event.model_dump(mode="json")
+        restored = RequestCompletedEvent.model_validate(data)
+        assert restored == event
+
+
+class TestParseStreamEvent:
+    """parse_stream_event dispatches on event_type."""
+
+    def test_request_captured_restores_subclass_fields(self) -> None:
+        event = RequestCapturedEvent(trace_id="tx", session_id="sx")
+        payload = event.model_dump(mode="json")
+        parsed = parse_stream_event(payload)
+        assert isinstance(parsed, RequestCapturedEvent)
+        assert parsed.trace_id == "tx"
+        assert parsed.session_id == "sx"
+
+    def test_request_completed(self) -> None:
+        event = RequestCompletedEvent(
+            trace_id="t",
+            session_id="s",
+            assistant_response="x",
+            trace_summary={},
+            trace_breakdown=[],
+        )
+        parsed = parse_stream_event(event.model_dump(mode="json"))
+        assert isinstance(parsed, RequestCompletedEvent)
+        assert parsed.assistant_response == "x"
+
+    def test_unknown_event_type_raises(self) -> None:
+        with pytest.raises(ValueError, match="unknown"):
+            parse_stream_event({"event_type": "nope"})
+
+
 class TestConstants:
     """Stream and consumer group constants."""
 
     def test_stream_name(self) -> None:
         assert STREAM_REQUEST_CAPTURED == "stream:request.captured"
 
+    def test_stream_request_completed(self) -> None:
+        assert STREAM_REQUEST_COMPLETED == "stream:request.completed"
+
     def test_consumer_group_name(self) -> None:
         assert CG_CONSOLIDATOR == "cg:consolidator"
+
+    def test_phase2_consumer_groups(self) -> None:
+        assert CG_ES_INDEXER == "cg:es-indexer"
+        assert CG_SESSION_WRITER == "cg:session-writer"

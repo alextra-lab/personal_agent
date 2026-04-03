@@ -113,19 +113,27 @@ class TestConsumerRunner:
         await runner.stop()
 
         assert len(received_events) == 1
+        ev = received_events[0]
+        assert isinstance(ev, RequestCapturedEvent)
+        assert ev.trace_id == "t1"
+        assert ev.session_id == "s1"
         mock_redis.xack.assert_called_once_with("stream:test", "cg:test", "1-0")
 
     @pytest.mark.asyncio
     async def test_handler_error_triggers_dead_letter(
         self, bus: RedisStreamBus, mock_redis: AsyncMock
     ) -> None:
-        """Handler exceptions route the event to dead-letter and ACK."""
+        """After max_retries handler failures, event is dead-lettered with attempts and ACKed."""
         import orjson
 
         event = RequestCapturedEvent(trace_id="t1", session_id="s1")
         event_json = orjson.dumps(event.model_dump(mode="json")).decode()
 
+        handler_calls = 0
+
         async def failing_handler(e: object) -> None:
+            nonlocal handler_calls
+            handler_calls += 1
             raise ValueError("processing failed")
 
         mock_redis.xreadgroup = _make_xreadgroup_side_effect(
@@ -135,12 +143,47 @@ class TestConsumerRunner:
         await bus.subscribe("stream:test", "cg:test", "c0", failing_handler)
         runner = ConsumerRunner(bus)
         await runner.start()
-        await asyncio.sleep(0.1)
+        # Three attempts with backoff 0.05 + 0.1 s between failures
+        await asyncio.sleep(0.5)
         await runner.stop()
 
-        # Dead-letter XADD + ACK should both be called
-        assert mock_redis.xadd.call_count >= 1  # dead letter write
+        assert handler_calls == 3
+        assert mock_redis.xadd.call_count >= 1
         assert mock_redis.xack.call_count >= 1
+        dl_args = mock_redis.xadd.call_args_list[-1][0]
+        assert dl_args[1]["attempts"] == "3"
+
+    @pytest.mark.asyncio
+    async def test_handler_succeeds_after_transient_failures(
+        self, bus: RedisStreamBus, mock_redis: AsyncMock
+    ) -> None:
+        """Handler failures below max_retries do not dead-letter; success ACKs."""
+        import orjson
+
+        event = RequestCapturedEvent(trace_id="t1", session_id="s1")
+        event_json = orjson.dumps(event.model_dump(mode="json")).decode()
+
+        calls = 0
+
+        async def flaky_handler(e: object) -> None:
+            nonlocal calls
+            calls += 1
+            if calls < 3:
+                raise RuntimeError("transient")
+
+        mock_redis.xreadgroup = _make_xreadgroup_side_effect(
+            [("stream:test", [("1-0", {"data": event_json})])]
+        )
+
+        await bus.subscribe("stream:test", "cg:test", "c0", flaky_handler)
+        runner = ConsumerRunner(bus)
+        await runner.start()
+        await asyncio.sleep(0.5)
+        await runner.stop()
+
+        assert calls == 3
+        mock_redis.xack.assert_called_once_with("stream:test", "cg:test", "1-0")
+        assert mock_redis.xadd.call_count == 0
 
     @pytest.mark.asyncio
     async def test_missing_data_field_acks_and_skips(

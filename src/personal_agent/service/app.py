@@ -271,31 +271,52 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await scheduler.start()
         log.info("brainstem_scheduler_started")
 
-    # Wire event bus consumer: consolidator listens for request.captured (ADR-0041)
+    # Wire event bus consumers (ADR-0041 Phase 1 + Phase 2 / FRE-158)
     from personal_agent.events.bus import get_event_bus
     from personal_agent.events.models import (
         CG_CONSOLIDATOR,
+        CG_ES_INDEXER,
+        CG_SESSION_WRITER,
         STREAM_REQUEST_CAPTURED,
+        STREAM_REQUEST_COMPLETED,
         EventBase,
     )
     from personal_agent.events.redis_backend import RedisStreamBus
+    from personal_agent.events.request_completed_handlers import (
+        build_request_trace_es_handler,
+        build_session_writer_handler,
+    )
 
     active_bus = get_event_bus()
-    if isinstance(active_bus, RedisStreamBus) and scheduler is not None:
+    if isinstance(active_bus, RedisStreamBus):
+        if scheduler is not None:
 
-        async def _on_request_captured(event: EventBase) -> None:
-            """Route request.captured events to the scheduler."""
-            if scheduler is not None:
-                await scheduler.on_request_captured(
-                    trace_id=getattr(event, "trace_id", "unknown"),
-                    session_id=getattr(event, "session_id", "unknown"),
-                )
+            async def _on_request_captured(event: EventBase) -> None:
+                """Route request.captured events to the scheduler."""
+                if scheduler is not None:
+                    await scheduler.on_request_captured(
+                        trace_id=getattr(event, "trace_id", "unknown"),
+                        session_id=getattr(event, "session_id", "unknown"),
+                    )
+
+            await active_bus.subscribe(
+                stream=STREAM_REQUEST_CAPTURED,
+                group=CG_CONSOLIDATOR,
+                consumer_name="consolidator-0",
+                handler=_on_request_captured,
+            )
 
         await active_bus.subscribe(
-            stream=STREAM_REQUEST_CAPTURED,
-            group=CG_CONSOLIDATOR,
-            consumer_name="consolidator-0",
-            handler=_on_request_captured,
+            stream=STREAM_REQUEST_COMPLETED,
+            group=CG_ES_INDEXER,
+            consumer_name="es-indexer-0",
+            handler=build_request_trace_es_handler(es_handler),
+        )
+        await active_bus.subscribe(
+            stream=STREAM_REQUEST_COMPLETED,
+            group=CG_SESSION_WRITER,
+            consumer_name="session-writer-0",
+            handler=build_session_writer_handler(),
         )
         consumer_runner = ConsumerRunner(active_bus)
         await consumer_runner.start()
@@ -495,9 +516,15 @@ async def chat(
         else:
             session = await repo.create(SessionCreate())
 
-    # Await any in-flight assistant-message append for this session (FRE-51 edge case).
+    # FRE-51: await prior turn's assistant append (NoOp: background task; Redis: session-writer).
     sid = str(cast(UUID, session.session_id))
-    if sid in _pending_append_tasks:
+    from personal_agent.events.bus import get_event_bus
+    from personal_agent.events.redis_backend import RedisStreamBus
+    from personal_agent.events.session_write_waiter import await_previous_session_write
+
+    if isinstance(get_event_bus(), RedisStreamBus):
+        await await_previous_session_write(sid)
+    elif sid in _pending_append_tasks:
         await _pending_append_tasks.pop(sid)
 
     # --- Phase: session_hydration ---
@@ -624,22 +651,45 @@ async def chat(
         ],
     )
 
-    # Index to Elasticsearch (non-blocking)
-    if es_handler and getattr(es_handler, "_connected", False):
-        asyncio.create_task(
-            es_handler.es_logger.index_request_trace(
-                trace_id=trace_id,
-                timer=timer,
-                session_id=str(session.session_id),
-            )
+    # Durable side effects: Redis Streams (FRE-158) or legacy fire-and-forget (NoOp bus).
+    bus = get_event_bus()
+    if isinstance(bus, RedisStreamBus):
+        from personal_agent.events.models import STREAM_REQUEST_COMPLETED, RequestCompletedEvent
+        from personal_agent.events.session_write_waiter import (
+            register_session_write_waiter,
+            release_session_write_wait,
         )
 
-    # Fire-and-forget DB write: return response immediately, append assistant message in background (FRE-51).
-    session_uuid = cast(UUID, session.session_id)
-    task = asyncio.create_task(
-        _append_assistant_message_background(session_uuid, response_content, trace_id)
-    )
-    _pending_append_tasks[sid] = task
+        # Published after response timing is finalized (full RequestTimer spans in event).
+        register_session_write_waiter(sid)
+        try:
+            await bus.publish(
+                STREAM_REQUEST_COMPLETED,
+                RequestCompletedEvent(
+                    trace_id=trace_id,
+                    session_id=sid,
+                    assistant_response=response_content,
+                    trace_summary=timer.to_trace_summary(),
+                    trace_breakdown=timer.to_breakdown(),
+                ),
+            )
+        except Exception:
+            release_session_write_wait(sid)
+            raise
+    else:
+        if es_handler and getattr(es_handler, "_connected", False):
+            asyncio.create_task(
+                es_handler.es_logger.index_request_trace(
+                    trace_id=trace_id,
+                    timer=timer,
+                    session_id=str(session.session_id),
+                )
+            )
+        session_uuid = cast(UUID, session.session_id)
+        task = asyncio.create_task(
+            _append_assistant_message_background(session_uuid, response_content, trace_id)
+        )
+        _pending_append_tasks[sid] = task
 
     return {
         "session_id": str(session.session_id),

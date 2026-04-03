@@ -14,7 +14,11 @@ from typing import TYPE_CHECKING
 import orjson
 
 from personal_agent.config.settings import get_settings
-from personal_agent.events.models import EventBase
+from personal_agent.events.models import (
+    CG_SESSION_WRITER,
+    RequestCompletedEvent,
+    parse_stream_event,
+)
 from personal_agent.telemetry import get_logger
 
 if TYPE_CHECKING:
@@ -139,7 +143,7 @@ class ConsumerRunner:
 
         try:
             payload = orjson.loads(raw)
-            event = EventBase.model_validate(payload)
+            event = parse_stream_event(payload)
         except Exception as exc:
             log.error(
                 "consumer_deserialize_error",
@@ -151,38 +155,45 @@ class ConsumerRunner:
             await self._bus.ack(sub.stream, sub.group, message_id)
             return
 
-        try:
-            await sub.handler(event)
-            await self._bus.ack(sub.stream, sub.group, message_id)
-            log.debug(
-                "event_processed",
-                stream=sub.stream,
-                group=sub.group,
-                event_type=event.event_type,
-                event_id=event.event_id,
-                message_id=message_id,
-            )
-        except Exception as exc:
-            # Check pending info for retry count via XPENDING (simplified:
-            # we use a retry counter in the dead-letter payload).
-            # For Phase 1 we treat each failure as one attempt and dead-letter
-            # after max_retries total failures across redeliveries.
-            log.warning(
-                "consumer_handler_error",
-                stream=sub.stream,
-                group=sub.group,
-                event_type=event.event_type,
-                event_id=event.event_id,
-                message_id=message_id,
-                error=str(exc),
-            )
-            # For Phase 1: dead-letter immediately on handler failure.
-            # A richer retry strategy (XPENDING count check) comes in Phase 2.
-            await self._bus.dead_letter(
-                event=event,
-                source_stream=sub.stream,
-                group=sub.group,
-                error=str(exc),
-                attempts=1,
-            )
-            await self._bus.ack(sub.stream, sub.group, message_id)
+        for attempt in range(1, max_retries + 1):
+            try:
+                await sub.handler(event)
+                await self._bus.ack(sub.stream, sub.group, message_id)
+                log.debug(
+                    "event_processed",
+                    stream=sub.stream,
+                    group=sub.group,
+                    event_type=event.event_type,
+                    event_id=event.event_id,
+                    message_id=message_id,
+                )
+                return
+            except Exception as exc:
+                log.warning(
+                    "consumer_handler_error",
+                    stream=sub.stream,
+                    group=sub.group,
+                    event_type=event.event_type,
+                    event_id=event.event_id,
+                    message_id=message_id,
+                    attempt=attempt,
+                    max_retries=max_retries,
+                    error=str(exc),
+                )
+                if attempt >= max_retries:
+                    await self._bus.dead_letter(
+                        event=event,
+                        source_stream=sub.stream,
+                        group=sub.group,
+                        error=str(exc),
+                        attempts=max_retries,
+                    )
+                    if isinstance(event, RequestCompletedEvent) and sub.group == CG_SESSION_WRITER:
+                        from personal_agent.events.session_write_waiter import (
+                            release_session_write_wait,
+                        )
+
+                        release_session_write_wait(event.session_id)
+                    await self._bus.ack(sub.stream, sub.group, message_id)
+                    return
+                await asyncio.sleep(0.05 * attempt)

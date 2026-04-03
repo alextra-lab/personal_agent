@@ -1,6 +1,6 @@
 # ADR-0041: Event Bus via Redis Streams
 
-**Status**: Accepted (Phase 1 implemented 2026-04-03)
+**Status**: Accepted (Phases 1–2 implemented 2026-04-03)
 **Date**: 2026-04-02
 **Deciders**: Project owner
 **Related**: ADR-0030 (Captain's Log & Self-Improvement Pipeline), ADR-0040 (Linear Async Feedback Channel)
@@ -84,7 +84,7 @@ Events carry identifiers and metadata, not large payloads. Consumers fetch full 
 
 | Event | Stream | Published by | Consumers | Replaces |
 |-------|--------|-------------|-----------|----------|
-| `request.completed` | `stream:request.completed` | Orchestrator (executor) | ES indexer (`cg:es-indexer`), Session writer (`cg:session-writer`), Scheduler idle detection (`cg:scheduler`) | Fire-and-forget DB append + `notify_request_end()` manual counter |
+| `request.completed` | `stream:request.completed` | Service (`/chat`, after orchestrator returns; carries full `RequestTimer` snapshot) | ES indexer (`cg:es-indexer`), Session writer (`cg:session-writer`); `cg:scheduler` (future) | Fire-and-forget DB append + ES trace index on `/chat` hot path |
 | `request.captured` | `stream:request.captured` | Orchestrator (after TaskCapture disk write) | Consolidator (`cg:consolidator`) | Scheduler 60s polling loop checking disk for new captures |
 
 #### Memory & consolidation events
@@ -148,7 +148,7 @@ Events carry identifiers and metadata, not large payloads. Consumers fetch full 
 
 3. **Event models** (`src/personal_agent/events/models.py`): Frozen Pydantic models for each event type. Discriminated union via `event_type: Literal[...]` field — consistent with project coding standards (§ Discriminated Unions for State Modeling).
 
-4. **Consumer runner** (`src/personal_agent/events/consumer.py`): Async loop per consumer group. Reads from stream via `XREADGROUP`, dispatches to registered handler, acknowledges on success (`XACK`), increments retry counter on failure, routes to dead-letter stream after `max_retries` (default 3).
+4. **Consumer runner** (`src/personal_agent/events/consumer.py`): Async loop per consumer group. Reads from stream via `XREADGROUP`, deserializes with `parse_stream_event()` in `events/models.py` (subclass fields preserved), dispatches to registered handler, acknowledges on success (`XACK`), retries the handler up to `max_retries` (default 3) with short backoff, then routes to the dead-letter stream.
 
 5. **Dead-letter stream** (`stream:dead_letter`): Failed events land here with error context (original stream, consumer group, error message, attempt count). A brainstem lifecycle job logs dead-letter counts to telemetry for visibility.
 
@@ -169,8 +169,9 @@ Phased adoption. Each phase is independently valuable. The system remains functi
 
 - Migrate ES indexing: `request.completed` → `cg:es-indexer` (with retry + dead-letter)
 - Migrate DB message append: `request.completed` → `cg:session-writer` (with retry + dead-letter)
-- Remove `fire_and_forget()` calls from the hot path
-- **Validation**: Kill Elasticsearch mid-request; verify event is retried and indexed after ES recovers
+- Remove `asyncio.create_task` hot-path work for chat trace indexing and assistant DB append when the Redis bus is active; `NoOpBus` retains legacy `create_task` behavior
+- **Implemented (FRE-158)**: `RequestCompletedEvent`, handlers in `events/request_completed_handlers.py`, `ElasticsearchLogger.index_request_trace_from_snapshot`, session ordering via `events/session_write_waiter.py` (FRE-51); terminal session-writer failure releases the waiter after dead-letter so `/chat` does not deadlock
+- **Validation**: Kill Elasticsearch mid-request; verify event is retried and indexed after ES recovers (operational). Automated: consumer retry/dead-letter, model round-trip, snapshot indexer unit tests
 
 #### Phase 3: Pipeline decoupling
 

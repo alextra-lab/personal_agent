@@ -24,19 +24,29 @@ from personal_agent.events.bus import (
 )
 from personal_agent.events.models import (
     CG_CONSOLIDATOR,
+    CG_ES_INDEXER,
+    CG_SESSION_WRITER,
     STREAM_REQUEST_CAPTURED,
+    STREAM_REQUEST_COMPLETED,
     EventBase,
     RequestCapturedEvent,
+    RequestCompletedEvent,
+    parse_stream_event,
 )
 
 __all__ = [
     "CG_CONSOLIDATOR",
+    "CG_ES_INDEXER",
+    "CG_SESSION_WRITER",
     "EventBase",
     "EventBus",
     "EventHandler",
     "NoOpBus",
     "RequestCapturedEvent",
+    "RequestCompletedEvent",
     "STREAM_REQUEST_CAPTURED",
+    "STREAM_REQUEST_COMPLETED",
     "get_event_bus",
+    "parse_stream_event",
     "set_global_event_bus",
 ]

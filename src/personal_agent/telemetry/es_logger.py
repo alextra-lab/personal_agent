@@ -6,6 +6,7 @@ from uuid import UUID
 
 if TYPE_CHECKING:
     from elasticsearch import AsyncElasticsearch
+
     from personal_agent.telemetry.request_timer import RequestTimer
 else:
     AsyncElasticsearch = Any  # noqa: A001
@@ -229,7 +230,7 @@ class ElasticsearchLogger:
     async def index_request_trace(
         self,
         trace_id: str,
-        timer: "RequestTimer",
+        timer: object,
         session_id: str | None = None,
     ) -> str | None:
         """Index request trace summary and per-step documents for Kibana.
@@ -257,19 +258,52 @@ class ElasticsearchLogger:
             return None
 
         summary = timer.to_trace_summary()
-        total_duration_ms = summary.get("total_duration_ms") or timer.get_total_ms()
+        breakdown = timer.to_breakdown()
+        return await self.index_request_trace_from_snapshot(
+            trace_id=trace_id,
+            trace_summary=summary,
+            trace_breakdown=breakdown,
+            session_id=session_id,
+        )
+
+    async def index_request_trace_from_snapshot(
+        self,
+        trace_id: str,
+        trace_summary: dict[str, Any],
+        trace_breakdown: list[dict[str, Any]],
+        session_id: str | None = None,
+    ) -> str | None:
+        """Index request trace from a timer snapshot (Redis event consumer path).
+
+        Same documents as ``index_request_trace`` — idempotent IDs
+        ``trace_{trace_id}`` and ``trace_{trace_id}_step_{sequence}``.
+
+        Args:
+            trace_id: Request trace identifier.
+            trace_summary: Dict from ``RequestTimer.to_trace_summary()``.
+            trace_breakdown: List from ``RequestTimer.to_breakdown()``.
+            session_id: Optional session ID for filtering.
+
+        Returns:
+            Document ID of the request_trace summary doc if successful, else None.
+        """
+        if not self.client:
+            return None
+
+        total_duration_ms = trace_summary.get("total_duration_ms")
+        if total_duration_ms is None:
+            total_duration_ms = 0.0
         ts = datetime.utcnow().isoformat()
         index_name = self._get_index_name()
 
-        # One request_trace summary document
         trace_doc: dict[str, Any] = {
             "@timestamp": ts,
             "event_type": "request_trace",
             "trace_id": trace_id,
             "session_id": session_id,
             "total_duration_ms": total_duration_ms,
-            "total_steps": summary.get("total_steps", 0),
-            "phases_summary": summary.get("phases_summary") or {},
+            "total_steps": trace_summary.get("total_steps", 0),
+            "phases_summary": trace_summary.get("phases_summary") or {},
         }
 
         try:
@@ -280,9 +314,7 @@ class ElasticsearchLogger:
             )
             doc_id = str(result["_id"])
 
-            # One request_trace_step per span (from to_breakdown, skip "total" row)
-            breakdown = timer.to_breakdown()
-            for entry in breakdown:
+            for entry in trace_breakdown:
                 if entry.get("phase") == "total":
                     continue
                 step_doc: dict[str, Any] = {

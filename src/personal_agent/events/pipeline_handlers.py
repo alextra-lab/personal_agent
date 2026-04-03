@@ -39,15 +39,21 @@ def build_consolidation_insights_handler() -> Any:
             )
             return
         from personal_agent.insights.engine import InsightsEngine
+        from personal_agent.telemetry.queries import TelemetryQueries
 
         engine = InsightsEngine()
-        insights = await engine.analyze_patterns(days=7)
-        log.info(
-            "insights_analysis_from_consolidation",
-            event_id=event.event_id,
-            captures_processed=event.captures_processed,
-            insights_count=len(insights),
-        )
+        try:
+            insights = await engine.analyze_patterns(days=7)
+            log.info(
+                "insights_analysis_from_consolidation",
+                event_id=event.event_id,
+                captures_processed=event.captures_processed,
+                insights_count=len(insights),
+            )
+        finally:
+            queries = getattr(engine, "_queries", None)
+            if isinstance(queries, TelemetryQueries):
+                await queries.disconnect()
 
     return handler
 

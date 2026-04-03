@@ -5,14 +5,26 @@ from datetime import datetime, timezone
 import pytest
 
 from personal_agent.events.models import (
+    CG_CAPTAIN_LOG,
     CG_CONSOLIDATOR,
     CG_ES_INDEXER,
+    CG_FEEDBACK,
+    CG_INSIGHTS,
+    CG_PROMOTION,
     CG_SESSION_WRITER,
+    STREAM_CONSOLIDATION_COMPLETED,
+    STREAM_FEEDBACK_RECEIVED,
+    STREAM_PROMOTION_ISSUE_CREATED,
     STREAM_REQUEST_CAPTURED,
     STREAM_REQUEST_COMPLETED,
+    STREAM_SYSTEM_IDLE,
+    ConsolidationCompletedEvent,
     EventBase,
+    FeedbackReceivedEvent,
+    PromotionIssueCreatedEvent,
     RequestCapturedEvent,
     RequestCompletedEvent,
+    SystemIdleEvent,
     parse_stream_event,
 )
 
@@ -120,6 +132,76 @@ class TestParseStreamEvent:
             parse_stream_event({"event_type": "nope"})
 
 
+class TestPhase3Events:
+    """Phase 3 event models (ADR-0041)."""
+
+    def test_consolidation_completed_event_type(self) -> None:
+        event = ConsolidationCompletedEvent(
+            captures_processed=5, entities_created=10, entities_promoted=2
+        )
+        assert event.event_type == "consolidation.completed"
+
+    def test_consolidation_completed_roundtrip(self) -> None:
+        event = ConsolidationCompletedEvent(
+            captures_processed=3, entities_created=7, entities_promoted=1
+        )
+        payload = event.model_dump(mode="json")
+        parsed = parse_stream_event(payload)
+        assert isinstance(parsed, ConsolidationCompletedEvent)
+        assert parsed.captures_processed == 3
+        assert parsed.entities_created == 7
+        assert parsed.entities_promoted == 1
+
+    def test_promotion_issue_created_event_type(self) -> None:
+        event = PromotionIssueCreatedEvent(
+            entry_id="CL-001", linear_issue_id="FRE-99", fingerprint="abc123"
+        )
+        assert event.event_type == "promotion.issue_created"
+
+    def test_promotion_issue_created_roundtrip(self) -> None:
+        event = PromotionIssueCreatedEvent(
+            entry_id="CL-001", linear_issue_id="FRE-99", fingerprint=None
+        )
+        payload = event.model_dump(mode="json")
+        parsed = parse_stream_event(payload)
+        assert isinstance(parsed, PromotionIssueCreatedEvent)
+        assert parsed.entry_id == "CL-001"
+        assert parsed.linear_issue_id == "FRE-99"
+        assert parsed.fingerprint is None
+
+    def test_feedback_received_event_type(self) -> None:
+        event = FeedbackReceivedEvent(
+            issue_id="uuid-1", issue_identifier="FRE-10", label="Rejected"
+        )
+        assert event.event_type == "feedback.received"
+
+    def test_feedback_received_roundtrip(self) -> None:
+        event = FeedbackReceivedEvent(
+            issue_id="uuid-2",
+            issue_identifier="FRE-11",
+            label="Approved",
+            fingerprint="fp42",
+        )
+        payload = event.model_dump(mode="json")
+        parsed = parse_stream_event(payload)
+        assert isinstance(parsed, FeedbackReceivedEvent)
+        assert parsed.label == "Approved"
+        assert parsed.fingerprint == "fp42"
+
+    def test_system_idle_event_type(self) -> None:
+        event = SystemIdleEvent(idle_seconds=300.0)
+        assert event.event_type == "system.idle"
+        assert event.trigger == "monitoring_loop"
+
+    def test_system_idle_roundtrip(self) -> None:
+        event = SystemIdleEvent(idle_seconds=120.5, trigger="lifecycle_loop")
+        payload = event.model_dump(mode="json")
+        parsed = parse_stream_event(payload)
+        assert isinstance(parsed, SystemIdleEvent)
+        assert parsed.idle_seconds == 120.5
+        assert parsed.trigger == "lifecycle_loop"
+
+
 class TestConstants:
     """Stream and consumer group constants."""
 
@@ -135,3 +217,15 @@ class TestConstants:
     def test_phase2_consumer_groups(self) -> None:
         assert CG_ES_INDEXER == "cg:es-indexer"
         assert CG_SESSION_WRITER == "cg:session-writer"
+
+    def test_phase3_streams(self) -> None:
+        assert STREAM_CONSOLIDATION_COMPLETED == "stream:consolidation.completed"
+        assert STREAM_PROMOTION_ISSUE_CREATED == "stream:promotion.issue_created"
+        assert STREAM_FEEDBACK_RECEIVED == "stream:feedback.received"
+        assert STREAM_SYSTEM_IDLE == "stream:system.idle"
+
+    def test_phase3_consumer_groups(self) -> None:
+        assert CG_INSIGHTS == "cg:insights"
+        assert CG_PROMOTION == "cg:promotion"
+        assert CG_CAPTAIN_LOG == "cg:captain-log"
+        assert CG_FEEDBACK == "cg:feedback"

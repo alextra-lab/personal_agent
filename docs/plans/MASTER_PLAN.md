@@ -10,7 +10,7 @@
 
 | # | Work Item | Linear | Spec / ADR | Status |
 |---|-----------|--------|------------|--------|
-| 1 | Event Bus — Redis Streams (Phases 3–4) | [Project](https://linear.app/frenchforest/project/event-bus-redis-streams-d0b2f16e97ed) | ADR-0041 | FRE-158 Phase 2 Done; next FRE-159 |
+| 1 | Event Bus — Redis Streams (Phase 4) | [Project](https://linear.app/frenchforest/project/event-bus-redis-streams-d0b2f16e97ed) | ADR-0041 | FRE-159 Phase 3 Done; next Phase 4 (memory.accessed) |
 | 2 | EVAL-10 run (Context Intelligence final verification) | — | `specs/CONTEXT_INTELLIGENCE_SPEC.md` | Pending |
 
 ## Upcoming — Needs Approval

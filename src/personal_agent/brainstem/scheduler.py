@@ -12,14 +12,9 @@ from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 
 from personal_agent.brainstem.sensors.sensors import poll_system_metrics
-from personal_agent.captains_log.es_indexer import schedule_es_index
 from personal_agent.captains_log.feedback import FeedbackPoller
 from personal_agent.captains_log.linear_client import LinearClient
-from personal_agent.captains_log.manager import CaptainLogManager
-from personal_agent.captains_log.promotion import PromotionCriteria, PromotionPipeline
 from personal_agent.config.settings import get_settings
-from personal_agent.insights import InsightsEngine
-from personal_agent.insights.engine import INSIGHTS_INDEX_PREFIX
 from personal_agent.memory.service import MemoryService
 from personal_agent.second_brain.consolidator import SecondBrainConsolidator
 from personal_agent.second_brain.quality_monitor import ConsolidationQualityMonitor
@@ -42,8 +37,6 @@ ARCHIVE_HOUR_UTC = 2  # Daily archive at 2 AM UTC
 PURGE_WEEKDAY = 6  # Sunday
 PURGE_HOUR_UTC = 3  # Weekly purge at 3 AM UTC Sunday
 BACKFILL_INTERVAL_SECONDS = 600  # Captain's Log ES backfill every 10 minutes (FRE-30)
-PROMOTION_WEEKDAY = 6  # Sunday (ADR-0030)
-PROMOTION_HOUR_UTC = 10  # Weekly promotion at 10 AM UTC Sunday
 
 
 class BrainstemScheduler:
@@ -87,23 +80,12 @@ class BrainstemScheduler:
         self._last_purge_week: tuple[int, int] | None = None  # (year, week)
         self._backfill_es_logger = backfill_es_logger
         self._last_backfill_run: datetime | None = None
-        self.insights_engine = InsightsEngine()
-        self._last_insights_daily_date: datetime | None = None
-        self._last_insights_week: tuple[int, int] | None = None  # (year, week)
         self._last_quality_check_date: date | None = None
-        self._last_promotion_week: tuple[int, int] | None = None  # (year, week) ADR-0030
         self._last_feedback_date: date | None = None  # ADR-0040
-        promo_criteria = PromotionCriteria(
-            max_existing_linear_issues=settings.promotion_initial_cap,
-        )
-        self.promotion_pipeline = PromotionPipeline(
-            criteria=promo_criteria,
-            linear_client=linear_client,
-            create_issue_fn=(linear_client.create_issue if linear_client else None),
-        )
         self.feedback_poller: FeedbackPoller | None = (
             FeedbackPoller(linear_client) if linear_client else None
         )
+        self._linear_client = linear_client
         self.feedback_polling_hour_utc = settings.feedback_polling_hour_utc
         self.quality_monitor = quality_monitor or ConsolidationQualityMonitor(
             memory_service=memory_service,
@@ -127,9 +109,6 @@ class BrainstemScheduler:
         self.min_consolidation_interval_seconds = getattr(
             settings, "second_brain_min_interval_seconds", 3600
         )  # 1 hour
-        self.insights_daily_run_hour_utc = getattr(settings, "insights_daily_run_hour_utc", 6)
-        self.insights_weekly_day = getattr(settings, "insights_weekly_day", 6)
-        self.insights_weekly_run_hour_utc = getattr(settings, "insights_weekly_run_hour_utc", 9)
         self.quality_monitor_enabled = getattr(settings, "quality_monitor_enabled", True)
         self.quality_monitor_daily_run_hour_utc = getattr(
             settings, "quality_monitor_daily_run_hour_utc", 5
@@ -220,8 +199,25 @@ class BrainstemScheduler:
         if await self._should_consolidate():
             await self._trigger_consolidation()
 
+    async def on_system_idle(self) -> None:
+        """Event-driven handler for ``system.idle`` events (ADR-0041 Phase 3).
+
+        Called by the event bus consumer when a ``system.idle`` event is
+        received.  Converges on ``_trigger_consolidation`` so the
+        min-interval gate still applies.
+        """
+        if not settings.enable_second_brain:
+            return
+        log.info("event_system_idle_received")
+        await self._trigger_consolidation()
+
     async def _monitoring_loop(self) -> None:
-        """Background monitoring loop that checks conditions and triggers consolidation."""
+        """Background monitoring loop that emits system.idle when idle conditions are met.
+
+        Phase 3 (ADR-0041): emits ``system.idle`` via the event bus instead of
+        calling ``_trigger_consolidation`` directly.  The ``cg:consolidator``
+        consumer receives the event and calls ``on_system_idle()``.
+        """
         while self.running:
             try:
                 await asyncio.sleep(self.check_interval_seconds)
@@ -229,9 +225,9 @@ class BrainstemScheduler:
                 if not settings.enable_second_brain:
                     continue
 
-                # Check if conditions are met
+                # Check if conditions are met, then publish system.idle
                 if await self._should_consolidate():
-                    await self._trigger_consolidation()
+                    await self._emit_system_idle()
 
             except asyncio.CancelledError:
                 raise
@@ -324,8 +320,28 @@ class BrainstemScheduler:
             )
             return False
 
+    async def _emit_system_idle(self) -> None:
+        """Publish a ``system.idle`` event when idle conditions are satisfied.
+
+        The ``cg:consolidator`` consumer receives this event and calls
+        ``on_system_idle()``, which triggers consolidation.
+        """
+        from personal_agent.events.bus import get_event_bus
+        from personal_agent.events.models import STREAM_SYSTEM_IDLE, SystemIdleEvent
+
+        idle_seconds = 0.0
+        if self.last_request_time:
+            idle_seconds = (datetime.now(timezone.utc) - self.last_request_time).total_seconds()
+
+        event = SystemIdleEvent(idle_seconds=idle_seconds)
+        try:
+            await get_event_bus().publish(STREAM_SYSTEM_IDLE, event)
+            log.debug("system_idle_event_emitted", idle_seconds=idle_seconds)
+        except Exception as exc:
+            log.warning("system_idle_event_publish_failed", error=str(exc))
+
     async def _trigger_consolidation(self) -> None:
-        """Trigger second brain consolidation."""
+        """Trigger second brain consolidation and publish consolidation.completed."""
         log.info("consolidation_triggered")
 
         try:
@@ -346,12 +362,41 @@ class BrainstemScheduler:
                 **result,
             )
 
+            # Publish consolidation.completed event (Phase 3, ADR-0041)
+            await self._publish_consolidation_completed(result)
+
         except Exception as e:
             log.error(
                 "consolidation_failed",
                 error=str(e),
                 exc_info=True,
             )
+
+    async def _publish_consolidation_completed(self, result: dict[str, Any]) -> None:
+        """Publish ``consolidation.completed`` to trigger insights and promotion consumers.
+
+        Args:
+            result: Summary dict returned by ``consolidate_recent_captures``.
+        """
+        from personal_agent.events.bus import get_event_bus
+        from personal_agent.events.models import (
+            STREAM_CONSOLIDATION_COMPLETED,
+            ConsolidationCompletedEvent,
+        )
+
+        event = ConsolidationCompletedEvent(
+            captures_processed=result.get("captures_processed", 0),
+            entities_created=result.get("entities_created", 0),
+            entities_promoted=result.get("entities_promoted", 0),
+        )
+        try:
+            await get_event_bus().publish(STREAM_CONSOLIDATION_COMPLETED, event)
+            log.debug(
+                "consolidation_completed_event_emitted",
+                captures_processed=event.captures_processed,
+            )
+        except Exception as exc:
+            log.warning("consolidation_completed_event_publish_failed", error=str(exc))
 
     async def _lifecycle_loop(self) -> None:
         """Run data lifecycle tasks: hourly disk check, daily 2AM archive, weekly Sunday 3AM purge."""
@@ -418,94 +463,23 @@ class BrainstemScheduler:
                     await self.lifecycler.cleanup_elasticsearch_indices()
                     self._last_purge_week = (year, week)
 
-                # Daily insights analysis (default 6 AM UTC)
-                if (
-                    getattr(settings, "insights_enabled", True)
-                    and now.hour == self.insights_daily_run_hour_utc
-                    and (
-                        self._last_insights_daily_date is None
-                        or self._last_insights_daily_date.date() != today
-                    )
-                ):
-                    insights = await self.insights_engine.analyze_patterns(days=7)
-                    self._last_insights_daily_date = now
-                    log.info("insights_daily_analysis_completed", insights_count=len(insights))
-
-                # Weekly insights -> Captain's Log proposals (default Sunday 9 AM UTC)
-                if (
-                    getattr(settings, "insights_enabled", True)
-                    and now.weekday() == self.insights_weekly_day
-                    and now.hour == self.insights_weekly_run_hour_utc
-                    and (
-                        self._last_insights_week is None or self._last_insights_week != (year, week)
-                    )
-                ):
-                    insights = await self.insights_engine.analyze_patterns(days=7)
-                    proposals = await self.insights_engine.create_captain_log_proposals(insights)
-                    manager = CaptainLogManager()
-                    for proposal in proposals:
-                        manager.save_entry(proposal)
-                    summary_doc = {
-                        "timestamp": now.isoformat(),
-                        "record_type": "weekly_summary",
-                        "insight_type": "weekly_proposals",
-                        "title": "Weekly insights proposal batch",
-                        "summary": "Weekly insights converted into Captain's Log config proposals.",
-                        "confidence": 1.0,
-                        "actionable": True,
-                        "insights_count": len(insights),
-                        "proposals_created": len(proposals),
-                        "analysis_window_days": 7,
-                    }
-                    schedule_es_index(
-                        index_name=f"{INSIGHTS_INDEX_PREFIX}-{now.strftime('%Y-%m-%d')}",
-                        document=summary_doc,
-                    )
-                    self._last_insights_week = (year, week)
-                    log.info(
-                        "insights_weekly_proposals_created",
-                        insights_count=len(insights),
-                        proposal_count=len(proposals),
-                    )
-
-                # Weekly promotion pipeline (ADR-0030): promote qualifying CL proposals to Linear
-                if (
-                    getattr(settings, "promotion_pipeline_enabled", True)
-                    and now.weekday() == PROMOTION_WEEKDAY
-                    and now.hour == PROMOTION_HOUR_UTC
-                    and (
-                        self._last_promotion_week is None
-                        or self._last_promotion_week != (year, week)
-                    )
-                ):
-                    try:
-                        promoted = await self.promotion_pipeline.run()
-                        self._last_promotion_week = (year, week)
-                        log.info(
-                            "promotion_pipeline_scheduled_run",
-                            promoted_count=len(promoted),
-                        )
-                    except Exception as promo_err:
-                        log.warning(
-                            "promotion_pipeline_failed",
-                            error=str(promo_err),
-                            exc_info=True,
-                        )
-
-                # Daily Linear feedback polling (ADR-0040)
+                # Daily Linear feedback polling (ADR-0040 / ADR-0041 Phase 3)
+                # Insights and promotion run reactively via consolidation.completed events;
+                # feedback poller publishes feedback.received for cg:insights and cg:feedback.
                 if (
                     self.feedback_poller is not None
                     and getattr(settings, "feedback_polling_enabled", True)
                     and now.hour == self.feedback_polling_hour_utc
                     and (self._last_feedback_date is None or self._last_feedback_date != today)
                 ):
-                    events: list[Any] = []
+                    feedback_events: list[Any] = []
                     try:
-                        events = await self.feedback_poller.check_for_feedback()
-                        if events:
-                            await self.feedback_poller.process_feedback(events)
+                        feedback_events = await self.feedback_poller.check_for_feedback()
+                        if feedback_events:
+                            await self.feedback_poller.process_feedback(feedback_events)
+                            await self._publish_feedback_events(feedback_events)
                         self._last_feedback_date = today
-                        log.info("feedback_polling_completed", events_count=len(events))
+                        log.info("feedback_polling_completed", events_count=len(feedback_events))
                     except Exception as poll_err:
                         log.warning(
                             "feedback_polling_failed",
@@ -531,6 +505,45 @@ class BrainstemScheduler:
                     "lifecycle_loop_error",
                     error=str(e),
                     exc_info=True,
+                )
+
+    async def _publish_feedback_events(self, feedback_events: list[Any]) -> None:
+        """Publish ``feedback.received`` events for each processed feedback label.
+
+        Args:
+            feedback_events: List of ``FeedbackEvent`` dataclasses from the poller.
+        """
+        from personal_agent.captains_log.linear_client import (
+            extract_issue_identifier_from_description,
+        )
+        from personal_agent.events.bus import get_event_bus
+        from personal_agent.events.models import STREAM_FEEDBACK_RECEIVED, FeedbackReceivedEvent
+
+        bus = get_event_bus()
+        for fe in feedback_events:
+            fingerprint: str | None = None
+            try:
+                if self._linear_client is not None:
+                    issue = await self._linear_client.get_issue(fe.issue_id)
+                    desc = str(issue.get("description") or "")
+                    fingerprint = extract_issue_identifier_from_description(desc) or None
+            except Exception:
+                pass  # fingerprint remains None; event still published without it
+
+            event = FeedbackReceivedEvent(
+                issue_id=fe.issue_id,
+                issue_identifier=fe.issue_identifier,
+                label=fe.label,
+                fingerprint=fingerprint,
+            )
+            try:
+                await bus.publish(STREAM_FEEDBACK_RECEIVED, event)
+            except Exception as exc:
+                log.warning(
+                    "feedback_event_publish_failed",
+                    issue_identifier=fe.issue_identifier,
+                    label=fe.label,
+                    error=str(exc),
                 )
 
     async def _run_quality_monitoring(self) -> None:

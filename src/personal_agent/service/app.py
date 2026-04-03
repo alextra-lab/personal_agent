@@ -271,15 +271,30 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await scheduler.start()
         log.info("brainstem_scheduler_started")
 
-    # Wire event bus consumers (ADR-0041 Phase 1 + Phase 2 / FRE-158)
+    # Wire event bus consumers (ADR-0041 Phase 1 + Phase 2 / FRE-158, Phase 3 / FRE-159)
     from personal_agent.events.bus import get_event_bus
     from personal_agent.events.models import (
+        CG_CAPTAIN_LOG,
         CG_CONSOLIDATOR,
         CG_ES_INDEXER,
+        CG_FEEDBACK,
+        CG_INSIGHTS,
+        CG_PROMOTION,
         CG_SESSION_WRITER,
+        STREAM_CONSOLIDATION_COMPLETED,
+        STREAM_FEEDBACK_RECEIVED,
+        STREAM_PROMOTION_ISSUE_CREATED,
         STREAM_REQUEST_CAPTURED,
         STREAM_REQUEST_COMPLETED,
+        STREAM_SYSTEM_IDLE,
         EventBase,
+    )
+    from personal_agent.events.pipeline_handlers import (
+        build_consolidation_insights_handler,
+        build_consolidation_promotion_handler,
+        build_feedback_insights_handler,
+        build_feedback_suppression_handler,
+        build_promotion_captain_log_handler,
     )
     from personal_agent.events.redis_backend import RedisStreamBus
     from personal_agent.events.request_completed_handlers import (
@@ -299,13 +314,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                         session_id=getattr(event, "session_id", "unknown"),
                     )
 
+            async def _on_system_idle(event: EventBase) -> None:
+                """Route system.idle events to the scheduler (Phase 3)."""
+                if scheduler is not None:
+                    await scheduler.on_system_idle()
+
             await active_bus.subscribe(
                 stream=STREAM_REQUEST_CAPTURED,
                 group=CG_CONSOLIDATOR,
                 consumer_name="consolidator-0",
                 handler=_on_request_captured,
             )
+            await active_bus.subscribe(
+                stream=STREAM_SYSTEM_IDLE,
+                group=CG_CONSOLIDATOR,
+                consumer_name="consolidator-idle-0",
+                handler=_on_system_idle,
+            )
 
+        # Phase 2 — request.completed consumers
         await active_bus.subscribe(
             stream=STREAM_REQUEST_COMPLETED,
             group=CG_ES_INDEXER,
@@ -318,6 +345,39 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             consumer_name="session-writer-0",
             handler=build_session_writer_handler(),
         )
+
+        # Phase 3 — pipeline decoupling consumers
+        await active_bus.subscribe(
+            stream=STREAM_CONSOLIDATION_COMPLETED,
+            group=CG_INSIGHTS,
+            consumer_name="insights-0",
+            handler=build_consolidation_insights_handler(),
+        )
+        await active_bus.subscribe(
+            stream=STREAM_CONSOLIDATION_COMPLETED,
+            group=CG_PROMOTION,
+            consumer_name="promotion-0",
+            handler=build_consolidation_promotion_handler(linear_client=linear_client),
+        )
+        await active_bus.subscribe(
+            stream=STREAM_PROMOTION_ISSUE_CREATED,
+            group=CG_CAPTAIN_LOG,
+            consumer_name="captain-log-0",
+            handler=build_promotion_captain_log_handler(),
+        )
+        await active_bus.subscribe(
+            stream=STREAM_FEEDBACK_RECEIVED,
+            group=CG_INSIGHTS,
+            consumer_name="insights-feedback-0",
+            handler=build_feedback_insights_handler(),
+        )
+        await active_bus.subscribe(
+            stream=STREAM_FEEDBACK_RECEIVED,
+            group=CG_FEEDBACK,
+            consumer_name="feedback-suppression-0",
+            handler=build_feedback_suppression_handler(),
+        )
+
         consumer_runner = ConsumerRunner(active_bus)
         await consumer_runner.start()
         log.info("event_bus_consumer_runner_started")

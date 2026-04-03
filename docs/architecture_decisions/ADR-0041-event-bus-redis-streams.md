@@ -1,6 +1,6 @@
 # ADR-0041: Event Bus via Redis Streams
 
-**Status**: Accepted (Phases 1–2 implemented 2026-04-03)
+**Status**: Accepted (Phases 1–3 implemented 2026-04-03)
 **Date**: 2026-04-02
 **Deciders**: Project owner
 **Related**: ADR-0030 (Captain's Log & Self-Improvement Pipeline), ADR-0040 (Linear Async Feedback Channel)

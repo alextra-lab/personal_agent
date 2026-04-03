@@ -246,7 +246,9 @@ class PromotionPipeline:
 
         if self._create_issue_fn is not None and self._linear_client is not None:
             try:
-                count = await self._linear_client.count_non_archived_issues(settings.linear_team_name)
+                count = await self._linear_client.count_non_archived_issues(
+                    settings.linear_team_name
+                )
                 if count > settings.issue_budget_threshold:
                     log.warning(
                         "issue_budget_promotion_paused",
@@ -315,7 +317,58 @@ class PromotionPipeline:
             scanned=len(entries),
             promoted=len(promoted),
         )
+
+        # Publish promotion.issue_created events (Phase 3, ADR-0041)
+        await self._publish_promotion_events(promoted, entries)
+
         return promoted
+
+    async def _publish_promotion_events(
+        self,
+        promoted: list[dict[str, str]],
+        all_entries: list[CaptainLogEntry],
+    ) -> None:
+        """Publish ``promotion.issue_created`` for each promoted entry.
+
+        Args:
+            promoted: List of dicts with ``entry_id`` and ``linear_issue_id``.
+            all_entries: All scanned entries (used to look up fingerprints).
+        """
+        if not promoted:
+            return
+        from personal_agent.events.bus import get_event_bus
+        from personal_agent.events.models import (
+            STREAM_PROMOTION_ISSUE_CREATED,
+            PromotionIssueCreatedEvent,
+        )
+
+        bus = get_event_bus()
+        entry_fp: dict[str, str | None] = {
+            e.entry_id: (
+                e.proposed_change.fingerprint
+                if e.proposed_change and e.proposed_change.fingerprint
+                else None
+            )
+            for e in all_entries
+        }
+        for record in promoted:
+            entry_id = record.get("entry_id", "")
+            linear_issue_id = record.get("linear_issue_id", "")
+            fingerprint = entry_fp.get(entry_id)
+            event = PromotionIssueCreatedEvent(
+                entry_id=entry_id,
+                linear_issue_id=linear_issue_id,
+                fingerprint=fingerprint,
+            )
+            try:
+                await bus.publish(STREAM_PROMOTION_ISSUE_CREATED, event)
+            except Exception as exc:
+                log.warning(
+                    "promotion_event_publish_failed",
+                    entry_id=entry_id,
+                    linear_issue_id=linear_issue_id,
+                    error=str(exc),
+                )
 
     async def _existing_linear_issue_for_fingerprint(self, fingerprint: str) -> str | None:
         """Return Linear issue identifier if one already contains this fingerprint."""

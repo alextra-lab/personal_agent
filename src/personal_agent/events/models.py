@@ -24,6 +24,18 @@ STREAM_REQUEST_CAPTURED = "stream:request.captured"
 STREAM_REQUEST_COMPLETED = "stream:request.completed"
 """Stream for request-completed events (Phase 2 — ES + session writer)."""
 
+STREAM_CONSOLIDATION_COMPLETED = "stream:consolidation.completed"
+"""Stream for consolidation-completed events (Phase 3)."""
+
+STREAM_PROMOTION_ISSUE_CREATED = "stream:promotion.issue_created"
+"""Stream for promotion-issue-created events (Phase 3)."""
+
+STREAM_FEEDBACK_RECEIVED = "stream:feedback.received"
+"""Stream for feedback-received events (Phase 3)."""
+
+STREAM_SYSTEM_IDLE = "stream:system.idle"
+"""Stream for system-idle events (Phase 3)."""
+
 CG_CONSOLIDATOR = "cg:consolidator"
 """Consumer group: brainstem consolidator."""
 
@@ -32,6 +44,18 @@ CG_ES_INDEXER = "cg:es-indexer"
 
 CG_SESSION_WRITER = "cg:session-writer"
 """Consumer group: durable assistant message append to Postgres."""
+
+CG_INSIGHTS = "cg:insights"
+"""Consumer group: insights engine (Phase 3)."""
+
+CG_PROMOTION = "cg:promotion"
+"""Consumer group: promotion pipeline (Phase 3)."""
+
+CG_CAPTAIN_LOG = "cg:captain-log"
+"""Consumer group: captain's log reflection writer (Phase 3)."""
+
+CG_FEEDBACK = "cg:feedback"
+"""Consumer group: feedback signal consumers (Phase 3)."""
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +122,82 @@ class RequestCompletedEvent(EventBase):
     trace_breakdown: list[dict[str, Any]]
 
 
+# ---------------------------------------------------------------------------
+# Phase 3 events
+# ---------------------------------------------------------------------------
+
+
+class ConsolidationCompletedEvent(EventBase):
+    """Published after second-brain consolidation finishes.
+
+    Consumed by ``cg:insights`` (pattern analysis) and ``cg:promotion``
+    (promote qualifying Captain's Log proposals to Linear).
+
+    Attributes:
+        captures_processed: Total captures examined in this run.
+        entities_created: New Neo4j entities created.
+        entities_promoted: Entities promoted from episodic to semantic memory.
+    """
+
+    event_type: Literal["consolidation.completed"] = "consolidation.completed"
+    captures_processed: int
+    entities_created: int
+    entities_promoted: int
+
+
+class PromotionIssueCreatedEvent(EventBase):
+    """Published when the promotion pipeline creates a Linear issue.
+
+    Consumed by ``cg:captain-log`` to write a reflection entry.
+
+    Attributes:
+        entry_id: Captain's Log entry ID that was promoted.
+        linear_issue_id: Linear issue identifier (e.g. ``FRE-123``).
+        fingerprint: Proposal fingerprint, if available.
+    """
+
+    event_type: Literal["promotion.issue_created"] = "promotion.issue_created"
+    entry_id: str
+    linear_issue_id: str
+    fingerprint: str | None = None
+
+
+class FeedbackReceivedEvent(EventBase):
+    """Published after the feedback poller processes a Linear feedback label.
+
+    Consumed by ``cg:insights`` (signal recording) and ``cg:feedback``
+    (suppression updates for rejected proposals).
+
+    Attributes:
+        issue_id: Linear internal issue UUID.
+        issue_identifier: Human-readable identifier (e.g. ``FRE-123``).
+        label: The feedback label that was processed (e.g. ``Rejected``).
+        fingerprint: Proposal fingerprint extracted from the issue description.
+    """
+
+    event_type: Literal["feedback.received"] = "feedback.received"
+    issue_id: str
+    issue_identifier: str
+    label: str
+    fingerprint: str | None = None
+
+
+class SystemIdleEvent(EventBase):
+    """Published by the brainstem scheduler when the system is idle.
+
+    Consumed by ``cg:consolidator`` to trigger consolidation and by any
+    future deferred-work consumers.
+
+    Attributes:
+        idle_seconds: Seconds since the last completed request.
+        trigger: Source that determined idleness (default ``monitoring_loop``).
+    """
+
+    event_type: Literal["system.idle"] = "system.idle"
+    idle_seconds: float
+    trigger: str = "monitoring_loop"
+
+
 def parse_stream_event(payload: dict[str, Any]) -> EventBase:
     """Deserialize a stream JSON payload into the correct event subclass.
 
@@ -118,4 +218,12 @@ def parse_stream_event(payload: dict[str, Any]) -> EventBase:
         return RequestCapturedEvent.model_validate(payload)
     if raw_type == "request.completed":
         return RequestCompletedEvent.model_validate(payload)
+    if raw_type == "consolidation.completed":
+        return ConsolidationCompletedEvent.model_validate(payload)
+    if raw_type == "promotion.issue_created":
+        return PromotionIssueCreatedEvent.model_validate(payload)
+    if raw_type == "feedback.received":
+        return FeedbackReceivedEvent.model_validate(payload)
+    if raw_type == "system.idle":
+        return SystemIdleEvent.model_validate(payload)
     raise ValueError(f"unknown event_type: {raw_type!r}")

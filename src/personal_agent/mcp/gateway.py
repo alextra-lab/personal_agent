@@ -223,7 +223,15 @@ class MCPGatewayAdapter:
 
             try:
                 result = await self.client.call_tool(mcp_tool_name, kwargs)
-                return result if result else {}
+                if not result:
+                    return {}
+                # MCP tools may return lists when multiple content items
+                # are present; ToolResult.output expects str | dict.
+                if isinstance(result, list):
+                    import json
+
+                    return json.dumps(result, default=str)
+                return result
 
             except Exception as e:
                 log.error(

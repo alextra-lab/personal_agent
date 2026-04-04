@@ -7,6 +7,7 @@ from typing import Any
 from personal_agent.config import settings
 from personal_agent.mcp.client import MCPClientWrapper
 from personal_agent.mcp.governance import MCPGovernanceManager
+from personal_agent.mcp.linear_issue_args import normalize_save_issue_arguments
 from personal_agent.mcp.types import mcp_tool_to_definition
 from personal_agent.mcp_server_allowlist import mcp_tool_matches_enabled_server
 from personal_agent.telemetry import get_logger
@@ -222,7 +223,18 @@ class MCPGatewayAdapter:
                 raise RuntimeError("MCP gateway not connected")
 
             try:
-                result = await self.client.call_tool(mcp_tool_name, kwargs)
+                call_args = kwargs
+                if mcp_tool_name == "save_issue":
+                    call_args = normalize_save_issue_arguments(
+                        kwargs, default_team=settings.linear_team_name
+                    )
+                    if call_args.get("team") != kwargs.get("team"):
+                        log.info(
+                            "mcp_save_issue_team_normalized",
+                            original_team=kwargs.get("team"),
+                            team=call_args.get("team"),
+                        )
+                result = await self.client.call_tool(mcp_tool_name, call_args)
                 if not result:
                     return {}
                 # MCP tools may return lists when multiple content items
@@ -260,7 +272,18 @@ class MCPGatewayAdapter:
         if not self.client:
             raise RuntimeError("MCP gateway not connected")
         try:
-            result = await self.client.call_tool(name, arguments)
+            call_args = arguments
+            if name == "save_issue":
+                call_args = normalize_save_issue_arguments(
+                    arguments, default_team=settings.linear_team_name
+                )
+                if call_args.get("team") != arguments.get("team"):
+                    log.info(
+                        "mcp_save_issue_team_normalized",
+                        original_team=arguments.get("team"),
+                        team=call_args.get("team"),
+                    )
+            result = await self.client.call_tool(name, call_args)
             return result if result else {}
         except Exception as e:
             log.error("mcp_gateway_call_tool_failed", tool=name, error=str(e), exc_info=True)

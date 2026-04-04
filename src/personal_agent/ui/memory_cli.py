@@ -307,3 +307,58 @@ def memory_stats(
             await svc.disconnect()
 
     _run(_run_stats())
+
+
+@memory_app.command("freshness-backfill")
+def memory_freshness_backfill(
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Count rows that would be updated; no writes.",
+    ),
+    batch_size: int = typer.Option(
+        100,
+        "--batch-size",
+        min=1,
+        max=500,
+        help="Nodes or relationships per Neo4j transaction.",
+    ),
+) -> None:
+    """Backfill ``first_accessed_at`` from ``first_seen`` / ``created_at`` (ADR-0042).
+
+    Requires ``AGENT_FRESHNESS_BACKFILL_CONFIRM=true`` unless ``--dry-run``.
+    Does not modify ``last_accessed_at`` or ``access_count``.
+    """
+    from personal_agent.config import settings as app_settings
+    from personal_agent.memory.freshness_backfill import run_freshness_first_accessed_backfill
+    from personal_agent.memory.service import MemoryService
+
+    if not dry_run and not app_settings.freshness_backfill_confirm:
+        console.print(
+            "[red]Refusing to write: set AGENT_FRESHNESS_BACKFILL_CONFIRM=true "
+            "or use --dry-run.[/red]"
+        )
+        raise typer.Exit(2)
+
+    async def _go() -> None:
+        svc = await _get_memory_service()
+        try:
+            ent, rel = await run_freshness_first_accessed_backfill(
+                svc,
+                dry_run=dry_run,
+                batch_size=batch_size,
+            )
+            if dry_run:
+                console.print(
+                    f"[green]Dry run: {ent} entity row(s) and {rel} relationship row(s) "
+                    f"would be updated (no writes).[/green]"
+                )
+            else:
+                console.print(
+                    f"[green]Backfill done: entities updated={ent}, "
+                    f"relationships updated={rel}.[/green]"
+                )
+        finally:
+            await svc.disconnect()
+
+    _run(_go())

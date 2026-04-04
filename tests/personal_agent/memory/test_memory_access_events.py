@@ -59,6 +59,7 @@ class TestQueryMemoryEventPublishing:
         mock_result = AsyncMock()
         mock_result.values = AsyncMock(return_value=[])
         mock_result.data = AsyncMock(return_value=[])
+        mock_result.single = AsyncMock(return_value={"ids": []})
         mock_session.run = AsyncMock(return_value=mock_result)
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
@@ -115,6 +116,7 @@ class TestQueryMemoryEventPublishing:
         mock_result = AsyncMock()
         mock_result.values = AsyncMock(return_value=[])
         mock_result.data = AsyncMock(return_value=[])
+        mock_result.single = AsyncMock(return_value={"ids": []})
         mock_session.run = AsyncMock(return_value=mock_result)
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
@@ -150,6 +152,7 @@ class TestQueryMemoryEventPublishing:
         mock_result = AsyncMock()
         mock_result.values = AsyncMock(return_value=[])
         mock_result.data = AsyncMock(return_value=[])
+        mock_result.single = AsyncMock(return_value={"ids": []})
         mock_session.run = AsyncMock(return_value=mock_result)
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
@@ -201,8 +204,15 @@ class TestQueryMemoryBroadEventPublishing:
         mock_session_result.data = AsyncMock(return_value=[])
         mock_turn_result = AsyncMock()
         mock_turn_result.data = AsyncMock(return_value=[])
+        mock_rel_collect = AsyncMock()
+        mock_rel_collect.single = AsyncMock(return_value={"ids": []})
         mock_session.run = AsyncMock(
-            side_effect=[mock_entity_result, mock_session_result, mock_turn_result]
+            side_effect=[
+                mock_entity_result,
+                mock_session_result,
+                mock_turn_result,
+                mock_rel_collect,
+            ]
         )
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=None)
@@ -450,7 +460,10 @@ class TestConsolidatorAccessContext:
         mock_service.turn_exists = AsyncMock(return_value=False)
         mock_service.create_conversation = AsyncMock(return_value=True)
         mock_service.create_entity = AsyncMock(side_effect=["entity-1", "entity-2"])
-        mock_service.create_relationship = AsyncMock(return_value=True)
+        mock_service.create_relationship = AsyncMock(return_value=None)
+        mock_service.fetch_turn_discusses_relationship_element_ids = AsyncMock(
+            return_value=["discuss-rel-1"]
+        )
         mock_service.get_promotion_candidates = AsyncMock(return_value=[])
         mock_service.create_session = AsyncMock(return_value=True)
         mock_service.link_session_turns = AsyncMock(return_value=1)
@@ -529,6 +542,7 @@ class TestConsolidatorAccessContext:
         assert event.query_type == "consolidation_traversal"
         assert event.trace_id == "consolidation"
         assert set(event.entity_ids) == {"entity-1", "entity-2"}
+        assert event.relationship_ids == ["discuss-rel-1"]
 
     @pytest.mark.asyncio
     async def test_consolidation_suppresses_when_freshness_disabled(self) -> None:
@@ -542,7 +556,8 @@ class TestConsolidatorAccessContext:
         mock_service.turn_exists = AsyncMock(return_value=False)
         mock_service.create_conversation = AsyncMock(return_value=True)
         mock_service.create_entity = AsyncMock(return_value="entity-1")
-        mock_service.create_relationship = AsyncMock(return_value=False)
+        mock_service.create_relationship = AsyncMock(return_value=None)
+        mock_service.fetch_turn_discusses_relationship_element_ids = AsyncMock(return_value=[])
         mock_service.get_promotion_candidates = AsyncMock(return_value=[])
         mock_service.driver = MagicMock()
         mock_db_session = AsyncMock()

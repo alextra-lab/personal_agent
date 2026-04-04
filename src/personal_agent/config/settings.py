@@ -579,7 +579,7 @@ class AppConfig(BaseSettings):
     freshness_enabled: bool = Field(
         default=False,
         description="Enable knowledge graph freshness tracking (ADR-0042). "
-        "When False, memory.accessed events are published but the cg:freshness consumer no-ops.",
+        "When False, memory.accessed publish paths are no-ops and the consumer skips writes.",
     )
     freshness_half_life_days: float = Field(
         default=30.0,
@@ -619,6 +619,27 @@ class AppConfig(BaseSettings):
     freshness_review_schedule_cron: str = Field(
         default="0 3 * * 0",
         description="Cron expression for the weekly staleness-review brainstem job (default: Sunday 03:00 UTC).",
+    )
+    freshness_dormant_entity_proposal_threshold: int = Field(
+        default=10,
+        ge=1,
+        description="Minimum dormant entity count before emitting a Captain's Log archival proposal.",
+    )
+    freshness_dormant_relationship_proposal_threshold: int = Field(
+        default=10,
+        ge=1,
+        description="Minimum dormant relationship count before emitting a Captain's Log proposal.",
+    )
+    freshness_never_accessed_noise_days: float = Field(
+        default=30.0,
+        gt=0,
+        description="Entities with zero accesses and first_seen older than this are counted as "
+        "never_accessed_old_entity_count (extraction-noise signal).",
+    )
+    freshness_backfill_confirm: bool = Field(
+        default=False,
+        description="Must be True (e.g. AGENT_FRESHNESS_BACKFILL_CONFIRM=true) to run "
+        "destructive-adjacent freshness backfill CLI.",
     )
     freshness_relevance_weight: float = Field(
         default=0.15,

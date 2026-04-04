@@ -7,11 +7,6 @@ from typing import Any
 import orjson
 import structlog
 
-try:
-    from neo4j import AsyncGraphDatabase
-except ModuleNotFoundError:  # pragma: no cover - optional dependency in test environments
-    AsyncGraphDatabase = None  # type: ignore[assignment]
-
 from personal_agent.config.settings import get_settings
 from personal_agent.events import (
     STREAM_MEMORY_ACCESSED,
@@ -21,6 +16,10 @@ from personal_agent.events import (
 )
 from personal_agent.memory.embeddings import generate_embedding
 from personal_agent.memory.fact import PromotionCandidate
+from personal_agent.memory.freshness_aggregate import (
+    GraphStalenessSummary,
+    aggregate_graph_staleness,
+)
 from personal_agent.memory.models import (
     Entity,
     EntityNode,
@@ -30,6 +29,14 @@ from personal_agent.memory.models import (
     SessionNode,
     TurnNode,
 )
+
+Neo4jAsyncGraphDatabase: Any = None
+try:
+    from neo4j import AsyncGraphDatabase as _Neo4jAsyncGraphDatabase
+
+    Neo4jAsyncGraphDatabase = _Neo4jAsyncGraphDatabase
+except ModuleNotFoundError:  # pragma: no cover - optional dependency in test environments
+    pass
 
 # Backward-compatibility alias
 ConversationNode = TurnNode
@@ -61,7 +68,7 @@ class MemoryService:
         Returns:
             True if connected successfully, False otherwise
         """
-        if AsyncGraphDatabase is None:
+        if Neo4jAsyncGraphDatabase is None:
             log.error("neo4j_dependency_missing")
             self.connected = False
             return False
@@ -71,7 +78,7 @@ class MemoryService:
             user = settings.neo4j_user
             password = settings.neo4j_password
 
-            self.driver = AsyncGraphDatabase.driver(uri, auth=(user, password))
+            self.driver = Neo4jAsyncGraphDatabase.driver(uri, auth=(user, password))
             await self.driver.verify_connectivity()
             self.connected = True
             log.info("neo4j_connected", uri=uri)
@@ -490,18 +497,18 @@ class MemoryService:
             log.error("vector_index_creation_failed", error=str(e), exc_info=True)
             return False
 
-    async def create_relationship(self, relationship: Relationship) -> bool:
+    async def create_relationship(self, relationship: Relationship) -> str | None:
         """Create a relationship between nodes.
 
         Args:
             relationship: Relationship to create
 
         Returns:
-            True if successful, False otherwise
+            Neo4j ``elementId(rel)`` on success, or ``None`` on failure.
         """
         if not self.connected or not self.driver:
             log.warning("neo4j_not_connected")
-            return False
+            return None
 
         try:
             async with self.driver.session() as session:
@@ -509,10 +516,11 @@ class MemoryService:
                 # Standard Cypher cannot parameterize relationship type labels;
                 # apoc.merge.relationship handles this cleanly.
                 # Access tracking properties (FRE-161: KG Freshness) are initialized on creation.
-                await session.run(
+                result = await session.run(
                     """
                     MATCH (source)
                     WHERE source.entity_id = $source_id OR source.name = $source_id
+                       OR (source:Turn AND source.turn_id = $source_id)
                     MATCH (target)
                     WHERE target.entity_id = $target_id OR target.name = $target_id
                     CALL apoc.merge.relationship(
@@ -528,23 +536,97 @@ class MemoryService:
                         },
                         target
                     ) YIELD rel
-                    RETURN rel
+                    RETURN elementId(rel) AS element_id
                     """,
                     source_id=relationship.source_id,
                     target_id=relationship.target_id,
                     relationship_type=relationship.relationship_type,
                     weight=relationship.weight,
                 )
+                rec = await result.single()
+                element_id = rec.get("element_id") if rec else None
+                eid_str = str(element_id) if element_id is not None else None
                 log.info(
                     "relationship_created",
                     source=relationship.source_id,
                     target=relationship.target_id,
                     type=relationship.relationship_type,
+                    element_id=eid_str,
                 )
-                return True
+                return eid_str
         except Exception as e:
             log.error("relationship_creation_failed", error=str(e), exc_info=True)
-            return False
+            return None
+
+    async def fetch_turn_discusses_relationship_element_ids(self, turn_id: str) -> list[str]:
+        """Return ``elementId`` values for ``DISCUSSES`` edges from a turn.
+
+        Args:
+            turn_id: Turn node ``turn_id`` (typically trace id).
+
+        Returns:
+            Distinct relationship element ids, or empty list if unavailable.
+        """
+        if not self.connected or not self.driver or not turn_id:
+            return []
+        try:
+            async with self.driver.session() as session:
+                result = await session.run(
+                    """
+                    MATCH (t:Turn {turn_id: $turn_id})-[rel:DISCUSSES]->(:Entity)
+                    RETURN collect(DISTINCT elementId(rel)) AS ids
+                    """,
+                    turn_id=turn_id,
+                )
+                rec = await result.single()
+                raw = rec.get("ids") if rec else None
+                if not raw:
+                    return []
+                return [str(x) for x in raw if x is not None]
+        except Exception as e:
+            log.warning(
+                "fetch_turn_discusses_rel_ids_failed",
+                turn_id=turn_id,
+                error=str(e),
+            )
+            return []
+
+    async def _collect_discusses_relationship_element_ids_for_memory_query(
+        self,
+        session: Any,
+        conversations: list[TurnNode],
+        entity_names: list[str],
+    ) -> list[str]:
+        """Collect ``DISCUSSES`` relationship element ids touched by a memory query."""
+        out: list[str] = []
+        turn_ids = [c.turn_id for c in conversations if getattr(c, "turn_id", None)]
+        if turn_ids:
+            result = await session.run(
+                """
+                MATCH (c:Turn)-[rel:DISCUSSES]->(:Entity)
+                WHERE c.turn_id IN $turn_ids
+                RETURN collect(DISTINCT elementId(rel)) AS ids
+                """,
+                turn_ids=turn_ids,
+            )
+            rec = await result.single()
+            raw = rec.get("ids") if rec else None
+            if raw:
+                out.extend(str(x) for x in raw if x is not None)
+        if not out and entity_names:
+            result = await session.run(
+                """
+                MATCH (c:Turn)-[rel:DISCUSSES]->(e:Entity)
+                WHERE e.name IN $entity_names
+                RETURN collect(DISTINCT elementId(rel)) AS ids
+                """,
+                entity_names=entity_names,
+            )
+            rec = await result.single()
+            raw = rec.get("ids") if rec else None
+            if raw:
+                out.extend(str(x) for x in raw if x is not None)
+        return list(dict.fromkeys(out))
 
     async def query_memory(
         self,
@@ -735,6 +817,17 @@ class MemoryService:
                     reranker_scores=reranker_scores,
                 )
 
+                accessed_entity_ids = list(query.entity_names or [])
+                for conversation in conversations:
+                    accessed_entity_ids.extend(conversation.key_entities or [])
+                accessed_entity_ids = list(dict.fromkeys(accessed_entity_ids))
+
+                relationship_element_ids = (
+                    await self._collect_discusses_relationship_element_ids_for_memory_query(
+                        session, conversations, accessed_entity_ids
+                    )
+                )
+
                 log.info(
                     "memory_query_completed",
                     query_params=cypher_parts,
@@ -754,17 +847,10 @@ class MemoryService:
                 )
 
                 # Publish memory access event (Phase 4)
-                # Collect entity IDs from query parameters and conversation results
-                accessed_entity_ids = list(query.entity_names or [])
-                for conversation in conversations:
-                    accessed_entity_ids.extend(conversation.key_entities or [])
-                # Remove duplicates while preserving order
-                accessed_entity_ids = list(dict.fromkeys(accessed_entity_ids))
-
                 if settings.freshness_enabled and accessed_entity_ids and trace_id:
                     event = MemoryAccessedEvent(
                         entity_ids=accessed_entity_ids,
-                        relationship_ids=[],
+                        relationship_ids=relationship_element_ids,
                         access_context=access_context,
                         query_type="query_memory",
                         trace_id=trace_id,
@@ -777,6 +863,7 @@ class MemoryService:
                             "memory_access_event_published",
                             trace_id=trace_id,
                             entity_count=len(accessed_entity_ids),
+                            relationship_count=len(relationship_element_ids),
                             access_context=access_context.value,
                         )
                     except Exception as e:
@@ -892,10 +979,27 @@ class MemoryService:
                     accessed_entity_ids = [
                         e["name"] for e in entities if isinstance(e, dict) and e.get("name")
                     ]
+                    relationship_element_ids: list[str] = []
+                    if accessed_entity_ids:
+                        rel_result = await db_session.run(
+                            """
+                            MATCH (e:Entity)<-[rel:DISCUSSES]-(t:Turn)
+                            WHERE e.name IN $names AND t.timestamp >= $cutoff
+                            RETURN collect(DISTINCT elementId(rel)) AS ids
+                            """,
+                            names=accessed_entity_ids,
+                            cutoff=cutoff,
+                        )
+                        rel_rec = await rel_result.single()
+                        raw_ids = rel_rec.get("ids") if rel_rec else None
+                        if raw_ids:
+                            relationship_element_ids = [
+                                str(x) for x in raw_ids if x is not None
+                            ]
                     if accessed_entity_ids:
                         event = MemoryAccessedEvent(
                             entity_ids=accessed_entity_ids,
-                            relationship_ids=[],
+                            relationship_ids=relationship_element_ids,
                             access_context=access_context,
                             query_type="query_memory_broad",
                             trace_id=trace_id,
@@ -1516,3 +1620,14 @@ class MemoryService:
         except Exception:
             log.warning("get_promotion_candidates_failed", exc_info=True)
             return []
+
+    async def aggregate_graph_staleness(self) -> GraphStalenessSummary | None:
+        """Compute staleness tier counts and related metrics over the full graph.
+
+        Returns:
+            Aggregated summary, or ``None`` when Neo4j is not connected.
+        """
+        if not self.connected or not self.driver:
+            log.warning("aggregate_graph_staleness_no_driver")
+            return None
+        return await aggregate_graph_staleness(self.driver, get_settings())

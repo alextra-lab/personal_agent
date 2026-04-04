@@ -117,6 +117,7 @@ class SecondBrainConsolidator:
         captures_skipped = 0
         sessions_with_new_turns: set[str] = set()
         all_entity_ids: list[str] = []
+        all_relationship_element_ids: list[str] = []
 
         for i, capture in enumerate(captures, 1):
             if should_pause and should_pause():
@@ -151,6 +152,9 @@ class SecondBrainConsolidator:
                 entities_created += result.get("entities_created", 0)
                 relationships_created += result.get("relationships_created", 0)
                 all_entity_ids.extend(result.get("entity_ids", []))
+                all_relationship_element_ids.extend(
+                    result.get("relationship_element_ids", [])
+                )
                 log.debug(
                     "consolidation_capture_done",
                     capture_num=i,
@@ -219,10 +223,11 @@ class SecondBrainConsolidator:
                 )
 
         # Publish memory accessed event for consolidation traversal (Phase 4 / ADR-0042)
-        if _settings.freshness_enabled and all_entity_ids:
+        rel_ids_deduped = list(dict.fromkeys(all_relationship_element_ids))
+        if _settings.freshness_enabled and (all_entity_ids or rel_ids_deduped):
             accessed_event = MemoryAccessedEvent(
                 entity_ids=all_entity_ids,
-                relationship_ids=[],
+                relationship_ids=rel_ids_deduped,
                 access_context=AccessContext.CONSOLIDATION,
                 query_type="consolidation_traversal",
                 trace_id="consolidation",
@@ -232,6 +237,7 @@ class SecondBrainConsolidator:
                 log.debug(
                     "consolidation_memory_access_event_published",
                     entity_count=len(all_entity_ids),
+                    relationship_count=len(rel_ids_deduped),
                 )
             except Exception as e:
                 log.warning(
@@ -379,7 +385,13 @@ class SecondBrainConsolidator:
                 trace_id=capture.trace_id,
                 reason="extraction returned fallback result; will retry next run",
             )
-            return {"turns_created": 0, "entities_created": 0, "relationships_created": 0}
+            return {
+                "turns_created": 0,
+                "entities_created": 0,
+                "relationships_created": 0,
+                "entity_ids": [],
+                "relationship_element_ids": [],
+            }
 
         # Create Turn node
         turn = TurnNode(
@@ -403,6 +415,12 @@ class SecondBrainConsolidator:
 
         await self.memory_service.create_conversation(turn)
         turns_created = 1
+
+        relationship_element_ids: list[str] = list(
+            await self.memory_service.fetch_turn_discusses_relationship_element_ids(
+                capture.trace_id
+            )
+        )
 
         # Create entity nodes
         entities_created = 0
@@ -429,12 +447,15 @@ class SecondBrainConsolidator:
                 weight=rel_data.get("weight", 1.0),
                 properties=rel_data.get("properties", {}),
             )
-            if await self.memory_service.create_relationship(relationship):
+            rel_eid = await self.memory_service.create_relationship(relationship)
+            if rel_eid:
                 relationships_created += 1
+                relationship_element_ids.append(rel_eid)
 
         return {
             "turns_created": turns_created,
             "entities_created": entities_created,
             "relationships_created": relationships_created,
             "entity_ids": entity_ids,
+            "relationship_element_ids": list(dict.fromkeys(relationship_element_ids)),
         }

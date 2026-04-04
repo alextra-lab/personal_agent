@@ -103,6 +103,7 @@ class InsightsEngine:
             )
         )
         insights.extend(await self._build_graph_trend_insights(days=days))
+        insights.extend(await self._build_freshness_staleness_insights())
         insights.extend(self._build_usage_trend_insights(task_patterns))
 
         for anomaly in await self.detect_cost_anomalies(days=max(14, days)):
@@ -539,6 +540,88 @@ class InsightsEngine:
                 actionable=False,
             )
         ]
+
+    async def _build_freshness_staleness_insights(self) -> list[Insight]:
+        """Surface knowledge-graph staleness tiers and snapshot deltas (FRE-167 / ADR-0042)."""
+        from personal_agent.config.settings import get_settings
+        from personal_agent.memory.freshness_aggregate import freshness_tier_snapshot_path
+
+        cfg = get_settings()
+        if not cfg.freshness_enabled:
+            return []
+        if not self._memory.connected or self._memory.driver is None:
+            return []
+
+        summary = await self._memory.aggregate_graph_staleness()
+        if summary is None:
+            return []
+
+        total_e = sum(summary.entities.to_dict().values())
+        total_r = sum(summary.relationships.to_dict().values())
+        if total_e == 0 and total_r == 0:
+            return []
+
+        evidence: dict[str, float | int | str] = {
+            "entities_warm": summary.entities.warm,
+            "entities_cooling": summary.entities.cooling,
+            "entities_cold": summary.entities.cold,
+            "entities_dormant": summary.entities.dormant,
+            "relationships_warm": summary.relationships.warm,
+            "relationships_cooling": summary.relationships.cooling,
+            "relationships_cold": summary.relationships.cold,
+            "relationships_dormant": summary.relationships.dormant,
+            "never_accessed_old_entities": summary.never_accessed_old_entity_count,
+        }
+        out: list[Insight] = [
+            Insight(
+                insight_type="graph_staleness",
+                title="Knowledge graph staleness tier snapshot",
+                summary=(
+                    f"Entities — warm {summary.entities.warm}, cooling {summary.entities.cooling}, "
+                    f"cold {summary.entities.cold}, dormant {summary.entities.dormant}. "
+                    f"Relationships — dormant {summary.relationships.dormant} "
+                    f"(cold {summary.relationships.cold}). "
+                    f"Never-accessed entities older than noise window: "
+                    f"{summary.never_accessed_old_entity_count}."
+                ),
+                confidence=0.62,
+                evidence=evidence,
+                actionable=False,
+            )
+        ]
+
+        snap_path = freshness_tier_snapshot_path(cfg)
+        if snap_path.exists():
+            try:
+                snap = json.loads(snap_path.read_text(encoding="utf-8"))
+                prev_e = snap.get("entities")
+                if isinstance(prev_e, dict) and prev_e:
+                    old_dormant = int(prev_e.get("dormant", 0))
+                    delta = summary.entities.dormant - old_dormant
+                    if old_dormant > 0 and delta != 0:
+                        pct = round(100.0 * delta / old_dormant, 1)
+                        out.append(
+                            Insight(
+                                insight_type="graph_staleness_trend",
+                                title="Dormant entity count vs last freshness snapshot",
+                                summary=(
+                                    f"Dormant entities changed by {delta} ({pct}% vs prior snapshot). "
+                                    "Compare live graph to weekly freshness_review snapshot on disk."
+                                ),
+                                confidence=0.58,
+                                evidence={
+                                    "dormant_entities_delta": delta,
+                                    "dormant_entities_prior_snapshot": old_dormant,
+                                    "dormant_entities_now": summary.entities.dormant,
+                                    "snapshot_iso_week": str(snap.get("iso_week", "")),
+                                },
+                                actionable=False,
+                            )
+                        )
+            except Exception:
+                log.warning("insights_freshness_snapshot_read_failed", exc_info=True)
+
+        return out
 
     async def _build_graph_trend_insights(self, days: int) -> list[Insight]:
         """Generate graph-based trend insights from Neo4j entity activity."""

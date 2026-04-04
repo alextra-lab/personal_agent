@@ -1,9 +1,9 @@
 """Batch consumer for memory.accessed events (FRE-164 / ADR-0042 Step 4).
 
 Reads ``MemoryAccessedEvent`` instances from ``stream:memory.accessed``,
-accumulates them over a configurable batch window, deduplicates entity
-accesses within the window, and executes a single Cypher UNWIND transaction
-per flush to update Neo4j access metadata.
+accumulates them over a configurable batch window, deduplicates entity and
+relationship (``elementId``) accesses within the window, and executes one
+Cypher UNWIND transaction per kind per flush to update Neo4j access metadata.
 
 Design notes:
 - Events are ACKed on buffer insertion (best-effort; matches ADR-0042 §Decision 3).
@@ -33,6 +33,17 @@ SET e.last_accessed_at    = datetime(update.last_accessed_at),
     e.last_access_context = update.access_context,
     e.first_accessed_at   = COALESCE(e.first_accessed_at, datetime(update.last_accessed_at))
 RETURN count(e) AS updated
+"""
+
+_RELATIONSHIP_UPDATE_CYPHER = """
+UNWIND $updates AS update
+MATCH ()-[r]->()
+WHERE elementId(r) = update.rel_id
+SET r.last_accessed_at    = datetime(update.last_accessed_at),
+    r.access_count        = COALESCE(r.access_count, 0) + update.access_increment,
+    r.last_access_context = update.access_context,
+    r.first_accessed_at   = COALESCE(r.first_accessed_at, datetime(update.last_accessed_at))
+RETURN count(r) AS updated
 """
 
 
@@ -160,12 +171,12 @@ class FreshnessConsumer:
             )
 
     async def _write_batch(self, events: list[MemoryAccessedEvent]) -> None:
-        """Deduplicate and write entity access updates in a single Cypher transaction.
+        """Deduplicate and write entity and relationship access updates to Neo4j.
 
-        Collapse rules within a batch:
-        - ``access_increment`` accumulates the total access count for the entity.
+        Collapse rules within a batch (per entity or per ``elementId``):
+        - ``access_increment`` accumulates the total access count.
         - ``last_accessed_at`` is the maximum ``created_at`` across events touching
-          the entity.
+          the same id.
         - ``access_context`` is taken from the event with the latest ``created_at``.
 
         Args:
@@ -175,6 +186,7 @@ class FreshnessConsumer:
             Exception: Propagated from Neo4j on write failure (caller logs it).
         """
         entity_updates: dict[str, dict[str, Any]] = {}
+        relationship_updates: dict[str, dict[str, Any]] = {}
         for event in events:
             for entity_id in event.entity_ids:
                 if not entity_id:
@@ -192,7 +204,23 @@ class FreshnessConsumer:
                     rec["last_accessed_at"] = event.created_at
                     rec["access_context"] = event.access_context.value
 
-        if not entity_updates:
+            for rel_id in event.relationship_ids:
+                if not rel_id:
+                    continue
+                if rel_id not in relationship_updates:
+                    relationship_updates[rel_id] = {
+                        "rel_id": rel_id,
+                        "last_accessed_at": event.created_at,
+                        "access_increment": 0,
+                        "access_context": event.access_context.value,
+                    }
+                rrec = relationship_updates[rel_id]
+                rrec["access_increment"] += 1
+                if event.created_at > rrec["last_accessed_at"]:
+                    rrec["last_accessed_at"] = event.created_at
+                    rrec["access_context"] = event.access_context.value
+
+        if not entity_updates and not relationship_updates:
             return
 
         driver = self._resolve_driver()
@@ -200,10 +228,11 @@ class FreshnessConsumer:
             log.warning(
                 "freshness_consumer_no_driver",
                 entity_count=len(entity_updates),
+                relationship_count=len(relationship_updates),
             )
             return
 
-        updates = [
+        entity_rows = [
             {
                 **rec,
                 "last_accessed_at": rec["last_accessed_at"].isoformat()
@@ -212,17 +241,36 @@ class FreshnessConsumer:
             }
             for rec in entity_updates.values()
         ]
+        rel_rows = [
+            {
+                **rec,
+                "last_accessed_at": rec["last_accessed_at"].isoformat()
+                if isinstance(rec["last_accessed_at"], datetime)
+                else str(rec["last_accessed_at"]),
+            }
+            for rec in relationship_updates.values()
+        ]
 
+        entities_updated = 0
+        rels_updated = 0
         async with driver.session() as db_session:
-            result = await db_session.run(_ENTITY_UPDATE_CYPHER, updates=updates)
-            record = await result.single()
-            updated_count: int = record["updated"] if record else 0
-            log.info(
-                "freshness_batch_written",
-                events_in_batch=len(events),
-                entities_deduplicated=len(updates),
-                entities_updated_in_neo4j=updated_count,
-            )
+            if entity_rows:
+                result = await db_session.run(_ENTITY_UPDATE_CYPHER, updates=entity_rows)
+                record = await result.single()
+                entities_updated = int(record["updated"]) if record else 0
+            if rel_rows:
+                result = await db_session.run(_RELATIONSHIP_UPDATE_CYPHER, updates=rel_rows)
+                record = await result.single()
+                rels_updated = int(record["updated"]) if record else 0
+
+        log.info(
+            "freshness_batch_written",
+            events_in_batch=len(events),
+            entities_deduplicated=len(entity_rows),
+            entities_updated_in_neo4j=entities_updated,
+            relationships_deduplicated=len(rel_rows),
+            relationships_updated_in_neo4j=rels_updated,
+        )
 
     def _resolve_driver(self) -> Any | None:
         """Return a Neo4j driver, falling back to the global memory_service.

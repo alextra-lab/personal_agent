@@ -247,7 +247,8 @@ class MemoryAccessedEvent(EventBase):
 
     Attributes:
         entity_ids: Neo4j entity IDs accessed during this query.
-        relationship_ids: Neo4j relationship IDs traversed during this query.
+        relationship_ids: Neo4j relationship ``elementId`` values (Neo4j 5+) for
+            edges read or created during this access (DISCUSSES, merges, etc.).
         access_context: Typed context that triggered the access.
         query_type: Fine-grained query method name (e.g. ``"recall"``,
             ``"recall_broad"``, ``"memory_search"``,

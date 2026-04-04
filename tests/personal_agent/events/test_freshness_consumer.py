@@ -25,11 +25,12 @@ def _make_event(
     entity_ids: list[str],
     access_context: AccessContext = AccessContext.SEARCH,
     created_at: datetime | None = None,
+    relationship_ids: list[str] | None = None,
 ) -> MemoryAccessedEvent:
     """Create a MemoryAccessedEvent with minimal required fields."""
     return MemoryAccessedEvent(
         entity_ids=entity_ids,
-        relationship_ids=[],
+        relationship_ids=list(relationship_ids or []),
         access_context=access_context,
         query_type="test_query",
         trace_id="test-trace",
@@ -184,13 +185,51 @@ async def test_write_batch_multiple_entities() -> None:
     await consumer._write_batch([e1, e2, e3])
 
     db_session = driver.session.return_value.__aenter__.return_value
-    call_args = db_session.run.call_args
+    call_args = db_session.run.call_args_list[0]
     updates = call_args.kwargs["updates"] if call_args.kwargs else call_args.args[1]
     entity_map = {u["entity_id"]: u for u in updates}
 
     assert set(entity_map.keys()) == {"Entity/A", "Entity/B"}
     assert entity_map["Entity/A"]["access_increment"] == 2
     assert entity_map["Entity/B"]["access_increment"] == 1
+
+
+@pytest.mark.asyncio
+async def test_write_batch_updates_relationships() -> None:
+    """Relationship elementIds get a separate UNWIND batch (ADR-0042)."""
+    driver = _make_mock_driver(updated_count=1)
+    consumer = FreshnessConsumer(driver=driver)
+
+    r1 = _make_event([], relationship_ids=["5:abc:123:456"])
+    r2 = _make_event([], relationship_ids=["5:abc:123:456"])
+
+    await consumer._write_batch([r1, r2])
+
+    db_session = driver.session.return_value.__aenter__.return_value
+    assert db_session.run.await_count == 1
+    call_args = db_session.run.call_args
+    cypher = call_args.args[0]
+    assert "elementId(r)" in cypher
+    updates = call_args.kwargs["updates"]
+    assert len(updates) == 1
+    assert updates[0]["rel_id"] == "5:abc:123:456"
+    assert updates[0]["access_increment"] == 2
+
+
+@pytest.mark.asyncio
+async def test_write_batch_entities_and_relationships_two_queries() -> None:
+    """Batch with both kinds issues two Cypher executions."""
+    driver = _make_mock_driver(updated_count=1)
+    consumer = FreshnessConsumer(driver=driver)
+
+    await consumer._write_batch(
+        [
+            _make_event(["E1"], relationship_ids=["5:r:1"]),
+        ]
+    )
+
+    db_session = driver.session.return_value.__aenter__.return_value
+    assert db_session.run.await_count == 2
 
 
 @pytest.mark.asyncio

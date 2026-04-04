@@ -319,8 +319,8 @@ class TestGraphStructure:
             properties={"test": True},
         )
 
-        success = await memory_service.create_relationship(relationship)
-        assert success
+        rel_id = await memory_service.create_relationship(relationship)
+        assert rel_id is not None
 
         # Verify the relationship exists
         if not memory_service.driver:

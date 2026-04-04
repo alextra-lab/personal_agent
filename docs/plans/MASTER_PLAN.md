@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-04 (FRE-165)
+> **Last updated**: 2026-04-04 (FRE-166 / FRE-167 done; ADR-0042 backfill CLI + relationship access IDs)
 
 ---
 
@@ -10,7 +10,7 @@
 
 | # | Work Item | Linear | Spec / ADR | Status |
 |---|-----------|--------|------------|--------|
-| 1 | Event Bus — Redis Streams (Phase 4) | [Project](https://linear.app/frenchforest/project/event-bus-redis-streams-d0b2f16e97ed) | ADR-0041 | FRE-160 ✅ FRE-161 ✅ FRE-162 ✅ FRE-163 ✅ FRE-164 ✅ FRE-165 ✅; next FRE-166 (staleness review job) |
+| 1 | Event Bus — Redis Streams (Phase 4) | [Project](https://linear.app/frenchforest/project/event-bus-redis-streams-d0b2f16e97ed) | ADR-0041 | FRE-160 ✅ … FRE-165 ✅ |
 | 2 | EVAL-10 run (Context Intelligence final verification) | — | `specs/CONTEXT_INTELLIGENCE_SPEC.md` | Pending |
 
 ## Upcoming — Needs Approval
@@ -20,7 +20,7 @@ All projects below are in **Needs Approval** status. Ordered by recommended impl
 | # | Project | Linear | ADR / Spec | Depends On |
 |---|---------|--------|------------|------------|
 | 3 | CLI-First Tool Migration | [Project](https://linear.app/frenchforest/project/cli-first-tool-migration-5b948aeb13bb) | ADR-0028 | FRE-99 (Done) |
-| 4 | Knowledge Graph Freshness | [Project](https://linear.app/frenchforest/project/knowledge-graph-freshness-b2aba76fd737) | ADR-0042 | Event Bus Phases 1–2 (FRE-157, FRE-158) |
+| 4 | Knowledge Graph Freshness | [Project](https://linear.app/frenchforest/project/knowledge-graph-freshness-b2aba76fd737) | ADR-0042 | Event Bus Phases 1–2 (FRE-157, FRE-158); core FRE issues **Done** — enable flag + run operator backfill when ready |
 | 5 | Proactive Memory | [Project](https://linear.app/frenchforest/project/proactive-memory-67df0f9bb76e) | ADR-0039, `specs/PROACTIVE_MEMORY_DESIGN.md` | — (Seshat/Neo4j complete) |
 | 6 | Linear Async Feedback Channel | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | ADR-0030 pipeline (exists) |
 | 7 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2, `specs/RECALL_CLASSIFIER_L2_DESIGN.md` | Proactive Memory (FRE-176) |
@@ -54,6 +54,7 @@ Linear Feedback Channel (ADR-0040)  ← independent, can run in parallel
 
 | Phase | Completed | Summary |
 |-------|-----------|---------|
+| KG Freshness 6–7/7 (FRE-166, FRE-167) + relationship IDs | 2026-04-04 | FRE-166: `brainstem/jobs/freshness_review.py`, scheduler cron (`AGENT_FRESHNESS_REVIEW_SCHEDULE_CRON`), tier aggregation snapshot + deltas, Captain's Log dormant proposals when over threshold. FRE-167: `uv run agent memory freshness-backfill` (`freshness_backfill.py`), gated by `AGENT_FRESHNESS_BACKFILL_CONFIRM`. `MemoryAccessedEvent.relationship_ids` populated on query + consolidation paths; `FreshnessConsumer` UNWIND-updates relationships by `elementId`. Integration-style test: `tests/personal_agent/memory/test_freshness_pipeline.py`. |
 | KG Freshness 5–6/7 (FRE-164, FRE-165) | 2026-04-04 | FRE-164: `FreshnessConsumer` batch writer — buffers `memory.accessed` events (5 s window / 50 max), deduplicates per entity, single Cypher UNWIND flush to Neo4j; wired into `app.py` lifespan. FRE-165: `compute_freshness` (exponential decay × frequency boost) + `classify_staleness` (WARM/COOLING/COLD/DORMANT tiers); freshness integrated as step 6 in `_calculate_relevance_scores()` with `w_scale` weight redistribution. |
 | KG Freshness 3/7 (FRE-163) | 2026-04-04 | `memory.accessed` events published from all 6 active query paths (`query_memory`, `query_memory_broad`, `recall`, `recall_broad`, `memory_search` tool, consolidation traversal). Feature flag gates all publishing. `session_id` 422 fix in `/chat`. |
 | KG Freshness 1–2/7 (FRE-161, FRE-162) | 2026-04-04 | FRE-161: Neo4j schema (`last_accessed_at`, `access_count`, `last_access_context`, `first_accessed_at`) + Cypher constraint. FRE-162: `AccessContext` enum, `MemoryAccessedEvent` (typed fields), `FreshnessSettings` in config, unit tests. |

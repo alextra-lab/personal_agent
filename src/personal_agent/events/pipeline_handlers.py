@@ -41,10 +41,14 @@ def _default_elasticsearch_async_client() -> Any | None:
         return None
 
 
-def build_consolidation_insights_handler() -> Any:
+def build_consolidation_insights_handler(memory_service: Any | None = None) -> Any:
     """Build handler that runs insights analysis on ``consolidation.completed``.
 
     Skips analysis when no captures were processed (nothing new to analyse).
+
+    Args:
+        memory_service: Optional connected :class:`~personal_agent.memory.service.MemoryService`
+            for graph-backed insights (e.g. freshness staleness tiers).
 
     Returns:
         Async handler for ``cg:insights`` on ``stream:consolidation.completed``.
@@ -64,7 +68,7 @@ def build_consolidation_insights_handler() -> Any:
 
         shared_es = _default_elasticsearch_async_client()
         queries = TelemetryQueries(es_client=shared_es)
-        engine = InsightsEngine(telemetry_queries=queries)
+        engine = InsightsEngine(telemetry_queries=queries, memory_service=memory_service)
         try:
             insights = await engine.analyze_patterns(days=7)
             log.info(

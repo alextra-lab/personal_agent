@@ -248,6 +248,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         settings.enable_second_brain
         or settings.data_lifecycle_enabled
         or settings.insights_enabled
+        or settings.freshness_enabled
         or getattr(settings, "quality_monitor_enabled", True)
         or getattr(settings, "promotion_pipeline_enabled", True)
         or getattr(settings, "feedback_polling_enabled", True)
@@ -356,7 +357,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             stream=STREAM_CONSOLIDATION_COMPLETED,
             group=CG_INSIGHTS,
             consumer_name="insights-0",
-            handler=build_consolidation_insights_handler(),
+            handler=build_consolidation_insights_handler(memory_service=memory_service),
         )
         await active_bus.subscribe(
             stream=STREAM_CONSOLIDATION_COMPLETED,

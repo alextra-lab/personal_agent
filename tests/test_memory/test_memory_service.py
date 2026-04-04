@@ -274,9 +274,9 @@ class TestRelationships:
             relationship_type="RELATED_TO",
         )
 
-        success = await memory_service.create_relationship(relationship)
+        rel_id = await memory_service.create_relationship(relationship)
 
-        assert success
+        assert rel_id is not None
 
     @pytest.mark.asyncio
     async def test_relationship_access_tracking_on_creation(
@@ -301,8 +301,8 @@ class TestRelationships:
             weight=0.8,
         )
 
-        success = await memory_service.create_relationship(relationship)
-        assert success
+        rel_id = await memory_service.create_relationship(relationship)
+        assert rel_id is not None
 
         # Query the relationship to verify access-tracking properties
         async with memory_service.driver.session() as session:

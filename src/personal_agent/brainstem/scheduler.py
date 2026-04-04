@@ -86,6 +86,8 @@ class BrainstemScheduler:
             FeedbackPoller(linear_client) if linear_client else None
         )
         self._linear_client = linear_client
+        self.memory_service: MemoryService | None = memory_service
+        self._last_freshness_review_week: tuple[int, int] | None = None
         self.feedback_polling_hour_utc = settings.feedback_polling_hour_utc
         self.quality_monitor = quality_monitor or ConsolidationQualityMonitor(
             memory_service=memory_service,
@@ -462,6 +464,40 @@ class BrainstemScheduler:
                         await self.lifecycler.purge_expired_data(data_type)
                     await self.lifecycler.cleanup_elasticsearch_indices()
                     self._last_purge_week = (year, week)
+
+                # Weekly freshness review (FRE-166 / ADR-0042)
+                if (
+                    settings.freshness_enabled
+                    and self.memory_service is not None
+                    and (
+                        self._last_freshness_review_week is None
+                        or self._last_freshness_review_week != (year, week)
+                    )
+                ):
+                    from personal_agent.brainstem.jobs.freshness_review import (
+                        parse_freshness_review_schedule,
+                        run_freshness_review,
+                    )
+
+                    fr_minute, fr_hour, fr_weekday = parse_freshness_review_schedule(
+                        settings.freshness_review_schedule_cron
+                    )
+                    if (
+                        now.weekday() == fr_weekday
+                        and now.hour == fr_hour
+                        and now.minute == fr_minute
+                    ):
+                        trace_fb = f"freshness-review-{year}-W{week:02d}"
+                        try:
+                            await run_freshness_review(self.memory_service, trace_fb)
+                        except Exception as fr_err:
+                            log.warning(
+                                "freshness_review_failed",
+                                trace_id=trace_fb,
+                                error=str(fr_err),
+                                exc_info=True,
+                            )
+                        self._last_freshness_review_week = (year, week)
 
                 # Daily Linear feedback polling (ADR-0040 / ADR-0041 Phase 3)
                 # Insights and promotion run reactively via consolidation.completed events;

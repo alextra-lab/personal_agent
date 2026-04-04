@@ -20,9 +20,10 @@ class TestModelRole:
         assert ModelRole.PRIMARY == "primary"
         assert ModelRole.SUB_AGENT == "sub_agent"
 
-    def test_model_role_exactly_two_members(self) -> None:
-        """Test that ModelRole has exactly two members (ADR-0033 two-tier taxonomy)."""
-        assert len(list(ModelRole)) == 2
+    def test_model_role_exactly_three_members(self) -> None:
+        """Test that ModelRole has exactly three members (PRIMARY, SUB_AGENT, COMPRESSOR)."""
+        assert len(list(ModelRole)) == 3
+        assert ModelRole.COMPRESSOR == "compressor"
 
     def test_model_role_string_representation(self) -> None:
         """Test that ModelRole values are strings."""

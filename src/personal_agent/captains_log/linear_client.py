@@ -6,11 +6,13 @@ Calls Docker MCP gateway tools by name via :class:`MCPGatewayAdapter.call_tool`.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from personal_agent.config import settings
-from personal_agent.mcp.gateway import MCPGatewayAdapter
 from personal_agent.telemetry import get_logger
+
+if TYPE_CHECKING:
+    from personal_agent.mcp.gateway import MCPGatewayAdapter
 
 log = get_logger(__name__)
 
@@ -274,9 +276,7 @@ class LinearClient:
         team = team_name or settings.linear_team_name
         existing = await self.list_issue_labels(team=team)
         by_name = {
-            str(x.get("name", "")).strip(): x
-            for x in existing
-            if isinstance(x.get("name"), str)
+            str(x.get("name", "")).strip(): x for x in existing if isinstance(x.get("name"), str)
         }
 
         async def ensure_one(
@@ -314,6 +314,7 @@ class LinearClient:
 
 async def _cli_ensure_labels() -> None:
     """Entry point for ``python -m personal_agent.captains_log.linear_client``."""
+    from personal_agent.mcp.gateway import MCPGatewayAdapter
     from personal_agent.tools import get_default_registry
 
     registry = get_default_registry()

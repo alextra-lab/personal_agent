@@ -2,17 +2,44 @@
 
 This wrapper uses the MCP SDK's stdio_client context manager,
 which handles subprocess lifecycle automatically.
+
+The optional ``mcp`` SDK is imported only when :meth:`MCPClientWrapper.__aenter__`
+runs so that importing :mod:`personal_agent.mcp.gateway` (and transitively this
+module) does not require ``mcp`` to be installed.
 """
 
-import asyncio
-from typing import Any
+from __future__ import annotations
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+import asyncio
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, Self
 
 from personal_agent.telemetry import get_logger
 
+if TYPE_CHECKING:
+    from mcp import ClientSession
+
 log = get_logger(__name__)
+
+
+def _load_mcp_sdk() -> tuple[Any, Any, Any]:
+    """Import MCP SDK types and stdio transport.
+
+    Returns:
+        ``(ClientSession, StdioServerParameters, stdio_client)`` from the MCP SDK.
+
+    Raises:
+        ImportError: If the ``mcp`` package is not installed.
+    """
+    try:
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+    except ImportError as e:
+        raise ImportError(
+            "The 'mcp' package is required for MCP Gateway. Install project "
+            "dependencies (e.g. `uv sync`)."
+        ) from e
+    return ClientSession, StdioServerParameters, stdio_client
 
 
 class MCPClientWrapper:
@@ -41,9 +68,9 @@ class MCPClientWrapper:
         self._read_stream = None
         self._write_stream = None
         self.session: ClientSession | None = None
-        self._client_context = None
+        self._client_context: Any = None
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> Self:
         """Enter context manager - starts gateway subprocess and connects.
 
         Returns:
@@ -52,8 +79,10 @@ class MCPClientWrapper:
         try:
             log.info("mcp_client_connecting", command=self.command)
 
+            session_cls, stdio_server_parameters, stdio_client = _load_mcp_sdk()
+
             # Create server parameters
-            server_params = StdioServerParameters(
+            server_params = stdio_server_parameters(
                 command=self.command[0],
                 args=self.command[1:] if len(self.command) > 1 else None,
                 env=None,  # Use current environment
@@ -64,7 +93,7 @@ class MCPClientWrapper:
             self._read_stream, self._write_stream = await self._client_context.__aenter__()
 
             # Create session with timeout
-            self.session = ClientSession(self._read_stream, self._write_stream)
+            self.session = session_cls(self._read_stream, self._write_stream)
             await asyncio.wait_for(self.session.__aenter__(), timeout=self.timeout)
 
             # Initialize session (handshake)
@@ -80,7 +109,12 @@ class MCPClientWrapper:
             log.error("mcp_client_connect_failed", error=str(e), exc_info=True)
             raise
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Exit context manager - stops gateway subprocess and cleans up.
 
         Args:
@@ -203,7 +237,7 @@ class MCPClientWrapper:
             log.error("mcp_tool_call_failed", tool=name, error=str(e), exc_info=True)
             raise
 
-    def _extract_error_message(self, result) -> str:
+    def _extract_error_message(self, result: Any) -> str:
         """Extract error message from CallToolResult.
 
         Args:
@@ -216,11 +250,11 @@ class MCPClientWrapper:
         if result.content:
             for item in result.content:
                 if hasattr(item, "text"):
-                    return item.text
+                    return str(item.text)
         # Fallback
         return "Unknown tool error"
 
-    def _parse_mcp_content(self, content: list) -> Any:
+    def _parse_mcp_content(self, content: list[Any]) -> Any:
         """Parse MCP content items.
 
         MCP results can contain multiple content types:
@@ -242,7 +276,7 @@ class MCPClientWrapper:
         if not content:
             return {}
 
-        parsed_items = []
+        parsed_items: list[Any] = []
         for item in content:
             # TextContent (most common)
             if hasattr(item, "text"):

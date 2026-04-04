@@ -1,10 +1,11 @@
 # Self-Improvement Feedback Loop Specification
 
-**Version**: 0.1  
-**Date**: 2026-04-01  
-**Status**: Approved  
+**Version**: 0.2  
+**Date**: 2026-04-04 (status update)  
+**Status**: Phases 1–2 implemented (April 2026); Phase 3 meta-learning pending  
 **ADR**: ADR-0040 (Linear as Async Feedback Channel)  
-**Extends**: ADR-0030 (Captain's Log Dedup & Self-Improvement Pipeline)
+**Extends**: ADR-0030 (Captain's Log Dedup & Self-Improvement Pipeline)  
+**Event Bus**: ADR-0041 — internal processing is event-driven (see ADR-0040 addendum)
 
 ---
 
@@ -686,6 +687,43 @@ promotion_initial_cap: int = Field(
 - Apply each feedback label from the Linear mobile app
 - Verify agent responses within one scheduler cycle
 - Review comment quality (Deepen, Too Vague responses)
+
+---
+
+## 10a. Implementation Status (as of 2026-04-04)
+
+### Phase 1: Wire and ship — **DONE**
+
+All steps (0–5c) are implemented:
+
+- `captains_log/linear_client.py` — `LinearClient` wrapper (Step 1)
+- `service/app.py` — `LinearClient` created from `MCPGatewayAdapter`, injected into scheduler and event bus consumers (Step 2)
+- `captains_log/promotion.py` — accepts `create_issue_fn` + `linear_client`, defaults updated (Step 3)
+- `captains_log/suppression.py` — fingerprint suppression registry (Steps 5a–5c)
+- `brainstem/scheduler.py` — daily feedback polling integrated (Step 5)
+- Budget monitoring in `FeedbackPoller.process_feedback()` (Step 5)
+
+### Phase 2: Feedback loop — **DONE**
+
+All steps (6–12) are implemented:
+
+- `captains_log/feedback.py` — `FeedbackPoller` with state persistence, all 6 handlers (Approved, Rejected, Deepen, Too Vague, Duplicate, Defer), re-evaluation loop guard (Steps 6–12)
+- `events/pipeline_handlers.py` — event bus consumers for `feedback.received` (insights + suppression) and `promotion.issue_created` (captain-log reflection)
+- `brainstem/scheduler.py` — `_publish_feedback_events()` publishes `FeedbackReceivedEvent` after processing
+
+### Phase 3: Meta-learning — **PENDING**
+
+- `build_feedback_insights_handler()` in `pipeline_handlers.py` is a stub (logs signal only)
+- `InsightsEngine.analyze_feedback_patterns()` does not exist yet
+- Kibana dashboard configs not created
+
+### Phase 4: Evaluate — **NOT STARTED**
+
+Requires Phase 3 + 4 weeks of real data.
+
+### Event Bus integration (ADR-0041)
+
+Promotion is now triggered by `consolidation.completed` events (not weekly schedule). Feedback side-effects flow through `stream:feedback.received` to decoupled consumers. See ADR-0040 addendum.
 
 ---
 

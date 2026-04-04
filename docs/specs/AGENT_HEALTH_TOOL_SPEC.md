@@ -1,7 +1,7 @@
 # Agent Health Tool Spec
 
 **Date**: 2026-03-13
-**Status**: Proposed
+**Status**: Implemented (FRE-108, FRE-109, FRE-110 — March 2026)
 **Phase**: 2.3 Homeostasis & Feedback
 **Findings**: `docs/specs/FRE107_FINDINGS.md`
 **Related**: `docs/specs/SELF_TELEMETRY_TOOL_SPEC.md`, ADR-0004, ADR-0020

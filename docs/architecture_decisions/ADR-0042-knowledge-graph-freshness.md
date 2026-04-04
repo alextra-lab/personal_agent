@@ -1,6 +1,6 @@
 # ADR-0042: Knowledge Graph Freshness via Access Tracking
 
-**Status**: Approved
+**Status**: Accepted (implemented — FRE-161 through FRE-167, April 2026)
 **Date**: 2026-04-03
 **Deciders**: Project owner
 **Depends on**: ADR-0035 (Seshat backend — Neo4j + Enhanced Seshat), ADR-0041 (Event Bus via Redis Streams — Phase 4)

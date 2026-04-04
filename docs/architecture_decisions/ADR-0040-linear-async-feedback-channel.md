@@ -1,6 +1,6 @@
 # ADR-0040: Linear as Async Feedback Channel for Self-Improvement
 
-**Status**: Approved  
+**Status**: Accepted (Phases 1–2 implemented April 2026; Phase 3 meta-learning pending)  
 **Date**: 2026-04-01  
 **Deciders**: Project owner  
 **Extends**: ADR-0030 (Captain's Log Dedup & Self-Improvement Pipeline)  
@@ -261,11 +261,48 @@ Skip the feedback loop and go directly to autonomous self-implementation for app
 
 ---
 
+## Addendum: Event Bus Integration (April 2026)
+
+ADR-0041 (Event Bus via Redis Streams) materially improved the internal wiring of this feedback channel. The original design assumed tightly-coupled inline processing; the implemented architecture uses durable event-driven decoupling.
+
+### Changes from original design
+
+| Aspect | Original design (this ADR) | Implemented (post ADR-0041) |
+|--------|---------------------------|----------------------------|
+| **Promotion triggering** | Weekly scheduler job | `consolidation.completed` event → `cg:promotion` consumer (near-real-time) |
+| **Feedback side-effects** | Inline in handler code | Poller processes labels, publishes `feedback.received` → decoupled `cg:insights` and `cg:feedback` consumers |
+| **Suppression updates** | Direct call in `handle_rejected` | Event-driven via `build_feedback_suppression_handler()` on `feedback.received` |
+| **Insights signals** | Direct call to insights engine | Event-driven via `build_feedback_insights_handler()` on `feedback.received` |
+| **Captain's Log reflection** | Direct call after promotion | `promotion.issue_created` event → `cg:captain-log` consumer |
+
+### What remains poll-based
+
+Linear polling (`FeedbackPoller.check_for_feedback()`) runs daily via the brainstem scheduler because Linear does not push to us. All *internal* processing downstream of the poll is event-driven.
+
+### Webhook opportunity
+
+Linear supports webhooks on the free tier. With the event bus consumer infrastructure now in place, adding a thin HTTP webhook receiver that publishes `FeedbackReceivedEvent` directly to `stream:feedback.received` would eliminate the 24-hour polling latency. This is architecturally trivial but deferred until the feedback loop proves valuable during Phase 4 evaluation.
+
+### Implementation files (post Event Bus)
+
+| File | Role |
+|------|------|
+| `events/models.py` | `FeedbackReceivedEvent`, `PromotionIssueCreatedEvent`, `ConsolidationCompletedEvent` |
+| `events/pipeline_handlers.py` | Consumer builders: insights, promotion, captain-log reflection, feedback suppression |
+| `service/app.py` | Wires `LinearClient` → scheduler + event bus consumers at startup |
+
+---
+
 ## Links and References
 
 - ADR-0030: Captain's Log Dedup & Self-Improvement Pipeline (predecessor)
+- ADR-0041: Event Bus via Redis Streams (internal decoupling)
 - ADR-0019: Development Tracking System (Linear integration patterns)
-- `src/personal_agent/captains_log/promotion.py` — promotion pipeline (wire point)
+- `src/personal_agent/captains_log/promotion.py` — promotion pipeline
+- `src/personal_agent/captains_log/feedback.py` — feedback poller + handlers
+- `src/personal_agent/captains_log/linear_client.py` — typed Linear MCP wrapper
+- `src/personal_agent/captains_log/suppression.py` — fingerprint suppression
+- `src/personal_agent/events/pipeline_handlers.py` — event bus consumer handlers
 - `src/personal_agent/brainstem/scheduler.py` — scheduler (polling job host)
 - `src/personal_agent/insights/engine.py` — insights engine (meta-learning integration)
 - `docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md` §7 — self-improvement vision

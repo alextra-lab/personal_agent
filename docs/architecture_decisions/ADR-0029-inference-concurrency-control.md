@@ -1,6 +1,6 @@
 # ADR-0029: Inference Concurrency Control (Air Traffic Controller)
 
-**Status**: Proposed  
+**Status**: Accepted (implemented — FRE-101, March 2026)  
 **Date**: 2026-03-07  
 **Deciders**: Project owner  
 

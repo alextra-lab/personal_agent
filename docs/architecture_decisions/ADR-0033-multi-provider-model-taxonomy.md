@@ -1,6 +1,6 @@
 # ADR-0033: Multi-Provider Model Taxonomy, LiteLLM Integration & Delegation Architecture
 
-**Status**: Proposed (Revision 2)
+**Status**: Accepted (implemented — March 2026)
 **Date**: 2026-03-26
 **Deciders**: Project owner
 **Extends**: ADR-0031 (model config consolidation), ADR-0029 (inference concurrency)

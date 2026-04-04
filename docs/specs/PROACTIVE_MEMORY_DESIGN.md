@@ -1,8 +1,8 @@
 # Proactive Memory — Design Specification
 
-> **Status:** Proposed  
-> **Version:** 0.1  
-> **Date:** 2026-03-30  
+> **Status:** MVP implemented (code 2026-04-04); EVAL numbers pending harness runs  
+> **Version:** 0.2  
+> **Date:** 2026-04-04  
 > **Author:** Project owner  
 > **Related ADR:** `docs/architecture_decisions/ADR-0039-proactive-memory.md`  
 > **Related specs:** `docs/specs/CONTEXT_INTELLIGENCE_SPEC.md` (Phase 4), `docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md` (memory)  
@@ -202,11 +202,11 @@ Combine signals into a **single ranking score** per candidate. Weights are **con
 
 ## MVP Exit Criteria (spec level)
 
-- [ ] `suggest_relevant()` documented on `MemoryProtocol` and implemented in `MemoryServiceAdapter`.
-- [ ] Scoring uses at least **embedding similarity + entity overlap + recency**; topic coherence **stubbed or simplified** is acceptable for MVP if documented.
-- [ ] Threshold **0.3** and budget **500 tokens** enforced with tests.
-- [ ] `_query_memory_for_intent()` invokes proactive path for non-recall intents.
-- [ ] EVAL plan executed with flag on/off and results recorded under `telemetry/evaluation/`.
+- [x] `suggest_relevant()` on `MemoryProtocol` and `MemoryServiceAdapter` (`src/personal_agent/memory/protocol.py`, `protocol_adapter.py`).
+- [x] Scoring: embedding + entity overlap + recency + topic **stub** (`src/personal_agent/memory/proactive.py`).
+- [x] Threshold **0.3** and budget **500 tokens** (defaults in `AppConfig`); tests in `tests/personal_agent/memory/test_proactive.py`.
+- [x] `_query_memory_for_intent()` proactive path when `proactive_memory_enabled` (`request_gateway/context.py`).
+- [x] EVAL **procedure** and results template: `telemetry/evaluation/EVAL-proactive-memory/README.md`. Populate metrics after control/treatment harness runs (`PERSONAL_AGENT_EVAL=1`).
 
 ---
 

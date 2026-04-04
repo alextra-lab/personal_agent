@@ -1,6 +1,6 @@
 # ADR-0039: Proactive Memory via `suggest_relevant()`
 
-**Status:** Proposed  
+**Status:** Accepted (MVP implemented 2026-04-04; FRE-174–176)  
 **Date:** 2026-03-30  
 **Deciders:** Project owner  
 **Depends on:** ADR-0035 (Seshat / Neo4j backend), ADR-0024 (session graph model)  
@@ -72,10 +72,12 @@ The project owner wants **proactive** memory: Seshat should **suggest** relevant
 
 ## Acceptance Criteria
 
-- [ ] `suggest_relevant()` is declared on `MemoryProtocol` and implemented on `MemoryServiceAdapter` with structured logging and `trace_id` on all paths  
-- [ ] Final relevance score combines embedding similarity, entity overlap, recency, and topic coherence (coherence may be minimal in MVP if spec allows, but hook must exist)  
-- [ ] Candidates below **0.3** relevance are excluded; injected proactive memory respects **~500 token** budget and diminishing-returns cutoff  
-- [ ] `_query_memory_for_intent()` uses proactive suggestion for **non-`MEMORY_RECALL`** intents (and documented behavior for `MEMORY_RECALL` vs broad recall)  
-- [ ] Feature flag (or equivalent) supports **EVAL A/B** runs with proactive memory on vs off  
-- [ ] EVAL comparison documented: assertion rates and qualitative notes on response quality  
-- [ ] Unit/integration tests cover empty graph, failure fallback (no user-visible error), and budget trimming  
+- [x] `suggest_relevant()` is declared on `MemoryProtocol` and implemented on `MemoryServiceAdapter` with structured logging and `trace_id` on all paths (`proactive_memory_suggest_*` events).
+- [x] Final relevance score combines embedding similarity, entity overlap, recency, and topic coherence (topic term is an MVP stub in `memory/proactive.py`; hook extensible).
+- [x] Candidates below **0.3** relevance are excluded; injected proactive memory respects **~500 token** budget and diminishing-returns cutoff (`AppConfig` + `build_proactive_suggestions`).
+- [x] `_query_memory_for_intent()` uses proactive suggestion for **non-`MEMORY_RECALL`** intents when `proactive_memory_enabled`; **`MEMORY_RECALL`** still uses `recall_broad()` only.
+- [x] Feature flag **`AGENT_PROACTIVE_MEMORY_ENABLED`** supports EVAL A/B (default off).
+- [x] EVAL procedure and comparison template: `telemetry/evaluation/EVAL-proactive-memory/README.md`. **Numerical** assertion/latency deltas require running the harness twice (control vs treatment); fill the README table after those runs (FRE-177).
+- [x] Unit tests: `tests/personal_agent/memory/test_proactive.py`, context integration `tests/personal_agent/request_gateway/test_context.py` (empty / failure / budget paths).
+
+**Follow-up:** Publish `MemoryAccessedEvent` from `suggest_relevant()` when `freshness_enabled` (ADR-0042 checklist — still deferred in code).

@@ -649,6 +649,80 @@ class AppConfig(BaseSettings):
         "Only active when freshness_enabled=True and access data exists.",
     )
 
+    # Proactive memory (ADR-0039, FRE-174–176)
+    proactive_memory_enabled: bool = Field(
+        default=False,
+        description="Inject scored cross-session memory for non-MEMORY_RECALL intents.",
+    )
+    proactive_memory_w_embedding: float = Field(
+        default=0.45,
+        ge=0.0,
+        le=1.0,
+        description="Weight for embedding similarity in proactive scoring.",
+    )
+    proactive_memory_w_entity: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=1.0,
+        description="Weight for session–candidate entity overlap in proactive scoring.",
+    )
+    proactive_memory_w_recency: float = Field(
+        default=0.20,
+        ge=0.0,
+        le=1.0,
+        description="Weight for recency decay in proactive scoring.",
+    )
+    proactive_memory_w_topic: float = Field(
+        default=0.10,
+        ge=0.0,
+        le=1.0,
+        description="Weight for topic coherence (MVP stub) in proactive scoring.",
+    )
+    proactive_memory_recency_half_life_days: float = Field(
+        default=30.0,
+        gt=0,
+        description="Half-life in days for proactive recency sub-score.",
+    )
+    proactive_memory_min_score: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="Discard proactive candidates below this final score.",
+    )
+    proactive_memory_max_tokens: int = Field(
+        default=500,
+        ge=1,
+        description="Max estimated tokens for injected proactive memory payloads.",
+    )
+    proactive_memory_max_candidates: int = Field(
+        default=10,
+        ge=1,
+        description="Max candidates after scoring before diminishing-returns trim.",
+    )
+    proactive_memory_max_injected_items: int = Field(
+        default=5,
+        ge=1,
+        description="Max proactive items injected into context.",
+    )
+    proactive_memory_diminishing_score_floor: float = Field(
+        default=0.35,
+        ge=0.0,
+        le=1.0,
+        description="Stop when next candidate score is below this value.",
+    )
+    proactive_memory_diminishing_score_gap: float = Field(
+        default=0.15,
+        ge=0.0,
+        le=1.0,
+        description="Stop when score drops more than this vs previous selected item.",
+    )
+    proactive_memory_vector_top_k: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        description="Neo4j vector query top_k before per-session filtering.",
+    )
+
 
 _settings: AppConfig | None = None
 

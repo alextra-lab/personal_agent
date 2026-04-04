@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-04 (FRE-166 / FRE-167 done; ADR-0042 backfill CLI + relationship access IDs)
+> **Last updated**: 2026-04-04 (Proactive Memory FRE-174–176 implemented; FRE-177 harness + table TBD)
 
 ---
 
@@ -10,38 +10,32 @@
 
 | # | Work Item | Linear | Spec / ADR | Status |
 |---|-----------|--------|------------|--------|
-| 1 | Event Bus — Redis Streams (Phase 4) | [Project](https://linear.app/frenchforest/project/event-bus-redis-streams-d0b2f16e97ed) | ADR-0041 | FRE-160 ✅ … FRE-165 ✅ |
-| 2 | EVAL-10 run (Context Intelligence final verification) | — | `specs/CONTEXT_INTELLIGENCE_SPEC.md` | Pending |
+| 1 | EVAL-10 run (Context Intelligence final verification) | [FRE-187](https://linear.app/frenchforest/issue/FRE-187/eval-10-context-intelligence-final-verification-run) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` | Needs Approval |
+| 2 | Fix test import failure (missing `mcp` module) | FRE-185 | — | Approved |
 
 ## Upcoming — Needs Approval
 
-All projects below are in **Needs Approval** status. Ordered by recommended implementation sequence. Dependency chains are encoded in Linear (`blockedBy` relations).
+Ordered by recommended implementation sequence. Dependency chains are encoded in Linear (`blockedBy` relations).
 
 | # | Project | Linear | ADR / Spec | Depends On |
 |---|---------|--------|------------|------------|
-| 3 | CLI-First Tool Migration | [Project](https://linear.app/frenchforest/project/cli-first-tool-migration-5b948aeb13bb) | ADR-0028 | FRE-99 (Done) |
-| 4 | Knowledge Graph Freshness | [Project](https://linear.app/frenchforest/project/knowledge-graph-freshness-b2aba76fd737) | ADR-0042 | Event Bus Phases 1–2 (FRE-157, FRE-158); core FRE issues **Done** — enable flag + run operator backfill when ready |
-| 5 | Proactive Memory | [Project](https://linear.app/frenchforest/project/proactive-memory-67df0f9bb76e) | ADR-0039, `specs/PROACTIVE_MEMORY_DESIGN.md` | — (Seshat/Neo4j complete) |
-| 6 | Linear Async Feedback Channel | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | ADR-0030 pipeline (exists) |
-| 7 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2, `specs/RECALL_CLASSIFIER_L2_DESIGN.md` | Proactive Memory (FRE-176) |
-| 8 | Phase 3.0 Daily-Use Interface | [Project](https://linear.app/frenchforest/project/30-daily-use-interface-60a517bd90f6) | — | CLI Migration (FRE-172) |
+| 4 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |
+| 5 | CLI-First Tool Migration | [Project](https://linear.app/frenchforest/project/cli-first-tool-migration-5b948aeb13bb) | ADR-0028 | FRE-99 (Done) |
+| 6 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2, `specs/RECALL_CLASSIFIER_L2_DESIGN.md` | Proactive Memory MVP done (FRE-176) |
+| 7 | Phase 3.0 Daily-Use Interface | [Project](https://linear.app/frenchforest/project/30-daily-use-interface-60a517bd90f6) | — | CLI Migration (FRE-172) |
 
 ### Dependency graph (project-level)
 
 ```text
-Event Bus (ADR-0041)
+Proactive Memory (ADR-0039)
     ↓
-KG Freshness (ADR-0042)
+Context Intelligence Stretch Goals (4.7, 4.S1, 4.S2)
 
 CLI Migration (ADR-0028)
     ↓
 3.0 Daily-Use Interface (FRE-22 plugin arch)
 
-Proactive Memory (ADR-0039)
-    ↓
-Context Intelligence Stretch Goals (4.7, 4.S1, 4.S2)
-
-Linear Feedback Channel (ADR-0040)  ← independent, can run in parallel
+Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 4 eval)
 ```
 
 ## Backlog
@@ -54,6 +48,8 @@ Linear Feedback Channel (ADR-0040)  ← independent, can run in parallel
 
 | Phase | Completed | Summary |
 |-------|-----------|---------|
+| Proactive Memory (FRE-174–176; FRE-177 procedure) | 2026-04-04 | `suggest_relevant()` + `MemoryServiceAdapter`, `memory/proactive.py` scoring/budget, `AGENT_PROACTIVE_MEMORY_ENABLED`, `assemble_context` + `session_id` wiring. Tests: `test_proactive.py`, `test_context.py`. EVAL A/B: run harness + fill `telemetry/evaluation/EVAL-proactive-memory/README.md`. ADR-0039 Accepted (MVP). |
+| Linear Feedback Channel Phases 1–2 (ADR-0040) | 2026-04-04 | `FeedbackPoller`, all 6 handlers (Approved/Rejected/Deepen/Too Vague/Duplicate/Defer), `LinearClient` wrapper, promotion pipeline wired live, event bus integration (`feedback.received`, `promotion.issue_created`). Phase 3 meta-learning pending. |
 | KG Freshness 6–7/7 (FRE-166, FRE-167) + relationship IDs | 2026-04-04 | FRE-166: `brainstem/jobs/freshness_review.py`, scheduler cron (`AGENT_FRESHNESS_REVIEW_SCHEDULE_CRON`), tier aggregation snapshot + deltas, Captain's Log dormant proposals when over threshold. FRE-167: `uv run agent memory freshness-backfill` (`freshness_backfill.py`), gated by `AGENT_FRESHNESS_BACKFILL_CONFIRM`. `MemoryAccessedEvent.relationship_ids` populated on query + consolidation paths; `FreshnessConsumer` UNWIND-updates relationships by `elementId`. Integration-style test: `tests/personal_agent/memory/test_freshness_pipeline.py`. |
 | KG Freshness 5–6/7 (FRE-164, FRE-165) | 2026-04-04 | FRE-164: `FreshnessConsumer` batch writer — buffers `memory.accessed` events (5 s window / 50 max), deduplicates per entity, single Cypher UNWIND flush to Neo4j; wired into `app.py` lifespan. FRE-165: `compute_freshness` (exponential decay × frequency boost) + `classify_staleness` (WARM/COOLING/COLD/DORMANT tiers); freshness integrated as step 6 in `_calculate_relevance_scores()` with `w_scale` weight redistribution. |
 | KG Freshness 3/7 (FRE-163) | 2026-04-04 | `memory.accessed` events published from all 6 active query paths (`query_memory`, `query_memory_broad`, `recall`, `recall_broad`, `memory_search` tool, consolidation traversal). Feature flag gates all publishing. `session_id` 422 fix in `/chat`. |
@@ -79,10 +75,10 @@ Linear Feedback Channel (ADR-0040)  ← independent, can run in parallel
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| 0042 | Knowledge Graph Freshness via Access Tracking | Accepted (3/7 issues done) |
-| 0041 | Event Bus — Redis Streams | Accepted (Phases 1–4 foundation implemented) |
-| 0040 | Linear as Async Feedback Channel | Approved |
-| 0039 | Proactive Memory via `suggest_relevant()` | Proposed |
+| 0042 | Knowledge Graph Freshness via Access Tracking | Accepted (implemented — 7/7 done) |
+| 0041 | Event Bus — Redis Streams | Accepted (Phases 1–4 implemented) |
+| 0040 | Linear as Async Feedback Channel | Accepted (Phases 1–2 implemented; Phase 3 pending) |
+| 0039 | Proactive Memory via `suggest_relevant()` | Accepted (MVP implemented; EVAL numbers TBD) |
 | 0038 | Context Compressor Model | Accepted (implemented) |
 | 0037 | Recall Controller | Accepted (implemented) |
 | 0036 | Expansion Controller | Accepted (implemented) |

@@ -13,6 +13,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
+from personal_agent.memory.proactive_types import ProactiveMemorySuggestions
+
 
 class MemoryType(Enum):
     """Six memory types with different lifecycles.
@@ -217,5 +219,27 @@ class MemoryProtocol(Protocol):
 
         Returns:
             True if the backend is healthy and accepting requests.
+        """
+        ...
+
+    async def suggest_relevant(
+        self,
+        user_message: str,
+        session_entity_names: list[str],
+        session_topic_hint: str | None,
+        current_session_id: str,
+        trace_id: str,
+    ) -> ProactiveMemorySuggestions:
+        """Rank cross-session memories for proactive context injection (ADR-0039).
+
+        Args:
+            user_message: Current user message (embedded for similarity).
+            session_entity_names: Entities already associated with this session (names).
+            session_topic_hint: Optional short topic proxy (e.g. recent user text).
+            current_session_id: Active session id (exclude same-session turns).
+            trace_id: Request trace for logging.
+
+        Returns:
+            Scored, budget-trimmed candidates. On failure, implementations return empty.
         """
         ...

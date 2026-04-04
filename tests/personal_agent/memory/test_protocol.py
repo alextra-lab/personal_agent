@@ -16,6 +16,7 @@ from personal_agent.memory.protocol import (
     RecallScope,
 )
 from personal_agent.events import AccessContext
+from personal_agent.memory.proactive_types import ProactiveMemorySuggestions
 from personal_agent.memory.protocol_adapter import MemoryServiceAdapter
 
 
@@ -232,6 +233,16 @@ class TestProtocolIsRuntimeCheckable:
 
             async def is_connected(self) -> bool:
                 return True
+
+            async def suggest_relevant(
+                self,
+                user_message: str,
+                session_entity_names: list[str],
+                session_topic_hint: str | None,
+                current_session_id: str,
+                trace_id: str,
+            ) -> ProactiveMemorySuggestions:
+                return ProactiveMemorySuggestions(candidates=[])
 
         assert isinstance(FakeMemory(), MemoryProtocol)
 

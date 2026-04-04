@@ -143,6 +143,7 @@ async def run_gateway_pipeline(
         intent=intent,
         memory_adapter=memory_adapter,
         trace_id=trace_id,
+        session_id=session_id,
         recall_context=recall_result,
     )
     context = apply_budget(

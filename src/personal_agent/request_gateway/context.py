@@ -16,6 +16,7 @@ from typing import Any
 
 import structlog
 
+from personal_agent.config import settings
 from personal_agent.memory.protocol import BroadRecallResult, MemoryProtocol, MemoryRecallQuery
 from personal_agent.request_gateway.state_document import build_state_document
 from personal_agent.request_gateway.types import (
@@ -26,6 +27,23 @@ from personal_agent.request_gateway.types import (
 )
 
 logger = structlog.get_logger(__name__)
+
+
+def _session_topic_hint(session_messages: Sequence[dict[str, Any]]) -> str | None:
+    """Build a short topic proxy from recent user turns (ADR-0039 MVP)."""
+    parts: list[str] = []
+    for m in session_messages:
+        if m.get("role") == "user" and m.get("content"):
+            parts.append(str(m["content"]))
+    if not parts:
+        return None
+    return " ".join(parts[-3:])[:800]
+
+
+def _capitalized_entity_hints(user_message: str) -> list[str]:
+    """Slice-2 heuristic entity names (supplementary to graph session entities)."""
+    words = user_message.split()
+    return [w.strip('",.:;!?') for w in words if len(w) > 3 and w[0].isupper()][:10]
 
 
 def _format_broad_recall_context(
@@ -71,6 +89,8 @@ async def _query_memory_for_intent(
     user_message: str,
     memory_adapter: MemoryProtocol,
     trace_id: str,
+    session_id: str,
+    session_messages: Sequence[dict[str, Any]],
 ) -> list[dict[str, Any]] | None:
     """Query memory based on intent type.
 
@@ -79,6 +99,8 @@ async def _query_memory_for_intent(
         user_message: The user's message.
         memory_adapter: Seshat protocol adapter.
         trace_id: Request trace identifier.
+        session_id: Current session id for proactive retrieval.
+        session_messages: Session history for topic proxy extraction.
 
     Returns:
         Memory context list, or None if no relevant memory found.
@@ -97,12 +119,20 @@ async def _query_memory_for_intent(
             )
             return _format_broad_recall_context(broad)
 
+        if settings.proactive_memory_enabled:
+            suggestions = await memory_adapter.suggest_relevant(
+                user_message=user_message,
+                session_entity_names=_capitalized_entity_hints(user_message),
+                session_topic_hint=_session_topic_hint(session_messages),
+                current_session_id=session_id,
+                trace_id=trace_id,
+            )
+            if suggestions.candidates:
+                return [c.payload for c in suggestions.candidates]
+
         # Entity-name matching for analysis and other task types (Slice 2).
         # Extract capitalised words > 3 chars as potential entity names.
-        words = user_message.split()
-        entity_names = [
-            w.strip('",.:;!?') for w in words if len(w) > 3 and w[0].isupper()
-        ]
+        entity_names = _capitalized_entity_hints(user_message)
         if not entity_names:
             return None
 
@@ -146,6 +176,7 @@ async def assemble_context(
     intent: IntentResult,
     memory_adapter: MemoryProtocol | None,
     trace_id: str,
+    session_id: str = "",
     recall_context: RecallResult | None = None,
 ) -> AssembledContext:
     """Assemble the full context for the primary agent.
@@ -160,6 +191,7 @@ async def assemble_context(
         intent: Classified intent from Stage 4.
         memory_adapter: Seshat protocol adapter (None if unavailable).
         trace_id: Request trace identifier.
+        session_id: Client session id for proactive memory session scoping.
         recall_context: Recall controller result from Stage 4b (None if not triggered).
 
     Returns:
@@ -183,6 +215,8 @@ async def assemble_context(
             user_message=user_message,
             memory_adapter=memory_adapter,
             trace_id=trace_id,
+            session_id=session_id,
+            session_messages=session_messages,
         )
 
     # Inject session fact candidates from recall controller (as system message

@@ -130,6 +130,128 @@ class MemoryService:
         """
         return await self.turn_exists(conversation_id)
 
+    async def fetch_session_discussed_entity_names(self, session_id: str) -> list[str]:
+        """Return distinct Entity names linked to turns in the given session.
+
+        Args:
+            session_id: Session identifier (matches ``Turn.session_id``).
+
+        Returns:
+            Sorted entity names; empty if unavailable or on error.
+        """
+        if not session_id or not self.connected or not self.driver:
+            return []
+        try:
+            async with self.driver.session() as session:
+                result = await session.run(
+                    """
+                    MATCH (t:Turn {session_id: $session_id})-[:DISCUSSES]->(e:Entity)
+                    RETURN collect(DISTINCT e.name) AS names
+                    """,
+                    session_id=session_id,
+                )
+                rec = await result.single()
+                if not rec:
+                    return []
+                raw = rec.get("names") or []
+                return sorted({str(n) for n in raw if n})
+        except Exception as e:
+            log.warning(
+                "fetch_session_discussed_entity_names_failed",
+                session_id=session_id,
+                error=str(e),
+            )
+            return []
+
+    async def suggest_proactive_raw(
+        self,
+        query_embedding: list[float],
+        current_session_id: str,
+        trace_id: str,
+    ) -> list[dict[str, Any]]:
+        """Vector entity retrieval plus best cross-session turn per entity (ADR-0039).
+
+        Args:
+            query_embedding: Query embedding (zero vector yields no rows).
+            current_session_id: Exclude turns from this session.
+            trace_id: For error logging.
+
+        Returns:
+            Row dicts for :func:`personal_agent.memory.proactive.build_proactive_suggestions`.
+        """
+        cfg = get_settings()
+        top_k = cfg.proactive_memory_vector_top_k
+        if not self.connected or not self.driver:
+            return []
+        if not query_embedding or not any(x != 0.0 for x in query_embedding):
+            return []
+        sid = current_session_id or ""
+        try:
+            async with self.driver.session() as session:
+                result = await session.run(
+                    """
+                    CALL db.index.vector.queryNodes('entity_embedding', $top_k, $embedding)
+                    YIELD node, score
+                    WITH node, score
+                    ORDER BY score DESC
+                    LIMIT $top_k
+                    OPTIONAL MATCH (node)<-[:DISCUSSES]-(t:Turn)
+                    WHERE t IS NULL OR coalesce(t.session_id, '') <> $current_session
+                    WITH node, score, t
+                    ORDER BY node, t.timestamp DESC
+                    WITH node, score, collect(t)[0] AS t
+                    RETURN node.name AS name,
+                           node.entity_type AS entity_type,
+                           node.description AS description,
+                           score AS vector_score,
+                           t.turn_id AS turn_id,
+                           t.session_id AS session_id,
+                           t.timestamp AS timestamp,
+                           t.user_message AS user_message,
+                           t.summary AS summary,
+                           t.key_entities AS key_entities
+                    """,
+                    top_k=top_k,
+                    embedding=query_embedding,
+                    current_session=sid,
+                )
+                rows = await result.data()
+        except Exception as e:
+            log.warning(
+                "suggest_proactive_raw_failed",
+                trace_id=trace_id,
+                error=str(e),
+            )
+            return []
+
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            ts = row.get("timestamp")
+            ts_iso: str | None
+            if ts is None:
+                ts_iso = None
+            elif isinstance(ts, datetime):
+                ts_iso = ts.isoformat()
+            else:
+                ts_iso = str(ts)
+
+            out.append(
+                {
+                    "name": row.get("name"),
+                    "entity_type": row.get("entity_type"),
+                    "description": row.get("description"),
+                    "vector_score": float(row.get("vector_score") or 0.0),
+                    "turn_id": row.get("turn_id"),
+                    "session_id": row.get("session_id"),
+                    "timestamp_iso": ts_iso,
+                    "user_message": row.get("user_message"),
+                    "summary": row.get("summary"),
+                    "key_entities": list(row.get("key_entities") or []),
+                    "mention_count": 0,
+                }
+            )
+        return out
+
     async def create_conversation(self, conversation: TurnNode) -> bool:
         """Create a Turn node in the graph.
 
@@ -993,9 +1115,7 @@ class MemoryService:
                         rel_rec = await rel_result.single()
                         raw_ids = rel_rec.get("ids") if rel_rec else None
                         if raw_ids:
-                            relationship_element_ids = [
-                                str(x) for x in raw_ids if x is not None
-                            ]
+                            relationship_element_ids = [str(x) for x in raw_ids if x is not None]
                     if accessed_entity_ids:
                         event = MemoryAccessedEvent(
                             entity_ids=accessed_entity_ids,

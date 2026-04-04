@@ -325,7 +325,7 @@ Save as: `telemetry/evaluation/EVAL-09-post-fix-baseline/`
 |---|----------|--------|--------|-------|
 | 4.1 | Rolling LLM Summarization | Research Strategy 2 + CONVERSATION_CONTINUITY_SPEC deferred work | M | Sonnet |
 | 4.2 | Async Background Compression | Research Technique 1 | S | Sonnet |
-| 4.3 | Proactive Memory (`suggest_relevant()`) | Slice 3 stretch goal | L | Opus (design) / Sonnet (impl) |
+| 4.3 | Proactive Memory (`suggest_relevant()`) | Slice 3 stretch goal | L | **MVP done** (FRE-174–176); EVAL A/B numbers TBD (`telemetry/evaluation/EVAL-proactive-memory/`) |
 | 4.4 | Cross-Session Recall Validation | Slice 3 stretch goal | S | Sonnet |
 | 4.5 | Structured Context Assembly | Research Strategy 4 | M | Sonnet |
 | 4.6 | KV Cache Preservation (stable prefix) | Research Technique 4 | S | Sonnet |
@@ -359,7 +359,7 @@ Run summarization as `asyncio.create_task()` between turns. Fire when token coun
 
 ### 4.3 — Proactive Memory
 
-Seshat injects cross-session context during `assemble_context()` without being asked. Design decisions needed: relevance scoring, noise control, token budget allocation, A/B validation methodology.
+Seshat injects cross-session context during `assemble_context()` without being asked when **`AGENT_PROACTIVE_MEMORY_ENABLED=true`**. Implemented: `MemoryProtocol.suggest_relevant()`, multi-signal scoring + budget in `memory/proactive.py`, Neo4j vector + turn fetch in `MemoryService.suggest_proactive_raw()`. **A/B methodology:** `telemetry/evaluation/EVAL-proactive-memory/README.md` (fill comparison table after harness runs).
 
 **Prerequisite:** Phase 2's promotion threshold fix (entities must exist in Neo4j) verified in Phase 3.
 
@@ -393,7 +393,7 @@ Lightweight classifier for implicit references regex can't catch ("Can we refine
 - [x] Compressor model configured in `models.yaml` — `gpt-5.4-nano` cloud nano
 - [x] Async compression fires on threshold — `compression_manager.py`, 65% threshold (ADR-0038)
 - [x] Cross-session recall tested with new eval paths — CP-30, CP-31 with multi-session runner
-- [x] Proactive memory has design doc — `PROACTIVE_MEMORY_DESIGN.md` + ADR-0039 (implementation deferred)
+- [x] Proactive memory — `PROACTIVE_MEMORY_DESIGN.md` + ADR-0039 (MVP implemented); measured A/B vs baseline pending harness
 - [ ] EVAL-10 full run shows no regression from EVAL-09 — prepared, pending live run
 - [x] Relevant ADRs created — ADR-0038 (compressor), ADR-0039 (proactive memory)
 - [x] MASTER_PLAN updated

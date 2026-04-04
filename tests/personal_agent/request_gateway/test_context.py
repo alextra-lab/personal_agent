@@ -6,6 +6,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import personal_agent.request_gateway.context as ctx_module
+from personal_agent.memory.proactive_types import (
+    ProactiveMemoryCandidate,
+    ProactiveMemorySuggestions,
+    ProactiveScoreComponents,
+)
 from personal_agent.request_gateway.context import assemble_context
 from personal_agent.request_gateway.types import (
     AssembledContext,
@@ -151,3 +157,76 @@ class TestAssembleContext:
         )
         assert isinstance(result, AssembledContext)
         assert result.memory_context is None
+
+    @pytest.mark.asyncio
+    async def test_proactive_memory_enabled_uses_suggest_relevant(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-recall intent with flag on calls suggest_relevant and injects payloads."""
+        monkeypatch.setattr(ctx_module.settings, "proactive_memory_enabled", True)
+        intent = IntentResult(
+            task_type=TaskType.CONVERSATIONAL,
+            complexity=Complexity.SIMPLE,
+            confidence=0.9,
+            signals=[],
+        )
+        cand = ProactiveMemoryCandidate(
+            kind="entity",
+            payload={
+                "type": "entity",
+                "name": "Neo4j",
+                "entity_type": "Technology",
+                "description": None,
+                "mention_count": 2,
+            },
+            relevance_score=0.88,
+            score_components=ProactiveScoreComponents(
+                embedding=0.8,
+                entity_overlap=0.5,
+                recency=0.6,
+                topic_coherence=0.5,
+            ),
+        )
+        mock_adapter = AsyncMock()
+        mock_adapter.is_connected = AsyncMock(return_value=True)
+        mock_adapter.suggest_relevant = AsyncMock(
+            return_value=ProactiveMemorySuggestions(candidates=[cand])
+        )
+
+        result = await assemble_context(
+            user_message="Tell me about graphs",
+            session_messages=[{"role": "user", "content": "we use neo4j"}],
+            intent=intent,
+            memory_adapter=mock_adapter,
+            trace_id="t-pro",
+            session_id="sess-1",
+        )
+        assert result.memory_context is not None
+        assert result.memory_context[0]["name"] == "Neo4j"
+        mock_adapter.suggest_relevant.assert_awaited_once()
+        mock_adapter.recall.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_proactive_memory_disabled_skips_suggest_relevant(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Flag off does not call suggest_relevant when no capitalized entities."""
+        monkeypatch.setattr(ctx_module.settings, "proactive_memory_enabled", False)
+        intent = IntentResult(
+            task_type=TaskType.CONVERSATIONAL,
+            complexity=Complexity.SIMPLE,
+            confidence=0.9,
+            signals=[],
+        )
+        mock_adapter = AsyncMock()
+        mock_adapter.is_connected = AsyncMock(return_value=True)
+
+        result = await assemble_context(
+            user_message="hello there",
+            session_messages=[],
+            intent=intent,
+            memory_adapter=mock_adapter,
+            trace_id="t-off",
+        )
+        assert result.memory_context is None
+        mock_adapter.suggest_relevant.assert_not_called()

@@ -7,10 +7,15 @@ while the underlying service remains unchanged.
 
 from __future__ import annotations
 
+import time
+
 import structlog
 
 from personal_agent.events import AccessContext
+from personal_agent.memory.embeddings import generate_embedding
 from personal_agent.memory.models import MemoryQuery
+from personal_agent.memory.proactive import build_proactive_suggestions
+from personal_agent.memory.proactive_types import ProactiveMemorySuggestions
 from personal_agent.memory.protocol import (
     BroadRecallResult,
     Episode,
@@ -19,7 +24,8 @@ from personal_agent.memory.protocol import (
 )
 from personal_agent.memory.service import MemoryService
 
-logger = structlog.get_logger(__name__)
+log = structlog.get_logger(__name__)
+logger = log  # alias used by earlier methods
 
 
 class MemoryServiceAdapter:
@@ -214,3 +220,75 @@ class MemoryServiceAdapter:
             True if the driver is initialized.
         """
         return self._service.driver is not None
+
+    async def suggest_relevant(
+        self,
+        user_message: str,
+        session_entity_names: list[str],
+        session_topic_hint: str | None,
+        current_session_id: str,
+        trace_id: str,
+    ) -> ProactiveMemorySuggestions:
+        """Proactive ranked memory for context injection (ADR-0039)."""
+        log.info(
+            "proactive_memory_suggest_start",
+            trace_id=trace_id,
+            user_message_length=len(user_message or ""),
+            session_id=current_session_id or "",
+        )
+        try:
+            t0 = time.perf_counter()
+            embedding = await generate_embedding(user_message, mode="query")
+            emb_ms = (time.perf_counter() - t0) * 1000.0
+            if not any(x != 0.0 for x in embedding):
+                log.info(
+                    "proactive_memory_suggest_empty",
+                    trace_id=trace_id,
+                    reason="zero_embedding",
+                )
+                return ProactiveMemorySuggestions(candidates=[], query_embedding_ms=emb_ms)
+
+            db_entities = await self._service.fetch_session_discussed_entity_names(
+                current_session_id
+            )
+            merged = set(session_entity_names) | set(db_entities)
+
+            raw = await self._service.suggest_proactive_raw(
+                embedding,
+                current_session_id,
+                trace_id,
+            )
+            if not raw:
+                log.info(
+                    "proactive_memory_suggest_empty",
+                    trace_id=trace_id,
+                    reason="no_raw_rows",
+                )
+                return ProactiveMemorySuggestions(candidates=[], query_embedding_ms=emb_ms)
+
+            suggestions = build_proactive_suggestions(
+                raw,
+                merged,
+                session_topic_hint,
+                trace_id,
+                emb_ms,
+            )
+            if not suggestions.candidates:
+                log.info(
+                    "proactive_memory_suggest_empty",
+                    trace_id=trace_id,
+                    reason="filtered_or_budget",
+                    raw_row_count=len(raw),
+                )
+            else:
+                log.info(
+                    "proactive_memory_suggest_complete",
+                    trace_id=trace_id,
+                    candidate_count=len(suggestions.candidates),
+                    raw_row_count=len(raw),
+                    query_embedding_ms=emb_ms,
+                )
+            return suggestions
+        except Exception:
+            log.exception("proactive_memory_suggest_failed", trace_id=trace_id)
+            return ProactiveMemorySuggestions(candidates=[], query_embedding_ms=None)

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import structlog
 
+from personal_agent.events import AccessContext
 from personal_agent.memory.models import MemoryQuery
 from personal_agent.memory.protocol import (
     BroadRecallResult,
@@ -52,6 +53,8 @@ class MemoryServiceAdapter:
             service_query,
             feedback_key=trace_id,
             query_text=query.query_text,
+            access_context=AccessContext.CONTEXT_ASSEMBLY,
+            trace_id=trace_id,
         )
         return MemoryRecallResult(
             episodes=[
@@ -101,6 +104,8 @@ class MemoryServiceAdapter:
             entity_types=entity_types,
             recency_days=recency_days,
             limit=limit,
+            access_context=AccessContext.CONTEXT_ASSEMBLY,
+            trace_id=trace_id,
         )
         entities = raw.get("entities", [])
         entities_by_type: dict[str, list[dict[str, object]]] = {}

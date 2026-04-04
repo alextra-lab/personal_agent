@@ -13,8 +13,12 @@ from typing import Any
 
 from personal_agent.captains_log.capture import TaskCapture, read_captures
 from personal_agent.config import load_model_config
+from personal_agent.config.settings import get_settings
 from personal_agent.events import (
+    STREAM_MEMORY_ACCESSED,
     STREAM_MEMORY_ENTITIES_UPDATED,
+    AccessContext,
+    MemoryAccessedEvent,
     MemoryEntitiesUpdatedEvent,
     get_event_bus,
 )
@@ -196,20 +200,44 @@ class SecondBrainConsolidator:
             extraction_model=entity_extraction_role,
         )
 
+        _settings = get_settings()
+        bus = get_event_bus()
+
         # Publish memory entities updated event (Phase 4)
         if all_entity_ids:
-            event = MemoryEntitiesUpdatedEvent(
+            entities_updated_event = MemoryEntitiesUpdatedEvent(
                 entity_ids=all_entity_ids,
                 consolidation_id="consolidation",
             )
-            bus = get_event_bus()
             try:
-                await bus.publish(STREAM_MEMORY_ENTITIES_UPDATED, event)
+                await bus.publish(STREAM_MEMORY_ENTITIES_UPDATED, entities_updated_event)
             except Exception as e:
                 log.warning(
                     "memory_entities_updated_event_publish_failed",
                     error=str(e),
-                    event_id=event.event_id,
+                    event_id=entities_updated_event.event_id,
+                )
+
+        # Publish memory accessed event for consolidation traversal (Phase 4 / ADR-0042)
+        if _settings.freshness_enabled and all_entity_ids:
+            accessed_event = MemoryAccessedEvent(
+                entity_ids=all_entity_ids,
+                relationship_ids=[],
+                access_context=AccessContext.CONSOLIDATION,
+                query_type="consolidation_traversal",
+                trace_id="consolidation",
+            )
+            try:
+                await bus.publish(STREAM_MEMORY_ACCESSED, accessed_event)
+                log.debug(
+                    "consolidation_memory_access_event_published",
+                    entity_count=len(all_entity_ids),
+                )
+            except Exception as e:
+                log.warning(
+                    "memory_access_event_publish_failed",
+                    error=str(e),
+                    event_id=accessed_event.event_id,
                 )
 
         return summary

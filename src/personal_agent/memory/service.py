@@ -553,6 +553,7 @@ class MemoryService:
         query_text: str | None = None,
         access_context: AccessContext = AccessContext.SEARCH,
         trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> MemoryQueryResult:
         """Query memory graph for relevant conversations and entities.
 
@@ -565,6 +566,7 @@ class MemoryService:
             access_context: Typed context where the query originated.
                 Used for access tracking events (ADR-0042).
             trace_id: Optional request trace identifier for event correlation.
+            session_id: Optional session identifier for event correlation.
 
         Returns:
             MemoryQueryResult with conversations, entities, and relationships
@@ -759,23 +761,30 @@ class MemoryService:
                 # Remove duplicates while preserving order
                 accessed_entity_ids = list(dict.fromkeys(accessed_entity_ids))
 
-                if accessed_entity_ids and trace_id:
+                if settings.freshness_enabled and accessed_entity_ids and trace_id:
                     event = MemoryAccessedEvent(
                         entity_ids=accessed_entity_ids,
                         relationship_ids=[],
                         access_context=access_context,
                         query_type="query_memory",
                         trace_id=trace_id,
+                        session_id=session_id,
                     )
-                    # Non-blocking publish
                     bus = get_event_bus()
                     try:
                         await bus.publish(STREAM_MEMORY_ACCESSED, event)
+                        log.debug(
+                            "memory_access_event_published",
+                            trace_id=trace_id,
+                            entity_count=len(accessed_entity_ids),
+                            access_context=access_context.value,
+                        )
                     except Exception as e:
                         log.warning(
                             "memory_access_event_publish_failed",
                             error=str(e),
                             event_id=event.event_id,
+                            trace_id=trace_id,
                         )
 
                 return result
@@ -789,6 +798,9 @@ class MemoryService:
         entity_types: list[str] | None = None,
         recency_days: int = 90,
         limit: int = 20,
+        access_context: AccessContext = AccessContext.SEARCH,
+        trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> dict[str, Any]:
         """Broad memory recall: return entities and session summaries (ADR-0025).
 
@@ -799,6 +811,9 @@ class MemoryService:
             entity_types: Optional filter e.g. ["Location", "Person"]. None = all types.
             recency_days: How far back to look.
             limit: Maximum entities to return.
+            access_context: Typed context where the query originated (ADR-0042).
+            trace_id: Optional request trace identifier for event correlation.
+            session_id: Optional session identifier for event correlation.
 
         Returns:
             Dict with keys:
@@ -866,11 +881,44 @@ class MemoryService:
                 r = await db_session.run(turn_q, cutoff=cutoff)
                 turns = await r.data()
 
-                return {
+                payload = {
                     "entities": entities,
                     "sessions": sessions,
                     "turns_summary": turns,
                 }
+
+                # Publish memory access event (Phase 4 / ADR-0042)
+                if settings.freshness_enabled and trace_id and entities:
+                    accessed_entity_ids = [
+                        e["name"] for e in entities if isinstance(e, dict) and e.get("name")
+                    ]
+                    if accessed_entity_ids:
+                        event = MemoryAccessedEvent(
+                            entity_ids=accessed_entity_ids,
+                            relationship_ids=[],
+                            access_context=access_context,
+                            query_type="query_memory_broad",
+                            trace_id=trace_id,
+                            session_id=session_id,
+                        )
+                        bus = get_event_bus()
+                        try:
+                            await bus.publish(STREAM_MEMORY_ACCESSED, event)
+                            log.debug(
+                                "memory_access_event_published",
+                                trace_id=trace_id,
+                                entity_count=len(accessed_entity_ids),
+                                access_context=access_context.value,
+                            )
+                        except Exception as pub_exc:
+                            log.warning(
+                                "memory_access_event_publish_failed",
+                                error=str(pub_exc),
+                                event_id=event.event_id,
+                                trace_id=trace_id,
+                            )
+
+                return payload
 
         except Exception as e:
             log.error("query_memory_broad_failed", error=str(e), exc_info=True)

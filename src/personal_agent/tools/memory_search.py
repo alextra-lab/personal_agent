@@ -128,6 +128,7 @@ async def search_memory_executor(
     )
 
     try:
+        from personal_agent.events import AccessContext
         from personal_agent.memory.models import MemoryQuery
         from personal_agent.memory.service import MemoryService
 
@@ -152,7 +153,12 @@ async def search_memory_executor(
                 limit=limit,
                 recency_days=recency_days if recency_days > 0 else None,
             )
-            result = await memory_service.query_memory(query, query_text=query_text)
+            result = await memory_service.query_memory(
+                query,
+                query_text=query_text,
+                access_context=AccessContext.TOOL_CALL,
+                trace_id=trace_id,
+            )
             output = {
                 "matched_turns": [
                     {
@@ -173,6 +179,8 @@ async def search_memory_executor(
                 entity_types=entity_types or None,
                 recency_days=recency_days if recency_days > 0 else 3650,
                 limit=limit,
+                access_context=AccessContext.TOOL_CALL,
+                trace_id=trace_id,
             )
             output = {
                 "entities": broad.get("entities", []),

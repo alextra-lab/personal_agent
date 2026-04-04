@@ -588,7 +588,11 @@ async def chat(
     # --- Phase: session_db_lookup ---
     with timer.span("session_db_lookup"):
         if session_id:
-            session = await repo.get(UUID(session_id))
+            try:
+                parsed_session_id = UUID(session_id)
+            except ValueError:
+                raise HTTPException(status_code=422, detail="session_id must be a valid UUID")
+            session = await repo.get(parsed_session_id)
             if not session:
                 raise HTTPException(status_code=404, detail="Session not found")
         else:

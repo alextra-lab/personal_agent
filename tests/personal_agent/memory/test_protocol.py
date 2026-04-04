@@ -15,6 +15,7 @@ from personal_agent.memory.protocol import (
     MemoryType,
     RecallScope,
 )
+from personal_agent.events import AccessContext
 from personal_agent.memory.protocol_adapter import MemoryServiceAdapter
 
 
@@ -290,7 +291,11 @@ class TestMemoryServiceAdapter:
         assert result.total_entity_count == 2
         assert result.recent_sessions == [{"session_id": "s1"}]
         mock_service.query_memory_broad.assert_called_once_with(
-            entity_types=None, recency_days=90, limit=20
+            entity_types=None,
+            recency_days=90,
+            limit=20,
+            access_context=AccessContext.CONTEXT_ASSEMBLY,
+            trace_id="test",
         )
 
     @pytest.mark.asyncio

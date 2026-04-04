@@ -699,6 +699,7 @@ Full guide: `docs/reference/TOOL_INTEGRATION_GUIDE.md`
 - **Never** ignore linter errors without fixing them
 - **Never** claim work is complete without running tests + mypy + ruff
 - **Never** rationalize away coding standards
+- **Never** launch more than one pytest process at a time — the full suite takes 7+ minutes and parallel runs halt the machine (hook `.claude/hooks/check-pytest-lock.sh` enforces this)
 
 ---
 

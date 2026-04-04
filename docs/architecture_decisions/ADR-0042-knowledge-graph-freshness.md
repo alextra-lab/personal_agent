@@ -445,16 +445,16 @@ Track access metadata in Redis sorted sets (entity ID → last access timestamp,
 
 This workstream depends on ADR-0041 Phase 4 (memory.accessed event publishing). It can be parallelized with ADR-0039 (proactive memory) — both enhance `_calculate_relevance_scores()` but on independent axes (proactive memory adds a retrieval path; freshness adds a scoring signal).
 
-| Order | Work | Rationale |
-|-------|------|-----------|
-| 1 | Schema additions (nullable properties on Entity/Relationship nodes) | Zero-risk, additive — can ship immediately |
-| 2 | Event model (`MemoryAccessedEvent`, `AccessContext`) | Types-first design |
-| 3 | Publish points in memory service / protocol adapter | Depends on ADR-0041 Phase 4 event bus infra |
-| 4 | Freshness consumer (`cg:freshness`) | Batch writer — the core async pipeline |
-| 5 | Decay function + relevance scoring integration | Read path — uses data from step 4 |
-| 6 | Brainstem freshness review job | Lifecycle integration — uses data from step 4 |
-| 7 | Insights engine integration (staleness metrics) | Observability — uses data from step 6 |
-| 8 | Backfill job for existing entities | One-time migration |
+| Order | Work | Rationale | Status |
+|-------|------|-----------|--------|
+| 1 | Schema additions (nullable properties on Entity/Relationship nodes) | Zero-risk, additive — can ship immediately | ✅ FRE-161 |
+| 2 | Event model (`MemoryAccessedEvent`, `AccessContext`) | Types-first design | ✅ FRE-162 |
+| 3 | Publish points in memory service / protocol adapter | Depends on ADR-0041 Phase 4 event bus infra | ✅ FRE-163 |
+| 4 | Freshness consumer (`cg:freshness`) | Batch writer — the core async pipeline | ✅ FRE-164 |
+| 5 | Decay function + relevance scoring integration | Read path — uses data from step 4 | ✅ FRE-165 |
+| 6 | Brainstem freshness review job | Lifecycle integration — uses data from step 4 | ⬜ FRE-166 |
+| 7 | Insights engine integration (staleness metrics) | Observability — uses data from step 6 | ⬜ FRE-167 |
+| 8 | Backfill job for existing entities | One-time migration | ⬜ FRE-168 |
 
 **Estimated effort:** M (2–3 sessions). Steps 1–2 are S. Steps 3–5 are M (core value). Steps 6–8 are S (additive).
 
@@ -462,19 +462,19 @@ This workstream depends on ADR-0041 Phase 4 (memory.accessed event publishing). 
 
 ## Acceptance Criteria
 
-- [ ] Entity and Relationship nodes support `last_accessed_at`, `access_count`, `last_access_context`, `first_accessed_at` properties
-- [ ] `MemoryAccessedEvent` published from all memory query paths (`recall`, `recall_broad`, `suggest_relevant`, `query_memory`, `query_memory_broad`, consolidation traversal, `memory_search` tool)
-- [ ] Freshness consumer (`cg:freshness`) batch-updates Neo4j with < 5s latency from event publish to property update (under normal load)
-- [ ] Publishing `memory.accessed` adds < 1ms to memory query latency (consistent with ADR-0041 Phase 4 validation target)
-- [ ] `_calculate_relevance_scores()` includes freshness factor when access data is available
-- [ ] `_calculate_relevance_scores()` gracefully degrades to existing weights when freshness data is absent
-- [ ] Brainstem freshness review job classifies entities into warm/cooling/cold/dormant tiers
-- [ ] Freshness review emits telemetry: entity counts by tier, tier migration week-over-week
-- [ ] Dormant entities/relationships generate Captain's Log insight proposals
+- [x] Entity and Relationship nodes support `last_accessed_at`, `access_count`, `last_access_context`, `first_accessed_at` properties (FRE-161)
+- [x] `MemoryAccessedEvent` published from all memory query paths (`recall`, `recall_broad`, `query_memory`, `query_memory_broad`, consolidation traversal, `memory_search` tool) — `suggest_relevant` deferred to Slice 3 (FRE-163)
+- [x] Freshness consumer (`cg:freshness`) batch-updates Neo4j with < 5s latency from event publish to property update (under normal load) (FRE-164)
+- [x] Publishing `memory.accessed` adds < 1ms to memory query latency (consistent with ADR-0041 Phase 4 validation target) (FRE-163)
+- [x] `_calculate_relevance_scores()` includes freshness factor when access data is available (FRE-165)
+- [x] `_calculate_relevance_scores()` gracefully degrades to existing weights when freshness data is absent (FRE-165)
+- [x] Unit tests for decay function, freshness scoring, staleness classification (FRE-165)
+- [x] Feature flag (`freshness_enabled`) disables all freshness tracking with no behavioral change (FRE-163)
+- [ ] Brainstem freshness review job classifies entities into warm/cooling/cold/dormant tiers (FRE-166)
+- [ ] Freshness review emits telemetry: entity counts by tier, tier migration week-over-week (FRE-166)
+- [ ] Dormant entities/relationships generate Captain's Log insight proposals (FRE-166)
+- [ ] Integration test: access entity → verify consumer updates `access_count` and `last_accessed_at` within batch window (FRE-166)
 - [ ] All new code uses structured logging with `trace_id`
-- [ ] Unit tests for decay function, freshness scoring, staleness classification
-- [ ] Integration test: access entity → verify consumer updates `access_count` and `last_accessed_at` within batch window
-- [ ] Feature flag (`freshness.enabled`) disables all freshness tracking with no behavioral change
 
 ---
 

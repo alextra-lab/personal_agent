@@ -15,6 +15,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency in test en
 from personal_agent.config.settings import get_settings
 from personal_agent.events import (
     STREAM_MEMORY_ACCESSED,
+    AccessContext,
     MemoryAccessedEvent,
     get_event_bus,
 )
@@ -550,7 +551,7 @@ class MemoryService:
         query: MemoryQuery,
         feedback_key: str | None = None,
         query_text: str | None = None,
-        query_context: str = "search",
+        access_context: AccessContext = AccessContext.SEARCH,
         trace_id: str | None = None,
     ) -> MemoryQueryResult:
         """Query memory graph for relevant conversations and entities.
@@ -561,8 +562,8 @@ class MemoryService:
             query_text: Optional original user query text. When provided,
                 generates a vector embedding for hybrid similarity search
                 and enables implicit rephrase detection for feedback tracking.
-            query_context: Context where the query originated (e.g., "search",
-                "consolidation", "context_assembly"). Used for access tracking events.
+            access_context: Typed context where the query originated.
+                Used for access tracking events (ADR-0042).
             trace_id: Optional request trace identifier for event correlation.
 
         Returns:
@@ -758,10 +759,12 @@ class MemoryService:
                 # Remove duplicates while preserving order
                 accessed_entity_ids = list(dict.fromkeys(accessed_entity_ids))
 
-                if accessed_entity_ids:
+                if accessed_entity_ids and trace_id:
                     event = MemoryAccessedEvent(
                         entity_ids=accessed_entity_ids,
-                        query_context=query_context,
+                        relationship_ids=[],
+                        access_context=access_context,
+                        query_type="query_memory",
                         trace_id=trace_id,
                     )
                     # Non-blocking publish

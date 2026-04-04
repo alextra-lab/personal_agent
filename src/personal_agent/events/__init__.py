@@ -31,6 +31,7 @@ from personal_agent.events.models import (
     STREAM_MEMORY_ENTITIES_UPDATED,
     STREAM_REQUEST_CAPTURED,
     STREAM_REQUEST_COMPLETED,
+    AccessContext,
     EventBase,
     MemoryAccessedEvent,
     MemoryEntitiesUpdatedEvent,
@@ -40,6 +41,7 @@ from personal_agent.events.models import (
 )
 
 __all__ = [
+    "AccessContext",
     "CG_CONSOLIDATOR",
     "CG_ES_INDEXER",
     "CG_FRESHNESS",

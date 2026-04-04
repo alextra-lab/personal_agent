@@ -9,6 +9,7 @@ consumers fetch full data from the source system when needed.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -212,25 +213,56 @@ class SystemIdleEvent(EventBase):
 # ---------------------------------------------------------------------------
 
 
-class MemoryAccessedEvent(EventBase):
-    """Published after a memory query operation completes.
+class AccessContext(str, Enum):
+    """Discriminator for the access context of a memory query (ADR-0042).
 
-    Carries entity identifiers accessed during the query, along with the
-    query context (search, consolidation, context-assembly, etc.).
-    Consumed by ``cg:freshness`` (no-op stub in Phase 4; follow-on ADR
-    designs the actual knowledge graph freshness consumer).
+    Each value identifies the subsystem that triggered the memory access,
+    enabling the freshness consumer to prioritise updates and the insights
+    engine to distinguish usage patterns.
+    """
+
+    SEARCH = "search"
+    """Direct user-driven memory search (``query_memory`` / ``query_memory_broad``)."""
+
+    CONTEXT_ASSEMBLY = "context_assembly"
+    """Pre-LLM context assembly (``recall`` / ``recall_broad``)."""
+
+    SUGGEST_RELEVANT = "suggest_relevant"
+    """Proactive relevance suggestion (``suggest_relevant`` — ADR-0039)."""
+
+    CONSOLIDATION = "consolidation"
+    """Knowledge graph traversal during consolidation (``SecondBrainConsolidator``)."""
+
+    TOOL_CALL = "tool_call"
+    """``memory_search`` MCP tool invocation."""
+
+
+class MemoryAccessedEvent(EventBase):
+    """Published after a memory query operation completes (ADR-0042).
+
+    Carries entity and relationship identifiers accessed during the query,
+    along with a typed access context.  Consumed by ``cg:freshness`` to
+    update ``last_accessed_at``, ``access_count``, and ``last_access_context``
+    on the corresponding Neo4j nodes and relationships.
 
     Attributes:
-        entity_ids: List of Neo4j entity IDs accessed during this query.
-        query_context: Context where the query occurred (e.g., ``"search"``,
-            ``"consolidation"``, ``"context_assembly"``).
-        trace_id: Request trace identifier, if available.
+        entity_ids: Neo4j entity IDs accessed during this query.
+        relationship_ids: Neo4j relationship IDs traversed during this query.
+        access_context: Typed context that triggered the access.
+        query_type: Fine-grained query method name (e.g. ``"recall"``,
+            ``"recall_broad"``, ``"memory_search"``,
+            ``"consolidation_traversal"``).
+        trace_id: Request trace identifier for event correlation.
+        session_id: Session that originated the request, if available.
     """
 
     event_type: Literal["memory.accessed"] = "memory.accessed"
     entity_ids: list[str]
-    query_context: str
-    trace_id: str | None = None
+    relationship_ids: list[str]
+    access_context: AccessContext
+    query_type: str
+    trace_id: str
+    session_id: str | None = None
 
 
 class MemoryEntitiesUpdatedEvent(EventBase):

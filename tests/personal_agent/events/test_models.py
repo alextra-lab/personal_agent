@@ -9,18 +9,22 @@ from personal_agent.events.models import (
     CG_CONSOLIDATOR,
     CG_ES_INDEXER,
     CG_FEEDBACK,
+    CG_FRESHNESS,
     CG_INSIGHTS,
     CG_PROMOTION,
     CG_SESSION_WRITER,
     STREAM_CONSOLIDATION_COMPLETED,
     STREAM_FEEDBACK_RECEIVED,
+    STREAM_MEMORY_ACCESSED,
     STREAM_PROMOTION_ISSUE_CREATED,
     STREAM_REQUEST_CAPTURED,
     STREAM_REQUEST_COMPLETED,
     STREAM_SYSTEM_IDLE,
+    AccessContext,
     ConsolidationCompletedEvent,
     EventBase,
     FeedbackReceivedEvent,
+    MemoryAccessedEvent,
     PromotionIssueCreatedEvent,
     RequestCapturedEvent,
     RequestCompletedEvent,
@@ -202,6 +206,99 @@ class TestPhase3Events:
         assert parsed.trigger == "lifecycle_loop"
 
 
+class TestAccessContext:
+    """AccessContext enum (ADR-0042)."""
+
+    def test_all_five_contexts_defined(self) -> None:
+        members = {m.value for m in AccessContext}
+        assert members == {
+            "search",
+            "context_assembly",
+            "consolidation",
+            "suggest_relevant",
+            "tool_call",
+        }
+
+    def test_is_str_subclass(self) -> None:
+        """AccessContext values are plain strings for JSON serialisation."""
+        assert isinstance(AccessContext.SEARCH, str)
+        assert AccessContext.SEARCH == "search"
+
+    def test_roundtrip_via_value(self) -> None:
+        for ctx in AccessContext:
+            assert AccessContext(ctx.value) is ctx
+
+
+class TestMemoryAccessedEvent:
+    """MemoryAccessedEvent model (ADR-0042)."""
+
+    def _make(self, **kwargs: object) -> MemoryAccessedEvent:
+        defaults: dict[str, object] = dict(
+            entity_ids=["e1", "e2"],
+            relationship_ids=["r1"],
+            access_context=AccessContext.SEARCH,
+            query_type="query_memory",
+            trace_id="trace-abc",
+        )
+        defaults.update(kwargs)
+        return MemoryAccessedEvent(**defaults)  # type: ignore[arg-type]
+
+    def test_event_type_discriminator(self) -> None:
+        event = self._make()
+        assert event.event_type == "memory.accessed"
+
+    def test_frozen(self) -> None:
+        event = self._make()
+        with pytest.raises(Exception):
+            event.trace_id = "other"  # type: ignore[misc]
+
+    def test_access_context_typed(self) -> None:
+        event = self._make(access_context=AccessContext.CONTEXT_ASSEMBLY)
+        assert event.access_context is AccessContext.CONTEXT_ASSEMBLY
+
+    def test_session_id_optional(self) -> None:
+        assert self._make().session_id is None
+        assert self._make(session_id="s1").session_id == "s1"
+
+    def test_serialization_roundtrip_dict(self) -> None:
+        event = self._make(
+            entity_ids=["e1"],
+            relationship_ids=["r1"],
+            access_context=AccessContext.TOOL_CALL,
+            query_type="memory_search",
+            trace_id="t-1",
+            session_id="s-1",
+        )
+        data = event.model_dump(mode="json")
+        restored = MemoryAccessedEvent.model_validate(data)
+        assert restored.entity_ids == ["e1"]
+        assert restored.relationship_ids == ["r1"]
+        assert restored.access_context is AccessContext.TOOL_CALL
+        assert restored.query_type == "memory_search"
+        assert restored.trace_id == "t-1"
+        assert restored.session_id == "s-1"
+        assert restored.event_type == "memory.accessed"
+
+    def test_json_roundtrip(self) -> None:
+        event = self._make()
+        restored = MemoryAccessedEvent.model_validate_json(event.model_dump_json())
+        assert restored == event
+
+    def test_parse_stream_event_dispatches(self) -> None:
+        event = self._make(access_context=AccessContext.CONSOLIDATION)
+        payload = event.model_dump(mode="json")
+        parsed = parse_stream_event(payload)
+        assert isinstance(parsed, MemoryAccessedEvent)
+        assert parsed.access_context is AccessContext.CONSOLIDATION
+        assert parsed.relationship_ids == event.relationship_ids
+
+    def test_access_context_serialises_as_string(self) -> None:
+        """JSON payload carries the string value, not the enum member name."""
+        event = self._make(access_context=AccessContext.SUGGEST_RELEVANT)
+        data = event.model_dump(mode="json")
+        assert data["access_context"] == "suggest_relevant"
+
+
 class TestConstants:
     """Stream and consumer group constants."""
 
@@ -229,3 +326,7 @@ class TestConstants:
         assert CG_PROMOTION == "cg:promotion"
         assert CG_CAPTAIN_LOG == "cg:captain-log"
         assert CG_FEEDBACK == "cg:feedback"
+
+    def test_phase4_constants(self) -> None:
+        assert STREAM_MEMORY_ACCESSED == "stream:memory.accessed"
+        assert CG_FRESHNESS == "cg:freshness"

@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-04
+> **Last updated**: 2026-04-04 (FRE-162)
 
 ---
 
@@ -10,7 +10,7 @@
 
 | # | Work Item | Linear | Spec / ADR | Status |
 |---|-----------|--------|------------|--------|
-| 1 | Event Bus — Redis Streams (Phase 4) | [Project](https://linear.app/frenchforest/project/event-bus-redis-streams-d0b2f16e97ed) | ADR-0041 | FRE-159 Phase 3 Done; next Phase 4 (memory.accessed) |
+| 1 | Event Bus — Redis Streams (Phase 4) | [Project](https://linear.app/frenchforest/project/event-bus-redis-streams-d0b2f16e97ed) | ADR-0041 | FRE-160 ✅ FRE-161 ✅ FRE-162 ✅; next FRE-163 (publish points) |
 | 2 | EVAL-10 run (Context Intelligence final verification) | — | `specs/CONTEXT_INTELLIGENCE_SPEC.md` | Pending |
 
 ## Upcoming — Needs Approval
@@ -54,6 +54,8 @@ Linear Feedback Channel (ADR-0040)  ← independent, can run in parallel
 
 | Phase | Completed | Summary |
 |-------|-----------|---------|
+| KG Freshness 1–2/7 (FRE-161, FRE-162) | 2026-04-04 | FRE-161: Neo4j schema (`last_accessed_at`, `access_count`, `last_access_context`, `first_accessed_at`) + Cypher constraint. FRE-162: `AccessContext` enum, `MemoryAccessedEvent` (typed fields), `FreshnessSettings` in config, unit tests. |
+| Event Bus Phase 4 foundation (FRE-160) | 2026-04-04 | `stream:memory.accessed` + `stream:memory.entities_updated`; `cg:freshness` group; `MemoryAccessedEvent` stub publish in `query_memory()`; `MemoryEntitiesUpdatedEvent` stub in consolidator. |
 | Event Bus Phase 2 (FRE-158) | 2026-04-04 | `request.completed` → `cg:es-indexer` + `cg:session-writer`; `parse_stream_event`; consumer retries + dead-letter; `/chat` durable when bus enabled; FRE-51 session waiter. |
 | Event Bus Phase 1 (FRE-157) | 2026-04-03 | Redis 7 infra, EventBus protocol, RedisStreamBus, ConsumerRunner, `request.captured` → consolidator migration. Feature flag off by default; polling fallback retained. |
 | ADR-0028 research (CLI vs MCP) | 2026-04-02 | FRE-99 complete. ADR accepted: hybrid three-tier model (native > CLI > MCP). Implementation project created. |
@@ -74,8 +76,8 @@ Linear Feedback Channel (ADR-0040)  ← independent, can run in parallel
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| 0042 | Knowledge Graph Freshness via Access Tracking | Proposed |
-| 0041 | Event Bus — Redis Streams | Accepted (Phases 1–2 implemented) |
+| 0042 | Knowledge Graph Freshness via Access Tracking | Accepted (2/7 issues done) |
+| 0041 | Event Bus — Redis Streams | Accepted (Phases 1–4 foundation implemented) |
 | 0040 | Linear as Async Feedback Channel | Approved |
 | 0039 | Proactive Memory via `suggest_relevant()` | Proposed |
 | 0038 | Context Compressor Model | Accepted (implemented) |

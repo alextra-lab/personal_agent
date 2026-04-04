@@ -575,6 +575,59 @@ class AppConfig(BaseSettings):
         description="Linear project name for promoted improvement issues",
     )
 
+    # Knowledge Graph Freshness (ADR-0042)
+    freshness_enabled: bool = Field(
+        default=False,
+        description="Enable knowledge graph freshness tracking (ADR-0042). "
+        "When False, memory.accessed events are published but the cg:freshness consumer no-ops.",
+    )
+    freshness_half_life_days: float = Field(
+        default=30.0,
+        gt=0,
+        description="Freshness decay half-life in days. "
+        "An entity loses half its freshness score every this many days without access.",
+    )
+    freshness_cold_threshold_days: float = Field(
+        default=180.0,
+        gt=0,
+        description="Days since last access after which an entity is considered dormant "
+        "and a Captain's Log archival proposal may be generated.",
+    )
+    freshness_frequency_boost_alpha: float = Field(
+        default=0.1,
+        gt=0,
+        description="Alpha coefficient in the frequency boost formula: "
+        "boost = min(1 + α × ln(1 + access_count), max_boost).",
+    )
+    freshness_frequency_boost_max: float = Field(
+        default=1.5,
+        gt=1.0,
+        description="Maximum multiplier applied by the frequency boost.",
+    )
+    freshness_consumer_batch_window_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        description="cg:freshness consumer accumulates events for this many seconds "
+        "before issuing a batch Neo4j update.",
+    )
+    freshness_consumer_batch_max_events: int = Field(
+        default=50,
+        ge=1,
+        description="cg:freshness consumer flushes early when this many events accumulate "
+        "within the batch window.",
+    )
+    freshness_review_schedule_cron: str = Field(
+        default="0 3 * * 0",
+        description="Cron expression for the weekly staleness-review brainstem job (default: Sunday 03:00 UTC).",
+    )
+    freshness_relevance_weight: float = Field(
+        default=0.15,
+        ge=0.0,
+        le=1.0,
+        description="Weight allocated to the freshness signal in _calculate_relevance_scores(). "
+        "Only active when freshness_enabled=True and access data exists.",
+    )
+
 
 _settings: AppConfig | None = None
 

@@ -310,9 +310,6 @@ def _fallback_reply_from_tool_results(ctx: ExecutionContext) -> str:
         else:
             err = r.get("error") or "Unknown error"
             lines.append(f"- {tool_name}: failed ({err})")
-    lines.append(
-        "If you'd like, try again with an explicit directory path, e.g. “List 3 non-hidden files in /path/to/directory”."
-    )
     return "\n".join(lines)
 
 
@@ -1159,11 +1156,10 @@ async def step_llm_call(
         llm_client = get_llm_client(role_name=model_role.value)
 
         # Get tools for this model role and mode
-        # Per spec (ORCHESTRATOR_CORE_SPEC_v0.1.md): synthesis should use tools=None
-        # Detect if we're synthesizing (last messages are tool results OR previous state was TOOL_EXECUTION)
-        is_synthesizing = (len(ctx.messages) > 0 and ctx.messages[-1].get("role") == "tool") or (
-            len(ctx.steps) > 0 and ctx.steps[-1].get("type") == "tool_call"
-        )
+        # ReAct loop: always offer tools so the model can chain calls until it
+        # decides to synthesize on its own.  Bounded by orchestrator_max_tool_iterations
+        # in step_tool_execution, which forces TaskState.SYNTHESIS when the limit is hit.
+        is_synthesizing = False
 
         # ── Strategy-aware tool setup (ADR-0032) ──────────────────────
         from personal_agent.llm_client.models import ToolCallingStrategy
@@ -1296,8 +1292,6 @@ async def step_llm_call(
         # Call LocalLLMClient.respond()
         # Pass previous_response_id for stateful /v1/responses API
         max_retries_override: int | None = 1 if tools else None
-        if is_synthesizing:
-            max_retries_override = 0
 
         # /no_think injection for tool flow (per user preference):
         # - Tool-request call: append suffix to the last user message.
@@ -1310,21 +1304,6 @@ async def step_llm_call(
 
         if tools:
             request_messages = _append_no_think_to_last_user_message(request_messages)
-        elif is_synthesizing:
-            # Check if we're using a Mistral model (strict alternation requirements)
-            # Mistral models expect: user -> assistant (tool_call) -> tool -> assistant (synthesis)
-            # They don't want a user nudge between tool results and synthesis
-            is_mistral = model_config and "mistral" in model_config.id.lower()
-
-            if not is_mistral:
-                request_messages = _append_no_think_synthesis_nudge(request_messages)
-            else:
-                log.info(
-                    "synthesis_nudge_skipped_for_mistral",
-                    trace_id=ctx.trace_id,
-                    model_id=model_config.id if model_config else None,
-                    reason="Mistral models require direct synthesis after tool results",
-                )
 
         # Validate and fix conversation role alternation for strict models (e.g., Mistral).
         request_messages = _validate_and_fix_conversation_roles(request_messages)
@@ -1370,21 +1349,6 @@ async def step_llm_call(
         # Extract response content and tool calls
         response_content = response["content"] or ""
         response_tool_calls = response["tool_calls"] or []
-
-        # During synthesis, ignore tool calls (per spec: synthesis should not use tools)
-        # This prevents the model from making additional tool calls after tool execution
-        if is_synthesizing and response_tool_calls:
-            log.warning(
-                "tool_calls_ignored_during_synthesis",
-                trace_id=ctx.trace_id,
-                tool_count=len(response_tool_calls),
-                message="Ignoring tool calls during synthesis phase",
-            )
-            response_tool_calls = []
-            # If the model is still trying to call tools during synthesis, we should not
-            # surface tool-call markup as the final user reply.
-            if "[TOOL_REQUEST]" in response_content or "<tool_call>" in response_content:
-                response_content = ""
 
         # Track response_id for stateful /v1/responses API
         if response.get("response_id"):

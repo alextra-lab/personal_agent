@@ -395,6 +395,19 @@ class AppConfig(BaseSettings):
     # Cloud API secrets (model identity lives in config/models.yaml — ADR-0031)
     anthropic_api_key: str | None = Field(default=None, description="Anthropic API key for Claude")
     openai_api_key: str | None = Field(default=None, description="OpenAI API key")
+
+    # Perplexity AI (native tool — ADR-0028 Phase 2)
+    perplexity_api_key: str | None = Field(default=None, description="Perplexity API key")
+    perplexity_base_url: str = Field(
+        default="https://api.perplexity.ai",
+        description="Perplexity API base URL",
+    )
+    perplexity_timeout_seconds: int = Field(
+        default=90,
+        ge=10,
+        le=300,
+        description="Timeout for Perplexity API requests (research mode can be slow)",
+    )
     cloud_weekly_budget_usd: float = Field(
         default=5.0,
         description=(

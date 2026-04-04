@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-04 (Proactive Memory FRE-174–176 implemented; FRE-177 harness + table TBD)
+> **Last updated**: 2026-04-04 (CLI-First Tool Migration FRE-171/170/173/172/188 complete; ReAct multi-tool loop live)
 
 ---
 
@@ -20,7 +20,7 @@ Ordered by recommended implementation sequence. Dependency chains are encoded in
 | # | Project | Linear | ADR / Spec | Depends On |
 |---|---------|--------|------------|------------|
 | 4 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |
-| 5 | CLI-First Tool Migration | [Project](https://linear.app/frenchforest/project/cli-first-tool-migration-5b948aeb13bb) | ADR-0028 | FRE-99 (Done) |
+| 5 | ~~CLI-First Tool Migration~~ | ~~[Project](https://linear.app/frenchforest/project/cli-first-tool-migration-5b948aeb13bb)~~ | ~~ADR-0028~~ | ~~Done~~ |
 | 6 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2, `specs/RECALL_CLASSIFIER_L2_DESIGN.md` | Proactive Memory MVP done (FRE-176) |
 | 7 | Phase 3.0 Daily-Use Interface | [Project](https://linear.app/frenchforest/project/30-daily-use-interface-60a517bd90f6) | — | CLI Migration (FRE-172) |
 
@@ -57,6 +57,7 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 | Event Bus Phase 4 foundation (FRE-160) | 2026-04-04 | `stream:memory.accessed` + `stream:memory.entities_updated`; `cg:freshness` group; `MemoryAccessedEvent` stub publish in `query_memory()`; `MemoryEntitiesUpdatedEvent` stub in consolidator. |
 | Event Bus Phase 2 (FRE-158) | 2026-04-04 | `request.completed` → `cg:es-indexer` + `cg:session-writer`; `parse_stream_event`; consumer retries + dead-letter; `/chat` durable when bus enabled; FRE-51 session waiter. |
 | Event Bus Phase 1 (FRE-157) | 2026-04-03 | Redis 7 infra, EventBus protocol, RedisStreamBus, ConsumerRunner, `request.captured` → consolidator migration. Feature flag off by default; polling fallback retained. |
+| CLI-First Tool Migration (FRE-171/170/173/172/188) + ReAct loop | 2026-04-04 | ADR-0028 fully implemented. 5 native tools: `query_elasticsearch`, `perplexity_query`, `fetch_url`, `get_library_docs`, `run_sysdiag`. MCP ES/Perplexity/fetch/Context7/misc tools disabled in governance. `TOOL_INTEGRATION_GUIDE.md` + `SKILL_TEMPLATE.md` created. `is_synthesizing` gate removed — agent now chains tool calls (ReAct loop) until deciding to synthesize; bounded by `orchestrator_max_tool_iterations`. |
 | ADR-0028 research (CLI vs MCP) | 2026-04-02 | FRE-99 complete. ADR accepted: hybrid three-tier model (native > CLI > MCP). Implementation project created. |
 | Context Intelligence — Phase 4 ENHANCE | 2026-03-30 | Rolling LLM summarization (ADR-0038), async compression, structured context assembly, KV cache prefix stability, cross-session eval (CP-30/CP-31), proactive memory design (ADR-0039), recall classifier L2 design. EVAL-10 pending. |
 | Context Intelligence — Phase 3 VERIFY (EVAL-09) | 2026-03-30 | 34/35 paths, 176/177 assertions (99.4%). All Phase 3 gates met. |
@@ -88,7 +89,7 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 | 0032 | Robust Tool Calling Strategy | Accepted (implemented) |
 | 0031 | Model Config Consolidation | Accepted (implemented) |
 | 0030 | Captain's Log Dedup & Self-Improvement Pipeline | Accepted (implemented) |
-| 0028 | External Tool CLI Migration (MCP → Native/CLI) | Accepted |
+| 0028 | External Tool CLI Migration (MCP → Native/CLI) | Accepted (implemented) |
 
 ---
 

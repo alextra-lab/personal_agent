@@ -1,6 +1,6 @@
 # Claude Code Configuration for Personal Agent
 
-> Last updated: 2026-03-19
+> Last updated: 2026-04-04
 
 This file provides Claude with comprehensive context about the **Personal Agent** project structure, architectural decisions, development standards, and workflow policies. Claude should apply all guidelines in this file when assisting with development tasks.
 
@@ -662,6 +662,17 @@ uv run ruff check src/
 
 ## When Claude Should
 
+### Tool Integration (ADR-0028 — CLI-First, as of 2026-04-04)
+
+**RULE: New tools MUST justify why Tier 1 or Tier 2 is insufficient before using Tier 3 (MCP).**
+
+Three-tier decision tree:
+1. **Tier 1 — Native Python** (`src/personal_agent/tools/<name>.py`): Default for REST APIs, local services. Zero subprocess overhead. Pattern: httpx + `ToolDefinition` + executor + governance entry + tests.
+2. **Tier 2 — CLI + SKILL.md** (`docs/skills/<name>.md`): When a mature CLI exists (gh, docker, git, curl). No Python code needed; agent reads SKILL.md and invokes CLI directly.
+3. **Tier 3 — MCP** (reserved): Only for browser automation, bidirectional streaming, or stateful protocol requirements. Requires explicit ADR justification.
+
+Full guide: `docs/reference/TOOL_INTEGRATION_GUIDE.md`
+
 ### ✅ DO
 
 - **Always** check Linear issue status before implementing (must be Approved)
@@ -674,6 +685,7 @@ uv run ruff check src/
 - **Always** place files according to file organization rules
 - **Always** use `personal_agent.config.settings` for configuration access
 - **Always** ask for clarification if a task seems to violate standards
+- **Always** use Tier 1/2 for new tools; justify before choosing Tier 3 (MCP)
 
 ### ❌ DON'T
 

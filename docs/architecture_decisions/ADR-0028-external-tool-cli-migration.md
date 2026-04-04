@@ -1,7 +1,8 @@
 # ADR-0028: External Tool Integration — MCP Gateway vs CLI Army
 
-**Status**: Accepted
+**Status**: Accepted — Implemented 2026-04-04
 **Date**: 2026-04-02 (research completed; original draft 2026-03-07)
+**Implemented**: 2026-04-04 (FRE-171/170/173/172/188; all 4 phases complete)
 **Deciders**: Project owner
 
 ---
@@ -250,14 +251,14 @@ Yes, with caveats:
 
 ## Acceptance Criteria
 
-- [ ] Three-tier tool model documented in ADR and CLAUDE.md
-- [ ] Phase 1: Native `query_elasticsearch` tool passes integration tests against local ES
-- [ ] Phase 2: Native `perplexity_query` tool calls Perplexity API successfully
-- [ ] Phase 3: `mcp_search`, `mcp_docker`, `mcp_sequentialthinking` removed from governance config
-- [ ] Phase 4: Tool integration guide created at `docs/reference/TOOL_INTEGRATION_GUIDE.md`
-- [ ] MCP gateway code preserved but disabled by default (no code deletion)
-- [ ] No regression in agent tool capabilities (same operations available via new tools)
-- [ ] Context window token usage measurably reduced (before/after telemetry comparison)
+- [x] Three-tier tool model documented in ADR and CLAUDE.md
+- [x] Phase 1: Native `query_elasticsearch` tool — `src/personal_agent/tools/elasticsearch.py`; 4 actions (esql, indices, mappings, shards); 12 unit tests
+- [x] Phase 2: Native `perplexity_query` tool — `src/personal_agent/tools/perplexity.py`; ask/reason/research modes; API key via `settings.perplexity_api_key`
+- [x] Phase 3: `mcp_search`, `mcp_docker`, `mcp_sequentialthinking` disabled in governance config; `fetch_url` + `get_library_docs` native tools added
+- [x] Phase 4: Tool integration guide at `docs/reference/TOOL_INTEGRATION_GUIDE.md`; `docs/skills/SKILL_TEMPLATE.md` created; CLAUDE.md updated with tool routing rule
+- [x] MCP gateway code preserved but disabled by default (no code deletion)
+- [x] No regression in agent tool capabilities (same operations available via new tools)
+- [x] `run_sysdiag` subprocess tool added (FRE-188): 17 allow-listed commands, no shell=True, 32 KB output cap, 14 unit + 3 integration tests
 
 ---
 

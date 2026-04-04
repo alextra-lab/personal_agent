@@ -222,23 +222,3 @@ def build_feedback_suppression_handler() -> Any:
     return handler
 
 
-def build_freshness_handler() -> Any:
-    """Build no-op handler for memory access tracking (Phase 4 stub).
-
-    Acknowledges ``memory.accessed`` and ``memory.entities_updated`` events
-    immediately. This is a placeholder for the follow-on ADR that designs
-    the actual knowledge graph freshness consumer.
-
-    Returns:
-        Async handler for ``cg:freshness`` on ``stream:memory.*`` events.
-    """
-
-    async def handler(event: EventBase) -> None:
-        # Phase 4 stub: just acknowledge receipt
-        log.debug(
-            "freshness_event_acknowledged",
-            event_id=event.event_id,
-            event_type=event.event_type,
-        )
-
-    return handler

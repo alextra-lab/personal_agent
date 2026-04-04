@@ -1037,6 +1037,14 @@ class MemoryService:
         4. Vector similarity: 0-0.15
         5. Reranker score: 0-0.35
 
+        Full pipeline + freshness (all signals including access data):
+        1. Recency: 0-0.15
+        2. Entity match: 0-0.20
+        3. Entity importance: 0-0.05
+        4. Vector similarity: 0-0.15
+        5. Reranker score: 0-0.30
+        6. Freshness: 0-0.15
+
         Args:
             conversations: List of conversations to score.
             query: Original query with entity filters.
@@ -1090,25 +1098,71 @@ class MemoryService:
             except Exception as e:
                 log.warning("entity_importance_fetch_failed", error=str(e))
 
+        # Fetch freshness data when access tracking is enabled (ADR-0042 Step 5)
+        # entity_name -> freshness score in [0.0, 1.0]
+        freshness_scores: dict[str, float] = {}
+        current_settings = get_settings()
+        if current_settings.freshness_enabled and query.entity_names and self.driver:
+            from personal_agent.memory.freshness import compute_freshness  # noqa: PLC0415
+
+            try:
+                async with self.driver.session() as session:
+                    result = await session.run(
+                        """
+                        MATCH (e:Entity)
+                        WHERE e.name IN $entity_names
+                          AND e.access_count IS NOT NULL
+                          AND e.access_count > 0
+                        RETURN e.name AS name,
+                               e.last_accessed_at AS last_accessed_at,
+                               e.access_count AS access_count
+                        """,
+                        entity_names=query.entity_names,
+                    )
+                    async for record in result:
+                        raw_ts = record.get("last_accessed_at")
+                        last_accessed_at: datetime | None = None
+                        if raw_ts is not None:
+                            try:
+                                last_accessed_at = datetime.fromisoformat(str(raw_ts))
+                            except (ValueError, TypeError):
+                                last_accessed_at = None
+                        fs = compute_freshness(
+                            last_accessed_at=last_accessed_at,
+                            access_count=int(record.get("access_count") or 0),
+                            half_life_days=current_settings.freshness_half_life_days,
+                            alpha=current_settings.freshness_frequency_boost_alpha,
+                            max_boost=current_settings.freshness_frequency_boost_max,
+                        )
+                        freshness_scores[record["name"]] = fs
+            except Exception as e:
+                log.warning("freshness_scores_fetch_failed", error=str(e))
+
         # Determine weight scheme based on available signals
         use_vector = bool(_vector_scores)
         use_reranker = bool(_reranker_scores)
+        use_freshness = current_settings.freshness_enabled and bool(freshness_scores)
+        # freshness_weight from config; only active when access data is available.
+        # When active, all other weights are scaled by (1 - w_freshness) so they
+        # sum to 1.0 regardless of which signals are present (graceful degradation).
+        w_freshness_cfg = current_settings.freshness_relevance_weight if use_freshness else 0.0
+        w_scale = 1.0 - w_freshness_cfg  # redistribution factor for non-freshness signals
         if use_vector and use_reranker:
-            w_recency = 0.20
-            w_entity_match = 0.20
-            w_importance = 0.10
-            w_vector = 0.15
-            w_reranker = 0.35
+            w_recency = 0.20 * w_scale
+            w_entity_match = 0.20 * w_scale
+            w_importance = 0.10 * w_scale
+            w_vector = 0.15 * w_scale
+            w_reranker = 0.35 * w_scale
         elif use_vector:
-            w_recency = 0.30
-            w_entity_match = 0.30
-            w_importance = 0.15
-            w_vector = 0.25
+            w_recency = 0.30 * w_scale
+            w_entity_match = 0.30 * w_scale
+            w_importance = 0.15 * w_scale
+            w_vector = 0.25 * w_scale
             w_reranker = 0.0
         else:
-            w_recency = 0.40
-            w_entity_match = 0.40
-            w_importance = 0.20
+            w_recency = 0.40 * w_scale
+            w_entity_match = 0.40 * w_scale
+            w_importance = 0.20 * w_scale
             w_vector = 0.0
             w_reranker = 0.0
 
@@ -1144,10 +1198,20 @@ class MemoryService:
             else:
                 # Non-hybrid weights for this conversation (redistribute reranker weight)
                 if conv_has_reranker:
-                    cw_recency, cw_entity, cw_importance, cw_vector = 0.25, 0.25, 0.15, 0.0
-                    cw_reranker = 0.35
+                    cw_recency, cw_entity, cw_importance, cw_vector = (
+                        0.25 * w_scale,
+                        0.25 * w_scale,
+                        0.15 * w_scale,
+                        0.0,
+                    )
+                    cw_reranker = 0.35 * w_scale
                 else:
-                    cw_recency, cw_entity, cw_importance, cw_vector = 0.40, 0.40, 0.20, 0.0
+                    cw_recency, cw_entity, cw_importance, cw_vector = (
+                        0.40 * w_scale,
+                        0.40 * w_scale,
+                        0.20 * w_scale,
+                        0.0,
+                    )
                     cw_reranker = 0.0
 
             score = 0.0
@@ -1186,6 +1250,19 @@ class MemoryService:
             # 5. Reranker score (cross-attention relevance)
             if conv_has_reranker:
                 score += conv_reranker_score * cw_reranker
+
+            # 6. Freshness score (access recency × frequency, ADR-0042)
+            # Uses max freshness score across matched query entities for this conversation.
+            # When no freshness data is available for any of this conversation's entities,
+            # the factor is skipped and the redistributed weight stays with the other signals.
+            if use_freshness and conv.key_entities:
+                conv_freshness_scores = [
+                    freshness_scores[e]
+                    for e in conv.key_entities
+                    if e in freshness_scores and freshness_scores[e] > 0.0
+                ]
+                if conv_freshness_scores:
+                    score += max(conv_freshness_scores) * w_freshness_cfg
 
             scores[conv.turn_id] = min(score, 1.0)  # Cap at 1.0
 

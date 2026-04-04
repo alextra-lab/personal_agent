@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-04 (FRE-163)
+> **Last updated**: 2026-04-04 (FRE-165)
 
 ---
 
@@ -10,7 +10,7 @@
 
 | # | Work Item | Linear | Spec / ADR | Status |
 |---|-----------|--------|------------|--------|
-| 1 | Event Bus — Redis Streams (Phase 4) | [Project](https://linear.app/frenchforest/project/event-bus-redis-streams-d0b2f16e97ed) | ADR-0041 | FRE-160 ✅ FRE-161 ✅ FRE-162 ✅ FRE-163 ✅; next FRE-164 (freshness consumer) |
+| 1 | Event Bus — Redis Streams (Phase 4) | [Project](https://linear.app/frenchforest/project/event-bus-redis-streams-d0b2f16e97ed) | ADR-0041 | FRE-160 ✅ FRE-161 ✅ FRE-162 ✅ FRE-163 ✅ FRE-164 ✅ FRE-165 ✅; next FRE-166 (staleness review job) |
 | 2 | EVAL-10 run (Context Intelligence final verification) | — | `specs/CONTEXT_INTELLIGENCE_SPEC.md` | Pending |
 
 ## Upcoming — Needs Approval
@@ -54,6 +54,7 @@ Linear Feedback Channel (ADR-0040)  ← independent, can run in parallel
 
 | Phase | Completed | Summary |
 |-------|-----------|---------|
+| KG Freshness 5–6/7 (FRE-164, FRE-165) | 2026-04-04 | FRE-164: `FreshnessConsumer` batch writer — buffers `memory.accessed` events (5 s window / 50 max), deduplicates per entity, single Cypher UNWIND flush to Neo4j; wired into `app.py` lifespan. FRE-165: `compute_freshness` (exponential decay × frequency boost) + `classify_staleness` (WARM/COOLING/COLD/DORMANT tiers); freshness integrated as step 6 in `_calculate_relevance_scores()` with `w_scale` weight redistribution. |
 | KG Freshness 3/7 (FRE-163) | 2026-04-04 | `memory.accessed` events published from all 6 active query paths (`query_memory`, `query_memory_broad`, `recall`, `recall_broad`, `memory_search` tool, consolidation traversal). Feature flag gates all publishing. `session_id` 422 fix in `/chat`. |
 | KG Freshness 1–2/7 (FRE-161, FRE-162) | 2026-04-04 | FRE-161: Neo4j schema (`last_accessed_at`, `access_count`, `last_access_context`, `first_accessed_at`) + Cypher constraint. FRE-162: `AccessContext` enum, `MemoryAccessedEvent` (typed fields), `FreshnessSettings` in config, unit tests. |
 | Event Bus Phase 4 foundation (FRE-160) | 2026-04-04 | `stream:memory.accessed` + `stream:memory.entities_updated`; `cg:freshness` group; `MemoryAccessedEvent` stub publish in `query_memory()`; `MemoryEntitiesUpdatedEvent` stub in consolidator. |

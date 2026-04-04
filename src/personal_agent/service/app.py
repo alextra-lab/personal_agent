@@ -38,6 +38,7 @@ scheduler: BrainstemScheduler | None = None
 metrics_daemon: MetricsDaemon | None = None
 mcp_adapter: "MCPGatewayAdapter | None" = None  # type: ignore  # noqa: F821
 consumer_runner: "ConsumerRunner | None" = None  # type: ignore  # noqa: F821
+freshness_consumer: "FreshnessConsumer | None" = None  # type: ignore  # noqa: F821
 
 # Fire-and-forget assistant message appends: session_id -> task (FRE-51).
 # Next request for same session awaits this so history is consistent before hydration.
@@ -121,7 +122,7 @@ async def _preflight_check_tcp(service: str, host: str, port: int) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan management."""
-    global es_handler, memory_service, scheduler, metrics_daemon, mcp_adapter, consumer_runner
+    global es_handler, memory_service, scheduler, metrics_daemon, mcp_adapter, consumer_runner, freshness_consumer
 
     # Startup
     log.info("service_starting")
@@ -292,12 +293,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         STREAM_SYSTEM_IDLE,
         EventBase,
     )
+    from personal_agent.events.consumers.freshness_consumer import FreshnessConsumer
     from personal_agent.events.pipeline_handlers import (
         build_consolidation_insights_handler,
         build_consolidation_promotion_handler,
         build_feedback_insights_handler,
         build_feedback_suppression_handler,
-        build_freshness_handler,
         build_promotion_captain_log_handler,
     )
     from personal_agent.events.redis_backend import RedisStreamBus
@@ -382,18 +383,28 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             handler=build_feedback_suppression_handler(),
         )
 
-        # Phase 4 — memory access tracking (no-op stub, placeholder for follow-on ADR)
+        # Phase 4 — memory access tracking (FRE-164 / ADR-0042 Step 4)
+        _settings = get_settings()
+        freshness_consumer = FreshnessConsumer(
+            batch_window_seconds=_settings.freshness_consumer_batch_window_seconds,
+            batch_max_events=_settings.freshness_consumer_batch_max_events,
+        )
+        await freshness_consumer.start()
         await active_bus.subscribe(
             stream=STREAM_MEMORY_ACCESSED,
             group=CG_FRESHNESS,
             consumer_name="freshness-access-0",
-            handler=build_freshness_handler(),
+            handler=freshness_consumer.handle,
         )
+        # memory.entities_updated events are informational at this phase — no-op ACK
+        async def _noop_freshness_entities(event: EventBase) -> None:
+            pass
+
         await active_bus.subscribe(
             stream=STREAM_MEMORY_ENTITIES_UPDATED,
             group=CG_FRESHNESS,
             consumer_name="freshness-entities-0",
-            handler=build_freshness_handler(),
+            handler=_noop_freshness_entities,
         )
 
         consumer_runner = ConsumerRunner(active_bus)
@@ -411,6 +422,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if consumer_runner is not None:
         await consumer_runner.stop()
         consumer_runner = None
+    if freshness_consumer is not None:
+        await freshness_consumer.stop()
+        freshness_consumer = None
     active_bus_shutdown = get_event_bus()
     if not isinstance(active_bus_shutdown, NoOpBus):
         await active_bus_shutdown.close()

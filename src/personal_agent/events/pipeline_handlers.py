@@ -20,6 +20,27 @@ from personal_agent.telemetry import get_logger
 log = get_logger(__name__)
 
 
+def _default_elasticsearch_async_client() -> Any | None:
+    """Return the app's AsyncElasticsearch client when Captain's Log ES is wired.
+
+    Avoids creating a second :class:`~elasticsearch.AsyncElasticsearch` (and
+    aiohttp pool) for :class:`~personal_agent.telemetry.queries.TelemetryQueries`
+    when the main process already has a connected handler.
+
+    Returns:
+        The shared async client, or ``None`` if unavailable.
+    """
+    try:
+        from personal_agent.captains_log.manager import CaptainLogManager
+
+        handler = CaptainLogManager._default_es_handler
+        if handler is None or not getattr(handler, "_connected", False):
+            return None
+        return getattr(handler.es_logger, "client", None)
+    except Exception:
+        return None
+
+
 def build_consolidation_insights_handler() -> Any:
     """Build handler that runs insights analysis on ``consolidation.completed``.
 
@@ -41,7 +62,9 @@ def build_consolidation_insights_handler() -> Any:
         from personal_agent.insights.engine import InsightsEngine
         from personal_agent.telemetry.queries import TelemetryQueries
 
-        engine = InsightsEngine()
+        shared_es = _default_elasticsearch_async_client()
+        queries = TelemetryQueries(es_client=shared_es)
+        engine = InsightsEngine(telemetry_queries=queries)
         try:
             insights = await engine.analyze_patterns(days=7)
             log.info(
@@ -51,9 +74,7 @@ def build_consolidation_insights_handler() -> Any:
                 insights_count=len(insights),
             )
         finally:
-            queries = getattr(engine, "_queries", None)
-            if isinstance(queries, TelemetryQueries):
-                await queries.disconnect()
+            await queries.disconnect()
 
     return handler
 

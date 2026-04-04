@@ -36,6 +36,12 @@ STREAM_FEEDBACK_RECEIVED = "stream:feedback.received"
 STREAM_SYSTEM_IDLE = "stream:system.idle"
 """Stream for system-idle events (Phase 3)."""
 
+STREAM_MEMORY_ACCESSED = "stream:memory.accessed"
+"""Stream for memory-accessed events (Phase 4)."""
+
+STREAM_MEMORY_ENTITIES_UPDATED = "stream:memory.entities_updated"
+"""Stream for memory-entities-updated events (Phase 4)."""
+
 CG_CONSOLIDATOR = "cg:consolidator"
 """Consumer group: brainstem consolidator."""
 
@@ -56,6 +62,9 @@ CG_CAPTAIN_LOG = "cg:captain-log"
 
 CG_FEEDBACK = "cg:feedback"
 """Consumer group: feedback signal consumers (Phase 3)."""
+
+CG_FRESHNESS = "cg:freshness"
+"""Consumer group: knowledge graph freshness tracker (Phase 4)."""
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +207,49 @@ class SystemIdleEvent(EventBase):
     trigger: str = "monitoring_loop"
 
 
+# ---------------------------------------------------------------------------
+# Phase 4 events
+# ---------------------------------------------------------------------------
+
+
+class MemoryAccessedEvent(EventBase):
+    """Published after a memory query operation completes.
+
+    Carries entity identifiers accessed during the query, along with the
+    query context (search, consolidation, context-assembly, etc.).
+    Consumed by ``cg:freshness`` (no-op stub in Phase 4; follow-on ADR
+    designs the actual knowledge graph freshness consumer).
+
+    Attributes:
+        entity_ids: List of Neo4j entity IDs accessed during this query.
+        query_context: Context where the query occurred (e.g., ``"search"``,
+            ``"consolidation"``, ``"context_assembly"``).
+        trace_id: Request trace identifier, if available.
+    """
+
+    event_type: Literal["memory.accessed"] = "memory.accessed"
+    entity_ids: list[str]
+    query_context: str
+    trace_id: str | None = None
+
+
+class MemoryEntitiesUpdatedEvent(EventBase):
+    """Published after consolidation updates entities in the knowledge graph.
+
+    Carries the entity IDs that were updated (created or modified) during
+    consolidation. Consumed by ``cg:freshness`` for knowledge graph
+    freshness tracking.
+
+    Attributes:
+        entity_ids: List of Neo4j entity IDs that were created or updated.
+        consolidation_id: Optional consolidation batch identifier.
+    """
+
+    event_type: Literal["memory.entities_updated"] = "memory.entities_updated"
+    entity_ids: list[str]
+    consolidation_id: str | None = None
+
+
 def parse_stream_event(payload: dict[str, Any]) -> EventBase:
     """Deserialize a stream JSON payload into the correct event subclass.
 
@@ -226,4 +278,8 @@ def parse_stream_event(payload: dict[str, Any]) -> EventBase:
         return FeedbackReceivedEvent.model_validate(payload)
     if raw_type == "system.idle":
         return SystemIdleEvent.model_validate(payload)
+    if raw_type == "memory.accessed":
+        return MemoryAccessedEvent.model_validate(payload)
+    if raw_type == "memory.entities_updated":
+        return MemoryEntitiesUpdatedEvent.model_validate(payload)
     raise ValueError(f"unknown event_type: {raw_type!r}")

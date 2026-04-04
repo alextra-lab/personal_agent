@@ -13,6 +13,11 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency in test en
     AsyncGraphDatabase = None  # type: ignore[assignment]
 
 from personal_agent.config.settings import get_settings
+from personal_agent.events import (
+    STREAM_MEMORY_ACCESSED,
+    MemoryAccessedEvent,
+    get_event_bus,
+)
 from personal_agent.memory.embeddings import generate_embedding
 from personal_agent.memory.fact import PromotionCandidate
 from personal_agent.memory.models import (
@@ -534,6 +539,8 @@ class MemoryService:
         query: MemoryQuery,
         feedback_key: str | None = None,
         query_text: str | None = None,
+        query_context: str = "search",
+        trace_id: str | None = None,
     ) -> MemoryQueryResult:
         """Query memory graph for relevant conversations and entities.
 
@@ -543,6 +550,9 @@ class MemoryService:
             query_text: Optional original user query text. When provided,
                 generates a vector embedding for hybrid similarity search
                 and enables implicit rephrase detection for feedback tracking.
+            query_context: Context where the query originated (e.g., "search",
+                "consolidation", "context_assembly"). Used for access tracking events.
+            trace_id: Optional request trace identifier for event correlation.
 
         Returns:
             MemoryQueryResult with conversations, entities, and relationships
@@ -730,10 +740,37 @@ class MemoryService:
                     query_text=query_text,
                 )
 
-                return MemoryQueryResult(
+                result = MemoryQueryResult(
                     conversations=conversations,
                     relevance_scores=relevance_scores,
                 )
+
+                # Publish memory access event (Phase 4)
+                # Collect entity IDs from query parameters and conversation results
+                accessed_entity_ids = list(query.entity_names or [])
+                for conversation in conversations:
+                    accessed_entity_ids.extend(conversation.key_entities or [])
+                # Remove duplicates while preserving order
+                accessed_entity_ids = list(dict.fromkeys(accessed_entity_ids))
+
+                if accessed_entity_ids:
+                    event = MemoryAccessedEvent(
+                        entity_ids=accessed_entity_ids,
+                        query_context=query_context,
+                        trace_id=trace_id,
+                    )
+                    # Non-blocking publish
+                    bus = get_event_bus()
+                    try:
+                        await bus.publish(STREAM_MEMORY_ACCESSED, event)
+                    except Exception as e:
+                        log.warning(
+                            "memory_access_event_publish_failed",
+                            error=str(e),
+                            event_id=event.event_id,
+                        )
+
+                return result
 
         except Exception as e:
             log.error("memory_query_failed", error=str(e), exc_info=True)

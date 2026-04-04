@@ -278,11 +278,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         CG_CONSOLIDATOR,
         CG_ES_INDEXER,
         CG_FEEDBACK,
+        CG_FRESHNESS,
         CG_INSIGHTS,
         CG_PROMOTION,
         CG_SESSION_WRITER,
         STREAM_CONSOLIDATION_COMPLETED,
         STREAM_FEEDBACK_RECEIVED,
+        STREAM_MEMORY_ACCESSED,
+        STREAM_MEMORY_ENTITIES_UPDATED,
         STREAM_PROMOTION_ISSUE_CREATED,
         STREAM_REQUEST_CAPTURED,
         STREAM_REQUEST_COMPLETED,
@@ -294,6 +297,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         build_consolidation_promotion_handler,
         build_feedback_insights_handler,
         build_feedback_suppression_handler,
+        build_freshness_handler,
         build_promotion_captain_log_handler,
     )
     from personal_agent.events.redis_backend import RedisStreamBus
@@ -376,6 +380,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             group=CG_FEEDBACK,
             consumer_name="feedback-suppression-0",
             handler=build_feedback_suppression_handler(),
+        )
+
+        # Phase 4 — memory access tracking (no-op stub, placeholder for follow-on ADR)
+        await active_bus.subscribe(
+            stream=STREAM_MEMORY_ACCESSED,
+            group=CG_FRESHNESS,
+            consumer_name="freshness-access-0",
+            handler=build_freshness_handler(),
+        )
+        await active_bus.subscribe(
+            stream=STREAM_MEMORY_ENTITIES_UPDATED,
+            group=CG_FRESHNESS,
+            consumer_name="freshness-entities-0",
+            handler=build_freshness_handler(),
         )
 
         consumer_runner = ConsumerRunner(active_bus)

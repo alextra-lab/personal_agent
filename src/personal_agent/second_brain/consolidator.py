@@ -13,6 +13,11 @@ from typing import Any
 
 from personal_agent.captains_log.capture import TaskCapture, read_captures
 from personal_agent.config import load_model_config
+from personal_agent.events import (
+    STREAM_MEMORY_ENTITIES_UPDATED,
+    MemoryEntitiesUpdatedEvent,
+    get_event_bus,
+)
 from personal_agent.memory.models import Entity, Relationship, SessionNode, TurnNode
 from personal_agent.memory.promote import run_promotion_pipeline
 from personal_agent.memory.service import MemoryService
@@ -107,6 +112,7 @@ class SecondBrainConsolidator:
         relationships_created = 0
         captures_skipped = 0
         sessions_with_new_turns: set[str] = set()
+        all_entity_ids: list[str] = []
 
         for i, capture in enumerate(captures, 1):
             if should_pause and should_pause():
@@ -140,6 +146,7 @@ class SecondBrainConsolidator:
                         sessions_with_new_turns.add(capture.session_id)
                 entities_created += result.get("entities_created", 0)
                 relationships_created += result.get("relationships_created", 0)
+                all_entity_ids.extend(result.get("entity_ids", []))
                 log.debug(
                     "consolidation_capture_done",
                     capture_num=i,
@@ -188,6 +195,23 @@ class SecondBrainConsolidator:
             **summary,
             extraction_model=entity_extraction_role,
         )
+
+        # Publish memory entities updated event (Phase 4)
+        if all_entity_ids:
+            event = MemoryEntitiesUpdatedEvent(
+                entity_ids=all_entity_ids,
+                consolidation_id="consolidation",
+            )
+            bus = get_event_bus()
+            try:
+                await bus.publish(STREAM_MEMORY_ENTITIES_UPDATED, event)
+            except Exception as e:
+                log.warning(
+                    "memory_entities_updated_event_publish_failed",
+                    error=str(e),
+                    event_id=event.event_id,
+                )
+
         return summary
 
     async def _consolidate_sessions(
@@ -294,7 +318,7 @@ class SecondBrainConsolidator:
             capture: Task capture to process
 
         Returns:
-            Processing result summary
+            Processing result summary with entity_ids for events.
         """
         # Strip <think>…</think> blocks from the assistant response before extraction.
         # The full response (including thinking) is preserved in the TurnNode below for
@@ -354,6 +378,7 @@ class SecondBrainConsolidator:
 
         # Create entity nodes
         entities_created = 0
+        entity_ids: list[str] = []
         for entity_data in extraction_result.get("entities", []):
             entity = Entity(
                 name=entity_data.get("name", ""),
@@ -364,6 +389,7 @@ class SecondBrainConsolidator:
             entity_id = await self.memory_service.create_entity(entity)
             if entity_id:
                 entities_created += 1
+                entity_ids.append(entity_id)
 
         # Create relationships
         relationships_created = 0
@@ -382,4 +408,5 @@ class SecondBrainConsolidator:
             "turns_created": turns_created,
             "entities_created": entities_created,
             "relationships_created": relationships_created,
+            "entity_ids": entity_ids,
         }

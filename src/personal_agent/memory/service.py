@@ -380,6 +380,11 @@ class MemoryService:
                     "e.last_seen = datetime()",
                     "e.mention_count = COALESCE(e.mention_count, 0) + 1",
                     "e.first_seen = COALESCE(e.first_seen, datetime())",
+                    # Access tracking (FRE-161: KG Freshness)
+                    "e.first_accessed_at = COALESCE(e.first_accessed_at, datetime())",
+                    "e.last_accessed_at = datetime()",
+                    "e.access_count = COALESCE(e.access_count, 0)",
+                    "e.last_access_context = COALESCE(e.last_access_context, 'created')",
                 ]
                 params: dict[str, Any] = {
                     "name": effective_name,
@@ -449,9 +454,7 @@ class MemoryService:
                 rows = await result.data()
                 if rows:
                     existing_dims = (
-                        rows[0].get("options", {})
-                        .get("indexConfig", {})
-                        .get("vector.dimensions")
+                        rows[0].get("options", {}).get("indexConfig", {}).get("vector.dimensions")
                     )
                     if existing_dims is not None and int(existing_dims) != target_dims:
                         log.warning(
@@ -504,6 +507,7 @@ class MemoryService:
                 # Use APOC to create a relationship with a dynamic type label.
                 # Standard Cypher cannot parameterize relationship type labels;
                 # apoc.merge.relationship handles this cleanly.
+                # Access tracking properties (FRE-161: KG Freshness) are initialized on creation.
                 await session.run(
                     """
                     MATCH (source)
@@ -513,7 +517,14 @@ class MemoryService:
                     CALL apoc.merge.relationship(
                         source, $relationship_type,
                         {},
-                        {weight: $weight, created_at: datetime()},
+                        {
+                            weight: $weight,
+                            created_at: datetime(),
+                            first_accessed_at: datetime(),
+                            last_accessed_at: datetime(),
+                            access_count: 0,
+                            last_access_context: 'created'
+                        },
                         target
                     ) YIELD rel
                     RETURN rel
@@ -690,18 +701,11 @@ class MemoryService:
                 # --- Reranker: re-score candidates via cross-attention ---
                 reranker_scores: dict[str, float] = {}
                 current_settings = get_settings()
-                if (
-                    current_settings.reranker_enabled
-                    and query_text
-                    and len(conversations) > 1
-                ):
+                if current_settings.reranker_enabled and query_text and len(conversations) > 1:
                     try:
                         from personal_agent.memory.reranker import rerank  # noqa: PLC0415
 
-                        docs = [
-                            c.summary or c.user_message or ""
-                            for c in conversations
-                        ]
+                        docs = [c.summary or c.user_message or "" for c in conversations]
                         rerank_results = await rerank(
                             query=query_text,
                             documents=docs,
@@ -722,7 +726,8 @@ class MemoryService:
 
                 # Calculate plausibility/relevance scores
                 relevance_scores = await self._calculate_relevance_scores(
-                    conversations, query,
+                    conversations,
+                    query,
                     vector_scores=vector_scores,
                     reranker_scores=reranker_scores,
                 )
@@ -1079,7 +1084,10 @@ class MemoryService:
 
             if conv_has_vector_hit:
                 cw_recency, cw_entity, cw_importance, cw_vector = (
-                    w_recency, w_entity_match, w_importance, w_vector,
+                    w_recency,
+                    w_entity_match,
+                    w_importance,
+                    w_vector,
                 )
                 cw_reranker = w_reranker if conv_has_reranker else 0.0
             else:

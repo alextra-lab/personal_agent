@@ -171,6 +171,79 @@ class TestEntityManagement:
         assert record is not None
         assert record["mc"] >= 2
 
+    @pytest.mark.asyncio
+    async def test_entity_access_tracking_on_creation(
+        self, memory_service, clean_test_data
+    ):
+        """Test that entity nodes are created with access-tracking properties (FRE-161)."""
+        unique_name = f"AccessTrack_{uuid.uuid4().hex[:8]}"
+        entity = Entity(
+            name=unique_name,
+            entity_type="TEST_TYPE",
+        )
+
+        entity_id = await memory_service.create_entity(entity)
+        assert entity_id is not None
+
+        # Query the entity to verify access-tracking properties
+        async with memory_service.driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (e:Entity {name: $name})
+                RETURN
+                    e.access_count AS access_count,
+                    e.first_accessed_at AS first_accessed_at,
+                    e.last_accessed_at AS last_accessed_at,
+                    e.last_access_context AS last_access_context
+                """,
+                name=unique_name,
+            )
+            record = await result.single()
+
+        assert record is not None
+        assert record["access_count"] == 0
+        assert record["first_accessed_at"] is not None
+        assert record["last_accessed_at"] is not None
+        assert record["last_access_context"] == "created"
+
+    @pytest.mark.asyncio
+    async def test_entity_access_tracking_defaults(
+        self, memory_service, clean_test_data
+    ):
+        """Test that entities without explicit access-tracking properties default correctly."""
+        # Create an entity with very unique name to minimize dedup
+        unique_name = f"NoEmbedTest_{uuid.uuid4().hex}"
+        entity = Entity(
+            name=unique_name,
+            entity_type="TEST_ENTITY",
+        )
+
+        # Create entity
+        entity_id = await memory_service.create_entity(entity)
+        assert entity_id is not None
+        assert len(entity_id) > 0
+
+        # Verify access-tracking properties are set using the returned entity_id
+        async with memory_service.driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (e:Entity {name: $name})
+                RETURN
+                    e.first_accessed_at AS first_accessed,
+                    e.last_accessed_at AS last_accessed,
+                    e.access_count AS access_count,
+                    e.last_access_context AS context
+                """,
+                name=entity_id,
+            )
+            record = await result.single()
+
+        assert record is not None
+        assert record["first_accessed"] is not None
+        assert record["last_accessed"] is not None
+        assert record["access_count"] == 0
+        assert record["context"] == "created"
+
 
 class TestRelationships:
     """Test relationship creation between nodes."""
@@ -204,6 +277,56 @@ class TestRelationships:
         success = await memory_service.create_relationship(relationship)
 
         assert success
+
+    @pytest.mark.asyncio
+    async def test_relationship_access_tracking_on_creation(
+        self, memory_service, clean_test_data
+    ):
+        """Test that relationship properties include access-tracking (FRE-161)."""
+        # Create source and target entities
+        source_name = f"Source_{uuid.uuid4().hex[:8]}"
+        target_name = f"Target_{uuid.uuid4().hex[:8]}"
+
+        source_entity = Entity(name=source_name, entity_type="TEST")
+        target_entity = Entity(name=target_name, entity_type="TEST")
+
+        await memory_service.create_entity(source_entity)
+        await memory_service.create_entity(target_entity)
+
+        # Create relationship
+        relationship = Relationship(
+            source_id=source_name,
+            target_id=target_name,
+            relationship_type="TEST_RELATES",
+            weight=0.8,
+        )
+
+        success = await memory_service.create_relationship(relationship)
+        assert success
+
+        # Query the relationship to verify access-tracking properties
+        async with memory_service.driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (s {name: $source_name})-[rel:TEST_RELATES]->(t {name: $target_name})
+                RETURN
+                    rel.access_count AS access_count,
+                    rel.first_accessed_at AS first_accessed_at,
+                    rel.last_accessed_at AS last_accessed_at,
+                    rel.last_access_context AS last_access_context,
+                    rel.weight AS weight
+                """,
+                source_name=source_name,
+                target_name=target_name,
+            )
+            record = await result.single()
+
+        assert record is not None
+        assert record["access_count"] == 0
+        assert record["first_accessed_at"] is not None
+        assert record["last_accessed_at"] is not None
+        assert record["last_access_context"] == "created"
+        assert record["weight"] == 0.8
 
 
 class TestMemoryQueries:

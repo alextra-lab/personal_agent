@@ -16,6 +16,13 @@ class Entity(BaseModel):
     embedding: list[float] | None = None
     coordinates: tuple[float, float] | None = None  # (latitude, longitude)
     geocoded: bool = False
+    # Access tracking (FRE-161: KG Freshness)
+    last_accessed_at: datetime | None = None
+    access_count: int = 0
+    last_access_context: str | None = (
+        None  # "search", "context_assembly", "consolidation", "suggest_relevant", "tool_call"
+    )
+    first_accessed_at: datetime | None = None
 
 
 class Relationship(BaseModel):
@@ -26,6 +33,13 @@ class Relationship(BaseModel):
     relationship_type: str  # "DISCUSSES", "PART_OF", "SIMILAR_TO", "HAPPENED_BEFORE", etc.
     weight: float = Field(default=1.0, ge=0.0, le=1.0)
     properties: dict[str, Any] = Field(default_factory=dict)
+    # Access tracking (FRE-161: KG Freshness)
+    last_accessed_at: datetime | None = None
+    access_count: int = 0
+    last_access_context: str | None = (
+        None  # "search", "context_assembly", "consolidation", "suggest_relevant", "tool_call"
+    )
+    first_accessed_at: datetime | None = None
 
 
 class TurnNode(BaseModel):

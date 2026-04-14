@@ -12,6 +12,7 @@ The budget stage is a pass-through that counts tokens.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from typing import Any
 
 import structlog
@@ -46,10 +47,44 @@ def _capitalized_entity_hints(user_message: str) -> list[str]:
     return [w.strip('",.:;!?') for w in words if len(w) > 3 and w[0].isupper()][:10]
 
 
+def _freshness_score_modifier(last_accessed_at: datetime | None) -> float:
+    """Compute a freshness multiplier for relevance scoring (D4, ADR-0047).
+
+    Applies a +10 % boost for recently accessed entities (within 7 days) and
+    a -15 % penalty for stale entities (90+ days since last access).  No
+    adjustment is applied when ``last_accessed_at`` is not available.
+
+    Args:
+        last_accessed_at: UTC datetime of last access, or None if unknown.
+
+    Returns:
+        Multiplier in the range [0.85, 1.10].  Returns 1.0 when no data.
+    """
+    if last_accessed_at is None:
+        return 1.0
+
+    now = datetime.now(timezone.utc)
+    # Ensure the stored datetime is timezone-aware before computing delta
+    if last_accessed_at.tzinfo is None:
+        last_accessed_at = last_accessed_at.replace(tzinfo=timezone.utc)
+
+    days_since_access = (now - last_accessed_at).days
+    if days_since_access <= 7:
+        return 1.10  # +10 % for recently accessed
+    if days_since_access >= 90:
+        return 0.85  # -15 % for stale
+    return 1.0
+
+
 def _format_broad_recall_context(
     broad: BroadRecallResult,
 ) -> list[dict[str, Any]]:
     """Format broad recall result as memory context for the LLM.
+
+    D4 (ADR-0047): when ``last_accessed_at`` is present on an entity dict,
+    a ``freshness_modifier`` field is included so downstream consumers can
+    apply the score adjustment.  The modifier itself does not reorder the
+    returned list — that is left to the caller's ranking step.
 
     Args:
         broad: The broad recall result from Seshat.
@@ -61,6 +96,19 @@ def _format_broad_recall_context(
 
     for entity_type, entities in broad.entities_by_type.items():
         for entity in entities:
+            # D4: derive freshness modifier from ADR-0042 access-tracking field
+            raw_ts = entity.get("last_accessed_at")
+            last_accessed_at: datetime | None = None
+            if isinstance(raw_ts, datetime):
+                last_accessed_at = raw_ts
+            elif isinstance(raw_ts, str):
+                try:
+                    last_accessed_at = datetime.fromisoformat(raw_ts)
+                except ValueError:
+                    last_accessed_at = None
+
+            freshness_mod = _freshness_score_modifier(last_accessed_at)
+
             context.append(
                 {
                     "type": "entity",
@@ -68,6 +116,8 @@ def _format_broad_recall_context(
                     "name": entity.get("name", "unknown"),
                     "description": entity.get("description"),
                     "mention_count": entity.get("mention_count", 0),
+                    # D4: freshness modifier for downstream relevance scoring
+                    "freshness_modifier": freshness_mod,
                 }
             )
 
@@ -145,6 +195,17 @@ async def _query_memory_for_intent(
         result = await memory_adapter.recall(query, trace_id=trace_id)
         context: list[dict[str, Any]] = []
         for entity in result.entities:
+            # D4: derive freshness modifier from ADR-0042 access-tracking field
+            raw_ts = entity.get("last_accessed_at")
+            ent_last_accessed: datetime | None = None
+            if isinstance(raw_ts, datetime):
+                ent_last_accessed = raw_ts
+            elif isinstance(raw_ts, str):
+                try:
+                    ent_last_accessed = datetime.fromisoformat(raw_ts)
+                except ValueError:
+                    ent_last_accessed = None
+
             context.append(
                 {
                     "type": "entity",
@@ -152,6 +213,8 @@ async def _query_memory_for_intent(
                     "entity_type": entity.get("entity_type"),
                     "description": entity.get("description"),
                     "mention_count": entity.get("mention_count", 0),
+                    # D4: freshness modifier for downstream relevance scoring
+                    "freshness_modifier": _freshness_score_modifier(ent_last_accessed),
                 }
             )
         for ep in result.episodes:

@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-04 (CLI-First Tool Migration FRE-171/170/173/172/188 complete; ReAct multi-tool loop live)
+> **Last updated**: 2026-04-14 (Seshat v2 Architecture implemented — FRE-192 all 9 child issues done)
 
 ---
 
@@ -11,7 +11,6 @@
 | # | Work Item | Linear | Spec / ADR | Status |
 |---|-----------|--------|------------|--------|
 | 1 | EVAL-10 run (Context Intelligence final verification) | [FRE-187](https://linear.app/frenchforest/issue/FRE-187/eval-10-context-intelligence-final-verification-run) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` | Needs Approval |
-| 2 | Fix test import failure (missing `mcp` module) | FRE-185 | — | Approved |
 
 ## Upcoming — Needs Approval
 
@@ -19,10 +18,8 @@ Ordered by recommended implementation sequence. Dependency chains are encoded in
 
 | # | Project | Linear | ADR / Spec | Depends On |
 |---|---------|--------|------------|------------|
-| 4 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |
-| 5 | ~~CLI-First Tool Migration~~ | ~~[Project](https://linear.app/frenchforest/project/cli-first-tool-migration-5b948aeb13bb)~~ | ~~ADR-0028~~ | ~~Done~~ |
-| 6 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2, `specs/RECALL_CLASSIFIER_L2_DESIGN.md` | Proactive Memory MVP done (FRE-176) |
-| 7 | Phase 3.0 Daily-Use Interface | [Project](https://linear.app/frenchforest/project/30-daily-use-interface-60a517bd90f6) | — | CLI Migration (FRE-172) |
+| 2 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |
+| 3 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2 | Proactive Memory MVP done (FRE-176) |
 
 ### Dependency graph (project-level)
 
@@ -48,6 +45,7 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 
 | Phase | Completed | Summary |
 |-------|-----------|---------|
+| Seshat v2 Architecture (FRE-192: FRE-201–209) | 2026-04-14 | All 8 ADRs (0043–0050) implemented across 6 phases. FRE-201: Protocol definitions (KnowledgeGraphProtocol, SessionStoreProtocol, SearchIndexProtocol, etc.). FRE-202: Context observability (CompactionRecord, KnowledgeWeight, freshness scoring). FRE-203: SKILL.md docs (4 skill files). FRE-204: AG-UI transport (SSE streaming, 5 event types). FRE-205: Docker Compose cloud simulation (6-service topology). FRE-206: Seshat API Gateway (auth, rate limiting, knowledge/session/observation APIs, HTTP client). FRE-207: Execution profiles (local/cloud YAML, profile-aware TraceContext). FRE-208: MCP server + delegation adapters (ClaudeCode/Codex/GenericMCP adapters, 6 MCP tools). FRE-209: PWA scaffold (Next.js 14, AG-UI SSE streaming, HITL). 180+ new tests. |
 | Proactive Memory (FRE-174–176; FRE-177 procedure) | 2026-04-04 | `suggest_relevant()` + `MemoryServiceAdapter`, `memory/proactive.py` scoring/budget, `AGENT_PROACTIVE_MEMORY_ENABLED`, `assemble_context` + `session_id` wiring. Tests: `test_proactive.py`, `test_context.py`. EVAL A/B: run harness + fill `telemetry/evaluation/EVAL-proactive-memory/README.md`. ADR-0039 Accepted (MVP). |
 | Linear Feedback Channel Phases 1–2 (ADR-0040) | 2026-04-04 | `FeedbackPoller`, all 6 handlers (Approved/Rejected/Deepen/Too Vague/Duplicate/Defer), `LinearClient` wrapper, promotion pipeline wired live, event bus integration (`feedback.received`, `promotion.issue_created`). Phase 3 meta-learning pending. |
 | KG Freshness 6–7/7 (FRE-166, FRE-167) + relationship IDs | 2026-04-04 | FRE-166: `brainstem/jobs/freshness_review.py`, scheduler cron (`AGENT_FRESHNESS_REVIEW_SCHEDULE_CRON`), tier aggregation snapshot + deltas, Captain's Log dormant proposals when over threshold. FRE-167: `uv run agent memory freshness-backfill` (`freshness_backfill.py`), gated by `AGENT_FRESHNESS_BACKFILL_CONFIRM`. `MemoryAccessedEvent.relationship_ids` populated on query + consolidation paths; `FreshnessConsumer` UNWIND-updates relationships by `elementId`. Integration-style test: `tests/personal_agent/memory/test_freshness_pipeline.py`. |
@@ -76,6 +74,14 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 
 | ADR | Title | Status |
 |-----|-------|--------|
+| 0050 | Remote Agent Harness Integration | Accepted (implemented — FRE-208) |
+| 0049 | Application Modularity | Accepted (implemented — FRE-201) |
+| 0048 | Mobile & Multi-Device UI | Accepted (implemented — FRE-209) |
+| 0047 | Context Management & Observability | Accepted (implemented — FRE-202) |
+| 0046 | Agent-to-UI Protocol Stack | Accepted (implemented — FRE-204) |
+| 0045 | Infrastructure — Cloud Knowledge Layer | Accepted (implemented — FRE-205, FRE-206) |
+| 0044 | Provider Abstraction & Dual-Harness | Accepted (implemented — FRE-207) |
+| 0043 | Three-Layer Architectural Separation | Accepted (implemented — foundational for ADRs 0044–0050) |
 | 0042 | Knowledge Graph Freshness via Access Tracking | Accepted (implemented — 7/7 done) |
 | 0041 | Event Bus — Redis Streams | Accepted (Phases 1–4 implemented) |
 | 0040 | Linear as Async Feedback Channel | Accepted (Phases 1–2 implemented; Phase 3 pending) |

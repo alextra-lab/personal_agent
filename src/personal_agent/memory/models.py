@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import AliasChoices, BaseModel, Field
 
+from personal_agent.memory.weight import KnowledgeWeight
+
 
 class Entity(BaseModel):
     """An entity extracted from conversations."""
@@ -23,6 +25,8 @@ class Entity(BaseModel):
         None  # "search", "context_assembly", "consolidation", "suggest_relevant", "tool_call"
     )
     first_accessed_at: datetime | None = None
+    # D5: Knowledge confidence metadata (ADR-0047)
+    weight: KnowledgeWeight = Field(default_factory=KnowledgeWeight)
 
 
 class Relationship(BaseModel):

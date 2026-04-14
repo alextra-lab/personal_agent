@@ -412,6 +412,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await consumer_runner.start()
         log.info("event_bus_consumer_runner_started")
 
+    # Wire gateway state (FRE-206): attach storage backends to app.state so
+    # gateway endpoints (mounted below in local-dev mode) can reach them.
+    if settings.gateway_mount_local:
+        from personal_agent.gateway.app import _KnowledgeGraphAdapter as _KGAdapter  # noqa: PLC0415
+        from personal_agent.service.database import AsyncSessionLocal as _ASL  # noqa: PLC0415
+
+        app.state.db_session_factory = _ASL
+        app.state.knowledge_graph = (
+            _KGAdapter(memory_service) if memory_service is not None else None
+        )
+        app.state.es_client = (
+            es_handler.es_logger.client
+            if es_handler is not None and getattr(es_handler, "_connected", False)
+            else None
+        )
+        log.info("gateway_state_wired")
+
     log.info("service_ready", port=settings.service_port)
 
     yield
@@ -469,6 +486,20 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+# AG-UI transport — streaming SSE endpoint (ADR-0046, FRE-204)
+from personal_agent.transport.agui.endpoint import router as transport_router  # noqa: E402
+
+app.include_router(transport_router)
+
+# Seshat API Gateway (FRE-206) — additive, does not affect existing routes.
+# In local dev mode the gateway router mounts on this app (port 9000).
+# In production, run personal_agent.gateway.app:gateway_app on its own port.
+if settings.gateway_mount_local:
+    from personal_agent.gateway.app import create_gateway_router  # noqa: E402
+
+    _gateway_router = create_gateway_router()
+    app.include_router(_gateway_router)
 
 
 # ============================================================================

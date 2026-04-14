@@ -26,6 +26,7 @@ from personal_agent.request_gateway.types import (
     RecallResult,
     TaskType,
 )
+from personal_agent.telemetry.compaction import get_dropped_entities
 
 logger = structlog.get_logger(__name__)
 
@@ -172,6 +173,22 @@ def run_recall_controller(
             candidates=[],
         )
 
+    # D3: Compaction quality check — warn when a recalled noun phrase matches
+    # an entity that was dropped by a recent compaction event.
+    session_id_for_check = trace_id  # best available proxy when session_id not threaded here
+    dropped = get_dropped_entities(session_id_for_check)
+    if dropped:
+        for np in noun_phrases:
+            for dropped_entity in dropped:
+                if np in dropped_entity.lower() or dropped_entity.lower() in np:
+                    logger.warning(
+                        "compaction_quality.poor",
+                        entity_id=dropped_entity,
+                        noun_phrase=np,
+                        session_id=session_id_for_check,
+                        trace_id=trace_id,
+                    )
+
     # Reclassify
     logger.info(
         "recall_reclassified",
@@ -265,16 +282,12 @@ def _scan_session_facts(
             # for multi-word phrases (handles "caching system" matching "caching layer")
             phrase_found = phrase_lower in content_lower
             if not phrase_found and " " in phrase_lower:
-                phrase_found = any(
-                    w in content_lower for w in phrase_lower.split() if len(w) > 3
-                )
+                phrase_found = any(w in content_lower for w in phrase_lower.split() if len(w) > 3)
             if phrase_found:
                 # Extract the sentence containing the match
                 sentences = re.split(r"[.!?\n]", content)
                 search_terms = [phrase_lower] + (
-                    [w for w in phrase_lower.split() if len(w) > 3]
-                    if " " in phrase_lower
-                    else []
+                    [w for w in phrase_lower.split() if len(w) > 3] if " " in phrase_lower else []
                 )
                 matching_sentence = ""
                 for s in sentences:
@@ -289,6 +302,15 @@ def _scan_session_facts(
                 # Score by recency (newer = higher)
                 turn_index = total_turns - 1 - i
                 recency_score = 1.0 - (i / max(total_turns, 1))
+
+                # D5 (ADR-0047): When an Entity object with KnowledgeWeight is
+                # available for this fact, apply a -10 % confidence penalty for
+                # low-confidence facts (weight.confidence < 0.4).
+                # Example:
+                #   if hasattr(entity, 'weight') and entity.weight.confidence < 0.4:
+                #       recency_score *= 0.90
+                # Entity objects are not threaded into this path today — the hook
+                # is applied in memory/service.py relevance scoring instead.
 
                 # Deduplicate by (turn, fact) to avoid wasting slots
                 fact_key = (turn_index, matching_sentence)

@@ -736,6 +736,40 @@ class AppConfig(BaseSettings):
         description="Neo4j vector query top_k before per-session filtering.",
     )
 
+    # Execution Profiles (ADR-0044, FRE-207)
+    default_profile: str = Field(
+        default="local",
+        description=(
+            "Default execution profile name (e.g. 'local', 'cloud'). "
+            "Used when no profile is explicitly specified for a conversation. "
+            "Must match a file in profiles_dir."
+        ),
+    )
+    profiles_dir: str = Field(
+        default="config/profiles",
+        description="Directory containing execution profile YAML files (ADR-0044).",
+    )
+
+    # Seshat API Gateway (FRE-206)
+    gateway_mount_local: bool = Field(
+        default=True,
+        description=(
+            "Mount the Seshat API Gateway routes on the execution service "
+            "(port 9000). When False the gateway must run as a separate process."
+        ),
+    )
+    gateway_auth_enabled: bool = Field(
+        default=False,
+        description=(
+            "Require Bearer token authentication on gateway endpoints. "
+            "Disabled by default for local dev — set True for production."
+        ),
+    )
+    gateway_access_config: str = Field(
+        default="config/gateway_access.yaml",
+        description="Path to the YAML file declaring gateway bearer tokens and scopes.",
+    )
+
 
 _settings: AppConfig | None = None
 

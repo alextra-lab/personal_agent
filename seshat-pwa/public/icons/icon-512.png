@@ -1,0 +1,2 @@
+PLACEHOLDER: Replace with actual 512x512 PNG icon before deployment.
+Generate with: npx pwa-asset-generator logo.svg public/icons

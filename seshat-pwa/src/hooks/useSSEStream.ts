@@ -1,0 +1,240 @@
+'use client';
+
+import { useState, useCallback, useRef } from 'react';
+
+import {
+  connectToStream,
+  sendChatMessage,
+  type StreamConnection,
+} from '@/lib/agui-client';
+import type {
+  AGUIEvent,
+  ChatMessage,
+  PendingInterrupt,
+  ToolCall,
+} from '@/lib/types';
+
+// --------------------------------------------------------------------------
+// Hook return type
+// --------------------------------------------------------------------------
+
+export interface UseSSEStreamReturn {
+  messages: ChatMessage[];
+  isStreaming: boolean;
+  activeTools: ToolCall[];
+  /** Context window utilisation in [0, 1]; null until first STATE_DELTA. */
+  contextBudget: number | null;
+  pendingInterrupt: PendingInterrupt | null;
+  sendMessage: (text: string, sessionId: string, profile?: string) => Promise<void>;
+  resolveInterrupt: (choice: string) => void;
+  disconnect: () => void;
+  clearMessages: () => void;
+}
+
+// --------------------------------------------------------------------------
+// Hook
+// --------------------------------------------------------------------------
+
+/**
+ * React hook that manages the full AG-UI streaming lifecycle.
+ *
+ * Handles:
+ * - Sending user messages to the Seshat backend.
+ * - Connecting to the AG-UI SSE stream.
+ * - Assembling streaming text deltas into assistant messages.
+ * - Tracking tool call lifecycle (TOOL_CALL_START → TOOL_CALL_END).
+ * - Surfacing context budget from STATE_DELTA events.
+ * - Capturing HITL INTERRUPT events and providing a resolve callback.
+ * - Cleaning up the EventSource on DONE or error.
+ */
+export function useSSEStream(): UseSSEStreamReturn {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [activeTools, setActiveTools] = useState<ToolCall[]>([]);
+  const [contextBudget, setContextBudget] = useState<number | null>(null);
+  const [pendingInterrupt, setPendingInterrupt] = useState<PendingInterrupt | null>(null);
+
+  // Refs that survive re-renders without causing them.
+  const streamRef = useRef<StreamConnection | null>(null);
+  const currentContentRef = useRef<string>('');
+  const currentSessionRef = useRef<string>('');
+
+  // --------------------------------------------------------------------------
+  // Event dispatch
+  // --------------------------------------------------------------------------
+
+  const handleEvent = useCallback((event: AGUIEvent) => {
+    switch (event.type) {
+      case 'TEXT_DELTA': {
+        const { text } = event.data as { text: string };
+        currentContentRef.current += text;
+        const snapshot = currentContentRef.current;
+
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.role === 'assistant') {
+            // Update the in-progress assistant message.
+            return [
+              ...prev.slice(0, -1),
+              { ...last, content: snapshot },
+            ];
+          }
+          // First delta for this turn — create the assistant message.
+          return [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: 'assistant' as const,
+              content: snapshot,
+              timestamp: new Date(),
+              toolCalls: [],
+            },
+          ];
+        });
+        break;
+      }
+
+      case 'TOOL_CALL_START': {
+        const { tool_name } = event.data as { tool_name: string };
+        setActiveTools((prev) => [
+          ...prev,
+          { name: tool_name, status: 'running' },
+        ]);
+        break;
+      }
+
+      case 'TOOL_CALL_END': {
+        const { tool_name, result } = event.data as {
+          tool_name: string;
+          result: string;
+        };
+        setActiveTools((prev) =>
+          prev.map((t) =>
+            t.name === tool_name
+              ? { ...t, status: 'completed', result }
+              : t,
+          ),
+        );
+        break;
+      }
+
+      case 'STATE_DELTA': {
+        const { key, value } = event.data as { key: string; value: unknown };
+        if (key === 'context_window' && typeof value === 'number') {
+          setContextBudget(value);
+        }
+        break;
+      }
+
+      case 'INTERRUPT': {
+        const { context, options } = event.data as {
+          context: string;
+          options: string[];
+        };
+        setPendingInterrupt({
+          context,
+          options,
+          sessionId: event.session_id,
+        });
+        // Pause streaming indicator — we're waiting for user input.
+        setIsStreaming(false);
+        break;
+      }
+
+      case 'DONE': {
+        streamRef.current?.close();
+        streamRef.current = null;
+        setIsStreaming(false);
+        setActiveTools([]);
+        break;
+      }
+    }
+  }, []);
+
+  // --------------------------------------------------------------------------
+  // Public API
+  // --------------------------------------------------------------------------
+
+  const sendMessage = useCallback(
+    async (text: string, sessionId: string, profile = 'local') => {
+      // Close any existing stream.
+      streamRef.current?.close();
+      streamRef.current = null;
+
+      currentContentRef.current = '';
+      currentSessionRef.current = sessionId;
+
+      // Optimistically add the user message.
+      const userMessage: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: 'user',
+        content: text,
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, userMessage]);
+      setIsStreaming(true);
+      setPendingInterrupt(null);
+      setActiveTools([]);
+
+      // 1. Send the message (triggers backend processing).
+      try {
+        await sendChatMessage({ message: text, sessionId, profile });
+      } catch (err) {
+        setIsStreaming(false);
+        // Append an error pseudo-message so the user can see what happened.
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: `Error contacting Seshat: ${err instanceof Error ? err.message : String(err)}`,
+            timestamp: new Date(),
+          },
+        ]);
+        return;
+      }
+
+      // 2. Connect to the SSE stream.
+      streamRef.current = connectToStream(
+        sessionId,
+        handleEvent,
+        () => {
+          // SSE error — stream may have ended or backend restarted.
+          streamRef.current = null;
+          setIsStreaming(false);
+        },
+      );
+    },
+    [handleEvent],
+  );
+
+  const resolveInterrupt = useCallback((choice: string) => {
+    // The caller is responsible for calling resumeInterrupt() from agui-client
+    // with the session ID from pendingInterrupt before calling this.
+    setPendingInterrupt(null);
+    setIsStreaming(true);
+  }, []);
+
+  const disconnect = useCallback(() => {
+    streamRef.current?.close();
+    streamRef.current = null;
+    setIsStreaming(false);
+  }, []);
+
+  const clearMessages = useCallback(() => {
+    setMessages([]);
+    currentContentRef.current = '';
+  }, []);
+
+  return {
+    messages,
+    isStreaming,
+    activeTools,
+    contextBudget,
+    pendingInterrupt,
+    sendMessage,
+    resolveInterrupt,
+    disconnect,
+    clearMessages,
+  };
+}

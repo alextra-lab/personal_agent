@@ -1,0 +1,49 @@
+# Seshat API Gateway — Access Control Configuration
+# FRE-206 / docs/plans/2026-04-14-fre-206-gateway-design.md
+#
+# Each token entry declares:
+#   name       : human-readable label (used in logs)
+#   secret     : bearer token value — may be a literal or "${ENV_VAR}" reference
+#   scopes     : list of granted permission scopes
+#   rate_limit : max requests per hour (integer or "N/hour")
+#
+# In local dev (gateway_auth_enabled: false) tokens are ignored.
+# For production, inject secrets via environment variables.
+
+tokens:
+  - name: dev-local
+    secret: "dev-token-not-for-production"
+    scopes:
+      - knowledge:read
+      - knowledge:write
+      - sessions:read
+      - observations:read
+    rate_limit: 1000
+
+  - name: claude-code-local
+    secret: "${GATEWAY_TOKEN_CLAUDE_CODE}"
+    scopes:
+      - knowledge:read
+      - knowledge:write
+      - sessions:read
+      - observations:read
+    rate_limit: 100
+
+  - name: pwa-client
+    secret: "${GATEWAY_TOKEN_PWA}"
+    scopes:
+      - knowledge:read
+      - sessions:read
+      - observations:read
+    rate_limit: 200
+
+  - name: execution-service
+    secret: "${GATEWAY_TOKEN_EXECUTION}"
+    scopes:
+      - knowledge:read
+      - knowledge:write
+      - sessions:read
+      - sessions:write
+      - observations:read
+      - observations:write
+    rate_limit: 1000

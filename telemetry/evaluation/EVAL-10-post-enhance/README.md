@@ -2,7 +2,7 @@
 
 **Phase:** 4 (ENHANCE) — Context Intelligence
 **Baseline:** EVAL-09 (34/35 paths, 176/177 assertions, 99.4%)
-**Date:** Pending live rerun
+**Last full run:** 2026-04-14 (see `evaluation_results.json` timestamp)
 
 ## Purpose
 
@@ -25,9 +25,9 @@ PERSONAL_AGENT_EVAL=1 uv run python -m tests.evaluation.harness.run \
 
 ## Success Criteria
 
-- [ ] No regression from EVAL-09 baseline on existing 35 paths
-- [ ] CP-30 (Cross-Session Entity Recall) passes
-- [ ] CP-31 (Cross-Session Decision Recall) passes
+- [ ] No regression from EVAL-09 baseline on **assertion pass rate** (latest: 175/181 = 96.7% vs 99.4% — see `docs/research/EVAL-10_FINAL_REPORT_2026-04-14.md`)
+- [x] CP-30 (Cross-Session Entity Recall) passes (full run 2026-04-14)
+- [x] CP-31 (Cross-Session Decision Recall) passes (full run 2026-04-14)
 - [ ] `context_compression_completed` events visible in telemetry
 - [ ] `context_compression_used` events visible for long conversations
 - [ ] `context_prefix_stable` hashes consistent within sessions

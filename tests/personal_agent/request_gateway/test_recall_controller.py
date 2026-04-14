@@ -169,6 +169,8 @@ class TestRunRecallController:
 @pytest.mark.parametrize(
     ("text", "should_match"),
     [
+        ("What was that data processing tool we discussed?", True),
+        ("What database did we decide on?", True),
         (
             "Going back to the beginning — what was our primary database again?",
             True,

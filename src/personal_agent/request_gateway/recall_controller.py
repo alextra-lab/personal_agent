@@ -41,11 +41,13 @@ _RECALL_CUE_PATTERNS: re.Pattern[str] = re.compile(
     # Possessive prior-decision
     r"|(?:what\s+(?:was|were|is)\s+(?:our|the)\s+(?:primary|main|original|first|chosen|selected|preferred))"
     r"|(?:what\s+did\s+(?:we|I)\s+(?:decide|pick|choose|settle|go\s+with|land\s+on))"
+    r"|(?:what\s+[\w\s]{1,80}?\s+did\s+(?:we|I)\s+(?:decide|pick|choose|settle|go\s+with|land\s+on))"
     # Explicit memory request
     r"|(?:remind\s+me\s+(?:what|which|about|of))"
     r"|(?:refresh\s+my\s+memory)"
     # Resumptive reference
-    r"|(?:the\s+\w+\s+(?:we|I)\s+(?:discussed|mentioned|talked\s+about|decided\s+on|chose|picked))",
+    r"|(?:the\s+\w+\s+(?:we|I)\s+(?:discussed|mentioned|talked\s+about|decided\s+on|chose|picked))"
+    r"|(?:what\s+was\s+that\s+[\w\s]{1,80}?\s+(?:we|I)\s+(?:discussed|mentioned|talked\s+about))",
 )
 
 # Noun phrase extraction: simple heuristic — captures up to 3 words after a possessive/

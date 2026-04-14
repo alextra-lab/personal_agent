@@ -2,7 +2,7 @@
 
 **Phase:** 4 (ENHANCE) — Context Intelligence
 **Baseline:** EVAL-09 (34/35 paths, 176/177 assertions, 99.4%)
-**Date:** Pending live run
+**Date:** Pending live rerun
 
 ## Purpose
 
@@ -14,12 +14,12 @@ correctly.
 
 ```bash
 # Category evals first (fast feedback)
-uv run python -m tests.evaluation.harness.run \
+PERSONAL_AGENT_EVAL=1 uv run python -m tests.evaluation.harness.run \
     --categories context_management memory_quality cross_session \
     --output-dir telemetry/evaluation/EVAL-10-post-enhance/
 
 # Full 37-path harness
-uv run python -m tests.evaluation.harness.run \
+PERSONAL_AGENT_EVAL=1 uv run python -m tests.evaluation.harness.run \
     --output-dir telemetry/evaluation/EVAL-10-post-enhance/
 ```
 
@@ -31,6 +31,12 @@ uv run python -m tests.evaluation.harness.run \
 - [ ] `context_compression_completed` events visible in telemetry
 - [ ] `context_compression_used` events visible for long conversations
 - [ ] `context_prefix_stable` hashes consistent within sessions
+
+## Resolved Regression Blockers
+
+- [x] FRE-210: CP-30/CP-31 recall intent cues now classify as `memory_recall`.
+- [x] FRE-211: Harness post-path assertion coroutine is awaited in both single and multi-session flows.
+- [x] FRE-212: Responsiveness probe no longer sends invalid `session_id`; `--skip-responsiveness-probe` is no longer required as a workaround.
 
 ## New Paths (Phase 4)
 

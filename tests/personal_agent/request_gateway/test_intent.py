@@ -19,6 +19,10 @@ class TestMemoryRecall:
             "What did I decide about the architecture?",
             # Eval CP-19-v7: resumptive "the X we discussed earlier"
             "The tool we discussed earlier — can you confirm what it was?",
+            # Eval CP-30: cross-session resumptive phrasing
+            "What was that data processing tool we discussed?",
+            # Eval CP-31: decision recall phrasing
+            "What database did we decide on?",
         ],
     )
     def test_memory_recall_detected(self, message: str) -> None:

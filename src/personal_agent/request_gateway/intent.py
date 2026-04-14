@@ -25,13 +25,16 @@ _MEMORY_RECALL_PATTERNS: re.Pattern[str] = re.compile(
     r"(?i)"
     # Resumptive reference (eval CP-19-v7): "The tool we discussed earlier — ..."
     r"(?:the\s+\w+\s+(?:we|I)\s+(?:discussed|mentioned|talked\s+about)(?:\s+earlier)?)"
+    # Cross-session resumptive phrasing (CP-30): "What was that ... we discussed?"
+    r"|(?:what\s+was\s+that\s+[\w\s]{1,80}?\s+(?:we|I)\s+(?:discussed|mentioned|talked\s+about))"
     r"|(?:what\s+(?:have\s+I|did\s+I|topics?\s+have\s+(?:I|we)|things?\s+have\s+I)\s+)"
     r"|(?:do\s+you\s+remember)"
     r"|(?:last\s+time\s+(?:we|I)\s+(?:asked|talked|discussed))"
     r"|(?:have\s+(?:we|I)\s+(?:discussed|talked|spoken))"
     r"|(?:what\s+(?:do\s+you\s+know|did\s+(?:I|we))\s+)"
     r"|(?:recall\s+(?:our|my|the)\s+)"
-    r"|(?:what\s+(?:have\s+)?(?:I|we)\s+(?:decided|concluded|said))",
+    # Include did/decide-on variants (CP-31): "What database did we decide on?"
+    r"|(?:what\s+(?:(?:have\s+)?(?:I|we)\s+(?:decided|concluded|said)|[\w\s]{1,80}?\s+did\s+(?:I|we)\s+decide\s+on))",
 )
 
 _CODING_PATTERNS: re.Pattern[str] = re.compile(

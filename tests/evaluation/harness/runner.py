@@ -14,6 +14,7 @@ import asyncio
 import time
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from typing import Any
 
 import httpx
 import structlog
@@ -68,7 +69,7 @@ class EvaluationRunner:
     ) -> None:
         self._agent_url = agent_url
         self._telemetry = telemetry or TelemetryChecker()
-        self._neo4j_checker = None
+        self._neo4j_checker: Any = None
         self._chat_timeout_s = chat_timeout_s
         self._inter_turn_delay_s = inter_turn_delay_s
         self._inter_path_delay_s = inter_path_delay_s
@@ -103,7 +104,7 @@ class EvaluationRunner:
             try:
                 resp = await client.post(
                     f"{self._agent_url}/chat",
-                    params={"message": _RESPONSIVENESS_PROBE_MSG, "session_id": "probe-session"},
+                    params={"message": _RESPONSIVENESS_PROBE_MSG},
                 )
                 resp.raise_for_status()
                 log.info("inference_responsiveness_probe_ok", timeout_s=_RESPONSIVENESS_PROBE_TIMEOUT_S)
@@ -198,7 +199,7 @@ class EvaluationRunner:
                     response_time_ms=turn_result.response_time_ms,
                 )
 
-        self._run_post_path_assertions(path, result)
+        await self._run_post_path_assertions(path, result)
         return result
 
     async def _run_multi_session_path(self, path: ConversationPath) -> PathResult:
@@ -274,7 +275,7 @@ class EvaluationRunner:
                 )
                 await asyncio.sleep(session_spec.post_session_delay_s)
 
-        self._run_post_path_assertions(path, result)
+        await self._run_post_path_assertions(path, result)
         return result
 
     async def _run_post_path_assertions(

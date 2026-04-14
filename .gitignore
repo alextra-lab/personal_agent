@@ -95,3 +95,6 @@ current_session
 
 # SearXNG generated files (ADR-0034)
 docker/searxng/uwsgi.ini
+
+# Cursor Agent
+.worktrees

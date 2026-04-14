@@ -44,17 +44,50 @@ External agent harnesses are not homogeneous:
 
 A generic integration layer can't assume CLI access, specific API shapes, or shared filesystem. It needs a **protocol-level** integration point that any agent can use.
 
-### MCP is the natural integration protocol
+### Two integration paths, not one
 
-MCP (Model Context Protocol) is already the standard for agent-tool integration. Seshat already runs MCP servers (ADR-0011) and consumes MCP tools. The key insight: **Seshat itself can be an MCP server** that external agents connect to.
+ADR-0028 established a three-tier tool integration model. The same tiers apply to how external agents integrate with Seshat:
 
-Claude Code, Codex, and Cursor all support MCP servers natively. An MCP server that exposes Seshat's Knowledge Layer gives any MCP-capable agent read/write access to the knowledge graph, conversation history, and observation data — through a standard protocol they already understand.
+**Tier 2 — SKILL.md + Seshat API**: For skill-capable harnesses (Claude Code, Codex, Cursor with OpenClaw support), a SKILL.md file teaches the agent how to query Seshat's Knowledge Layer API via CLI commands (`curl`, `httpx`) or the existing `agent memory search` CLI. Zero schema overhead in the external agent's context — it reads the skill doc from disk only when it needs Seshat's knowledge.
+
+**Tier 3 — MCP server**: For agents that support MCP natively, Seshat exposes an MCP server with structured tool definitions. This adds schema overhead in the external agent's context (the ADR-0028 tradeoff), but provides richer integration: structured tool discovery, typed responses, and MCP resource URIs.
+
+Both paths hit the same backend — the Seshat API Gateway (ADR-0045). Both are subject to the same authentication, scoping, and audit logging. The difference is how the external agent discovers and invokes Seshat's capabilities.
+
+**Why both**: We don't yet know which path produces better delegation outcomes. SKILL.md is leaner (zero schema tokens) but less structured. MCP is heavier but provides typed tool contracts. Building both against the same API lets us compare them empirically — which path leads to better knowledge retrieval during delegated tasks, fewer failed tool calls, and lower total token cost.
 
 ---
 
 ## Decision
 
-### D1: Seshat as an MCP server for external agents
+### D1: SKILL.md integration path (Tier 2)
+
+For skill-capable agent harnesses, provide SKILL.md files that teach the agent to interact with Seshat's Knowledge Layer API:
+
+```
+docs/skills/
+  seshat-knowledge.md     # Search/read/write knowledge graph entities
+  seshat-sessions.md      # Read conversation history and session context
+  seshat-observations.md  # Query execution traces and performance data
+  seshat-delegate.md      # Delegate tasks back to Seshat
+```
+
+Each skill doc follows the OpenClaw/SKILL.md format (ADR-0028 Tier 2) and maps to the same API endpoints as the MCP server tools:
+
+| Skill | CLI invocation | Equivalent MCP tool |
+|-------|---------------|-------------------|
+| `seshat-knowledge.md` | `curl $SESHAT_API/knowledge/search?q=...` | `seshat_search_knowledge` |
+| `seshat-knowledge.md` | `curl $SESHAT_API/knowledge/entities/{id}` | `seshat_get_entity` |
+| `seshat-knowledge.md` | `curl -X POST $SESHAT_API/knowledge/entities` | `seshat_store_fact` |
+| `seshat-sessions.md` | `curl $SESHAT_API/sessions/{id}/messages` | `seshat_get_session_context` |
+| `seshat-observations.md` | `curl $SESHAT_API/observations/query` | `seshat_query_observations` |
+| `seshat-delegate.md` | `curl -X POST $SESHAT_API/delegate` | `seshat_delegate` |
+
+**Advantages over MCP**: Zero schema tokens in the external agent's context window. The agent reads the skill doc once, then invokes CLI commands. Portable across any harness that supports SKILL.md or similar documentation patterns.
+
+**Authentication**: The skill doc includes instructions for passing the API token as a bearer header. The token is stored in the agent's environment (e.g., Claude Code's `.claude/settings.json` or shell env var), not in the skill doc itself.
+
+### D2: Seshat as an MCP server for external agents (Tier 3)
 
 Expose Seshat's Knowledge Layer as an **MCP server** that external agent harnesses can connect to:
 
@@ -109,7 +142,7 @@ Expose Seshat's Knowledge Layer as an **MCP server** that external agent harness
 | `seshat://sessions/{id}/messages` | Session conversation history |
 | `seshat://observations/recent` | Recent execution observations |
 
-### D2: Scoped access with audit logging
+### D3: Scoped access with audit logging
 
 Not all external agents should have the same access. Access is controlled by **API tokens** with explicit scope:
 
@@ -152,7 +185,7 @@ tokens:
 
 This creates a complete audit trail of what external agents read from and wrote to Seshat's knowledge.
 
-### D3: Delegation from Seshat to external agents
+### D4: Delegation from Seshat to external agents
 
 Outbound delegation (Seshat → external agent) uses the existing `DelegationPackage`/`DelegationOutcome` types from ADR-0033/Slice 2, extended with MCP context:
 
@@ -190,7 +223,7 @@ When Seshat delegates to Claude Code with an `mcp_server` field populated, the d
 7. Audit trail logged
 ```
 
-### D4: Delegation from external agents to Seshat (reverse delegation)
+### D5: Delegation from external agents to Seshat (reverse delegation)
 
 The `seshat_delegate` MCP tool enables **reverse delegation**: an external agent asks Seshat to perform a task.
 
@@ -210,7 +243,7 @@ Seshat MCP Server → processes delegation → creates Linear issue → returns 
 
 Reverse delegation is scoped: only agents with the `delegate` scope in their access token can trigger it. Delegated tasks go through Seshat's normal governance pipeline (including approval gates if configured).
 
-### D5: Agent-specific adapters
+### D6: Agent-specific adapters
 
 Each external agent needs a thin adapter that handles its specific integration mechanics:
 
@@ -250,19 +283,22 @@ This follows the modularity principle (ADR-0049): new agent integrations are new
 
 - **External agents get Seshat's full knowledge**: Claude Code can query the knowledge graph, read past conversations, and understand architectural context — dramatically improving delegation quality.
 - **Bidirectional interaction**: External agents aren't limited to the context stuffed into the delegation package. They can ask for more when they need it.
-- **Any MCP-capable agent works**: The MCP server is protocol-standard. New agent harnesses that support MCP can connect to Seshat without custom integration work.
-- **Audit trail**: Complete visibility into what external agents accessed and modified. Essential for debugging delegation outcomes and understanding knowledge provenance.
+- **Two integration paths enable empirical comparison**: SKILL.md (Tier 2) and MCP server (Tier 3) both hit the same API. Comparing delegation quality, token cost, and tool-call success rates between them produces real data on which pattern works better — rather than choosing on theory alone.
+- **SKILL.md path is immediately useful**: Writing skill docs is fast (no code, just documentation). Claude Code can start querying Seshat's knowledge graph as soon as the API exists and the skill doc is written.
+- **MCP path covers non-skill agents**: Any MCP-capable agent works without needing SKILL.md support. Protocol-standard integration.
+- **Audit trail**: Complete visibility into what external agents accessed and modified via either path. Essential for debugging delegation outcomes and understanding knowledge provenance.
 - **Reverse delegation enables new workflows**: Developers using Claude Code or Cursor can leverage Seshat's capabilities (knowledge search, Linear integration, memory storage) from within their preferred tool.
 
 ### Negative
 
-- **Security surface area**: Exposing the Knowledge Layer via MCP server creates an attack surface. Compromised tokens could leak knowledge or inject false facts. Mitigation: scoped tokens, rate limiting, audit logging, and the ability to revoke tokens instantly.
-- **MCP server maintenance**: The MCP server becomes a dependency for external agent workflows. Downtime affects delegation quality. Mitigation: the server is lightweight (thin wrapper over Knowledge Layer API), and delegations degrade gracefully (package context is still embedded even without MCP access).
+- **Two paths to maintain**: Both SKILL.md docs and the MCP server must be kept in sync with the underlying API. When the API changes, both integration surfaces need updates. Mitigation: both are thin wrappers over the same API — SKILL.md is documentation, MCP server is a thin adapter.
+- **Security surface area**: Exposing the Knowledge Layer (via either path) creates an attack surface. Compromised tokens could leak knowledge or inject false facts. Mitigation: scoped tokens, rate limiting, audit logging, and the ability to revoke tokens instantly.
 - **Complexity of bidirectional delegation**: Seshat delegates to Claude Code, which delegates back to Seshat — potential infinite loops. Mitigation: delegation depth limit (default: 2). Reverse delegations cannot trigger outbound delegations.
 - **Agent-specific adapters need maintenance**: Each external agent's CLI/API interface can change. Claude Code flags, Codex API versions, Cursor extension APIs — these are external dependencies. Mitigation: adapters are thin and isolated. Breaking changes affect one adapter, not the system.
 
 ### Neutral
 
 - **Existing MCP infrastructure reused**: Seshat already has an MCP gateway (`mcp/gateway.py`) and client (`mcp/client.py`). The MCP server is a new direction (Seshat as server, not just client) but uses the same protocol and SDK.
-- **FRE-22 (Plugin/extension architecture) is related but broader**: This ADR focuses on agent-to-agent integration via MCP. FRE-22 encompasses a broader plugin model that may include non-agent extensions. They're complementary, not competing.
-- **Delegation adapter for Claude Code already partially exists**: The delegation executor from Slice 2 launched Claude Code as a subprocess. This ADR formalizes and extends that pattern with MCP context injection and scoped access.
+- **FRE-22 (Plugin/extension architecture) is related but broader**: This ADR focuses on agent-to-agent integration. FRE-22 encompasses a broader plugin model that may include non-agent extensions. They're complementary, not competing.
+- **Delegation adapter for Claude Code already partially exists**: The delegation executor from Slice 2 launched Claude Code as a subprocess. This ADR formalizes and extends that pattern with MCP context injection, SKILL.md docs, and scoped access.
+- **Convergence is expected**: Over time, usage data will show whether SKILL.md or MCP (or both) is the better integration path. The architecture supports deprecating one without affecting the other — they share the API layer, not each other.

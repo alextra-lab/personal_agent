@@ -147,19 +147,20 @@ services:
       dockerfile: Dockerfile.gateway
     container_name: cloud-sim-seshat-gateway
     environment:
-      # Database URLs pointing to internal service names
-      DATABASE_URL: postgresql://agent:${POSTGRES_PASSWORD:-cloud_sim_password}@postgres:5432/personal_agent
-      NEO4J_URI: bolt://neo4j:7687
-      NEO4J_USER: neo4j
-      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-cloud_sim_password}
-      ELASTICSEARCH_HOST: elasticsearch
-      ELASTICSEARCH_PORT: "9200"
-      REDIS_URL: redis://redis:6379/0
+      # All settings use AGENT_ prefix (see config/settings.py env_prefix)
+      AGENT_DATABASE_URL: postgresql+asyncpg://agent:${POSTGRES_PASSWORD:-cloud_sim_password}@postgres:5432/personal_agent
+      AGENT_NEO4J_URI: bolt://neo4j:7687
+      AGENT_NEO4J_USER: neo4j
+      AGENT_NEO4J_PASSWORD: ${NEO4J_PASSWORD:-cloud_sim_password}
+      AGENT_ELASTICSEARCH_URL: http://elasticsearch:9200
+      AGENT_EVENT_BUS_REDIS_URL: redis://redis:6379/0
+      AGENT_ENABLE_MEMORY_GRAPH: "true"
+      AGENT_GATEWAY_AUTH_ENABLED: "false"
       # API configuration
       API_HOST: 0.0.0.0
       API_PORT: "9001"
       # Logging
-      LOG_LEVEL: info
+      AGENT_LOG_LEVEL: info
     ports:
       # Exposed on cloud-sim network (accessed via Caddy in production)
       - "9001:9001"
@@ -173,11 +174,11 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9001/api/v1/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9001/api/v1/health')"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 15s
     mem_limit: 256m
     cpus: 0.5
     networks:

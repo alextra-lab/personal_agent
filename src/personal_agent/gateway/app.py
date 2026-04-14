@@ -22,7 +22,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, Request
 
 from personal_agent.config.settings import get_settings
 from personal_agent.gateway.knowledge_api import router as knowledge_router
@@ -41,7 +41,7 @@ _health_router = APIRouter(tags=["health"])
 
 
 @_health_router.get("/health")
-async def gateway_health(request: Any) -> dict[str, Any]:
+async def gateway_health(request: Request) -> dict[str, Any]:
     """Gateway health check — no authentication required.
 
     Args:
@@ -50,8 +50,7 @@ async def gateway_health(request: Any) -> dict[str, Any]:
     Returns:
         Dict with ``status`` and ``components`` sub-keys.
     """
-    state = getattr(request, "app", None)
-    app_state = getattr(state, "state", None) if state is not None else None
+    app_state = request.app.state
     kg_ok = getattr(app_state, "knowledge_graph", None) is not None
     es_ok = getattr(app_state, "es_client", None) is not None
     db_ok = getattr(app_state, "db_session_factory", None) is not None

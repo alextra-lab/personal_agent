@@ -27,7 +27,10 @@ localhost {
 		header_up X-Forwarded-Host {http.request.header.Host}
 
 		# Timeout for long-running requests (e.g., knowledge graph queries)
-		timeout 30s
+		transport http {
+			dial_timeout 30s
+			response_header_timeout 30s
+		}
 	}
 
 	# Enable access logs (optional, for debugging)
@@ -44,9 +47,4 @@ localhost {
 		respond @4xx "{http.error.status_code} {http.error.status_text}" {http.error.status_code}
 		respond @5xx "Internal Server Error" 500
 	}
-}
-
-# Health check endpoint (for monitoring/orchestration)
-localhost/health {
-	reverse_proxy seshat-gateway:9001
 }

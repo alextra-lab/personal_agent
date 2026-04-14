@@ -28,9 +28,9 @@ COPY config/ config/
 # Install dependencies (production-only, no dev dependencies)
 RUN uv sync --frozen --no-dev
 
-# Health check
-HEALTHCHECK --interval=10s --timeout=5s --retries=5 \
-  CMD /usr/local/bin/uv run curl -f http://localhost:9001/api/v1/health || exit 1
+# Health check (python instead of curl — slim image has no curl)
+HEALTHCHECK --interval=10s --timeout=5s --retries=5 --start-period=15s \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:9001/api/v1/health')" || exit 1
 
 # Expose API port
 EXPOSE 9001

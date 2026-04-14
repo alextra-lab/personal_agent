@@ -1,0 +1,2627 @@
+{
+  "timestamp": "2026-04-14T15:50:52.688346+00:00",
+  "summary": {
+    "total_paths": 37,
+    "paths_passed": 33,
+    "paths_failed": 4,
+    "path_pass_rate": 0.8918918918918919,
+    "total_assertions": 181,
+    "assertions_passed": 175,
+    "assertions_failed": 6,
+    "assertion_pass_rate": 0.9668508287292817,
+    "total_response_time_ms": 2850495.054126106,
+    "avg_turn_response_time_ms": 25913.59140114642
+  },
+  "by_category": {
+    "Intent Classification": {
+      "total": 7,
+      "passed": 5
+    },
+    "Decomposition Strategies": {
+      "total": 4,
+      "passed": 3
+    },
+    "Memory System": {
+      "total": 4,
+      "passed": 4
+    },
+    "Expansion & Sub-Agents": {
+      "total": 3,
+      "passed": 3
+    },
+    "Context Management": {
+      "total": 8,
+      "passed": 8
+    },
+    "Tools & Self-Inspection": {
+      "total": 3,
+      "passed": 2
+    },
+    "Edge Cases": {
+      "total": 2,
+      "passed": 2
+    },
+    "Memory Quality": {
+      "total": 4,
+      "passed": 4
+    },
+    "Cross-Session Recall": {
+      "total": 2,
+      "passed": 2
+    }
+  },
+  "paths": [
+    {
+      "path_id": "CP-01",
+      "path_name": "Conversational Intent",
+      "category": "Intent Classification",
+      "session_id": "e5d86353-484d-4cec-9a73-9f7a32620f20",
+      "all_passed": true,
+      "assertions_passed": 8,
+      "assertions_total": 8,
+      "total_time_ms": 7210.816541992244,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Hey, how's it going?",
+          "response_text": "Hey! I'm doing well, thanks for asking. How about you? Anything I can help you with today?",
+          "trace_id": "ed0b466d-2424-4188-8eef-08e3f8dd8ea0",
+          "response_time_ms": 2189.0969579981174,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            },
+            {
+              "passed": true,
+              "message": "intent_classified.confidence: expected=0.7, actual=0.7",
+              "actual_value": 0.7
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.complexity: expected=simple, actual=simple",
+              "actual_value": "simple"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            },
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': not found (expected: absent)",
+              "actual_value": 0
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_dispatch_started': not found (expected: absent)",
+              "actual_value": 0
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Tell me something interesting you've learned recently.",
+          "response_text": "Something interesting I've learned recently is how powerful the combination of Elasticsearch and Neo4j can be for building intelligent systems. Elasticsearch excels at centralized logging and full-text search across microservices, while Neo4j shines as a relationship-centric knowledge graph. Using them together lets you have both the massive-scale search capabilities of Elasticsearch and the deep relationship insights of a graph database.\n\nFor example, you could use Elasticsearch to log and sear",
+          "trace_id": "cf94532d-b0b6-4c51-88ff-347464320f69",
+          "response_time_ms": 5021.719583994127,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            },
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': not found (expected: absent)",
+              "actual_value": 0
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Response is natural and engaging, not robotic",
+        "Appropriate length (not a one-word answer, not an essay)",
+        "No unnecessary tool invocations or system introspection",
+        "Turn 2 response demonstrates personality or knowledge"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-02",
+      "path_name": "Memory Recall Intent",
+      "category": "Intent Classification",
+      "session_id": "c6ee9cd9-c1c2-4417-9f90-c928d6e1beab",
+      "all_passed": true,
+      "assertions_passed": 5,
+      "assertions_total": 5,
+      "total_time_ms": 31545.256666999194,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "I've been thinking about building a recommendation engine using collaborative filtering.",
+          "response_text": "I'd be happy to help you explore collaborative filtering for a recommendation engine! Based on our past discussions, I can share some key insights:\n\n## Collaborative Filtering Approaches\n\nThere are two main approaches:\n\n### 1. **User-Based Collaborative Filtering**\n- Finds users similar to you based on their preferences/ratings\n- Recommends items that similar users liked\n- Good for: \"Users who liked this also liked...\" scenarios\n- Challenges: User base can grow large, making similarity calculati",
+          "trace_id": "f9edac1b-e12a-4473-a239-13a7dba97a3b",
+          "response_time_ms": 8860.375874995952,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "What have we discussed in our conversations so far?",
+          "response_text": "Based on our conversation history, here's what we've discussed:\n\n## **Core Technologies & Stack**\n- **PostgreSQL** (72 mentions) - Primary database with pgvector for vector search, JSONB for semi-structured data\n- **Python 3.12** - Main backend language with FastAPI, Flask, Pydantic, SQLAlchemy\n- **Kubernetes** - Container orchestration with GPU node pools\n- **Docker/Docker Compose** - Containerization and local development\n- **Redis** - Caching, sessions, rate limiting, Celery backend\n- **Rabbi",
+          "trace_id": "a9bee3d4-c746-4480-9e83-cbc8ff0c2f7e",
+          "response_time_ms": 22684.88079200324,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            },
+            {
+              "passed": true,
+              "message": "intent_classified.confidence: expected=0.9, actual=0.9",
+              "actual_value": 0.9
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 2 response references the recommendation engine topic",
+        "If no prior history, gracefully acknowledges limited history",
+        "Response is structured (not a wall of text)",
+        "Does not hallucinate conversations that never happened"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-03",
+      "path_name": "Analysis Intent",
+      "category": "Intent Classification",
+      "session_id": "ebbda799-6801-4456-8529-4d630e089bc6",
+      "all_passed": true,
+      "assertions_passed": 5,
+      "assertions_total": 5,
+      "total_time_ms": 20353.74629200669,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Analyze the trade-offs between REST and GraphQL for a small team building internal APIs.",
+          "response_text": "Based on my analysis of past discussions and current best practices, here's a comprehensive breakdown of REST vs GraphQL trade-offs for small teams building internal APIs:\n\n## REST\n\n### Advantages\n- **Simplicity**: Easier to learn and implement, especially with modern frameworks like FastAPI or Flask\n- **Caching**: HTTP caching works out-of-the-box (browser, CDN, proxy)\n- **Tooling maturity**: Extensive ecosystem of debugging tools, monitoring, and documentation (OpenAPI/Swagger)\n- **Versioning*",
+          "trace_id": "3fcbc5ac-b567-4df1-afaa-8dbe19fea8a0",
+          "response_time_ms": 12206.622792000417,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "intent_classified.confidence: expected=0.8, actual=0.8",
+              "actual_value": 0.8
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.complexity: expected=simple, actual=simple",
+              "actual_value": "simple"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Which would you lean toward for our case and why?",
+          "response_text": "I'd lean toward **REST** for your case, but I need to understand your specific situation better to give a confident recommendation.\n\nA few quick questions that would help me be more precise:\n\n1. **Team size** - How many developers will be working on this API?\n2. **API complexity** - Are you building straightforward CRUD operations, or do you have complex data relationships and queries?\n3. **Client types** - Do you have multiple clients (web, mobile, admin dashboards) with different data needs, o",
+          "trace_id": "fded2793-cf13-4290-b734-04db986a5971",
+          "response_time_ms": 8147.123500006273,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 1 covers at least 3 trade-off dimensions",
+        "Addresses the 'small team' constraint specifically",
+        "Turn 2 recommendation is consistent with Turn 1 analysis",
+        "Structured format (bullets, headers, or numbered points)"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-04",
+      "path_name": "Planning Intent",
+      "category": "Intent Classification",
+      "session_id": "8f481f7b-b49c-4658-a0ee-f64cbe87dc86",
+      "all_passed": true,
+      "assertions_passed": 4,
+      "assertions_total": 4,
+      "total_time_ms": 43387.357498999336,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Plan the next steps for adding user authentication to our API service.",
+          "response_text": "I attempted to use tools, but synthesis failed. Here are the latest tool results:\n- web_search: success\n- web_search: success\n- get_library_docs: success",
+          "trace_id": "bfe0faae-ffdc-4df3-b6e3-4f2d09117710",
+          "response_time_ms": 28513.07029099553,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=planning, actual=planning",
+              "actual_value": "planning"
+            },
+            {
+              "passed": true,
+              "message": "intent_classified.confidence: expected=0.8, actual=0.8",
+              "actual_value": 0.8
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.complexity: expected=simple, actual=simple",
+              "actual_value": "simple"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "What should we tackle first, and what can we defer?",
+          "response_text": "Based on the authentication patterns and best practices, here's a prioritized breakdown:\n\n## **Tackle First (Critical Path)**\n\n### 1. **Core Authentication Setup** (Week 1)\n- **Install dependencies**: `passlib`, `python-jose`, `python-multipart`\n- **Create base user model** with password hashing\n- **Implement JWT token generation/validation**\n- **Build basic login endpoint** (email + password)\n- **Create protected route decorator/middleware**\n- **Add environment variables** for JWT secret\n\n### 2",
+          "trace_id": "6cde2508-1453-4e73-834f-4525e37ba25b",
+          "response_time_ms": 14874.287208003807,
+          "assertions": []
+        }
+      ],
+      "quality_criteria": [
+        "Plan includes at least 4 concrete steps",
+        "Steps have a logical ordering",
+        "Addresses auth method choices (OAuth, JWT, session-based)",
+        "Turn 2 provides clear prioritization with reasoning"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-05",
+      "path_name": "Delegation Intent (Explicit and Implicit)",
+      "category": "Intent Classification",
+      "session_id": "dc497d0a-bb8b-45a5-8453-23a16c952f66",
+      "all_passed": false,
+      "assertions_passed": 3,
+      "assertions_total": 5,
+      "total_time_ms": 773840.2469590073,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Use Claude Code to write a function that parses nested JSON configuration files with schema validation and returns structured error messages for each validation failure.",
+          "response_text": "I'll write a comprehensive Python function for parsing nested JSON configuration files with schema validation and structured error reporting.\n\n```python\nimport json\nfrom typing import Any, Dict, List, Optional, Tuple, Union\nfrom dataclasses import dataclass, field\nfrom enum import Enum\n\n\nclass ValidationErrorType(Enum):\n    \"\"\"Types of validation errors.\"\"\"\n    MISSING_REQUIRED = \"missing_required\"\n    EXTRA_FIELD = \"extra_field\"\n    INVALID_TYPE = \"invalid_type\"\n    INVALID_VALUE = \"invalid_val",
+          "trace_id": "28607e8f-a7e7-477b-a2d7-a95c84fbe100",
+          "response_time_ms": 173833.33358399977,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=delegation, actual=delegation",
+              "actual_value": "delegation"
+            },
+            {
+              "passed": true,
+              "message": "intent_classified.confidence: expected=0.85, actual=0.85",
+              "actual_value": 0.85
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=delegate, actual=delegate",
+              "actual_value": "delegate"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Write unit tests for the edge cases \u2014 circular references, missing required keys, and deeply nested structures beyond 10 levels.",
+          "response_text": "[TIMEOUT after 300002ms]",
+          "trace_id": "",
+          "response_time_ms": 300002.1974170086,
+          "assertions": [
+            {
+              "passed": false,
+              "message": "Turn timed out after 300002ms",
+              "actual_value": null
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "What context would you include in the handoff to make sure Claude Code doesn't need to ask follow-up questions?",
+          "response_text": "[TIMEOUT after 300005ms]",
+          "trace_id": "",
+          "response_time_ms": 300004.715957999,
+          "assertions": [
+            {
+              "passed": false,
+              "message": "Turn timed out after 300005ms",
+              "actual_value": null
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 1: Agent composes a DelegationPackage rather than writing code",
+        "Turn 1: task_description is clear for an agent with no prior context",
+        "Turn 2: acceptance_criteria includes the three edge cases",
+        "Turn 3: Demonstrates awareness of what external agents need",
+        "Package is sufficient for Claude Code without follow-up questions"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-06",
+      "path_name": "Self-Improvement Intent",
+      "category": "Intent Classification",
+      "session_id": "f0aa6afa-4236-4a55-9b10-74b1727bee60",
+      "all_passed": true,
+      "assertions_passed": 3,
+      "assertions_total": 3,
+      "total_time_ms": 38862.86666599335,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "What improvements would you suggest to your own memory and recall system?",
+          "response_text": "Based on my past conversations about memory and recall systems, here are some improvements I'd suggest:\n\n## 1. **Enhanced Context-Aware Retrieval**\n- Implement semantic similarity search with better embedding models\n- Add multi-modal context (code snippets, diagrams, file contents) to memory entries\n- Support fuzzy matching to retrieve related but not exact matches\n\n## 2. **Temporal Awareness & Lifecycle Management**\n- Add explicit freshness/expiration scores to memory entries\n- Implement automa",
+          "trace_id": "852b7f53-dc4b-443d-8c07-e48362dd758f",
+          "response_time_ms": 18143.411749988445,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=self_improve, actual=self_improve",
+              "actual_value": "self_improve"
+            },
+            {
+              "passed": true,
+              "message": "intent_classified.confidence: expected=0.85, actual=0.85",
+              "actual_value": 0.85
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Which of those would have the biggest impact on your usefulness to me?",
+          "response_text": "Based on my current capabilities and how I interact with you, I'd say **enhanced context-aware retrieval** and **proactive memory suggestions** would have the biggest impact on my usefulness to you. Here's why:\n\n## Top Priority: Context-Aware Retrieval\n\nThis would transform how I remember and bring up information. Right now, I rely on exact keyword matching or simple semantic similarity. Better retrieval would mean:\n\n- I'd remember the *intent* behind your questions, not just the keywords\n- I co",
+          "trace_id": "94131f93-b5a4-4ac3-9b7c-7cea68920b3e",
+          "response_time_ms": 20719.454916004906,
+          "assertions": []
+        }
+      ],
+      "quality_criteria": [
+        "Suggestions reference actual system capabilities",
+        "Does not hallucinate features the system doesn't have",
+        "Turn 2 prioritization is grounded, not generic",
+        "Demonstrates self-awareness about current limitations"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-07",
+      "path_name": "Tool Use Intent",
+      "category": "Intent Classification",
+      "session_id": "76d09e2d-f6a0-4899-8107-35ef018a3ce6",
+      "all_passed": false,
+      "assertions_passed": 5,
+      "assertions_total": 6,
+      "total_time_ms": 97174.79916699813,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "List the tools you currently have access to.",
+          "response_text": "I have access to 52 tools organized into the following categories:\n\n## MCP Tools (41 tools)\n- **mcp_create_attachment** - Create attachments on Linear issues\n- **mcp_create_document** - Create Linear documents\n- **mcp_create_issue_label** - Create Linear issue labels\n- **mcp_delete_attachment** - Delete attachments\n- **mcp_delete_comment** - Delete comments\n- **mcp_esql** - Elasticsearch ES|QL queries\n- **mcp_extract_images** - Extract images from markdown\n- **mcp_get_library_docs** - Fetch libr",
+          "trace_id": "3558834d-221a-44b3-9adc-126bc21db49b",
+          "response_time_ms": 75887.01187500556,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=tool_use, actual=tool_use",
+              "actual_value": "tool_use"
+            },
+            {
+              "passed": true,
+              "message": "intent_classified.confidence: expected=0.8, actual=0.8",
+              "actual_value": 0.8
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.complexity: expected=simple, actual=simple",
+              "actual_value": "simple"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Read the system log and tell me if anything looks concerning.",
+          "response_text": "I attempted to use tools, but synthesis failed. Here are the latest tool results:\n- query_elasticsearch: failed (Elasticsearch returned HTTP 400: [1:63] [esql/query] unknown field [format])\n- query_elasticsearch: failed (Elasticsearch returned HTTP 400: [1:63] [esql/query] unknown field [format])\n- query_elasticsearch: failed (Elasticsearch returned HTTP 400: [1:41] [esql/query] unknown field [format])",
+          "trace_id": "cab4e957-82e1-412a-90df-db9bfbad687c",
+          "response_time_ms": 21287.787291992572,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=tool_use, actual=tool_use",
+              "actual_value": "tool_use"
+            },
+            {
+              "passed": false,
+              "message": "Event 'tool_call_completed': NOT found (expected: present)",
+              "actual_value": 0
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 1 lists tools accurately",
+        "Turn 2 actually calls a tool (not just describes it)",
+        "Tool results are interpreted and summarized, not dumped raw",
+        "If system is healthy, says so; if issues found, highlights them"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-08",
+      "path_name": "SINGLE Strategy (Simple Question)",
+      "category": "Decomposition Strategies",
+      "session_id": "4803052e-510b-4ae4-ab0a-a03a67b854f2",
+      "all_passed": true,
+      "assertions_passed": 6,
+      "assertions_total": 6,
+      "total_time_ms": 48595.51879201899,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "What is dependency injection?",
+          "response_text": "**Dependency Injection (DI)** is a design pattern and principle that implements **Inversion of Control (IoC)** for managing dependencies between software components.\n\n## Core Concept\n\nInstead of a class creating its own dependencies (like instantiating objects directly), those dependencies are **injected** from the outside. This creates loose coupling between components, making code more modular, testable, and maintainable.\n\n## How It Works\n\n**Without DI:**\n```python\nclass UserService:\n    def _",
+          "trace_id": "a47adb80-55b7-48bb-a632-16889b9d025f",
+          "response_time_ms": 25356.5080420085,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.complexity: expected=simple, actual=simple",
+              "actual_value": "simple"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_dispatch_started': not found (expected: absent)",
+              "actual_value": 0
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Can you give me a quick example in Python?",
+          "response_text": "Here's a quick example showing dependency injection in Python:\n\n```python\nfrom abc import ABC, abstractmethod\n\n# 1. Define interfaces\nclass Logger(ABC):\n    @abstractmethod\n    def log(self, message: str):\n        pass\n\nclass Database(ABC):\n    @abstractmethod\n    def connect(self):\n        pass\n\n# 2. Concrete implementations\nclass ConsoleLogger:\n    def log(self, message: str):\n        print(f\"[LOG] {message}\")\n\nclass ConsoleDatabase:\n    def connect(self):\n        return \"Connected to database",
+          "trace_id": "34f9278e-bd80-4633-ae28-754da39d6f5f",
+          "response_time_ms": 23239.010750010493,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_dispatch_started': not found (expected: absent)",
+              "actual_value": 0
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Explanation is clear and accurate",
+        "Appropriate depth for a definitional question",
+        "Python example in Turn 2 is correct and illustrative",
+        "Fast response time (no expansion overhead)"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-09",
+      "path_name": "HYBRID Strategy (Moderate Analysis)",
+      "category": "Decomposition Strategies",
+      "session_id": "e25878b6-a107-4452-a742-762babf60de1",
+      "all_passed": true,
+      "assertions_passed": 9,
+      "assertions_total": 9,
+      "total_time_ms": 153081.3079159998,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Research the advantages of event sourcing versus CRUD for session storage, and evaluate their suitability for a PostgreSQL-backed system.",
+          "response_text": "Based on the comprehensive research, here's a detailed comparison of event sourcing versus CRUD for session storage in PostgreSQL-backed systems:\n\n## Core Advantages of Event Sourcing\n\n**Event sourcing** offers significant benefits for specialized use cases:\n\n- **Complete Auditability**: Immutable, chronological log of every state change enables full reconstruction of user session history for security analysis and debugging\n- **Temporal Queries**: Ability to query session state at any specific p",
+          "trace_id": "d6479a8c-d9db-4c01-a9f5-1974c48be5c6",
+          "response_time_ms": 134770.82670800155,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.complexity: expected=moderate, actual=moderate",
+              "actual_value": "moderate"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=hybrid, actual=hybrid",
+              "actual_value": "hybrid"
+            },
+            {
+              "passed": true,
+              "message": "Event 'planner_started': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_dispatch_started': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_controller_complete': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "expansion_controller_complete.sub_agent_count: 4.0 >= 1 = PASS",
+              "actual_value": 4.0
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Given what you found, which approach would you recommend for our use case?",
+          "response_text": "I'd be happy to give you a specific recommendation, but I need more details about your use case to provide tailored advice. Could you share:\n\n1. **What type of system are you building?** (e.g., e-commerce, SaaS platform, real-time application, financial system)\n\n2. **What are your key requirements?**\n   - Is low-latency session access critical?\n   - Do you need audit trails or regulatory compliance (GDPR, HIPAA, etc.)?\n   - Will you need to debug or reconstruct past session states?\n   - What's y",
+          "trace_id": "d4f95739-c42a-43b4-9e77-df8d330e6eea",
+          "response_time_ms": 18310.481207998237,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Response covers both event sourcing AND CRUD approaches",
+        "PostgreSQL-specific considerations addressed",
+        "Sub-agent contributions synthesized coherently",
+        "Turn 2 recommendation grounded in Turn 1 analysis",
+        "Quality noticeably better than a single-pass response"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-10",
+      "path_name": "DECOMPOSE Strategy (Complex Multi-Part Analysis)",
+      "category": "Decomposition Strategies",
+      "session_id": "4a023172-21a5-4b35-b855-33037a090f27",
+      "all_passed": true,
+      "assertions_passed": 7,
+      "assertions_total": 7,
+      "total_time_ms": 109895.12679200561,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Compare three approaches to distributed caching, evaluate their performance under load, analyze the cost implications for each, and recommend which fits a system handling ten thousand requests per second.",
+          "response_text": "Based on the analysis, here's a comprehensive comparison of three distributed caching approaches for a system handling 10,000 requests per second (RPS):\n\n## Three Approaches to Distributed Caching\n\n### 1. In-Memory Distributed Cache\n**Description:** Stores data directly in RAM across a cluster of nodes (e.g., Redis, Hazelcast). Uses inter-node communication for data replication and consistency, avoiding disk I/O entirely.\n\n**Performance Under Load:**\n- **Latency:** Sub-millisecond (typically 100",
+          "trace_id": "5faed73e-91ce-4c47-a247-9ff1f4021ba3",
+          "response_time_ms": 109895.12679200561,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.complexity: expected=complex, actual=complex",
+              "actual_value": "complex"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=decompose, actual=decompose",
+              "actual_value": "decompose"
+            },
+            {
+              "passed": true,
+              "message": "Event 'planner_started': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_dispatch_started': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_controller_complete': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "expansion_controller_complete.sub_agent_count: 5.0 >= 2 = PASS",
+              "actual_value": 5.0
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "At least 3 caching approaches compared",
+        "Performance evaluation includes metrics or benchmarks",
+        "Cost analysis is concrete, not vague",
+        "Recommendation is specific with clear reasoning",
+        "Response well-structured with sections for each part"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-11",
+      "path_name": "Complexity Escalation Across Turns",
+      "category": "Decomposition Strategies",
+      "session_id": "83c4f96c-9913-4c9b-a2b1-2d300585b7da",
+      "all_passed": false,
+      "assertions_passed": 10,
+      "assertions_total": 12,
+      "total_time_ms": 128766.38137502596,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "What is a knowledge graph?",
+          "response_text": "A **knowledge graph** is a structured representation of knowledge that organizes information as a network of interconnected entities and their relationships. Think of it as a graph database that stores not just data, but the connections between different pieces of information.\n\n## Key Components\n\n1. **Entities (Nodes)**: These represent real-world objects, concepts, or things\u2014such as people, places, organizations, products, events, or abstract concepts.\n\n2. **Relationships (Edges)**: These defin",
+          "trace_id": "f184cf77-5c78-484d-81bc-32a1ee230d3d",
+          "response_time_ms": 13048.735625008703,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "decomposition_assessed.complexity: expected=simple, actual=simple",
+              "actual_value": "simple"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_dispatch_started': not found (expected: absent)",
+              "actual_value": 0
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Compare Neo4j and Dgraph for entity storage, and evaluate their query performance and Python ecosystem support.",
+          "response_text": "Based on the analysis, here's a comprehensive comparison of Neo4j and Dgraph for entity storage:\n\n## Storage Models\n\n### Neo4j\n- **Property Graph Model**: Native graph database with labeled property graphs\n- **Storage**: Optimized adjacency lists for fast pointer traversal\n- **Architecture**: Single-node or clustered (Enterprise Edition/Aura)\n- **Scaling**: Primarily vertical scaling; horizontal scaling possible but complex\n- **Consistency**: Strong ACID guarantees with write-ahead logging\n\n### ",
+          "trace_id": "6dcdcf5e-d6fe-4764-a22e-e9cc90062103",
+          "response_time_ms": 106026.61370800342,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.complexity: expected=moderate, actual=moderate",
+              "actual_value": "moderate"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=hybrid, actual=hybrid",
+              "actual_value": "hybrid"
+            },
+            {
+              "passed": true,
+              "message": "Event 'planner_started': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_dispatch_started': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "expansion_controller_complete.sub_agent_count: 4.0 >= 1 = PASS",
+              "actual_value": 4.0
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "Based on that comparison, which should we use?",
+          "response_text": "To make a specific recommendation, I need to understand your use case better. Could you share:\n\n1. **Scale requirements**: How many entities/relationships do you expect? (millions, billions?)\n2. **Workload pattern**: Read-heavy, write-heavy, or balanced?\n3. **Team expertise**: Does your team have GraphQL experience, or are they more familiar with SQL/Cypher?\n4. **Infrastructure**: Are you on-premises, cloud, or hybrid? Any constraints on scaling?\n5. **Application type**: Is this for analytics/re",
+          "trace_id": "35acf9df-85ba-4578-b987-8974726e6003",
+          "response_time_ms": 9691.03204201383,
+          "assertions": [
+            {
+              "passed": false,
+              "message": "No 'decomposition_assessed' event found",
+              "actual_value": null
+            },
+            {
+              "passed": false,
+              "message": "No 'decomposition_assessed' event found",
+              "actual_value": null
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_dispatch_started': not found (expected: absent)",
+              "actual_value": 0
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 1 is concise and accurate",
+        "Turn 2 is noticeably more detailed (HYBRID effect)",
+        "Turn 2 covers both databases across both dimensions",
+        "Turn 3 recommendation references Turn 2 analysis",
+        "No classification bleed-over between turns"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-12",
+      "path_name": "Entity Seeding and Targeted Recall",
+      "category": "Memory System",
+      "session_id": "d141307f-c8ea-479a-9ab7-f2ef6ab00e18",
+      "all_passed": true,
+      "assertions_passed": 6,
+      "assertions_total": 6,
+      "total_time_ms": 31145.334832996014,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "I've been working on a project called Project Atlas. It's a data pipeline that processes satellite imagery using Apache Kafka and Apache Spark.",
+          "response_text": "That sounds like an interesting project! Project Atlas is a data pipeline for processing satellite imagery using Apache Kafka and Apache Spark. \n\nIs there something specific you'd like help with regarding Project Atlas? I can assist with:\n\n- Searching for relevant documentation on Kafka and Spark integrations\n- Looking up best practices for satellite imagery processing pipelines\n- Finding information about similar projects or architectures\n- Checking if there's any related context from our past ",
+          "trace_id": "0a41d288-6e18-435f-bf00-bdebd3a133bd",
+          "response_time_ms": 10396.20412500517,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "The team lead is Maria Chen and we're deploying to AWS with a target of processing 500 images per hour.",
+          "response_text": "Great! I can see from our past conversations that we've already discussed Project Atlas. Here's what I recall:\n\n**Project Atlas** - Satellite imagery data pipeline\n- **Team Lead**: Maria Chen\n- **Architecture**: AWS-based with Apache Kafka and Apache Spark\n- **Components**: Kafka ingestion, Spark processing, S3/MSK storage, and monitoring capabilities\n\nWith your target of processing **500 images per hour**, that's a solid throughput requirement. \n\nWhat would you like help with? I can assist with",
+          "trace_id": "b66bcc1a-c7ce-4a86-8cd9-b067adb54d3a",
+          "response_time_ms": 5398.367332993075,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "What do you know about Project Atlas?",
+          "response_text": "Based on our past conversations, here's what I know about **Project Atlas**:\n\n## Overview\nProject Atlas is a **satellite imagery data pipeline** designed to process satellite imagery at scale.\n\n## Team & Leadership\n- **Team Lead**: Maria Chen\n- **Deployment Target**: AWS cloud infrastructure\n- **Performance Target**: 500 images per hour\n\n## Architecture Stack\nThe project uses a modern data pipeline architecture with:\n\n**Message Queue**: Apache Kafka for ingestion and data streaming\n\n**Processing",
+          "trace_id": "ca10f0f6-7de9-432a-9891-0c1595fb43b2",
+          "response_time_ms": 15350.763374997769,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            },
+            {
+              "passed": true,
+              "message": "intent_classified.confidence: expected=0.9, actual=0.9",
+              "actual_value": 0.9
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 3 references Project Atlas by name",
+        "Mentions at least 3 of: pipeline, imagery, Kafka, Spark, Maria Chen, AWS",
+        "Information is accurate (not hallucinated)",
+        "Demonstrates synthesis, not just parroting"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-13",
+      "path_name": "Broad Recall",
+      "category": "Memory System",
+      "session_id": "a426d5d2-ca39-4d90-a15b-e8ee09d7ae6c",
+      "all_passed": true,
+      "assertions_passed": 4,
+      "assertions_total": 4,
+      "total_time_ms": 28189.992957995855,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "I've been evaluating Django and FastAPI for our new web service. FastAPI seems faster but Django has more batteries included.",
+          "response_text": "You're right about the key tradeoffs! Here's a quick summary based on our previous discussions:\n\n**FastAPI Strengths:**\n- \u26a1 **Performance**: Built on Starlette and Pydantic, with async-first support and high throughput\n- \ud83c\udfaf **API-focused**: Excellent for modern REST/GraphQL APIs with automatic OpenAPI docs\n- \ud83e\uddea **Type safety**: Native Pydantic validation and type hints\n- \ud83d\udce6 **Lightweight**: Minimal dependencies, fast startup\n\n**Django Strengths:**\n- \ud83d\udd0b **Batteries included**: Admin panel, ORM, auth,",
+          "trace_id": "b63c2378-243e-4815-b637-8d7c82878335",
+          "response_time_ms": 9409.546833005152,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "We also need to decide between PostgreSQL and MongoDB for the storage layer. Our data is mostly relational but we have some document-like structures.",
+          "response_text": "Given your data pattern (mostly relational with some document-like structures), here's the comparison:\n\n**PostgreSQL** (what you've already decided on in earlier discussions)\n- \u2705 **Relational data**: Excellent for structured, normalized data with relationships\n- \u2705 **Hybrid support**: JSONB columns let you store document-like data with full query capabilities\n- \u2705 **ACID compliance**: Strong transactional guarantees\n- \u2705 **Foreign keys & constraints**: Enforce data integrity\n- \u2705 **Your stack**: You",
+          "trace_id": "0d207137-0898-40b6-a265-2ec54a13e0a9",
+          "response_time_ms": 9327.034499990987,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "What topics have we covered in this conversation?",
+          "response_text": "Here are the topics we've covered in this conversation:\n\n1. **Web Framework Evaluation**\n   - Django vs FastAPI comparison\n   - FastAPI's performance advantages (async-first, Starlette, Pydantic)\n   - Django's \"batteries included\" approach (admin, ORM, auth, templating)\n   - Recommendation based on your existing FastAPI stack\n\n2. **Database Storage Layer Decision**\n   - PostgreSQL vs MongoDB comparison\n   - PostgreSQL's JSONB support for hybrid relational/document data\n   - Your data pattern (mo",
+          "trace_id": "fb8a0a46-e33b-4051-ad37-6650d4664d94",
+          "response_time_ms": 9453.411624999717,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Identifies at least 2 distinct topics (web frameworks, databases)",
+        "Mentions specific technologies (Django, FastAPI, PostgreSQL, MongoDB)",
+        "Response is organized \u2014 groups topics",
+        "Captures key considerations (speed vs batteries, relational vs document)",
+        "Does not hallucinate topics not discussed"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-14",
+      "path_name": "Multi-Entity Tracking",
+      "category": "Memory System",
+      "session_id": "00f8e847-a617-4cf8-aa05-836c9c9f454b",
+      "all_passed": true,
+      "assertions_passed": 4,
+      "assertions_total": 4,
+      "total_time_ms": 29507.031792993075,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Alice on our team is building a CI/CD automation tool called BuildBot. She's using Python and GitHub Actions.",
+          "response_text": "I'm aware that Alice is building BuildBot, a CI/CD automation tool using Python and GitHub Actions. This has been discussed in our previous conversations, and we've aligned on using GitHub Actions for the CI/CD pipeline to match her BuildBot project stack.\n\nIs there something specific you'd like help with regarding BuildBot? For example:\n- Setting up GitHub Actions workflows\n- Python integration patterns\n- CI/CD pipeline configuration\n- Troubleshooting issues\n- Documentation or planning",
+          "trace_id": "abac5a8a-defd-4f9a-9797-4a3e0f881945",
+          "response_time_ms": 6390.818250001757,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Bob is working on a deployment tool called DeployTool. He's focused on Terraform and AWS infrastructure.",
+          "response_text": "I'm aware that Bob is working on DeployTool, which focuses on Terraform and AWS infrastructure-as-code for AWS deployments. This complements Alice's BuildBot project well since you'll likely need a solid deployment pipeline connecting the CI/CD automation to the actual infrastructure.\n\nIs there something specific you'd like help with regarding DeployTool? For example:\n- Terraform configuration best practices\n- AWS deployment strategies\n- Integrating DeployTool with BuildBot\n- Infrastructure-as-C",
+          "trace_id": "020bf2b7-b909-4e81-81c6-9f70e20fde67",
+          "response_time_ms": 6595.947708992753,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "What do you know about Alice and her work?",
+          "response_text": "Based on our conversations, here's what I know about Alice and her work:\n\n**Alice's Project: BuildBot**\n- She is building a CI/CD automation tool called **BuildBot**\n- **Tech stack**: Python and GitHub Actions\n- **Purpose**: CI/CD automation and pipeline orchestration\n\n**Key Details from Our Discussions:**\n- Alice's work aligns with your existing project stack, particularly around CI/CD infrastructure\n- We've discussed GitHub Actions for the CI/CD pipeline to match her BuildBot implementation\n- ",
+          "trace_id": "831e3261-f2a0-47a7-a2f3-985e40be8a03",
+          "response_time_ms": 16520.265833998565,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            },
+            {
+              "passed": true,
+              "message": "intent_classified.confidence: expected=0.9, actual=0.9",
+              "actual_value": 0.9
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Correctly associates Alice with BuildBot, Python, GitHub Actions",
+        "Does NOT mention Bob, DeployTool, Terraform, or AWS",
+        "Demonstrates entity-relationship awareness",
+        "Clean separation between the two people"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-15",
+      "path_name": "Memory-Informed Response",
+      "category": "Memory System",
+      "session_id": "08cf08b3-4add-4698-b3c6-4405455d88bd",
+      "all_passed": true,
+      "assertions_passed": 3,
+      "assertions_total": 3,
+      "total_time_ms": 26619.66508300975,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "I'm building a real-time dashboard using WebSockets and React to monitor IoT sensor data produced by industrial equipment.",
+          "response_text": "I'd be happy to help you build a real-time IoT dashboard using WebSockets and React! Based on our previous discussions, I can see you're working on a similar project.\n\nTo provide the most relevant guidance, could you tell me:\n\n1. **What specific aspect** are you looking for help with right now?\n   - WebSocket connection management and reconnection logic?\n   - Real-time UI updates and state management in React?\n   - Handling multiple sensor data streams?\n   - Scalability considerations for many c",
+          "trace_id": "4ccd071f-196b-4572-977e-953738b9dadc",
+          "response_time_ms": 8835.036500007845,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "What technology stack would you recommend for the backend of this project?",
+          "response_text": "For an IoT sensor data dashboard with real-time WebSocket connections, here's my recommended backend stack:\n\n## Primary Recommendation: **Node.js with Socket.io**\n\n**Why:**\n- **Native event-driven architecture** - Perfect for handling many concurrent WebSocket connections\n- **Socket.io** provides automatic reconnection, fallback to HTTP long-polling, rooms/publish-subscribe patterns\n- **Large ecosystem** - Mature libraries for IoT protocols (MQTT, CoAP) if you need to bridge from other systems\n-",
+          "trace_id": "01461fe0-35d7-496b-98c7-123a56a568f3",
+          "response_time_ms": 17784.628583001904,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Recommendation explicitly references WebSockets from Turn 1",
+        "Addresses IoT/real-time requirements (not generic web stack)",
+        "Technologies compatible with stated stack",
+        "Does not recommend conflicting technologies",
+        "Feels like a conversation, not two isolated questions"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-16",
+      "path_name": "HYBRID Synthesis Quality",
+      "category": "Expansion & Sub-Agents",
+      "session_id": "9372ed8b-e58a-4e8b-8776-308b215b0b93",
+      "all_passed": true,
+      "assertions_passed": 9,
+      "assertions_total": 9,
+      "total_time_ms": 129287.13391599013,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Research microservices communication patterns and evaluate the trade-offs between synchronous HTTP, asynchronous messaging, and gRPC.",
+          "response_text": "Based on the research completed, here's a comprehensive evaluation of microservices communication patterns:\n\n## Synchronous HTTP Communication Patterns\n\n### 1. **Request-Response (RESTful)**\n- **Use Cases**: CRUD operations, resource retrieval, standard API endpoints\n- **Implementation**: HTTP verbs (GET, POST, PUT, DELETE) with JSON/XML payloads\n- **Characteristics**: Stateless interactions using standard status codes (200, 404, 500)\n\n### 2. **Client-Side Load Balancing**\n- **Use Cases**: High-",
+          "trace_id": "a57b2fb7-1fdc-4a8d-a7bb-b0821d09944f",
+          "response_time_ms": 105362.45349999808,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.complexity: expected=moderate, actual=moderate",
+              "actual_value": "moderate"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=hybrid, actual=hybrid",
+              "actual_value": "hybrid"
+            },
+            {
+              "passed": true,
+              "message": "Event 'planner_started': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_dispatch_started': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_controller_complete': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "expansion_controller_complete.sub_agent_count: 4.0 >= 1 = PASS",
+              "actual_value": 4.0
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Which pattern would you recommend for a system with both low-latency and high-throughput requirements?",
+          "response_text": "For a system with **both low-latency and high-throughput requirements**, I recommend **gRPC** as the primary communication pattern, with the following considerations:\n\n## Primary Recommendation: gRPC\n\n**Why gRPC is optimal:**\n\n| Requirement | gRPC Advantage |\n|-------------|----------------|\n| **Low Latency** | HTTP/2 multiplexing eliminates connection overhead; Protobuf binary serialization is ~10x smaller than JSON |\n| **High Throughput** | Streamlined binary protocol; connection reuse; effici",
+          "trace_id": "3c480fa2-2332-4f7c-b4f6-338374b9561a",
+          "response_time_ms": 23924.680415992043,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "All three communication patterns covered (HTTP, async, gRPC)",
+        "Trade-offs are concrete (latency, complexity, tooling)",
+        "Response feels unified \u2014 not three stitched answers",
+        "Synthesis adds value (comparison table, decision framework)",
+        "Turn 2 recommendation grounded in Turn 1 analysis"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-17",
+      "path_name": "Sub-Agent Concurrency",
+      "category": "Expansion & Sub-Agents",
+      "session_id": "04da8291-dbad-47b1-9b37-d8b8c19dfcaf",
+      "all_passed": true,
+      "assertions_passed": 8,
+      "assertions_total": 8,
+      "total_time_ms": 83169.65504200198,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Compare the performance characteristics of Redis, Memcached, and Hazelcast for distributed caching. Analyze their memory management approaches and evaluate operational complexity. Recommend which fits our workload of ten thousand requests per second.",
+          "response_text": "Based on the analysis of Redis, Memcached, and Hazelcast, here's a comprehensive comparison for your 10,000 RPS workload:\n\n## Performance Characteristics\n\n**Redis**\n- **Throughput:** 100,000+ requests/second on a single node\n- **Latency:** Sub-millisecond (<1ms)\n- **Scalability:** Single-threaded I/O model (Redis 6.0+ uses multi-threaded networking) eliminates lock contention. Distributed scaling requires Redis Cluster or Sentinel, adding network overhead and complexity.\n\n**Memcached**\n- **Throu",
+          "trace_id": "3d751019-83d4-4b92-9fb8-d4c59983b527",
+          "response_time_ms": 83169.65504200198,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.complexity: expected=complex, actual=complex",
+              "actual_value": "complex"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=decompose, actual=decompose",
+              "actual_value": "decompose"
+            },
+            {
+              "passed": true,
+              "message": "Event 'planner_started': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_dispatch_started': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_controller_complete': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "expansion_controller_complete.sub_agent_count: 6.0 >= 2 = PASS",
+              "actual_value": 6.0
+            },
+            {
+              "passed": true,
+              "message": "Event 'user_visible_timeout': not found (expected: absent)",
+              "actual_value": 0
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "All three caching systems compared",
+        "Performance includes throughput, latency, memory efficiency",
+        "Memory management differences explained",
+        "Operational complexity addressed",
+        "Final recommendation is specific and justified"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-18",
+      "path_name": "Expansion Budget Enforcement",
+      "category": "Expansion & Sub-Agents",
+      "session_id": "27c2c8e7-fe4a-485e-8b68-38fcf2a758a8",
+      "all_passed": true,
+      "assertions_passed": 1,
+      "assertions_total": 1,
+      "total_time_ms": 56009.23983300163,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Research the advantages of container orchestration and evaluate Kubernetes versus Docker Swarm for small engineering teams.",
+          "response_text": "Based on the research, here's a comprehensive analysis of container orchestration advantages and a comparison between Kubernetes and Docker Swarm for small engineering teams.\n\n## Primary Advantages of Container Orchestration\n\nContainer orchestration platforms provide critical capabilities that manual container management cannot match:\n\n- **Auto-scaling**: Automatically adjusts the number of running container instances based on real-time demand or predefined thresholds, ensuring optimal resource ",
+          "trace_id": "b99f983e-49d9-4156-96f0-492c2fa49966",
+          "response_time_ms": 56009.23983300163,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Under load: provides reasonable response (graceful degradation)",
+        "Under load: response less detailed than HYBRID version",
+        "Budget enforcement transparent in telemetry",
+        "Compare quality: SINGLE vs HYBRID version of same question"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-19",
+      "path_name": "Long Conversation Trimming",
+      "category": "Context Management",
+      "session_id": "9d47a972-126c-4ad5-ad8b-6be439e27d65",
+      "all_passed": true,
+      "assertions_passed": 3,
+      "assertions_total": 3,
+      "total_time_ms": 242590.93683501123,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Let's talk about our system architecture. We use a microservices pattern with FastAPI services communicating over HTTP.",
+          "response_text": "I'd be happy to discuss your microservices architecture! Based on our past conversations, I can see we've covered several important aspects of your system.\n\nHere are some key areas we can dive into:\n\n## Communication Patterns\nSince you're using FastAPI services over HTTP, we can discuss:\n- **RESTful APIs** with OpenAPI/Swagger documentation\n- **Request/response patterns** and error handling\n- **Authentication/authorization** strategies (JWT, API keys, OAuth2)\n- **Rate limiting** and circuit brea",
+          "trace_id": "ed056f3c-673d-4909-9a2d-7b5aac5b00d3",
+          "response_time_ms": 15978.538834009669,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Our primary database is PostgreSQL for transactional data.",
+          "response_text": "Great! PostgreSQL is an excellent choice for transactional data in a microservices architecture. We've discussed this before, and it offers several advantages:\n\n## PostgreSQL Strengths for Microservices\n\n**ACID Guarantees**\n- Perfect for financial transactions and critical business data\n- Reliable multi-row, multi-table transactions\n- Strong data consistency across your services\n\n**Database-per-Service Pattern**\n- Each microservice owns its PostgreSQL instance/schema\n- Eliminates shared database",
+          "trace_id": "9699b0de-d2c9-4e46-b682-91203ad75ec0",
+          "response_time_ms": 14740.744666996761,
+          "assertions": []
+        },
+        {
+          "turn_index": 2,
+          "user_message": "We also use Elasticsearch for logging and Neo4j for our knowledge graph.",
+          "response_text": "Excellent! You have a solid polyglot persistence architecture. This combination gives you powerful capabilities for different use cases:\n\n## Your Architecture Overview\n\n**PostgreSQL** \u2192 Transactional data (ACID compliance, relational data)\n**Elasticsearch** \u2192 Centralized logging, search, and analytics\n**Neo4j** \u2192 Knowledge graph (relationships, connected data)\n\n## How They Work Together\n\n### Elasticsearch for Logging\nWe've discussed this setup before - you're likely using:\n- **Filebeat/Fluentd**",
+          "trace_id": "57b415a0-4b77-44a4-8964-4ef3fb2abb57",
+          "response_time_ms": 16672.24037500273,
+          "assertions": []
+        },
+        {
+          "turn_index": 3,
+          "user_message": "The deployment is on Docker Compose locally and Kubernetes in production.",
+          "response_text": "Perfect! That's a very common and practical deployment pattern. We've discussed this transition before, and it brings some important architectural considerations:\n\n## Docker Compose (Local Development)\n\n**Advantages:**\n- Simple, portable environment\n- Single `docker-compose.yml` defines all services\n- Easy debugging and local testing\n- Fast iteration cycles\n\n**Typical Stack:**\n- FastAPI services as containers\n- PostgreSQL, Elasticsearch, Neo4j as linked containers\n- Development tools (pgAdmin, K",
+          "trace_id": "674a9043-76fa-4970-9bb9-63bb58f87fd8",
+          "response_time_ms": 14103.660250009852,
+          "assertions": []
+        },
+        {
+          "turn_index": 4,
+          "user_message": "We've been having issues with service discovery between containers.",
+          "response_text": "Service discovery issues in Docker Compose are pretty common. Let me help you troubleshoot. Here are the typical causes and solutions:\n\n## Common Service Discovery Problems\n\n### 1. **Wrong Service Names**\nDocker Compose uses service names from `docker-compose.yml` as hostnames.\n\n**Check:**\n```yaml\n# docker-compose.yml\nservices:\n  user-service:  # \u2190 Use this exact name\n    image: user-service:latest\n    ports:\n      - \"8000:8000\"\n  \n  order-service:\n    image: order-service:latest\n    ports:\n    ",
+          "trace_id": "b9bc78f8-67d0-4327-b0b4-dc7bbd9d26b1",
+          "response_time_ms": 20431.02912500035,
+          "assertions": []
+        },
+        {
+          "turn_index": 5,
+          "user_message": "I tried using Consul but it added too much operational overhead.",
+          "response_text": "That's a very common experience! Consul is powerful but can be overkill for many teams. Let me share some lighter-weight alternatives that worked well for others in similar situations:\n\n## Lighter-Weight Service Discovery Options\n\n### 1. **Kubernetes Native DNS** (Production)\nIf you're already on K8s, you don't need Consul at all:\n\n```yaml\n# Kubernetes Service\napiVersion: v1\nkind: Service\nmetadata:\n  name: user-service\nspec:\n  selector:\n    app: user-service\n  ports:\n    - port: 8000\n      targe",
+          "trace_id": "d832a1d8-c4a5-4385-95a3-d7eeca63c587",
+          "response_time_ms": 26074.487624995527,
+          "assertions": []
+        },
+        {
+          "turn_index": 6,
+          "user_message": "We're now evaluating DNS-based service discovery versus Envoy sidecar proxies.",
+          "response_text": "Great topic! You've actually discussed this before. Let me give you a clear comparison based on what we've explored previously and current best practices.\n\n## DNS-Based Service Discovery (Kubernetes DNS)\n\n### How It Works\n- K8s DNS resolves service names to ClusterIP\n- `user-service` \u2192 `10.96.100.50` (IP)\n- Simple `http://user-service:8000` calls\n\n### Advantages\n\u2705 **Zero code changes** - works with existing HTTP clients\n\u2705 **No latency overhead** - direct service-to-service calls\n\u2705 **Simple to op",
+          "trace_id": "baf59383-ff22-481d-adb7-eae4ab7c56ff",
+          "response_time_ms": 34885.65245800419,
+          "assertions": []
+        },
+        {
+          "turn_index": 7,
+          "user_message": "The team is leaning toward Envoy because it also handles load balancing.",
+          "response_text": "Great choice! Envoy provides excellent load balancing and is widely adopted in production. Here's how to get started:\n\n## Quick Start Options\n\n### **Option 1: Istio Control Plane** (Recommended for most teams)\n\n```yaml\n# Install Istio (minimal profile)\nistioctl install --set profile=minimal -y\n\n# Enable sidecar injection for your namespace\nkubectl label namespace default istio-injection=enabled\n```\n\n**Result:**\n- Automatic Envoy sidecar injection\n- Built-in load balancing (round-robin, least-req",
+          "trace_id": "ffd99aae-9eda-4c03-af8e-b2a1b74d4298",
+          "response_time_ms": 36525.833166990196,
+          "assertions": []
+        },
+        {
+          "turn_index": 8,
+          "user_message": "But I'm worried about the memory overhead of running Envoy sidecars on every service.",
+          "response_text": "That's a very valid concern! Envoy sidecars do add overhead, but it's often manageable. Let me break down the real numbers and optimization strategies.\n\n## Memory Overhead Reality Check\n\n### **Typical Envoy Sidecar Memory Usage**\n| Configuration | Memory (RSS) | CPU (idle) |\n|--------------|--------------|------------|\n| **Minimal** | 30-50 MB | 5-10 mCPU |\n| **Default** | 80-150 MB | 20-50 mCPU |\n| **Heavy (Istio)** | 200-400 MB | 100-200 mCPU |\n\n### **Comparison**\n```yaml\n# Your app container\n",
+          "trace_id": "a6c19e70-996c-477a-8997-6ff1b3c6f095",
+          "response_time_ms": 45404.06512499612,
+          "assertions": []
+        },
+        {
+          "turn_index": 9,
+          "user_message": "Going back to the beginning \u2014 what was our primary database again?",
+          "response_text": "Based on our earlier discussions, your **primary database was PostgreSQL** with **pgvector** as the primary deployment target.\n\nYou mentioned:\n- PostgreSQL as the main database for the system\n- pgvector for vector similarity search (likely for ML/embedding use cases)\n- Binary JSON (JSONB) data type for semi-structured data storage\n- PostgreSQL schema migration tooling\n\nThis aligns with your architecture that also included:\n- **Elasticsearch** for search/logging\n- **Neo4j** for graph data\n- **Red",
+          "trace_id": "91559e5a-2d8e-41df-a6e6-c99891b489a7",
+          "response_time_ms": 17774.68520900584,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'recall_cue_detected': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "Event 'context_budget_applied': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 10: correctly identifies PostgreSQL as primary database",
+        "If trimmed, important foundational facts were retained",
+        "Conversation feels coherent throughout",
+        "Agent doesn't forget mid-conversation",
+        "context_budget_applied event fires on Turn 10 with correct trimmed/overflow_action fields"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-19-v2",
+      "path_name": "Implicit Recall \u2014 'again' cue",
+      "category": "Context Management",
+      "session_id": "f58aa77b-d520-4238-b7d2-22ad75a118e8",
+      "all_passed": true,
+      "assertions_passed": 3,
+      "assertions_total": 3,
+      "total_time_ms": 26412.640458001988,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "We need to pick a primary database for the project. Let's go with PostgreSQL.",
+          "response_text": "Great choice! PostgreSQL is an excellent option for a primary database. It's a powerful, production-ready relational database that offers:\n\n- **ACID compliance** for reliable transaction processing\n- **Rich data types** including JSONB for flexible schema evolution\n- **Strong extensibility** with custom types, functions, and operators\n- **Excellent concurrency** via MVCC (Multi-Version Concurrency Control)\n- **Advanced features** like full-text search, geospatial support (PostGIS), and replicati",
+          "trace_id": "f658b369-7737-45b1-9283-2e329db992c6",
+          "response_time_ms": 7933.60666600347,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Now let's discuss the API framework. We should use FastAPI.",
+          "response_text": "Excellent choice! FastAPI is a great fit for your architecture. Here's why it's ideal for your use case:\n\n## Why FastAPI Works Well\n\n**Performance**\n- Built on Starlette, with ASGI support\n- Uses `uvicorn` as the ASGI server\n- Async-first design for handling concurrent requests efficiently\n- High performance comparable to NodeJS and Go\n\n**Developer Experience**\n- Automatic OpenAPI/Swagger documentation\n- Pydantic-based request validation\n- Type hints for better IDE support\n- Minimal boilerplate ",
+          "trace_id": "e111c4cd-0b43-4dbc-b873-3402d44a8aca",
+          "response_time_ms": 8549.599125006353,
+          "assertions": []
+        },
+        {
+          "turn_index": 2,
+          "user_message": "What was our primary database again?",
+          "response_text": "PostgreSQL! We just confirmed it as our primary database choice. It's a powerful relational database that works great with FastAPI and our async architecture. We can use SQLAlchemy for database access and Alembic for migrations.",
+          "trace_id": "260cd026-b6d0-4829-892a-2f51dba9d003",
+          "response_time_ms": 9929.434666992165,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            },
+            {
+              "passed": true,
+              "message": "Event 'recall_cue_detected': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Correctly identifies PostgreSQL as primary database",
+        "Recall controller reclassifies from CONVERSATIONAL to MEMORY_RECALL",
+        "Agent does not claim ignorance or ask user to repeat"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-19-v3",
+      "path_name": "Implicit Recall \u2014 'earlier' cue",
+      "category": "Context Management",
+      "session_id": "22116ea9-6ece-4a8a-9367-5ecb0b5252f3",
+      "all_passed": true,
+      "assertions_passed": 3,
+      "assertions_total": 3,
+      "total_time_ms": 49131.97162399592,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "We decided to use Redis for our caching layer.",
+          "response_text": "Great choice! Redis is an excellent option for your caching layer. Based on our previous discussions, here's why Redis fits well:\n\n## Key Benefits for Your Architecture\n\n**Performance**\n- In-memory data store with sub-millisecond latency\n- Supports 100,000+ operations per second\n- Ideal for high-throughput scenarios\n\n**Features**\n- Rich data structures (strings, hashes, lists, sets, sorted sets)\n- Built-in expiration and TTL support\n- Pub/Sub messaging for real-time updates\n- Persistence options",
+          "trace_id": "f2b62c47-69de-4bfe-9581-ecc2a001f0fa",
+          "response_time_ms": 9628.831041001831,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Let's move on to discussing monitoring.",
+          "response_text": "Excellent! Let's discuss monitoring for your Redis caching layer. Based on our previous conversations about monitoring and alerting, here's a comprehensive approach:\n\n## Key Metrics to Monitor\n\n### **Redis-Specific Metrics**\n- **Memory Usage** - `used_memory`, `used_memory_peak`, `used_memory_rss`\n- **Hit Rate** - `keyspace_hits` / (`keyspace_hits` + `keyspace_misses`)\n- **Command Throughput** - `total_commands_processed` per second\n- **Connections** - `connected_clients`, `blocked_clients`\n- **",
+          "trace_id": "7cb9acc2-c876-43bc-9625-04a7ff11e5d3",
+          "response_time_ms": 27262.46541600267,
+          "assertions": []
+        },
+        {
+          "turn_index": 2,
+          "user_message": "Going back to earlier \u2014 what caching system did we pick?",
+          "response_text": "Based on our conversation history, we decided to use **Redis** for your caching layer. You mentioned this at the start of our discussion, and we then moved on to talking about Redis monitoring.",
+          "trace_id": "cf997839-aa5d-450e-9199-9f77fa331d74",
+          "response_time_ms": 12240.675166991423,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            },
+            {
+              "passed": true,
+              "message": "Event 'recall_cue_detected': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Correctly identifies Redis as caching system",
+        "Recall controller reclassifies from CONVERSATIONAL to MEMORY_RECALL"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-19-v4",
+      "path_name": "Implicit Recall \u2014 'remind me' cue",
+      "category": "Context Management",
+      "session_id": "5d496105-8e67-41f4-8e90-87bd020bc4f5",
+      "all_passed": true,
+      "assertions_passed": 2,
+      "assertions_total": 2,
+      "total_time_ms": 33691.5525420045,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "For the message queue, let's use RabbitMQ.",
+          "response_text": "Great choice! RabbitMQ is a solid option for a message queue. It's a mature, reliable broker with strong AMQP support and features like:\n\n**Key Benefits:**\n- **AMQP protocol** - Industry standard for message queuing\n- **Dead Letter Exchanges** - Handle failed messages gracefully\n- **Exchange types** - Direct, fanout, topic, headers for flexible routing\n- **Persistence** - Messages can be persisted to disk\n- **Clustering & Federation** - High availability and cross-datacenter support\n- **Manageme",
+          "trace_id": "80068e94-fd2c-43c7-b604-fcc1fdc84a88",
+          "response_time_ms": 8851.587750003091,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Actually, let's also consider the deployment strategy.",
+          "response_text": "Good point! Let's think about the deployment strategy for RabbitMQ. Here are the main approaches:\n\n## Deployment Options\n\n### 1. **Kubernetes (Recommended for Cloud-Native)**\n- **Operator**: RabbitMQ Operator (Pivotal/VMware)\n  - Automates cluster management, scaling, backups\n  - Built-in management UI, monitoring, clustering\n  - CRDs for custom RabbitMQ instances\n- **Helm Chart**: bitnami/rabbitmq or rabbitmq-cluster-operator\n  - Quick deployment, good defaults\n  - Easy to customize with values",
+          "trace_id": "8e3f367d-6c24-4396-bd32-c840836b8af0",
+          "response_time_ms": 17411.77079199406,
+          "assertions": []
+        },
+        {
+          "turn_index": 2,
+          "user_message": "Remind me what we decided on the message queue?",
+          "response_text": "We decided to use **RabbitMQ** as the message queue.",
+          "trace_id": "bf3ecdc4-f399-4369-8b1c-0bf1f940cd39",
+          "response_time_ms": 7428.194000007352,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Correctly identifies RabbitMQ as message queue",
+        "Intent classifier or recall controller classifies as MEMORY_RECALL"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-19-v5",
+      "path_name": "Implicit Recall \u2014 'what did we decide' cue",
+      "category": "Context Management",
+      "session_id": "fd463781-7f80-4dea-854f-440861a381e6",
+      "all_passed": true,
+      "assertions_passed": 2,
+      "assertions_total": 2,
+      "total_time_ms": 32291.79924998607,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "For the CI/CD pipeline, we should go with GitHub Actions.",
+          "response_text": "Great choice! GitHub Actions is an excellent option for your CI/CD pipeline. It integrates well with GitHub repositories, has a large ecosystem of community actions, and offers strong support for Python projects.\n\nBased on our earlier discussion, this aligns well with Alice's BuildBot project stack, which also uses Python and GitHub Actions. The combination of:\n- **FastAPI** for the API layer\n- **Python** as the primary language\n- **GitHub Actions** for CI/CD\n- **BuildBot** integration\n\n...creat",
+          "trace_id": "be9548f6-1112-4b06-93a0-5c73ccb8a13b",
+          "response_time_ms": 6498.951332992874,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Let me also think about the testing strategy.",
+          "response_text": "Good thinking! For a Python/FastAPI project, here's a comprehensive testing strategy to consider:\n\n## Testing Pyramid Approach\n\n### **Unit Tests** (Base of pyramid - most tests)\n- **pytest** as the testing framework (industry standard for Python)\n- Test individual functions, classes, and methods in isolation\n- Mock external dependencies (databases, APIs, file systems)\n- Aim for 80%+ code coverage on core business logic\n- Run fast (seconds to minutes)\n\n### **Integration Tests** (Middle layer - fe",
+          "trace_id": "df29e82c-224a-480e-8465-c23ced4f0e31",
+          "response_time_ms": 14731.348667002749,
+          "assertions": []
+        },
+        {
+          "turn_index": 2,
+          "user_message": "What did we decide on the CI/CD pipeline?",
+          "response_text": "We decided to go with **GitHub Actions** for the CI/CD pipeline. This was your explicit choice, and I confirmed it's a solid option that integrates well with GitHub repositories, has a large ecosystem of community actions, and works well with Python projects.",
+          "trace_id": "15f88ce1-41a4-42d8-82f1-b30f3295c080",
+          "response_time_ms": 11061.499249990447,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Correctly identifies GitHub Actions as CI/CD choice",
+        "Intent classifier or recall controller classifies as MEMORY_RECALL"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-19-v6",
+      "path_name": "Implicit Recall \u2014 'refresh my memory' cue",
+      "category": "Context Management",
+      "session_id": "72f77f01-dc82-4b46-a5da-6d52b3e0aa54",
+      "all_passed": true,
+      "assertions_passed": 3,
+      "assertions_total": 3,
+      "total_time_ms": 27133.127582987072,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Our main programming language will be Python 3.12.",
+          "response_text": "Great! I've noted that Python 3.12 will be your main programming language. \n\nBased on our previous discussions, you're also using:\n- **FastAPI** for the Python backend\n- **SQLAlchemy 2.0** for database ORM\n- **functools.lru_cache** for caching\n- **GitHub Actions** for CI/CD\n\nPython 3.12 offers several notable improvements that will benefit your stack:\n\n- **Enhanced error messages** with better syntax error locations\n- **Parenthesized context managers** for cleaner `with` statements\n- **Type hint",
+          "trace_id": "938651c8-12ca-4bbd-9247-1d1dec573f65",
+          "response_time_ms": 8076.520207992871,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "We also need a frontend framework. Let's use React.",
+          "response_text": "Perfect! I've noted that **React** will be your frontend framework.\n\nSo your full stack is now:\n\n**Backend:**\n- Python 3.12\n- FastAPI\n- SQLAlchemy 2.0\n- GitHub Actions (CI/CD)\n\n**Frontend:**\n- React\n\nThis is a solid modern stack! The combination gives you:\n- FastAPI's automatic OpenAPI/Swagger documentation for your REST APIs\n- React's component-based architecture for your UI\n- TypeScript would pair well with React for type safety (we discussed this before)\n- Easy integration via REST APIs using",
+          "trace_id": "5b1fbef9-ca57-46e7-a904-d43d7ecd92b0",
+          "response_time_ms": 12776.599499993608,
+          "assertions": []
+        },
+        {
+          "turn_index": 2,
+          "user_message": "Refresh my memory \u2014 what was our main programming language?",
+          "response_text": "Our main programming language is **Python 3.12**.",
+          "trace_id": "89ea6629-41b1-4b52-b980-7749198dccdc",
+          "response_time_ms": 6280.007875000592,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            },
+            {
+              "passed": true,
+              "message": "Event 'recall_cue_detected': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Correctly identifies Python 3.12 as main language",
+        "Recall controller reclassifies from CONVERSATIONAL to MEMORY_RECALL"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-19-v7",
+      "path_name": "Implicit Recall \u2014 'the X we discussed' cue",
+      "category": "Context Management",
+      "session_id": "44daea8f-b39a-4d2b-b47a-3b059300192f",
+      "all_passed": true,
+      "assertions_passed": 3,
+      "assertions_total": 3,
+      "total_time_ms": 31712.527042007423,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "We should use Terraform for infrastructure as code.",
+          "response_text": "That's a solid choice! Terraform is an excellent Infrastructure as Code (IaC) tool. Based on our previous discussion, here are some key reasons why Terraform is a great fit:\n\n**Key Benefits:**\n- **Declarative HCL Configuration** - Write clean, readable infrastructure code\n- **Multi-cloud Support** - Works across AWS, Azure, GCP, and many other providers\n- **State Management** - Tracks infrastructure state for safe, incremental changes\n- **Modules** - Reusable components for consistent infrastruc",
+          "trace_id": "85aceb91-ba6f-4e32-a002-6efca047bf4e",
+          "response_time_ms": 9582.550999999512,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Let's also set up monitoring with Grafana.",
+          "response_text": "Great idea! Let's set up a comprehensive monitoring stack with Grafana. Here's a recommended approach:\n\n## Monitoring Stack Architecture\n\n**Core Components:**\n- **Grafana** - Visualization and dashboards\n- **Prometheus** - Metrics collection and storage\n- **Node Exporter** - System metrics (CPU, memory, disk, network)\n- **Alertmanager** - Alert routing and notification\n- **Loki** - Log aggregation (optional but recommended)\n\n## Implementation Approaches\n\n### 1. Docker Compose (Quick Start)\nSimpl",
+          "trace_id": "d67a2d90-5920-428e-891a-fd2664d295c7",
+          "response_time_ms": 13086.043625007733,
+          "assertions": []
+        },
+        {
+          "turn_index": 2,
+          "user_message": "The tool we discussed earlier \u2014 can you confirm what it was?",
+          "response_text": "Looking at our conversation history, I don't see a specific tool name mentioned that we discussed together in our previous interactions. \n\nCould you clarify what context you're referring to? For example:\n- Was it a monitoring tool (like Prometheus, Grafana, Node Exporter)?\n- Was it an infrastructure tool (like Terraform, Terragrunt)?\n- Was it a specific technology from our earlier discussions?\n\nIf you can provide a bit more context about what the tool does or what it was used for, I can help ide",
+          "trace_id": "c0d94186-c5fb-4d97-bb56-961c2424f20d",
+          "response_time_ms": 9043.932417000178,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            },
+            {
+              "passed": true,
+              "message": "Event 'recall_cue_detected': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Correctly identifies Terraform as infrastructure tool",
+        "Recall controller reclassifies from CONVERSATIONAL to MEMORY_RECALL"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-20",
+      "path_name": "Progressive Token Budget Management",
+      "category": "Context Management",
+      "session_id": "1a3d1114-9254-4db4-9055-a19b97227218",
+      "all_passed": true,
+      "assertions_passed": 5,
+      "assertions_total": 5,
+      "total_time_ms": 72086.1000020086,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Run the system health check.",
+          "response_text": "## System Health Check Complete \u2705\n\nAll system metrics are within healthy ranges:\n\n### **CPU**\n- Load: **6.9%** (16 cores)\n- Load averages: 3.09 / 3.86 / 3.67 (1 / 5 / 15 min)\n- Status: \u2705 Healthy\n\n### **Memory**\n- Used: **63.3 GB** / 128 GB (49.5%)\n- Available: **46.95 GB**\n- Status: \u2705 Healthy\n\n### **Disk**\n- Used: **1.26 GB** / 926.35 GB (0.14%)\n- Free: **269.56 GB**\n- Status: \u2705 Healthy\n\n### **GPU**\n- Power: **0.26 W**\n- Load: **1.05%**\n- Temperature: **65.08\u00b0C**\n- Status: \u2705 Healthy\n\n**Overall S",
+          "trace_id": "3fb5b630-236a-42b7-8af6-462d182e2830",
+          "response_time_ms": 22964.625417007483,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            },
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Now show me the recent error details.",
+          "response_text": "## Recent Error Summary (Last 24 Hours)\n\n**Total Errors:** 18  \n**Trend:** Stable\n\n### **Breakdown by Type:**\n- **Tool Call Failed:** 15 (83%)\n- **Model Call Error:** 2 (11%)\n- **Task Failed:** 1 (6%)\n\n### **Breakdown by Component:**\n- **Executor:** 17 errors\n- **Client:** 1 error\n\n### **Recent Errors:**\n\n#### **1. Model/API Timeout (Most Recent)**\n- **Time:** 2026-04-14 15:07:02 UTC\n- **Type:** Task Failed / Model Call Error\n- **Component:** Executor/Client\n- **Issue:** Request to `http://local",
+          "trace_id": "fce9370b-e598-4671-a6bd-38c07fc1dbd3",
+          "response_time_ms": 22630.559709010413,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "Also check the system metrics.",
+          "response_text": "## System Metrics Snapshot\n\n### **CPU**\n- **Load:** 8.5% (16 cores)\n- **Load Averages:** 3.56 / 3.86 / 3.68 (1 / 5 / 15 min)\n- **Status:** \u2705 Healthy\n\n### **Memory**\n- **Used:** 63.5 GB / 128 GB (49.6%)\n- **Available:** 46.68 GB\n- **Status:** \u2705 Healthy\n\n### **Disk**\n- **Used:** 1.26 GB / 926.35 GB (0.14%)\n- **Free:** 269.56 GB\n- **Status:** \u2705 Healthy\n\n### **GPU**\n- **Power:** 0.42 W\n- **Load:** 2.90%\n- **Temperature:** 68.86\u00b0C\n- **Status:** \u2705 Healthy\n\n**Overall: All system metrics are within norm",
+          "trace_id": "a4ceca7b-db42-4f9d-947f-51cb4f3a499a",
+          "response_time_ms": 14384.291666996432,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        },
+        {
+          "turn_index": 3,
+          "user_message": "Summarize everything you've found \u2014 is the system healthy overall?",
+          "response_text": "## System Health Summary\n\n### **Overall Status: \u2705 HEALTHY**\n\nThe system is operating normally with no critical issues. Here's the complete picture:\n\n---\n\n### **System Metrics** (All Green)\n- **CPU:** 8.5% load on 16 cores - excellent performance headroom\n- **Memory:** 49.6% utilized (63.5 GB / 128 GB) - comfortable capacity\n- **Disk:** 0.14% utilized (1.26 GB / 926.35 GB) - plenty of space\n- **GPU:** 2.90% load, 68.86\u00b0C - operating within safe parameters\n\n---\n\n### **Error Analysis** (18 errors i",
+          "trace_id": "13284b01-c989-4faa-8cee-87c0c1feae5e",
+          "response_time_ms": 12106.623208994279,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'context_budget_applied': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Each tool call returns valid data",
+        "Turn 4 synthesizes findings coherently",
+        "If trimmed, most recent tool results preserved",
+        "Agent identifies any genuine issues",
+        "context_budget_applied event fires on Turn 4 with correct trimmed/overflow_action fields"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-21",
+      "path_name": "System Metrics (Natural Language)",
+      "category": "Tools & Self-Inspection",
+      "session_id": "e2f8d764-aa41-4053-be76-22ad61aa5a36",
+      "all_passed": true,
+      "assertions_passed": 2,
+      "assertions_total": 2,
+      "total_time_ms": 39590.44141600316,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "How is the system doing right now? I want to know about CPU and memory usage.",
+          "response_text": "Here's your current system health status:\n\n## CPU Usage\n- **Load**: 50.3%\n- **Cores**: 16\n- **Load Average**: 3.01 (1min) / 3.69 (5min) / 3.62 (15min)\n\n## Memory Usage\n- **Used**: 63.4%\n- **Total**: 128.0 GB\n- **Available**: 46.86 GB\n\n## Additional Metrics\n- **Disk**: 1.26 GB used / 926.35 GB total (269.57 GB free)\n- **GPU Load**: 6.66%\n- **GPU Temperature**: 64.68\u00b0C\n- **GPU Power**: 0.25 W\n\n**Summary**: Your system is running well with moderate CPU load and memory usage. The load averages are r",
+          "trace_id": "3329d161-92a1-4598-a0a0-0e4aa18748b3",
+          "response_time_ms": 19984.52416600776,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            },
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Is that normal for our setup?",
+          "response_text": "Yes, this is completely normal for your setup. Looking at your historical system metrics, the current readings are very consistent with what we've seen before:\n\n**Historical Baseline:**\n- **Memory**: Previously ~64.5% used (now 63.4%)\n- **Load Average**: Previously 3.8/3.8/3.7 (now 3.01/3.69/3.62)\n- **GPU Load**: Previously ~6.6% (now 6.66%)\n\nYour system has been running at these levels consistently, and previous health checks reported everything as \"within healthy ranges with no issues detected",
+          "trace_id": "e3528a23-903c-4fc3-9320-54e9759ce5a4",
+          "response_time_ms": 19605.9172499954,
+          "assertions": []
+        }
+      ],
+      "quality_criteria": [
+        "Agent calls the tool (doesn't just describe it)",
+        "Response includes actual CPU %, memory %, disk % values",
+        "Values are interpreted, not just dumped",
+        "Turn 2 provides context-aware interpretation"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-22",
+      "path_name": "Self-Telemetry Query",
+      "category": "Tools & Self-Inspection",
+      "session_id": "e4ab8894-5030-49a6-b43c-7b49b2e94962",
+      "all_passed": false,
+      "assertions_passed": 1,
+      "assertions_total": 2,
+      "total_time_ms": 31941.537541992147,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Show me your error rate and performance metrics over the past hour.",
+          "response_text": "## Performance Metrics (Past Hour)\n\n### Overall Status\n- **Status**: \u274c Unhealthy\n- **Total Interactions**: 0\n- **Success Rate**: 100% (no interactions in this window)\n\n### Component Health\n\n| Component | Status | Calls | Errors | Avg Latency |\n|-----------|--------|-------|--------|-------------|\n| **LLM** | \u26a0\ufe0f Degraded | 246 | 2 | 18,102 ms |\n| **Tools** | \u26a0\ufe0f Degraded | 23 | 4 | - |\n\n### Error Summary\n- **Total Errors**: 7\n- **Error Types**:\n  - `task_failed`: 1\n  - `model_call_error`: 2\n  - `t",
+          "trace_id": "441a6122-5e01-4f03-8a87-9ec5e741cb23",
+          "response_time_ms": 24276.20662499976,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': found (expected: present)",
+              "actual_value": 2
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Are there any specific errors I should be worried about?",
+          "response_text": "Based on the error metrics, here are the specific errors you should be aware of:\n\n## Critical Issues\n\n### 1. **LLM Timeouts (Most Impactful)**\n- **What**: Requests to the local chat completion API (`http://localhost:8000/v1/chat/completions`) are timing out after 180 seconds\n- **Impact**: This is blocking AI responses and causing task failures\n- **Frequency**: 3 errors in the past hour\n- **Action Needed**: Check if the local model service is running and responsive\n\n### 2. **Elasticsearch Query E",
+          "trace_id": "56486594-50ab-448b-8b58-46956dbc572e",
+          "response_time_ms": 7665.330916992389,
+          "assertions": [
+            {
+              "passed": false,
+              "message": "Event 'tool_call_completed': NOT found (expected: present)",
+              "actual_value": 0
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 1 reports success rate, latency, or throughput",
+        "Turn 2 reports specific error types or confirms no errors",
+        "Data is interpreted, not raw JSON dumped",
+        "Demonstrates genuine self-awareness about operational state"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-23",
+      "path_name": "Search Memory Tool (Explicit)",
+      "category": "Tools & Self-Inspection",
+      "session_id": "978b4e57-3273-4019-9e43-ab78e7aa3d3b",
+      "all_passed": true,
+      "assertions_passed": 4,
+      "assertions_total": 4,
+      "total_time_ms": 31117.674416003865,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "I've been learning about distributed systems, particularly consensus algorithms like Raft and Paxos.",
+          "response_text": "That's great! Distributed systems and consensus algorithms are fascinating and fundamental topics in computer science. Raft and Paxos are the two most well-known consensus algorithms, each with their own strengths and trade-offs.\n\nIf you're studying them, I can help with:\n\n- **Conceptual explanations** - How consensus works, why it's needed, and the challenges involved\n- **Comparing Raft vs Paxos** - Differences in design, understandability, and practical use\n- **Deep dives** into specific aspec",
+          "trace_id": "f3e5f5f1-48e7-4443-bf21-91f578c1446a",
+          "response_time_ms": 5374.231207999401,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "I'm also interested in how CRDTs enable conflict-free replication.",
+          "response_text": "CRDTs (Conflict-Free Replicated Data Types) are fascinating because they solve a fundamental problem in distributed systems: how to allow concurrent updates across replicas without coordination, while guaranteeing that all replicas will eventually converge to the same state.\n\nHere's how CRDTs enable conflict-free replication:\n\n## Core Principles\n\n**1. Commutativity** - Operations can be applied in any order and produce the same result\n- If replica A receives operations x then y, and replica B re",
+          "trace_id": "8579c306-ef48-49ee-a319-7346d7eecd49",
+          "response_time_ms": 10608.459875002154,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "Search your memory for anything related to distributed systems.",
+          "response_text": "I found several relevant conversations about distributed systems in your memory. Here's what you've discussed:\n\n## Core Distributed Systems Concepts\n\n**Consensus & Coordination:**\n- **Consensus Algorithms**: Raft and Paxos\n- **Leader Election** and **Log Replication**\n- **CAP Theorem** (Consistency, Availability, Partition Tolerance)\n\n**CRDTs (Conflict-Free Replicated Data Types):**\n- Properties: G-Set, PN-Set, Last-Writer-Wins Register, Observed-Remove Set\n- Understanding of how they enable eve",
+          "trace_id": "f432e06a-7a96-4ee4-9867-f6b80ef363e2",
+          "response_time_ms": 15134.98333300231,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=tool_use, actual=tool_use",
+              "actual_value": "tool_use"
+            },
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Agent actually calls search_memory tool",
+        "Results reference distributed systems topics",
+        "If no prior data, gracefully indicates this",
+        "Distinguishes memory data vs. session context"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-24",
+      "path_name": "Ambiguous Intent",
+      "category": "Edge Cases",
+      "session_id": "3d666e72-fcde-43ff-8c91-60f2b018b143",
+      "all_passed": true,
+      "assertions_passed": 4,
+      "assertions_total": 4,
+      "total_time_ms": 19274.5087910007,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Can you look into why our unit tests keep failing and fix the flaky ones in the authentication module?",
+          "response_text": "I attempted to use tools, but synthesis failed. Here are the latest tool results:\n- list_directory: success\n- list_directory: success",
+          "trace_id": "37519d5d-9296-49f0-9f25-910319b214f0",
+          "response_time_ms": 11794.142957995064,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=delegation, actual=delegation",
+              "actual_value": "delegation"
+            },
+            {
+              "passed": true,
+              "message": "intent_classified.confidence: expected=0.85, actual=0.85",
+              "actual_value": 0.85
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Actually, before fixing anything, just analyze the failure patterns first.",
+          "response_text": "I attempted to use tools, but synthesis failed. Here are the latest tool results:\n- search_memory: success",
+          "trace_id": "9e74f91d-9196-4e22-a344-261ea191dc22",
+          "response_time_ms": 7480.365833005635,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "intent_classified.confidence: expected=0.8, actual=0.8",
+              "actual_value": 0.8
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 1: treats as delegation/coding task",
+        "Turn 2: shifts to analysis mode \u2014 investigates patterns",
+        "Transition between intents is smooth",
+        "No carry-over of Turn 1 intent into Turn 2"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-25",
+      "path_name": "Intent Shift Mid-Conversation",
+      "category": "Edge Cases",
+      "session_id": "2d6b7738-0411-4821-8de0-004bb6a531d5",
+      "all_passed": true,
+      "assertions_passed": 8,
+      "assertions_total": 8,
+      "total_time_ms": 48200.11629301007,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Hey there, how are you doing today?",
+          "response_text": "Hey! I'm doing well, thanks for asking! How about you? Anything I can help you with today?",
+          "trace_id": "78012c60-b845-46c4-b45b-480addcb6c9c",
+          "response_time_ms": 2410.443792003207,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Analyze the impact of adding a caching layer between our API and database.",
+          "response_text": "I attempted to use tools, but synthesis failed. Here are the latest tool results:\n- web_search: success\n- web_search: success\n- perplexity_query: failed (Perplexity API key not configured. Set AGENT_PERPLEXITY_API_KEY in your .env file.)",
+          "trace_id": "5544228b-3332-48fb-b1eb-fcd19ffc905a",
+          "response_time_ms": 14701.394458999857,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "Write a function that implements a simple LRU cache in Python.",
+          "response_text": "Here's a simple LRU (Least Recently Used) cache implementation in Python using `OrderedDict`:\n\n```python\nfrom collections import OrderedDict\n\nclass LRUCache:\n    def __init__(self, capacity: int):\n        \"\"\"\n        Initialize the LRU cache with a given capacity.\n        \n        Args:\n            capacity: Maximum number of items the cache can hold\n        \"\"\"\n        self.capacity = capacity\n        self.cache = OrderedDict()\n    \n    def get(self, key: int) -> int:\n        \"\"\"\n        Get a ",
+          "trace_id": "48b67199-edaf-4282-893b-113f4b082726",
+          "response_time_ms": 21777.0487920061,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=delegation, actual=delegation",
+              "actual_value": "delegation"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=delegate, actual=delegate",
+              "actual_value": "delegate"
+            }
+          ]
+        },
+        {
+          "turn_index": 3,
+          "user_message": "What have we discussed about caching in this conversation?",
+          "response_text": "Based on our conversation, we've discussed:\n\n1. **Caching layer impact analysis** - You asked about analyzing the impact of adding a caching layer between your API and database. I attempted to search for information on this topic.\n\n2. **LRU cache implementation** - You asked me to write a simple LRU (Least Recently Used) cache in Python, which I provided with:\n   - A complete `LRUCache` class using `OrderedDict`\n   - O(1) time complexity for both `get` and `put` operations\n   - Detailed usage ex",
+          "trace_id": "97c34b3d-eef8-46cf-b151-c36ce19a127d",
+          "response_time_ms": 9311.229250000906,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Each turn's response matches its intent",
+        "Turn 2 provides genuine analysis",
+        "Turn 3 produces code (or delegation package)",
+        "Turn 4 recalls the caching discussion from Turns 2-3",
+        "No classification bleed-over between turns"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-26",
+      "path_name": "Memory Promotion Quality",
+      "category": "Memory Quality",
+      "session_id": "f4e821b9-9bbf-4201-a58d-3e3385714499",
+      "all_passed": true,
+      "assertions_passed": 7,
+      "assertions_total": 7,
+      "total_time_ms": 50885.702374987886,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "I'm building a service called DataForge. It uses Apache Flink for stream processing and stores results in ClickHouse.",
+          "response_text": "That's a solid architecture! Apache Flink for stream processing with ClickHouse as the storage layer is a powerful combination for real-time analytics and high-throughput data pipelines.\n\nI notice we've discussed DataForge before - it seems you're continuing to develop this service. Based on our previous conversations, you've also explored integrating this with Apache Kafka for ingestion and considered DataForge Labs for high-volume requirements.\n\nHow can I help you with DataForge? I can assist ",
+          "trace_id": "c0b05ab3-dcf8-404f-909b-b7730a827dc7",
+          "response_time_ms": 5985.727292005322,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "The project lead is Priya Sharma. We're targeting a throughput of 50,000 events per second on GCP.",
+          "response_text": "That's an ambitious throughput target! 50,000 events per second on GCP with Flink and ClickHouse is definitely achievable, but it requires careful architecture.\n\nGiven your scale and the GCP environment, here are some key considerations we could dive into:\n\n**Infrastructure & Scaling:**\n- Flink on GCP: Kubernetes (GKE) vs. Dataflow vs. standalone clusters\n- ClickHouse on GCP: Managed (ClickHouse Cloud) vs. self-hosted on GKE/Compute Engine\n- Kafka alternative: Pub/Sub or Kafka on GKE\n\n**Performa",
+          "trace_id": "94b8e8af-514b-4b4c-a559-a84630bd0c41",
+          "response_time_ms": 8109.484207991045,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "DataForge also integrates with Grafana for real-time monitoring and uses Kafka as the ingestion layer before Flink processes the data.",
+          "response_text": "Perfect! That gives us the complete architecture:\n\n```\nKafka (ingestion) \u2192 Apache Flink (stream processing) \u2192 ClickHouse (storage) \u2192 Grafana (monitoring)\n```\n\nThis is a solid, battle-tested stack for real-time analytics at scale. With 50K events/second on GCP, here's what we could optimize:\n\n**Kafka Layer:**\n- Partition count and replication factor for 50K EPS\n- Topic configuration and retention policies\n- Consumer group design for Flink jobs\n\n**Flink Layer:**\n- Parallelism settings and operator",
+          "trace_id": "5cb6feab-a61f-4ec4-a70f-cf5a874c49f5",
+          "response_time_ms": 10922.93366699596,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 3,
+          "user_message": "What do you remember about the DataForge project?",
+          "response_text": "Based on my memory, here's what I recall about the **DataForge** project:\n\n## Project Overview\n- **Type**: Real-time streaming analytics service\n- **Project Lead**: Priya Sharma\n- **Platform**: Google Cloud Platform (GCP)\n\n## Architecture Stack\n```\nApache Kafka \u2192 Apache Flink \u2192 ClickHouse \u2192 Grafana\n                           \u2193\n                       Prometheus\n```\n\n## Key Details\n- **Ingestion**: Apache Kafka\n- **Stream Processing**: Apache Flink\n- **Storage**: ClickHouse\n- **Monitoring**: Grafa",
+          "trace_id": "6166751c-2d30-4361-8811-1090c986c6b0",
+          "response_time_ms": 25867.55720799556,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            },
+            {
+              "passed": true,
+              "message": "Event 'memory_recall_broad_query': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 4 references DataForge by name",
+        "Mentions at least 5 of: Flink, ClickHouse, Priya Sharma, GCP, Grafana, Kafka",
+        "Information is accurate (no hallucinated technologies or people)",
+        "Demonstrates entity-relationship awareness (Kafka -> Flink -> ClickHouse pipeline)",
+        "Does not confuse entities from other conversations"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-27",
+      "path_name": "Memory-Informed Context Assembly",
+      "category": "Memory Quality",
+      "session_id": "1e308886-e3b4-4839-b61b-4a4ed6ecdaa1",
+      "all_passed": true,
+      "assertions_passed": 5,
+      "assertions_total": 5,
+      "total_time_ms": 30913.94195902103,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "I'm working on a machine learning pipeline called SentinelML that uses PyTorch for model training and MLflow for experiment tracking.",
+          "response_text": "I can see you're working with SentinelML, a machine learning pipeline that uses PyTorch for model training and MLflow for experiment tracking. I recall we've discussed this pipeline before.\n\nWhat would you like help with regarding your SentinelML pipeline? I can assist with:\n\n- Debugging or troubleshooting issues\n- Best practices for PyTorch or MLflow integration\n- Architecture improvements\n- Code review or optimization\n- Experiment tracking strategies\n- Or anything else specific to your project",
+          "trace_id": "0ce3fad5-0418-4be3-b954-dc8cc079ec1d",
+          "response_time_ms": 3879.510292012128,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "SentinelML runs on Kubernetes with GPU node pools. The inference endpoint uses TorchServe behind an Istio service mesh.",
+          "response_text": "I see! Your SentinelML pipeline has a solid infrastructure setup:\n\n- **Kubernetes** with GPU node pools for scalable compute\n- **TorchServe** for serving inference endpoints\n- **Istio service mesh** for traffic management, security, and observability\n\nThis is a robust production architecture I've seen discussed before. Is there something specific you'd like help with? For example:\n\n- Scaling or performance optimization?\n- Troubleshooting an issue?\n- Adding new features or integrations?\n- Monitor",
+          "trace_id": "1f1f121b-4881-454c-9abe-7573e5c6772b",
+          "response_time_ms": 5065.855042004841,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "What infrastructure changes would you recommend for scaling SentinelML to handle 10x the current inference load?",
+          "response_text": "I attempted to use tools, but synthesis failed. Here are the latest tool results:\n- web_search: success\n- web_search: success\n- web_search: success",
+          "trace_id": "e5c449c6-cbe2-427a-8be1-2519d6394ad9",
+          "response_time_ms": 21968.57662500406,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            },
+            {
+              "passed": true,
+              "message": "Event 'memory_enrichment_completed': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 3 response explicitly references SentinelML by name",
+        "Recommends scaling TorchServe specifically (not generic model serving)",
+        "Addresses Kubernetes GPU node pool scaling",
+        "Mentions Istio service mesh considerations for load balancing",
+        "Advice is stack-specific, not generic cloud scaling advice",
+        "Response demonstrates memory-informed reasoning, not generic knowledge"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-28",
+      "path_name": "Context Budget Trimming Audit",
+      "category": "Memory Quality",
+      "session_id": "ae352566-6bec-4a65-8fa4-6373c12cc14f",
+      "all_passed": true,
+      "assertions_passed": 4,
+      "assertions_total": 4,
+      "total_time_ms": 137873.97070803854,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Our production system uses PostgreSQL 16 as the primary database with pgvector for embeddings.",
+          "response_text": "I understand your production system is running PostgreSQL 16 with pgvector for embeddings. This is a solid setup for vector search and similarity operations.\n\nHow can I help you with your database setup? I can assist with:\n\n- Query optimization and indexing strategies for pgvector\n- Performance tuning for PostgreSQL 16\n- Vector similarity search patterns (HNSW, IVFFlat, etc.)\n- Migration or upgrade considerations\n- Troubleshooting specific issues\n- Architecture recommendations for your use case\n",
+          "trace_id": "10eeb303-219f-4548-aab0-3a630a0de98e",
+          "response_time_ms": 10587.777207998442,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "We chose PostgreSQL specifically because we needed ACID guarantees for our financial transaction processing.",
+          "response_text": "That's a solid architectural decision. PostgreSQL is well-suited for financial systems due to its strong ACID compliance, durability guarantees, and mature transaction handling.\n\nGiven your setup (PostgreSQL 16 + pgvector + financial transactions), you're combining:\n\n1. **ACID-compliant transaction processing** for financial data integrity\n2. **Vector embeddings** for similarity search (likely for fraud detection, pattern matching, or recommendations)\n\nThis hybrid approach is powerful but has so",
+          "trace_id": "312be88b-9d3e-4c87-b455-c868ee880281",
+          "response_time_ms": 8122.689041003468,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "The API layer is FastAPI with Pydantic v2 for validation.",
+          "response_text": "Great stack choice. FastAPI with Pydantic v2 is a solid combination for your financial API layer:\n\n- **FastAPI** - Excellent async support, great performance, automatic OpenAPI docs\n- **Pydantic v2** - Improved performance, better validation, stricter by default\n\nGiven your PostgreSQL 16 + pgvector backend, you're likely:\n- Exposing vector similarity endpoints (e.g., `/embeddings/search`)\n- Handling financial transaction endpoints with strict validation\n- Possibly implementing fraud detection or",
+          "trace_id": "6406b4cd-26da-456b-a620-226743a4da2d",
+          "response_time_ms": 9878.595250003855,
+          "assertions": []
+        },
+        {
+          "turn_index": 3,
+          "user_message": "We use Redis for session caching and rate limiting.",
+          "response_text": "Perfect addition to your stack. Redis is ideal for both session caching and rate limiting:\n\n**Session Caching:**\n- Fast, in-memory session storage\n- TTL-based expiration for automatic cleanup\n- Works well with FastAPI's session middleware\n\n**Rate Limiting:**\n- Sliding window or token bucket algorithms\n- Protects your financial endpoints from abuse\n- Low-latency lookups for request throttling\n\n**Integration with your setup:**\n- **FastAPI + Redis** - Use `fastapi-limiter` or custom middleware for ",
+          "trace_id": "89da7e20-da98-4dbb-be75-70c6d2bad802",
+          "response_time_ms": 8832.465875006164,
+          "assertions": []
+        },
+        {
+          "turn_index": 4,
+          "user_message": "Our observability stack is Prometheus plus Grafana with OpenTelemetry instrumentation.",
+          "response_text": "Solid observability stack. Prometheus + Grafana with OpenTelemetry is a well-established combination:\n\n**Your Observability Architecture:**\n- **OpenTelemetry** - Unified instrumentation across FastAPI, PostgreSQL, Redis\n- **Prometheus** - Metrics collection and alerting\n- **Grafana** - Visualization and dashboards\n\n**Key metrics to monitor for your financial system:**\n- **PostgreSQL 16** - Query latency, connection pool usage, transaction rates, pgvector index performance\n- **FastAPI** - Request",
+          "trace_id": "ff94a9f9-8ea2-4176-8ebf-256659abb406",
+          "response_time_ms": 13054.869666011655,
+          "assertions": []
+        },
+        {
+          "turn_index": 5,
+          "user_message": "We deploy using ArgoCD with Kustomize overlays across three environments: dev, staging, production.",
+          "response_text": "Excellent. You have a complete, well-structured GitOps deployment architecture:\n\n**Your Deployment Stack:**\n```\nArgoCD (GitOps controller)\n  \u2514\u2500\u2500 Kustomize overlays (environment-specific configs)\n       \u251c\u2500\u2500 dev\n       \u251c\u2500\u2500 staging\n       \u2514\u2500\u2500 production\n```\n\n**This setup provides:**\n- **Declarative infrastructure** - Git as source of truth\n- **Environment isolation** - Separate configs for each environment\n- **Audit trail** - All changes tracked in Git\n- **Rollback capability** - Easy version rever",
+          "trace_id": "47883dac-74fb-48b7-b56e-2f23428f902f",
+          "response_time_ms": 16131.160584001918,
+          "assertions": []
+        },
+        {
+          "turn_index": 6,
+          "user_message": "The CI pipeline uses GitHub Actions with matrix builds for Python 3.11 and 3.12.",
+          "response_text": "Great. Your CI pipeline is well-structured:\n\n**Your CI/CD Architecture:**\n```\nGitHub Actions (CI)\n  \u2514\u2500\u2500 Matrix builds: Python 3.11, 3.12\n       \u2514\u2500\u2500 ArgoCD (CD)\n            \u2514\u2500\u2500 Kustomize overlays \u2192 dev/staging/production\n```\n\n**Matrix build benefits:**\n- **Compatibility testing** - Ensure code works across Python versions\n- **Early detection** - Catch version-specific bugs before deployment\n- **Gradual migration** - Support transition from 3.11 to 3.12\n\n**Typical GitHub Actions workflow:**\n```yam",
+          "trace_id": "898d73e4-3a08-499b-bc9d-9636cd2a6f1d",
+          "response_time_ms": 15767.492833998404,
+          "assertions": []
+        },
+        {
+          "turn_index": 7,
+          "user_message": "We also have a Celery worker fleet for async job processing backed by RabbitMQ.",
+          "response_text": "Perfect addition. Celery + RabbitMQ completes your async processing architecture:\n\n**Your Full Architecture:**\n```\nFastAPI (API layer)\n  \u251c\u2500\u2500 Redis (sessions + rate limiting)\n  \u251c\u2500\u2500 PostgreSQL 16 + pgvector (data layer)\n  \u2514\u2500\u2500 Celery workers (async jobs)\n       \u2514\u2500\u2500 RabbitMQ (message broker)\n```\n\n**Typical async job use cases for your financial system:**\n- **Vector embedding generation** - Process transactions for similarity search\n- **Fraud detection** - Background analysis of transaction patterns\n",
+          "trace_id": "d8417251-4a7a-4b7f-9217-c472a2d52299",
+          "response_time_ms": 13936.011083002086,
+          "assertions": []
+        },
+        {
+          "turn_index": 8,
+          "user_message": "Run a full system health check, then tell me about any issues, and also check the recent error log.",
+          "response_text": "## System Health Check Summary\n\n### \u2705 **System Metrics - All Good**\n- **CPU:** 10.7% load (16 cores), load average ~3.1 (healthy)\n- **Memory:** 63.7% used, 46.4 GB available (128 GB total) - **Good**\n- **Disk:** 1.26 TB used, 269.6 GB free (926 GB total) - **Plenty of space**\n- **GPU:** 6.8% load, 73\u00b0C temp - **Normal**\n\n### \u26a0\ufe0f **Recent Errors (Past 24 Hours)**\n**Total: 19 errors** (stable trend)\n\n**Breakdown:**\n- **Tool call failures:** 16 (84%)\n- **Model call errors:** 2 (11%)\n- **Task failure",
+          "trace_id": "f870823b-2886-4076-a6b7-0625939db01d",
+          "response_time_ms": 30391.88950000971,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': found (expected: present)",
+              "actual_value": 2
+            }
+          ]
+        },
+        {
+          "turn_index": 9,
+          "user_message": "Given everything we've discussed about our stack, what is our primary database and why did we choose it?",
+          "response_text": "Your primary database is **PostgreSQL 16 with pgvector**.\n\n**Why you chose it:**\n\n1. **pgvector integration** - You selected PostgreSQL specifically for its pgvector extension, which enables vector similarity searches directly in the database. This is critical for your financial system's transaction similarity search and fraud detection capabilities.\n\n2. **Reliability and maturity** - PostgreSQL is the most trusted open-source database for financial systems, with strong ACID compliance and prove",
+          "trace_id": "661146ae-6888-41f6-8de5-84bd9a0b28c1",
+          "response_time_ms": 11171.019667002838,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 10 correctly identifies PostgreSQL 16 as primary database",
+        "Turn 10 mentions ACID guarantees or financial transaction context",
+        "If context was trimmed, foundational facts (PostgreSQL, financial) survived",
+        "gateway_output.budget_trimmed field accurately reflects trimming decision",
+        "If overflow_action is 'dropped_oldest_history', recent tool output is preserved",
+        "If overflow_action is 'dropped_memory_context', session history is preserved"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-29",
+      "path_name": "Delegation Package Completeness",
+      "category": "Memory Quality",
+      "session_id": "5dcf6bb6-40c2-40af-8a44-196301c212cc",
+      "all_passed": true,
+      "assertions_passed": 7,
+      "assertions_total": 7,
+      "total_time_ms": 27845.323083005496,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Our API uses FastAPI with SQLAlchemy 2.0 async sessions and Alembic for migrations. The models are in src/models/ and the routes in src/routes/.",
+          "response_text": "Got it! I understand your API stack:\n\n- **FastAPI** as the web framework\n- **SQLAlchemy 2.0** with async sessions for database operations\n- **Alembic** for database migrations\n- **Models** located in `src/models/`\n- **Routes** located in `src/routes/`\n\nIs there something specific you'd like help with? For example:\n- Creating or reviewing models/routes\n- Setting up Alembic migrations\n- Database configuration\n- API design patterns\n- Debugging an issue\n\nLet me know what you need!",
+          "trace_id": "9f6a8727-7bb5-4795-a5dc-a27ff24819f9",
+          "response_time_ms": 4906.144458000199,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "We had a bug last week where a migration dropped a column that was still referenced by an API endpoint. The tests didn't catch it because we were mocking the database.",
+          "response_text": "That's a classic integration gap! Mocking the database in tests means you're not catching schema/code mismatches. Here's how to prevent this:\n\n## Immediate Fixes\n\n1. **Sync the codebase** - Update the API endpoint to remove references to the dropped column\n2. **Add the column back** (if needed) via a quick Alembic migration\n\n## Prevention Strategies\n\n### 1. **Integration Tests with Real DB**\n```python\n# In tests/conftest.py\n@pytest.fixture\ndef async_engine():\n    return create_async_engine(setti",
+          "trace_id": "9600fd7d-b466-4dd3-9911-30086f53b686",
+          "response_time_ms": 13640.556333004497,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "Use Claude Code to add a new REST endpoint for bulk user imports with CSV upload support, input validation, and proper error reporting for malformed rows.",
+          "response_text": "I attempted to use tools, but synthesis failed. Here are the latest tool results:\n- list_directory: success",
+          "trace_id": "1592876c-d0cb-440e-b34f-3be5adfe37a7",
+          "response_time_ms": 9298.6222920008,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=delegation, actual=delegation",
+              "actual_value": "delegation"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=delegate, actual=delegate",
+              "actual_value": "delegate"
+            },
+            {
+              "passed": true,
+              "message": "Event 'delegation_package_created': found (expected: present)",
+              "actual_value": 1
+            },
+            {
+              "passed": true,
+              "message": "delegation_package_created.criteria_count: 3.0 >= 1 = PASS",
+              "actual_value": 3.0
+            },
+            {
+              "passed": true,
+              "message": "delegation_package_created.context_items: 0.0 >= 0 = PASS",
+              "actual_value": 0.0
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Delegation package references FastAPI + SQLAlchemy from Turn 1",
+        "Package includes the migration bug from Turn 2 as a known pitfall",
+        "Acceptance criteria cover CSV parsing, validation, and error reporting",
+        "Package includes relevant file paths (src/models/, src/routes/)",
+        "Task description is self-contained for an agent with no prior context",
+        "Package complexity estimate is reasonable (MODERATE or COMPLEX)"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-30",
+      "path_name": "Cross-Session Entity Recall",
+      "category": "Cross-Session Recall",
+      "session_id": "a8cb2003-73a7-45c5-afee-ea0efaa6016e",
+      "all_passed": true,
+      "assertions_passed": 5,
+      "assertions_total": 5,
+      "total_time_ms": 54153.90204099822,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "We're evaluating DataForge for our data processing pipeline. It's a distributed framework similar to Apache Flink.",
+          "response_text": "I attempted to use tools, but synthesis failed. Here are the latest tool results:\n- web_search: success\n- web_search: success\n- fetch_url: success",
+          "trace_id": "cc56a63f-3151-4261-bfb8-91120b2c10bf",
+          "response_time_ms": 24219.166583003243,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'intent_classified': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Our team lead Priya Sharma has experience with both tools. She recommends DataForge for our ClickHouse integration.",
+          "response_text": "I attempted to use tools, but synthesis failed. Here are the latest tool results:\n- web_search: success",
+          "trace_id": "c9bcfd75-bfb1-4eba-ba7a-81dfc5adfc38",
+          "response_time_ms": 8033.687957999064,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'intent_classified': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "Let's go with DataForge then. It handles our volume requirements and Priya can lead the integration.",
+          "response_text": "Great choice! DataForge seems like a solid fit for your requirements. Based on our earlier discussion, here's what we've decided:\n\n**Decision Summary:**\n- **Framework:** DataForge (distributed data processing framework)\n- **Integration Target:** ClickHouse\n- **Lead:** Priya Sharma (has experience with both DataForge and ClickHouse)\n- **Key Benefit:** Handles high-volume data processing requirements\n\n**Next Steps to Consider:**\n\n1. **Create a Linear Issue** to track the DataForge integration proj",
+          "trace_id": "eb529402-01de-4c76-b692-d176349291a3",
+          "response_time_ms": 7877.548916992964,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'intent_classified': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        },
+        {
+          "turn_index": 3,
+          "user_message": "What was that data processing tool we discussed?",
+          "response_text": "Based on our previous discussions, the data processing tool we talked about was **DataForge**. \n\nHere are the key details from that conversation:\n\n- **Architecture**: DataForge uses a streaming architecture with:\n  - **Kafka** for data ingestion\n  - **Apache Flink** for stream processing\n  - **ClickHouse** for storage\n  - **Grafana** for monitoring\n\n- **Team Lead**: Priya Sharma recommended DataForge for your ClickHouse integration\n\n- **Use Case**: It's positioned as a real-time streaming analyt",
+          "trace_id": "db2e33b4-d05d-4832-8934-6620bc84e741",
+          "response_time_ms": 14023.498583002947,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            },
+            {
+              "passed": true,
+              "message": "Event 'recall_cue_detected': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-31",
+      "path_name": "Cross-Session Decision Recall",
+      "category": "Cross-Session Recall",
+      "session_id": "f619e765-fc30-423f-9cef-bc3608e315fe",
+      "all_passed": true,
+      "assertions_passed": 4,
+      "assertions_total": 4,
+      "total_time_ms": 27005.802041006973,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "I need to pick a primary database for the new project. Options are PostgreSQL, MySQL, or CockroachDB.",
+          "response_text": "I attempted to use tools, but synthesis failed. Here are the latest tool results:\n- web_search: success\n- web_search: success",
+          "trace_id": "e17a1756-63e3-4aac-b268-e47b47fff1d8",
+          "response_time_ms": 10939.068167004734,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'intent_classified': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "After reviewing the requirements, let's go with PostgreSQL. It has the best JSONB support and our team knows it well.",
+          "response_text": "Great choice! PostgreSQL is an excellent decision for your project, especially given your team's familiarity with it and the strong JSONB support.\n\nBased on our previous discussions, here's what I recommend for your PostgreSQL setup:\n\n## Recommended Stack\n- **PostgreSQL** - Primary relational database\n- **SQLAlchemy 2.0** - ORM with async support\n- **Alembic** - Database migrations\n- **Pydantic** - Data validation (for API layer)\n\n## Key Advantages You're Leveraging\n\n1. **JSONB Support** - Store",
+          "trace_id": "1953ba40-e668-4b7a-99ed-27a7a1569c60",
+          "response_time_ms": 6349.191833010991,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'intent_classified': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "What database did we decide on?",
+          "response_text": "Based on our previous discussions, we decided on **PostgreSQL** as the primary database. Specifically, we selected **pgvector** as the main deployment target, which is PostgreSQL with vector search capabilities for machine learning and AI workloads.\n\nWe also discussed integrating several other technologies with PostgreSQL:\n- **pgvector** for vector search functionality\n- **Kubernetes** for container orchestration\n- **Redis** for caching and sessions\n- **Prometheus** for metrics and monitoring\n- ",
+          "trace_id": "11b7efa9-28a4-4577-b778-e5239e73eddc",
+          "response_time_ms": 9717.542040991248,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=memory_recall, actual=memory_recall",
+              "actual_value": "memory_recall"
+            },
+            {
+              "passed": true,
+              "message": "Event 'recall_cue_detected': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [],
+      "post_path_assertions": []
+    }
+  ]
+}

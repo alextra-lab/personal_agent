@@ -1,5 +1,12 @@
 # Graphiti Experiment Implementation Plan
 
+> **ARCHIVED INFRASTRUCTURE (Apr 2026)**
+> The ephemeral second Neo4j (`neo4j-experiment`, port `7688`) and the Graphiti
+> harness (`scripts/graphiti_experiment.py` + `scripts/experiment/`) have been
+> archived to `scripts/archive/graphiti_experiment/` and removed from compose.
+> The procedural steps below are historical record — **do not re-run** them as-is.
+> See `docs/research/GRAPHITI_EXPERIMENT_REPORT.md` for conclusions.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Run a comparative experiment between Graphiti and the current Seshat Neo4j backend across 6 scenarios (episodic retrieval, semantic consolidation, temporal queries, entity dedup, consolidation lifecycle, scaling) and produce a recommendation report.

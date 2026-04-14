@@ -51,7 +51,6 @@ from tests.evaluation.harness.dataset import (
     PATHS_BY_ID,
 )
 from tests.evaluation.harness.models import ConversationPath
-from tests.evaluation.harness.neo4j_checker import Neo4jChecker
 from tests.evaluation.harness.report import (
     generate_json_report,
     generate_markdown_report,
@@ -149,11 +148,6 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         default="telemetry/evaluation",
         help="Base directory for output reports (default: telemetry/evaluation)",
-    )
-    parser.add_argument(
-        "--neo4j-uri",
-        default="bolt://localhost:7687",
-        help="Neo4j bolt URI (default: bolt://localhost:7687)",
     )
     parser.add_argument(
         "--skip-setup",
@@ -270,15 +264,9 @@ async def main() -> None:
 
     telemetry = TelemetryChecker(es_url=args.es_url)
 
-    neo4j = Neo4jChecker(neo4j_uri=args.neo4j_uri)
-    neo4j_connected = await neo4j.connect()
-    if not neo4j_connected:
-        log.warning("neo4j_not_available_post_path_assertions_will_be_skipped")
-
     runner = EvaluationRunner(
         agent_url=args.agent_url,
         telemetry=telemetry,
-        neo4j_checker=neo4j if neo4j_connected else None,
         inter_path_delay_s=args.inter_path_delay,
     )
 
@@ -302,9 +290,6 @@ async def main() -> None:
 
     # Run paths
     results = await runner.run_paths(paths)
-
-    if neo4j_connected:
-        await neo4j.disconnect()
 
     # Generate reports
     output_dir = Path(args.output_dir)

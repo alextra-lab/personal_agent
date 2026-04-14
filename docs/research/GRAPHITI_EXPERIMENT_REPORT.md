@@ -1,5 +1,11 @@
 # Graphiti Experiment Report — EVAL-02
 
+> **ARCHIVED INFRASTRUCTURE (Apr 2026)**
+> The ephemeral second Neo4j (`neo4j-experiment`, port `7688`) and the Graphiti
+> comparison harness (`scripts/graphiti_experiment.py`) have been removed from
+> `docker-compose.yml` and archived to `scripts/archive/graphiti_experiment/`.
+> **The findings and conclusions below are unchanged.**
+
 **Date:** 2026-03-28
 **Linear Issue:** FRE-147
 **Spec:** `docs/superpowers/specs/2026-03-28-graphiti-experiment-design.md`

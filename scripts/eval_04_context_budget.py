@@ -40,7 +40,6 @@ log = structlog.get_logger(__name__)
 AGENT_URL = "http://localhost:9000"
 ES_URL = "http://localhost:9200"
 ES_INDEX = "agent-logs-*"
-NEO4J_URI = "bolt://localhost:7687"
 
 # ---------------------------------------------------------------------------
 # Stress-test scenarios — designed to build long contexts
@@ -350,26 +349,19 @@ async def run() -> None:
     print()
 
     from tests.evaluation.harness.dataset import PATHS_BY_ID
-    from tests.evaluation.harness.neo4j_checker import Neo4jChecker
     from tests.evaluation.harness.report import generate_json_report, generate_markdown_report
     from tests.evaluation.harness.runner import EvaluationRunner
     from tests.evaluation.harness.telemetry import TelemetryChecker
 
     telemetry = TelemetryChecker(es_url=ES_URL)
-    neo4j = Neo4jChecker(neo4j_uri=NEO4J_URI)
-    neo4j_connected = await neo4j.connect()
 
     runner = EvaluationRunner(
         agent_url=AGENT_URL,
         telemetry=telemetry,
-        neo4j_checker=neo4j if neo4j_connected else None,
     )
 
     harness_paths = [PATHS_BY_ID["CP-19"], PATHS_BY_ID["CP-20"], PATHS_BY_ID["CP-28"]]
     harness_results = await runner.run_paths(harness_paths)
-
-    if neo4j_connected:
-        await neo4j.disconnect()
 
     # Quick harness summary
     for r in harness_results:

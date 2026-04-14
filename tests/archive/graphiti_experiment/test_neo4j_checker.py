@@ -6,13 +6,17 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+# NOTE: This file is ARCHIVED — not collected by default pytest.
+# Original imports updated to point at archived locations after EVAL-02 cleanup.
+# Neo4jAssertion builder helpers remain in the live models.py (they are pure data);
+# Neo4jChecker is co-located here in tests/archive/graphiti_experiment/.
+from tests.archive.graphiti_experiment.neo4j_checker import Neo4jChecker
 from tests.evaluation.harness.models import (
     Neo4jAssertion,
     neo4j_cypher,
     neo4j_entity,
     neo4j_promoted,
 )
-from tests.evaluation.harness.neo4j_checker import Neo4jChecker
 
 
 class TestNeo4jAssertionBuilders:

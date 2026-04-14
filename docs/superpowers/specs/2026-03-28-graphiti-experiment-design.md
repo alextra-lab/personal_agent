@@ -1,8 +1,14 @@
 # Graphiti Experiment Design — EVAL-02
 
+> **EXPERIMENT CLOSED (Apr 2026)**
+> Infrastructure (ephemeral Neo4j + harness) archived to
+> `scripts/archive/graphiti_experiment/`. Decision recorded in
+> `docs/research/GRAPHITI_EXPERIMENT_REPORT.md`: keep Seshat + add embeddings.
+> Design rationale below is preserved for architectural archaeology.
+
 **Date:** 2026-03-28
 **Linear Issue:** FRE-147
-**Status:** Design approved — awaiting implementation plan
+**Status:** Complete — see GRAPHITI_EXPERIMENT_REPORT.md for outcomes
 **Spec ref:** COGNITIVE_ARCHITECTURE_REDESIGN_v2.md Section 5.5, COGNITIVE_AGENT_ARCHITECTURE_v0.1.md Section 5
 
 ---

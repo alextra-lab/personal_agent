@@ -25,7 +25,6 @@ from tests.evaluation.harness.models import (
     TelemetryAssertion,
     TurnResult,
 )
-from tests.evaluation.harness.neo4j_checker import Neo4jChecker
 from tests.evaluation.harness.telemetry import TelemetryChecker
 
 log = structlog.get_logger(__name__)
@@ -48,25 +47,28 @@ class EvaluationRunner:
     Args:
         agent_url: Base URL of the agent service.
         telemetry: TelemetryChecker instance for assertion verification.
-        neo4j_checker: Optional Neo4jChecker for post-path graph assertions.
         chat_timeout_s: Timeout for POST /chat requests.
         inter_turn_delay_s: Delay between turns to allow ES indexing.
         inter_path_delay_s: Cooldown between paths to let the inference server
             recover. Set to 0 to disable. Default 8 s.
+
+    Note:
+        Neo4j post-path assertions (``Neo4jAssertion`` in ConversationPath) are
+        silently skipped — the ``Neo4jChecker`` was archived with the Graphiti
+        experiment (EVAL-02). See ``tests/archive/graphiti_experiment/`` to restore.
     """
 
     def __init__(  # noqa: D107
         self,
         agent_url: str = DEFAULT_AGENT_URL,
         telemetry: TelemetryChecker | None = None,
-        neo4j_checker: Neo4jChecker | None = None,
         chat_timeout_s: float = DEFAULT_CHAT_TIMEOUT_S,
         inter_turn_delay_s: float = DEFAULT_INTER_TURN_DELAY_S,
         inter_path_delay_s: float = DEFAULT_INTER_PATH_DELAY_S,
     ) -> None:
         self._agent_url = agent_url
         self._telemetry = telemetry or TelemetryChecker()
-        self._neo4j_checker = neo4j_checker
+        self._neo4j_checker = None
         self._chat_timeout_s = chat_timeout_s
         self._inter_turn_delay_s = inter_turn_delay_s
         self._inter_path_delay_s = inter_path_delay_s

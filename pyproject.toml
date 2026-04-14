@@ -96,6 +96,7 @@ override-dependencies = [
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+norecursedirs = ["tests/archive", ".venv", "venv", "build", "dist", ".git"]
 addopts = [
   "-ra",
   "--strict-markers",
@@ -130,7 +131,9 @@ exclude = [
   "venv",
   ".venv",
   "build",
-  "dist"
+  "dist",
+  "scripts/archive",
+  "tests/archive",
 ]
 
 # -----------------------------
@@ -141,7 +144,7 @@ exclude = [
 target-version = "py312"
 line-length = 100
 src = ["src"]
-exclude = ["venv", ".venv", "build", "dist"]
+exclude = ["venv", ".venv", "build", "dist", "scripts/archive", "tests/archive"]
 
 [tool.ruff.lint]
 # Core rule families: errors, warnings, bugbear, imports, and docstrings.

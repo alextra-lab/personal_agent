@@ -17,8 +17,8 @@
 	local_certs
 }
 
-# Main API endpoint — listen on all hostnames (VPS IP, localhost, any domain)
-:443 {
+# Main API endpoint
+localhost {
 	# Reverse proxy to Seshat API Gateway running on port 9001
 	reverse_proxy seshat-gateway:9001 {
 		# Preserve the original request headers

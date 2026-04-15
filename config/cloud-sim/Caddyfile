@@ -2,7 +2,7 @@
 #
 # Routes:
 #   /api/*             → seshat-gateway:9001  (REST API)
-#   /chat, /stream/*   → seshat-gateway:9001  (AG-UI endpoints)
+#   /chat, /chat/stream, /stream/* → seshat-gateway:9001  (AG-UI endpoints)
 #   /docs, /openapi.json, /redoc → seshat-gateway:9001 (Swagger)
 #   /*                 → seshat-pwa:3000      (Next.js PWA)
 #
@@ -16,7 +16,7 @@
 
 # Shared routing — gateway handles API paths, PWA handles everything else
 (routing) {
-	@backend path /api/* /chat /stream/* /docs /docs/* /openapi.json /redoc
+	@backend path /api/* /chat /chat/stream /stream/* /docs /docs/* /openapi.json /redoc
 	handle @backend {
 		reverse_proxy seshat-gateway:9001 {
 			header_up X-Forwarded-For {http.request.header.X-Forwarded-For}

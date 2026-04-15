@@ -6,7 +6,7 @@ from typing import Any, AsyncGenerator, cast
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Form, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from personal_agent.brainstem.scheduler import BrainstemScheduler
@@ -27,6 +27,8 @@ from personal_agent.service.repositories.session_repository import SessionReposi
 from personal_agent.telemetry import add_elasticsearch_handler, get_logger
 from personal_agent.telemetry.es_handler import ElasticsearchHandler
 from personal_agent.telemetry.request_timer import RequestTimer
+from personal_agent.transport.agui.endpoint import get_event_queue
+from personal_agent.transport.events import TextDeltaEvent
 
 log = get_logger(__name__)
 settings = get_settings()
@@ -71,6 +73,189 @@ async def _append_assistant_message_background(
         )
     finally:
         _pending_append_tasks.pop(sid, None)
+
+
+async def _process_chat_stream_background(
+    session_id: str,
+    message: str,
+    profile_name: str,
+) -> None:
+    """Run the full orchestrator pipeline and push the result to the SSE queue.
+
+    Runs as a fire-and-forget ``asyncio.Task``.  A ``None`` sentinel is always
+    pushed to the SSE queue, even on error, so the client stream closes cleanly.
+
+    Args:
+        session_id: Client-generated session UUID (used for SSE queue key and DB).
+        message: User's message text.
+        profile_name: Execution profile name (e.g. ``"local"``, ``"cloud"``).
+    """
+    from personal_agent.config.profile import load_profile, set_current_profile
+
+    queue = get_event_queue(session_id)
+    trace_id = str(uuid4())
+
+    try:
+        # Wire execution profile so LLM factory dispatches to the correct model.
+        try:
+            _profile = load_profile(profile_name)
+            set_current_profile(_profile)
+        except FileNotFoundError:
+            log.warning(
+                "chat_stream.unknown_profile",
+                profile=profile_name,
+                trace_id=trace_id,
+            )
+
+        # ── Session ──────────────────────────────────────────────────────
+        session_uuid = UUID(session_id)
+        db_messages: list[dict] = []
+        prior_messages: list[dict] = []
+
+        async with AsyncSessionLocal() as db:
+            repo = SessionRepository(db)
+            session = await repo.get(session_uuid)
+            if not session:
+                # Create with client-provided UUID so history is addressable
+                # across turns without the client needing to track a separate DB ID.
+                from datetime import datetime
+
+                from personal_agent.service.models import SessionModel
+
+                now = datetime.utcnow()
+                session = SessionModel(
+                    session_id=session_uuid,
+                    created_at=now,
+                    last_active_at=now,
+                    mode="NORMAL",
+                    channel="CHAT",
+                    metadata_={},
+                    messages=[],
+                )
+                db.add(session)
+                await db.commit()
+                await db.refresh(session)
+
+            db_messages = list(session.messages or [])
+            max_history = settings.conversation_max_history_messages
+            prior_messages = db_messages[-max_history:] if max_history > 0 else db_messages
+            await repo.append_message(session_uuid, {"role": "user", "content": message})
+
+        # ── Gateway pipeline ─────────────────────────────────────────────
+        from personal_agent.brainstem.expansion import compute_expansion_budget
+        from personal_agent.brainstem.sensors import poll_system_metrics
+        from personal_agent.governance.models import Mode
+
+        try:
+            system_metrics = poll_system_metrics()
+            expansion_budget = compute_expansion_budget(
+                system_metrics, max_budget=settings.expansion_budget_max
+            )
+        except Exception:
+            log.warning("chat_stream.expansion_budget_failed", trace_id=trace_id, exc_info=True)
+            expansion_budget = 0
+
+        gateway_output = None
+        try:
+            from personal_agent.memory.protocol_adapter import MemoryServiceAdapter
+
+            memory_adapter = (
+                MemoryServiceAdapter(service=memory_service)
+                if memory_service and memory_service.driver
+                else None
+            )
+            gateway_output = await run_gateway_pipeline(
+                user_message=message,
+                session_id=session_id,
+                session_messages=prior_messages,
+                trace_id=trace_id,
+                mode=Mode.NORMAL,
+                memory_adapter=memory_adapter,
+                expansion_budget=expansion_budget,
+                full_session_messages=db_messages,
+            )
+        except Exception as e:
+            log.warning(
+                "chat_stream.gateway_pipeline_failed",
+                trace_id=trace_id,
+                error=sanitize_error_message(e),
+            )
+
+        # ── Orchestrator ─────────────────────────────────────────────────
+        response_content = ""
+        request_started = False
+        try:
+            from personal_agent.orchestrator import Orchestrator
+            from personal_agent.orchestrator.channels import Channel
+
+            orchestrator = Orchestrator()
+            session_mgr = orchestrator.session_manager
+
+            if not session_mgr.get_session(session_id):
+                session_mgr.create_session(Mode.NORMAL, Channel.CHAT, session_id=session_id)
+            if prior_messages:
+                session_mgr.update_session(session_id, messages=prior_messages)
+
+            if scheduler:
+                scheduler.notify_request_start()
+                request_started = True
+
+            result = await orchestrator.handle_user_request(
+                session_id=session_id,
+                user_message=message,
+                mode=None,
+                channel=None,
+                trace_id=trace_id,
+                request_timer=RequestTimer(trace_id=trace_id),
+                gateway_output=gateway_output,
+            )
+            response_content = result.get("reply", "No response generated")
+
+        except Exception as e:
+            error_id = str(uuid4())[:8]
+            log.error(
+                "chat_stream.orchestrator_failed",
+                error_id=error_id,
+                trace_id=trace_id,
+                error=sanitize_error_message(e),
+                exc_info=True,
+            )
+            response_content = f"[Error {error_id}]: {sanitize_error_message(e)}"
+        finally:
+            if scheduler and request_started:
+                scheduler.notify_request_end()
+
+        # Push full response to SSE queue then persist to DB.
+        await queue.put(TextDeltaEvent(text=response_content, session_id=session_id))
+
+        try:
+            async with AsyncSessionLocal() as db:
+                repo = SessionRepository(db)
+                await repo.append_message(
+                    session_uuid, {"role": "assistant", "content": response_content}
+                )
+        except Exception as e:
+            log.error(
+                "chat_stream.db_append_assistant_failed",
+                trace_id=trace_id,
+                error=sanitize_error_message(e),
+            )
+
+    except Exception as e:
+        log.error(
+            "chat_stream.background_failed",
+            session_id=session_id,
+            error=sanitize_error_message(e),
+            exc_info=True,
+        )
+        await queue.put(
+            TextDeltaEvent(
+                text=f"\n\n[Error: {sanitize_error_message(e)}]",
+                session_id=session_id,
+            )
+        )
+    finally:
+        await queue.put(None)  # Always close the SSE stream.
 
 
 def _parse_db_host_port(database_url: str) -> tuple[str, int]:
@@ -824,6 +1009,58 @@ async def chat(
         "response": response_content,
         "trace_id": trace_id,
     }
+
+
+# ============================================================================
+# AG-UI Streaming Chat Endpoint (ADR-0046 / FRE-207)
+# ============================================================================
+
+
+@app.post("/chat/stream")
+async def chat_stream_endpoint(
+    message: str = Form(...),
+    session_id: str = Form(...),
+    profile: str = Form(default="local"),
+) -> dict[str, str]:
+    """AG-UI fire-and-forget chat endpoint for the PWA.
+
+    Accepts a user message via form data, launches the full Seshat orchestrator
+    pipeline as a background task, and returns immediately.  The client should
+    connect to ``GET /stream/{session_id}`` to receive ``TEXT_DELTA`` events as
+    the model generates its reply.
+
+    The execution profile is resolved inside the background task so the
+    LLM client factory dispatches to the correct cloud or local model.
+
+    Args:
+        message: User message text.
+        session_id: Client-generated session UUID.
+        profile: Execution profile name (e.g. ``"local"``, ``"cloud"``).
+
+    Returns:
+        ``{"session_id": ..., "status": "streaming"}`` once the background
+        task is launched.
+
+    Raises:
+        HTTPException: 422 if ``session_id`` is not a valid UUID v4.
+    """
+    try:
+        UUID(session_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422, detail="session_id must be a valid UUID v4"
+        ) from exc
+
+    asyncio.create_task(
+        _process_chat_stream_background(
+            session_id=session_id,
+            message=message,
+            profile_name=profile,
+        )
+    )
+
+    log.info("chat_stream.launched", session_id=session_id, profile=profile)
+    return {"session_id": session_id, "status": "streaming"}
 
 
 # ============================================================================

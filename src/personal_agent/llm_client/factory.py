@@ -55,30 +55,51 @@ class LLMClient(Protocol):
 def get_llm_client(role_name: str = "primary") -> Any:
     """Return the appropriate LLM client for a given role's provider_type.
 
-    Reads provider_type from models.yaml for the specified role.
-    "local" → LocalLLMClient (hardware-specific optimizations: GPU concurrency,
-    thinking budget, tool filtering). Any other value → LiteLLMClient (cloud,
-    all providers via litellm.acompletion()).
+    When an ExecutionProfile is active (set via
+    :func:`~personal_agent.config.profile.set_current_profile`), the profile's
+    model key for the requested role overrides the ``models.yaml`` default.
+    This is the primary mechanism for cloud-profile dispatch (ADR-0044 D1).
+
+    Decision order:
+    1. If a profile is active AND the profile defines a model for this role →
+       look up that model key in ``models.yaml`` and dispatch accordingly.
+    2. Otherwise → look up ``role_name`` directly in ``models.yaml`` (existing
+       behaviour, unchanged for local/default execution).
+
+    ``"local"`` ``provider_type`` → :class:`LocalLLMClient` (GPU-aware concurrency,
+    thinking budget, tool filtering). Any other value → :class:`LiteLLMClient`
+    (all cloud providers via ``litellm.acompletion()``).
 
     Args:
-        role_name: The model role name to look up in models.yaml (default: "primary").
+        role_name: The model role name to look up in ``models.yaml``
+            (default: ``"primary"``).
 
     Returns:
-        An LLM client instance matching the role's provider_type.
+        An LLM client instance matching the resolved role's ``provider_type``.
 
     Examples:
-        >>> # With local models.yaml (provider_type: "local")
+        >>> # Default: reads 'primary' from models.yaml
         >>> client = get_llm_client("primary")
-        >>> type(client).__name__
-        'LocalLLMClient'
 
-        >>> # With baseline models.yaml (provider_type: "cloud", provider: "anthropic")
-        >>> client = get_llm_client("primary")
-        >>> type(client).__name__
-        'LiteLLMClient'
+        >>> # With cloud profile active: reads cloud profile's primary_model key
+        >>> from personal_agent.config.profile import load_profile, set_current_profile
+        >>> set_current_profile(load_profile("cloud"))
+        >>> client = get_llm_client("primary")  # → LiteLLMClient(claude-sonnet-4-6)
     """
+    from personal_agent.config.profile import get_current_profile
+
     config = load_model_config()
-    model_def = config.models.get(role_name)
+
+    # Resolve the model key: profile overrides role_name when profile is active.
+    profile = get_current_profile()
+    resolved_key = role_name
+    if profile is not None:
+        if role_name == "primary" and profile.primary_model:
+            resolved_key = profile.primary_model
+        elif role_name == "sub_agent" and profile.sub_agent_model:
+            resolved_key = profile.sub_agent_model
+
+    model_def = config.models.get(resolved_key)
 
     if model_def and model_def.provider_type != "local":
         from personal_agent.llm_client.litellm_client import LiteLLMClient

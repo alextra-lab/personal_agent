@@ -29,16 +29,14 @@ COPY config/ config/
 RUN uv sync --frozen --no-dev
 
 # Health check (python instead of curl — slim image has no curl)
-HEALTHCHECK --interval=10s --timeout=5s --retries=5 --start-period=15s \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:9001/api/v1/health')" || exit 1
+HEALTHCHECK --interval=10s --timeout=5s --retries=5 --start-period=30s \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:9001/health')" || exit 1
 
 # Expose API port
 EXPOSE 9001
 
-# Run the Seshat API Gateway factory function
-# This creates the FastAPI app and runs it on 0.0.0.0:9001
-#
-# The factory function is defined in personal_agent/gateway/app.py
-# and handles initialization of all Knowledge Layer connections.
-CMD ["uv", "run", "uvicorn", "personal_agent.gateway.app:create_gateway_app", \
-     "--factory", "--host", "0.0.0.0", "--port", "9001"]
+# Run the full Seshat service app (orchestrator, memory, brainstem, AG-UI endpoints).
+# ADR-0044/FRE-207: switched from thin gateway to full service app so the
+# cloud profile can dispatch to LiteLLM via the profile-aware LLM factory.
+CMD ["uv", "run", "uvicorn", "personal_agent.service.app:app", \
+     "--host", "0.0.0.0", "--port", "9001"]

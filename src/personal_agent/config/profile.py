@@ -9,11 +9,42 @@ Profiles reference models by name; the model registry remains in config/models.y
 
 from __future__ import annotations
 
+import contextvars
 from pathlib import Path
 from typing import Literal
 
 import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field
+
+# ---------------------------------------------------------------------------
+# Current-profile context variable
+# ---------------------------------------------------------------------------
+
+#: Async-safe context variable that carries the active ExecutionProfile through
+#: an orchestrator call chain without threading the profile through every
+#: function signature.  Set once in the service endpoint; read by the LLM
+#: client factory to select the correct model.
+_current_profile: contextvars.ContextVar[ExecutionProfile | None] = contextvars.ContextVar(
+    "current_profile", default=None
+)
+
+
+def set_current_profile(profile: ExecutionProfile) -> contextvars.Token[ExecutionProfile | None]:
+    """Set the active profile for the current async context.
+
+    Args:
+        profile: The ExecutionProfile to activate.
+
+    Returns:
+        A token that can be passed to :func:`reset_current_profile` to restore
+        the previous value (useful in tests).
+    """
+    return _current_profile.set(profile)
+
+
+def get_current_profile() -> ExecutionProfile | None:
+    """Return the active ExecutionProfile, or ``None`` if none is set."""
+    return _current_profile.get()
 
 
 class DelegationConfig(BaseModel):

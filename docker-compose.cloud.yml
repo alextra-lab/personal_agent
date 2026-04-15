@@ -256,12 +256,12 @@ services:
       reranker:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9001/api/v1/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9001/health')"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 30s
-    mem_limit: 512m
+      start_period: 60s
+    mem_limit: 768m
     cpus: 1.0
     networks:
       - cloud-sim

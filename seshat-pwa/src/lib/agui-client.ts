@@ -36,7 +36,7 @@ export interface SendMessageOptions {
 export async function sendChatMessage(opts: SendMessageOptions): Promise<void> {
   const { message, sessionId, profile = 'local' } = opts;
 
-  const resp = await fetch(`${SESHAT_API}/chat`, {
+  const resp = await fetch(`${SESHAT_API}/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -47,7 +47,7 @@ export async function sendChatMessage(opts: SendMessageOptions): Promise<void> {
   });
 
   if (!resp.ok) {
-    throw new Error(`Seshat /chat returned ${resp.status}: ${resp.statusText}`);
+    throw new Error(`Seshat /chat/stream returned ${resp.status}: ${resp.statusText}`);
   }
 }
 

@@ -1,10 +1,10 @@
 name: cloud
-description: "Cloud inference via LiteLLM (Claude Sonnet)"
-primary_model: claude-sonnet-4-20250514
-sub_agent_model: claude-haiku-4-5-20251001
+description: "Cloud inference via LiteLLM (Claude Sonnet + Haiku)"
+primary_model: claude_sonnet
+sub_agent_model: claude_haiku
 provider_type: cloud
 cost_limit_per_session: 2.00
 delegation:
   allow_cloud_escalation: true
   escalation_provider: anthropic
-  escalation_model: claude-sonnet-4-20250514
+  escalation_model: claude_sonnet

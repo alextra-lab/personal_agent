@@ -125,6 +125,18 @@ models:
     max_concurrency: 10
     default_timeout: 60
 
+  claude_haiku:
+    # Anthropic Claude Haiku — fast, low-cost sub-agent model for cloud profile
+    # Used as sub_agent_model in config/profiles/cloud.yaml
+    id: "claude-haiku-4-5-20251001"
+    provider: "anthropic"
+    provider_type: "cloud"
+    max_tokens: 4096
+    context_length: 200000
+    min_concurrency: 1
+    max_concurrency: 20
+    default_timeout: 30
+
   gpt-5.4-nano:
     # OpenAI GPT-5.4 Nano — entity extraction, structured output tasks
     # Cheapest cloud model with strong structured output quality

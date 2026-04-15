@@ -439,7 +439,14 @@ class TestMemoryQueries:
         for _ in range(2):
             await memory_service.create_entity(low_entity)
 
-        interests = await memory_service.get_user_interests(limit=500)
+        # Use a dynamic limit so pre-existing entities in shared Neo4j state
+        # do not push this test's low-mention entity out of the result window.
+        async with memory_service.driver.session() as session:
+            count_result = await session.run("MATCH (e:Entity) RETURN count(e) AS total")
+            count_record = await count_result.single()
+            total_entities = int(count_record["total"]) if count_record else 0
+
+        interests = await memory_service.get_user_interests(limit=total_entities + 10)
 
         test_interests = [i for i in interests if i.name.startswith(prefix)]
         assert len(test_interests) == 3

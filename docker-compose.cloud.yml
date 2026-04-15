@@ -285,7 +285,8 @@ services:
       seshat-gateway:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:80"]
+      # Caddy admin API (port 2019) — avoids TLS cert issues in healthcheck
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:2019/config/"]
       interval: 10s
       timeout: 5s
       retries: 3

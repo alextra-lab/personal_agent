@@ -13,12 +13,12 @@
 # - Add rate limiting and auth directives as needed
 
 {
-	# Use self-signed certificates for local cloud simulation
+	# Use self-signed certificates (no domain configured yet)
 	local_certs
 }
 
-# Main API endpoint
-localhost {
+# Main API endpoint — listen on all hostnames (VPS IP, localhost, any domain)
+:443 {
 	# Reverse proxy to Seshat API Gateway running on port 9001
 	reverse_proxy seshat-gateway:9001 {
 		# Preserve the original request headers

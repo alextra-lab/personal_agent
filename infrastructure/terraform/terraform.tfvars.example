@@ -1,0 +1,22 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Copy this file to terraform.tfvars and fill in real values.
+# NEVER commit terraform.tfvars — it is gitignored.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# OVH API credentials
+# Create at: https://eu.api.ovh.com/createApp/
+# Required API rights:
+#   GET    /ip/*
+#   PUT    /ip/*
+#   POST   /ip/*
+#   DELETE /ip/*
+ovh_application_key    = "REPLACE_WITH_APP_KEY"
+ovh_application_secret = "REPLACE_WITH_APP_SECRET"
+ovh_consumer_key       = "REPLACE_WITH_CONSUMER_KEY"
+
+# VPS public IP — find in OVH control panel under "My VPS"
+vps_ip = "REPLACE_WITH_VPS_IP"
+
+# SSH daemon port — must match what is configured in /etc/ssh/sshd_config
+# on the server and in your local ~/.ssh/config
+ssh_port = REPLACE_WITH_SSH_PORT

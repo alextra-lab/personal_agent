@@ -1,0 +1,34 @@
+# fail2ban jail configuration — Seshat VPS
+#
+# This file is a template. harden.sh copies it to /etc/fail2ban/jail.local
+# replacing SSH_PORT_PLACEHOLDER with the actual port number.
+#
+# If you already have a jail.local, merge the [sshd] section manually.
+
+[DEFAULT]
+# Ban duration in seconds (3600 = 1 hour)
+bantime  = 3600
+
+# Window within which failures are counted (seconds)
+findtime = 600
+
+# Number of failures before ban
+maxretry = 5
+
+# Use systemd journal as log backend (Debian 12 default)
+backend = systemd
+
+# Notification (optional — set up sendmail/postfix first)
+# destemail = admin@yourdomain.example
+# sender    = fail2ban@yourdomain.example
+# action    = %(action_mwl)s
+
+[sshd]
+enabled  = true
+port     = SSH_PORT_PLACEHOLDER
+filter   = sshd
+# Aggressive mode catches more attack patterns
+mode     = aggressive
+maxretry = 3
+bantime  = 3600
+findtime = 300

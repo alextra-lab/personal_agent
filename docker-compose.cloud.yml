@@ -1,10 +1,7 @@
-# Cloud Simulation Docker Compose
+# Cloud Deployment Docker Compose — OVH VPS-3
 #
-# This file mirrors the target VPS deployment topology with resource constraints.
-# Used to validate the architecture before provisioning a real cloud VPS.
-#
-# Total RAM budget: ~4.5GB (under 8GB recommended VPS spec)
-# Total CPU budget: 3.5 vCPU (under 4 vCPU recommended)
+# Production topology for the Seshat API Gateway and supporting services.
+# Resource limits are conservative; VPS-3 (24GB RAM, 8 vCPU) provides headroom.
 #
 # Services:
 # - PostgreSQL (pgvector): 512MB RAM, 0.5 CPU
@@ -14,9 +11,9 @@
 # - Seshat API Gateway: 256MB RAM, 0.5 CPU
 # - Caddy reverse proxy: 64MB RAM, 0.25 CPU
 #
-# Network: cloud-sim (isolated bridge network, mimics VPS internal network)
-# All services communicate via internal DNS names (postgres, neo4j, elasticsearch, redis)
-# Only Caddy exposes ports 80 and 443 to the host.
+# Network: cloud-sim (isolated bridge network)
+# All services communicate via internal DNS. Debug ports are bound to 127.0.0.1
+# only (SSH tunnel to access). Only Caddy exposes 80 and 443 externally.
 
 services:
   # PostgreSQL 17 with pgvector extension
@@ -33,8 +30,8 @@ services:
       - postgres_data_cloud:/var/lib/postgresql/data
       - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql
     ports:
-      # Internal only in cloud deployment; exposed here for debugging
-      - "5432:5432"
+      # Localhost only — use SSH tunnel to access: ssh -L 5432:localhost:5432 vps-5a0f676b
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U agent -d personal_agent"]
       interval: 10s
@@ -65,9 +62,9 @@ services:
     volumes:
       - neo4j_data_cloud:/data
     ports:
-      # Internal only in cloud deployment; exposed for debugging/browser
-      - "7474:7474"  # HTTP Browser
-      - "7687:7687"  # Bolt Driver
+      # Localhost only — use SSH tunnel: ssh -L 7474:localhost:7474 -L 7687:localhost:7687 vps-5a0f676b
+      - "127.0.0.1:7474:7474"  # HTTP Browser
+      - "127.0.0.1:7687:7687"  # Bolt Driver
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
       interval: 10s
@@ -95,8 +92,8 @@ services:
     volumes:
       - es_data_cloud:/usr/share/elasticsearch/data
     ports:
-      # Internal only in cloud deployment; exposed for debugging
-      - "9200:9200"
+      # Localhost only — use SSH tunnel: ssh -L 9200:localhost:9200 vps-5a0f676b
+      - "127.0.0.1:9200:9200"
     healthcheck:
       test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q 'green\\|yellow'"]
       interval: 10s
@@ -116,8 +113,8 @@ services:
     image: redis:7-alpine
     container_name: cloud-sim-redis
     ports:
-      # Internal only in cloud deployment; exposed for debugging
-      - "6379:6379"
+      # Localhost only — use SSH tunnel: ssh -L 6379:localhost:6379 vps-5a0f676b
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data_cloud:/data
     healthcheck:
@@ -162,8 +159,8 @@ services:
       # Logging
       AGENT_LOG_LEVEL: info
     ports:
-      # Exposed on cloud-sim network (accessed via Caddy in production)
-      - "9001:9001"
+      # Localhost only — Caddy proxies to this port internally
+      - "127.0.0.1:9001:9001"
     depends_on:
       postgres:
         condition: service_healthy

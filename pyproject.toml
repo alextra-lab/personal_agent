@@ -51,7 +51,7 @@ dependencies = [
   "neo4j>=5.15.0",        # Neo4j driver for knowledge graph
   # Claude API (Phase 2.2 - second brain). Optional at runtime: only loaded when using Claude.
   "anthropic>=0.18.0",
-  "litellm>=1.82.1",
+  "litellm>=1.83.0",
   # Event bus (ADR-0041 — Redis Streams)
   "redis[hiredis]>=5.0.0",
 ]
@@ -62,7 +62,7 @@ agent = "personal_agent.ui.service_cli:app"
 [project.optional-dependencies]
 # Development tooling stack: linting, typing, and tests.
 dev = [
-  "pytest>=8.3.0",
+  "pytest>=9.0.3",
   "pytest-asyncio>=0.23.0",
   "pytest-cov>=5.0.0",        # coverage reporting
   "mypy>=1.11.0",
@@ -84,7 +84,7 @@ dev = [
 [tool.uv]
 override-dependencies = [
   "aiohttp>=3.13.4",  # CVE-2026-22815, CVE-2026-34513–34520, CVE-2026-34525
-  "cryptography>=46.0.6",  # CVE-2026-26007, CVE-2026-34073
+  "cryptography>=46.0.7",  # CVE-2026-26007, CVE-2026-34073
   "pygments>=2.20.0",  # CVE-2026-4539
   "requests>=2.33.0",  # CVE-2026-25645
 ]

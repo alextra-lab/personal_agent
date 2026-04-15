@@ -25,10 +25,12 @@ from typing import Any, AsyncGenerator
 from fastapi import APIRouter, FastAPI, Request
 
 from personal_agent.config.settings import get_settings
+from personal_agent.gateway.chat_api import router as chat_router
 from personal_agent.gateway.knowledge_api import router as knowledge_router
 from personal_agent.gateway.observation_api import router as observation_router
 from personal_agent.gateway.session_api import router as session_router
 from personal_agent.telemetry import get_logger
+from personal_agent.transport.agui.endpoint import router as transport_router
 
 log = get_logger(__name__)
 
@@ -305,7 +307,9 @@ def create_gateway_app() -> FastAPI:
         lifespan=_gateway_lifespan,
     )
     add_error_handlers(app)
-    app.include_router(create_gateway_router())
+    app.include_router(create_gateway_router())  # /api/v1/* — storage APIs
+    app.include_router(chat_router)              # /chat   — Anthropic streaming
+    app.include_router(transport_router)          # /stream/* — AG-UI SSE
     return app
 
 

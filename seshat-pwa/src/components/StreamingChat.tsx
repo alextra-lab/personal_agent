@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { resumeInterrupt } from '@/lib/agui-client';
+import { generateUUID } from '@/lib/uuid';
 import type { ExecutionProfile } from '@/lib/types';
 import { useSSEStream } from '@/hooks/useSSEStream';
 
@@ -33,7 +34,7 @@ interface StreamingChatProps {
  */
 export function StreamingChat({ sessionId: initialSessionId }: StreamingChatProps) {
   const sessionId = useRef(
-    initialSessionId ?? crypto.randomUUID(),
+    initialSessionId ?? generateUUID(),
   ).current;
 
   const [profile, setProfile] = useState<ExecutionProfile>('local');

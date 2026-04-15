@@ -7,6 +7,7 @@ import {
   sendChatMessage,
   type StreamConnection,
 } from '@/lib/agui-client';
+import { generateUUID } from '@/lib/uuid';
 import type {
   AGUIEvent,
   ChatMessage,
@@ -83,7 +84,7 @@ export function useSSEStream(): UseSSEStreamReturn {
           return [
             ...prev,
             {
-              id: crypto.randomUUID(),
+              id: generateUUID(),
               role: 'assistant' as const,
               content: snapshot,
               timestamp: new Date(),
@@ -166,7 +167,7 @@ export function useSSEStream(): UseSSEStreamReturn {
 
       // Optimistically add the user message.
       const userMessage: ChatMessage = {
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         role: 'user',
         content: text,
         timestamp: new Date(),
@@ -185,7 +186,7 @@ export function useSSEStream(): UseSSEStreamReturn {
         setMessages((prev) => [
           ...prev,
           {
-            id: crypto.randomUUID(),
+            id: generateUUID(),
             role: 'assistant',
             content: `Error contacting Seshat: ${err instanceof Error ? err.message : String(err)}`,
             timestamp: new Date(),

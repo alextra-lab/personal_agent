@@ -28,6 +28,7 @@ WORKDIR /llama.cpp
 RUN cmake -B build \
       -DCMAKE_BUILD_TYPE=Release \
       -DLLAMA_CURL=OFF \
+      -DBUILD_SHARED_LIBS=OFF \
     && cmake --build build --target llama-server -j"$(nproc)"
 
 # ── Runtime image ─────────────────────────────────────────────────────────────

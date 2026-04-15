@@ -138,7 +138,10 @@ services:
   # To set up models on VPS before first deploy:
   #   bash infrastructure/scripts/transfer-models.sh
   embeddings:
-    image: ghcr.io/ggerganov/llama.cpp:server
+    build:
+      context: .
+      dockerfile: Dockerfile.llmserver
+    image: llmserver:latest
     container_name: cloud-sim-embeddings
     command:
       - "-m"
@@ -171,7 +174,7 @@ services:
     restart: unless-stopped
 
   reranker:
-    image: ghcr.io/ggerganov/llama.cpp:server
+    image: llmserver:latest
     container_name: cloud-sim-reranker
     command:
       - "-m"

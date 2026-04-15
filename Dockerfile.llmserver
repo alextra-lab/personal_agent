@@ -1,0 +1,47 @@
+# Dockerfile.llmserver — llama.cpp server for CPU inference
+#
+# Builds llama-server from source (multi-stage).
+# Used for embedding (port 8503) and reranker (port 8504) services.
+#
+# Build time: ~5-10 minutes on VPS (C++ compilation)
+# Image size:  ~200MB final image
+#
+# Usage (embedding):
+#   docker build -f Dockerfile.llmserver -t llmserver:latest .
+#   docker run -v /opt/seshat/models:/models llmserver:latest \
+#     -m /models/embedding/Qwen3-Embedding-0.6B-f16.gguf \
+#     --embedding --pooling last --host 0.0.0.0 --port 8503
+
+FROM ubuntu:24.04 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake \
+    g++ \
+    git \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone https://github.com/ggerganov/llama.cpp --depth=1 /llama.cpp
+
+WORKDIR /llama.cpp
+
+RUN cmake -B build \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DLLAMA_CURL=OFF \
+    && cmake --build build --target llama-server -j"$(nproc)"
+
+# ── Runtime image ─────────────────────────────────────────────────────────────
+
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
+
+# Models are mounted at runtime — not baked into this image
+VOLUME ["/models"]
+
+ENTRYPOINT ["llama-server"]

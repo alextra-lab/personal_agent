@@ -292,7 +292,8 @@ services:
     mem_limit: 256m
     cpus: 0.5
     networks:
-      - cloud-sim
+      cloud-sim:
+        ipv4_address: 172.25.0.11
     restart: unless-stopped
 
   # Caddy reverse proxy

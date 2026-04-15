@@ -96,5 +96,8 @@ current_session
 # SearXNG generated files (ADR-0034)
 docker/searxng/uwsgi.ini
 
-# Cursor Agent
-.worktrees
+# Local git worktrees (`git worktree add .worktrees/...`) — not source
+.worktrees/
+
+# Terraform
+infrastructure/terraform/terraform.tfvars

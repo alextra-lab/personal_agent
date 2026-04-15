@@ -153,12 +153,22 @@ class LiteLLMClient:
         if system_prompt:
             api_messages = [{"role": "system", "content": system_prompt}, *api_messages]
 
+        # Resolve provider API key from AGENT_-prefixed settings so LiteLLM
+        # doesn't have to find a bare ANTHROPIC_API_KEY / OPENAI_API_KEY env var.
+        api_key: str | None = None
+        if self.provider == "anthropic":
+            api_key = _settings.anthropic_api_key or None
+        elif self.provider == "openai":
+            api_key = _settings.openai_api_key or None
+
         # Build litellm call kwargs
         litellm_kwargs: dict[str, Any] = {
             "model": self._litellm_model,
             "messages": api_messages,
             "max_tokens": effective_max_tokens,
         }
+        if api_key:
+            litellm_kwargs["api_key"] = api_key
         if tools:
             litellm_kwargs["tools"] = tools
         if tool_choice is not None:

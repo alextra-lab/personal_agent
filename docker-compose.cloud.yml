@@ -305,7 +305,8 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: cloud-sim-cloudflared
-    command: tunnel --no-autoupdate run
+    # Force HTTP/2 over TCP — QUIC (UDP) is blocked by OVH firewall
+    command: tunnel --no-autoupdate --protocol http2 run
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
     networks:

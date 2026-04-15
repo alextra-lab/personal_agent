@@ -268,9 +268,9 @@ services:
     restart: unless-stopped
 
   # Caddy reverse proxy
-  # Purpose: TLS termination, API gateway, rate limiting
+  # Purpose: TLS termination (localhost SSH access) + HTTP entry point (WARP private network)
   # Resource limit: 64MB RAM, 0.25 CPU
-  # Serves localhost with self-signed certificate for local testing
+  # Static IP 172.25.0.10 — stable address for WARP private network routing
   caddy:
     image: caddy:2-alpine
     container_name: cloud-sim-caddy
@@ -294,8 +294,26 @@ services:
     mem_limit: 64m
     cpus: 0.25
     networks:
+      cloud-sim:
+        ipv4_address: 172.25.0.10
+    restart: unless-stopped
+
+  # Cloudflare Tunnel — WARP private network access
+  # Purpose: Connects VPS Docker network to Cloudflare Zero Trust
+  # WARP devices route 172.25.0.0/16 through this tunnel → reach Caddy at 172.25.0.10
+  # Token stored in .env as CLOUDFLARE_TUNNEL_TOKEN (never committed)
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloud-sim-cloudflared
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    networks:
       - cloud-sim
     restart: unless-stopped
+    depends_on:
+      caddy:
+        condition: service_healthy
 
 volumes:
   # PostgreSQL data (persisted)

@@ -130,14 +130,81 @@ services:
     restart: unless-stopped
     command: redis-server --appendonly yes
 
-  # Seshat API Gateway (FastAPI)
-  # Purpose: Knowledge + Observation APIs served over HTTPS
-  # Depends on: postgres, neo4j, elasticsearch, redis
-  # Resource limit: 256MB RAM, 0.5 CPU
+  # llama.cpp — Embedding + Reranker server
+  # Purpose: Serves Qwen3-Embedding-0.6B (port 8503) and Qwen3-Reranker-0.6B (port 8504)
+  # Models are mounted from the host at /opt/seshat/models/ (populated by transfer-models.sh)
+  # Resource limit: 3GB RAM, 4 CPU (shared between embedding and reranker via single container)
   #
-  # NOTE: This container depends on personal_agent.gateway.app:create_gateway_app
-  # which is created by FRE-206. For now, this is a template Dockerfile that will
-  # be built once the gateway app is ready.
+  # To set up models on VPS before first deploy:
+  #   bash infrastructure/scripts/transfer-models.sh
+  embeddings:
+    image: ghcr.io/ggerganov/llama.cpp:server
+    container_name: cloud-sim-embeddings
+    command:
+      - "-m"
+      - "/models/embedding/Qwen3-Embedding-0.6B-f16.gguf"
+      - "--embedding"
+      - "--pooling"
+      - "last"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8503"
+      - "--ctx-size"
+      - "8192"
+      - "--threads"
+      - "4"
+    volumes:
+      - /opt/seshat/models:/models:ro
+    ports:
+      - "127.0.0.1:8503:8503"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8503/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    mem_limit: 2048m
+    cpus: 4.0
+    networks:
+      - cloud-sim
+    restart: unless-stopped
+
+  reranker:
+    image: ghcr.io/ggerganov/llama.cpp:server
+    container_name: cloud-sim-reranker
+    command:
+      - "-m"
+      - "/models/reranker/qwen3-reranker-0.6b-q8_0.gguf"
+      - "--reranking"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8504"
+      - "--ctx-size"
+      - "8192"
+      - "--threads"
+      - "4"
+    volumes:
+      - /opt/seshat/models:/models:ro
+    ports:
+      - "127.0.0.1:8504:8504"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8504/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    mem_limit: 1024m
+    cpus: 4.0
+    networks:
+      - cloud-sim
+    restart: unless-stopped
+
+  # Seshat API Gateway (FastAPI)
+  # Purpose: Full agent harness — Knowledge API, Observation API, orchestration
+  # Depends on: postgres, neo4j, elasticsearch, redis, embeddings, reranker
+  # Resource limit: 512MB RAM, 1.0 CPU (increased for full harness)
   seshat-gateway:
     build:
       context: .
@@ -152,10 +219,18 @@ services:
       AGENT_ELASTICSEARCH_URL: http://elasticsearch:9200
       AGENT_EVENT_BUS_REDIS_URL: redis://redis:6379/0
       AGENT_ENABLE_MEMORY_GRAPH: "true"
+      AGENT_EVENT_BUS_ENABLED: "true"
       AGENT_GATEWAY_AUTH_ENABLED: "false"
+      # Use cloud model config (embedding/reranker point to Docker service hostnames)
+      AGENT_MODEL_CONFIG_PATH: /app/config/models.cloud.yaml
+      # Cloud LLM API keys (injected from VPS .env)
+      AGENT_ANTHROPIC_API_KEY: ${AGENT_ANTHROPIC_API_KEY}
+      AGENT_OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY}
+      AGENT_PERPLEXITY_API_KEY: ${AGENT_PERPLEXITY_API_KEY}
       # API configuration
       API_HOST: 0.0.0.0
       API_PORT: "9001"
+      APP_ENV: production
       # Logging
       AGENT_LOG_LEVEL: info
     ports:
@@ -170,14 +245,18 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      embeddings:
+        condition: service_healthy
+      reranker:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9001/api/v1/health')"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 15s
-    mem_limit: 256m
-    cpus: 0.5
+      start_period: 30s
+    mem_limit: 512m
+    cpus: 1.0
     networks:
       - cloud-sim
     restart: unless-stopped

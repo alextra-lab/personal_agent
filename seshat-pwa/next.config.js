@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Enable static export capability for PWA hosting
-  // output: 'export', // Uncomment if deploying as static site
+  // Standalone output for Docker — bundles only what next start needs
+  output: 'standalone',
 
   // Rewrites to proxy AG-UI backend in development
   async rewrites() {

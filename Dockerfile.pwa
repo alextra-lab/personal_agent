@@ -1,0 +1,44 @@
+# Dockerfile.pwa — Next.js PWA for Seshat
+#
+# Multi-stage build: deps → builder → runner (standalone).
+# NEXT_PUBLIC_SESHAT_URL is baked in at build time by Next.js — pass via
+# docker-compose build arg. Defaults to the Caddy static IP on cloud-sim.
+#
+# Build time: ~2-3 minutes (npm install + next build)
+# Image size:  ~200MB (node:20-alpine + standalone output)
+
+FROM node:20-alpine AS deps
+WORKDIR /app
+COPY seshat-pwa/package.json seshat-pwa/package-lock.json ./
+RUN npm ci
+
+# ── Build ──────────────────────────────────────────────────────────────────────
+
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY seshat-pwa/ .
+
+ARG NEXT_PUBLIC_SESHAT_URL=http://172.25.0.10
+ENV NEXT_PUBLIC_SESHAT_URL=${NEXT_PUBLIC_SESHAT_URL}
+
+RUN npm run build
+
+# ── Runtime ───────────────────────────────────────────────────────────────────
+
+FROM node:20-alpine AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV PORT=3000
+
+RUN addgroup -S nextjs && adduser -S nextjs -G nextjs
+
+COPY --from=builder /app/public ./public
+COPY --from=builder --chown=nextjs:nextjs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nextjs /app/.next/static ./.next/static
+
+USER nextjs
+EXPOSE 3000
+
+CMD ["node", "server.js"]

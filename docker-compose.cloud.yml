@@ -267,6 +267,34 @@ services:
       - cloud-sim
     restart: unless-stopped
 
+  # Seshat PWA (Next.js)
+  # Purpose: Mobile-first chat UI served via Caddy
+  # Bakes NEXT_PUBLIC_SESHAT_URL=http://172.25.0.10 at build time
+  # Resource limit: 256MB RAM, 0.5 CPU
+  seshat-pwa:
+    build:
+      context: .
+      dockerfile: Dockerfile.pwa
+      args:
+        NEXT_PUBLIC_SESHAT_URL: "http://172.25.0.10"
+    container_name: cloud-sim-seshat-pwa
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      seshat-gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    mem_limit: 256m
+    cpus: 0.5
+    networks:
+      - cloud-sim
+    restart: unless-stopped
+
   # Caddy reverse proxy
   # Purpose: TLS termination (localhost SSH access) + HTTP entry point (WARP private network)
   # Resource limit: 64MB RAM, 0.25 CPU
@@ -283,6 +311,8 @@ services:
       - caddy_config:/config
     depends_on:
       seshat-gateway:
+        condition: service_healthy
+      seshat-pwa:
         condition: service_healthy
     healthcheck:
       # Caddy admin API (port 2019) — avoids TLS cert issues in healthcheck

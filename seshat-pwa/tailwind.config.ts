@@ -22,9 +22,27 @@ const config: Config = {
       animation: {
         'pulse-dot': 'pulse 1.2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
       },
+      typography: {
+        DEFAULT: {
+          css: {
+            // Remove backtick quotes around inline code
+            'code::before': { content: '""' },
+            'code::after': { content: '""' },
+            // Inline code pill styling
+            code: {
+              backgroundColor: 'rgb(51 65 85)',  // slate-700
+              borderRadius: '0.25rem',
+              padding: '0.1em 0.35em',
+              fontWeight: '400',
+            },
+          },
+        },
+      },
     },
   },
-  plugins: [],
+  plugins: [
+    require('@tailwindcss/typography'),
+  ],
 };
 
 export default config;

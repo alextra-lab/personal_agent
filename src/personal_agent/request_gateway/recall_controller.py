@@ -66,21 +66,26 @@ _INTERROG_NOUN_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Trailing stop words to strip from noun phrases (query artifacts)
-_TRAILING_STOP_RE = re.compile(
-    r"\s+\b(?:again|now|today|here|there|then|please|yet)\b$",
-    re.IGNORECASE,
-)
+# Verb words that signal the start of a trailing clause to strip from a noun phrase
+# (e.g., "tool we discussed" → strip from "we" onwards → "tool").
+# Implemented as a set lookup (not regex) to avoid ReDoS on user-controlled input.
+_TRAILING_VERB_WORDS: frozenset[str] = frozenset({
+    "we", "i", "you", "they", "he", "she",
+    "did", "does", "was", "were", "is", "are", "have", "had",
+    "pick", "picked", "chose", "choose",
+    "use", "used",
+    "discuss", "discussed",
+    "mention", "mentioned",
+    "decide", "decided",
+    "do",
+})
 
-# Trailing verb phrases and pronouns to strip (e.g., "tool we discussed" → "tool",
-# "caching system did" → "caching system").
-# Uses \b and [^\n]* (no nested quantifiers) to prevent polynomial backtracking.
-_TRAILING_VERB_RE = re.compile(
-    r"\s+\b(?:we|i|you|they|he|she|did|does|was|were|is|are|have|had"
-    r"|pick|picked|chose|choose|use|used|discuss|discussed|mention|mentioned"
-    r"|decide|decided|do)\b[^\n]*$",
-    re.IGNORECASE,
-)
+# Query-artifact stop words to strip from the trailing position of a noun phrase
+# (e.g., "tool again" → "tool").
+# Implemented as a set lookup (not regex) to avoid ReDoS on user-controlled input.
+_TRAILING_STOP_WORDS: frozenset[str] = frozenset({
+    "again", "now", "today", "here", "there", "then", "please", "yet",
+})
 
 
 def run_recall_controller(
@@ -243,11 +248,17 @@ def _extract_noun_phrases(message: str) -> list[str]:
     seen: set[str] = set()
     phrases: list[str] = []
     for m in all_matches:
-        # Strip trailing verb phrases (e.g., "tool we discussed" → "tool")
-        stripped = _TRAILING_VERB_RE.sub("", m).strip()
-        # Strip trailing query-artifact stop words
-        stripped = _TRAILING_STOP_RE.sub("", stripped).strip()
-        cleaned = stripped.lower()
+        # Strip trailing verb phrase: find first verb word (not at index 0) and
+        # drop it plus everything after. Set lookup avoids ReDoS on user input.
+        words = m.split()
+        for i in range(1, len(words)):
+            if words[i].lower() in _TRAILING_VERB_WORDS:
+                words = words[:i]
+                break
+        # Strip trailing query-artifact stop word (e.g., "tool again" → "tool").
+        if words and words[-1].lower() in _TRAILING_STOP_WORDS:
+            words = words[:-1]
+        cleaned = " ".join(words).lower()
         if cleaned and cleaned not in seen and len(cleaned) > 2:
             seen.add(cleaned)
             phrases.append(cleaned)

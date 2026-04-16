@@ -1908,7 +1908,10 @@ async def execute_task_safe(
 
         if ctx.error:
             sanitized_error = sanitize_error_message(ctx.error)
-            result["reply"] = f"Error: {sanitized_error}"
+            # Use an opaque reply to avoid exposing exception details in the
+            # HTTP response; full error info is retained in steps for internal
+            # telemetry and log correlation only.
+            result["reply"] = "An error occurred while processing your request."
             result["steps"].append(
                 {
                     "type": "error",

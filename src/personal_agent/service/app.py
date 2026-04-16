@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from personal_agent.brainstem.scheduler import BrainstemScheduler
@@ -676,6 +677,16 @@ app = FastAPI(
     description="Cognitive architecture service with persistent memory",
     version="2.0.0",
     lifespan=lifespan,
+)
+
+# CORS — allows the Next.js dev server (localhost:3000) to reach the backend (localhost:9000).
+# In production Caddy proxies both through the same origin so this middleware is a no-op there.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # AG-UI transport — streaming SSE endpoint (ADR-0046, FRE-204)

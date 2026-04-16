@@ -47,6 +47,14 @@ class AppConfig(BaseSettings):
     # Application
     project_name: str = Field(default="Personal Local AI Collaborator", description="Project name")
     version: str = Field(default="0.1.0", description="Application version")
+    cors_allowed_origins: list[str] = Field(
+        default=["http://localhost:3000"],
+        description=(
+            "CORS allowed origins for the FastAPI service. "
+            "In production Caddy proxies PWA and backend through the same origin so this is unused. "
+            "Locally the Next.js dev server runs on :3000 while the backend is on :9000."
+        ),
+    )
 
     # Telemetry
     log_dir: Path = Field(default=Path("telemetry/logs"), description="Log directory path")
@@ -104,9 +112,14 @@ class AppConfig(BaseSettings):
     )
     orchestrator_task_timeout_seconds: int = Field(default=300, ge=1, description="Task timeout")
     orchestrator_max_tool_iterations: int = Field(
-        default=3,
+        default=6,
         ge=0,
-        description="Maximum tool execution iterations per user request (prevents tool loops)",
+        description=(
+            "Maximum tool execution iterations per user request (prevents tool loops). "
+            "Raised from 3 to 6: a health check calling 3 tools (self_telemetry, system_metrics, "
+            "run_sysdiag) plus synthesis needs at least 4 iterations; 6 covers compound tasks "
+            "with sub-agent results while still bounding runaway loops."
+        ),
     )
     orchestrator_max_repeated_tool_calls: int = Field(
         default=1,

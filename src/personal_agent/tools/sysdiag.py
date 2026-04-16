@@ -1,26 +1,31 @@
 """Native system diagnostics tool (FRE-188 / ADR-0028).
 
 Single subprocess-based tool that dispatches to an allow-listed set of
-read-only OS diagnostic commands (ps, lsof, iostat, vm_stat, find, …).
+read-only OS diagnostic commands (ps, lsof, iostat, df, …).
 
 Security model
 --------------
 * Allow-list controls which binaries can be invoked — no shell=True.
 * Args are parsed via shlex and passed directly to asyncio.create_subprocess_exec
   so there is no shell injection surface.
+* Binary paths are resolved via shutil.which at import time (not at call time),
+  preventing runtime PATH manipulation.
 * Timeout defaults to 15 s; callers can override up to 60 s.
 * Governance mode restrictions apply via the standard ToolExecutionLayer.
 
-macOS note
-----------
-This tool targets Darwin (Apple Silicon, macOS 25+). Some command names
-differ from their Linux equivalents (vm_stat vs vmstat; no ss; etc.).
+Platform support
+----------------
+Detected at import time.  Darwin: macOS-specific commands (vm_stat, sw_vers,
+diskutil, top -l).  Linux/Debian: Linux equivalents (vmstat, free, ss, ip,
+top -b).  Commands unavailable on the host are silently excluded.
 """
 
 from __future__ import annotations
 
 import asyncio
+import platform
 import shlex
+import shutil
 from typing import Any
 
 from personal_agent.telemetry import TraceContext, get_logger
@@ -29,67 +34,89 @@ from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
 
-# Commands that may be invoked. Lowercase name → resolved binary path.
-# Paths verified on Darwin 25.4.0 (Apple Silicon).
-_ALLOW_LIST: dict[str, str] = {
-    # Process inspection
-    "ps": "/bin/ps",
-    "pgrep": "/usr/bin/pgrep",
-    "top": "/usr/bin/top",
-    "lsof": "/usr/sbin/lsof",
-    # Filesystem
-    "find": "/usr/bin/find",
-    "df": "/bin/df",
-    "du": "/usr/bin/du",
-    # I/O and memory
-    "iostat": "/usr/sbin/iostat",
-    "vm_stat": "/usr/bin/vm_stat",
-    # Network
-    "ifconfig": "/sbin/ifconfig",
-    "netstat": "/usr/sbin/netstat",
-    # System info
-    "uptime": "/usr/bin/uptime",
-    "sysctl": "/usr/sbin/sysctl",
-    "who": "/usr/bin/who",
-    "last": "/usr/bin/last",
-    "sw_vers": "/usr/bin/sw_vers",
-    "diskutil": "/usr/sbin/diskutil",
-}
-
 _DEFAULT_TIMEOUT = 15
 _MAX_TIMEOUT = 60
 _MAX_OUTPUT_CHARS = 32_000
 
+# ---------------------------------------------------------------------------
+# Platform-specific allow-list
+# Paths resolved via shutil.which at import time — safe because resolution
+# happens before any user input arrives, so PATH cannot be manipulated.
+# Commands unavailable on the host are silently excluded from the allow-list.
+# ---------------------------------------------------------------------------
+
+_IS_DARWIN = platform.system() == "Darwin"
+
+_DARWIN_CANDIDATES = [
+    "ps", "pgrep", "top", "lsof",
+    "find", "df", "du",
+    "iostat", "vm_stat",
+    "ifconfig", "netstat",
+    "uptime", "sysctl", "who", "last",
+    "sw_vers", "diskutil",
+]
+
+_LINUX_CANDIDATES = [
+    "ps", "pgrep", "top", "lsof",
+    "find", "df", "du",
+    "iostat", "vmstat", "free",
+    "ip", "ifconfig", "ss", "netstat",
+    "uptime", "sysctl", "who", "last",
+    "uname",
+]
+
+_candidates = _DARWIN_CANDIDATES if _IS_DARWIN else _LINUX_CANDIDATES
+
+# Build allow-list: name → resolved absolute path (excludes unavailable binaries).
+_ALLOW_LIST: dict[str, str] = {
+    cmd: path
+    for cmd in _candidates
+    if (path := shutil.which(cmd)) is not None
+}
+
 _ALLOWED_NAMES = ", ".join(sorted(_ALLOW_LIST))
 
-run_sysdiag_tool = ToolDefinition(
-    name="run_sysdiag",
-    description=(
+def _build_description() -> str:
+    base = (
         "Run a read-only system diagnostic command on the host machine. "
         "Returns stdout, stderr, and exit code. "
-        "Allowed commands:\n"
-        f"  {_ALLOWED_NAMES}\n\n"
+        f"Allowed commands:\n  {_ALLOWED_NAMES}\n\n"
         "Common usage patterns:\n"
         "- Process list (all): ps aux\n"
-        "- Process list (filter by name): ps aux | use args='aux', then filter stdout\n"
+        "- Process search by name: pgrep -lf python\n"
         "- Port listeners: lsof -i :9000\n"
         "- Open files by process: lsof -p <pid>\n"
-        "- Process search by name (macOS): pgrep -lf python  "
-        "(-f matches full command line — use this, NOT bare 'pgrep python' which only matches "
-        "the exact process name and will miss python3, python3.12, etc.)\n"
-        "- List PIDs only: pgrep -f python\n"
         "- Disk usage: df -h\n"
         "- Directory size: du -sh /path/to/dir\n"
         "- File search: find /var/log -name '*.log' -mtime -1\n"
-        "- I/O stats: iostat -d 1 3\n"
-        "- Memory stats: vm_stat\n"
-        "- Network interfaces: ifconfig\n"
-        "- Network connections: netstat -an | grep LISTEN\n"
-        "- Kernel params: sysctl kern.maxfiles\n"
-        "- macOS version: sw_vers\n"
-        "- Disk list: diskutil list\n"
-        "Note: 'top' requires non-interactive flags on macOS, e.g. 'top -l 1 -n 20'."
-    ),
+    )
+    if _IS_DARWIN:
+        return base + (
+            "- I/O stats: iostat -d 1 3\n"
+            "- Memory stats: vm_stat\n"
+            "- Network interfaces: ifconfig\n"
+            "- Network connections: netstat -an\n"
+            "- Kernel params: sysctl kern.maxfiles\n"
+            "- macOS version: sw_vers\n"
+            "- Disk list: diskutil list\n"
+            "Note: 'top' requires non-interactive flags on macOS: top -l 1 -n 20"
+        )
+    else:
+        return base + (
+            "- I/O stats: iostat -xz 1 3\n"
+            "- Virtual memory / swap: vmstat 1 3\n"
+            "- Memory overview: free -h\n"
+            "- Network sockets/listeners: ss -tlnp\n"
+            "- Network interfaces: ip addr\n"
+            "- Kernel params: sysctl vm.swappiness\n"
+            "- System info: uname -a\n"
+            "Note: 'top' requires batch mode on Linux: top -b -n 1 -o %CPU"
+        )
+
+
+run_sysdiag_tool = ToolDefinition(
+    name="run_sysdiag",
+    description=_build_description(),
     category="read_only",
     parameters=[
         ToolParameter(
@@ -155,7 +182,9 @@ async def run_sysdiag_executor(
     command = (command or "").strip().lower()
     if command not in _ALLOW_LIST:
         raise ToolExecutionError(
-            f"Command '{command}' is not in the allow-list. Allowed: {_ALLOWED_NAMES}."
+            f"Command '{command}' is not available on this platform "
+            f"({'Darwin' if _IS_DARWIN else 'Linux'}). "
+            f"Allowed: {_ALLOWED_NAMES}."
         )
 
     binary = _ALLOW_LIST[command]

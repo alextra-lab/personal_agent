@@ -189,6 +189,7 @@ async def test_e2e_llm_timeout_handling():
     """Test graceful handling of LLM timeouts."""
     with _e2e_patches() as mock_llm_class:
         mock_llm = AsyncMock()
+        mock_llm.model_configs = {}  # Needed so executor can read effective_tool_strategy
         mock_llm_class.return_value = mock_llm
 
         mock_llm.respond.side_effect = asyncio.TimeoutError("Model timeout")

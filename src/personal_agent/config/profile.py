@@ -115,12 +115,15 @@ def load_profile(name: str, profiles_dir: str | Path = "config/profiles") -> Exe
         FileNotFoundError: If no YAML file for the given profile name exists.
         ValueError: If the profile YAML is structurally invalid.
     """
-    if not re.match(r"^[a-zA-Z0-9_-]+$", name):
+    # Sanitize via basename (CodeQL-recognized path sanitizer): strips any directory
+    # separators, then validate that only safe characters remain.
+    safe_name = Path(name).name
+    if safe_name != name or not re.match(r"^[a-zA-Z0-9_-]+$", safe_name):
         raise ValueError(
             f"Profile name '{name}' contains invalid characters; "
             "only alphanumeric characters, underscores, and dashes are allowed."
         )
-    path = Path(profiles_dir) / f"{name}.yaml"
+    path = Path(profiles_dir) / f"{safe_name}.yaml"
     if not path.exists():
         raise FileNotFoundError(f"Profile '{name}' not found at {path}")
 

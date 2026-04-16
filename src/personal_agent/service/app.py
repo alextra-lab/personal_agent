@@ -220,7 +220,9 @@ async def _process_chat_stream_background(
                 error=sanitize_error_message(e),
                 exc_info=True,
             )
-            response_content = f"[Error {error_id}]: {sanitize_error_message(e)}"
+            # Do not include exception details in the SSE stream to avoid
+            # information exposure; full context is in the structured log.
+            response_content = f"An error occurred processing your request. (Error ID: {error_id})"
         finally:
             if scheduler and request_started:
                 scheduler.notify_request_end()

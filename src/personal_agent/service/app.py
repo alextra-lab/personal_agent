@@ -943,8 +943,9 @@ async def chat(
             error_type=type(e).__name__,
             exc_info=True,
         )
-        sanitized_msg = sanitize_error_message(e)
-        response_content = f"{sanitized_msg} (Error ID: {error_id})"
+        # Do not include exception details in the HTTP response to avoid
+        # information exposure; full context is in the structured log.
+        response_content = f"An error occurred processing your request. (Error ID: {error_id})"
     finally:
         if scheduler and request_started:
             scheduler.notify_request_end()

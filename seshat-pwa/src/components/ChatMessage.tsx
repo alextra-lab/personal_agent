@@ -1,6 +1,7 @@
 'use client';
 
 import type { ChatMessage as ChatMessageType, ToolCall } from '@/lib/types';
+import { MarkdownContent } from './MarkdownContent';
 
 interface ChatMessageProps {
   message: ChatMessageType;
@@ -28,9 +29,8 @@ function ToolCallBadge({ tool }: { tool: ToolCall }) {
 /**
  * Renders a single chat message bubble.
  *
- * User messages appear on the right in blue; assistant messages appear
- * on the left in slate. Tool call badges are shown beneath assistant
- * message content.
+ * User messages appear on the right in blue as plain text.
+ * Assistant messages appear on the left in slate with markdown rendering.
  */
 export function ChatMessage({ message }: ChatMessageProps) {
   const isUser = message.role === 'user';
@@ -44,10 +44,15 @@ export function ChatMessage({ message }: ChatMessageProps) {
             : 'bg-slate-700 text-slate-100 rounded-bl-sm'
         }`}
       >
-        {/* Message content — preserve whitespace for structured output */}
-        <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">
-          {message.content}
-        </p>
+        {isUser ? (
+          // User messages: plain text, preserve whitespace
+          <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">
+            {message.content}
+          </p>
+        ) : (
+          // Assistant messages: full markdown rendering
+          <MarkdownContent content={message.content} />
+        )}
 
         {/* Tool call badges for assistant messages */}
         {!isUser && message.toolCalls && message.toolCalls.length > 0 && (

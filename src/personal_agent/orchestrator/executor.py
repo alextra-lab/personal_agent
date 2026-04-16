@@ -1908,11 +1908,18 @@ async def execute_task_safe(
 
         if ctx.error:
             sanitized_error = sanitize_error_message(ctx.error)
-            result["reply"] = f"Error: {sanitized_error}"
+            log.warning(
+                TASK_FAILED,
+                trace_id=ctx.trace_id,
+                session_id=ctx.session_id,
+                error=sanitized_error,
+                error_type=type(ctx.error).__name__,
+            )
+            result["reply"] = "An error occurred while processing your request. Please try again."
             result["steps"].append(
                 {
                     "type": "error",
-                    "description": f"Task failed: {sanitized_error}",
+                    "description": "Task failed due to an internal error.",
                     "metadata": {"error_type": type(ctx.error).__name__},
                 }
             )
@@ -1941,8 +1948,15 @@ async def execute_task_safe(
             error_type=type(e).__name__,
             exc_info=True,
         )
-        # Return error result with sanitized message
+        # Keep details in logs, return only generic user-facing error content.
         sanitized_error = sanitize_error_message(e)
+        log.error(
+            TASK_FAILED,
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            error=sanitized_error,
+            error_type=type(e).__name__,
+        )
         log.info(
             REPLY_READY,
             trace_id=ctx.trace_id,
@@ -1951,11 +1965,11 @@ async def execute_task_safe(
             fatal_error=True,
         )
         return {
-            "reply": "Critical error occurred. The agent is recovering.",
+            "reply": "An internal error occurred. Please try again.",
             "steps": [
                 {
                     "type": "error",
-                    "description": f"Fatal error: {sanitized_error}",
+                    "description": "Task failed due to an internal error.",
                     "metadata": {"error_type": type(e).__name__},
                 }
             ],

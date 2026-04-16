@@ -244,15 +244,19 @@ async def _process_chat_stream_background(
             )
 
     except Exception as e:
+        bg_error_id = str(uuid4())[:8]
         log.error(
             "chat_stream.background_failed",
             session_id=session_id,
+            error_id=bg_error_id,
             error=sanitize_error_message(e),
             exc_info=True,
         )
+        # Do not include exception details in the SSE stream to avoid
+        # information exposure; full context is in the structured log.
         await queue.put(
             TextDeltaEvent(
-                text=f"\n\n[Error: {sanitize_error_message(e)}]",
+                text=f"\n\n[An error occurred. Error ID: {bg_error_id}]",
                 session_id=session_id,
             )
         )

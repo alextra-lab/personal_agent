@@ -115,23 +115,29 @@ def load_profile(name: str, profiles_dir: str | Path = "config/profiles") -> Exe
         FileNotFoundError: If no YAML file for the given profile name exists.
         ValueError: If the profile YAML is structurally invalid.
     """
-    # Sanitize via basename (CodeQL-recognized path sanitizer): strips any directory
-    # separators, then validate that only safe characters remain.
-    safe_name = Path(name).name
-    if safe_name != name or not re.match(r"^[a-zA-Z0-9_-]+$", safe_name):
+    # Validate name before any filesystem access.
+    if not re.match(r"^[a-zA-Z0-9_-]+$", name):
         raise ValueError(
             f"Profile name '{name}' contains invalid characters; "
             "only alphanumeric characters, underscores, and dashes are allowed."
         )
-    path = Path(profiles_dir) / f"{safe_name}.yaml"
-    if not path.exists():
-        raise FileNotFoundError(f"Profile '{name}' not found at {path}")
 
-    with open(path) as f:
+    # Enumerate the profiles directory and select the matching file by stem.
+    # The path passed to open() is derived from the filesystem glob result —
+    # not from user input — which breaks the taint chain for path injection.
+    profiles_path = Path(profiles_dir)
+    matched: Path | None = next(
+        (p for p in profiles_path.glob("*.yaml") if p.stem == name),
+        None,
+    )
+    if matched is None:
+        raise FileNotFoundError(f"Profile '{name}' not found in {profiles_dir}")
+
+    with open(matched) as f:
         data = yaml.safe_load(f)
 
     if not isinstance(data, dict):
-        raise ValueError(f"Profile file at {path} must contain a YAML mapping, got {type(data)}")
+        raise ValueError(f"Profile file at {matched} must contain a YAML mapping, got {type(data)}")
 
     return ExecutionProfile(**data)
 

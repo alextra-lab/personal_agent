@@ -15,6 +15,10 @@ TRUNCATION_MARKER = {"role": "system", "content": "[Earlier messages truncated]"
 def estimate_message_tokens(message: dict[str, Any]) -> int:
     """Estimate token count for one message using a simple heuristic.
 
+    Accounts for both the main ``content`` field and any ``tool_calls``
+    payload (which can be large for tool-heavy turns but is invisible to the
+    naive ``content``-only estimate).
+
     Args:
         message: OpenAI-style chat message dict.
 
@@ -24,7 +28,15 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
     content = message.get("content", "")
     if not isinstance(content, str):
         content = str(content)
-    return max(1, len(content) // 4)
+    chars = len(content)
+
+    # Add characters from tool_calls so assistant messages with large argument
+    # payloads are not underestimated and accidentally kept when they should be evicted.
+    tool_calls = message.get("tool_calls")
+    if tool_calls:
+        chars += len(str(tool_calls))
+
+    return max(1, chars // 4)
 
 
 def estimate_messages_tokens(messages: list[dict[str, Any]]) -> int:
@@ -200,7 +212,79 @@ def apply_context_window(
             trace_id=trace_id,
         )
 
+    output_messages = _sanitize_tool_pairs(output_messages, trace_id=trace_id)
+
     return output_messages
+
+
+# ---------------------------------------------------------------------------
+# Tool-pair sanitization (prevents AnthropicException invalid_request_error)
+# ---------------------------------------------------------------------------
+
+
+def _sanitize_tool_pairs(
+    messages: list[dict[str, Any]],
+    *,
+    trace_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Remove orphaned tool-result messages after truncation.
+
+    Anthropic's API requires that every ``tool_result`` block references a
+    ``tool_use`` block that appears in a preceding assistant message.  Context
+    truncation can violate this invariant in two ways:
+
+    1. The tail-selection loop uses ``continue`` (not ``break``), so it may
+       include a ``role="tool"`` message whose paired assistant ``tool_calls``
+       block was individually too large and skipped.
+    2. ``_evict_old_tool_errors`` removes ``role="tool"`` error messages but
+       leaves the preceding assistant ``tool_calls`` intact — the reverse
+       orphan (tool_use with no tool_result) is less dangerous but can still
+       confuse smaller models.
+
+    This function only fixes the form that triggers a hard API rejection:
+    ``tool_result`` blocks with no matching ``tool_use_id``.  It does *not*
+    alter assistant messages that have unresolved ``tool_calls``; those are
+    harmless from the API's perspective.
+
+    Args:
+        messages: Message list after truncation/eviction.
+        trace_id: Optional trace identifier for telemetry.
+
+    Returns:
+        Sanitized list with no orphaned ``role="tool"`` messages.
+    """
+    # Collect every tool_call id that has a live assistant message backing it.
+    live_ids: set[str] = set()
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            for tc in msg.get("tool_calls") or []:
+                tc_id = tc.get("id")
+                if tc_id:
+                    live_ids.add(tc_id)
+
+    sanitized: list[dict[str, Any]] = []
+    dropped = 0
+    for msg in messages:
+        if msg.get("role") == "tool":
+            tc_id = msg.get("tool_call_id")
+            if tc_id and tc_id not in live_ids:
+                dropped += 1
+                log.warning(
+                    "orphaned_tool_result_dropped",
+                    tool_call_id=tc_id,
+                    trace_id=trace_id,
+                )
+                continue
+        sanitized.append(msg)
+
+    if dropped:
+        log.info(
+            "tool_pair_sanitization_completed",
+            dropped=dropped,
+            trace_id=trace_id,
+        )
+
+    return sanitized
 
 
 # ---------------------------------------------------------------------------

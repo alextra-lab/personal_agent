@@ -10,6 +10,7 @@ Profiles reference models by name; the model registry remains in config/models.y
 from __future__ import annotations
 
 import contextvars
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -114,6 +115,11 @@ def load_profile(name: str, profiles_dir: str | Path = "config/profiles") -> Exe
         FileNotFoundError: If no YAML file for the given profile name exists.
         ValueError: If the profile YAML is structurally invalid.
     """
+    if not re.match(r"^[a-zA-Z0-9_-]+$", name):
+        raise ValueError(
+            f"Profile name '{name}' contains invalid characters; "
+            "only alphanumeric characters, underscores, and dashes are allowed."
+        )
     path = Path(profiles_dir) / f"{name}.yaml"
     if not path.exists():
         raise FileNotFoundError(f"Profile '{name}' not found at {path}")

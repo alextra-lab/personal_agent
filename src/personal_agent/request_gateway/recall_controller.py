@@ -68,16 +68,17 @@ _INTERROG_NOUN_RE = re.compile(
 
 # Trailing stop words to strip from noun phrases (query artifacts)
 _TRAILING_STOP_RE = re.compile(
-    r"\s+(?:again|now|today|here|there|then|please|yet)$",
+    r"\s+\b(?:again|now|today|here|there|then|please|yet)\b$",
     re.IGNORECASE,
 )
 
 # Trailing verb phrases and pronouns to strip (e.g., "tool we discussed" → "tool",
-# "caching system did" → "caching system")
+# "caching system did" → "caching system").
+# Uses \b and [^\n]* (no nested quantifiers) to prevent polynomial backtracking.
 _TRAILING_VERB_RE = re.compile(
-    r"\s+(?:we|i|you|they|he|she|did|does|was|were|is|are|have|had"
+    r"\s+\b(?:we|i|you|they|he|she|did|does|was|were|is|are|have|had"
     r"|pick|picked|chose|choose|use|used|discuss|discussed|mention|mentioned"
-    r"|decide|decided|do)(?:\s+.*)?$",
+    r"|decide|decided|do)\b[^\n]*$",
     re.IGNORECASE,
 )
 

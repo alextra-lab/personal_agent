@@ -54,6 +54,7 @@ dependencies = [
   "litellm>=1.83.0",
   # Event bus (ADR-0041 — Redis Streams)
   "redis[hiredis]>=5.0.0",
+  "python-multipart>=0.0.26",
 ]
 
 [project.scripts]

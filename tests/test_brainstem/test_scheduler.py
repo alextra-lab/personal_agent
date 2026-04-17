@@ -381,15 +381,16 @@ class TestMonitoringLoop:
                     "perf_system_mem_used": 40.0,
                 }
 
-                with patch.object(scheduler, "_trigger_consolidation") as mock_trigger:
-                    mock_trigger.return_value = None
+                with patch.object(scheduler, "_emit_system_idle") as mock_emit:
+                    mock_emit.return_value = None
 
                     await scheduler.start()
                     await asyncio.sleep(0.3)  # Let it check a few times
                     await scheduler.stop()
 
-                    # Should trigger at least once
-                    assert mock_trigger.call_count >= 1
+                    # Monitoring loop now emits system.idle (ADR-0041 Phase 3);
+                    # on_system_idle() → _trigger_consolidation() via event bus.
+                    assert mock_emit.call_count >= 1
 
 
 @pytest.mark.asyncio

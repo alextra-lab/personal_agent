@@ -63,20 +63,20 @@ def test_allow_list_not_empty() -> None:
 
 @pytest.mark.asyncio
 async def test_empty_command_raises() -> None:
-    with pytest.raises(ToolExecutionError, match="not in the allow-list"):
+    with pytest.raises(ToolExecutionError, match="not available on this platform"):
         await run_sysdiag_executor(command="")
 
 
 @pytest.mark.asyncio
 async def test_disallowed_command_raises() -> None:
-    with pytest.raises(ToolExecutionError, match="not in the allow-list"):
+    with pytest.raises(ToolExecutionError, match="not available on this platform"):
         await run_sysdiag_executor(command="rm")
 
 
 @pytest.mark.asyncio
 async def test_shell_injection_attempt_is_blocked() -> None:
     """Shell metacharacters in command name are rejected, not executed."""
-    with pytest.raises(ToolExecutionError, match="not in the allow-list"):
+    with pytest.raises(ToolExecutionError, match="not available on this platform"):
         await run_sysdiag_executor(command="ps; rm -rf /")
 
 

@@ -10,6 +10,13 @@
 
 **Spec:** `docs/superpowers/specs/2026-04-17-mac-slm-tunnel-design.md`
 
+**Status:** ✅ COMPLETE — deployed 2026-04-17
+
+**Post-deployment fixes applied (not in original plan):**
+- `access.tf`: CF Access policy `decision` must be `"non_identity"` for service tokens (not `"allow"`)
+- `docker-compose.cloud.yml`: env var names inside gateway container must have `AGENT_` prefix (`AGENT_CF_ACCESS_CLIENT_ID`) because pydantic-settings applies `env_prefix` to aliased fields
+- `config/models.cloud.yaml`: primary model id corrected to `unsloth/qwen3.6-35-A3B` (slm_server serves qwen3.6, not qwen3.5)
+
 ---
 
 ## File Map

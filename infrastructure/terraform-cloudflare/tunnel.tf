@@ -23,7 +23,7 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "seshat" {
   tunnel_id  = cloudflare_zero_trust_tunnel_cloudflared.seshat.id
 
   config = {
-    ingress_rule = [
+    ingress = [
       {
         hostname = "agent.${var.domain}"
         service  = "http://caddy:80"

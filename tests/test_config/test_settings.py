@@ -236,3 +236,33 @@ class TestLoadAppConfig:
         finally:
             if original_settings is not None:
                 settings_module._settings = original_settings
+
+
+class TestCFAccessSettings:
+    """Test CF Access credential fields on AppConfig."""
+
+    def test_cf_access_client_id_reads_from_env(self) -> None:
+        """CF_ACCESS_CLIENT_ID env var is read into cf_access_client_id."""
+        os.environ["CF_ACCESS_CLIENT_ID"] = "test-client-id"
+        try:
+            config = AppConfig()
+            assert config.cf_access_client_id == "test-client-id"
+        finally:
+            del os.environ["CF_ACCESS_CLIENT_ID"]
+
+    def test_cf_access_client_secret_reads_from_env(self) -> None:
+        """CF_ACCESS_CLIENT_SECRET env var is read into cf_access_client_secret."""
+        os.environ["CF_ACCESS_CLIENT_SECRET"] = "test-client-secret"
+        try:
+            config = AppConfig()
+            assert config.cf_access_client_secret == "test-client-secret"
+        finally:
+            del os.environ["CF_ACCESS_CLIENT_SECRET"]
+
+    def test_cf_access_fields_default_to_none(self) -> None:
+        """CF access fields are None when env vars are not set."""
+        os.environ.pop("CF_ACCESS_CLIENT_ID", None)
+        os.environ.pop("CF_ACCESS_CLIENT_SECRET", None)
+        config = AppConfig()
+        assert config.cf_access_client_id is None
+        assert config.cf_access_client_secret is None

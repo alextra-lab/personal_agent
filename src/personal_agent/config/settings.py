@@ -782,6 +782,22 @@ class AppConfig(BaseSettings):
         default="config/gateway_access.yaml",
         description="Path to the YAML file declaring gateway bearer tokens and scopes.",
     )
+    cf_access_client_id: str | None = Field(
+        default=None,
+        alias="CF_ACCESS_CLIENT_ID",
+        description=(
+            "Cloudflare Zero Trust service token client ID for Mac SLM tunnel. "
+            "Injected as CF-Access-Client-Id header on requests to slm.frenchforet.com."
+        ),
+    )
+    cf_access_client_secret: str | None = Field(
+        default=None,
+        alias="CF_ACCESS_CLIENT_SECRET",
+        description=(
+            "Cloudflare Zero Trust service token secret for Mac SLM tunnel. "
+            "Injected as CF-Access-Client-Secret header on requests to slm.frenchforet.com."
+        ),
+    )
 
 
 _settings: AppConfig | None = None

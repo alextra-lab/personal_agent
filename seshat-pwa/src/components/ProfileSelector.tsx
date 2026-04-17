@@ -1,6 +1,7 @@
 'use client';
 
 import type { ExecutionProfile } from '@/lib/types';
+import { useInferenceStatus } from '@/hooks/useInferenceStatus';
 
 interface ProfileSelectorProps {
   selected: ExecutionProfile;
@@ -37,14 +38,16 @@ const PROFILES: ProfileOption[] = [
  * Profile selector shown at the start of a new conversation.
  *
  * Displays local vs. cloud execution profile options with model name,
- * description, and cost estimate. Selection is persisted to the parent
- * via the onSelect callback.
+ * description, and cost estimate. The Local card shows a live availability
+ * dot: green when the Mac SLM tunnel is reachable, grey when offline.
  */
 export function ProfileSelector({
   selected,
   onSelect,
   disabled = false,
 }: ProfileSelectorProps) {
+  const inferenceStatus = useInferenceStatus(selected === 'local');
+
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm text-slate-400 text-center">
@@ -53,6 +56,27 @@ export function ProfileSelector({
       <div className="grid grid-cols-2 gap-3">
         {PROFILES.map((profile) => {
           const isSelected = selected === profile.id;
+          const isLocal = profile.id === 'local';
+
+          const statusDot = isLocal ? (
+            <span
+              className={`inline-block w-2 h-2 rounded-full ml-1 flex-shrink-0 ${
+                inferenceStatus.status === 'up'
+                  ? 'bg-emerald-400'
+                  : inferenceStatus.status === 'down'
+                    ? 'bg-slate-500'
+                    : 'bg-slate-600'
+              }`}
+              title={
+                inferenceStatus.status === 'up'
+                  ? `Mac inference online${inferenceStatus.latencyMs !== null ? ` (${inferenceStatus.latencyMs}ms)` : ''}`
+                  : inferenceStatus.status === 'down'
+                    ? 'Mac inference offline — start slm_server on your Mac'
+                    : 'Checking Mac inference…'
+              }
+            />
+          ) : null;
+
           return (
             <button
               key={profile.id}
@@ -73,6 +97,7 @@ export function ProfileSelector({
                 <span className="text-sm font-semibold text-slate-100">
                   {profile.label}
                 </span>
+                {statusDot}
                 {isSelected && (
                   <span className="ml-auto text-xs text-blue-400 font-medium">
                     Selected

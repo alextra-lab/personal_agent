@@ -276,7 +276,7 @@ services:
       context: .
       dockerfile: Dockerfile.pwa
       args:
-        NEXT_PUBLIC_SESHAT_URL: "http://172.25.0.10"
+        NEXT_PUBLIC_SESHAT_URL: "https://agent.frenchforet.com"
     container_name: cloud-sim-seshat-pwa
     ports:
       - "127.0.0.1:3000:3000"

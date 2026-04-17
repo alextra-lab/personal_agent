@@ -227,6 +227,9 @@ services:
       AGENT_ENABLE_MEMORY_GRAPH: "true"
       AGENT_EVENT_BUS_ENABLED: "true"
       AGENT_GATEWAY_AUTH_ENABLED: "true"
+      # Gateway bearer tokens — must match config/gateway_access.yaml secrets
+      GATEWAY_TOKEN_PWA: ${GATEWAY_TOKEN_PWA}
+      GATEWAY_TOKEN_EXTERNAL_AGENT: ${GATEWAY_TOKEN_EXTERNAL_AGENT}
       # Use cloud model config (embedding/reranker point to Docker service hostnames)
       AGENT_MODEL_CONFIG_PATH: /app/config/models.cloud.yaml
       # Cloud LLM API keys (injected from VPS .env)

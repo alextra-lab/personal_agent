@@ -45,6 +45,10 @@ from personal_agent.telemetry.trace import TraceContext
 
 log = get_logger(__name__)
 
+_CF_ACCESS_CLIENT_ID_HEADER = "CF-Access-Client-Id"
+_CF_ACCESS_CLIENT_SECRET_HEADER = "CF-Access-Client-Secret"
+_SLM_TUNNEL_HOSTNAME = "slm.frenchforet.com"
+
 
 class LocalLLMClient:
     """Client for interacting with local LLM servers.
@@ -368,10 +372,10 @@ class LocalLLMClient:
                     or current_endpoint.startswith("http://127.0.0.1")
                 )
                 cf_headers: dict[str, str] = {}
-                if "slm.frenchforet.com" in current_endpoint:
+                if _SLM_TUNNEL_HOSTNAME in current_endpoint:
                     if settings.cf_access_client_id and settings.cf_access_client_secret:
-                        cf_headers["CF-Access-Client-Id"] = settings.cf_access_client_id
-                        cf_headers["CF-Access-Client-Secret"] = settings.cf_access_client_secret
+                        cf_headers[_CF_ACCESS_CLIENT_ID_HEADER] = settings.cf_access_client_id
+                        cf_headers[_CF_ACCESS_CLIENT_SECRET_HEADER] = settings.cf_access_client_secret
 
                 async with httpx.AsyncClient(timeout=timeout_config, verify=verify_ssl) as client:
                     response = await client.post(

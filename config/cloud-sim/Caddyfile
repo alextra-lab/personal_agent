@@ -56,14 +56,16 @@ http://172.25.0.10 {
 # Cloudflare Tunnel — user-facing PWA + same-origin API
 # Traffic arrives from cloudflared with Host: agent.frenchforet.com.
 # Uses the shared routing snippet: /api/* → seshat-gateway:9001, /* → seshat-pwa:3000.
-http://agent.frenchforet.com {
+# :80 port suffix disables Caddy auto-HTTPS (http:// prefix alone is insufficient with local_certs).
+agent.frenchforet.com:80 {
 	import routing
 }
 
 # Cloudflare Tunnel — external agent API access
 # All paths route directly to the gateway.
 # TLS is terminated at the Cloudflare edge; traffic arrives here as plain HTTP.
-http://api.frenchforet.com {
+# :80 port suffix disables Caddy auto-HTTPS.
+api.frenchforet.com:80 {
 	reverse_proxy seshat-gateway:9001 {
 		header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}
 		header_up X-Forwarded-Proto https

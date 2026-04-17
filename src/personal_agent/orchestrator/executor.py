@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, cast
 
 from personal_agent.config import settings
+from personal_agent.config.env_loader import Environment
 from personal_agent.llm_client import ModelRole
 from personal_agent.orchestrator import compression_manager
 from personal_agent.orchestrator.context_window import (
@@ -300,7 +301,7 @@ def _fallback_reply_from_tool_results(ctx: ExecutionContext) -> str:
 
     last_results = ctx.tool_results[-3:]
     lines: list[str] = [
-        "I attempted to use tools, but synthesis failed. Here are the latest tool results:"
+        "I reached my tool-use limit before completing a synthesis. Here are the latest tool results:"
     ]
     for r in last_results:
         tool_name = r.get("tool_name", "unknown_tool")
@@ -1136,6 +1137,17 @@ async def step_llm_call(
         model_role = ctx.selected_model_role
 
     system_prompt: str | None = None
+
+    # Inject deployment context so the model doesn't try to access host-only paths
+    if settings.environment == Environment.PRODUCTION:
+        system_prompt = (
+            "## Deployment Context\n"
+            "You are running inside a Docker container on a cloud VPS.\n"
+            "- Your app code is at `/app` — the host path `/opt/seshat` is not accessible from here\n"
+            "- Configuration is injected as environment variables at startup; there is no `.env` file inside the container\n"
+            "- Do not search for files at `/opt/seshat`, `/home/debian`, or other host paths — they will never be found\n"
+            "- To inspect your running config use `self_telemetry_query`; to check the filesystem use `run_sysdiag` starting at `/app`"
+        )
 
     # Create span for LLM call
     span_ctx, span_id = trace_ctx.new_span()

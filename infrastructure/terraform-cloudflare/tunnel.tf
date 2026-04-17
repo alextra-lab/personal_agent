@@ -22,18 +22,20 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "seshat" {
   account_id = var.cloudflare_account_id
   tunnel_id  = cloudflare_zero_trust_tunnel_cloudflared.seshat.id
 
-  config {
-    ingress_rule {
-      hostname = "agent.${var.domain}"
-      service  = "http://caddy:80"
-    }
-    ingress_rule {
-      hostname = "api.${var.domain}"
-      service  = "http://caddy:80"
-    }
-    # Required catch-all — must be last, no hostname
-    ingress_rule {
-      service = "http_status:404"
-    }
+  config = {
+    ingress_rule = [
+      {
+        hostname = "agent.${var.domain}"
+        service  = "http://caddy:80"
+      },
+      {
+        hostname = "api.${var.domain}"
+        service  = "http://caddy:80"
+      },
+      # Required catch-all — must be last, no hostname
+      {
+        service = "http_status:404"
+      },
+    ]
   }
 }

@@ -16,10 +16,12 @@ resource "cloudflare_ruleset" "api_auth_check" {
   kind        = "zone"
   phase       = "http_request_firewall_custom"
 
-  rules {
-    action      = "block"
-    expression  = "(http.host eq \"api.${var.domain}\" and not any(http.request.headers.names[*] eq \"authorization\"))"
-    description = "Block API requests without Authorization header"
-    enabled     = true
-  }
+  rules = [
+    {
+      action      = "block"
+      expression  = "(http.host eq \"api.${var.domain}\" and not any(http.request.headers.names[*] eq \"authorization\"))"
+      description = "Block API requests without Authorization header"
+      enabled     = true
+    },
+  ]
 }

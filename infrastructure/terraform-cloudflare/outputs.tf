@@ -5,7 +5,7 @@ output "tunnel_id" {
 
 output "tunnel_token" {
   description = "Cloudflare Tunnel token — set as CLOUDFLARE_TUNNEL_TOKEN in VPS .env then restart cloudflared"
-  value       = cloudflare_zero_trust_tunnel_cloudflared.seshat.tunnel_token
+  value       = cloudflare_zero_trust_tunnel_cloudflared.seshat.token
   sensitive   = true
 }
 

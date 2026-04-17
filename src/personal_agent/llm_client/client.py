@@ -367,8 +367,16 @@ class LocalLLMClient:
                     current_endpoint.startswith("http://localhost")
                     or current_endpoint.startswith("http://127.0.0.1")
                 )
+                cf_headers: dict[str, str] = {}
+                if "slm.frenchforet.com" in current_endpoint:
+                    if settings.cf_access_client_id and settings.cf_access_client_secret:
+                        cf_headers["CF-Access-Client-Id"] = settings.cf_access_client_id
+                        cf_headers["CF-Access-Client-Secret"] = settings.cf_access_client_secret
+
                 async with httpx.AsyncClient(timeout=timeout_config, verify=verify_ssl) as client:
-                    response = await client.post(current_endpoint, json=payload)
+                    response = await client.post(
+                        current_endpoint, json=payload, headers=cf_headers or None
+                    )
                     response.raise_for_status()
                     response_data = response.json()
 

@@ -552,3 +552,97 @@ models:
 
             payload = mock_client.post.call_args.kwargs["json"]
             assert payload["response_format"] == response_format
+
+    @pytest.mark.asyncio
+    async def test_cf_access_headers_injected_for_slm_endpoint(
+        self, tmp_path: Path
+    ) -> None:
+        """CF-Access headers are injected when endpoint contains slm.frenchforet.com."""
+        config_file = tmp_path / "models_slm.yaml"
+        config_file.write_text(
+            """
+models:
+  primary:
+    id: "test-primary"
+    context_length: 32768
+    max_concurrency: 1
+    default_timeout: 60
+    endpoint: "https://slm.frenchforet.com/v1"
+  sub_agent:
+    id: "test-sub"
+    context_length: 32768
+    max_concurrency: 1
+    default_timeout: 60
+"""
+        )
+        slm_client = LocalLLMClient(
+            base_url="https://slm.frenchforet.com/v1",
+            timeout_seconds=30,
+            max_retries=0,
+            model_config_path=config_file,
+        )
+
+        mock_response = {
+            "choices": [{"message": {"role": "assistant", "content": "hello"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+
+        with (
+            patch("personal_agent.llm_client.client.settings") as mock_settings,
+            patch("httpx.AsyncClient") as mock_client_class,
+        ):
+            mock_settings.cf_access_client_id = "test-id-123"
+            mock_settings.cf_access_client_secret = "test-secret-456"
+            mock_http = AsyncMock()
+            mock_response_obj = MagicMock()
+            mock_response_obj.json.return_value = mock_response
+            mock_response_obj.raise_for_status = MagicMock()
+            mock_http.post = AsyncMock(return_value=mock_response_obj)
+            mock_client_class.return_value.__aenter__.return_value = mock_http
+
+            trace_ctx = TraceContext.new_trace()
+            await slm_client.respond(
+                role=ModelRole.PRIMARY,
+                messages=[{"role": "user", "content": "hi"}],
+                trace_ctx=trace_ctx,
+            )
+
+            call_kwargs = mock_http.post.call_args[1]
+            headers = call_kwargs.get("headers") or {}
+            assert headers.get("CF-Access-Client-Id") == "test-id-123"
+            assert headers.get("CF-Access-Client-Secret") == "test-secret-456"
+
+    @pytest.mark.asyncio
+    async def test_no_cf_headers_for_localhost_endpoint(
+        self, client: LocalLLMClient
+    ) -> None:
+        """CF-Access headers are NOT added for localhost endpoints."""
+        mock_response = {
+            "choices": [{"message": {"role": "assistant", "content": "hello"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+
+        with (
+            patch("personal_agent.llm_client.client.settings") as mock_settings,
+            patch("httpx.AsyncClient") as mock_client_class,
+        ):
+            mock_settings.cf_access_client_id = "test-id-123"
+            mock_settings.cf_access_client_secret = "test-secret-456"
+            mock_http = AsyncMock()
+            mock_response_obj = MagicMock()
+            mock_response_obj.json.return_value = mock_response
+            mock_response_obj.raise_for_status = MagicMock()
+            mock_http.post = AsyncMock(return_value=mock_response_obj)
+            mock_client_class.return_value.__aenter__.return_value = mock_http
+
+            trace_ctx = TraceContext.new_trace()
+            await client.respond(
+                role=ModelRole.PRIMARY,
+                messages=[{"role": "user", "content": "hi"}],
+                trace_ctx=trace_ctx,
+            )
+
+            call_kwargs = mock_http.post.call_args[1]
+            headers = call_kwargs.get("headers")
+            assert headers is None or "CF-Access-Client-Id" not in (headers or {})
+            assert headers is None or "CF-Access-Client-Secret" not in (headers or {})

@@ -13,7 +13,7 @@ resource "cloudflare_zero_trust_access_service_token" "vps_gateway" {
 resource "cloudflare_zero_trust_access_policy" "slm_allow_service_token" {
   account_id = var.cloudflare_account_id
   name       = "Allow VPS gateway service token"
-  decision   = "allow"
+  decision   = "non_identity"
 
   include = [
     {

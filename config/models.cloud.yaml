@@ -1,9 +1,9 @@
 # Cloud / VPS model configuration
 # Used on the VPS via AGENT_MODEL_CONFIG_PATH=/app/config/models.cloud.yaml
 # Differences from models.yaml:
+#   - primary/sub_agent endpoint → https://slm.frenchforet.com/v1  (Mac SLM tunnel)
 #   - embedding endpoint → http://embeddings:8503/v1  (llama.cpp Docker service)
 #   - reranker endpoint  → http://embeddings:8504/v1  (llama.cpp Docker service)
-#   - primary/sub_agent endpoints unchanged (unused on cloud path — cloud APIs used instead)
 #
 # Original: config/models.yaml (ADR-0031 + ADR-0033: two-tier taxonomy + LiteLLM)
 #
@@ -64,7 +64,7 @@ models:
     supports_function_calling: true
     tool_calling_strategy: "native"  # Qwen3.5 chat template supports tools natively
     provider_type: "local"
-    endpoint: "http://localhost:8000/v1"
+    endpoint: "https://slm.frenchforet.com/v1"
 
   # ── Tier 2: Sub-Agent ───────────────────────────────────────────
   sub_agent:
@@ -86,7 +86,7 @@ models:
     supports_function_calling: true
     tool_calling_strategy: "native"  # Qwen3.5 chat template supports tools natively
     provider_type: "local"
-    endpoint: "http://localhost:8000/v1"
+    endpoint: "https://slm.frenchforet.com/v1"
 
   # ── Experimental / A/B Testing ──────────────────────────────────
   reasoning_heavy:

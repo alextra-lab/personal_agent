@@ -230,6 +230,9 @@ services:
       # Gateway bearer tokens — must match config/gateway_access.yaml secrets
       GATEWAY_TOKEN_PWA: ${GATEWAY_TOKEN_PWA}
       GATEWAY_TOKEN_EXTERNAL_AGENT: ${GATEWAY_TOKEN_EXTERNAL_AGENT}
+      # Cloudflare Access service token for Mac SLM tunnel (local inference profile)
+      CF_ACCESS_CLIENT_ID: ${CF_ACCESS_CLIENT_ID}
+      CF_ACCESS_CLIENT_SECRET: ${CF_ACCESS_CLIENT_SECRET}
       # Use cloud model config (embedding/reranker point to Docker service hostnames)
       AGENT_MODEL_CONFIG_PATH: /app/config/models.cloud.yaml
       # Cloud LLM API keys (injected from VPS .env)

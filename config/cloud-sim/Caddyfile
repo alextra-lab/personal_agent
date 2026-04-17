@@ -52,3 +52,35 @@ localhost {
 http://172.25.0.10 {
 	import routing
 }
+
+# Cloudflare Tunnel — user-facing PWA + same-origin API
+# Traffic arrives from cloudflared with Host: agent.frenchforet.com.
+# Uses the shared routing snippet: /api/* → seshat-gateway:9001, /* → seshat-pwa:3000.
+http://agent.frenchforet.com {
+	import routing
+}
+
+# Cloudflare Tunnel — external agent API access
+# All paths route directly to the gateway.
+# TLS is terminated at the Cloudflare edge; traffic arrives here as plain HTTP.
+http://api.frenchforet.com {
+	reverse_proxy seshat-gateway:9001 {
+		header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-Host {http.request.header.Host}
+		transport http {
+			dial_timeout 30s
+			response_header_timeout 60s
+		}
+	}
+	log {
+		output stdout
+		format json
+	}
+	handle_errors {
+		@4xx expression `{http.error.status_code} >= 400 && {http.error.status_code} < 500`
+		@5xx expression `{http.error.status_code} >= 500`
+		respond @4xx "{http.error.status_code} {http.error.status_text}" {http.error.status_code}
+		respond @5xx "Internal Server Error" 500
+	}
+}

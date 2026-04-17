@@ -7,6 +7,10 @@ This module provides:
 - CLI-first native tools replacing MCP tools (ADR-0028)
 """
 
+from personal_agent.tools.infra_health import (
+    infra_health_executor,
+    infra_health_tool,
+)
 from personal_agent.tools.sysdiag import (
     run_sysdiag_executor,
     run_sysdiag_tool,
@@ -100,6 +104,8 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
     registry.register(get_library_docs_tool, get_library_docs_executor)
     # FRE-188: system diagnostics
     registry.register(run_sysdiag_tool, run_sysdiag_executor)
+    # Infrastructure health (TCP/HTTP probes — container-safe, no CLI tools needed)
+    registry.register(infra_health_tool, infra_health_executor)
 
 
 # Global singleton registry

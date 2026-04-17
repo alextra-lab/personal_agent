@@ -1143,10 +1143,16 @@ async def step_llm_call(
         system_prompt = (
             "## Deployment Context\n"
             "You are running inside a Docker container on a cloud VPS.\n"
-            "- Your app code is at `/app` — the host path `/opt/seshat` is not accessible from here\n"
+            "- App code is at `/app` — the host path `/opt/seshat` is the host mount point and is NOT accessible from here\n"
             "- Configuration is injected as environment variables at startup; there is no `.env` file inside the container\n"
-            "- Do not search for files at `/opt/seshat`, `/home/debian`, or other host paths — they will never be found\n"
-            "- To inspect your running config use `self_telemetry_query`; to check the filesystem use `run_sysdiag` starting at `/app`"
+            "- Do NOT search for files at `/opt/seshat`, `/home/debian`, or other host paths — they do not exist inside the container\n"
+            "- Use `run_sysdiag` to inspect the container filesystem starting at `/app`\n"
+            "- All backend services are reachable via Docker internal DNS:\n"
+            "    postgres:5432  |  neo4j:7687 (bolt) / neo4j:7474 (HTTP)  |  elasticsearch:9200\n"
+            "    redis:6379  |  embeddings:8503  |  reranker:8504\n"
+            "- Use `infra_health` to check connectivity and health of all these services at once\n"
+            "- Use `self_telemetry_query` to inspect logs, errors, and execution history\n"
+            "- Use `search_memory` or `query_elasticsearch` to query the knowledge graph and trace data"
         )
 
     # Create span for LLM call

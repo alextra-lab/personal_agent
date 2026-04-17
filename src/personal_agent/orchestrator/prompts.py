@@ -42,6 +42,7 @@ Rules:
 - Do not invent tools or parameters. If no tool fits, say so directly.
 - Provide ALL required parameters (e.g., list_directory requires {"path": "..."}).
 - For large directories, prefer calling list_directory with include_details=false and/or max_entries (unless the user explicitly asked for every entry).
+- PARALLEL CALLS: When a task needs multiple independent tool calls (e.g. checking errors AND checking memory AND checking infra health), issue ALL of them in a SINGLE response as multiple tool_calls entries. Never call them one at a time when they are independent — batching saves iterations.
 - After tool results are returned, synthesize a final natural-language answer. Do NOT request the same tool again unless the path/args must change.
 - Whenever the user asks about current events, recent news, CVEs, product versions, or anything requiring live web data, call web_search for quick lookups (free, private, multi-engine). Pass categories='it' for technical queries, 'science' for research, 'news' for current events, 'weather' for forecasts.
 - After web_search returns URLs, use mcp_fetch_content to read full page content when snippets are insufficient.

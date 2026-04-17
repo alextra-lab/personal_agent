@@ -51,7 +51,7 @@ models:
     # Orchestrator brain: deep reasoning, tool calling, decomposition planning.
     # Thinking enabled with bounded budget. Single concurrent (GPU-limited).
     # Renamed from "reasoning" (ADR-0033).
-    id: "unsloth/qwen3.5-35-A3B"
+    id: "unsloth/qwen3.6-35-A3B"
     context_length: 64000
     quantization: "8bit"
     min_concurrency: 1

@@ -226,6 +226,11 @@ services:
       AGENT_EVENT_BUS_REDIS_URL: redis://redis:6379/0
       AGENT_ENABLE_MEMORY_GRAPH: "true"
       AGENT_EVENT_BUS_ENABLED: "true"
+      AGENT_ENABLE_SECOND_BRAIN: "true"
+      AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED: "false"
+      AGENT_PROACTIVE_MEMORY_ENABLED: "true"
+      AGENT_FRESHNESS_ENABLED: "true"
+      AGENT_MCP_GATEWAY_ENABLED: "false"
       AGENT_GATEWAY_AUTH_ENABLED: "true"
       # Gateway bearer tokens — must match config/gateway_access.yaml secrets
       GATEWAY_TOKEN_PWA: ${GATEWAY_TOKEN_PWA}

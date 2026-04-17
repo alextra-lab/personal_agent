@@ -1,11 +1,13 @@
 """FastAPI service application."""
 
 import asyncio
+import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, cast
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
+import httpx
 from fastapi import Depends, FastAPI, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1079,6 +1081,48 @@ async def chat_stream_endpoint(
 
     log.info("chat_stream.launched", session_id=session_id, profile=profile)
     return {"session_id": session_id, "status": "streaming"}
+
+
+# ============================================================================
+# Inference Availability (Mac SLM Tunnel)
+# ============================================================================
+
+_SLM_HEALTH_URL = "https://slm.frenchforet.com/health"
+
+
+@app.get("/api/inference/status")
+async def inference_status() -> dict[str, Any]:
+    """Probe the Mac SLM tunnel and return availability for the local profile.
+
+    Makes a GET /health request to https://slm.frenchforet.com/health with
+    Cloudflare Access service token headers. Times out in 3 seconds.
+
+    Returns:
+        {"local": "up", "latency_ms": N} if reachable,
+        {"local": "down", "latency_ms": None} otherwise.
+    """
+    headers: dict[str, str] = {}
+    if settings.cf_access_client_id and settings.cf_access_client_secret:
+        headers["CF-Access-Client-Id"] = settings.cf_access_client_id
+        headers["CF-Access-Client-Secret"] = settings.cf_access_client_secret
+
+    start = time.monotonic()
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(_SLM_HEALTH_URL, headers=headers)
+            resp.raise_for_status()
+        latency_ms = int((time.monotonic() - start) * 1000)
+        return {"local": "up", "latency_ms": latency_ms}
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 403:
+            log.warning(
+                "inference_tunnel_auth_failed",
+                status=403,
+                hint="Rotate CF_ACCESS_CLIENT_ID/SECRET via terraform apply",
+            )
+        return {"local": "down", "latency_ms": None}
+    except Exception:
+        return {"local": "down", "latency_ms": None}
 
 
 # ============================================================================

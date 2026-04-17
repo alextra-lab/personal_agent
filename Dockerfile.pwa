@@ -22,6 +22,9 @@ COPY seshat-pwa/ .
 ARG NEXT_PUBLIC_SESHAT_URL=http://172.25.0.10
 ENV NEXT_PUBLIC_SESHAT_URL=${NEXT_PUBLIC_SESHAT_URL}
 
+ARG NEXT_PUBLIC_GATEWAY_TOKEN=""
+ENV NEXT_PUBLIC_GATEWAY_TOKEN=${NEXT_PUBLIC_GATEWAY_TOKEN}
+
 RUN npm run build
 
 # ── Runtime ───────────────────────────────────────────────────────────────────

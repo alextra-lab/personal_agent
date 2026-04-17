@@ -226,7 +226,7 @@ services:
       AGENT_EVENT_BUS_REDIS_URL: redis://redis:6379/0
       AGENT_ENABLE_MEMORY_GRAPH: "true"
       AGENT_EVENT_BUS_ENABLED: "true"
-      AGENT_GATEWAY_AUTH_ENABLED: "false"
+      AGENT_GATEWAY_AUTH_ENABLED: "true"
       # Use cloud model config (embedding/reranker point to Docker service hostnames)
       AGENT_MODEL_CONFIG_PATH: /app/config/models.cloud.yaml
       # Cloud LLM API keys (injected from VPS .env)
@@ -277,6 +277,7 @@ services:
       dockerfile: Dockerfile.pwa
       args:
         NEXT_PUBLIC_SESHAT_URL: "https://agent.frenchforet.com"
+        NEXT_PUBLIC_GATEWAY_TOKEN: ${GATEWAY_TOKEN_PWA}
     container_name: cloud-sim-seshat-pwa
     ports:
       - "127.0.0.1:3000:3000"

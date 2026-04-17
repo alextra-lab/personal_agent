@@ -151,12 +151,17 @@ def infra_health_executor(
 
     all_reachable = all(f is True for f in reachable_flags if f is not None)
 
+    def _is_reachable(k: str, v: Any) -> bool | None:
+        if k == "neo4j":
+            return v.get("bolt", {}).get("reachable")
+        return v.get("reachable") if isinstance(v, dict) else None
+
     log.info(
         "infra_health_checked",
         trace_id=trace_id,
         all_reachable=all_reachable,
-        reachable=[k for k, v in services.items() if isinstance(v, dict) and v.get("reachable") is True],
-        unreachable=[k for k, v in services.items() if isinstance(v, dict) and v.get("reachable") is False],
+        reachable=[k for k, v in services.items() if _is_reachable(k, v) is True],
+        unreachable=[k for k, v in services.items() if _is_reachable(k, v) is False],
     )
 
     return {"success": True, "all_reachable": all_reachable, "services": services}

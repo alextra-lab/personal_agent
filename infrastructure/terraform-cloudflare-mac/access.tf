@@ -28,8 +28,7 @@ resource "cloudflare_zero_trust_access_application" "slm" {
   account_id       = var.cloudflare_account_id
   name             = "Mac SLM Server"
   domain           = "slm.${var.domain}"
-  type             = "self_hosted"
-  session_duration = "24h"
+  type = "self_hosted"
 
   policies = [
     {

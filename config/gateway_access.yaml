@@ -47,3 +47,12 @@ tokens:
       - observations:read
       - observations:write
     rate_limit: 1000
+
+  - name: external-agent
+    secret: "${GATEWAY_TOKEN_EXTERNAL_AGENT}"
+    scopes:
+      - knowledge:read
+      - knowledge:write
+      - sessions:read
+      - observations:read
+    rate_limit: "500/hour"

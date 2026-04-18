@@ -207,9 +207,34 @@ services:
       - cloud-sim
     restart: unless-stopped
 
+  # SearXNG metasearch engine for private web search (ADR-0034)
+  # Purpose: Private web search aggregating Google, Brave, DuckDuckGo, etc.
+  # Resource limit: 256MB RAM, 0.5 CPU
+  searxng:
+    image: searxng/searxng:latest
+    container_name: cloud-sim-searxng
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080
+    volumes:
+      - ./docker/searxng:/etc/searxng:rw
+    ports:
+      # Localhost only — use SSH tunnel: ssh -L 8888:localhost:8888 vps-5a0f676b
+      - "127.0.0.1:8888:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    mem_limit: 256m
+    cpus: 0.5
+    networks:
+      - cloud-sim
+    restart: unless-stopped
+
   # Seshat API Gateway (FastAPI)
   # Purpose: Full agent harness — Knowledge API, Observation API, orchestration
-  # Depends on: postgres, neo4j, elasticsearch, redis, embeddings, reranker
+  # Depends on: postgres, neo4j, elasticsearch, redis, embeddings, reranker, searxng
   # Resource limit: 512MB RAM, 1.0 CPU (increased for full harness)
   seshat-gateway:
     build:
@@ -251,6 +276,7 @@ services:
       APP_ENV: production
       # Logging
       AGENT_LOG_LEVEL: info
+      AGENT_SEARXNG_BASE_URL: http://searxng:8080
     ports:
       # Localhost only — Caddy proxies to this port internally
       - "127.0.0.1:9001:9001"
@@ -266,6 +292,8 @@ services:
       embeddings:
         condition: service_healthy
       reranker:
+        condition: service_healthy
+      searxng:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9001/health')"]

@@ -84,7 +84,7 @@ class MCPClientWrapper:
             # Create server parameters
             server_params = stdio_server_parameters(
                 command=self.command[0],
-                args=self.command[1:] if len(self.command) > 1 else None,
+                args=self.command[1:],
                 env=None,  # Use current environment
             )
 

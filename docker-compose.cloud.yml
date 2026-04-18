@@ -255,7 +255,13 @@ services:
       AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED: "false"
       AGENT_PROACTIVE_MEMORY_ENABLED: "true"
       AGENT_FRESHNESS_ENABLED: "true"
-      AGENT_MCP_GATEWAY_ENABLED: "false"
+      AGENT_MCP_GATEWAY_ENABLED: "true"
+      AGENT_MCP_GATEWAY_COMMAND: /app/docker/mcp/run-gateway.sh
+      AGENT_MCP_GATEWAY_ENABLED_SERVERS: '["sequentialthinking", "context7", "linear"]'
+      AGENT_MCP_GATEWAY_TIMEOUT_SECONDS: "90"
+      # Host path of MCP secrets .env — must exist on VPS before first deploy.
+      # See docker/mcp/mcp-secrets.env.example → copy to /opt/seshat/mcp-secrets.env on host.
+      MCP_SECRETS_FILE: /opt/seshat/mcp-secrets.env
       AGENT_GATEWAY_AUTH_ENABLED: "true"
       # Gateway bearer tokens — must match config/gateway_access.yaml secrets
       GATEWAY_TOKEN_PWA: ${GATEWAY_TOKEN_PWA}
@@ -295,6 +301,9 @@ services:
         condition: service_healthy
       searxng:
         condition: service_healthy
+    volumes:
+      # Docker socket — allows run-gateway.sh to spawn docker/mcp-gateway container
+      - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9001/health')"]
       interval: 10s

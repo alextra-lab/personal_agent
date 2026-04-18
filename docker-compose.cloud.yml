@@ -256,7 +256,7 @@ services:
       AGENT_PROACTIVE_MEMORY_ENABLED: "true"
       AGENT_FRESHNESS_ENABLED: "true"
       AGENT_MCP_GATEWAY_ENABLED: "true"
-      AGENT_MCP_GATEWAY_COMMAND: /app/docker/mcp/run-gateway.sh
+      AGENT_MCP_GATEWAY_COMMAND: '["/app/docker/mcp/run-gateway.sh"]'
       AGENT_MCP_GATEWAY_ENABLED_SERVERS: '["sequentialthinking", "context7", "linear"]'
       AGENT_MCP_GATEWAY_TIMEOUT_SECONDS: "90"
       # Host path of MCP secrets .env — must exist on VPS before first deploy.

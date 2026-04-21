@@ -308,6 +308,10 @@ services:
     volumes:
       # Docker socket — allows run-gateway.sh to spawn docker/mcp-gateway container
       - /var/run/docker.sock:/var/run/docker.sock
+      # Persist Captain's Log captures across container restarts/redeployments.
+      # Without this, every deploy wipes the capture history and the consolidation
+      # pipeline has nothing to process until new captures accumulate.
+      - seshat_captures_cloud:/app/telemetry/captains_log/captures
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9001/health')"]
       interval: 10s
@@ -422,6 +426,10 @@ volumes:
   caddy_data:
     driver: local
   caddy_config:
+    driver: local
+
+  # Captain's Log captures (persisted across container restarts)
+  seshat_captures_cloud:
     driver: local
 
 networks:

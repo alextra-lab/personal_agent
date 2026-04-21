@@ -357,7 +357,12 @@ class BrainstemScheduler:
                 should_pause=lambda: self._active_request_count > 0,
             )
 
-            self.last_consolidation = datetime.now(timezone.utc)
+            # Only mark a consolidation interval when real captures were found.
+            # If captures_processed=0 the dir was empty (e.g. fresh container startup);
+            # leaving last_consolidation=None lets the scheduler retry promptly once
+            # captures arrive rather than waiting the full min_consolidation_interval.
+            if result.get("captures_processed", 0) > 0:
+                self.last_consolidation = datetime.now(timezone.utc)
 
             log.info(
                 "consolidation_completed",

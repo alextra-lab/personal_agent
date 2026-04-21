@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-21 (FRE-237: history sanitiser — cross-provider tool_use_id fix)
+> **Last updated**: 2026-04-21 (FRE-239: event bus / second-brain pipeline fixes)
 
 ---
 
@@ -45,6 +45,7 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 
 | Phase | Completed | Summary |
 |-------|-----------|---------|
+| Bug: event bus / second-brain pipeline not firing (FRE-239) | 2026-04-21 | Four fixes: (1) `seshat_captures_cloud` Docker volume added to `docker-compose.cloud.yml` — captures no longer wiped on container restart; (2) `BrainstemScheduler._trigger_consolidation` now only sets `last_consolidation` when `captures_processed > 0`, preventing an empty startup run from blocking consolidation for 1 hour; (3) `NoOpBus.publish` emits a `debug` log so silent discards are visible; (4) `app.py` lifespan logs `event_bus_ready` with registered consumer list on startup. |
 | Bug: cross-provider tool_use_id orphan (FRE-237) | 2026-04-21 | New `llm_client/history_sanitiser.py` — two-pass strip of orphaned `tool_result` / `tool_calls` entries before every dispatch (both `LocalLLMClient` and `LiteLLMClient`). Fixes Anthropic 400 on Qwen→Sonnet failover. Telemetry: `history_sanitised` event. Also fixed `.env` `AGENT_MCP_GATEWAY_COMMAND` JSON format. |
 | Seshat v2 Architecture (FRE-192: FRE-201–209) | 2026-04-14 | All 8 ADRs (0043–0050) implemented across 6 phases. FRE-201: Protocol definitions (KnowledgeGraphProtocol, SessionStoreProtocol, SearchIndexProtocol, etc.). FRE-202: Context observability (CompactionRecord, KnowledgeWeight, freshness scoring). FRE-203: SKILL.md docs (4 skill files). FRE-204: AG-UI transport (SSE streaming, 5 event types). FRE-205: Docker Compose cloud simulation (6-service topology). FRE-206: Seshat API Gateway (auth, rate limiting, knowledge/session/observation APIs, HTTP client). FRE-207: Execution profiles (local/cloud YAML, profile-aware TraceContext). FRE-208: MCP server + delegation adapters (ClaudeCode/Codex/GenericMCP adapters, 6 MCP tools). FRE-209: PWA scaffold (Next.js 14, AG-UI SSE streaming, HITL). 180+ new tests. |
 | Proactive Memory (FRE-174–176; FRE-177 procedure) | 2026-04-04 | `suggest_relevant()` + `MemoryServiceAdapter`, `memory/proactive.py` scoring/budget, `AGENT_PROACTIVE_MEMORY_ENABLED`, `assemble_context` + `session_id` wiring. Tests: `test_proactive.py`, `test_context.py`. EVAL A/B: run harness + fill `telemetry/evaluation/EVAL-proactive-memory/README.md`. ADR-0039 Accepted (MVP). |

@@ -604,7 +604,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         consumer_runner = ConsumerRunner(active_bus)
         await consumer_runner.start()
-        log.info("event_bus_consumer_runner_started")
+        registered = [f"{s.stream}→{s.group}" for s in active_bus.subscriptions]
+        log.info(
+            "event_bus_ready",
+            bus_type=type(active_bus).__name__,
+            consumer_count=len(registered),
+            consumers=registered,
+        )
 
     # Wire gateway state (FRE-206): attach storage backends to app.state so
     # gateway endpoints (mounted below in local-dev mode) can reach them.

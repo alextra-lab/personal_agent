@@ -133,7 +133,7 @@ services:
   # llama.cpp — Embedding + Reranker server
   # Purpose: Serves Qwen3-Embedding-0.6B (port 8503) and Qwen3-Reranker-0.6B (port 8504)
   # Models are mounted from the host at /opt/seshat/models/ (populated by transfer-models.sh)
-  # Resource limit: 3GB RAM, 4 CPU (shared between embedding and reranker via single container)
+  # Resource limit: embeddings 3000MB / reranker 2560MB, 4 CPU each
   #
   # To set up models on VPS before first deploy:
   #   bash infrastructure/scripts/transfer-models.sh
@@ -167,7 +167,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
-    mem_limit: 2048m
+    mem_limit: 3000m
     cpus: 4.0
     networks:
       - cloud-sim
@@ -189,6 +189,10 @@ services:
       - "8504"
       - "--ctx-size"
       - "8192"
+      - "--ubatch-size"
+      - "1024"
+      - "--parallel"
+      - "1"
       - "--threads"
       - "4"
     volumes:
@@ -201,7 +205,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
-    mem_limit: 1024m
+    mem_limit: 2560m
     cpus: 4.0
     networks:
       - cloud-sim

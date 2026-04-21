@@ -153,6 +153,11 @@ class LiteLLMClient:
         if system_prompt:
             api_messages = [{"role": "system", "content": system_prompt}, *api_messages]
 
+        # Sanitise tool_call / tool_result consistency before dispatch (FRE-237).
+        from personal_agent.llm_client.history_sanitiser import sanitise_messages
+
+        api_messages, _ = sanitise_messages(api_messages, trace_id=trace_id)
+
         # Resolve provider API key from AGENT_-prefixed settings so LiteLLM
         # doesn't have to find a bare ANTHROPIC_API_KEY / OPENAI_API_KEY env var.
         api_key: str | None = None

@@ -24,6 +24,7 @@ from personal_agent.llm_client.concurrency import (
     InferencePriority,
     InferenceSlotTimeout,
 )
+from personal_agent.llm_client.history_sanitiser import sanitise_messages
 from personal_agent.llm_client.models import ModelConfig, ModelDefinition
 from personal_agent.llm_client.types import (
     LLMClientError,
@@ -299,6 +300,11 @@ class LocalLLMClient:
         request_messages = messages.copy()
         if system_prompt:
             request_messages.insert(0, {"role": "system", "content": system_prompt})
+
+        # Sanitise tool_call / tool_result consistency before dispatch (FRE-237).
+        request_messages, _ = sanitise_messages(
+            request_messages, trace_id=str(trace_ctx.trace_id) if trace_ctx else None
+        )
 
         # Note: reasoning_effort is ignored for /v1/chat/completions (it's LM Studio /v1/responses specific)
         # We keep the parameter for API compatibility but don't use it

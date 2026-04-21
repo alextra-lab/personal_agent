@@ -34,6 +34,7 @@ UNKNOWN_STATE = "unknown_state"
 MODEL_CALL_STARTED = "model_call_started"
 MODEL_CALL_COMPLETED = "model_call_completed"
 MODEL_CALL_ERROR = "model_call_error"
+HISTORY_SANITISED = "history_sanitised"
 
 # Tool execution events
 TOOL_CALL_STARTED = "tool_call_started"

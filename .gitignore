@@ -93,6 +93,7 @@ current_session
 .claude/worktrees/
 .claude/todos/
 .claude/.cache/
+.claude/settings.json
 
 # SearXNG generated files (ADR-0034)
 docker/searxng/uwsgi.ini

@@ -51,6 +51,8 @@ tools:
       - "/System/**"
       - "/Library/**"
       - "$HOME/.ssh/**"
+    loop_max_per_signature: 1
+    loop_max_consecutive: 2
 
   system_metrics_snapshot:
     category: "read_only"
@@ -362,6 +364,27 @@ tools:
     requires_approval: false
     timeout_seconds: 65
     rate_limit_per_hour: 300
+    loop_max_per_signature: 3
+    loop_max_consecutive: 4
+    loop_output_sensitive: true
+
+  self_telemetry_query:
+    category: "read_only"
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
+    risk_level: "low"
+    requires_approval: false
+    loop_max_per_signature: 2
+    loop_max_consecutive: 3
+    loop_output_sensitive: true
+
+  infra_health:
+    category: "read_only"
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
+    risk_level: "low"
+    requires_approval: false
+    loop_max_per_signature: 2
+    loop_max_consecutive: 3
+    loop_output_sensitive: true
 
   # ADR-0028 Phase 1: Replaced by native query_elasticsearch tool
   query_elasticsearch:
@@ -1013,6 +1036,8 @@ tools:
     requires_approval: false
     timeout_seconds: 30
     rate_limit_per_hour: 20
+    loop_max_per_signature: 1
+    loop_max_consecutive: 2
 
   # FRE-224: native Linear issue search / list (Tier-1)
   find_linear_issues:

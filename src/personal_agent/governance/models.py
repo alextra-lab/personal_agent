@@ -124,6 +124,20 @@ class ToolPolicy(BaseModel):
         False, description="Whether outbound gateway is required"
     )
     rate_limit_per_hour: int | None = Field(None, ge=0, description="Rate limit per hour")
+    loop_max_per_signature: int = Field(
+        default=1,
+        ge=0,
+        description="Max executions of the same (tool, args) pair per request",
+    )
+    loop_max_consecutive: int = Field(
+        default=3,
+        ge=1,
+        description="Consecutive calls before warning; hard-block fires at this + 1",
+    )
+    loop_output_sensitive: bool = Field(
+        default=False,
+        description="If True, skip output-identity blocking (for polling tools whose output changes each call)",
+    )
 
 
 class ModelRoleConstraints(BaseModel):

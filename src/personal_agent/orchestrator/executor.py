@@ -18,6 +18,12 @@ from personal_agent.orchestrator.context_window import (
     apply_context_window,
     estimate_messages_tokens,
 )
+from personal_agent.orchestrator.loop_gate import (
+    GateDecision,
+    GateResult,
+    ToolLoopPolicy,
+    stable_hash,
+)
 from personal_agent.orchestrator.routing import is_memory_recall_query
 from personal_agent.orchestrator.session import SessionManager
 from personal_agent.orchestrator.types import (
@@ -46,6 +52,82 @@ from personal_agent.tools import ToolExecutionLayer, get_default_registry
 from personal_agent.tools.registry import ToolRegistry
 
 log = get_logger(__name__)
+
+# ── Tool loop gate helpers ─────────────────────────────────────────────────
+
+_cached_governance_config: Any = None
+
+
+def _get_cached_governance_config() -> Any:
+    """Module-level governance config cache. TODO: replace with @lru_cache after config singleton."""
+    global _cached_governance_config
+    if _cached_governance_config is None:
+        from personal_agent.config import load_governance_config  # noqa: PLC0415
+        _cached_governance_config = load_governance_config()
+    return _cached_governance_config
+
+
+def _get_tool_loop_policy(tool_name: str) -> ToolLoopPolicy:
+    """Returns loop policy for tool_name, or ToolLoopPolicy() defaults if not configured.
+
+    Args:
+        tool_name: The name of the tool to look up in governance config.
+
+    Returns:
+        ToolLoopPolicy with values from governance config, or defaults if not found.
+    """
+    try:
+        gov_config = _get_cached_governance_config()
+        tool_policy = gov_config.tools.get(tool_name)
+        if tool_policy is None:
+            return ToolLoopPolicy()
+        return ToolLoopPolicy(
+            loop_max_per_signature=tool_policy.loop_max_per_signature,
+            loop_max_consecutive=tool_policy.loop_max_consecutive,
+            loop_output_sensitive=tool_policy.loop_output_sensitive,
+        )
+    except Exception:  # noqa: BLE001
+        return ToolLoopPolicy()
+
+
+def _gate_blocked_result(
+    tool_call_id: str,
+    tool_name: str,
+    gate_result: GateResult,
+) -> dict[str, Any]:
+    """Formats a tool result dict for gate-blocked calls.
+
+    Args:
+        tool_call_id: The tool call ID from the LLM response.
+        tool_name: The name of the blocked tool.
+        gate_result: The GateResult that triggered the block.
+
+    Returns:
+        A tool result dict suitable for appending to ctx.messages.
+    """
+    hints: dict[GateDecision, str] = {
+        GateDecision.BLOCK_IDENTITY: (
+            "Already retrieved these results. Use the previous tool output to answer."
+        ),
+        GateDecision.BLOCK_OUTPUT: (
+            "Retrieved the same result before. Use the previous tool output to answer."
+        ),
+        GateDecision.BLOCK_CONSECUTIVE: (
+            f"{tool_name} called too many times consecutively. "
+            "Synthesize from already-gathered results."
+        ),
+    }
+    return {
+        "tool_call_id": tool_call_id,
+        "role": "tool",
+        "name": tool_name,
+        "content": json.dumps({
+            "status": "done",
+            "hint": hints.get(gate_result.decision, "Tool call blocked by loop gate."),
+            "gate_decision": gate_result.decision.value,
+        }),
+    }
+
 
 # Entity type keywords for recall intent (ADR-0025) — map words to graph entity_type
 _ENTITY_TYPE_KEYWORDS: dict[str, str] = {
@@ -1733,37 +1815,28 @@ async def step_tool_execution(
             )
             continue
 
-        # Repeat-call detection: prevent identical tool call signatures from looping
-        try:
-            args_signature = json.dumps(arguments, sort_keys=True)
-        except TypeError:
-            # Non-JSON-serializable args shouldn't happen; fall back to repr
-            args_signature = repr(arguments)
-        call_signature = f"{tool_name}:{args_signature}"
-        repeats = ctx.tool_call_signatures.count(call_signature)
-        if repeats >= settings.orchestrator_max_repeated_tool_calls:
-            log.warning(
-                "repeated_tool_call_blocked",
-                trace_id=ctx.trace_id,
-                tool_name=tool_name,
-                repeats=repeats,
-                max_repeats=settings.orchestrator_max_repeated_tool_calls,
-            )
-            tool_results.append(
-                {
-                    "tool_call_id": tool_call_id,
-                    "role": "tool",
-                    "name": tool_name,
-                    "content": json.dumps(
-                        {
-                            "status": "done",
-                            "hint": "This tool was already called with the same arguments. Use the previous result to answer.",
-                        }
-                    ),
-                }
-            )
+        # Loop gate: pre-execution check
+        args_hash = stable_hash(arguments)
+        loop_policy = _get_tool_loop_policy(tool_name)
+        gate_result = ctx.loop_gate.check_before(tool_name, args_hash, loop_policy)
+        log.info(
+            "tool_loop_gate",
+            trace_id=ctx.trace_id,
+            decision=gate_result.decision.value,
+            tool_name=gate_result.tool_name,
+            state_before=gate_result.state_before.value,
+            state_after=gate_result.state_after.value,
+            reason=gate_result.reason,
+            consecutive_count=gate_result.consecutive_count,
+            total_calls=gate_result.total_calls,
+        )
+        if gate_result.decision in (
+            GateDecision.BLOCK_IDENTITY,
+            GateDecision.BLOCK_OUTPUT,
+            GateDecision.BLOCK_CONSECUTIVE,
+        ):
+            tool_results.append(_gate_blocked_result(tool_call_id, tool_name, gate_result))
             continue
-        ctx.tool_call_signatures.append(call_signature)
 
         # Validate required parameters before execution
         global _tool_registry
@@ -1832,6 +1905,23 @@ async def step_tool_execution(
                         "hint": f"{tool_name}: {short_error}",
                     }
                 )
+
+            # Loop gate: record output for output-identity detection
+            output_hash = stable_hash(result.output)
+            ctx.loop_gate.record_output(tool_name, args_hash, output_hash, loop_policy)
+
+            # Inject gate warning into result content if consecutive threshold just hit
+            if gate_result.decision == GateDecision.WARN_CONSECUTIVE:
+                try:
+                    parsed = json.loads(content)
+                    if isinstance(parsed, dict):
+                        parsed["_gate_warning"] = (
+                            f"{tool_name} called {gate_result.consecutive_count} times "
+                            f"consecutively. Consider synthesizing from gathered results."
+                        )
+                        content = json.dumps(parsed)
+                except (json.JSONDecodeError, TypeError):
+                    pass
 
             tool_results.append(
                 {

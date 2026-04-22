@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, TypedDict
 
 from personal_agent.governance.models import Mode
 from personal_agent.llm_client import ModelRole
+from personal_agent.orchestrator.loop_gate import ToolLoopGate
 from personal_agent.request_gateway.types import GatewayOutput
 
 if TYPE_CHECKING:
@@ -177,7 +178,7 @@ class ExecutionContext:
 
     # Tool loop governance (per-request)
     tool_iteration_count: int = 0
-    tool_call_signatures: list[str] = field(default_factory=list)
+    loop_gate: ToolLoopGate = field(default_factory=ToolLoopGate)
     # Set True when the iteration limit fires so step_llm_call performs a no-tool synthesis pass
     force_synthesis_from_limit: bool = False
 

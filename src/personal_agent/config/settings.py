@@ -112,13 +112,13 @@ class AppConfig(BaseSettings):
     )
     orchestrator_task_timeout_seconds: int = Field(default=300, ge=1, description="Task timeout")
     orchestrator_max_tool_iterations: int = Field(
-        default=20,
+        default=25,
         ge=0,
         description=(
             "Maximum tool execution iterations per user request (prevents tool loops). "
-            "Raised to 20: investigative tasks (memory check, infra health, telemetry review) "
-            "require 6–10 sequential tool calls when the model doesn't batch. "
-            "20 gives headroom for compound tasks while still bounding runaway loops."
+            "Raised to 25: compound telemetry/analysis tasks can need 15+ sequential calls. "
+            "At max-3, a budget warning is injected. At max+1, a forced LLM synthesis pass "
+            "runs (no tools) so gathered results are never silently discarded."
         ),
     )
     orchestrator_max_repeated_tool_calls: int = Field(

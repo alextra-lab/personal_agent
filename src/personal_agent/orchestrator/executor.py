@@ -1201,6 +1201,45 @@ async def step_llm_call(
         tools: list[dict[str, Any]] | None = None
         _prompt_injected_tool_text: str | None = None  # filled for PROMPT_INJECTED only
 
+        # Forced synthesis: iteration limit fired — disable tools and inject a synthesis prompt
+        # so the LLM produces a real answer from gathered results instead of a useless fallback.
+        if ctx.force_synthesis_from_limit:
+            ctx.force_synthesis_from_limit = False
+            is_synthesizing = True
+            ctx.messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "You have reached the tool call limit. "
+                        "Do NOT call any more tools. "
+                        "Using only the tool results already in this conversation, "
+                        "synthesize a complete, helpful answer to the user's original request."
+                    ),
+                }
+            )
+            log.info("force_synthesis_injected", trace_id=ctx.trace_id, iteration=ctx.tool_iteration_count)
+
+        # Budget warning: when 3 calls from the limit, ask the LLM to begin wrapping up
+        elif (
+            not is_synthesizing
+            and ctx.tool_iteration_count >= settings.orchestrator_max_tool_iterations - 2
+        ):
+            ctx.messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        f"⚠️ Tool budget: {settings.orchestrator_max_tool_iterations - ctx.tool_iteration_count} "
+                        "tool call(s) remaining. Prioritize synthesis — only make additional tool calls "
+                        "if they are strictly necessary to answer the user's question."
+                    ),
+                }
+            )
+            log.info(
+                "tool_budget_warning_injected",
+                trace_id=ctx.trace_id,
+                remaining=settings.orchestrator_max_tool_iterations - ctx.tool_iteration_count,
+            )
+
         if not is_synthesizing and tool_strategy != ToolCallingStrategy.DISABLED:
             # Load tool definitions from registry
             global _tool_registry
@@ -1585,18 +1624,20 @@ async def step_tool_execution(
             iteration=ctx.tool_iteration_count,
             max_iterations=settings.orchestrator_max_tool_iterations,
         )
-        ctx.final_reply = _fallback_reply_from_tool_results(ctx)
         ctx.steps.append(
             {
                 "type": "warning",
-                "description": "Tool loop limit reached; returning best-effort response",
+                "description": "Tool loop limit reached; forcing LLM synthesis pass",
                 "metadata": {
                     "iteration": ctx.tool_iteration_count,
                     "max_iterations": settings.orchestrator_max_tool_iterations,
                 },
             }
         )
-        return TaskState.SYNTHESIS
+        # Route back to LLM_CALL with tools disabled so the model synthesizes
+        # from all gathered results rather than returning a useless fallback.
+        ctx.force_synthesis_from_limit = True
+        return TaskState.LLM_CALL
 
     # Get tool execution layer
     try:

@@ -178,6 +178,8 @@ class ExecutionContext:
     # Tool loop governance (per-request)
     tool_iteration_count: int = 0
     tool_call_signatures: list[str] = field(default_factory=list)
+    # Set True when the iteration limit fires so step_llm_call performs a no-tool synthesis pass
+    force_synthesis_from_limit: bool = False
 
     # Memory enrichment (Phase 2.2)
     memory_context: list[dict[str, Any]] | None = None  # Retrieved conversations for context

@@ -13,7 +13,7 @@
 
 | Wave | # | Work Item | Linear | Type | Status |
 |------|---|-----------|--------|------|--------|
-| 0 | 1 | bug(captains_log): DSPy bypassed for cloud models | [FRE-253](https://linear.app/frenchforest/issue/FRE-253) | Bug fix | Approved |
+| ~~0~~ | ~~1~~ | ~~bug(captains_log): DSPy bypassed for cloud models~~ | ~~[FRE-253](https://linear.app/frenchforest/issue/FRE-253)~~ | ~~Bug fix~~ | ~~Done 2026-04-22~~ |
 | 0 | 2 | Governance: per-TaskType tool allowlist Stage 3 | [FRE-252](https://linear.app/frenchforest/issue/FRE-252) | Feature | Approved |
 | 1 | 3a | Investigate step-count reduction (interaction latency) | [FRE-254](https://linear.app/frenchforest/issue/FRE-254) | Investigation | Approved — parallel with FRE-245 |
 | 1 | 3b | Feedback Stream Bus Convention (ADR-0054) | [FRE-245](https://linear.app/frenchforest/issue/FRE-245) | ADR draft | Approved — parallel with FRE-254 |
@@ -80,6 +80,7 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 
 | Phase | Completed | Summary |
 |-------|-----------|---------|
+| Bug: DSPy bypassed for cloud models (FRE-253) | 2026-04-22 | Extended `configure_dspy_lm()` to accept `ModelRole \| str` and build `"{provider}/{model_id}"` LiteLLM strings for cloud models (Anthropic/OpenAI API key from settings, no api_base). Removed 70-line cloud bypass from `reflection.py`; both local and cloud now route through DSPy ChainOfThought. `generate_reflection_dspy()` gains `captains_log_role` param. 5 new unit tests. |
 | ADR-0053: Gate Feedback Monitoring framework (FRE-233) | 2026-04-22 | Drafted ADR-0053 at `docs/architecture_decisions/ADR-0053-gate-feedback-monitoring.md`. Established Feedback Stream ADR Template; four-level observability framework documented. Spawned implementation issues FRE-244–251 (all Approved). |
 | Bug: create_linear_issue teamId type mismatch (FRE-255) | 2026-04-22 | Fixed `IDComparator.eq` type error in `create_linear_issue` native tool — was passing raw UUID where API expects `ID!` scalar. |
 | FRE-242: Bug agent loops on web searches — Canceled | 2026-04-22 | Superseded by ADR-0062/ToolLoopGate which handles all tool loop detection generically. |

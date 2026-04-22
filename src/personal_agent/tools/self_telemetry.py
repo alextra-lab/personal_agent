@@ -269,7 +269,7 @@ def _compute_latency_stats(durations: Sequence[float | int]) -> dict[str, float 
 
     def percentile(p: float) -> float | None:
         """Calculate the p-th percentile (0-100) from sorted data."""
-        if n < 20:
+        if n < 4:
             return None
         idx = int(n * p / 100)
         return float(sorted_durations[idx])
@@ -487,8 +487,8 @@ def _get_system_status() -> dict[str, Any]:
     latest = metrics[0]
     return {
         "mode": latest.get("mode", "NORMAL"),
-        "cpu_avg": latest.get("cpu_load_percent"),
-        "mem_avg": latest.get("mem_used_percent"),
+        "cpu_avg": latest.get("cpu_load"),
+        "mem_avg": latest.get("memory_used"),
     }
 
 
@@ -803,6 +803,16 @@ def _execute_performance_query(
     # Compute latency trend (compare median latency to preceding same-duration window)
     latency_trend = _compute_latency_trend(window_str)
 
+    # Compute token usage aggregates
+    token_totals = [c.total_tokens for c in captures if c.total_tokens > 0]
+    tokens = {
+        "total_in_window": sum(token_totals),
+        "avg_per_interaction": round(sum(token_totals) / len(token_totals), 1)
+        if token_totals
+        else None,
+        "interactions_with_data": len(token_totals),
+    }
+
     return {
         "success": True,
         "output": {
@@ -812,6 +822,7 @@ def _execute_performance_query(
                 "avg_per_hour": avg_per_hour,
             },
             "latency": latency,
+            "tokens": tokens,
             "by_outcome": by_outcome,
             "top_tools": top_tools,
             "bottleneck": bottleneck,

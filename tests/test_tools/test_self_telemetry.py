@@ -638,17 +638,17 @@ def test_compute_latency_stats_with_percentiles() -> None:
 
 
 def test_compute_latency_stats_few_samples_no_percentiles() -> None:
-    """_compute_latency_stats should return None for percentiles with < 20 samples."""
+    """_compute_latency_stats should return None for percentiles with < 4 samples."""
     from personal_agent.tools.self_telemetry import _compute_latency_stats
 
-    durations = [10, 20, 30, 40, 50]  # Only 5 samples
+    durations = [10, 20, 30]  # Only 3 samples — below threshold of 4
 
     stats = _compute_latency_stats(durations)
 
-    assert stats["avg_ms"] == 30.0
+    assert stats["avg_ms"] == 20.0
     assert stats["min_ms"] == 10
-    assert stats["max_ms"] == 50
-    # All percentiles should be None with < 20 samples
+    assert stats["max_ms"] == 30
+    # All percentiles should be None with < 4 samples
     assert stats["p50_ms"] is None
     assert stats["p75_ms"] is None
     assert stats["p90_ms"] is None

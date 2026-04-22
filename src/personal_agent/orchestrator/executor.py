@@ -614,13 +614,17 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                 if ctx.metrics_summary and "duration_seconds" in ctx.metrics_summary:
                     duration_ms = ctx.metrics_summary["duration_seconds"] * 1000
 
-                # Extract tools used from steps
+                # Extract tools used and accumulate token counts from steps
                 tools_used = []
+                total_tokens = 0
                 for step in ctx.steps:
                     if step.get("type") == "tool_call":
                         tool_name = (step.get("metadata") or {}).get("tool_name")
                         if tool_name:
                             tools_used.append(tool_name)
+                    elif step.get("type") == "llm_call":
+                        meta = step.get("metadata") or {}
+                        total_tokens += meta.get("tokens", 0)
 
                 capture = TaskCapture(
                     trace_id=ctx.trace_id,
@@ -635,6 +639,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                     outcome="completed",
                     memory_context_used=bool(ctx.memory_context),
                     memory_conversations_found=len(ctx.memory_context) if ctx.memory_context else 0,
+                    total_tokens=total_tokens,
                     tool_results=ctx.tool_results,
                 )
                 write_capture(capture)

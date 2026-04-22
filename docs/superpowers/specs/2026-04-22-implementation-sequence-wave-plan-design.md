@@ -22,8 +22,8 @@
 
 | # | Issue | Type | Notes |
 |---|-------|------|-------|
-| 1 | FRE-253 | Bug fix | DSPy bypassed for cloud models in `reflection.py` — self-reflection quality degraded right now |
-| 2 | FRE-252 | Feature | Per-TaskType tool allowlist in Stage 3 governance — independent, small scope |
+| ~~1~~ | ~~FRE-253~~ | ~~Bug fix~~ | ~~DSPy bypassed for cloud models in `reflection.py` — self-reflection quality degraded right now~~ ✅ Done 2026-04-22 |
+| ~~2~~ | ~~FRE-252~~ | ~~Feature~~ | ~~Per-TaskType tool allowlist in Stage 3 governance — independent, small scope~~ ✅ Done 2026-04-22 |
 
 ---
 

@@ -150,7 +150,39 @@ class ToolLoopGate:
                 total_calls=fsm.total_calls,
             )
 
-        # Signals 2, 3, 4 — to be added in Tasks 4 and 5
+        # Signal 3a: Consecutive block — grace turn (WARNED) already used
+        if fsm.state == ToolCallState.WARNED:
+            fsm.state = ToolCallState.BLOCKED
+            return GateResult(
+                decision=GateDecision.BLOCK_CONSECUTIVE,
+                tool_name=tool_name,
+                state_before=state_before,
+                state_after=ToolCallState.BLOCKED,
+                reason=(
+                    f"Consecutive calls exceeded after warning "
+                    f"({fsm.consecutive_count} consecutive)"
+                ),
+                consecutive_count=fsm.consecutive_count,
+                total_calls=fsm.total_calls,
+            )
+
+        # Signal 3b: Consecutive warn — first threshold breach, one grace turn follows
+        if fsm.consecutive_count >= policy.loop_max_consecutive:
+            fsm.state = ToolCallState.WARNED
+            return GateResult(
+                decision=GateDecision.WARN_CONSECUTIVE,
+                tool_name=tool_name,
+                state_before=state_before,
+                state_after=ToolCallState.WARNED,
+                reason=(
+                    f"Consecutive threshold reached "
+                    f"({fsm.consecutive_count}/{policy.loop_max_consecutive})"
+                ),
+                consecutive_count=fsm.consecutive_count,
+                total_calls=fsm.total_calls,
+            )
+
+        # Signal 2 placeholder — added in Task 5
 
         # Allow — transition IDLE → ACTIVE on first call
         if fsm.state == ToolCallState.IDLE:

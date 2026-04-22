@@ -114,3 +114,61 @@ def test_blocked_tool_stays_blocked():
     result = gate.check_before("web_search", "hash_abc", policy)
     assert result.decision == GateDecision.BLOCK_IDENTITY
     assert result.state_after == ToolCallState.BLOCKED
+
+
+# ── Consecutive signal tests ───────────────────────────────────────────────
+
+
+def test_consecutive_warn_at_threshold():
+    """Gate issues WARN_CONSECUTIVE when same tool reaches loop_max_consecutive calls."""
+    gate = ToolLoopGate()
+    # max_consecutive=2: WARN fires on the 2nd consecutive call
+    policy = ToolLoopPolicy(loop_max_per_signature=10, loop_max_consecutive=2)
+    gate.check_before("run_sysdiag", "hash_a", policy)  # consecutive=1, ALLOW
+    result = gate.check_before("run_sysdiag", "hash_b", policy)  # consecutive=2, WARN
+    assert result.decision == GateDecision.WARN_CONSECUTIVE
+    assert result.state_after == ToolCallState.WARNED
+
+
+def test_consecutive_block_after_warn():
+    """Gate issues BLOCK_CONSECUTIVE on the call after WARN_CONSECUTIVE."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(loop_max_per_signature=10, loop_max_consecutive=2)
+    gate.check_before("run_sysdiag", "hash_a", policy)
+    gate.check_before("run_sysdiag", "hash_b", policy)  # → WARNED
+    result = gate.check_before("run_sysdiag", "hash_c", policy)  # → BLOCKED
+    assert result.decision == GateDecision.BLOCK_CONSECUTIVE
+    assert result.state_after == ToolCallState.BLOCKED
+
+
+def test_consecutive_counter_resets_when_different_tool_runs():
+    """Calling a different tool resets the consecutive counter and unblocks WARNED state."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(loop_max_per_signature=10, loop_max_consecutive=2)
+    gate.check_before("run_sysdiag", "hash_a", policy)
+    gate.check_before("run_sysdiag", "hash_b", policy)  # → WARNED
+    gate.check_before("web_search", "hash_q", ToolLoopPolicy())  # different tool
+    result = gate.check_before("run_sysdiag", "hash_c", policy)  # consecutive=1, ALLOW (reset from WARNED→ACTIVE)
+    assert result.decision == GateDecision.ALLOW
+    assert result.state_after == ToolCallState.ACTIVE
+
+
+def test_two_tools_alternating_do_not_trigger_consecutive():
+    """Alternating between two tools never triggers consecutive blocking."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(loop_max_per_signature=10, loop_max_consecutive=2)
+    for i in range(5):
+        r1 = gate.check_before("tool_a", f"hash_{i}a", policy)
+        r2 = gate.check_before("tool_b", f"hash_{i}b", policy)
+        assert r1.decision == GateDecision.ALLOW
+        assert r2.decision == GateDecision.ALLOW
+
+
+def test_gate_result_includes_consecutive_count():
+    """GateResult.consecutive_count reflects the current call's consecutive depth."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(loop_max_per_signature=10, loop_max_consecutive=5)
+    for i in range(3):
+        gate.check_before("run_sysdiag", f"hash_{i}", policy)
+    result = gate.check_before("run_sysdiag", "hash_3", policy)
+    assert result.consecutive_count == 4

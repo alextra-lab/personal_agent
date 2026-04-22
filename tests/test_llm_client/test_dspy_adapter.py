@@ -320,6 +320,47 @@ def test_configure_dspy_lm_without_dspy_raises_import_error(monkeypatch):
 
 
 # ============================================================================
+# Unit Tests: cloud model support (FRE-253)
+# ============================================================================
+
+
+def test_configure_dspy_lm_accepts_string_role_name():
+    """String role name (e.g. captains_log_role value) is accepted."""
+    lm = configure_dspy_lm(role="primary")
+    assert lm is not None
+    assert hasattr(lm, "model")
+
+
+def test_configure_dspy_lm_cloud_anthropic_model_string():
+    """Cloud Anthropic model produces 'anthropic/{model_id}', not 'openai/'."""
+    lm = configure_dspy_lm(role="claude_sonnet")
+    assert lm.model == "anthropic/claude-sonnet-4-6"
+
+
+def test_configure_dspy_lm_cloud_openai_model_string():
+    """Cloud OpenAI model produces 'openai/{model_id}' with no localhost in kwargs."""
+    lm = configure_dspy_lm(role="gpt-5.4-nano")
+    assert lm.model == "openai/gpt-5.4-nano"
+    # Cloud OpenAI must not point at localhost
+    api_base = (lm.kwargs or {}).get("api_base")
+    assert api_base is None or "localhost" not in str(api_base)
+
+
+def test_configure_dspy_lm_local_model_uses_openai_prefix():
+    """Local model still produces 'openai/{model_id}' string (unchanged behaviour)."""
+    lm = configure_dspy_lm(role=ModelRole.PRIMARY)
+    assert lm.model.startswith("openai/")
+
+
+def test_configure_dspy_lm_local_model_sets_api_base():
+    """Local model sets api_base pointing at localhost in kwargs."""
+    lm = configure_dspy_lm(role=ModelRole.PRIMARY)
+    api_base = (lm.kwargs or {}).get("api_base")
+    assert api_base is not None
+    assert "localhost" in api_base or "127.0.0.1" in api_base
+
+
+# ============================================================================
 # Performance Tests (Baseline Measurement)
 # ============================================================================
 

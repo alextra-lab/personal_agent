@@ -29,18 +29,23 @@ def test_process_role_keys_resolve_to_valid_models() -> None:
 def test_self_analysis_consumers_use_process_role_indirection() -> None:
     """Consumers must read model assignment from config, not hardcode a ModelRole."""
     from personal_agent.captains_log import reflection
+    from personal_agent.llm_client import dspy_adapter
     from personal_agent.second_brain import entity_extraction
 
     ee_source = inspect.getsource(entity_extraction)
     refl_source = inspect.getsource(reflection)
+    dspy_adapter_source = inspect.getsource(dspy_adapter)
 
     # Must reference the configurable process-role key (not a hardcoded ModelRole)
     assert "entity_extraction_role" in ee_source
     assert "captains_log_role" in refl_source
 
-    # Must branch on the provider field (the dispatch mechanism)
+    # entity_extraction.py must branch on .provider directly (its own dispatch)
     assert ".provider" in ee_source
-    assert ".provider" in refl_source
+
+    # reflection.py delegates provider dispatch to configure_dspy_lm() (FRE-253).
+    # The provider branch lives in dspy_adapter.py, not reflection.py.
+    assert "model_def.provider" in dspy_adapter_source
 
     # NOTE: insights/engine.py does not yet use LLM-based analysis.
     # When insights_role dispatch is added to engine.py, add assertions here.

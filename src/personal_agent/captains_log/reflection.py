@@ -140,86 +140,15 @@ async def generate_reflection_entry(
     # Ensure final_state is a string (DSPy expects string, not None)
     effective_final_state = final_state or "UNKNOWN"
 
-    # Resolve the configured model for Captain's Log (ADR-0031)
+    # Resolve the configured model for Captain's Log (ADR-0031).
+    # DSPy handles both local and cloud models via configure_dspy_lm() — no
+    # separate cloud branch needed (FRE-253).
     from personal_agent.config import load_model_config
 
     _model_config = load_model_config()
-    _captains_log_model_def = _model_config.models.get(_model_config.captains_log_role)
-    _captains_log_provider = _captains_log_model_def.provider if _captains_log_model_def else None
+    _captains_log_role = _model_config.captains_log_role
 
-    # ── Cloud path (any provider via LiteLLM) ────────────────────────────────
-    if _captains_log_provider is not None:
-        try:
-            from personal_agent.llm_client.factory import get_llm_client
-
-            _cloud_client = get_llm_client(role_name=_model_config.captains_log_role)
-            log.info(
-                "captains_log_using_cloud",
-                model_id=_captains_log_model_def.id,  # type: ignore[union-attr]
-                provider=_captains_log_provider,
-                trace_id=trace_id,
-                component="reflection",
-            )
-            prompt = REFLECTION_PROMPT.format(
-                user_message=user_message[:200],
-                trace_id=trace_id,
-                steps_count=steps_count,
-                final_state=effective_final_state,
-                reply_length=reply_length,
-                telemetry_summary=telemetry_summary,
-            )
-            _cloud_response = await _cloud_client.respond(
-                role=ModelRole.PRIMARY,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-            )
-            _content = _cloud_response["content"]
-            if not _content:
-                raise ValueError("Cloud LLM returned empty response for Captain's Log reflection")
-
-            reflection_data = _parse_reflection_response(_content)
-            string_metrics, structured_metrics = extract_metrics_from_summary(metrics_summary)
-            title = (
-                f"Task: {user_message[:50]}" if len(user_message) > 50 else f"Task: {user_message}"
-            )
-            proposed_change = _build_proposed_change(reflection_data.get("proposed_change"))
-            entry = CaptainLogEntry(
-                entry_id="",
-                timestamp=datetime.now(timezone.utc),
-                type=CaptainLogEntryType.REFLECTION,
-                title=title,
-                rationale=reflection_data["rationale"],
-                proposed_change=proposed_change,
-                supporting_metrics=string_metrics,
-                metrics_structured=structured_metrics if structured_metrics else None,
-                impact_assessment=reflection_data.get("impact_assessment"),
-                status=CaptainLogStatus.AWAITING_APPROVAL,
-                related_adrs=reflection_data.get("related_adrs", []),
-                related_experiments=reflection_data.get("related_experiments", []),
-                telemetry_refs=[{"trace_id": trace_id, "metric_name": None, "value": None}],
-            )
-            log.info(
-                "captains_log_cloud_reflection_succeeded",
-                model_id=_captains_log_model_def.id,  # type: ignore[union-attr]
-                input_tokens=_cloud_response["usage"].get("prompt_tokens"),
-                output_tokens=_cloud_response["usage"].get("completion_tokens"),
-                has_proposal=entry.proposed_change is not None,
-                trace_id=trace_id,
-                component="reflection",
-            )
-            return entry
-        except Exception as e:
-            log.warning(
-                "captains_log_cloud_reflection_failed_fallback_local",
-                error_type=type(e).__name__,
-                error_message=str(e),
-                trace_id=trace_id,
-                component="reflection",
-            )
-            # Fall through to local DSPy / manual path
-
-    # ── Local path (DSPy → manual JSON → basic) ──────────────────────────────
-    # Create LLM client
+    # ── DSPy → manual JSON → basic ───────────────────────────────────────────
     llm_client = LocalLLMClient(
         base_url=settings.llm_base_url,
         timeout_seconds=settings.llm_timeout_seconds,
@@ -244,6 +173,7 @@ async def generate_reflection_entry(
                 telemetry_summary=telemetry_summary,
                 llm_client=llm_client,
                 metrics_summary=metrics_summary,  # ADR-0014: Deterministic extraction
+                captains_log_role=_captains_log_role,
             )
             log.info(
                 "dspy_reflection_succeeded",

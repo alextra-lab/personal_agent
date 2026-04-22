@@ -46,20 +46,21 @@ except ImportError:
 
 
 def configure_dspy_lm(
-    role: ModelRole,
+    role: ModelRole | str,
     base_url: str | None = None,
     timeout_s: int | None = None,
 ) -> Any:
     """Configure and return a DSPy LM instance for the specified model role.
 
-    This function creates a DSPy language model adapter configured to use
-    LM Studio's OpenAI-compatible endpoint with the model specified for the
-    given role in models.yaml.
+    Supports both local (LM Studio) and cloud (Anthropic, OpenAI) models.
+    Cloud models are identified by the ``provider`` field in models.yaml; they
+    use the appropriate API key and do not need a custom ``api_base``.
 
     Args:
-        role: Model role (PRIMARY, SUB_AGENT) to lookup model.
-        base_url: Optional LM Studio base URL. Defaults to settings.llm_base_url.
-        timeout_s: Optional timeout in seconds. Defaults to settings.llm_timeout_seconds.
+        role: Model role to lookup — either a ModelRole enum or a raw string
+            role name (e.g. ``"captains_log_role"`` value from models.yaml).
+        base_url: Local LM Studio base URL override. Ignored for cloud models.
+        timeout_s: Timeout in seconds. Defaults to settings.llm_timeout_seconds.
 
     Returns:
         Configured dspy.LM instance ready to use with dspy.configure().
@@ -68,27 +69,11 @@ def configure_dspy_lm(
         ImportError: If dspy package is not installed.
         ModelConfigError: If model configuration is missing for role.
 
-    Example:
-        >>> from personal_agent.llm_client.dspy_adapter import configure_dspy_lm
-        >>> from personal_agent.llm_client.types import ModelRole
-        >>> import dspy
-        >>>
-        >>> lm = configure_dspy_lm(role=ModelRole.PRIMARY)
-        >>> dspy.configure(lm=lm)
-        >>>
-        >>> class MySignature(dspy.Signature):
-        ...     question: str = dspy.InputField()
-        ...     answer: str = dspy.OutputField()
-        >>>
-        >>> predictor = dspy.Predict(MySignature)
-        >>> result = predictor(question="What is Python?")
-
     Notes:
-        - DSPy requires OpenAI-compatible API endpoint
-        - LM Studio provides /v1/chat/completions endpoint
-        - api_key is set to "lm-studio" (dummy key required by LiteLLM)
-        - Model format: "openai/model-name" for OpenAI-compatible endpoints
-        - base_url must include /v1 suffix (required by LiteLLM routing)
+        - Local models: ``"openai/{model_id}"`` format, api_base = localhost endpoint
+        - Cloud Anthropic: ``"anthropic/{model_id}"`` format, api_key from settings
+        - Cloud OpenAI: ``"openai/{model_id}"`` format, api_key from settings (no api_base)
+        - LiteLLM (used by DSPy) routes based on model string prefix
     """
     if dspy is None:
         raise ImportError(
@@ -102,17 +87,51 @@ def configure_dspy_lm(
         log.error("model_config_load_failed", error=str(e), component="dspy_adapter")
         raise
 
+    # Accept both ModelRole enum and plain string role names
+    role_key = role.value if hasattr(role, "value") else role
+
     # Lookup model for role
-    model_def = model_configs.models.get(role.value)
+    model_def = model_configs.models.get(role_key)
     if not model_def:
         raise ModelConfigError(
-            f"No model configured for role '{role.value}'. "
+            f"No model configured for role '{role_key}'. "
             f"Available roles: {list(model_configs.models.keys())}"
         )
 
     model_id = model_def.id
+    effective_timeout = timeout_s or settings.llm_timeout_seconds
 
-    # Determine base URL (priority: explicit arg > model config > settings default)
+    if model_def.provider is not None:
+        # ── Cloud model path ─────────────────────────────────────────────────
+        # LiteLLM routing uses "{provider}/{model_id}" strings natively.
+        litellm_model = f"{model_def.provider}/{model_id}"
+
+        api_key: str
+        if model_def.provider == "anthropic":
+            api_key = settings.anthropic_api_key or ""
+        elif model_def.provider == "openai":
+            api_key = settings.openai_api_key or ""
+        else:
+            api_key = ""
+
+        log.info(
+            "dspy_lm_configured",
+            role=role_key,
+            model_id=model_id,
+            provider=model_def.provider,
+            is_cloud=True,
+            timeout_s=effective_timeout,
+            component="dspy_adapter",
+        )
+
+        return dspy.LM(
+            model=litellm_model,
+            api_key=api_key,
+            model_type="chat",
+            timeout=effective_timeout,
+        )
+
+    # ── Local model path (existing behaviour) ────────────────────────────────
     effective_base_url = base_url or model_def.endpoint or settings.llm_base_url
 
     # Ensure base_url includes /v1 (required by LiteLLM routing)
@@ -122,30 +141,23 @@ def configure_dspy_lm(
         else:
             effective_base_url = f"{effective_base_url.rstrip('/')}/v1"
 
-    # Determine timeout
-    effective_timeout = timeout_s or settings.llm_timeout_seconds
-
     log.info(
         "dspy_lm_configured",
-        role=role.value,
+        role=role_key,
         model_id=model_id,
         base_url=effective_base_url,
+        is_cloud=False,
         timeout_s=effective_timeout,
         component="dspy_adapter",
     )
 
-    # Create DSPy LM instance
-    # Format: "openai/model-name" for OpenAI-compatible endpoints
-    # api_base and api_key passed as kwargs to LiteLLM
-    lm = dspy.LM(
-        model=f"openai/{model_id}",  # Format for OpenAI-compatible
-        api_base=effective_base_url,  # Must include /v1
+    return dspy.LM(
+        model=f"openai/{model_id}",
+        api_base=effective_base_url,
         api_key="lm-studio",  # Dummy key (LiteLLM requires non-empty)
-        model_type="chat",  # Use 'chat' for chat models
+        model_type="chat",
         timeout=effective_timeout,
     )
-
-    return lm
 
 
 def create_dspy_predictor(

@@ -82,10 +82,8 @@ async def run_gateway_pipeline(
 
     # Stage 2: Session (handled by caller -- messages passed in as session_messages)
 
-    # Stage 3: Governance
-    governance = evaluate_governance(mode=mode, expansion_budget=expansion_budget)
-
-    # Stage 4: Intent Classification
+    # Stage 4: Intent Classification (runs before Stage 3 so task_type is
+    # available for per-TaskType tool allowlist intersection — FRE-252)
     intent = classify_intent(user_message)
 
     logger.info(
@@ -123,6 +121,13 @@ async def run_gateway_pipeline(
             trace_id=trace_id,
             reclassified_by="recall_controller",
         )
+
+    # Stage 3: Governance (after Stage 4 so task_type is available — FRE-252)
+    governance = evaluate_governance(
+        mode=mode,
+        expansion_budget=expansion_budget,
+        task_type=intent.task_type,
+    )
 
     # Stage 5: Decomposition Assessment
     decomposition = assess_decomposition(intent=intent, governance=governance)

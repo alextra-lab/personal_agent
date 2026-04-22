@@ -1,6 +1,38 @@
 # Tool permissions and risk classifications
 # See ADR-0005 for detailed semantics
 
+# Per-TaskType allowed categories (FRE-252). Intersection with mode_policies
+# determines the final allowed_tool_categories in GovernanceContext.
+task_type_policies:
+  conversational:
+    allowed_categories: []
+  memory_recall:
+    allowed_categories: ["read_only"]
+  analysis:
+    allowed_categories: ["read_only", "network"]
+  planning:
+    allowed_categories: ["read_only", "network"]
+  delegation:
+    allowed_categories: ["read_only", "network", "system_write", "essential_health_check"]
+  self_improve:
+    allowed_categories: ["read_only"]
+  tool_use:
+    allowed_categories: ["read_only", "network", "system_write", "essential_health_check"]
+
+# Per-mode allowed categories for intersection with task_type_policies.
+# NORMAL has no mode-level restriction; restricted modes narrow the set.
+mode_policies:
+  NORMAL:
+    allowed_categories: ["read_only", "network", "system_write", "essential_health_check"]
+  ALERT:
+    allowed_categories: ["read_only", "essential_health_check"]
+  DEGRADED:
+    allowed_categories: ["read_only", "essential_health_check"]
+  LOCKDOWN:
+    allowed_categories: ["essential_health_check"]
+  RECOVERY:
+    allowed_categories: ["read_only", "essential_health_check"]
+
 tool_categories:
   read_only:
     description: "Tools that only observe, never modify"

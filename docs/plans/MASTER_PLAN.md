@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-22 (ToolLoopGate: per-tool FSM loop detection implemented — ADR-0062; FRE-233: ADR-0053 gate monitoring + full feedback stream architecture; Hermes research integrated — FRE-251, FRE-252, FRE-226 updated)
+> **Last updated**: 2026-04-22 (FRE-233/ADR-0053 done — spawned FRE-244–251 all Approved; FRE-255 bug fix done; FRE-242 canceled (superseded by ADR-0062); FRE-187 confirmed Done; FRE-253/FRE-254 new backlog items)
 
 ---
 
@@ -10,33 +10,38 @@
 
 | # | Work Item | Linear | Spec / ADR | Status |
 |---|-----------|--------|------------|--------|
-| 1 | EVAL-10 run (Context Intelligence final verification) | [FRE-187](https://linear.app/frenchforest/issue/FRE-187/eval-10-context-intelligence-final-verification-run) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` | Needs Approval |
+| 1 | Feedback Stream Bus Convention — foundation for all Phase 2 streams | [FRE-245](https://linear.app/frenchforest/issue/FRE-245) | ADR-0054 | Approved |
 
-## Upcoming — Needs Approval
+## Upcoming — Approved
 
-Ordered by recommended implementation sequence. Dependency chains are encoded in Linear (`blockedBy` relations).
+Ordered by recommended implementation sequence. All items Approved in Linear. Dependency chains encoded in Linear (`blockedBy` relations).
 
 | # | Project | Linear | ADR / Spec | Depends On |
 |---|---------|--------|------------|------------|
-| 2 | Feedback Stream Bus Convention | [FRE-245](https://linear.app/frenchforest/issue/FRE-245) | ADR-0054 | ADR-0041 (Event Bus) — **must precede all Phase 2 ADRs** |
-| 3 | Gate Feedback Monitoring — acceptance | [FRE-233](https://linear.app/frenchforest/issue/FRE-233) | ADR-0053 | — |
-| 4 | System Health & Homeostasis — Mode Manager fix | [FRE-246](https://linear.app/frenchforest/issue/FRE-246) | ADR-0055 | FRE-245 |
-| 5 | Error Pattern Monitoring — Level 3 observability | [FRE-244](https://linear.app/frenchforest/issue/FRE-244) | ADR-0056 | FRE-245 |
-| 6 | Insights & Pattern Analysis — wire InsightsEngine | [FRE-247](https://linear.app/frenchforest/issue/FRE-247) | ADR-0057 | FRE-245 |
-| 7 | Self-Improvement Pipeline — formalize Streams 1-3 | [FRE-248](https://linear.app/frenchforest/issue/FRE-248) | ADR-0058 | FRE-245 |
-| 8 | Context Quality — compaction full loop | [FRE-249](https://linear.app/frenchforest/issue/FRE-249) | ADR-0059 | FRE-245, FRE-244 |
-| 9 | Knowledge Graph Quality — consolidation + decay→reranking | [FRE-250](https://linear.app/frenchforest/issue/FRE-250) | ADR-0060 | FRE-245, FRE-247 |
-| 10 | Within-Session Progressive Context Compression | [FRE-251](https://linear.app/frenchforest/issue/FRE-251) | ADR-0061 | FRE-249 |
-| 11 | Agent self-updating skills (agentskills.io format) | [FRE-226](https://linear.app/frenchforest/issue/FRE-226) | ADR pending | FRE-248 |
-| 12 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |
-| 13 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2 | Proactive Memory MVP done (FRE-176) |
+| 2 | System Health & Homeostasis — Mode Manager fix | [FRE-246](https://linear.app/frenchforest/issue/FRE-246) | ADR-0055 | FRE-245 |
+| 3 | Error Pattern Monitoring — Level 3 observability | [FRE-244](https://linear.app/frenchforest/issue/FRE-244) | ADR-0056 | FRE-245 |
+| 4 | Insights & Pattern Analysis — wire InsightsEngine | [FRE-247](https://linear.app/frenchforest/issue/FRE-247) | ADR-0057 | FRE-245 |
+| 5 | Self-Improvement Pipeline — formalize Streams 1-3 | [FRE-248](https://linear.app/frenchforest/issue/FRE-248) | ADR-0058 | FRE-245 |
+| 6 | Context Quality — compaction full loop | [FRE-249](https://linear.app/frenchforest/issue/FRE-249) | ADR-0059 | FRE-245, FRE-244 |
+| 7 | Knowledge Graph Quality — consolidation + decay→reranking | [FRE-250](https://linear.app/frenchforest/issue/FRE-250) | ADR-0060 | FRE-245, FRE-247 |
+| 8 | Within-Session Progressive Context Compression | [FRE-251](https://linear.app/frenchforest/issue/FRE-251) | ADR-0061 | FRE-249 |
+| 9 | Agent self-updating skills (agentskills.io format) | [FRE-226](https://linear.app/frenchforest/issue/FRE-226) | ADR pending | FRE-248 |
+| 10 | Governance: per-TaskType tool allowlist Stage 3 | [FRE-252](https://linear.app/frenchforest/issue/FRE-252) | — | — |
+| 11 | bug(captains_log): DSPy bypassed for cloud models | [FRE-253](https://linear.app/frenchforest/issue/FRE-253) | — | — |
+| 12 | Investigate step-count reduction (interaction latency) | [FRE-254](https://linear.app/frenchforest/issue/FRE-254) | — | — |
+| 13 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |
+| 14 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2 | Proactive Memory MVP done (FRE-176) |
+
+## Needs Approval
+
+_(none currently)_
 
 ### Dependency graph (project-level)
 
 ```text
-FEEDBACK STREAM ARCHITECTURE (FRE-233 — ADR-0053 accepted)
+ADR-0053: Gate Feedback Monitoring (FRE-233) ✅ Done 2026-04-22 — spawned FRE-244–251
     ↓
-ADR-0054: Bus Convention (FRE-245) ← FOUNDATION — must come first
+ADR-0054: Bus Convention (FRE-245) ← CURRENT FOCUS — must implement first
     ├── ADR-0055: System Health & Homeostasis (FRE-246)  ← fixes app.py:176 hardcoded Mode.NORMAL
     ├── ADR-0056: Error Pattern Monitoring (FRE-244)     ← Level 3 observability
     ├── ADR-0057: Insights & Pattern Analysis (FRE-247)  ← wires InsightsEngine
@@ -66,13 +71,15 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 
 | Work Item | Linear | Spec / ADR |
 |-----------|--------|------------|
-| Per-TaskType tool allowlist in governance (Stage 3) | [FRE-252](https://linear.app/frenchforest/issue/FRE-252) | Enhancement to ADR-0028; no blocker |
 | Captain's Log ES Backfill | — | `specs/CAPTAINS_LOG_ES_BACKFILL_SPEC.md` |
 
 ## Completed
 
 | Phase | Completed | Summary |
 |-------|-----------|---------|
+| ADR-0053: Gate Feedback Monitoring framework (FRE-233) | 2026-04-22 | Drafted ADR-0053 at `docs/architecture_decisions/ADR-0053-gate-feedback-monitoring.md`. Established Feedback Stream ADR Template; four-level observability framework documented. Spawned implementation issues FRE-244–251 (all Approved). |
+| Bug: create_linear_issue teamId type mismatch (FRE-255) | 2026-04-22 | Fixed `IDComparator.eq` type error in `create_linear_issue` native tool — was passing raw UUID where API expects `ID!` scalar. |
+| FRE-242: Bug agent loops on web searches — Canceled | 2026-04-22 | Superseded by ADR-0062/ToolLoopGate which handles all tool loop detection generically. |
 | ToolLoopGate — per-tool FSM loop detection (ADR-0062) | 2026-04-22 | Replaced global `tool_call_signatures` dedup with `ToolLoopGate`: per-request registry of per-tool FSMs. Three detection signals: (1) call identity — block after N identical (tool, args) calls; (2) output identity — block when same args produce same output ≥2 times (skippable for polling tools via `loop_output_sensitive: true`); (3) consecutiveness — WARN at N consecutive calls, BLOCK at N+1 with WARNED→ACTIVE reset when a different tool runs in between. `loop_max_per_signature`, `loop_max_consecutive`, `loop_output_sensitive` fields added to `ToolPolicy`. Per-tool overrides in `tools.yaml` for `run_sysdiag`, `self_telemetry_query`, `infra_health` (output-sensitive polling), `create_linear_issue`, `write_file` (strict). All gate decisions emit structured `tool_loop_gate` log events (Level 2 observability). 24 unit tests. |
 | Bug: event bus / second-brain pipeline not firing (FRE-239) | 2026-04-21 | Four fixes: (1) `seshat_captures_cloud` Docker volume added to `docker-compose.cloud.yml` — captures no longer wiped on container restart; (2) `BrainstemScheduler._trigger_consolidation` now only sets `last_consolidation` when `captures_processed > 0`, preventing an empty startup run from blocking consolidation for 1 hour; (3) `NoOpBus.publish` emits a `debug` log so silent discards are visible; (4) `app.py` lifespan logs `event_bus_ready` with registered consumer list on startup. |
 | Bug: cross-provider tool_use_id orphan (FRE-237) | 2026-04-21 | New `llm_client/history_sanitiser.py` — two-pass strip of orphaned `tool_result` / `tool_calls` entries before every dispatch (both `LocalLLMClient` and `LiteLLMClient`). Fixes Anthropic 400 on Qwen→Sonnet failover. Telemetry: `history_sanitised` event. Also fixed `.env` `AGENT_MCP_GATEWAY_COMMAND` JSON format. |
@@ -89,7 +96,8 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 | Event Bus Phase 1 (FRE-157) | 2026-04-03 | Redis 7 infra, EventBus protocol, RedisStreamBus, ConsumerRunner, `request.captured` → consolidator migration. Feature flag off by default; polling fallback retained. |
 | CLI-First Tool Migration (FRE-171/170/173/172/188) + ReAct loop | 2026-04-04 | ADR-0028 fully implemented. 5 native tools: `query_elasticsearch`, `perplexity_query`, `fetch_url`, `get_library_docs`, `run_sysdiag`. MCP ES/Perplexity/fetch/Context7/misc tools disabled in governance. `TOOL_INTEGRATION_GUIDE.md` + `SKILL_TEMPLATE.md` created. `is_synthesizing` gate removed — agent now chains tool calls (ReAct loop) until deciding to synthesize; bounded by `orchestrator_max_tool_iterations`. |
 | ADR-0028 research (CLI vs MCP) | 2026-04-02 | FRE-99 complete. ADR accepted: hybrid three-tier model (native > CLI > MCP). Implementation project created. |
-| Context Intelligence — Phase 4 ENHANCE | 2026-03-30 | Rolling LLM summarization (ADR-0038), async compression, structured context assembly, KV cache prefix stability, cross-session eval (CP-30/CP-31), proactive memory design (ADR-0039), recall classifier L2 design. EVAL-10 pending. |
+| EVAL-10: Context Intelligence final verification (FRE-187) | 2026-04-14 | 175/181 assertions, 33/37 paths (96.7%). CP-30/CP-31 cross-session pass. Four paths failed (CP-05 timeouts, CP-07 ES format, CP-11 decomp telemetry, CP-22 tool lifecycle) — documented with root causes; re-baseline to 99.4% deferred to follow-up issues. |
+| Context Intelligence — Phase 4 ENHANCE | 2026-03-30 | Rolling LLM summarization (ADR-0038), async compression, structured context assembly, KV cache prefix stability, cross-session eval (CP-30/CP-31), proactive memory design (ADR-0039), recall classifier L2 design. |
 | Context Intelligence — Phase 3 VERIFY (EVAL-09) | 2026-03-30 | 34/35 paths, 176/177 assertions (99.4%). All Phase 3 gates met. |
 | Qwen3.5 Model Integration | 2026-03-16 | Think-tag stripping, per-model thinking control, sampling params. Project completed. |
 | Redesign v2 — Slice 3: Intelligence | 2026-03-29 | Expansion controller, dual-mode sub-agents, Seshat hybrid search, recall controller (Stage 4b). |
@@ -106,16 +114,16 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| 0061 | Within-Session Progressive Context Compression | Needs Approval (FRE-251 — blocked by 0059) |
-| 0060 | Knowledge Graph Quality Stream | Needs Approval (FRE-250 — blocked by 0054, 0057) |
-| 0059 | Context Quality Monitoring Stream | Needs Approval (FRE-249 — blocked by 0054, 0056) |
-| 0058 | Self-Improvement Pipeline Stream | Needs Approval (FRE-248 — blocked by 0054) |
-| 0057 | Insights & Pattern Analysis Stream | Needs Approval (FRE-247 — blocked by 0054) |
-| 0056 | Error Pattern Monitoring Stream | Needs Approval (FRE-244 — blocked by 0054) |
-| 0055 | System Health & Homeostasis Stream | Needs Approval (FRE-246 — blocked by 0054) |
-| 0054 | Feedback Stream Bus Convention | Needs Approval (FRE-245 — **draft next**) |
+| 0061 | Within-Session Progressive Context Compression | Approved (FRE-251 — blocked by 0059) |
+| 0060 | Knowledge Graph Quality Stream | Approved (FRE-250 — blocked by 0054, 0057) |
+| 0059 | Context Quality Monitoring Stream | Approved (FRE-249 — blocked by 0054, 0056) |
+| 0058 | Self-Improvement Pipeline Stream | Approved (FRE-248 — blocked by 0054) |
+| 0057 | Insights & Pattern Analysis Stream | Approved (FRE-247 — blocked by 0054) |
+| 0056 | Error Pattern Monitoring Stream | Approved (FRE-244 — blocked by 0054) |
+| 0055 | System Health & Homeostasis Stream | Approved (FRE-246 — blocked by 0054) |
+| 0054 | Feedback Stream Bus Convention | Approved (FRE-245 — **current focus**) |
 | 0062 | Tool Loop Gate — Per-Tool FSM-Based Loop Detection | Accepted (Implemented — 2026-04-22) |
-| 0053 | Deterministic Gate Feedback-Loop Monitoring Framework | Proposed (FRE-233 — awaiting acceptance) |
+| 0053 | Deterministic Gate Feedback-Loop Monitoring Framework | Accepted (Implemented — FRE-233 done 2026-04-22) |
 | 0052 | Seshat Owner Identity Primitive | Proposed (Needs Approval) |
 | 0051 | Cloud Profile Orchestrator Dispatch via ContextVar | Accepted |
 | 0050 | Remote Agent Harness Integration | Accepted (implemented — FRE-208) |

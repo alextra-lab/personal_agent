@@ -409,6 +409,17 @@ class AppConfig(BaseSettings):
     anthropic_api_key: str | None = Field(default=None, description="Anthropic API key for Claude")
     openai_api_key: str | None = Field(default=None, description="OpenAI API key")
 
+    # Linear (native tool — FRE-224)
+    linear_api_key: str | None = Field(
+        default=None,
+        description="Linear Personal Access Token for the native create_linear_issue tool (FRE-224)",
+    )
+    linear_agent_rate_limit_per_day: int = Field(
+        default=10,
+        ge=1,
+        description="Max agent-filed Linear issues per 24h (across all projects combined)",
+    )
+
     # Perplexity AI (native tool — ADR-0028 Phase 2)
     perplexity_api_key: str | None = Field(default=None, description="Perplexity API key")
     perplexity_base_url: str = Field(

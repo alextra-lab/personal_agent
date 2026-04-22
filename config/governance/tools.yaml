@@ -1005,6 +1005,42 @@ tools:
     # allowed_paths: []
     # timeout_seconds: 30
 
+  # FRE-224: native Linear issue creation (Tier-1 — no MCP gateway required)
+  create_linear_issue:
+    category: "network"
+    allowed_in_modes: ["NORMAL"]
+    risk_level: "medium"
+    requires_approval: false
+    timeout_seconds: 30
+    rate_limit_per_hour: 20
+
+  # FRE-224: native Linear issue search / list (Tier-1)
+  find_linear_issues:
+    category: "network"
+    allowed_in_modes: ["NORMAL", "DEGRADED"]
+    risk_level: "low"
+    requires_approval: false
+    timeout_seconds: 15
+    rate_limit_per_hour: 100
+
+  # FRE-224: list Linear projects (Tier-1)
+  list_linear_projects:
+    category: "network"
+    allowed_in_modes: ["NORMAL", "DEGRADED"]
+    risk_level: "low"
+    requires_approval: false
+    timeout_seconds: 15
+    rate_limit_per_hour: 60
+
+  # FRE-224: create Linear project (Tier-1)
+  create_linear_project:
+    category: "network"
+    allowed_in_modes: ["NORMAL"]
+    risk_level: "medium"
+    requires_approval: false
+    timeout_seconds: 15
+    rate_limit_per_hour: 10
+
   # Auto-discovered: 2026-04-03T18:57:35.611133
   # Update an existing Linear document
   mcp_update_document:

@@ -7,14 +7,6 @@ This module provides:
 - CLI-first native tools replacing MCP tools (ADR-0028)
 """
 
-from personal_agent.tools.infra_health import (
-    infra_health_executor,
-    infra_health_tool,
-)
-from personal_agent.tools.sysdiag import (
-    run_sysdiag_executor,
-    run_sysdiag_tool,
-)
 from personal_agent.tools.context7 import (
     get_library_docs_executor,
     get_library_docs_tool,
@@ -34,6 +26,20 @@ from personal_agent.tools.filesystem import (
     read_file_executor,
     read_file_tool,
 )
+from personal_agent.tools.infra_health import (
+    infra_health_executor,
+    infra_health_tool,
+)
+from personal_agent.tools.linear import (
+    create_linear_issue_executor,
+    create_linear_issue_tool,
+    create_linear_project_executor,
+    create_linear_project_tool,
+    find_linear_issues_executor,
+    find_linear_issues_tool,
+    list_linear_projects_executor,
+    list_linear_projects_tool,
+)
 from personal_agent.tools.memory_search import (
     search_memory_executor,
     search_memory_tool,
@@ -46,6 +52,10 @@ from personal_agent.tools.registry import ToolRegistry
 from personal_agent.tools.self_telemetry import (
     self_telemetry_query_executor,
     self_telemetry_query_tool,
+)
+from personal_agent.tools.sysdiag import (
+    run_sysdiag_executor,
+    run_sysdiag_tool,
 )
 from personal_agent.tools.system_health import (
     system_metrics_snapshot_executor,
@@ -106,6 +116,11 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
     registry.register(run_sysdiag_tool, run_sysdiag_executor)
     # Infrastructure health (TCP/HTTP probes — container-safe, no CLI tools needed)
     registry.register(infra_health_tool, infra_health_executor)
+    # FRE-224: native Linear tool (Tier-1, no MCP gateway required)
+    registry.register(create_linear_issue_tool, create_linear_issue_executor)
+    registry.register(find_linear_issues_tool, find_linear_issues_executor)
+    registry.register(list_linear_projects_tool, list_linear_projects_executor)
+    registry.register(create_linear_project_tool, create_linear_project_executor)
 
 
 # Global singleton registry

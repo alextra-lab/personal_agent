@@ -1906,9 +1906,10 @@ async def step_tool_execution(
                     }
                 )
 
-            # Loop gate: record output for output-identity detection
-            output_hash = stable_hash(result.output)
-            ctx.loop_gate.record_output(tool_name, args_hash, output_hash, loop_policy)
+            # Loop gate: record output for output-identity detection (success only)
+            if result.success:
+                output_hash = stable_hash(result.output)
+                ctx.loop_gate.record_output(tool_name, args_hash, output_hash, loop_policy)
 
             # Inject gate warning into result content if consecutive threshold just hit
             if gate_result.decision == GateDecision.WARN_CONSECUTIVE:

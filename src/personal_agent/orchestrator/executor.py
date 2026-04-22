@@ -55,10 +55,10 @@ log = get_logger(__name__)
 
 # ── Tool loop gate helpers ─────────────────────────────────────────────────
 
-_cached_governance_config: Any = None
+_cached_governance_config: object = None
 
 
-def _get_cached_governance_config() -> Any:
+def _get_cached_governance_config() -> object:
     """Module-level governance config cache. TODO: replace with @lru_cache after config singleton."""
     global _cached_governance_config
     if _cached_governance_config is None:
@@ -78,7 +78,7 @@ def _get_tool_loop_policy(tool_name: str) -> ToolLoopPolicy:
     """
     try:
         gov_config = _get_cached_governance_config()
-        tool_policy = gov_config.tools.get(tool_name)
+        tool_policy = gov_config.tools.get(tool_name)  # type: ignore[union-attr]
         if tool_policy is None:
             return ToolLoopPolicy()
         return ToolLoopPolicy(
@@ -1906,7 +1906,8 @@ async def step_tool_execution(
                     }
                 )
 
-            # Loop gate: record output for output-identity detection (success only)
+            # Loop gate: record output for output-identity detection (success only —
+            # error strings are not meaningful signals and would poison the history)
             if result.success:
                 output_hash = stable_hash(result.output)
                 ctx.loop_gate.record_output(tool_name, args_hash, output_hash, loop_policy)

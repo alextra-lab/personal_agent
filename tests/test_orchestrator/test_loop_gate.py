@@ -240,3 +240,51 @@ def test_output_sensitive_still_records_for_telemetry():
     fsm = gate._fsms["run_sysdiag"]
     assert "hash_args" in fsm.output_history
     assert fsm.output_history["hash_args"] == ["out_hash"]
+
+
+# ── Integration-style tests ────────────────────────────────────────────────
+
+
+def test_full_request_scenario_self_telemetry():
+    """Simulates self_telemetry_query: max=2, output_sensitive=True; third call blocks by identity."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(loop_max_per_signature=2, loop_output_sensitive=True)
+    args_hash = stable_hash({"query_type": "health"})
+
+    r1 = gate.check_before("self_telemetry_query", args_hash, policy)
+    assert r1.decision == GateDecision.ALLOW
+    gate.record_output("self_telemetry_query", args_hash, stable_hash({"status": "ok"}), policy)
+
+    r2 = gate.check_before("self_telemetry_query", args_hash, policy)
+    assert r2.decision == GateDecision.ALLOW
+    gate.record_output("self_telemetry_query", args_hash, stable_hash({"status": "ok"}), policy)
+
+    r3 = gate.check_before("self_telemetry_query", args_hash, policy)
+    assert r3.decision == GateDecision.BLOCK_IDENTITY  # 3rd call exceeds max=2
+
+
+def test_consecutive_warn_then_synthesis_via_different_tool():
+    """After WARN, calling a different tool resets the FSM to ACTIVE."""
+    gate = ToolLoopGate()
+    diag_policy = ToolLoopPolicy(loop_max_per_signature=10, loop_max_consecutive=2)
+    search_policy = ToolLoopPolicy()
+
+    gate.check_before("run_sysdiag", "h1", diag_policy)
+    r_warn = gate.check_before("run_sysdiag", "h2", diag_policy)
+    assert r_warn.decision == GateDecision.WARN_CONSECUTIVE
+
+    gate.check_before("web_search", "hq", search_policy)  # different tool
+
+    r_resume = gate.check_before("run_sysdiag", "h3", diag_policy)
+    assert r_resume.decision == GateDecision.ALLOW  # consecutive reset
+
+
+def test_gate_result_fields_are_complete():
+    """GateResult always has all fields populated with meaningful values."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy()
+    result = gate.check_before("web_search", stable_hash({"q": "test"}), policy)
+    assert result.tool_name == "web_search"
+    assert result.consecutive_count >= 1
+    assert result.total_calls >= 1
+    assert result.reason != ""

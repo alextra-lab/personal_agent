@@ -177,8 +177,8 @@ class ToolLoopGate:
 
 ### Signal evaluation order in `check_before`
 
-1. **Identity**: `fsm.signature_counts.get(args_hash, 0) >= loop_max_per_signature` → `BLOCK_IDENTITY`
-   (`signature_counts[args_hash]` is incremented at the start of `check_before`, before any blocking check, so the count reflects the current call attempt)
+1. **Identity**: `fsm.signature_counts[args_hash] > loop_max_per_signature` → `BLOCK_IDENTITY`
+   (`signature_counts[args_hash]` is incremented at the start of `check_before`, before any blocking check; `>` means block starting from the (max+1)th identical call)
 2. **Output identity** (skipped if `loop_output_sensitive=True`): previous execution of same `(tool, args_hash)` produced identical `output_hash` → `BLOCK_OUTPUT`
 3. **Consecutive — block**: `fsm.state == WARNED` → `BLOCK_CONSECUTIVE`
 4. **Consecutive — warn**: `fsm.consecutive_count >= loop_max_consecutive` → `WARN_CONSECUTIVE`, transition to `WARNED`

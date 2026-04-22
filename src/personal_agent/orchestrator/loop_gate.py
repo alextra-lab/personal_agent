@@ -182,7 +182,23 @@ class ToolLoopGate:
                 total_calls=fsm.total_calls,
             )
 
-        # Signal 2 placeholder — added in Task 5
+        # Signal 2: Output identity (skipped for output-sensitive tools)
+        if not policy.loop_output_sensitive:
+            prior_outputs = fsm.output_history.get(args_hash, [])
+            if len(prior_outputs) >= 2 and len(set(prior_outputs)) == 1:
+                fsm.state = ToolCallState.BLOCKED
+                return GateResult(
+                    decision=GateDecision.BLOCK_OUTPUT,
+                    tool_name=tool_name,
+                    state_before=state_before,
+                    state_after=ToolCallState.BLOCKED,
+                    reason=(
+                        f"Identical output seen {len(prior_outputs)}x for same args "
+                        f"(hash={prior_outputs[0][:8]})"
+                    ),
+                    consecutive_count=fsm.consecutive_count,
+                    total_calls=fsm.total_calls,
+                )
 
         # Allow — transition IDLE → ACTIVE on first call
         if fsm.state == ToolCallState.IDLE:
@@ -202,10 +218,14 @@ class ToolLoopGate:
         tool_name: str,
         args_hash: str,
         output_hash: str,
-        policy: ToolLoopPolicy,
+        policy: ToolLoopPolicy,  # noqa: ARG002 — reserved for future per-tool recording config
     ) -> None:
-        """Post-execution hook. Stores output hash for output-identity detection.
+        """Post-execution hook. Records output hash for output-identity detection.
 
-        Not yet implemented — added in Task 5.
+        Always records even for output_sensitive=True tools, so future telemetry
+        and feedback loop analysis can observe actual output variation.
         """
-        raise NotImplementedError
+        fsm = self._get_or_create_fsm(tool_name)
+        if args_hash not in fsm.output_history:
+            fsm.output_history[args_hash] = []
+        fsm.output_history[args_hash].append(output_hash)

@@ -172,3 +172,71 @@ def test_gate_result_includes_consecutive_count():
         gate.check_before("run_sysdiag", f"hash_{i}", policy)
     result = gate.check_before("run_sysdiag", "hash_3", policy)
     assert result.consecutive_count == 4
+
+
+# ── Output identity signal tests ───────────────────────────────────────────
+
+
+def test_record_output_does_not_raise():
+    """record_output completes without error after a check_before call."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(loop_max_per_signature=5)
+    gate.check_before("self_telemetry_query", "hash_args", policy)
+    gate.record_output("self_telemetry_query", "hash_args", "hash_out_1", policy)  # no error
+
+
+def test_block_output_identity_after_two_identical_outputs():
+    """Gate blocks on third call when prior two calls produced identical output."""
+    gate = ToolLoopGate()
+    # max_per_signature=5 so identity won't block; output_sensitive=False (default)
+    policy = ToolLoopPolicy(loop_max_per_signature=5, loop_max_consecutive=10)
+    # Call 1
+    gate.check_before("query_es", "hash_args", policy)
+    gate.record_output("query_es", "hash_args", "out_same", policy)
+    # Call 2
+    gate.check_before("query_es", "hash_args", policy)
+    gate.record_output("query_es", "hash_args", "out_same", policy)  # identical!
+    # Call 3 — output-identity should block
+    result = gate.check_before("query_es", "hash_args", policy)
+    assert result.decision == GateDecision.BLOCK_OUTPUT
+    assert result.state_after == ToolCallState.BLOCKED
+
+
+def test_different_outputs_do_not_trigger_output_block():
+    """Gate does not block when outputs differ between calls."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(loop_max_per_signature=5, loop_max_consecutive=10)
+    gate.check_before("query_es", "hash_args", policy)
+    gate.record_output("query_es", "hash_args", "out_1", policy)
+    gate.check_before("query_es", "hash_args", policy)
+    gate.record_output("query_es", "hash_args", "out_2", policy)  # different!
+    result = gate.check_before("query_es", "hash_args", policy)
+    assert result.decision != GateDecision.BLOCK_OUTPUT
+
+
+def test_output_sensitive_bypasses_output_identity_block():
+    """loop_output_sensitive=True skips output-identity blocking."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(
+        loop_max_per_signature=5,
+        loop_max_consecutive=10,
+        loop_output_sensitive=True,
+    )
+    gate.check_before("run_sysdiag", "hash_args", policy)
+    gate.record_output("run_sysdiag", "hash_args", "out_same", policy)
+    gate.check_before("run_sysdiag", "hash_args", policy)
+    gate.record_output("run_sysdiag", "hash_args", "out_same", policy)
+    result = gate.check_before("run_sysdiag", "hash_args", policy)
+    # Should NOT be BLOCK_OUTPUT — output_sensitive=True bypasses this check
+    assert result.decision != GateDecision.BLOCK_OUTPUT
+
+
+def test_output_sensitive_still_records_for_telemetry():
+    """record_output always stores hashes even for output_sensitive=True tools."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(loop_max_per_signature=5, loop_output_sensitive=True)
+    gate.check_before("run_sysdiag", "hash_args", policy)
+    gate.record_output("run_sysdiag", "hash_args", "out_hash", policy)
+    fsm = gate._fsms["run_sysdiag"]
+    assert "hash_args" in fsm.output_history
+    assert fsm.output_history["hash_args"] == ["out_hash"]

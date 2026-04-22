@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-21 (FRE-239: event bus / second-brain pipeline fixes)
+> **Last updated**: 2026-04-22 (FRE-233: ADR-0053 gate monitoring + full feedback stream architecture — 7 projects, 8 ADR issues FRE-244 through FRE-250)
 
 ---
 
@@ -18,12 +18,33 @@ Ordered by recommended implementation sequence. Dependency chains are encoded in
 
 | # | Project | Linear | ADR / Spec | Depends On |
 |---|---------|--------|------------|------------|
-| 2 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |
-| 3 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2 | Proactive Memory MVP done (FRE-176) |
+| 2 | Feedback Stream Bus Convention | [FRE-245](https://linear.app/frenchforest/issue/FRE-245) | ADR-0054 | ADR-0041 (Event Bus) — **must precede all Phase 2 ADRs** |
+| 3 | Gate Feedback Monitoring — acceptance | [FRE-233](https://linear.app/frenchforest/issue/FRE-233) | ADR-0053 | — |
+| 4 | System Health & Homeostasis — Mode Manager fix | [FRE-246](https://linear.app/frenchforest/issue/FRE-246) | ADR-0055 | FRE-245 |
+| 5 | Error Pattern Monitoring — Level 3 observability | [FRE-244](https://linear.app/frenchforest/issue/FRE-244) | ADR-0056 | FRE-245 |
+| 6 | Insights & Pattern Analysis — wire InsightsEngine | [FRE-247](https://linear.app/frenchforest/issue/FRE-247) | ADR-0057 | FRE-245 |
+| 7 | Self-Improvement Pipeline — formalize Streams 1-3 | [FRE-248](https://linear.app/frenchforest/issue/FRE-248) | ADR-0058 | FRE-245 |
+| 8 | Context Quality — compaction full loop | [FRE-249](https://linear.app/frenchforest/issue/FRE-249) | ADR-0059 | FRE-245, FRE-244 |
+| 9 | Knowledge Graph Quality — consolidation + decay→reranking | [FRE-250](https://linear.app/frenchforest/issue/FRE-250) | ADR-0060 | FRE-245, FRE-247 |
+| 10 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |
+| 11 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2 | Proactive Memory MVP done (FRE-176) |
 
 ### Dependency graph (project-level)
 
 ```text
+FEEDBACK STREAM ARCHITECTURE (FRE-233 — ADR-0053 accepted)
+    ↓
+ADR-0054: Bus Convention (FRE-245) ← FOUNDATION — must come first
+    ├── ADR-0055: System Health & Homeostasis (FRE-246)  ← fixes app.py:176 hardcoded Mode.NORMAL
+    ├── ADR-0056: Error Pattern Monitoring (FRE-244)     ← Level 3 observability
+    ├── ADR-0057: Insights & Pattern Analysis (FRE-247)  ← wires InsightsEngine
+    └── ADR-0058: Self-Improvement Pipeline (FRE-248)    ← adds captain_log.entry_created event
+            ↓ (Phase 3 — depend on Phase 2)
+        ADR-0059: Context Quality (FRE-249)              ← depends on 0054 + 0056
+        ADR-0060: Knowledge Graph Quality (FRE-250)      ← depends on 0054 + 0057
+
+Architecture reference: docs/architecture/FEEDBACK_STREAM_ARCHITECTURE.md
+
 Proactive Memory (ADR-0039)
     ↓
 Context Intelligence Stretch Goals (4.7, 4.S1, 4.S2)
@@ -77,6 +98,16 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 
 | ADR | Title | Status |
 |-----|-------|--------|
+| 0060 | Knowledge Graph Quality Stream | Needs Approval (FRE-250 — blocked by 0054, 0057) |
+| 0059 | Context Quality Monitoring Stream | Needs Approval (FRE-249 — blocked by 0054, 0056) |
+| 0058 | Self-Improvement Pipeline Stream | Needs Approval (FRE-248 — blocked by 0054) |
+| 0057 | Insights & Pattern Analysis Stream | Needs Approval (FRE-247 — blocked by 0054) |
+| 0056 | Error Pattern Monitoring Stream | Needs Approval (FRE-244 — blocked by 0054) |
+| 0055 | System Health & Homeostasis Stream | Needs Approval (FRE-246 — blocked by 0054) |
+| 0054 | Feedback Stream Bus Convention | Needs Approval (FRE-245 — **draft next**) |
+| 0053 | Deterministic Gate Feedback-Loop Monitoring Framework | Proposed (FRE-233 — awaiting acceptance) |
+| 0052 | Seshat Owner Identity Primitive | Proposed (Needs Approval) |
+| 0051 | Cloud Profile Orchestrator Dispatch via ContextVar | Accepted |
 | 0050 | Remote Agent Harness Integration | Accepted (implemented — FRE-208) |
 | 0049 | Application Modularity | Accepted (implemented — FRE-201) |
 | 0048 | Mobile & Multi-Device UI | Accepted (implemented — FRE-209) |

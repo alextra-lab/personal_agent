@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-22 (FRE-233/ADR-0053 done — spawned FRE-244–251 all Approved; FRE-255 bug fix done; FRE-242 canceled (superseded by ADR-0062); FRE-187 confirmed Done; FRE-253/FRE-254 new backlog items)
+> **Last updated**: 2026-04-22 (Wave 1 complete — FRE-254 investigation done; FRE-245/ADR-0054 drafted and In Review; Wave 2 unblocked pending ADR-0054 acceptance)
 > **Implementation sequence**: `docs/superpowers/specs/2026-04-22-implementation-sequence-wave-plan-design.md`
 
 ---
@@ -15,8 +15,8 @@
 |------|---|-----------|--------|------|--------|
 | ~~0~~ | ~~1~~ | ~~bug(captains_log): DSPy bypassed for cloud models~~ | ~~[FRE-253](https://linear.app/frenchforest/issue/FRE-253)~~ | ~~Bug fix~~ | ~~Done 2026-04-22~~ |
 | ~~0~~ | ~~2~~ | ~~Governance: per-TaskType tool allowlist Stage 3~~ | ~~[FRE-252](https://linear.app/frenchforest/issue/FRE-252)~~ | ~~Feature~~ | ~~Done 2026-04-22~~ |
-| 1 | 3a | Investigate step-count reduction (interaction latency) | [FRE-254](https://linear.app/frenchforest/issue/FRE-254) | Investigation | Approved — parallel with FRE-245 |
-| 1 | 3b | Feedback Stream Bus Convention (ADR-0054) | [FRE-245](https://linear.app/frenchforest/issue/FRE-245) | ADR draft | Approved — parallel with FRE-254 |
+| ~~1~~ | ~~3a~~ | ~~Investigate step-count reduction (interaction latency)~~ | ~~[FRE-254](https://linear.app/frenchforest/issue/FRE-254)~~ | ~~Investigation~~ | ~~Done 2026-04-22~~ |
+| 1 | 3b | Feedback Stream Bus Convention (ADR-0054) | [FRE-245](https://linear.app/frenchforest/issue/FRE-245) | ADR draft | In Review — awaiting ADR-0054 acceptance |
 
 ## Upcoming — Approved
 
@@ -44,7 +44,7 @@ _(none)_
 ```text
 ADR-0053: Gate Feedback Monitoring (FRE-233) ✅ Done 2026-04-22 — spawned FRE-244–251
     ↓
-ADR-0054: Bus Convention (FRE-245) ← CURRENT FOCUS — must implement first
+ADR-0054: Bus Convention (FRE-245) ← In Review — accept to unblock Wave 2
     ├── ADR-0055: System Health & Homeostasis (FRE-246)  ← fixes app.py:176 hardcoded Mode.NORMAL
     ├── ADR-0056: Error Pattern Monitoring (FRE-244)     ← Level 3 observability
     ├── ADR-0057: Insights & Pattern Analysis (FRE-247)  ← wires InsightsEngine
@@ -80,6 +80,8 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 
 | Phase | Completed | Summary |
 |-------|-----------|---------|
+| Investigation: Step-count latency reduction (FRE-254) | 2026-04-22 | Root cause: Qwen3-35B-A3B emits one tool call per turn regardless of batching instructions — orchestrator already supports N calls/turn. Top findings: (1) `get_tool_definitions_for_llm()` ignores TaskType `allowed_categories` — wiring it eliminates ~3,000–4,000 tokens on conversational turns; (2) no step-budget hint in system prompt (`_TOOL_RULES` prompts.py:39) — add `"≤ 6 tool calls"` guidance; (3) total tool description cost ~4,200–4,600 tokens with redundant/stale references. Full report: `docs/research/FRE-254-step-count-investigation.md`. |
+| ADR-0054: Feedback Stream Bus Convention draft (FRE-245) | 2026-04-22 | Written at `docs/architecture_decisions/ADR-0054-feedback-stream-bus-convention.md` (Status: Proposed — In Review). Establishes D1: stream naming `stream:<domain>.<signal>[.<subtype>]`; D2: consumer group naming `cg:<role>`; D3: `FeedbackEventBase` with trace_id, session_id, source_component, schema_version; D4: durable-write decision rule (disk+ES / ES-only / target-store-only); D5: schema versioning policy; D6: dual-write failure handling (durable propagates, bus swallowed); D7: reference implementation — Stream 2 (Linear Human Feedback) documented with all 9 sections. Reserves 8 new stream names and 6 new consumer group names for Phase 2. Must be accepted before any Wave 2 ADR is drafted. |
 | Bug: DSPy bypassed for cloud models (FRE-253) | 2026-04-22 | Extended `configure_dspy_lm()` to accept `ModelRole \| str` and build `"{provider}/{model_id}"` LiteLLM strings for cloud models (Anthropic/OpenAI API key from settings, no api_base). Removed 70-line cloud bypass from `reflection.py`; both local and cloud now route through DSPy ChainOfThought. `generate_reflection_dspy()` gains `captains_log_role` param. 5 new unit tests. |
 | ADR-0053: Gate Feedback Monitoring framework (FRE-233) | 2026-04-22 | Drafted ADR-0053 at `docs/architecture_decisions/ADR-0053-gate-feedback-monitoring.md`. Established Feedback Stream ADR Template; four-level observability framework documented. Spawned implementation issues FRE-244–251 (all Approved). |
 | Bug: create_linear_issue teamId type mismatch (FRE-255) | 2026-04-22 | Fixed `IDComparator.eq` type error in `create_linear_issue` native tool — was passing raw UUID where API expects `ID!` scalar. |

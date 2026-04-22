@@ -32,8 +32,8 @@
 
 | # | Issue | Type | Notes |
 |---|-------|------|-------|
-| 3a | FRE-254 | Investigation | Step-count reduction — p50 39.7s, p90 122.5s; findings must land before stream ADRs are written |
-| 3b | FRE-245 | ADR draft | ADR-0054: Feedback Stream Bus Convention — dual-write pattern, stream naming, event shapes; unblocks all Phase 2 ADRs |
+| ~~3a~~ | ~~FRE-254~~ | ~~Investigation~~ | ~~Step-count reduction — findings at `docs/research/FRE-254-step-count-investigation.md`~~ ✅ Done 2026-04-22 |
+| 3b | FRE-245 | ADR draft | ADR-0054 drafted at `docs/architecture_decisions/ADR-0054-feedback-stream-bus-convention.md` — In Review, awaiting acceptance | 🔄 In Review 2026-04-22 |
 
 **Gate:** FRE-245 must be accepted before any Phase 2 ADR is drafted.
 

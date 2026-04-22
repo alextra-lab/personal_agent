@@ -29,7 +29,7 @@ Linear is already the project's task management tool, accessible from any device
 - **States**: a workflow engine (Backlog → Todo → In Progress → Done / Canceled)
 - **Comments**: freeform Markdown the agent can read and write
 - **Audit trail**: every state/label change is timestamped
-- **MCP integration**: Linear MCP is available via the Docker MCP toolkit (`user-MCP_DOCKER`), exposing `save_issue`, `get_issue`, `list_issues`, `list_comments`, `save_comment`, `create_issue_label` — all the tools needed for bidirectional communication. The agent's `MCPGatewayAdapter` can invoke these tools directly from background processes without depending on Cursor
+- **Direct GraphQL API**: `LinearClient` calls `https://api.linear.app/graphql` directly via httpx and a Personal Access Token (`AGENT_LINEAR_API_KEY`). This replaced an earlier MCP-gateway wrapper (FRE-243) which was incompatible with VPS deployments lacking Docker Desktop's DCR OAuth socket.
 
 Instead of building a custom approval UI, we can define a **structured feedback protocol** over Linear's existing primitives. The project owner triages proposals from their phone; the agent reads the feedback and responds.
 
@@ -300,12 +300,11 @@ Linear supports webhooks on the free tier. With the event bus consumer infrastru
 - ADR-0019: Development Tracking System (Linear integration patterns)
 - `src/personal_agent/captains_log/promotion.py` — promotion pipeline
 - `src/personal_agent/captains_log/feedback.py` — feedback poller + handlers
-- `src/personal_agent/captains_log/linear_client.py` — typed Linear MCP wrapper
+- `src/personal_agent/captains_log/linear_client.py` — typed Linear GraphQL client (direct httpx, no MCP dependency)
 - `src/personal_agent/captains_log/suppression.py` — fingerprint suppression
 - `src/personal_agent/events/pipeline_handlers.py` — event bus consumer handlers
 - `src/personal_agent/brainstem/scheduler.py` — scheduler (polling job host)
 - `src/personal_agent/insights/engine.py` — insights engine (meta-learning integration)
 - `docs/specs/COGNITIVE_ARCHITECTURE_REDESIGN_v2.md` §7 — self-improvement vision
-- Docker MCP toolkit (`user-MCP_DOCKER`): Linear tools available via `MCPGatewayAdapter`
-- `src/personal_agent/mcp/gateway.py` — MCP Gateway adapter (invocation point for Linear tools)
+- Linear GraphQL API: `https://api.linear.app/graphql` — authenticated via `AGENT_LINEAR_API_KEY` PAT
 - Linear free tier: 250 issues (excluding archived), 5,000 API requests/hour, 3,000,000 complexity points/hour

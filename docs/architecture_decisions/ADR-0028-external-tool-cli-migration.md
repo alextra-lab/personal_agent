@@ -236,7 +236,7 @@ Yes, with caveats:
 - **Migration effort**: ~3-4 focused sessions to convert ES, Perplexity, and remaining tools to native Python
 - **Two patterns during transition**: MCP and native tools coexist until migration completes (mitigated by MCP being disabled by default)
 - **Browser automation deferred**: MCP remains the right answer for browser tools, but they are currently disabled anyway
-- **LinearClient coupling**: The Captain's Log feedback loop (ADR-0040) uses `MCPGatewayAdapter.call_tool()` directly. If MCP gateway is disabled, Linear integration requires a separate client (minor refactor)
+- **LinearClient decoupled** (resolved FRE-243): `LinearClient` now calls the Linear GraphQL API directly via httpx; `MCPGatewayAdapter` is no longer a dependency of the Captain's Log pipeline
 
 ### Risks
 

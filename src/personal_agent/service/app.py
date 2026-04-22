@@ -405,10 +405,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         set_global_event_bus(NoOpBus())
         log.info("event_bus_disabled_using_noop")
 
-    # MCP gateway before brainstem scheduler so promotion/feedback can use Linear (ADR-0040).
+    # LinearClient: key-based, no gateway dependency (FRE-243 follow-up of FRE-224).
+    if settings.linear_api_key:
+        from personal_agent.captains_log.linear_client import LinearClient
+
+        linear_client = LinearClient()
+    else:
+        linear_client = None
+        log.warning(
+            "linear_client_unavailable",
+            reason="AGENT_LINEAR_API_KEY not set — promotion and feedback polling disabled",
+        )
+
+    # MCP gateway (other MCP tools may rely on it — keep independent of LinearClient).
     if settings.mcp_gateway_enabled:
         try:
-            from personal_agent.captains_log.linear_client import LinearClient
             from personal_agent.mcp.gateway import MCPGatewayAdapter
             from personal_agent.tools import get_default_registry
 
@@ -419,12 +430,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             log.info(
                 "mcp_gateway_initialized",
                 tools_count=len(mcp_adapter._mcp_tool_names),
-                tools=list(mcp_adapter._mcp_tool_names)[:10],  # Log first 10 tools
+                tools=list(mcp_adapter._mcp_tool_names)[:10],
             )
-            if mcp_adapter.client:
-                linear_client = LinearClient(mcp_adapter)
-            else:
-                linear_client = None
         except Exception as e:
             log.warning(
                 "mcp_gateway_init_failed",
@@ -433,9 +440,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 exc_info=True,
             )
             mcp_adapter = None
-            linear_client = None
-    else:
-        linear_client = None
 
     # Start Brainstem scheduler for second brain, lifecycle, and/or insights tasks.
     if (

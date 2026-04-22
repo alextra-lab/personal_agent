@@ -16,8 +16,9 @@ except Exception:
 " 2>/dev/null)
 
 if echo "$cmd" | grep -qE "pytest"; then
-    if pgrep -f "pytest" > /dev/null 2>&1; then
-        pids=$(pgrep -f "pytest" | tr '\n' ' ')
+    # Match only actual Python test runner processes, not this hook script itself.
+    if pgrep -f "python.*-m pytest" > /dev/null 2>&1; then
+        pids=$(pgrep -f "python.*-m pytest" | tr '\n' ' ')
         printf "BLOCKED: pytest already running (PIDs: %s). Wait for it to finish before starting another test run.\n" "${pids% }"
         exit 2
     fi

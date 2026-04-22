@@ -60,3 +60,57 @@ def test_tool_loop_gate_instantiation():
     gate = ToolLoopGate()
     assert len(gate._fsms) == 0
     assert gate._last_tool_name is None
+
+
+# ── Identity signal tests ──────────────────────────────────────────────────
+
+
+def test_first_call_is_allowed():
+    """Gate allows the first call to any tool."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(loop_max_per_signature=1)
+    result = gate.check_before("web_search", "hash_abc", policy)
+    assert result.decision == GateDecision.ALLOW
+    assert result.state_before == ToolCallState.IDLE
+    assert result.state_after == ToolCallState.ACTIVE
+
+
+def test_second_call_same_args_blocked_when_max_is_one():
+    """Gate blocks second call with same args when max_per_signature=1."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(loop_max_per_signature=1)
+    gate.check_before("web_search", "hash_abc", policy)
+    result = gate.check_before("web_search", "hash_abc", policy)
+    assert result.decision == GateDecision.BLOCK_IDENTITY
+    assert result.state_after == ToolCallState.BLOCKED
+
+
+def test_different_args_not_blocked_by_identity():
+    """Gate allows different args for the same tool."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(loop_max_per_signature=1)
+    gate.check_before("web_search", "hash_abc", policy)
+    result = gate.check_before("web_search", "hash_xyz", policy)
+    assert result.decision == GateDecision.ALLOW
+
+
+def test_identity_respects_per_tool_max():
+    """Gate respects loop_max_per_signature > 1."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(loop_max_per_signature=2)
+    gate.check_before("run_sysdiag", "hash_same", policy)
+    result2 = gate.check_before("run_sysdiag", "hash_same", policy)
+    assert result2.decision == GateDecision.ALLOW  # second call within limit
+    result3 = gate.check_before("run_sysdiag", "hash_same", policy)
+    assert result3.decision == GateDecision.BLOCK_IDENTITY  # third call exceeds limit
+
+
+def test_blocked_tool_stays_blocked():
+    """Once blocked, tool stays blocked on subsequent calls."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(loop_max_per_signature=1)
+    gate.check_before("web_search", "hash_abc", policy)
+    gate.check_before("web_search", "hash_abc", policy)  # → BLOCKED
+    result = gate.check_before("web_search", "hash_abc", policy)
+    assert result.decision == GateDecision.BLOCK_IDENTITY
+    assert result.state_after == ToolCallState.BLOCKED

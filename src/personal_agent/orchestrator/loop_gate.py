@@ -110,9 +110,60 @@ class ToolLoopGate:
     ) -> GateResult:
         """Pre-execution check. Drives FSM transition. Returns gate decision.
 
-        Not yet implemented — added in Tasks 3, 4, 5.
+        Evaluation order (first match wins):
+          1. Call identity: signature_counts[args_hash] > loop_max_per_signature
+          2. Output identity: ≥2 prior identical outputs for same args (Task 5)
+          3. Consecutive block: state is WARNED — grace turn used (Task 4)
+          4. Consecutive warn: consecutive_count >= loop_max_consecutive (Task 4)
+          5. Allow
         """
-        raise NotImplementedError
+        fsm = self._get_or_create_fsm(tool_name)
+        state_before = fsm.state
+
+        # Update consecutive counter
+        if self._last_tool_name == tool_name:
+            fsm.consecutive_count += 1
+        else:
+            fsm.consecutive_count = 1
+            # WARNED → ACTIVE reset when a different tool ran in between
+            if fsm.state == ToolCallState.WARNED:
+                fsm.state = ToolCallState.ACTIVE
+        self._last_tool_name = tool_name
+
+        # Increment signature call count and total before any blocking check
+        fsm.signature_counts[args_hash] = fsm.signature_counts.get(args_hash, 0) + 1
+        fsm.total_calls += 1
+
+        # Signal 1: Call identity
+        if fsm.signature_counts[args_hash] > policy.loop_max_per_signature:
+            fsm.state = ToolCallState.BLOCKED
+            return GateResult(
+                decision=GateDecision.BLOCK_IDENTITY,
+                tool_name=tool_name,
+                state_before=state_before,
+                state_after=ToolCallState.BLOCKED,
+                reason=(
+                    f"Same args called {fsm.signature_counts[args_hash]}x, "
+                    f"max={policy.loop_max_per_signature}"
+                ),
+                consecutive_count=fsm.consecutive_count,
+                total_calls=fsm.total_calls,
+            )
+
+        # Signals 2, 3, 4 — to be added in Tasks 4 and 5
+
+        # Allow — transition IDLE → ACTIVE on first call
+        if fsm.state == ToolCallState.IDLE:
+            fsm.state = ToolCallState.ACTIVE
+        return GateResult(
+            decision=GateDecision.ALLOW,
+            tool_name=tool_name,
+            state_before=state_before,
+            state_after=fsm.state,
+            reason="within thresholds",
+            consecutive_count=fsm.consecutive_count,
+            total_calls=fsm.total_calls,
+        )
 
     def record_output(
         self,

@@ -185,22 +185,23 @@ def adapt_responses_response(response_data: dict[str, Any]) -> LLMResponse:
         # Extract usage information
         usage = response_data.get("usage", {})
         if usage:
-            # Responses API uses input_tokens/output_tokens, normalize to prompt_tokens/completion_tokens
+            # Normalize: Responses API uses input_tokens/output_tokens; Chat API uses prompt/completion.
+            # Anthropic never sends total_tokens, so compute it from the component fields.
+            _p = usage.get("input_tokens", usage.get("prompt_tokens", 0))
+            _c = usage.get("output_tokens", usage.get("completion_tokens", 0))
             usage = {
-                "prompt_tokens": usage.get("input_tokens", usage.get("prompt_tokens", 0)),
-                "completion_tokens": usage.get("output_tokens", usage.get("completion_tokens", 0)),
-                "total_tokens": usage.get("total_tokens", 0),
+                "prompt_tokens": _p,
+                "completion_tokens": _c,
+                "total_tokens": usage.get("total_tokens") or (_p + _c),
             }
         else:
             # Try to extract from response metadata
+            _p = response_data.get("input_tokens", response_data.get("prompt_tokens", 0))
+            _c = response_data.get("output_tokens", response_data.get("completion_tokens", 0))
             usage = {
-                "prompt_tokens": response_data.get(
-                    "input_tokens", response_data.get("prompt_tokens", 0)
-                ),
-                "completion_tokens": response_data.get(
-                    "output_tokens", response_data.get("completion_tokens", 0)
-                ),
-                "total_tokens": response_data.get("total_tokens", 0),
+                "prompt_tokens": _p,
+                "completion_tokens": _c,
+                "total_tokens": response_data.get("total_tokens") or (_p + _c),
             }
 
         return LLMResponse(

@@ -616,7 +616,9 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
 
                 # Extract tools used and accumulate token counts from steps
                 tools_used = []
-                total_tokens = 0
+                cap_prompt_tokens = 0
+                cap_completion_tokens = 0
+                cap_total_tokens = 0
                 for step in ctx.steps:
                     if step.get("type") == "tool_call":
                         tool_name = (step.get("metadata") or {}).get("tool_name")
@@ -624,7 +626,9 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                             tools_used.append(tool_name)
                     elif step.get("type") == "llm_call":
                         meta = step.get("metadata") or {}
-                        total_tokens += meta.get("tokens", 0)
+                        cap_prompt_tokens += meta.get("prompt_tokens", 0)
+                        cap_completion_tokens += meta.get("completion_tokens", 0)
+                        cap_total_tokens += meta.get("tokens", 0)
 
                 capture = TaskCapture(
                     trace_id=ctx.trace_id,
@@ -639,7 +643,9 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                     outcome="completed",
                     memory_context_used=bool(ctx.memory_context),
                     memory_conversations_found=len(ctx.memory_context) if ctx.memory_context else 0,
-                    total_tokens=total_tokens,
+                    prompt_tokens=cap_prompt_tokens,
+                    completion_tokens=cap_completion_tokens,
+                    total_tokens=cap_total_tokens,
                     tool_results=ctx.tool_results,
                 )
                 write_capture(capture)
@@ -1407,7 +1413,9 @@ async def step_llm_call(
                 "model_role": model_role.value,
                 "span_id": span_id,
                 "duration_ms": duration_ms,
-                "tokens": response.get("usage", {}).get("total_tokens", 0),
+                "tokens": total_tokens,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
             },
         }
         ctx.steps.append(step)

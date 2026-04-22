@@ -112,9 +112,9 @@ class ToolLoopGate:
 
         Evaluation order (first match wins):
           1. Call identity: signature_counts[args_hash] > loop_max_per_signature
-          2. Output identity: ≥2 prior identical outputs for same args (Task 5)
-          3. Consecutive block: state is WARNED — grace turn used (Task 4)
-          4. Consecutive warn: consecutive_count >= loop_max_consecutive (Task 4)
+          2. Consecutive block: fsm.state == WARNED (grace turn already used)
+          3. Consecutive warn: consecutive_count >= loop_max_consecutive
+          4. Output identity: ≥2 prior identical outputs for same args
           5. Allow
         """
         fsm = self._get_or_create_fsm(tool_name)

@@ -14,7 +14,7 @@
 | Wave | # | Work Item | Linear | Type | Status |
 |------|---|-----------|--------|------|--------|
 | ~~0~~ | ~~1~~ | ~~bug(captains_log): DSPy bypassed for cloud models~~ | ~~[FRE-253](https://linear.app/frenchforest/issue/FRE-253)~~ | ~~Bug fix~~ | ~~Done 2026-04-22~~ |
-| 0 | 2 | Governance: per-TaskType tool allowlist Stage 3 | [FRE-252](https://linear.app/frenchforest/issue/FRE-252) | Feature | Approved |
+| ~~0~~ | ~~2~~ | ~~Governance: per-TaskType tool allowlist Stage 3~~ | ~~[FRE-252](https://linear.app/frenchforest/issue/FRE-252)~~ | ~~Feature~~ | ~~Done 2026-04-22~~ |
 | 1 | 3a | Investigate step-count reduction (interaction latency) | [FRE-254](https://linear.app/frenchforest/issue/FRE-254) | Investigation | Approved — parallel with FRE-245 |
 | 1 | 3b | Feedback Stream Bus Convention (ADR-0054) | [FRE-245](https://linear.app/frenchforest/issue/FRE-245) | ADR draft | Approved — parallel with FRE-254 |
 

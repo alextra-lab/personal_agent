@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-22 (FRE-233: ADR-0053 gate monitoring + full feedback stream architecture — 7 projects, 8 ADR issues FRE-244 through FRE-250)
+> **Last updated**: 2026-04-22 (FRE-233: ADR-0053 gate monitoring + full feedback stream architecture; Hermes research integrated — FRE-251, FRE-252, FRE-226 updated)
 
 ---
 
@@ -26,8 +26,10 @@ Ordered by recommended implementation sequence. Dependency chains are encoded in
 | 7 | Self-Improvement Pipeline — formalize Streams 1-3 | [FRE-248](https://linear.app/frenchforest/issue/FRE-248) | ADR-0058 | FRE-245 |
 | 8 | Context Quality — compaction full loop | [FRE-249](https://linear.app/frenchforest/issue/FRE-249) | ADR-0059 | FRE-245, FRE-244 |
 | 9 | Knowledge Graph Quality — consolidation + decay→reranking | [FRE-250](https://linear.app/frenchforest/issue/FRE-250) | ADR-0060 | FRE-245, FRE-247 |
-| 10 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |
-| 11 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2 | Proactive Memory MVP done (FRE-176) |
+| 10 | Within-Session Progressive Context Compression | [FRE-251](https://linear.app/frenchforest/issue/FRE-251) | ADR-0061 | FRE-249 |
+| 11 | Agent self-updating skills (agentskills.io format) | [FRE-226](https://linear.app/frenchforest/issue/FRE-226) | ADR pending | FRE-248 |
+| 12 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |
+| 13 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2 | Proactive Memory MVP done (FRE-176) |
 
 ### Dependency graph (project-level)
 
@@ -42,6 +44,10 @@ ADR-0054: Bus Convention (FRE-245) ← FOUNDATION — must come first
             ↓ (Phase 3 — depend on Phase 2)
         ADR-0059: Context Quality (FRE-249)              ← depends on 0054 + 0056
         ADR-0060: Knowledge Graph Quality (FRE-250)      ← depends on 0054 + 0057
+            ↓ (Phase 4)
+        ADR-0061: Within-Session Compression (FRE-251)   ← depends on ADR-0059
+        FRE-226:  Agent skill files (agentskills.io)     ← depends on ADR-0058 (FRE-248)
+        FRE-252:  Per-TaskType tool allowlist             ← independent (no blockers)
 
 Architecture reference: docs/architecture/FEEDBACK_STREAM_ARCHITECTURE.md
 
@@ -60,6 +66,7 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 
 | Work Item | Linear | Spec / ADR |
 |-----------|--------|------------|
+| Per-TaskType tool allowlist in governance (Stage 3) | [FRE-252](https://linear.app/frenchforest/issue/FRE-252) | Enhancement to ADR-0028; no blocker |
 | Captain's Log ES Backfill | — | `specs/CAPTAINS_LOG_ES_BACKFILL_SPEC.md` |
 
 ## Completed
@@ -98,6 +105,7 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 
 | ADR | Title | Status |
 |-----|-------|--------|
+| 0061 | Within-Session Progressive Context Compression | Needs Approval (FRE-251 — blocked by 0059) |
 | 0060 | Knowledge Graph Quality Stream | Needs Approval (FRE-250 — blocked by 0054, 0057) |
 | 0059 | Context Quality Monitoring Stream | Needs Approval (FRE-249 — blocked by 0054, 0056) |
 | 0058 | Self-Improvement Pipeline Stream | Needs Approval (FRE-248 — blocked by 0054) |

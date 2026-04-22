@@ -3,14 +3,20 @@
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
 > **Last updated**: 2026-04-22 (FRE-233/ADR-0053 done — spawned FRE-244–251 all Approved; FRE-255 bug fix done; FRE-242 canceled (superseded by ADR-0062); FRE-187 confirmed Done; FRE-253/FRE-254 new backlog items)
+> **Implementation sequence**: `docs/superpowers/specs/2026-04-22-implementation-sequence-wave-plan-design.md`
 
 ---
 
 ## Current Focus
 
-| # | Work Item | Linear | Spec / ADR | Status |
-|---|-----------|--------|------------|--------|
-| 1 | Feedback Stream Bus Convention — foundation for all Phase 2 streams | [FRE-245](https://linear.app/frenchforest/issue/FRE-245) | ADR-0054 | Approved |
+> Next item is always the first incomplete entry in the wave plan. Update this row when an item ships.
+
+| Wave | # | Work Item | Linear | Type | Status |
+|------|---|-----------|--------|------|--------|
+| 0 | 1 | bug(captains_log): DSPy bypassed for cloud models | [FRE-253](https://linear.app/frenchforest/issue/FRE-253) | Bug fix | Approved |
+| 0 | 2 | Governance: per-TaskType tool allowlist Stage 3 | [FRE-252](https://linear.app/frenchforest/issue/FRE-252) | Feature | Approved |
+| 1 | 3a | Investigate step-count reduction (interaction latency) | [FRE-254](https://linear.app/frenchforest/issue/FRE-254) | Investigation | Approved — parallel with FRE-245 |
+| 1 | 3b | Feedback Stream Bus Convention (ADR-0054) | [FRE-245](https://linear.app/frenchforest/issue/FRE-245) | ADR draft | Approved — parallel with FRE-254 |
 
 ## Upcoming — Approved
 
@@ -26,15 +32,12 @@ Ordered by recommended implementation sequence. All items Approved in Linear. De
 | 7 | Knowledge Graph Quality — consolidation + decay→reranking | [FRE-250](https://linear.app/frenchforest/issue/FRE-250) | ADR-0060 | FRE-245, FRE-247 |
 | 8 | Within-Session Progressive Context Compression | [FRE-251](https://linear.app/frenchforest/issue/FRE-251) | ADR-0061 | FRE-249 |
 | 9 | Agent self-updating skills (agentskills.io format) | [FRE-226](https://linear.app/frenchforest/issue/FRE-226) | ADR pending | FRE-248 |
-| 10 | Governance: per-TaskType tool allowlist Stage 3 | [FRE-252](https://linear.app/frenchforest/issue/FRE-252) | — | — |
-| 11 | bug(captains_log): DSPy bypassed for cloud models | [FRE-253](https://linear.app/frenchforest/issue/FRE-253) | — | — |
-| 12 | Investigate step-count reduction (interaction latency) | [FRE-254](https://linear.app/frenchforest/issue/FRE-254) | — | — |
-| 13 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |
-| 14 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2 | Proactive Memory MVP done (FRE-176) |
+| 10 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |
+| 11 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2 | Proactive Memory MVP done (FRE-176) |
 
 ## Needs Approval
 
-_(none currently)_
+_(none)_
 
 ### Dependency graph (project-level)
 

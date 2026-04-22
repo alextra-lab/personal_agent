@@ -224,7 +224,7 @@ class LinearClient:
             return _lc_state_ids[state_name]
         data = await self._call(
             """
-            query($teamId: String!) {
+            query($teamId: ID!) {
               workflowStates(filter: { team: { id: { eq: $teamId } } }) {
                 nodes { id name }
               }
@@ -251,7 +251,7 @@ class LinearClient:
         if _lc_label_team_fetched != team_id:
             data = await self._call(
                 """
-                query($teamId: String!) {
+                query($teamId: ID!) {
                   issueLabels(filter: { team: { id: { eq: $teamId } } }) {
                     nodes { id name }
                   }
@@ -285,7 +285,7 @@ class LinearClient:
     async def _project_id(self, team_id: str, project_name: str) -> str | None:
         data = await self._call(
             """
-            query($teamId: String!) {
+            query($teamId: ID!) {
               teams(filter: { id: { eq: $teamId } }) {
                 nodes { projects { nodes { id name } } }
               }
@@ -623,7 +623,7 @@ class LinearClient:
             team_id = await self._team_id(team)
             data = await self._call(
                 """
-                query($teamId: String!) {
+                query($teamId: ID!) {
                   issueLabels(filter: { team: { id: { eq: $teamId } } }, first: 250) {
                     nodes { id name color isGroup parent { id name } }
                   }

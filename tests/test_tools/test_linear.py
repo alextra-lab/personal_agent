@@ -454,3 +454,33 @@ async def test_unknown_team_raises() -> None:
             mock_cls.return_value = _mock_http_client([data])
             with pytest.raises(ToolExecutionError, match="team.*not found"):
                 await create_linear_issue_executor(title="T", description="D")
+
+
+# ── GraphQL type annotation tests ─────────────────────────────────────────────
+
+
+def test_get_state_id_query_uses_id_type() -> None:
+    """_get_state_id must declare $teamId as ID! not String! (Linear schema requires ID)."""
+    import inspect
+
+    source = inspect.getsource(lm._get_state_id)
+    assert "$teamId: ID!" in source
+    assert "$teamId: String!" not in source
+
+
+def test_get_label_id_query_uses_id_type() -> None:
+    """_get_label_id must declare $teamId as ID! not String!."""
+    import inspect
+
+    source = inspect.getsource(lm._get_label_id)
+    assert "$teamId: ID!" in source
+    assert "$teamId: String!" not in source
+
+
+def test_get_project_id_query_uses_id_type() -> None:
+    """_get_project_id must declare $teamId as ID! not String!."""
+    import inspect
+
+    source = inspect.getsource(lm._get_project_id)
+    assert "$teamId: ID!" in source
+    assert "$teamId: String!" not in source

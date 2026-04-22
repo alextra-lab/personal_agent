@@ -7,6 +7,7 @@ or use ``status`` instead of ``state``. The Linear server returns a generic
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 # Strings commonly passed instead of the real Linear team name (e.g. FrenchForest).
@@ -19,6 +20,12 @@ _TEAM_NAME_ALIASES: frozenset[str] = frozenset(
     }
 )
 
+# UUID v4 pattern — LLMs sometimes pass the raw team UUID instead of the team name.
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
 
 def _should_replace_team(team: str) -> bool:
     key = team.strip().casefold()
@@ -27,7 +34,10 @@ def _should_replace_team(team: str) -> bool:
     if key in _TEAM_NAME_ALIASES:
         return True
     compact = key.replace(" ", "").replace("-", "").replace("_", "")
-    return compact == "personalagent"
+    if compact == "personalagent":
+        return True
+    # Raw UUID — the MCP save_issue tool expects a team *name*, not an ID.
+    return bool(_UUID_RE.match(team.strip()))
 
 
 def normalize_save_issue_arguments(

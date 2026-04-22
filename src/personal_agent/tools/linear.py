@@ -260,7 +260,7 @@ async def _get_state_id(team_id: str, state_name: str) -> str:
         return _state_id_cache[state_name]
     data = await _gql(
         """
-        query($teamId: String!) {
+        query($teamId: ID!) {
           workflowStates(filter: { team: { id: { eq: $teamId } } }) {
             nodes { id name }
           }
@@ -286,7 +286,7 @@ async def _get_label_id(team_id: str, label_name: str, *, auto_create_color: str
     if team_id not in _labels_fetched_for_teams:
         data = await _gql(
             """
-            query($teamId: String!) {
+            query($teamId: ID!) {
               issueLabels(filter: { team: { id: { eq: $teamId } } }) {
                 nodes { id name }
               }
@@ -322,7 +322,7 @@ async def _get_label_id(team_id: str, label_name: str, *, auto_create_color: str
 async def _get_project_id(team_id: str, project_name: str) -> str | None:
     data = await _gql(
         """
-        query($teamId: String!) {
+        query($teamId: ID!) {
           teams(filter: { id: { eq: $teamId } }) {
             nodes {
               projects { nodes { id name } }
@@ -556,7 +556,7 @@ async def list_linear_projects_executor(
     team_id = await _get_team_id(_TEAM_NAME)
     data = await _gql(
         """
-        query($teamId: String!) {
+        query($teamId: ID!) {
           teams(filter: { id: { eq: $teamId } }) {
             nodes {
               projects(first: 100) {

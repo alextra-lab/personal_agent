@@ -29,7 +29,7 @@ Linear is already the project's task management tool, accessible from any device
 - **States**: a workflow engine (Backlog → Todo → In Progress → Done / Canceled)
 - **Comments**: freeform Markdown the agent can read and write
 - **Audit trail**: every state/label change is timestamped
-- **Direct GraphQL API**: `LinearClient` calls `https://api.linear.app/graphql` directly via httpx and a Personal Access Token (`AGENT_LINEAR_API_KEY`). This replaced an earlier MCP-gateway wrapper (FRE-243) which was incompatible with VPS deployments lacking Docker Desktop's DCR OAuth socket.
+- **Direct GraphQL API**: `LinearClient` calls `https://api.linear.app/graphql` directly via httpx and a Personal Access Token (`AGENT_LINEAR_API_KEY`). This replaced an earlier MCP-gateway wrapper (FRE-243) which was incompatible with VPS deployments lacking Docker Desktop's DCR OAuth socket. Filter queries that pass a team UUID must declare `$teamId: ID!` (not `String!`) — the Linear schema's `IDComparator.eq` field expects `ID` type (FRE-255).
 
 Instead of building a custom approval UI, we can define a **structured feedback protocol** over Linear's existing primitives. The project owner triages proposals from their phone; the agent reads the feedback and responds.
 
@@ -301,6 +301,8 @@ Linear supports webhooks on the free tier. With the event bus consumer infrastru
 - `src/personal_agent/captains_log/promotion.py` — promotion pipeline
 - `src/personal_agent/captains_log/feedback.py` — feedback poller + handlers
 - `src/personal_agent/captains_log/linear_client.py` — typed Linear GraphQL client (direct httpx, no MCP dependency)
+- `src/personal_agent/tools/linear.py` — native Tier-1 `create_linear_issue` / `find_linear_issues` tool (FRE-224)
+- `src/personal_agent/mcp/linear_issue_args.py` — `save_issue` argument normalizer (handles team aliases and UUID team IDs)
 - `src/personal_agent/captains_log/suppression.py` — fingerprint suppression
 - `src/personal_agent/events/pipeline_handlers.py` — event bus consumer handlers
 - `src/personal_agent/brainstem/scheduler.py` — scheduler (polling job host)

@@ -65,3 +65,23 @@ def test_normalize_coerces_string_priority() -> None:
         default_team="FrenchForest",
     )
     assert out["priority"] == 2
+
+
+def test_normalize_replaces_uuid_team_with_default() -> None:
+    """LLM passes raw team UUID (e.g. from a previous get_issue call) — must replace with name."""
+    uuid_team = "e04acc02-94ee-4ab8-a2c8-a13f2b929655"
+    out = normalize_save_issue_arguments(
+        {"title": "T", "team": uuid_team, "description": "x"},
+        default_team="FrenchForest",
+    )
+    assert out["team"] == "FrenchForest"
+
+
+def test_normalize_replaces_uppercase_uuid_team() -> None:
+    """UUID matching is case-insensitive."""
+    uuid_team = "E04ACC02-94EE-4AB8-A2C8-A13F2B929655"
+    out = normalize_save_issue_arguments(
+        {"title": "T", "team": uuid_team},
+        default_team="FrenchForest",
+    )
+    assert out["team"] == "FrenchForest"

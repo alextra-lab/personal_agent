@@ -307,6 +307,33 @@ This mostly survives, but the semantics shift:
 The state machine gets *simpler* because the gateway absorbs the routing
 complexity that was previously tangled into the executor.
 
+### 2.5 Tool Loop Gate (TOOL_EXECUTION governance)
+
+Within the `TOOL_EXECUTION` state, every tool call passes through `ToolLoopGate` before
+execution and reports its output afterward. The gate is a per-request registry of
+per-tool finite state machines (`ToolFSM`) and detects three loop signals:
+
+| Signal | Trigger | Gate decision |
+|--------|---------|---------------|
+| **Call identity** | Same `(tool, args_hash)` called > `loop_max_per_signature` times | `BLOCK_IDENTITY` |
+| **Output identity** | Same `(tool, args_hash)` produced identical output ≥ 2 times | `BLOCK_OUTPUT` |
+| **Consecutiveness** | Same tool called N times in a row | `WARN_CONSECUTIVE` at N, `BLOCK_CONSECUTIVE` at N+1 |
+
+FSM states per tool: `IDLE → ACTIVE → WARNED → BLOCKED`.
+
+A `WARNED → ACTIVE` reset fires when a *different* tool runs between two calls to the
+warned tool — legitimate multi-tool workflows are not penalized.
+
+Per-tool thresholds (`loop_max_per_signature`, `loop_max_consecutive`,
+`loop_output_sensitive`) live in `config/governance/tools.yaml`. Polling tools
+(`run_sysdiag`, `self_telemetry_query`, `infra_health`) set
+`loop_output_sensitive: true` so the output-identity signal is skipped for tools whose
+output legitimately changes each call.
+
+Every gate decision emits a structured `tool_loop_gate` log event (Level 2 observability).
+
+**ADR**: ADR-0062 — Tool Loop Gate. **Module**: `orchestrator/loop_gate.py`.
+
 ---
 
 ## 3. The Pre-LLM Gateway

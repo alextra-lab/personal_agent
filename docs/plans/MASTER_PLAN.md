@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-22 (FRE-233: ADR-0053 gate monitoring + full feedback stream architecture; Hermes research integrated — FRE-251, FRE-252, FRE-226 updated)
+> **Last updated**: 2026-04-22 (ToolLoopGate: per-tool FSM loop detection implemented — ADR-0062; FRE-233: ADR-0053 gate monitoring + full feedback stream architecture; Hermes research integrated — FRE-251, FRE-252, FRE-226 updated)
 
 ---
 
@@ -73,6 +73,7 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 
 | Phase | Completed | Summary |
 |-------|-----------|---------|
+| ToolLoopGate — per-tool FSM loop detection (ADR-0062) | 2026-04-22 | Replaced global `tool_call_signatures` dedup with `ToolLoopGate`: per-request registry of per-tool FSMs. Three detection signals: (1) call identity — block after N identical (tool, args) calls; (2) output identity — block when same args produce same output ≥2 times (skippable for polling tools via `loop_output_sensitive: true`); (3) consecutiveness — WARN at N consecutive calls, BLOCK at N+1 with WARNED→ACTIVE reset when a different tool runs in between. `loop_max_per_signature`, `loop_max_consecutive`, `loop_output_sensitive` fields added to `ToolPolicy`. Per-tool overrides in `tools.yaml` for `run_sysdiag`, `self_telemetry_query`, `infra_health` (output-sensitive polling), `create_linear_issue`, `write_file` (strict). All gate decisions emit structured `tool_loop_gate` log events (Level 2 observability). 24 unit tests. |
 | Bug: event bus / second-brain pipeline not firing (FRE-239) | 2026-04-21 | Four fixes: (1) `seshat_captures_cloud` Docker volume added to `docker-compose.cloud.yml` — captures no longer wiped on container restart; (2) `BrainstemScheduler._trigger_consolidation` now only sets `last_consolidation` when `captures_processed > 0`, preventing an empty startup run from blocking consolidation for 1 hour; (3) `NoOpBus.publish` emits a `debug` log so silent discards are visible; (4) `app.py` lifespan logs `event_bus_ready` with registered consumer list on startup. |
 | Bug: cross-provider tool_use_id orphan (FRE-237) | 2026-04-21 | New `llm_client/history_sanitiser.py` — two-pass strip of orphaned `tool_result` / `tool_calls` entries before every dispatch (both `LocalLLMClient` and `LiteLLMClient`). Fixes Anthropic 400 on Qwen→Sonnet failover. Telemetry: `history_sanitised` event. Also fixed `.env` `AGENT_MCP_GATEWAY_COMMAND` JSON format. |
 | Seshat v2 Architecture (FRE-192: FRE-201–209) | 2026-04-14 | All 8 ADRs (0043–0050) implemented across 6 phases. FRE-201: Protocol definitions (KnowledgeGraphProtocol, SessionStoreProtocol, SearchIndexProtocol, etc.). FRE-202: Context observability (CompactionRecord, KnowledgeWeight, freshness scoring). FRE-203: SKILL.md docs (4 skill files). FRE-204: AG-UI transport (SSE streaming, 5 event types). FRE-205: Docker Compose cloud simulation (6-service topology). FRE-206: Seshat API Gateway (auth, rate limiting, knowledge/session/observation APIs, HTTP client). FRE-207: Execution profiles (local/cloud YAML, profile-aware TraceContext). FRE-208: MCP server + delegation adapters (ClaudeCode/Codex/GenericMCP adapters, 6 MCP tools). FRE-209: PWA scaffold (Next.js 14, AG-UI SSE streaming, HITL). 180+ new tests. |
@@ -113,6 +114,7 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 | 0056 | Error Pattern Monitoring Stream | Needs Approval (FRE-244 — blocked by 0054) |
 | 0055 | System Health & Homeostasis Stream | Needs Approval (FRE-246 — blocked by 0054) |
 | 0054 | Feedback Stream Bus Convention | Needs Approval (FRE-245 — **draft next**) |
+| 0062 | Tool Loop Gate — Per-Tool FSM-Based Loop Detection | Accepted (Implemented — 2026-04-22) |
 | 0053 | Deterministic Gate Feedback-Loop Monitoring Framework | Proposed (FRE-233 — awaiting acceptance) |
 | 0052 | Seshat Owner Identity Primitive | Proposed (Needs Approval) |
 | 0051 | Cloud Profile Orchestrator Dispatch via ContextVar | Accepted |

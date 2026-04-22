@@ -77,6 +77,15 @@ This directory contains Architecture Decision Records for the Personal Agent (Se
 | [ADR-0041](ADR-0041-event-bus-redis-streams.md) | Event Bus via Redis Streams | Accepted (Phases 1–3 Implemented) |
 | [ADR-0042](ADR-0042-knowledge-graph-freshness.md) | Knowledge Graph Freshness via Access Tracking | Accepted (Implemented) |
 
+### Orchestrator Governance (ADR-0051 – ADR-0053, ADR-0062)
+
+| ADR | Title | Status |
+|-----|-------|--------|
+| [ADR-0051](ADR-0051-cloud-profile-orchestrator-dispatch.md) | Cloud Profile Orchestrator Dispatch via ContextVar | Accepted (Implemented) |
+| [ADR-0052](ADR-0052-seshat-owner-identity-primitive.md) | Seshat Owner Identity Primitive | Proposed |
+| [ADR-0053](ADR-0053-gate-feedback-monitoring.md) | Deterministic Gate Feedback-Loop Monitoring Framework | Proposed |
+| [ADR-0062](ADR-0062-tool-loop-gate.md) | Tool Loop Gate — Per-Tool FSM-Based Loop Detection | Accepted (Implemented) |
+
 ### Seshat v2 Architecture (ADR-0043 – ADR-0050)
 
 These ADRs define the next architectural phase: three-layer separation, cloud infrastructure, multi-device UI, and external agent integration.

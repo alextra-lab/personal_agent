@@ -77,7 +77,15 @@ _TOOL_INTENT_PATTERNS: re.Pattern[str] = re.compile(
     r"(?:(?:search|find|look\s*up|grep|glob)\s+(?:for\s+)?)"
     r"|(?:(?:list|show|display)\s+(?:the\s+)?(?:tools?|files?|endpoints?))"
     r"|(?:(?:read|open|view)\s+(?:\w+\s+)*?(?:file|config|log|url|browser))"
-    r"|(?:run\s+(?:the\s+)?(?:command|script|test))",
+    r"|(?:run\s+(?:the\s+)?(?:command|script|test))"
+    # Explicit tool invocation
+    r"|(?:(?:call|use|invoke|execute|run)\s+(?:the\s+)?(?:\w+\s+)?tool)"
+    r"|(?:using\s+the\s+\w+\s+tool)"
+    # Health / status / diagnostics
+    r"|(?:health\s*check)"
+    r"|(?:(?:check|inspect|monitor|diagnose|report\s+on)\s+"
+    r"(?:the\s+)?(?:health|status|errors?|logs?|infra(?:structure)?|performance|services?))"
+    r"|(?:(?:run|do|perform)\s+(?:a\s+)?(?:health|status|diagnostic|infra)\s*(?:check|report|scan)?)",
 )
 
 _SELF_IMPROVE_PATTERNS: re.Pattern[str] = re.compile(

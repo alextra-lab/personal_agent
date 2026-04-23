@@ -29,6 +29,43 @@ log = structlog.get_logger(__name__)
 litellm.suppress_debug_info = True
 
 
+def _apply_anthropic_cache_control(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+) -> None:
+    """Attach Anthropic cache_control markers in-place for prompt caching.
+
+    Marks the system message and the last tool definition as cache breakpoints.
+    Anthropic caches the prefix up to the last marked block, so marking both
+    the static system prompt and the static tool list eliminates re-processing
+    of ~4,200 tokens on every turn after the first.
+
+    LiteLLM forwards cache_control blocks through to the Anthropic API
+    transparently when present in message content.
+
+    Args:
+        messages: api_messages list (modified in-place). Must be pre-sanitised.
+        tools: OpenAI-format tool definitions list, or None.
+    """
+    # Mark system message
+    if messages and messages[0].get("role") == "system":
+        sys_content = messages[0].get("content", "")
+        if isinstance(sys_content, str):
+            messages[0]["content"] = [
+                {"type": "text", "text": sys_content, "cache_control": {"type": "ephemeral"}}
+            ]
+        elif isinstance(sys_content, list) and sys_content:
+            last_block = sys_content[-1]
+            if isinstance(last_block, dict) and "cache_control" not in last_block:
+                last_block["cache_control"] = {"type": "ephemeral"}
+
+    # Mark last tool definition (caches the whole tool list prefix)
+    if tools:
+        last_tool = tools[-1]
+        if isinstance(last_tool, dict) and "cache_control" not in last_tool:
+            last_tool["cache_control"] = {"type": "ephemeral"}
+
+
 class LiteLLMClient:
     """Cloud LLM client backed by LiteLLM.
 
@@ -187,6 +224,19 @@ class LiteLLMClient:
         if max_retries is not None:
             litellm_kwargs["num_retries"] = max_retries
 
+        # Anthropic prompt caching — eliminates re-processing of static system prompt
+        # and tool list on every turn after the first (cache write: ~$0.30/MTok,
+        # cache hit: ~$0.03/MTok vs $3.00/MTok uncached).
+        if self.provider == "anthropic":
+            litellm_kwargs.setdefault("extra_headers", {})[
+                "anthropic-beta"
+            ] = "prompt-caching-2024-07-31"
+            _apply_anthropic_cache_control(
+                api_messages, litellm_kwargs.get("tools")
+            )
+            # Reflect updated messages (cache_control blocks mutated in-place)
+            litellm_kwargs["messages"] = api_messages
+
         start_time = time.monotonic()
         log.info(
             "litellm_request_start",
@@ -228,7 +278,7 @@ class LiteLLMClient:
                     )
                 )
 
-        # Usage
+        # Usage — extract base tokens plus provider-specific cache fields
         usage: dict[str, Any] = {}
         if response.usage:
             usage = {
@@ -236,6 +286,25 @@ class LiteLLMClient:
                 "completion_tokens": response.usage.completion_tokens,
                 "total_tokens": response.usage.total_tokens,
             }
+
+            # Anthropic: explicit cache_control headers → cache_creation / cache_read fields
+            cache_read = getattr(response.usage, "cache_read_input_tokens", None)
+            cache_write = getattr(response.usage, "cache_creation_input_tokens", None)
+            if cache_read is not None:
+                usage["cache_read_input_tokens"] = cache_read
+            if cache_write is not None:
+                usage["cache_creation_input_tokens"] = cache_write
+
+            # OpenAI: automatic server-side caching → prompt_tokens_details.cached_tokens
+            # (gpt-4o, gpt-4o-mini, o1, and newer models; no client headers needed)
+            prompt_details = getattr(response.usage, "prompt_tokens_details", None)
+            if prompt_details is not None:
+                openai_cached = getattr(prompt_details, "cached_tokens", None)
+                if openai_cached is not None and openai_cached > 0:
+                    # Use the same field so the log line is uniform across providers
+                    usage["cache_read_input_tokens"] = (
+                        usage.get("cache_read_input_tokens", 0) + openai_cached
+                    )
 
         # Cost tracking — use litellm.completion_cost(), record to DB
         try:
@@ -265,8 +334,11 @@ class LiteLLMClient:
             role=role.value,
             elapsed_s=round(elapsed, 2),
             tokens=usage.get("total_tokens"),
+            prompt_tokens=usage.get("prompt_tokens"),
             cost_usd=round(cost, 6) if cost else None,
             tool_calls=len(tool_calls),
+            cache_read_tokens=usage.get("cache_read_input_tokens"),
+            cache_write_tokens=usage.get("cache_creation_input_tokens"),
         )
 
         await cost_tracker.disconnect()

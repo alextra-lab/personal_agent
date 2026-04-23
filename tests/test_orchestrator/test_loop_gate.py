@@ -36,7 +36,7 @@ def test_tool_loop_policy_defaults():
     """ToolLoopPolicy default thresholds match the documented spec values."""
     p = ToolLoopPolicy()
     assert p.loop_max_per_signature == 1
-    assert p.loop_max_consecutive == 3
+    assert p.loop_max_consecutive == 2  # tightened from 3 to align with ≤6 step budget (FRE-254)
     assert p.loop_output_sensitive is False
 
 
@@ -88,7 +88,8 @@ def test_second_call_same_args_blocked_when_max_is_one():
 def test_different_args_not_blocked_by_identity():
     """Gate allows different args for the same tool."""
     gate = ToolLoopGate()
-    policy = ToolLoopPolicy(loop_max_per_signature=1)
+    # Use high consecutive limit so only identity blocking is tested here.
+    policy = ToolLoopPolicy(loop_max_per_signature=1, loop_max_consecutive=10)
     gate.check_before("web_search", "hash_abc", policy)
     result = gate.check_before("web_search", "hash_xyz", policy)
     assert result.decision == GateDecision.ALLOW
@@ -97,7 +98,8 @@ def test_different_args_not_blocked_by_identity():
 def test_identity_respects_per_tool_max():
     """Gate respects loop_max_per_signature > 1."""
     gate = ToolLoopGate()
-    policy = ToolLoopPolicy(loop_max_per_signature=2)
+    # Use high consecutive limit so only identity blocking is tested here.
+    policy = ToolLoopPolicy(loop_max_per_signature=2, loop_max_consecutive=10)
     gate.check_before("run_sysdiag", "hash_same", policy)
     result2 = gate.check_before("run_sysdiag", "hash_same", policy)
     assert result2.decision == GateDecision.ALLOW  # second call within limit
@@ -248,7 +250,9 @@ def test_output_sensitive_still_records_for_telemetry():
 def test_full_request_scenario_self_telemetry():
     """Simulates self_telemetry_query: max=2, output_sensitive=True; third call blocks by identity."""
     gate = ToolLoopGate()
-    policy = ToolLoopPolicy(loop_max_per_signature=2, loop_output_sensitive=True)
+    # Use loop_max_consecutive=10 so consecutive blocking doesn't interfere with
+    # the identity-blocking assertion (the test's purpose is to verify max_per_signature=2).
+    policy = ToolLoopPolicy(loop_max_per_signature=2, loop_output_sensitive=True, loop_max_consecutive=10)
     args_hash = stable_hash({"query_type": "health"})
 
     r1 = gate.check_before("self_telemetry_query", args_hash, policy)

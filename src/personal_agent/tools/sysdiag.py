@@ -77,41 +77,15 @@ _ALLOW_LIST: dict[str, str] = {
 _ALLOWED_NAMES = ", ".join(sorted(_ALLOW_LIST))
 
 def _build_description() -> str:
-    base = (
+    top_hint = "top -l 1 -n 20" if _IS_DARWIN else "top -b -n 1 -o %CPU"
+    return (
         "Run a read-only system diagnostic command on the host machine. "
         "Returns stdout, stderr, and exit code. "
-        f"Allowed commands:\n  {_ALLOWED_NAMES}\n\n"
-        "Common usage patterns:\n"
-        "- Process list (all): ps aux\n"
-        "- Process search by name: pgrep -lf python\n"
-        "- Port listeners: lsof -i :9000\n"
-        "- Open files by process: lsof -p <pid>\n"
-        "- Disk usage: df -h\n"
-        "- Directory size: du -sh /path/to/dir\n"
-        "- File search: find /var/log -name '*.log' -mtime -1\n"
+        f"Allowed commands: {_ALLOWED_NAMES}. "
+        "Key patterns: process list (ps aux), port listeners (lsof -i :9000), "
+        f"disk usage (df -h), memory overview (free -h or vmstat), "
+        f"top processes ({top_hint})."
     )
-    if _IS_DARWIN:
-        return base + (
-            "- I/O stats: iostat -d 1 3\n"
-            "- Memory stats: vm_stat\n"
-            "- Network interfaces: ifconfig\n"
-            "- Network connections: netstat -an\n"
-            "- Kernel params: sysctl kern.maxfiles\n"
-            "- macOS version: sw_vers\n"
-            "- Disk list: diskutil list\n"
-            "Note: 'top' requires non-interactive flags on macOS: top -l 1 -n 20"
-        )
-    else:
-        return base + (
-            "- I/O stats: iostat -xz 1 3\n"
-            "- Virtual memory / swap: vmstat 1 3\n"
-            "- Memory overview: free -h\n"
-            "- Network sockets/listeners: ss -tlnp\n"
-            "- Network interfaces: ip addr\n"
-            "- Kernel params: sysctl vm.swappiness\n"
-            "- System info: uname -a\n"
-            "Note: 'top' requires batch mode on Linux: top -b -n 1 -o %CPU"
-        )
 
 
 run_sysdiag_tool = ToolDefinition(

@@ -5,6 +5,7 @@ and their executor functions, allowing tools to be registered, discovered,
 and filtered by operational mode.
 """
 
+from collections.abc import Sequence
 from typing import Any, Callable
 
 from personal_agent.governance.models import Mode
@@ -96,16 +97,27 @@ class ToolRegistry:
         """
         return list(self._tools.keys())
 
-    def get_tool_definitions_for_llm(self, mode: Mode | None = None) -> list[dict[str, Any]]:
+    def get_tool_definitions_for_llm(
+        self,
+        mode: Mode | None = None,
+        allowed_categories: Sequence[str] | None = None,
+    ) -> list[dict[str, Any]]:
         """Get tool definitions in OpenAI function calling format.
 
         Args:
             mode: Operational mode to filter by. If None, returns all tools.
+            allowed_categories: When not None, only tools whose category is in
+                this list are included. An empty list returns no tools (the
+                caller should omit the tools payload entirely in that case).
+                None means no category restriction (mode filter only).
 
         Returns:
             List of tool definitions in OpenAI format (for function calling).
         """
         tools = self.list_tools(mode=mode)
+        if allowed_categories is not None:
+            allowed_set = set(allowed_categories)
+            tools = [t for t in tools if (t.category or "") in allowed_set]
         result = []
         for tool_def in tools:
             # Build properties dict, using full JSON schema for complex types

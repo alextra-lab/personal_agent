@@ -109,14 +109,14 @@ class TestPromptConstants:
         assert len(TOOL_USE_SYSTEM_PROMPT) <= baselines["tool_use_system_prompt_max_chars"]
 
     def test_tool_use_prompt_contains_perplexity_guidance(self) -> None:
-        """Tool-use prompt must reference web_search as primary and mcp_perplexity_ask as fallback.
+        """Tool-use prompt must reference web_search as primary and perplexity_query as fallback.
 
-        ADR-0034: mcp_perplexity_research is no longer referenced in the default guidance;
-        web_search (SearXNG) is the primary search tool, mcp_perplexity_ask is the fallback
+        ADR-0034 + FRE-254: mcp_perplexity_ask replaced by native perplexity_query tool.
+        web_search (SearXNG) is the primary search tool, perplexity_query is the fallback
         for synthesized answers with citations.
         """
         assert "web_search" in TOOL_USE_SYSTEM_PROMPT
-        assert "mcp_perplexity_ask" in TOOL_USE_SYSTEM_PROMPT
+        assert "perplexity_query" in TOOL_USE_SYSTEM_PROMPT
 
     def test_get_router_prompt_returns_router_system_prompt(self) -> None:
         """get_router_prompt() must return the ROUTER_SYSTEM_PROMPT constant."""
@@ -359,7 +359,7 @@ class TestToolPromptAssembly:
         primary_call = mock_client.respond.call_args_list[0]
         system_prompt = primary_call.kwargs.get("system_prompt") or ""
         assert TOOL_USE_SYSTEM_PROMPT in system_prompt
-        assert "mcp_perplexity_ask" in system_prompt
+        assert "perplexity_query" in system_prompt  # native tool (FRE-254; mcp_perplexity_ask removed)
 
     @patch("personal_agent.llm_client.factory.get_llm_client")
     async def test_assembled_tool_prompt_within_baseline(

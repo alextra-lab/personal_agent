@@ -126,6 +126,22 @@ class AppConfig(BaseSettings):
         ge=0,
         description="Maximum times the same tool call signature can repeat per request",
     )
+    orchestrator_max_tool_iterations_by_task_type: dict[str, int] = Field(
+        default_factory=lambda: {
+            "conversational": 6,
+            "memory_recall": 8,
+            "analysis": 25,
+            "planning": 25,
+            "tool_use": 25,
+            "delegation": 25,
+            "self_improve": 25,
+        },
+        description=(
+            "Per-TaskType cap on tool iterations. Intersected with "
+            "orchestrator_max_tool_iterations (whichever is lower wins). "
+            "TaskTypes not listed fall back to orchestrator_max_tool_iterations."
+        ),
+    )
 
     # Routing (router speed and single-model mode)
     routing_policy: str = Field(

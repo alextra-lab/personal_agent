@@ -104,28 +104,11 @@ self_telemetry_query_tool = ToolDefinition(
     name="self_telemetry_query",
     description=(
         "Query this agent's operational health and telemetry. "
-        "Use to inspect execution traces, analyze performance, find errors, or review recent interactions. "
-        "\n\nquery_type options (choose one):\n"
-        "- 'health': Overall operational status (success rate, component health, alerts). "
-        "Default window=1h. Example: 'How are you?', 'Any errors recently?', 'Am I getting slower?'\n"
-        "- 'errors': Error analysis grouped by type and component with trend detection. "
-        "Default window=24h. Example: 'Show me failures this week', 'Errors in the last 5 interactions'\n"
-        "- 'interactions': Recent interaction history from Captain's Log. "
-        "Default last_n=10. Example: 'What have you been working on?'\n"
-        "- 'performance': Latency percentiles (p50/p75/p90/p95), throughput (interactions/hour), "
-        "breakdown by outcome (completed vs failed), top tools by usage, bottleneck identification. "
-        "Default window=24h. Example: 'Am I getting slower?', 'Show performance this week'\n"
-        "- 'events': Raw event query (filter by event/component/time). "
-        "Use 'model_call_error' or 'task_failed' to find recent errors. Default limit=20.\n"
-        "- 'trace': Reconstruct one trace by trace_id. Required for 'latency' queries too.\n"
-        "- 'latency': Phase breakdown (duration_ms) for one trace. Requires trace_id.\n"
-        "\nTime window formats:\n"
-        "- Relative: '1h', '30m', '2d', '45s' (hours, minutes, days, seconds)\n"
-        "- Named: 'today' (start of day), 'yesterday' (previous day), 'this_week' (Monday start)\n"
-        "\nScoping:\n"
-        "- Use 'window' for time-based queries (all types except 'interactions')\n"
-        "- Use 'last_n' for interaction-count scoping (health, errors, interactions, performance)\n"
-        "- 'window' and 'last_n' are mutually exclusive"
+        "query_type: health (status/alerts, window=1h), errors (grouped failures, window=24h), "
+        "interactions (recent history, last_n=10), performance (latency percentiles/throughput, window=24h), "
+        "events (raw event filter, limit=20), trace (reconstruct by trace_id), latency (phase breakdown by trace_id). "
+        "Time windows: relative '1h'/'30m'/'2d', or named 'today'/'yesterday'/'this_week'. "
+        "Scoping: use window= for time-based; last_n= for count-based (mutually exclusive)."
     ),
     category="read_only",
     parameters=[

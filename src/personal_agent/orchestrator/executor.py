@@ -4,6 +4,7 @@ This module implements the core orchestrator state machine with step functions.
 The executor coordinates task execution through explicit state transitions.
 """
 
+import asyncio
 import json
 import time
 from copy import deepcopy
@@ -88,6 +89,22 @@ def _get_tool_loop_policy(tool_name: str) -> ToolLoopPolicy:
         )
     except Exception:  # noqa: BLE001
         return ToolLoopPolicy()
+
+
+def _resolve_max_iterations(ctx: "ExecutionContext") -> int:
+    """Return the effective max-tool-iterations ceiling for this request.
+
+    Uses the per-TaskType limit from settings when the gateway classified a
+    task type, falling back to the global orchestrator_max_tool_iterations.
+    Always respects the global ceiling as a hard upper bound.
+    """
+    global_max = settings.orchestrator_max_tool_iterations
+    if ctx.gateway_output is not None:
+        task_type_val = ctx.gateway_output.intent.task_type.value
+        by_type = settings.orchestrator_max_tool_iterations_by_task_type
+        if task_type_val in by_type:
+            return min(by_type[task_type_val], global_max)
+    return global_max
 
 
 def _gate_blocked_result(
@@ -1302,16 +1319,17 @@ async def step_llm_call(
             )
             log.info("force_synthesis_injected", trace_id=ctx.trace_id, iteration=ctx.tool_iteration_count)
 
-        # Budget warning: when 3 calls from the limit, ask the LLM to begin wrapping up
+        # Budget warning: when 2 calls from the per-TaskType limit, ask the LLM to wrap up
         elif (
             not is_synthesizing
-            and ctx.tool_iteration_count >= settings.orchestrator_max_tool_iterations - 2
+            and ctx.tool_iteration_count >= _resolve_max_iterations(ctx) - 2
         ):
+            _effective_max = _resolve_max_iterations(ctx)
             ctx.messages.append(
                 {
                     "role": "user",
                     "content": (
-                        f"⚠️ Tool budget: {settings.orchestrator_max_tool_iterations - ctx.tool_iteration_count} "
+                        f"⚠️ Tool budget: {_effective_max - ctx.tool_iteration_count} "
                         "tool call(s) remaining. Prioritize synthesis — only make additional tool calls "
                         "if they are strictly necessary to answer the user's question."
                     ),
@@ -1320,7 +1338,7 @@ async def step_llm_call(
             log.info(
                 "tool_budget_warning_injected",
                 trace_id=ctx.trace_id,
-                remaining=settings.orchestrator_max_tool_iterations - ctx.tool_iteration_count,
+                remaining=_effective_max - ctx.tool_iteration_count,
             )
 
         if not is_synthesizing and tool_strategy != ToolCallingStrategy.DISABLED:
@@ -1328,11 +1346,33 @@ async def step_llm_call(
             global _tool_registry
             if _tool_registry is None:
                 _tool_registry = get_default_registry()
-            tool_defs = _tool_registry.get_tool_definitions_for_llm(mode=ctx.mode)
+
+            # Derive per-TaskType category filter from the gateway governance output.
+            # When allowed_categories is [] (e.g. conversational intent), no tools are
+            # sent — the caller must not pass tools=[] to providers that reject that.
+            _allowed_cats: list[str] | None = None
+            if ctx.gateway_output is not None:
+                _allowed_cats = ctx.gateway_output.governance.allowed_tool_categories
+            tool_defs = _tool_registry.get_tool_definitions_for_llm(
+                mode=ctx.mode, allowed_categories=_allowed_cats
+            )
+
+            # Empty tool list means the TaskType policy allows no tools — omit entirely.
+            if not tool_defs:
+                log.debug(
+                    "tools_suppressed_by_task_type",
+                    trace_id=ctx.trace_id,
+                    task_type=(
+                        ctx.gateway_output.intent.task_type.value
+                        if ctx.gateway_output else "unknown"
+                    ),
+                    allowed_categories=_allowed_cats,
+                )
+                is_synthesizing = True  # treat as no-tools path for prompt assembly
 
             if tool_strategy == ToolCallingStrategy.NATIVE:
                 # Pass tools in the API request — model uses native function calling
-                tools = tool_defs
+                tools = tool_defs if tool_defs else None
             elif tool_strategy == ToolCallingStrategy.PROMPT_INJECTED:
                 # Render tools as text for the system prompt instead of the API parameter.
                 # The model's chat template doesn't support the tools array.
@@ -1664,6 +1704,121 @@ async def step_llm_call(
         return TaskState.FAILED
 
 
+async def _dispatch_tool_call(
+    tool_call_id: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+    args_hash: str,
+    gate_result: "GateResult",
+    loop_policy: "ToolLoopPolicy",
+    tool_layer: "ToolExecutionLayer",
+    ctx: "ExecutionContext",
+    trace_ctx: "TraceContext",
+) -> dict[str, Any]:
+    """Execute one validated, gate-allowed tool call and return its result payload.
+
+    This coroutine is the Phase-2 body for the asyncio.gather dispatch in
+    step_tool_execution. It handles param validation, tool execution, and error
+    formatting, but does NOT mutate ctx or the loop gate — those mutations happen
+    sequentially in Phase 3 to preserve gate-FSM and ordering invariants.
+
+    Returns a plain dict with keys:
+        tool_call_id, tool_name, content, success, latency_ms,
+        output_hash (None on error), gate_result, args_hash, loop_policy,
+        tool_layer_output, tool_layer_error
+    """
+    # Validate required parameters
+    global _tool_registry
+    if _tool_registry is None:
+        _tool_registry = get_default_registry()
+    tool_info = _tool_registry.get_tool(tool_name)
+    if tool_info:
+        tool_def, _ = tool_info
+        required_params = [p.name for p in tool_def.parameters if p.required]
+        missing_params = [p for p in required_params if p not in arguments or arguments[p] is None]
+        if missing_params:
+            log.warning(
+                "tool_call_missing_required_params",
+                trace_id=ctx.trace_id,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                missing_params=missing_params,
+                required_params=required_params,
+            )
+            return {
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "content": json.dumps({
+                    "status": "retry",
+                    "hint": f"Missing required params: {', '.join(missing_params)}. Retry with these included.",
+                }),
+                "success": False,
+                "latency_ms": 0,
+                "output_hash": None,
+                "gate_result": gate_result,
+                "args_hash": args_hash,
+                "loop_policy": loop_policy,
+                "tool_layer_output": None,
+                "tool_layer_error": "missing_required_params",
+            }
+
+    # Execute tool
+    try:
+        result = await tool_layer.execute_tool(tool_name, arguments, trace_ctx)
+
+        if result.success:
+            content = (
+                json.dumps(result.output)
+                if isinstance(result.output, dict)
+                else str(result.output)
+            )
+            output_hash: str | None = stable_hash(result.output)
+        else:
+            short_error = (result.error or "execution failed")[:150]
+            content = json.dumps({"status": "error", "hint": f"{tool_name}: {short_error}"})
+            output_hash = None
+
+        return {
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+            "content": content,
+            "success": result.success,
+            "latency_ms": result.latency_ms,
+            "output_hash": output_hash,
+            "gate_result": gate_result,
+            "args_hash": args_hash,
+            "loop_policy": loop_policy,
+            "tool_layer_output": result.output,
+            "tool_layer_error": result.error,
+        }
+
+    except Exception as e:
+        log.error(
+            "tool_execution_exception",
+            trace_id=ctx.trace_id,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            error=str(e),
+            exc_info=True,
+        )
+        return {
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+            "content": json.dumps({
+                "status": "error",
+                "hint": f"{tool_name} failed to execute. Try a different approach or tool.",
+            }),
+            "success": False,
+            "latency_ms": 0,
+            "output_hash": None,
+            "gate_result": gate_result,
+            "args_hash": args_hash,
+            "loop_policy": loop_policy,
+            "tool_layer_output": None,
+            "tool_layer_error": str(e),
+        }
+
+
 async def step_tool_execution(
     ctx: ExecutionContext, session_manager: SessionManager, trace_ctx: TraceContext
 ) -> TaskState:
@@ -1694,7 +1849,8 @@ async def step_tool_execution(
 
     # Loop governance: prevent infinite tool execution cycles
     ctx.tool_iteration_count += 1
-    if ctx.tool_iteration_count > settings.orchestrator_max_tool_iterations:
+    _max_iters = _resolve_max_iterations(ctx)
+    if ctx.tool_iteration_count > _max_iters:
         if timer and tool_span_name:
             timer.end_span(
                 tool_span_name,
@@ -1705,7 +1861,7 @@ async def step_tool_execution(
             "tool_iteration_limit_reached",
             trace_id=ctx.trace_id,
             iteration=ctx.tool_iteration_count,
-            max_iterations=settings.orchestrator_max_tool_iterations,
+            max_iterations=_max_iters,
         )
         ctx.steps.append(
             {
@@ -1713,7 +1869,7 @@ async def step_tool_execution(
                 "description": "Tool loop limit reached; forcing LLM synthesis pass",
                 "metadata": {
                     "iteration": ctx.tool_iteration_count,
-                    "max_iterations": settings.orchestrator_max_tool_iterations,
+                    "max_iterations": _max_iters,
                 },
             }
         )
@@ -1772,8 +1928,12 @@ async def step_tool_execution(
         tool_count=len(tool_calls),
     )
 
-    # Execute each tool call
-    tool_results: list[dict[str, Any]] = []
+    # ── Phase 1: Sequential gate check ────────────────────────────────────────
+    # Gate FSM mutations must be sequential so call-count and consecutive-count
+    # thresholds are correct before any I/O is dispatched (ADR-0062).
+    tool_results: list[dict[str, Any]] = []     # blocked + error results (immediate)
+    allowed_plans: list[dict[str, Any]] = []    # tool calls cleared for async dispatch
+
     for tool_call in tool_calls:
         tool_call_id = tool_call.get("id", "")
         function_info = tool_call.get("function", {})
@@ -1781,11 +1941,7 @@ async def step_tool_execution(
         arguments_str = function_info.get("arguments", "{}")
 
         if not tool_name:
-            log.warning(
-                "tool_call_missing_name",
-                trace_id=ctx.trace_id,
-                tool_call_id=tool_call_id,
-            )
+            log.warning("tool_call_missing_name", trace_id=ctx.trace_id, tool_call_id=tool_call_id)
             continue
 
         # Parse arguments JSON
@@ -1794,183 +1950,150 @@ async def step_tool_execution(
         except json.JSONDecodeError as e:
             log.error(
                 "tool_call_invalid_arguments",
-                trace_id=ctx.trace_id,
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-                error=str(e),
+                trace_id=ctx.trace_id, tool_name=tool_name,
+                tool_call_id=tool_call_id, error=str(e),
             )
             # Concise, neutral error — avoids poisoning the model's confidence
             # in tool use on subsequent turns (ADR-0032 §3.1).
-            tool_results.append(
-                {
-                    "tool_call_id": tool_call_id,
-                    "role": "tool",
-                    "name": tool_name,
-                    "content": json.dumps(
-                        {
-                            "status": "retry",
-                            "hint": f"Arguments for {tool_name} were malformed JSON. Retry with valid JSON.",
-                        }
-                    ),
-                }
-            )
+            tool_results.append({
+                "tool_call_id": tool_call_id, "role": "tool", "name": tool_name,
+                "content": json.dumps({
+                    "status": "retry",
+                    "hint": f"Arguments for {tool_name} were malformed JSON. Retry with valid JSON.",
+                }),
+            })
             continue
 
-        # Loop gate: pre-execution check
+        # Gate pre-check (sequential — FSM state mutations happen here)
         args_hash = stable_hash(arguments)
         loop_policy = _get_tool_loop_policy(tool_name)
         gate_result = ctx.loop_gate.check_before(tool_name, args_hash, loop_policy)
         log.info(
             "tool_loop_gate",
             trace_id=ctx.trace_id,
-            decision=gate_result.decision.value,
-            tool_name=gate_result.tool_name,
-            state_before=gate_result.state_before.value,
-            state_after=gate_result.state_after.value,
-            reason=gate_result.reason,
-            consecutive_count=gate_result.consecutive_count,
+            decision=gate_result.decision.value, tool_name=gate_result.tool_name,
+            state_before=gate_result.state_before.value, state_after=gate_result.state_after.value,
+            reason=gate_result.reason, consecutive_count=gate_result.consecutive_count,
             total_calls=gate_result.total_calls,
         )
         if gate_result.decision in (
-            GateDecision.BLOCK_IDENTITY,
-            GateDecision.BLOCK_OUTPUT,
-            GateDecision.BLOCK_CONSECUTIVE,
+            GateDecision.BLOCK_IDENTITY, GateDecision.BLOCK_OUTPUT, GateDecision.BLOCK_CONSECUTIVE,
         ):
             tool_results.append(_gate_blocked_result(tool_call_id, tool_name, gate_result))
             continue
 
-        # Validate required parameters before execution
-        global _tool_registry
-        if _tool_registry is None:
-            _tool_registry = get_default_registry()
-        tool_info = _tool_registry.get_tool(tool_name)
-        if tool_info:
-            tool_def, _ = tool_info
-            required_params = [p.name for p in tool_def.parameters if p.required]
-            missing_params = [
-                p for p in required_params if p not in arguments or arguments[p] is None
-            ]
-            if missing_params:
-                log.warning(
-                    "tool_call_missing_required_params",
-                    trace_id=ctx.trace_id,
-                    tool_name=tool_name,
-                    tool_call_id=tool_call_id,
-                    missing_params=missing_params,
-                    required_params=required_params,
-                )
-                # Concise hint — full param descriptions stay in logs only (ADR-0032 §3.1)
-                tool_results.append(
-                    {
-                        "tool_call_id": tool_call_id,
-                        "role": "tool",
-                        "name": tool_name,
-                        "content": json.dumps(
-                            {
-                                "status": "retry",
-                                "hint": f"Missing required params: {', '.join(missing_params)}. Retry with these included.",
-                            }
-                        ),
-                    }
-                )
-                continue
+        allowed_plans.append({
+            "tool_call_id": tool_call_id, "tool_name": tool_name,
+            "arguments": arguments, "args_hash": args_hash,
+            "loop_policy": loop_policy, "gate_result": gate_result,
+        })
 
-        # Execute tool
-        try:
-            result = await tool_layer.execute_tool(tool_name, arguments, trace_ctx)
-
-            # Store result in tool_results list
-            ctx.tool_results.append(
-                {
-                    "tool_name": tool_name,
-                    "success": result.success,
-                    "output": result.output,
-                    "error": result.error,
-                    "latency_ms": result.latency_ms,
-                }
+    # ── Phase 2: Parallel async dispatch ──────────────────────────────────────
+    # I/O-bound tool executions (network, ES, Neo4j) run concurrently; the gate
+    # FSM has already been updated sequentially in Phase 1.
+    _phase2_start = time.time()
+    raw_dispatch: list[Any] = []
+    if allowed_plans:
+        raw_dispatch = list(
+            await asyncio.gather(
+                *[
+                    _dispatch_tool_call(
+                        p["tool_call_id"], p["tool_name"], p["arguments"],
+                        p["args_hash"], p["gate_result"], p["loop_policy"],
+                        tool_layer, ctx, trace_ctx,
+                    )
+                    for p in allowed_plans
+                ],
+                return_exceptions=True,
             )
+        )
 
-            # Format result for LLM (OpenAI format)
-            if result.success:
-                content = (
-                    json.dumps(result.output)
-                    if isinstance(result.output, dict)
-                    else str(result.output)
-                )
-            else:
-                # Concise error — full details logged by ToolExecutionLayer (ADR-0032 §3.1)
-                short_error = (result.error or "execution failed")[:150]
-                content = json.dumps(
-                    {
-                        "status": "error",
-                        "hint": f"{tool_name}: {short_error}",
-                    }
-                )
+    # ── Phase 3: Sequential record + result assembly ───────────────────────────
+    # gate.record_output and ctx mutations are sequential to preserve gate-FSM
+    # invariants and ordering guarantees. Results are appended in allowed_plans order.
+    _total_serial_ms = 0
+    _max_dispatch_ms = 0
+    for i, raw in enumerate(raw_dispatch):
+        plan = allowed_plans[i]
 
-            # Loop gate: record output for output-identity detection (success only —
-            # error strings are not meaningful signals and would poison the history)
-            if result.success:
-                output_hash = stable_hash(result.output)
-                ctx.loop_gate.record_output(tool_name, args_hash, output_hash, loop_policy)
-
-            # Inject gate warning into result content if consecutive threshold just hit
-            if gate_result.decision == GateDecision.WARN_CONSECUTIVE:
-                try:
-                    parsed = json.loads(content)
-                    if isinstance(parsed, dict):
-                        parsed["_gate_warning"] = (
-                            f"{tool_name} called {gate_result.consecutive_count} times "
-                            f"consecutively. Consider synthesizing from gathered results."
-                        )
-                        content = json.dumps(parsed)
-                except (json.JSONDecodeError, TypeError):
-                    pass
-
-            tool_results.append(
-                {
-                    "tool_call_id": tool_call_id,
-                    "role": "tool",
-                    "name": tool_name,
-                    "content": content,
-                }
-            )
-
-            # Record step
-            step: OrchestratorStep = {
-                "type": "tool_call",
-                "description": f"Executed tool: {tool_name}",
-                "metadata": {
-                    "tool_name": tool_name,
-                    "tool_call_id": tool_call_id,
-                    "success": result.success,
-                    "latency_ms": result.latency_ms,
-                },
-            }
-            ctx.steps.append(step)
-
-        except Exception as e:
+        if isinstance(raw, BaseException):
+            # Unexpected exception escaped _dispatch_tool_call's internal handler
             log.error(
-                "tool_execution_exception",
-                trace_id=ctx.trace_id,
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-                error=str(e),
-                exc_info=True,
+                "tool_dispatch_unexpected_exception",
+                trace_id=ctx.trace_id, tool_name=plan["tool_name"], error=str(raw),
             )
-            # Concise neutral hint — full traceback stays in logs only (ADR-0032 §3.1)
-            tool_results.append(
-                {
-                    "tool_call_id": tool_call_id,
-                    "role": "tool",
-                    "name": tool_name,
-                    "content": json.dumps(
-                        {
-                            "status": "error",
-                            "hint": f"{tool_name} failed to execute. Try a different approach or tool.",
-                        }
-                    ),
-                }
+            tool_results.append({
+                "tool_call_id": plan["tool_call_id"], "role": "tool",
+                "name": plan["tool_name"],
+                "content": json.dumps({
+                    "status": "error",
+                    "hint": f"{plan['tool_name']} failed to execute. Try a different approach or tool.",
+                }),
+            })
+            continue
+
+        dr: dict[str, Any] = raw
+
+        # Gate: record output for output-identity detection (success only)
+        if dr["success"] and dr["output_hash"] is not None:
+            ctx.loop_gate.record_output(
+                dr["tool_name"], dr["args_hash"], dr["output_hash"], dr["loop_policy"]
             )
+
+        content: str = dr["content"]
+
+        # Inject gate warning into content if consecutive threshold just hit
+        if dr["gate_result"].decision == GateDecision.WARN_CONSECUTIVE:
+            try:
+                parsed = json.loads(content)
+                if isinstance(parsed, dict):
+                    parsed["_gate_warning"] = (
+                        f"{dr['tool_name']} called {dr['gate_result'].consecutive_count} times "
+                        "consecutively. Consider synthesizing from gathered results."
+                    )
+                    content = json.dumps(parsed)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Persist in ctx.tool_results and ctx.steps (sequential — shared state)
+        ctx.tool_results.append({
+            "tool_name": dr["tool_name"],
+            "success": dr["success"],
+            "output": dr["tool_layer_output"],
+            "error": dr["tool_layer_error"],
+            "latency_ms": dr["latency_ms"],
+        })
+        ctx.steps.append({
+            "type": "tool_call",
+            "description": f"Executed tool: {dr['tool_name']}",
+            "metadata": {
+                "tool_name": dr["tool_name"],
+                "tool_call_id": dr["tool_call_id"],
+                "success": dr["success"],
+                "latency_ms": dr["latency_ms"],
+            },
+        })
+
+        _total_serial_ms += dr["latency_ms"]
+        _max_dispatch_ms = max(_max_dispatch_ms, dr["latency_ms"])
+
+        tool_results.append({
+            "tool_call_id": dr["tool_call_id"], "role": "tool",
+            "name": dr["tool_name"], "content": content,
+        })
+
+    # Emit parallel-dispatch telemetry for Kibana efficiency tracking
+    if allowed_plans:
+        _actual_wall_ms = int((time.time() - _phase2_start) * 1000)
+        log.info(
+            "tools_dispatched_parallel",
+            trace_id=ctx.trace_id,
+            count=len(allowed_plans),
+            blocked_count=len(tool_calls) - len(allowed_plans),
+            max_latency_ms=_max_dispatch_ms,
+            total_serial_equivalent_ms=_total_serial_ms,
+            actual_wall_ms=_actual_wall_ms,
+        )
 
     # Append all tool results to messages
     ctx.messages.extend(tool_results)

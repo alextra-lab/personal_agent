@@ -491,7 +491,9 @@ def build_chat_completions_request(
     if response_format is not None:
         payload["response_format"] = response_format
 
-    # Build extra_body for non-standard extensions (top_k, thinking control)
+    # Build extra_body for non-standard extensions (top_k, thinking control).
+    # Kept nested under extra_body — llama-server processes these via its own
+    # JSON parsing path; moving them top-level changes template dispatch behaviour.
     extra_body: dict[str, Any] = {}
 
     if top_k is not None:
@@ -504,5 +506,9 @@ def build_chat_completions_request(
 
     if extra_body:
         payload["extra_body"] = extra_body
+
+    # Enable KV-cache prefix reuse across requests (llama-server defaults to false).
+    # Confirmed safe via direct curl tests — tool calls parse correctly with this set.
+    payload["cache_prompt"] = True
 
     return payload

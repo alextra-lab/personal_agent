@@ -56,7 +56,7 @@ class ToolLoopPolicy:
     """Loop-specific policy for a tool. Extracted from governance ToolPolicy by executor."""
 
     loop_max_per_signature: int = 1      # max executions of same (tool, args) per request
-    loop_max_consecutive: int = 3        # WARN at N consecutive calls; BLOCK at N+1
+    loop_max_consecutive: int = 2        # WARN at N consecutive calls; BLOCK at N+1
     loop_output_sensitive: bool = False  # if True, skip output-identity blocking
 
 

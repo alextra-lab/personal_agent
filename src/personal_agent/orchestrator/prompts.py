@@ -43,10 +43,11 @@ Rules:
 - Provide ALL required parameters (e.g., list_directory requires {"path": "..."}).
 - For large directories, prefer calling list_directory with include_details=false and/or max_entries (unless the user explicitly asked for every entry).
 - PARALLEL CALLS: When a task needs multiple independent tool calls (e.g. checking errors AND checking memory AND checking infra health), issue ALL of them in a SINGLE response as multiple tool_calls entries. Never call them one at a time when they are independent — batching saves iterations.
+- Step budget: Complete most requests in ≤ 6 tool calls. Prefer synthesizing with gathered data over additional lookups. If you have enough information to answer, synthesize immediately.
 - After tool results are returned, synthesize a final natural-language answer. Do NOT request the same tool again unless the path/args must change.
 - Whenever the user asks about current events, recent news, CVEs, product versions, or anything requiring live web data, call web_search for quick lookups (free, private, multi-engine). Pass categories='it' for technical queries, 'science' for research, 'news' for current events, 'weather' for forecasts.
-- After web_search returns URLs, use mcp_fetch_content to read full page content when snippets are insufficient.
-- Use mcp_perplexity_ask only when you specifically need a synthesized answer with citations, or when web_search results are insufficient for a complex question.
+- After web_search returns URLs, use fetch_url to read full page content when snippets are insufficient.
+- Use perplexity_query only when you specifically need a synthesized answer with citations, or when web_search results are insufficient for a complex question.
 - Do NOT answer from your own knowledge when live information is needed; always search first."""
 
 
@@ -75,7 +76,7 @@ User: "What's the latest version of FastAPI?"
 [TOOL_REQUEST]{{"name": "web_search", "arguments": {{"query": "FastAPI latest version 2026", "categories": "it"}}}}[END_TOOL_REQUEST]
 
 User: "Give me a comprehensive comparison of React vs Svelte with citations"
-[TOOL_REQUEST]{{"name": "mcp_perplexity_ask", "arguments": {{"messages": [{{"role": "user", "content": "comprehensive comparison React vs Svelte 2026 with benchmarks"}}]}}}}[END_TOOL_REQUEST]
+[TOOL_REQUEST]{{"name": "perplexity_query", "arguments": {{"query": "comprehensive comparison React vs Svelte 2026 with benchmarks", "mode": "research"}}}}[END_TOOL_REQUEST]
 """
 
 

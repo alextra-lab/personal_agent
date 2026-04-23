@@ -441,6 +441,13 @@ class LocalLLMClient:
 
                     # Emit telemetry: call completed
                     duration_ms = int((time.time() - start_time) * 1000)
+                    _usage = llm_response["usage"]
+                    _pt = _usage.get("prompt_tokens", 0)
+                    _ct = _usage.get("completion_tokens", 0)
+                    # llama-server includes timings.tokens_cached when cache_prompt=true
+                    # and a prefix KV cache hit occurs — zero or absent means cache miss.
+                    _timings = (llm_response.get("raw") or {}).get("timings") or {}
+                    _cached = _timings.get("tokens_cached") or 0
                     log.info(
                         MODEL_CALL_COMPLETED,
                         role=role.value,
@@ -449,8 +456,10 @@ class LocalLLMClient:
                         api_type=current_api_type,
                         fallback_used=tried_fallback,
                         latency_ms=duration_ms,
-                        prompt_tokens=llm_response["usage"].get("prompt_tokens", 0),
-                        completion_tokens=llm_response["usage"].get("completion_tokens", 0),
+                        prompt_tokens=_pt,
+                        completion_tokens=_ct,
+                        total_tokens=_usage.get("total_tokens") or (_pt + _ct),
+                        cache_read_tokens=_cached if _cached > 0 else None,
                         trace_id=trace_ctx.trace_id,
                         span_id=span_id,
                     )

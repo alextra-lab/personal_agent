@@ -21,17 +21,10 @@ log = get_logger(__name__)
 web_search_tool = ToolDefinition(
     name="web_search",
     description=(
-        "Search the web using a private self-hosted metasearch engine. "
-        "Aggregates results from Google, Brave, DuckDuckGo, StackOverflow, "
-        "arXiv, and other engines. Returns structured results with titles, "
-        "URLs, and snippets. Use 'categories' to target specific domains: "
-        "'general' (default), 'it' (StackOverflow, GitHub, MDN), "
-        "'science' (arXiv, Semantic Scholar), 'news' (Google News, Bing News), "
-        "'weather' (wttr.in for forecasts and conditions). "
-        "Use 'engines' to query specific engines by name. "
-        "Prefer this tool for routine web lookups. "
-        "Use mcp_perplexity_ask only when synthesized answers with citations "
-        "are specifically needed."
+        "Search the web via a private self-hosted metasearch engine. "
+        "Returns titles, URLs, and snippets. "
+        "Categories: general (default), it, science, news, weather. "
+        "Use for routine web lookups; prefer perplexity_query for synthesized answers with citations."
     ),
     category="network",
     parameters=[

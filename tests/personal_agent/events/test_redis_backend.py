@@ -35,7 +35,7 @@ class TestPublish:
     @pytest.mark.asyncio
     async def test_publish_calls_xadd(self, bus: RedisStreamBus, mock_redis: AsyncMock) -> None:
         """publish() calls XADD with serialized event data."""
-        event = RequestCapturedEvent(trace_id="t1", session_id="s1")
+        event = RequestCapturedEvent(trace_id="t1", session_id="s1", source_component="test")
         await bus.publish("stream:request.captured", event)
         mock_redis.xadd.assert_called_once()
         call_args = mock_redis.xadd.call_args
@@ -50,7 +50,7 @@ class TestPublish:
         """Published payload contains valid JSON with event fields."""
         import orjson
 
-        event = RequestCapturedEvent(trace_id="abc", session_id="def")
+        event = RequestCapturedEvent(trace_id="abc", session_id="def", source_component="test")
         await bus.publish("stream:test", event)
         payload = mock_redis.xadd.call_args[0][1]
         parsed = orjson.loads(payload["data"])
@@ -138,7 +138,7 @@ class TestDeadLetter:
         self, bus: RedisStreamBus, mock_redis: AsyncMock
     ) -> None:
         """dead_letter() writes to the configured dead-letter stream."""
-        event = RequestCapturedEvent(trace_id="t1", session_id="s1")
+        event = RequestCapturedEvent(trace_id="t1", session_id="s1", source_component="test")
         await bus.dead_letter(
             event=event,
             source_stream="stream:test",

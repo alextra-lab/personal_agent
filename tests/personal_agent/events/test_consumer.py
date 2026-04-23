@@ -93,7 +93,7 @@ class TestConsumerRunner:
         """Runner dispatches event to handler and ACKs on success."""
         import orjson
 
-        event = RequestCapturedEvent(trace_id="t1", session_id="s1")
+        event = RequestCapturedEvent(trace_id="t1", session_id="s1", source_component="test")
         event_json = orjson.dumps(event.model_dump(mode="json")).decode()
 
         received_events: list[object] = []
@@ -126,7 +126,7 @@ class TestConsumerRunner:
         """After max_retries handler failures, event is dead-lettered with attempts and ACKed."""
         import orjson
 
-        event = RequestCapturedEvent(trace_id="t1", session_id="s1")
+        event = RequestCapturedEvent(trace_id="t1", session_id="s1", source_component="test")
         event_json = orjson.dumps(event.model_dump(mode="json")).decode()
 
         handler_calls = 0
@@ -160,7 +160,7 @@ class TestConsumerRunner:
         """Handler failures below max_retries do not dead-letter; success ACKs."""
         import orjson
 
-        event = RequestCapturedEvent(trace_id="t1", session_id="s1")
+        event = RequestCapturedEvent(trace_id="t1", session_id="s1", source_component="test")
         event_json = orjson.dumps(event.model_dump(mode="json")).decode()
 
         calls = 0

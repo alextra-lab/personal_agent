@@ -335,7 +335,10 @@ class BrainstemScheduler:
         if self.last_request_time:
             idle_seconds = (datetime.now(timezone.utc) - self.last_request_time).total_seconds()
 
-        event = SystemIdleEvent(idle_seconds=idle_seconds)
+        event = SystemIdleEvent(
+            idle_seconds=idle_seconds,
+            source_component="brainstem.scheduler",
+        )
         try:
             await get_event_bus().publish(STREAM_SYSTEM_IDLE, event)
             log.debug("system_idle_event_emitted", idle_seconds=idle_seconds)
@@ -395,6 +398,7 @@ class BrainstemScheduler:
             captures_processed=result.get("captures_processed", 0),
             entities_created=result.get("entities_created", 0),
             entities_promoted=result.get("entities_promoted", 0),
+            source_component="brainstem.scheduler",
         )
         try:
             await get_event_bus().publish(STREAM_CONSOLIDATION_COMPLETED, event)
@@ -576,6 +580,7 @@ class BrainstemScheduler:
                 issue_identifier=fe.issue_identifier,
                 label=fe.label,
                 fingerprint=fingerprint,
+                source_component="brainstem.scheduler",
             )
             try:
                 await bus.publish(STREAM_FEEDBACK_RECEIVED, event)

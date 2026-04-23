@@ -74,12 +74,31 @@ CG_FRESHNESS = "cg:freshness"
 
 
 class EventBase(BaseModel):
-    """Base class for all event bus events.
+    """Base class for all event bus events (ADR-0041, ADR-0054).
+
+    All feedback-stream contract fields live on this single base — ADR-0054
+    decided against a secondary ``FeedbackEventBase`` root.  Subclasses that
+    always carry a request trace (``RequestCaptured``, ``RequestCompleted``,
+    ``MemoryAccessed``) narrow ``trace_id`` / ``session_id`` to required.
+    Scheduled / system-triggered events leave them ``None``.
 
     Attributes:
         event_id: Unique identifier for this event instance.
         event_type: Literal discriminator — set by each concrete subclass.
         created_at: UTC timestamp when the event was created.
+        trace_id: Request trace identifier the event is correlated with, or
+            ``None`` for scheduled/system events (consolidation, idle,
+            feedback poller).  Subclasses narrow to required where a trace
+            always exists.
+        session_id: Originating session id when available; ``None`` for
+            system-level events with no session scope.
+        source_component: Dotted module path of the emitting component
+            (e.g. ``"request_gateway.monitoring"``).  Required so producer
+            identity is visible independently of stream name.
+        schema_version: Monotonically increasing integer; bumped when a
+            field is added or semantics change.  Consumers tolerate any
+            version — additive changes keep backward compatibility; breaking
+            changes take a new ``event_type`` (ADR-0054 §D5).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -87,6 +106,10 @@ class EventBase(BaseModel):
     event_id: str = Field(default_factory=lambda: uuid4().hex)
     event_type: str  # overridden as Literal in subclasses
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    trace_id: str | None = None
+    session_id: str | None = None
+    source_component: str
+    schema_version: int = 1
 
 
 # ---------------------------------------------------------------------------

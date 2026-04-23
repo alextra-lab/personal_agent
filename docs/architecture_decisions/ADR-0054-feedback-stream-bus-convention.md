@@ -1,7 +1,7 @@
 # ADR-0054: Feedback Stream Bus Convention
 
-**Status**: Proposed
-**Date**: 2026-04-22
+**Status**: Accepted
+**Date**: 2026-04-22 (initial draft) · 2026-04-23 (flatten decision — D3 rewritten, alternatives inverted, implementation landed)
 **Deciders**: Project owner
 **Depends on**: ADR-0041 (Event Bus — Redis Streams), ADR-0043 (Three-Layer Separation), ADR-0053 (Gate Feedback Monitoring — introduces the Feedback Stream ADR Template)
 **Related**: ADR-0030 (Captain's Log & Self-Improvement Pipeline), ADR-0040 (Linear Async Feedback Channel), ADR-0042 (Knowledge Graph Freshness)
@@ -171,62 +171,74 @@ Existing groups re-read through this rule:
 
 ### D3: Required Event Fields
 
-Every feedback stream event inherits from a new `FeedbackEventBase` that extends `EventBase` with fields required for composition, correlation, and observability. `FeedbackEventBase` lives in `events/models.py` and is added **non-breakingly** — existing events that do not inherit from it remain valid; new Phase 2 event types MUST inherit from it.
+Every event — feedback stream or otherwise — carries the same correlation and evolution fields. These live directly on `EventBase` rather than on a secondary `FeedbackEventBase` root. The four fields (`trace_id`, `session_id`, `source_component`, `schema_version`) are observability hygiene that benefits every event type equally; a two-base hierarchy would invent a soft "feedback vs not" distinction that can only be enforced by review, not by the type system.
 
 ```python
 from datetime import datetime, timezone
 from typing import Literal
 from uuid import uuid4
-from pydantic import ConfigDict, Field
-
-from personal_agent.events.models import EventBase
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class FeedbackEventBase(EventBase):
-    """Base class for all feedback stream events (ADR-0054).
+class EventBase(BaseModel):
+    """Base class for all event bus events (ADR-0041, ADR-0054).
 
-    Extends :class:`EventBase` with required fields for correlation and
-    composability across feedback streams.  All Phase 2 feedback events
-    (ADR-0055..ADR-0060) MUST inherit from this class.
+    All feedback-stream contract fields live on this single base.  Subclasses
+    that always carry a request trace (``RequestCaptured``, ``RequestCompleted``,
+    ``MemoryAccessed``) narrow ``trace_id`` / ``session_id`` to required.
+    Scheduled / system-triggered events leave them ``None``.
 
     Attributes:
-        trace_id: Request trace identifier the signal is correlated with,
-            or a synthetic id (``bg-YYYYMMDD-hhmmss``) when emitted from a
-            background consumer with no active request.
+        event_id: Unique per-event UUID.
+        event_type: Literal discriminator set by each concrete subclass;
+            dispatched in ``parse_stream_event()``.
+        created_at: UTC timestamp at event construction.
+        trace_id: Request trace identifier the event is correlated with, or
+            ``None`` for scheduled/system events (consolidation, idle,
+            feedback poller).  Subclasses narrow to required where a trace
+            always exists.
         session_id: Originating session id when available; ``None`` for
-            system-level signals that have no session scope.
+            system-level events with no session scope.
         source_component: Dotted module path of the emitting component
-            (e.g. ``"request_gateway.monitoring"``).  Identifies which code
-            produced the signal without pattern-matching the stream name.
+            (e.g. ``"request_gateway.monitoring"``).  Required so producer
+            identity is visible independently of stream name.
         schema_version: Monotonically increasing integer; bumped when a
-            field is renamed or semantics change.  Consumers MUST tolerate
-            any version ``<=`` their compiled-in max and MUST skip events
-            with higher versions (forward-compat default).
+            field is added or semantics change.  Additive changes keep
+            backward compatibility (Rule 1, D5); breaking changes take a new
+            ``event_type`` (Rule 2, D5).  Consumers tolerate any version by
+            default — Pydantic ignores unknown fields (Rule 3, D5).
     """
 
     model_config = ConfigDict(frozen=True)
 
-    trace_id: str
+    event_id: str = Field(default_factory=lambda: uuid4().hex)
+    event_type: str  # overridden as Literal in subclasses
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    trace_id: str | None = None
     session_id: str | None = None
     source_component: str
     schema_version: int = 1
 ```
 
-Every Phase 2 event type therefore has, via inheritance from `EventBase` + `FeedbackEventBase`:
+Every event type therefore has:
 
-| Field | Source | Purpose |
-|-------|--------|---------|
-| `event_id` | `EventBase` | Unique per-event UUID (already present) |
-| `event_type` | `EventBase` (Literal) | Discriminator; dispatches in `parse_stream_event()` |
-| `created_at` | `EventBase` | UTC timestamp at event construction |
-| `trace_id` | `FeedbackEventBase` | Correlation across streams and ES traces |
-| `session_id` | `FeedbackEventBase` | Session scoping; nullable for system signals |
-| `source_component` | `FeedbackEventBase` | Producer identity, independent of stream name |
-| `schema_version` | `FeedbackEventBase` | Forward-compat gate (see D5) |
+| Field | Purpose | Nullability |
+|-------|---------|-------------|
+| `event_id` | Unique per-event UUID | Required (default factory) |
+| `event_type` | Discriminator; dispatches in `parse_stream_event()` | Required (Literal override per subclass) |
+| `created_at` | UTC timestamp at event construction | Required (default factory) |
+| `trace_id` | Correlation across streams and ES traces | Nullable on base; narrowed to required by `RequestCaptured`, `RequestCompleted`, `MemoryAccessed` |
+| `session_id` | Session scoping | Nullable on base; narrowed to required by `RequestCaptured`, `RequestCompleted` |
+| `source_component` | Producer identity, independent of stream name | **Required — no default.** Forces producers to name themselves |
+| `schema_version` | Forward-compat gate (see D5) | Defaults to `1` |
 
-**Redis message-id (`stream_id`) note.** The per-message Redis id assigned by `XADD` is the durable acknowledge token and is available on the consumer side through the reader loop. It is **not** a field on the event model — attempting to embed it in the publish payload would be circular. Consumers that need the stream id for logging receive it as a side-channel parameter from `ConsumerRunner` (already the case in `events/consumer.py`).
+Scheduled / background events (`Consolidation`, `Promotion`, `Feedback`, `SystemIdle`, `MemoryEntitiesUpdated`) inherit nullable `trace_id` / `session_id` and leave them `None` — expressing the absence of a request context explicitly rather than omitting the fields. Consumers joining across streams can distinguish "no trace" from "unknown field" without ambiguity.
 
-**Why not flatten into `EventBase`?** Back-compatibility. Six event types already exist without these fields, and their producers (request-lifecycle, consolidation, promotion, feedback, system-idle, memory-access) are correct as-is. Introducing `FeedbackEventBase` as a second base class gives new streams the contract without rewriting the six accepted ones. Phase 2 migrations that want to adopt the new base class may do so opportunistically.
+**Redis message-id (`stream_id`) note.** The per-message Redis id assigned by `XADD` is the durable acknowledge token and is available on the consumer side through the reader loop. It is **not** a field on the event model — embedding it in the publish payload would be circular. Consumers that need the stream id for logging receive it as a side-channel parameter from `ConsumerRunner` (already the case in `events/consumer.py`).
+
+**What flattening costs.** The ten existing `xadd` sites are updated to pass `source_component=<dotted-module-path>`. Three of the eight existing event classes (`RequestCapturedEvent`, `RequestCompletedEvent`, `MemoryAccessedEvent`) already declared `trace_id` / `session_id` as required and continue to do so — the subclass override narrows the base's nullable default exactly as it did before the flatten. No data migration, no re-indexing, no schema replay.
+
+**What flattening avoids.** A two-base hierarchy enforced only by review; the near-certainty of opportunistic half-migrations accumulating over time; denial of `schema_version` to "Phase 1" events that will eventually need to evolve; and the cognitive overhead of reviewers having to decide which root a new event should inherit from.
 
 ---
 
@@ -330,7 +342,7 @@ async def emit_feedback_signal(
     *,
     durable_writer: DurableWriter,
     stream: str,
-    event: FeedbackEventBase,
+    event: EventBase,
 ) -> None:
     """Dual-write a feedback signal.
 
@@ -419,7 +431,7 @@ The sections below ARE the template. Future stream ADRs replicate these headings
 
 - **Type A — Durable record:** `telemetry/feedback_history/<issue_identifier>.json` (`FeedbackRecord`) for terminal labels; `telemetry/feedback_history/suppressed_fingerprints.json` for `Rejected`.
 - **Type B — Bus event:** `FeedbackReceivedEvent` on `stream:feedback.received`.
-- **Schema (FeedbackReceivedEvent, current):**
+- **Schema (FeedbackReceivedEvent):**
   ```python
   class FeedbackReceivedEvent(EventBase):
       event_type: Literal["feedback.received"] = "feedback.received"
@@ -428,7 +440,7 @@ The sections below ARE the template. Future stream ADRs replicate these headings
       label: str
       fingerprint: str | None = None
   ```
-  Under D3 this event will be extended to inherit from `FeedbackEventBase` in a `schema_version=2` migration; the existing event is preserved for compatibility.
+  Inherits `trace_id` / `session_id` / `source_component` / `schema_version` from the flattened `EventBase` (D3). The Linear poller has no active request trace, so `trace_id` and `session_id` are left `None`; `source_component="brainstem.scheduler"` identifies the producer.
 - **Deduplication:** The poller state file `telemetry/feedback_poller_state.json` ensures each (issue, label) is processed at-most-once; consequently each `FeedbackReceivedEvent` is emitted at-most-once per Linear label application.
 
 #### 6. Full automation cycle
@@ -494,11 +506,11 @@ The sections below ARE the template. Future stream ADRs replicate these headings
 | `FeedbackReceivedEvent` published to `stream:feedback.received` | `cg:insights` and `cg:feedback` subscribers | Insights entries in `agent-insights-*` ES index |
 | Suppression file + 30-day fingerprint block | Promotion pipeline auto-suppression | `suppressed_fingerprints.json` |
 
-**After Phase 2 (this ADR — migration to FeedbackEventBase):**
+**After Phase 2 (this ADR — flattened `EventBase`):**
 
 | What exists | What is automated | What is visible |
 |-------------|------------------|-----------------|
-| `FeedbackEventBase`, `FeedbackReceivedEvent` v2 with `source_component`, `trace_id`, `schema_version` | Cross-stream correlation via `trace_id`; producer identity visible without name-matching | Kibana saved search "all feedback events by source component" |
+| Flattened `EventBase` with `trace_id` / `session_id` / `source_component` / `schema_version` on every event; `FeedbackReceivedEvent` inherits them directly | Cross-stream correlation via `trace_id`; producer identity visible without name-matching; all events gain forward-compat via `schema_version` | Kibana saved search "all events by source component"; cross-stream `trace_id` join works without caveats |
 
 #### 9. Loop completeness criteria
 
@@ -527,9 +539,9 @@ Condition 5 is the durability test that validates the dual-write pattern end-to-
 
 | Option | Description | Verdict |
 |--------|-------------|---------|
-| A. Flatten `trace_id` etc. into `EventBase` | Single base; all events share all fields | Rejected — mutates shipped events; not all events need all fields (`ConsolidationCompletedEvent` has no natural `trace_id`) |
+| **A. Flatten `trace_id` etc. into `EventBase`** | Single base; every event carries correlation + evolution fields | **Adopted** — the four fields are observability hygiene, not feedback-specific semantics. Three of eight existing events already carry `trace_id`/`session_id` ad-hoc; nullability on the base cleanly expresses "no trace context" for scheduled events. One-time cost: ten producer call-sites gain `source_component=...`. No data migration. |
 | B. Separate `FeedbackEventMixin` | Compose via multiple inheritance | Rejected — complicates `parse_stream_event()` dispatch; Pydantic mixins are awkward |
-| **C. `FeedbackEventBase(EventBase)`** | New base class for feedback events only | Adopted — strict opt-in; legacy events unaffected |
+| C. `FeedbackEventBase(EventBase)` as a second root | New base class for feedback events only; existing events stay on `EventBase` | Rejected — enforced only by code review, not the type system; near-certain to produce a half-migrated hierarchy over time; denies `schema_version` forward-compat to "Phase 1" events that will eventually need to evolve. Earlier drafts of this ADR adopted this option on back-compat grounds that did not survive inspection (no persisted data is lost by flattening; ten producer call-sites is the entire migration cost). |
 
 ### Durable write target
 
@@ -573,16 +585,17 @@ Condition 5 is the durability test that validates the dual-write pattern end-to-
 - **Every future feedback stream ships with a bus event.** Phase 2 ADRs inherit a contract; they argue *what signal*, not *what naming scheme*.
 - **Cross-stream composition becomes buildable.** "Error pattern AND low confidence AND cost anomaly" requires one new consumer subscribing to three existing streams — no producer changes.
 - **Durability is no longer a per-stream negotiation.** The D4 decision rule answers the question "do I need a disk write?" deterministically.
-- **Forward compatibility is explicit.** Consumers written today will keep working when a producer adds a field tomorrow.
+- **Forward compatibility is explicit on every event.** All events carry `schema_version`; consumers written today keep working when a producer adds a field tomorrow. This applies uniformly to Phase 1 events too — they are no longer stuck at an implicit v1 forever.
 - **Dual-write ordering is explicit.** Production failures follow a documented pattern rather than the current ad-hoc "log and hope" behaviour.
+- **Single type root.** `EventBase` is the only base. New event authors cannot pick the "wrong" root; reviewers have no soft rule to enforce. `source_component` being required on the base forces every producer to name itself.
 - **ADR-0053 retroactively benefits.** The gate monitoring stream's dual-write posture matches the convention — no rework needed.
 - **Stream 2 is documented using the template.** Future ADR authors have a worked, running example to copy.
 
 ### Negative
 
-- **Six stream ADRs must adopt `FeedbackEventBase`.** Trivial refactor but it must actually happen — tracked via FRE-244 through FRE-250.
-- **The convention is enforced by review, not by the compiler.** A new stream that violates D1 or D2 is only caught if someone notices. Mitigated by code-review checklist line `ADR-0054: new stream uses constant from events/models.py` and by the `parse_stream_event()` dispatch (an event type not registered there fails at consumer-side parse).
-- **`FeedbackEventBase` is a second root in the events module.** `EventBase` remains the ultimate parent, but two bases complicate the type hierarchy in a small way.
+- **Ten producer call-sites carry a `source_component` literal.** One-time migration cost, done as part of this ADR. Value (producer identity visible in every payload) outweighs the addition.
+- **The convention is enforced by review, not by the compiler.** A new stream that violates D1 or D2 is only caught if someone notices. Mitigated by code-review checklist line `ADR-0054: new stream uses constant from events/models.py and inherits EventBase` and by `parse_stream_event()` dispatch (an event type not registered there fails at consumer-side parse). Note that `source_component` being required *is* compiler-enforced — any construction without it fails at `model_validate` time.
+- **Old ephemeral payloads in Redis become un-parseable on deploy.** A payload sitting in a Redis Stream at the moment of deploy that lacks `source_component` will fail `model_validate` in the upgraded consumer. In practice Redis is RDB-only and consumer groups track `last-delivered-id`, so this affects at most a handful of in-flight events per stream; durable records on disk (for dual-write streams) are preserved.
 
 ### Risks
 
@@ -600,17 +613,17 @@ Condition 5 is the durability test that validates the dual-write pattern end-to-
 
 | Order | Work | Rationale | Tier |
 |-------|------|-----------|------|
-| 1 | Add `FeedbackEventBase` to `src/personal_agent/events/models.py` | Foundation — all Phase 2 ADRs depend on this type existing | Tier-2: Sonnet |
-| 2 | Add stream-name constants for Phase 2 streams (D1 table) to `events/models.py` | Concrete constants before ADR-0055..0060 draft cite them | Tier-3: Haiku |
-| 3 | Add consumer-group constants for Phase 2 groups (D2 table) to `events/models.py` | Same rationale as Step 2 | Tier-3: Haiku |
-| 4 | Extend `parse_stream_event()` dispatch to handle Phase 2 types once defined | Dispatcher must know about new types to deserialize | Tier-3: Haiku — per new type |
-| 5 | Add `FeedbackEventBase` unit tests: forward-compat round-trip (Rule 3), frozen invariance | Quality gate for the convention contract | Tier-2: Sonnet |
-| 6 | Update `docs/architecture/FEEDBACK_STREAM_ARCHITECTURE.md` to link to this ADR under D7 template reference | Keep architecture doc canonical | Tier-3: Haiku |
-| 7 | Add code-review checklist item `ADR-0054: new stream uses constant from events/models.py and inherits FeedbackEventBase` to `docs/reference/PR_REVIEW_RUBRIC.md` | Enforcement without compiler support | Tier-3: Haiku |
+| 1 | Flatten `EventBase` in `src/personal_agent/events/models.py` — add `trace_id` / `session_id` / `source_component` / `schema_version` | Foundation — all Phase 2 ADRs (and existing consumers) benefit from the unified contract | Tier-2: Sonnet |
+| 2 | Update the ten existing `xadd` producer call-sites to pass `source_component=<dotted-module-path>` | Required field — constructions without it fail `model_validate` | Tier-2: Sonnet |
+| 3 | Update event-constructing tests (6 test files, ~40 constructions) to pass `source_component="test"` | Keep the suite green | Tier-3: Haiku |
+| 4 | Add unit tests: `source_component` required; `schema_version` default; nullable `trace_id` / `session_id` on scheduled events; forward-compat round-trip (Rule 3) | Quality gate for the convention contract | Tier-2: Sonnet |
+| 5 | Add stream-name constants for Phase 2 streams (D1 table) to `events/models.py` | Concrete constants before ADR-0055..0060 draft cite them | Tier-3: Haiku |
+| 6 | Add consumer-group constants for Phase 2 groups (D2 table) to `events/models.py` | Same rationale as Step 5 | Tier-3: Haiku |
+| 7 | Extend `parse_stream_event()` dispatch to handle Phase 2 types once defined | Dispatcher must know about new types to deserialize | Tier-3: Haiku — per new type |
+| 8 | Update `docs/architecture/FEEDBACK_STREAM_ARCHITECTURE.md` to link to this ADR under D7 template reference | Keep architecture doc canonical | Tier-3: Haiku |
+| 9 | Add code-review checklist item `ADR-0054: new stream uses constant from events/models.py; event inherits EventBase; construction includes source_component` to `docs/reference/PR_REVIEW_RUBRIC.md` | Enforcement without compiler support for stream-name discipline | Tier-3: Haiku |
 
-Steps 1–5 constitute the MVP: the contract exists in code, is tested, and is ready to be referenced by ADR-0055 through ADR-0060. Steps 6–7 close out documentation and enforcement.
-
-**No migrations for existing event types are required for this ADR.** `RequestCapturedEvent`, `RequestCompletedEvent`, `ConsolidationCompletedEvent`, `PromotionIssueCreatedEvent`, `FeedbackReceivedEvent`, `SystemIdleEvent`, `MemoryAccessedEvent`, and `MemoryEntitiesUpdatedEvent` remain on `EventBase` without `FeedbackEventBase` fields; this ADR only governs events introduced in Phase 2.
+Steps 1–4 constitute the MVP and are implemented together in one change: the contract exists in code, is tested, and is ready to be referenced by ADR-0055 through ADR-0060. Steps 5–9 are follow-on once Phase 2 ADRs are drafted.
 
 ---
 
@@ -620,7 +633,7 @@ Following ADR-0043 (Three-Layer Separation):
 
 | Component | Module | Layer |
 |-----------|--------|-------|
-| `FeedbackEventBase` | `src/personal_agent/events/models.py` | Infrastructure (events) |
+| Flattened `EventBase` (correlation + evolution fields) | `src/personal_agent/events/models.py` | Infrastructure (events) |
 | Stream / consumer-group constants for Phase 2 | `src/personal_agent/events/models.py` | Infrastructure (events) |
 | `parse_stream_event()` dispatch extensions | `src/personal_agent/events/models.py` | Infrastructure (events) |
 | Per-stream dual-write producer code (Phase 2) | Owning subsystem (e.g. `brainstem/`, `request_gateway/`) | Execution / Observation per ADR |
@@ -637,9 +650,9 @@ All Phase 2 producers live in their owning subsystem module. Consumers live in `
 
 2. **Where does the Phase 3 replay job live?** When the bus is down during a durable write, the event is written to disk/ES but never published. A replay job that rediscovers unpublished durable records and re-emits is noted in D6 but not scoped here. This should be a new FRE issue owned by ADR-0041 maintenance.
 
-3. **Should `FeedbackEventBase.schema_version` default bump when a consumer auto-rejects higher versions?** Rule 3 makes it tolerant, not rejecting. The tradeoff is noisy logs vs. silent drops. Keep current design (accept higher versions if Pydantic loads them) and revisit if skew becomes a real operational concern.
+3. **Should `EventBase.schema_version` skew trigger a noisier signal than silent tolerance?** Rule 3 makes consumers tolerant of higher versions (Pydantic loads them, unknown fields ignored). The tradeoff is noisy logs vs. silent drops. Keep current design (accept higher versions if Pydantic loads them) and revisit if skew becomes a real operational concern.
 
-4. **How does FRE-233 (ADR-0053) retroactively adopt `FeedbackEventBase`?** ADR-0053 is not yet implemented; simplest is to have its implementation PR reference this ADR and author the `GatewayDecisionEvent` as inheriting from `FeedbackEventBase` from the start. No migration needed.
+4. **How does FRE-233 (ADR-0053) relate to the flattened `EventBase`?** ADR-0053 is not yet implemented; its `GatewayDecisionEvent` inherits from `EventBase` from the start and automatically gains the four contract fields — no two-step migration, no reference to a defunct `FeedbackEventBase`.
 
 ---
 

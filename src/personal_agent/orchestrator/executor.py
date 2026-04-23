@@ -745,6 +745,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                 event = RequestCapturedEvent(
                     trace_id=ctx.trace_id,
                     session_id=ctx.session_id,
+                    source_component="orchestrator.executor",
                 )
                 _run_bg(get_event_bus().publish(STREAM_REQUEST_CAPTURED, event))
             except Exception as e:

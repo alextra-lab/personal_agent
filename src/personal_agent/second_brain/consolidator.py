@@ -212,6 +212,7 @@ class SecondBrainConsolidator:
             entities_updated_event = MemoryEntitiesUpdatedEvent(
                 entity_ids=all_entity_ids,
                 consolidation_id="consolidation",
+                source_component="second_brain.consolidator",
             )
             try:
                 await bus.publish(STREAM_MEMORY_ENTITIES_UPDATED, entities_updated_event)
@@ -231,6 +232,7 @@ class SecondBrainConsolidator:
                 access_context=AccessContext.CONSOLIDATION,
                 query_type="consolidation_traversal",
                 trace_id="consolidation",
+                source_component="second_brain.consolidator",
             )
             try:
                 await bus.publish(STREAM_MEMORY_ACCESSED, accessed_event)

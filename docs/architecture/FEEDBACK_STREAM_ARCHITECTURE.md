@@ -1,6 +1,6 @@
 # Feedback Stream Architecture
 
-> **Status**: Living document — updated 2026-04-22
+> **Status**: Living document — updated 2026-04-23
 > **Context**: Surfaced during FRE-233 (ADR-0053) development
 > **Owner**: Project owner
 
@@ -23,19 +23,21 @@ The agent's self-monitoring operates at four distinct levels, each observing a d
 
 ---
 
-## The Dual-Write Convention (ADR-0054, to be drafted)
+## The Dual-Write Convention (ADR-0054, accepted 2026-04-23)
 
-**The problem:** Five of nine feedback streams do not publish to the event bus. They detect or compute but their signal terminates at a log line or ES index entry. Nothing can subscribe to them; nothing can react to them in real time; future capabilities cannot compose on top of them.
+**The problem:** Five of nine feedback streams did not publish to the event bus. They detected or computed but the signal terminated at a log line or ES index entry. Nothing could subscribe to them; nothing could react in real time; future capabilities could not compose on top of them.
 
-**The convention:** Every feedback stream must:
+**The convention** established by [ADR-0054](../architecture_decisions/ADR-0054-feedback-stream-bus-convention.md) requires every feedback stream to:
 1. **Write durably** — to disk (JSON file) or Elasticsearch, so signals survive Redis outages and process restarts
 2. **Publish to the event bus** — a typed, frozen Pydantic event on a named stream, so any future consumer can subscribe without modifying the producer
 
-This is the "dual-write" pattern. The file/ES write is the durable record; the bus event is the composability hook.
+This is the "dual-write" pattern. The file/ES write is the durable record; the bus event is the composability hook. The durable write **must precede** the bus publish (D4 ordering rule); durable failures propagate; bus failures are logged and swallowed (D6).
 
-**Why this matters:** Once every stream publishes a typed bus event, new capabilities can be built by subscribing to combinations of streams — without touching producer code. For example: "when an error pattern fires AND confidence is low AND cost is anomalous → escalate to a different treatment." That kind of cross-stream composition is impossible today because most streams don't publish to the bus.
+**Contract fields on every event.** Per D3, `EventBase` carries `trace_id` / `session_id` (nullable for scheduled/system events; narrowed to required on request-driven events), `source_component` (required — producer identity, independent of stream name), and `schema_version` (defaults to 1; additive field changes keep backward compatibility via Rule 1; breaking changes take a new `event_type` via Rule 2).
 
-ADR-0054 establishes the event naming conventions, stream name conventions, and required fields for all feedback stream events.
+**Why this matters:** Once every stream publishes a typed bus event, new capabilities can be built by subscribing to combinations of streams — without touching producer code. For example: "when an error pattern fires AND confidence is low AND cost is anomalous → escalate to a different treatment." That kind of cross-stream composition is now buildable (one new consumer subscribing to three existing streams; zero producer changes).
+
+ADR-0054 establishes the stream naming convention (`stream:<domain>.<signal>[.<subtype>]`), the consumer group convention (`cg:<role>`), the `EventBase` contract fields, the durable-write decision rule, the schema-versioning policy, and the dual-write failure handling. It reserves 8 Phase 2 stream names and 6 consumer group names.
 
 ---
 
@@ -163,12 +165,13 @@ FOUNDATION (already accepted)
 └── ADR-0053: Gate Feedback Monitoring [DRAFTED — FRE-233]
     └── Establishes: Feedback Stream ADR Template
 
-PHASE 1 — CONVENTION
-└── ADR-0054: Feedback Stream Bus Convention [FRE-245]
-    Establishes: dual-write pattern, stream naming, event shapes
+PHASE 1 — CONVENTION ✅ Accepted 2026-04-23
+└── ADR-0054: Feedback Stream Bus Convention [FRE-245 done]
+    Establishes: dual-write pattern, stream naming (stream:<domain>.<signal>),
+                 consumer group naming (cg:<role>), flattened EventBase with
+                 trace_id/session_id/source_component/schema_version
     Depends on: ADR-0041
-    Enables: ALL subsequent stream ADRs
-    ┌── Must be accepted before any Phase 2 ADR is drafted ──┐
+    Enables: ALL subsequent stream ADRs — Phase 2 drafting unblocked
 
 PHASE 2 — FIX BROKEN STREAMS (parallel, all depend on ADR-0054)
 ├── ADR-0055: System Health & Homeostasis Stream [FRE-246]
@@ -250,7 +253,7 @@ PHASE 3 — COMPLETE PARTIAL STREAMS (depend on Phase 2)
 - ADR-0053: Deterministic Gate Feedback-Loop Monitoring Framework (`docs/architecture_decisions/ADR-0053-gate-feedback-monitoring.md`)
 - FRE-233: ADR-0053 — Gate Feedback Monitoring (awaiting acceptance)
 - FRE-244: ADR-0056 — Error Pattern Monitoring (Needs Approval, blocked by FRE-245)
-- FRE-245: ADR-0054 — Feedback Stream Bus Convention (Needs Approval — **draft next**)
+- FRE-245: ADR-0054 — Feedback Stream Bus Convention (✅ Accepted + implemented 2026-04-23)
 - FRE-246: ADR-0055 — System Health & Homeostasis (Needs Approval, blocked by FRE-245)
 - FRE-247: ADR-0057 — Insights & Pattern Analysis (Needs Approval, blocked by FRE-245)
 - FRE-248: ADR-0058 — Self-Improvement Pipeline Stream (Needs Approval, blocked by FRE-245)

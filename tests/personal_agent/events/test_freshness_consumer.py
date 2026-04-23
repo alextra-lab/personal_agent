@@ -36,6 +36,7 @@ def _make_event(
         trace_id="test-trace",
         session_id=None,
         created_at=created_at or datetime.now(timezone.utc),
+        source_component="test",
     )
 
 
@@ -66,7 +67,10 @@ async def test_handle_ignores_non_memory_accessed_events() -> None:
     """Non-MemoryAccessedEvent types are silently dropped."""
     consumer = FreshnessConsumer(driver=_make_mock_driver(), batch_max_events=10)
     other_event = ConsolidationCompletedEvent(
-        captures_processed=1, entities_created=0, entities_promoted=0
+        captures_processed=1,
+        entities_created=0,
+        entities_promoted=0,
+        source_component="test",
     )
     await consumer.handle(other_event)
     assert len(consumer._buffer) == 0

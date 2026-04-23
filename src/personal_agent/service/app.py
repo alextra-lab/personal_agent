@@ -1014,6 +1014,7 @@ async def chat(
                     assistant_response=response_content,
                     trace_summary=timer.to_trace_summary(),
                     trace_breakdown=timer.to_breakdown(),
+                    source_component="service.app",
                 ),
             )
         except Exception:

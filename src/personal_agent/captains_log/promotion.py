@@ -359,6 +359,7 @@ class PromotionPipeline:
                 entry_id=entry_id,
                 linear_issue_id=linear_issue_id,
                 fingerprint=fingerprint,
+                source_component="captains_log.promotion",
             )
             try:
                 await bus.publish(STREAM_PROMOTION_ISSUE_CREATED, event)

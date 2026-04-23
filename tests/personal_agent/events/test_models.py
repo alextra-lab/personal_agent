@@ -1,8 +1,9 @@
-"""Tests for event models (ADR-0041)."""
+"""Tests for event models (ADR-0041, ADR-0054)."""
 
 from datetime import datetime, timezone
 
 import pytest
+from pydantic import ValidationError
 
 from personal_agent.events.models import (
     CG_CAPTAIN_LOG,
@@ -38,22 +39,76 @@ class TestEventBase:
 
     def test_frozen(self) -> None:
         """EventBase instances are immutable."""
-        event = RequestCapturedEvent(trace_id="t1", session_id="s1")
+        event = RequestCapturedEvent(trace_id="t1", session_id="s1", source_component="test")
         with pytest.raises(Exception):  # ValidationError for frozen models
             event.trace_id = "t2"  # type: ignore[misc]
 
     def test_auto_event_id(self) -> None:
         """Each event gets a unique event_id by default."""
-        e1 = RequestCapturedEvent(trace_id="t1", session_id="s1")
-        e2 = RequestCapturedEvent(trace_id="t2", session_id="s2")
+        e1 = RequestCapturedEvent(trace_id="t1", session_id="s1", source_component="test")
+        e2 = RequestCapturedEvent(trace_id="t2", session_id="s2", source_component="test")
         assert e1.event_id != e2.event_id
         assert len(e1.event_id) == 32  # uuid4 hex
 
     def test_auto_created_at(self) -> None:
         """created_at defaults to UTC now."""
-        event = RequestCapturedEvent(trace_id="t1", session_id="s1")
+        event = RequestCapturedEvent(trace_id="t1", session_id="s1", source_component="test")
         assert event.created_at.tzinfo is not None
         assert (datetime.now(timezone.utc) - event.created_at).total_seconds() < 2
+
+
+class TestEventBaseFlattenedFields:
+    """ADR-0054: feedback-stream contract fields live on EventBase itself."""
+
+    def test_source_component_is_required(self) -> None:
+        """EventBase subclasses raise ValidationError when source_component is missing."""
+        with pytest.raises(ValidationError, match="source_component"):
+            RequestCapturedEvent(trace_id="t", session_id="s")  # type: ignore[call-arg]
+
+    def test_schema_version_defaults_to_one(self) -> None:
+        """schema_version defaults to 1 and is carried in serialised payload."""
+        event = RequestCapturedEvent(trace_id="t", session_id="s", source_component="test")
+        assert event.schema_version == 1
+        assert event.model_dump(mode="json")["schema_version"] == 1
+
+    def test_scheduled_event_leaves_trace_id_none(self) -> None:
+        """Scheduled / system events inherit nullable trace_id and leave it None."""
+        event = ConsolidationCompletedEvent(
+            captures_processed=0,
+            entities_created=0,
+            entities_promoted=0,
+            source_component="test",
+        )
+        assert event.trace_id is None
+        assert event.session_id is None
+
+    def test_forward_compat_ignores_unknown_fields(self) -> None:
+        """Consumer compiled at schema_version=1 parses a schema_version=2 payload.
+
+        Producer upgrades must not pause consumer fleets — extra fields are
+        silently dropped (ADR-0054 §D5 Rule 3).
+        """
+        payload = {
+            "event_type": "consolidation.completed",
+            "captures_processed": 0,
+            "entities_created": 0,
+            "entities_promoted": 0,
+            "source_component": "brainstem.scheduler",
+            "schema_version": 2,
+            # Hypothetical future field:
+            "new_v2_only_field": "ignored-by-old-consumer",
+        }
+        parsed = parse_stream_event(payload)
+        assert isinstance(parsed, ConsolidationCompletedEvent)
+        assert parsed.schema_version == 2
+
+    def test_source_component_round_trips_through_json(self) -> None:
+        """source_component survives JSON serialisation round-trip."""
+        event = RequestCapturedEvent(
+            trace_id="t", session_id="s", source_component="orchestrator.executor"
+        )
+        restored = RequestCapturedEvent.model_validate_json(event.model_dump_json())
+        assert restored.source_component == "orchestrator.executor"
 
 
 class TestRequestCapturedEvent:
@@ -61,12 +116,12 @@ class TestRequestCapturedEvent:
 
     def test_event_type_discriminator(self) -> None:
         """event_type is always 'request.captured'."""
-        event = RequestCapturedEvent(trace_id="abc", session_id="def")
+        event = RequestCapturedEvent(trace_id="abc", session_id="def", source_component="test")
         assert event.event_type == "request.captured"
 
     def test_serialization_roundtrip(self) -> None:
         """Model can serialize to dict and back."""
-        event = RequestCapturedEvent(trace_id="t1", session_id="s1")
+        event = RequestCapturedEvent(trace_id="t1", session_id="s1", source_component="test")
         data = event.model_dump(mode="json")
         restored = RequestCapturedEvent.model_validate(data)
         assert restored.trace_id == event.trace_id
@@ -76,7 +131,7 @@ class TestRequestCapturedEvent:
 
     def test_json_roundtrip(self) -> None:
         """Model can serialize to JSON string and back."""
-        event = RequestCapturedEvent(trace_id="t1", session_id="s1")
+        event = RequestCapturedEvent(trace_id="t1", session_id="s1", source_component="test")
         json_str = event.model_dump_json()
         restored = RequestCapturedEvent.model_validate_json(json_str)
         assert restored == event
@@ -92,6 +147,7 @@ class TestRequestCompletedEvent:
             assistant_response="hi",
             trace_summary={"total_duration_ms": 1.0, "total_steps": 0, "phases_summary": {}},
             trace_breakdown=[],
+            source_component="test",
         )
         assert event.event_type == "request.completed"
 
@@ -102,6 +158,7 @@ class TestRequestCompletedEvent:
             assistant_response="reply",
             trace_summary={"total_duration_ms": 2.5, "total_steps": 1, "phases_summary": {"a": 1}},
             trace_breakdown=[{"phase": "setup", "name": "n", "sequence": 1}],
+            source_component="test",
         )
         data = event.model_dump(mode="json")
         restored = RequestCompletedEvent.model_validate(data)
@@ -112,7 +169,7 @@ class TestParseStreamEvent:
     """parse_stream_event dispatches on event_type."""
 
     def test_request_captured_restores_subclass_fields(self) -> None:
-        event = RequestCapturedEvent(trace_id="tx", session_id="sx")
+        event = RequestCapturedEvent(trace_id="tx", session_id="sx", source_component="test")
         payload = event.model_dump(mode="json")
         parsed = parse_stream_event(payload)
         assert isinstance(parsed, RequestCapturedEvent)
@@ -126,6 +183,7 @@ class TestParseStreamEvent:
             assistant_response="x",
             trace_summary={},
             trace_breakdown=[],
+            source_component="test",
         )
         parsed = parse_stream_event(event.model_dump(mode="json"))
         assert isinstance(parsed, RequestCompletedEvent)
@@ -141,13 +199,19 @@ class TestPhase3Events:
 
     def test_consolidation_completed_event_type(self) -> None:
         event = ConsolidationCompletedEvent(
-            captures_processed=5, entities_created=10, entities_promoted=2
+            captures_processed=5,
+            entities_created=10,
+            entities_promoted=2,
+            source_component="test",
         )
         assert event.event_type == "consolidation.completed"
 
     def test_consolidation_completed_roundtrip(self) -> None:
         event = ConsolidationCompletedEvent(
-            captures_processed=3, entities_created=7, entities_promoted=1
+            captures_processed=3,
+            entities_created=7,
+            entities_promoted=1,
+            source_component="test",
         )
         payload = event.model_dump(mode="json")
         parsed = parse_stream_event(payload)
@@ -158,13 +222,19 @@ class TestPhase3Events:
 
     def test_promotion_issue_created_event_type(self) -> None:
         event = PromotionIssueCreatedEvent(
-            entry_id="CL-001", linear_issue_id="FRE-99", fingerprint="abc123"
+            entry_id="CL-001",
+            linear_issue_id="FRE-99",
+            fingerprint="abc123",
+            source_component="test",
         )
         assert event.event_type == "promotion.issue_created"
 
     def test_promotion_issue_created_roundtrip(self) -> None:
         event = PromotionIssueCreatedEvent(
-            entry_id="CL-001", linear_issue_id="FRE-99", fingerprint=None
+            entry_id="CL-001",
+            linear_issue_id="FRE-99",
+            fingerprint=None,
+            source_component="test",
         )
         payload = event.model_dump(mode="json")
         parsed = parse_stream_event(payload)
@@ -175,7 +245,10 @@ class TestPhase3Events:
 
     def test_feedback_received_event_type(self) -> None:
         event = FeedbackReceivedEvent(
-            issue_id="uuid-1", issue_identifier="FRE-10", label="Rejected"
+            issue_id="uuid-1",
+            issue_identifier="FRE-10",
+            label="Rejected",
+            source_component="test",
         )
         assert event.event_type == "feedback.received"
 
@@ -185,6 +258,7 @@ class TestPhase3Events:
             issue_identifier="FRE-11",
             label="Approved",
             fingerprint="fp42",
+            source_component="test",
         )
         payload = event.model_dump(mode="json")
         parsed = parse_stream_event(payload)
@@ -193,12 +267,16 @@ class TestPhase3Events:
         assert parsed.fingerprint == "fp42"
 
     def test_system_idle_event_type(self) -> None:
-        event = SystemIdleEvent(idle_seconds=300.0)
+        event = SystemIdleEvent(idle_seconds=300.0, source_component="test")
         assert event.event_type == "system.idle"
         assert event.trigger == "monitoring_loop"
 
     def test_system_idle_roundtrip(self) -> None:
-        event = SystemIdleEvent(idle_seconds=120.5, trigger="lifecycle_loop")
+        event = SystemIdleEvent(
+            idle_seconds=120.5,
+            trigger="lifecycle_loop",
+            source_component="test",
+        )
         payload = event.model_dump(mode="json")
         parsed = parse_stream_event(payload)
         assert isinstance(parsed, SystemIdleEvent)
@@ -239,6 +317,7 @@ class TestMemoryAccessedEvent:
             access_context=AccessContext.SEARCH,
             query_type="query_memory",
             trace_id="trace-abc",
+            source_component="test",
         )
         defaults.update(kwargs)
         return MemoryAccessedEvent(**defaults)  # type: ignore[arg-type]

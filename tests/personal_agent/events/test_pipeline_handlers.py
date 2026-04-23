@@ -104,6 +104,7 @@ def _consolidation_event(
         captures_processed=captures_processed,
         entities_created=entities_created,
         entities_promoted=entities_promoted,
+        source_component="test",
     )
 
 
@@ -116,6 +117,7 @@ def _promotion_event(
         entry_id=entry_id,
         linear_issue_id=linear_issue_id,
         fingerprint=fingerprint,
+        source_component="test",
     )
 
 
@@ -130,6 +132,7 @@ def _feedback_event(
         issue_identifier=issue_identifier,
         label=label,
         fingerprint=fingerprint,
+        source_component="test",
     )
 
 
@@ -191,7 +194,7 @@ class TestConsolidationInsightsHandler:
                 "personal_agent.insights.engine",
                 MagicMock(InsightsEngine=MagicMock(return_value=mock_engine)),
             )
-            await handler(RequestCapturedEvent(trace_id="t", session_id="s"))
+            await handler(RequestCapturedEvent(trace_id="t", session_id="s", source_component="test"))
 
         mock_engine.analyze_patterns.assert_not_called()
 
@@ -228,7 +231,7 @@ class TestConsolidationPromotionHandler:
         with pytest.MonkeyPatch().context() as mp:
             for k, v in _promotion_modules(mock_pipeline).items():
                 mp.setitem(sys.modules, k, v)
-            await handler(RequestCapturedEvent(trace_id="t", session_id="s"))
+            await handler(RequestCapturedEvent(trace_id="t", session_id="s", source_component="test"))
 
         mock_pipeline.run.assert_not_called()
 
@@ -264,7 +267,7 @@ class TestPromotionCaptainLogHandler:
         with pytest.MonkeyPatch().context() as mp:
             for k, v in _captain_log_modules(mock_manager_instance).items():
                 mp.setitem(sys.modules, k, v)
-            await handler(RequestCapturedEvent(trace_id="t", session_id="s"))
+            await handler(RequestCapturedEvent(trace_id="t", session_id="s", source_component="test"))
 
         mock_manager_instance.save_entry.assert_not_called()
 
@@ -287,7 +290,7 @@ class TestFeedbackInsightsHandler:
     async def test_ignores_wrong_event_type(self) -> None:
         """Handler is a no-op for non-FeedbackReceivedEvent."""
         handler = build_feedback_insights_handler()
-        await handler(RequestCapturedEvent(trace_id="t", session_id="s"))
+        await handler(RequestCapturedEvent(trace_id="t", session_id="s", source_component="test"))
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +349,6 @@ class TestFeedbackSuppressionHandler:
         with pytest.MonkeyPatch().context() as mp:
             for k, v in _suppression_modules(mock_suppress).items():
                 mp.setitem(sys.modules, k, v)
-            await handler(RequestCapturedEvent(trace_id="t", session_id="s"))
+            await handler(RequestCapturedEvent(trace_id="t", session_id="s", source_component="test"))
 
         mock_suppress.assert_not_called()

@@ -17,7 +17,7 @@ class TestNoOpBus:
     @pytest.mark.asyncio
     async def test_publish_is_silent(self) -> None:
         bus = NoOpBus()
-        event = RequestCapturedEvent(trace_id="t1", session_id="s1")
+        event = RequestCapturedEvent(trace_id="t1", session_id="s1", source_component="test")
         # Should not raise
         await bus.publish("stream:test", event)
 

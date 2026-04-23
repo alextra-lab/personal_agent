@@ -977,6 +977,7 @@ class MemoryService:
                         query_type="query_memory",
                         trace_id=trace_id,
                         session_id=session_id,
+                        source_component="memory.service",
                     )
                     bus = get_event_bus()
                     try:
@@ -1124,6 +1125,7 @@ class MemoryService:
                             query_type="query_memory_broad",
                             trace_id=trace_id,
                             session_id=session_id,
+                            source_component="memory.service",
                         )
                         bus = get_event_bus()
                         try:

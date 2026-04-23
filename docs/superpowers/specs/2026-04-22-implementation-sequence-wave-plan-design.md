@@ -33,9 +33,9 @@
 | # | Issue | Type | Notes |
 |---|-------|------|-------|
 | ~~3a~~ | ~~FRE-254~~ | ~~Investigation~~ | ~~Step-count reduction — findings at `docs/research/FRE-254-step-count-investigation.md`~~ ✅ Done 2026-04-22 |
-| 3b | FRE-245 | ADR draft | ADR-0054 drafted at `docs/architecture_decisions/ADR-0054-feedback-stream-bus-convention.md` — In Review, awaiting acceptance | 🔄 In Review 2026-04-22 |
+| ~~3b~~ | ~~FRE-245~~ | ~~ADR + implementation~~ | ~~ADR-0054 accepted; flattened `EventBase` carries `trace_id`/`session_id`/`source_component`/`schema_version`; 10 producer sites migrated; 5 new tests; 118 tests pass~~ ✅ Done 2026-04-23 |
 
-**Gate:** FRE-245 must be accepted before any Phase 2 ADR is drafted.
+**Gate:** ~~FRE-245 must be accepted before any Phase 2 ADR is drafted.~~ ✅ Cleared 2026-04-23 — Wave 2 is unblocked.
 
 ---
 

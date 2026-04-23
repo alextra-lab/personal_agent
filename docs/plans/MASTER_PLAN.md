@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-22 (Wave 1 complete — FRE-254 investigation done; FRE-245/ADR-0054 drafted and In Review; Wave 2 unblocked pending ADR-0054 acceptance)
+> **Last updated**: 2026-04-23 (Wave 1 complete — ADR-0054 accepted and implemented; `EventBase` flattened; Wave 2 unblocked, next focus FRE-246/ADR-0055)
 > **Implementation sequence**: `docs/superpowers/specs/2026-04-22-implementation-sequence-wave-plan-design.md`
 
 ---
@@ -16,7 +16,8 @@
 | ~~0~~ | ~~1~~ | ~~bug(captains_log): DSPy bypassed for cloud models~~ | ~~[FRE-253](https://linear.app/frenchforest/issue/FRE-253)~~ | ~~Bug fix~~ | ~~Done 2026-04-22~~ |
 | ~~0~~ | ~~2~~ | ~~Governance: per-TaskType tool allowlist Stage 3~~ | ~~[FRE-252](https://linear.app/frenchforest/issue/FRE-252)~~ | ~~Feature~~ | ~~Done 2026-04-22~~ |
 | ~~1~~ | ~~3a~~ | ~~Investigate step-count reduction (interaction latency)~~ | ~~[FRE-254](https://linear.app/frenchforest/issue/FRE-254)~~ | ~~Investigation~~ | ~~Done 2026-04-22~~ |
-| 1 | 3b | Feedback Stream Bus Convention (ADR-0054) | [FRE-245](https://linear.app/frenchforest/issue/FRE-245) | ADR draft | In Review — awaiting ADR-0054 acceptance |
+| ~~1~~ | ~~3b~~ | ~~Feedback Stream Bus Convention (ADR-0054)~~ | ~~[FRE-245](https://linear.app/frenchforest/issue/FRE-245)~~ | ~~ADR + implementation~~ | ~~Done 2026-04-23 — Accepted, flattened `EventBase`, 10 producer sites migrated~~ |
+| 2 | 4 | System Health & Homeostasis — Mode Manager fix (ADR-0055) | [FRE-246](https://linear.app/frenchforest/issue/FRE-246) | ADR + fix | Approved — unblocked |
 
 ## Upcoming — Approved
 
@@ -24,12 +25,12 @@ Ordered by recommended implementation sequence. All items Approved in Linear. De
 
 | # | Project | Linear | ADR / Spec | Depends On |
 |---|---------|--------|------------|------------|
-| 2 | System Health & Homeostasis — Mode Manager fix | [FRE-246](https://linear.app/frenchforest/issue/FRE-246) | ADR-0055 | FRE-245 |
-| 3 | Error Pattern Monitoring — Level 3 observability | [FRE-244](https://linear.app/frenchforest/issue/FRE-244) | ADR-0056 | FRE-245 |
-| 4 | Insights & Pattern Analysis — wire InsightsEngine | [FRE-247](https://linear.app/frenchforest/issue/FRE-247) | ADR-0057 | FRE-245 |
-| 5 | Self-Improvement Pipeline — formalize Streams 1-3 | [FRE-248](https://linear.app/frenchforest/issue/FRE-248) | ADR-0058 | FRE-245 |
-| 6 | Context Quality — compaction full loop | [FRE-249](https://linear.app/frenchforest/issue/FRE-249) | ADR-0059 | FRE-245, FRE-244 |
-| 7 | Knowledge Graph Quality — consolidation + decay→reranking | [FRE-250](https://linear.app/frenchforest/issue/FRE-250) | ADR-0060 | FRE-245, FRE-247 |
+| 2 | System Health & Homeostasis — Mode Manager fix | [FRE-246](https://linear.app/frenchforest/issue/FRE-246) | ADR-0055 | ~~FRE-245~~ (unblocked) |
+| 3 | Error Pattern Monitoring — Level 3 observability | [FRE-244](https://linear.app/frenchforest/issue/FRE-244) | ADR-0056 | ~~FRE-245~~ (unblocked) |
+| 4 | Insights & Pattern Analysis — wire InsightsEngine | [FRE-247](https://linear.app/frenchforest/issue/FRE-247) | ADR-0057 | ~~FRE-245~~ (unblocked) |
+| 5 | Self-Improvement Pipeline — formalize Streams 1-3 | [FRE-248](https://linear.app/frenchforest/issue/FRE-248) | ADR-0058 | ~~FRE-245~~ (unblocked) |
+| 6 | Context Quality — compaction full loop | [FRE-249](https://linear.app/frenchforest/issue/FRE-249) | ADR-0059 | ~~FRE-245~~ (unblocked), FRE-244 |
+| 7 | Knowledge Graph Quality — consolidation + decay→reranking | [FRE-250](https://linear.app/frenchforest/issue/FRE-250) | ADR-0060 | ~~FRE-245~~ (unblocked), FRE-247 |
 | 8 | Within-Session Progressive Context Compression | [FRE-251](https://linear.app/frenchforest/issue/FRE-251) | ADR-0061 | FRE-249 |
 | 9 | Agent self-updating skills (agentskills.io format) | [FRE-226](https://linear.app/frenchforest/issue/FRE-226) | ADR pending | FRE-248 |
 | 10 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |
@@ -44,7 +45,7 @@ _(none)_
 ```text
 ADR-0053: Gate Feedback Monitoring (FRE-233) ✅ Done 2026-04-22 — spawned FRE-244–251
     ↓
-ADR-0054: Bus Convention (FRE-245) ← In Review — accept to unblock Wave 2
+ADR-0054: Bus Convention (FRE-245) ✅ Done 2026-04-23 — Wave 2 unblocked
     ├── ADR-0055: System Health & Homeostasis (FRE-246)  ← fixes app.py:176 hardcoded Mode.NORMAL
     ├── ADR-0056: Error Pattern Monitoring (FRE-244)     ← Level 3 observability
     ├── ADR-0057: Insights & Pattern Analysis (FRE-247)  ← wires InsightsEngine
@@ -81,7 +82,8 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 | Phase | Completed | Summary |
 |-------|-----------|---------|
 | Investigation: Step-count latency reduction (FRE-254) | 2026-04-22 | Root cause: Qwen3-35B-A3B emits one tool call per turn regardless of batching instructions — orchestrator already supports N calls/turn. Top findings: (1) `get_tool_definitions_for_llm()` ignores TaskType `allowed_categories` — wiring it eliminates ~3,000–4,000 tokens on conversational turns; (2) no step-budget hint in system prompt (`_TOOL_RULES` prompts.py:39) — add `"≤ 6 tool calls"` guidance; (3) total tool description cost ~4,200–4,600 tokens with redundant/stale references. Full report: `docs/research/FRE-254-step-count-investigation.md`. |
-| ADR-0054: Feedback Stream Bus Convention draft (FRE-245) | 2026-04-22 | Written at `docs/architecture_decisions/ADR-0054-feedback-stream-bus-convention.md` (Status: Proposed — In Review). Establishes D1: stream naming `stream:<domain>.<signal>[.<subtype>]`; D2: consumer group naming `cg:<role>`; D3: `FeedbackEventBase` with trace_id, session_id, source_component, schema_version; D4: durable-write decision rule (disk+ES / ES-only / target-store-only); D5: schema versioning policy; D6: dual-write failure handling (durable propagates, bus swallowed); D7: reference implementation — Stream 2 (Linear Human Feedback) documented with all 9 sections. Reserves 8 new stream names and 6 new consumer group names for Phase 2. Must be accepted before any Wave 2 ADR is drafted. |
+| ADR-0054: Feedback Stream Bus Convention accepted + implemented (FRE-245) | 2026-04-23 | ADR rewritten from the "two-base" draft to a single flattened `EventBase` carrying `trace_id` / `session_id` / `source_component` / `schema_version`. D3 now describes the flat design; Alternatives table flips the verdict (A "flatten" adopted; C "FeedbackEventBase as second root" rejected with explicit post-hoc rationale). Implementation in the same change: `EventBase` fields added in `events/models.py`; 10 production `xadd` sites migrated with `source_component=<dotted-module-path>`; ~40 test event constructions updated; 5 new tests cover `source_component` required, `schema_version` default, nullable trace on scheduled events, forward-compat v1-consumer-reads-v2-payload. Verified: 118 tests pass across `events/`, `memory/test_memory_access_events`, `second_brain/`, `brainstem/`; mypy surfaces no new errors. Still reserves 8 Phase 2 stream names + 6 consumer group names. Wave 2 unblocked. |
+| ADR-0054 draft (FRE-245) | 2026-04-22 | Initial draft written at `docs/architecture_decisions/ADR-0054-feedback-stream-bus-convention.md` (Status: Proposed — In Review). Seven decisions D1–D7 drafted with a `FeedbackEventBase` as a secondary root; superseded in place on 2026-04-23 by the flatten decision (see row above). |
 | Bug: DSPy bypassed for cloud models (FRE-253) | 2026-04-22 | Extended `configure_dspy_lm()` to accept `ModelRole \| str` and build `"{provider}/{model_id}"` LiteLLM strings for cloud models (Anthropic/OpenAI API key from settings, no api_base). Removed 70-line cloud bypass from `reflection.py`; both local and cloud now route through DSPy ChainOfThought. `generate_reflection_dspy()` gains `captains_log_role` param. 5 new unit tests. |
 | ADR-0053: Gate Feedback Monitoring framework (FRE-233) | 2026-04-22 | Drafted ADR-0053 at `docs/architecture_decisions/ADR-0053-gate-feedback-monitoring.md`. Established Feedback Stream ADR Template; four-level observability framework documented. Spawned implementation issues FRE-244–251 (all Approved). |
 | Bug: create_linear_issue teamId type mismatch (FRE-255) | 2026-04-22 | Fixed `IDComparator.eq` type error in `create_linear_issue` native tool — was passing raw UUID where API expects `ID!` scalar. |
@@ -127,7 +129,7 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 | 0057 | Insights & Pattern Analysis Stream | Approved (FRE-247 — blocked by 0054) |
 | 0056 | Error Pattern Monitoring Stream | Approved (FRE-244 — blocked by 0054) |
 | 0055 | System Health & Homeostasis Stream | Approved (FRE-246 — blocked by 0054) |
-| 0054 | Feedback Stream Bus Convention | Approved (FRE-245 — **current focus**) |
+| 0054 | Feedback Stream Bus Convention | Accepted (Implemented — FRE-245 done 2026-04-23) |
 | 0062 | Tool Loop Gate — Per-Tool FSM-Based Loop Detection | Accepted (Implemented — 2026-04-22) |
 | 0053 | Deterministic Gate Feedback-Loop Monitoring Framework | Accepted (Implemented — FRE-233 done 2026-04-22) |
 | 0052 | Seshat Owner Identity Primitive | Proposed (Needs Approval) |

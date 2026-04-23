@@ -1,6 +1,6 @@
 # Feedback Stream Architecture
 
-> **Status**: Living document — updated 2026-04-23
+> **Status**: Living document — updated 2026-04-23 (ADR-0056 + ADR-0057 drafted, In Review)
 > **Context**: Surfaced during FRE-233 (ADR-0053) development
 > **Owner**: Project owner
 
@@ -14,10 +14,10 @@ The agent's self-monitoring operates at four distinct levels, each observing a d
 
 | Level | What it observes | Timescale | Streams |
 |-------|-----------------|-----------|---------|
-| **1 — System metrics** | CPU, memory, disk, GPU — hardware signals; operational mode | Seconds (5s poll) | Stream 5: Brainstem Sensors / Mode Manager |
-| **2 — Gate decisions** | Intent classification quality, strategy distribution, per-stage latency, confidence scores | Per-request | Stream NEW: Gate Feedback Monitoring (ADR-0053) |
-| **3 — Application errors** | Exceptions, ERROR/WARNING log events, tool failures, LLM errors, repeated failure patterns | Rolling window | Stream NEW: Error Pattern Monitoring (ADR-0056) |
-| **4 — Self-reflection** | LLM-generated post-task analysis — what happened, what to improve, capability gaps | Per-task | Streams 1–3: Self-Improvement Pipeline (ADR-0030/0040) |
+| **1 — System metrics** | CPU, memory, disk, GPU — hardware signals; operational mode | Seconds (5s poll) | Stream 5: Brainstem Sensors / Mode Manager (ADR-0055 Proposed) |
+| **2 — Gate decisions** | Intent classification quality, strategy distribution, per-stage latency, confidence scores | Per-request | Stream NEW: Gate Feedback Monitoring ([ADR-0053](../architecture_decisions/ADR-0053-gate-feedback-monitoring.md) Proposed) |
+| **3 — Application errors** | Exceptions, ERROR/WARNING log events, tool failures, LLM errors, repeated failure patterns | Rolling window | Stream NEW: Error Pattern Monitoring ([ADR-0056](../architecture_decisions/ADR-0056-error-pattern-monitoring.md) Proposed — In Review 2026-04-23) |
+| **4 — Self-reflection** | LLM-generated post-task analysis — what happened, what to improve, capability gaps | Per-task | Streams 1–3: Self-Improvement Pipeline (ADR-0030/0040); Phase 2 failure-path reflection proposed by ADR-0056 |
 
 **Design principle:** Levels 1–3 are automated observation. Level 4 is LLM-mediated interpretation. Together they give the agent the ability to observe itself at every scale — from hardware through pipeline through error to intent.
 
@@ -87,9 +87,9 @@ All nine feedback streams, their current state, and their target state after ADR
 - **Action:** None — `suggest_improvements()` and `create_captain_log_proposals()` exist but are not called
 - **Human loop:** Partial — Kibana only
 - **Bus?** ❌ No output on bus; delegation patterns are a stub
-- **ADR:** ADR-0057 (FRE-247 — Needs Approval)
+- **ADR:** [ADR-0057](../architecture_decisions/ADR-0057-insights-pattern-analysis.md) (FRE-247 — Proposed, In Review 2026-04-23)
 - **Project:** Insights & Pattern Analysis
-- **Gap:** Improvement objects are a dead end; delegation patterns unimplemented
+- **Gap:** Improvement objects are a dead end; delegation patterns unimplemented — ADR-0057 wires both
 
 ### Stream 5: Brainstem Sensors / Mode Manager
 - **Source:** `MetricsDaemon` — psutil + powermetrics, 5s poll
@@ -179,13 +179,15 @@ PHASE 2 — FIX BROKEN STREAMS (parallel, all depend on ADR-0054)
 │   Depends on: ADR-0054, ADR-0041, ADR-0053 (pattern)
 │   Project: System Health & Homeostasis
 │
-├── ADR-0056: Error Pattern Monitoring Stream [FRE-244]
+├── ADR-0056: Error Pattern Monitoring Stream [FRE-244 — drafted 2026-04-23, In Review]
 │   Level 3 observability — agent reads its own error logs
+│   Phase 2: failure-path reflection (GEPA-inspired) inside DSPy GenerateReflection
 │   Depends on: ADR-0053 (template), ADR-0054
 │   Project: Error Pattern Monitoring
 │
-├── ADR-0057: Insights & Pattern Analysis Stream [FRE-247]
+├── ADR-0057: Insights & Pattern Analysis Stream [FRE-247 — drafted 2026-04-23, In Review]
 │   Wires InsightsEngine to full loop; implements delegation patterns
+│   Adds InsightsPatternDetectedEvent + InsightsCostAnomalyEvent
 │   Depends on: ADR-0054, ADR-0041
 │   Project: Insights & Pattern Analysis
 │
@@ -252,10 +254,10 @@ PHASE 3 — COMPLETE PARTIAL STREAMS (depend on Phase 2)
 - ADR-0047: Context Management & Observability
 - ADR-0053: Deterministic Gate Feedback-Loop Monitoring Framework (`docs/architecture_decisions/ADR-0053-gate-feedback-monitoring.md`)
 - FRE-233: ADR-0053 — Gate Feedback Monitoring (awaiting acceptance)
-- FRE-244: ADR-0056 — Error Pattern Monitoring (Needs Approval, blocked by FRE-245)
+- FRE-244: ADR-0056 — Error Pattern Monitoring (Drafted 2026-04-23, In Review)
 - FRE-245: ADR-0054 — Feedback Stream Bus Convention (✅ Accepted + implemented 2026-04-23)
-- FRE-246: ADR-0055 — System Health & Homeostasis (Needs Approval, blocked by FRE-245)
-- FRE-247: ADR-0057 — Insights & Pattern Analysis (Needs Approval, blocked by FRE-245)
+- FRE-246: ADR-0055 — System Health & Homeostasis (Approved, unblocked)
+- FRE-247: ADR-0057 — Insights & Pattern Analysis (Drafted 2026-04-23, In Review)
 - FRE-248: ADR-0058 — Self-Improvement Pipeline Stream (Needs Approval, blocked by FRE-245)
 - FRE-249: ADR-0059 — Context Quality Monitoring (Needs Approval, blocked by FRE-245 + FRE-244)
 - FRE-250: ADR-0060 — Knowledge Graph Quality (Needs Approval, blocked by FRE-245 + FRE-247)

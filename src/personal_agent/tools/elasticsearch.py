@@ -199,7 +199,8 @@ async def _run_esql(
 
     resp = await client.post(
         f"{base_url}/_query",
-        json={"query": esql_query, "format": "json"},
+        params={"format": "json"},
+        json={"query": esql_query},
         headers={"Content-Type": "application/json"},
     )
     _raise_for_status(resp, trace_id)

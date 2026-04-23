@@ -94,11 +94,17 @@ async def test_esql_success() -> None:
     }
     resp = _mock_response(200, body)
     with patch("personal_agent.tools.elasticsearch.httpx.AsyncClient") as mock_cls:
-        mock_cls.return_value = _mock_client(resp)
+        mock_client = _mock_client(resp)
+        mock_cls.return_value = mock_client
         result = await query_elasticsearch_executor(
             action="esql",
             query="FROM agent-logs-* | WHERE level='ERROR'",
         )
+
+        # format must be a query param, not a body field (ES|QL /_query rejects body format)
+        call_kwargs = mock_client.post.call_args.kwargs
+        assert call_kwargs.get("params") == {"format": "json"}
+        assert "format" not in call_kwargs.get("json", {})
 
     assert result["columns"] == ["level", "message"]
     assert result["row_count"] == 1

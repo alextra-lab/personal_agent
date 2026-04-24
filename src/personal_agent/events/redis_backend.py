@@ -95,12 +95,16 @@ class RedisStreamBus:
 
     # -- Publish ----------------------------------------------------------
 
-    async def publish(self, stream: str, event: EventBase) -> None:
+    async def publish(self, stream: str, event: EventBase, maxlen: int | None = None) -> None:
         """Publish an event to a Redis stream via XADD.
 
         Args:
             stream: Target stream name.
             event: Event to publish.
+            maxlen: Optional stream length cap.  When provided, XADD is called
+                with ``MAXLEN ~ maxlen`` so Redis trims the stream to
+                approximately ``maxlen`` entries using approximate trimming for
+                performance.  ``None`` (default) means no trimming.
         """
         payload = event.model_dump(mode="json")
         # Flatten nested dict: Redis streams store flat field-value pairs.
@@ -109,7 +113,10 @@ class RedisStreamBus:
         import orjson
 
         data = {"data": orjson.dumps(payload).decode()}
-        message_id = await self._client.xadd(stream, data)  # type: ignore[arg-type]
+        if maxlen is not None:
+            message_id = await self._client.xadd(stream, data, maxlen=maxlen, approximate=True)  # type: ignore[arg-type]
+        else:
+            message_id = await self._client.xadd(stream, data)  # type: ignore[arg-type]
         log.debug(
             "event_published",
             stream=stream,

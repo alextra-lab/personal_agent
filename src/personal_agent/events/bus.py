@@ -32,12 +32,16 @@ class EventBus(Protocol):
     - ``RedisStreamBus`` — Redis Streams backend.
     """
 
-    async def publish(self, stream: str, event: EventBase) -> None:
+    async def publish(self, stream: str, event: EventBase, maxlen: int | None = None) -> None:
         """Publish an event to a stream.
 
         Args:
             stream: Target stream name (e.g. ``stream:request.captured``).
             event: Event payload.
+            maxlen: Optional stream length cap passed to XADD MAXLEN ~.
+                When set, the backend trims the stream to approximately
+                ``maxlen`` entries (approximate trimming for performance).
+                ``None`` means no trimming (existing behaviour).
         """
         ...
 
@@ -78,7 +82,7 @@ class NoOpBus:
     unreachable at startup (graceful degradation).
     """
 
-    async def publish(self, stream: str, event: EventBase) -> None:
+    async def publish(self, stream: str, event: EventBase, maxlen: int | None = None) -> None:
         """Discard the event."""
         log.debug("event_discarded_noop_bus", stream=stream, event_type=event.event_type)
 

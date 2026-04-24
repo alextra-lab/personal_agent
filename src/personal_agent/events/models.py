@@ -8,12 +8,15 @@ consumers fetch full data from the source system when needed.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from personal_agent.governance.models import Mode
 
 # ---------------------------------------------------------------------------
 # Stream and consumer-group constants
@@ -66,6 +69,17 @@ CG_FEEDBACK = "cg:feedback"
 
 CG_FRESHNESS = "cg:freshness"
 """Consumer group: knowledge graph freshness tracker (Phase 4)."""
+
+# Phase 2 stream names — ADR-0055 (System Health & Homeostasis)
+STREAM_METRICS_SAMPLED = "stream:metrics.sampled"
+"""Stream for metrics-sampled events (Phase 2 — ADR-0055)."""
+
+STREAM_MODE_TRANSITION = "stream:mode.transition"
+"""Stream for mode-transition events (Phase 2 — ADR-0055)."""
+
+# Phase 2 consumer groups — ADR-0055
+CG_MODE_CONTROLLER = "cg:mode-controller"
+"""Consumer group: mode controller (Phase 2 — ADR-0055)."""
 
 
 # ---------------------------------------------------------------------------
@@ -306,6 +320,55 @@ class MemoryEntitiesUpdatedEvent(EventBase):
     consolidation_id: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# Phase 2 events — ADR-0055 (System Health & Homeostasis)
+# ---------------------------------------------------------------------------
+
+
+class MetricsSampledEvent(EventBase):
+    """Published by MetricsDaemon every ~5 s with current hardware metrics.
+
+    trace_id and session_id are None — system-scoped event, not request-scoped.
+    source_component must be set to "brainstem.sensors.metrics_daemon".
+
+    Attributes:
+        sample_timestamp: UTC timestamp when the sample was collected.
+        metrics: Raw output of ``poll_system_metrics()`` — keys use the
+            ``perf_system_*`` / ``safety_*`` prefix convention (e.g.
+            ``perf_system_cpu_load``, ``perf_system_mem_used``).
+        sample_interval_seconds: Nominal poll cadence in seconds (default 5.0).
+    """
+
+    event_type: Literal["metrics.sampled"] = "metrics.sampled"
+    sample_timestamp: datetime
+    metrics: Mapping[str, float]
+    sample_interval_seconds: float
+
+
+class ModeTransitionEvent(EventBase):
+    """Published by ModeManager on each FSM state transition.
+
+    trace_id and session_id are None — system-scoped event, not request-scoped.
+    source_component must be set to "brainstem.mode_manager".
+
+    Attributes:
+        from_mode: Mode the FSM was in before the transition.
+        to_mode: Mode the FSM moved to.
+        reason: Matched rule name or operator reason that triggered the transition.
+        sensor_snapshot: Aggregated sensor values that triggered the rule, if
+            available. Defaults to empty mapping.
+        transition_index: Monotonic counter within the process lifetime; used by
+            ``cg:mode-controller`` cadence tracking.
+    """
+
+    event_type: Literal["mode.transition"] = "mode.transition"
+    from_mode: Mode
+    to_mode: Mode
+    reason: str
+    sensor_snapshot: Mapping[str, float] = Field(default_factory=dict)
+    transition_index: int
+
+
 def parse_stream_event(payload: dict[str, Any]) -> EventBase:
     """Deserialize a stream JSON payload into the correct event subclass.
 
@@ -338,4 +401,8 @@ def parse_stream_event(payload: dict[str, Any]) -> EventBase:
         return MemoryAccessedEvent.model_validate(payload)
     if raw_type == "memory.entities_updated":
         return MemoryEntitiesUpdatedEvent.model_validate(payload)
+    if raw_type == "metrics.sampled":
+        return MetricsSampledEvent.model_validate(payload)
+    if raw_type == "mode.transition":
+        return ModeTransitionEvent.model_validate(payload)
     raise ValueError(f"unknown event_type: {raw_type!r}")

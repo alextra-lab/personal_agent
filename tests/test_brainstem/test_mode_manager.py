@@ -1,9 +1,12 @@
 """Tests for ModeManager."""
 
+import asyncio
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 from personal_agent.brainstem.mode_manager import ModeManager
 from personal_agent.config.governance_loader import load_governance_config
+from personal_agent.events.models import STREAM_MODE_TRANSITION, ModeTransitionEvent
 from personal_agent.governance.models import Mode
 
 
@@ -191,3 +194,48 @@ def test_transition_history() -> None:
     assert len(history) == 2
     assert history[1]["from_mode"] == "ALERT"
     assert history[1]["to_mode"] == "LOCKDOWN"
+
+
+def test_mode_manager_dual_write_publishes_transition_event() -> None:
+    """transition_to() fires a ModeTransitionEvent on the bus alongside the structlog event."""
+
+    async def _run() -> None:
+        mock_bus = AsyncMock()
+        mm = ModeManager(event_bus=mock_bus)
+
+        # Trigger a transition
+        mm.transition_to(Mode.ALERT, "cpu_high", {"perf_system_cpu_load": 0.9})
+        # Drain pending tasks so the create_task coroutine executes
+        await asyncio.sleep(0)
+
+        mock_bus.publish.assert_called_once()
+        call_args = mock_bus.publish.call_args
+        assert call_args.args[0] == STREAM_MODE_TRANSITION
+        event = call_args.args[1]
+        assert isinstance(event, ModeTransitionEvent)
+        assert event.from_mode == Mode.NORMAL
+        assert event.to_mode == Mode.ALERT
+        assert event.source_component == "brainstem.mode_manager"
+
+    asyncio.run(_run())
+
+
+def test_mode_manager_no_publish_without_bus() -> None:
+    """No error when event_bus is None."""
+    mm = ModeManager()  # no bus
+    mm.transition_to(Mode.ALERT, "cpu_high", {})
+    assert mm.get_current_mode() == Mode.ALERT  # transition still happened
+
+
+def test_mode_manager_publish_error_is_swallowed() -> None:
+    """Bus publish errors don't prevent the FSM transition."""
+
+    async def _run() -> None:
+        mock_bus = AsyncMock()
+        mock_bus.publish.side_effect = Exception("redis down")
+        mm = ModeManager(event_bus=mock_bus)
+        mm.transition_to(Mode.ALERT, "cpu_high", {})
+        await asyncio.sleep(0.01)
+        assert mm.get_current_mode() == Mode.ALERT  # FSM still transitioned
+
+    asyncio.run(_run())

@@ -204,6 +204,37 @@ class AppConfig(BaseSettings):
         le=10000,
         description="Metrics daemon ring buffer size",
     )
+    mode_controller_enabled: bool = Field(
+        default=True,
+        description="Enable ADR-0055 mode controller (cg:mode-controller consumer + "
+        "dual-write of metrics.sampled and mode.transition events). "
+        "Defaults True — the full ADR-0055 pipeline is active in production.",
+    )
+    metrics_sampled_stream_maxlen: int = Field(
+        default=720,
+        ge=60,
+        description="MAXLEN (approximate) on stream:metrics.sampled — matches MetricsDaemon "
+        "ring-buffer depth (~1 h at 5 s).",
+    )
+    mode_evaluation_interval_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        description="How often cg:mode-controller aggregates its window and calls "
+        "ModeManager.evaluate_transitions. Unit: seconds.",
+    )
+    mode_window_size: int = Field(
+        default=12,
+        ge=1,
+        le=720,
+        description="Number of recent MetricsSampledEvent samples retained by "
+        "cg:mode-controller for aggregation (12 × 5 s = 60 s window).",
+    )
+    mode_calibration_anomaly_threshold: int = Field(
+        default=3,
+        ge=1,
+        description="Number of (from_mode, to_mode) edge transitions within 10 min "
+        "that triggers a Captain's Log calibration proposal.",
+    )
 
     # MCP Gateway
     mcp_gateway_enabled: bool = Field(

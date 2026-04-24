@@ -7,6 +7,7 @@ The brainstem is the always-on regulatory core of the agent, maintaining
 system stability and enforcing operational modes.
 """
 
+from personal_agent.brainstem.consumers.mode_controller import ModeControllerConsumer
 from personal_agent.brainstem.mode_manager import ModeManager, ModeManagerError
 from personal_agent.brainstem.optimizer import ThresholdOptimizer
 from personal_agent.brainstem.sensors import (
@@ -88,12 +89,42 @@ def get_or_create_metrics_daemon(
     return daemon
 
 
+def get_mode_controller(
+    mode_manager: ModeManager | None = None,
+) -> ModeControllerConsumer:
+    """Factory: create a ``ModeControllerConsumer`` wired to the global mode manager.
+
+    Intended to be called once during service lifespan setup (Task 6).
+    ``mode_manager`` defaults to the global singleton returned by
+    ``get_mode_manager()``.
+
+    Args:
+        mode_manager: Optional ``ModeManager`` override.  When ``None``,
+            ``get_mode_manager()`` is called to obtain the global singleton.
+
+    Returns:
+        A ready-to-register ``ModeControllerConsumer`` instance.  Callers
+        should subscribe its ``handle`` method to both
+        ``stream:metrics.sampled`` and ``stream:mode.transition`` via the
+        event bus.
+
+    Note:
+        Task 6 (service/app.py lifespan wiring) will call this factory and
+        register the consumer with the event bus when
+        ``settings.mode_controller_enabled`` is True.
+    """
+    manager = mode_manager or get_mode_manager()
+    return ModeControllerConsumer(mode_manager=manager)
+
+
 __all__ = [
+    "ModeControllerConsumer",
     "ModeManager",
     "ModeManagerError",
     "ThresholdOptimizer",
     "Mode",
     "get_mode_manager",
+    "get_mode_controller",
     "get_current_mode",
     "get_or_create_metrics_daemon",
     "poll_system_metrics",

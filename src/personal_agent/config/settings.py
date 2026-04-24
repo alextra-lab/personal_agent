@@ -215,6 +215,25 @@ class AppConfig(BaseSettings):
         description="MAXLEN (approximate) on stream:metrics.sampled — matches MetricsDaemon "
         "ring-buffer depth (~1 h at 5 s).",
     )
+    mode_evaluation_interval_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        description="How often cg:mode-controller aggregates its window and calls "
+        "ModeManager.evaluate_transitions. Unit: seconds.",
+    )
+    mode_window_size: int = Field(
+        default=12,
+        ge=1,
+        le=720,
+        description="Number of recent MetricsSampledEvent samples retained by "
+        "cg:mode-controller for aggregation (12 × 5 s = 60 s window).",
+    )
+    mode_calibration_anomaly_threshold: int = Field(
+        default=3,
+        ge=1,
+        description="Number of (from_mode, to_mode) edge transitions within 10 min "
+        "that triggers a Captain's Log calibration proposal.",
+    )
 
     # MCP Gateway
     mcp_gateway_enabled: bool = Field(

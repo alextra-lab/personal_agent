@@ -198,6 +198,212 @@ class TestConsolidationInsightsHandler:
 
         mock_engine.analyze_patterns.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_publishes_pattern_event_per_insight(self) -> None:
+        """Handler publishes one InsightsPatternDetectedEvent per insight when wiring is enabled."""
+        from personal_agent.events.models import (
+            STREAM_INSIGHTS_PATTERN_DETECTED,
+            InsightsPatternDetectedEvent,
+        )
+
+        published: list[tuple[str, object]] = []
+
+        class _FakeBus:
+            async def publish(self, stream: str, event: object, maxlen: object = None) -> None:
+                published.append((stream, event))
+
+        class _StubInsight:
+            insight_type = "correlation"
+            pattern_kind = ""
+            title = "t"
+            summary = "s"
+            confidence = 0.7
+            actionable = True
+            evidence: dict[str, object] = {}
+
+        mock_engine = MagicMock()
+        mock_engine.analyze_patterns = AsyncMock(return_value=[_StubInsight()])
+        mock_engine.create_captain_log_proposals = AsyncMock(return_value=[])
+
+        handler = build_consolidation_insights_handler(event_bus=_FakeBus())
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setitem(sys.modules, "personal_agent.insights", MagicMock())
+            mp.setitem(
+                sys.modules,
+                "personal_agent.insights.engine",
+                MagicMock(InsightsEngine=MagicMock(return_value=mock_engine)),
+            )
+            mp.setitem(
+                sys.modules,
+                "personal_agent.captains_log.manager",
+                MagicMock(CaptainLogManager=MagicMock(return_value=MagicMock())),
+            )
+            mp.setitem(
+                sys.modules,
+                "personal_agent.config.settings",
+                MagicMock(get_settings=MagicMock(return_value=MagicMock(insights_wiring_enabled=True))),
+            )
+            await handler(_consolidation_event(captures_processed=3))
+
+        pattern_events = [(s, e) for s, e in published if s == STREAM_INSIGHTS_PATTERN_DETECTED]
+        assert len(pattern_events) == 1
+        evt = pattern_events[0][1]
+        assert isinstance(evt, InsightsPatternDetectedEvent)
+        assert evt.insight_type == "correlation"
+
+    @pytest.mark.asyncio
+    async def test_publishes_cost_anomaly_event_for_anomaly_insights(self) -> None:
+        """Handler publishes InsightsCostAnomalyEvent when insight_type is 'anomaly'."""
+        from personal_agent.events.models import (
+            STREAM_INSIGHTS_COST_ANOMALY,
+            InsightsCostAnomalyEvent,
+        )
+
+        published: list[tuple[str, object]] = []
+
+        class _FakeBus:
+            async def publish(self, stream: str, event: object, maxlen: object = None) -> None:
+                published.append((stream, event))
+
+        class _StubInsight:
+            insight_type = "anomaly"
+            pattern_kind = ""
+            title = "Cost spike detected"
+            summary = "spike"
+            confidence = 0.75
+            actionable = True
+            evidence = {
+                "observed_cost_usd": 4.12,
+                "baseline_cost_usd": 1.28,
+                "ratio": 3.22,
+            }
+
+        mock_engine = MagicMock()
+        mock_engine.analyze_patterns = AsyncMock(return_value=[_StubInsight()])
+        mock_engine.create_captain_log_proposals = AsyncMock(return_value=[])
+
+        handler = build_consolidation_insights_handler(event_bus=_FakeBus())
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setitem(sys.modules, "personal_agent.insights", MagicMock())
+            mp.setitem(
+                sys.modules,
+                "personal_agent.insights.engine",
+                MagicMock(InsightsEngine=MagicMock(return_value=mock_engine)),
+            )
+            mp.setitem(
+                sys.modules,
+                "personal_agent.captains_log.manager",
+                MagicMock(CaptainLogManager=MagicMock(return_value=MagicMock())),
+            )
+            mp.setitem(
+                sys.modules,
+                "personal_agent.config.settings",
+                MagicMock(get_settings=MagicMock(return_value=MagicMock(insights_wiring_enabled=True))),
+            )
+            await handler(_consolidation_event(captures_processed=3))
+
+        cost_events = [(s, e) for s, e in published if s == STREAM_INSIGHTS_COST_ANOMALY]
+        assert len(cost_events) == 1
+        evt = cost_events[0][1]
+        assert isinstance(evt, InsightsCostAnomalyEvent)
+        assert evt.severity in {"low", "medium", "high"}
+        assert abs(evt.ratio - 3.22) < 1e-6
+
+    @pytest.mark.asyncio
+    async def test_saves_captain_log_proposals_via_manager(self) -> None:
+        """Handler calls CaptainLogManager.save_entry for every proposal."""
+        mock_proposal = MagicMock()
+
+        class _FakeBus:
+            async def publish(self, stream: str, event: object, maxlen: object = None) -> None:
+                pass
+
+        class _StubInsight:
+            insight_type = "trend"
+            pattern_kind = ""
+            title = "t"
+            summary = "s"
+            confidence = 0.7
+            actionable = True
+            evidence: dict[str, object] = {}
+
+        mock_engine = MagicMock()
+        mock_engine.analyze_patterns = AsyncMock(return_value=[_StubInsight()])
+        mock_engine.create_captain_log_proposals = AsyncMock(return_value=[mock_proposal])
+
+        mock_manager = MagicMock()
+        mock_manager.save_entry = MagicMock(return_value=None)
+
+        handler = build_consolidation_insights_handler(event_bus=_FakeBus())
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setitem(sys.modules, "personal_agent.insights", MagicMock())
+            mp.setitem(
+                sys.modules,
+                "personal_agent.insights.engine",
+                MagicMock(InsightsEngine=MagicMock(return_value=mock_engine)),
+            )
+            mp.setitem(
+                sys.modules,
+                "personal_agent.captains_log.manager",
+                MagicMock(CaptainLogManager=MagicMock(return_value=mock_manager)),
+            )
+            mp.setitem(
+                sys.modules,
+                "personal_agent.config.settings",
+                MagicMock(get_settings=MagicMock(return_value=MagicMock(insights_wiring_enabled=True))),
+            )
+            await handler(_consolidation_event(captures_processed=3))
+
+        mock_manager.save_entry.assert_called_once_with(mock_proposal)
+
+    @pytest.mark.asyncio
+    async def test_wiring_disabled_skips_bus_and_cl(self) -> None:
+        """When insights_wiring_enabled=False, no bus publish and no CL save."""
+        published: list[object] = []
+
+        class _FakeBus:
+            async def publish(self, stream: str, event: object, maxlen: object = None) -> None:
+                published.append(event)
+
+        class _StubInsight:
+            insight_type = "trend"
+            pattern_kind = ""
+            title = "t"
+            summary = "s"
+            confidence = 0.7
+            actionable = True
+            evidence: dict[str, object] = {}
+
+        mock_engine = MagicMock()
+        mock_engine.analyze_patterns = AsyncMock(return_value=[_StubInsight()])
+        mock_engine.create_captain_log_proposals = AsyncMock(return_value=[MagicMock()])
+
+        mock_manager = MagicMock()
+
+        handler = build_consolidation_insights_handler(event_bus=_FakeBus())
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setitem(sys.modules, "personal_agent.insights", MagicMock())
+            mp.setitem(
+                sys.modules,
+                "personal_agent.insights.engine",
+                MagicMock(InsightsEngine=MagicMock(return_value=mock_engine)),
+            )
+            mp.setitem(
+                sys.modules,
+                "personal_agent.captains_log.manager",
+                MagicMock(CaptainLogManager=MagicMock(return_value=mock_manager)),
+            )
+            mp.setitem(
+                sys.modules,
+                "personal_agent.config.settings",
+                MagicMock(get_settings=MagicMock(return_value=MagicMock(insights_wiring_enabled=False))),
+            )
+            await handler(_consolidation_event(captures_processed=3))
+
+        assert published == []
+        mock_manager.save_entry.assert_not_called()
+        mock_engine.create_captain_log_proposals.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # build_consolidation_promotion_handler

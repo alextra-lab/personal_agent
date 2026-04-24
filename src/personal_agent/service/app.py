@@ -583,7 +583,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             stream=STREAM_CONSOLIDATION_COMPLETED,
             group=CG_INSIGHTS,
             consumer_name="insights-0",
-            handler=build_consolidation_insights_handler(memory_service=memory_service),
+            handler=build_consolidation_insights_handler(
+                memory_service=memory_service,
+                event_bus=active_bus,
+            ),
         )
         await active_bus.subscribe(
             stream=STREAM_CONSOLIDATION_COMPLETED,

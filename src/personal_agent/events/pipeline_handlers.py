@@ -7,7 +7,7 @@ lazily so the module loads cheaply and stays testable with lightweight mocks.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from personal_agent.captains_log.models import ChangeScope
 from personal_agent.events.models import (
@@ -43,14 +43,29 @@ def _default_elasticsearch_async_client() -> Any | None:
         return None
 
 
-def build_consolidation_insights_handler(memory_service: Any | None = None) -> Any:
+def build_consolidation_insights_handler(
+    memory_service: Any | None = None,
+    event_bus: Any | None = None,
+) -> Any:
     """Build handler that runs insights analysis on ``consolidation.completed``.
 
-    Skips analysis when no captures were processed (nothing new to analyse).
+    On each event (when captures_processed > 0 and insights_wiring_enabled):
+      1. Calls ``InsightsEngine.analyze_patterns(days=7)``.
+      2. Publishes one ``InsightsPatternDetectedEvent`` per ``Insight``
+         to ``stream:insights.pattern_detected``.
+      3. Publishes one ``InsightsCostAnomalyEvent`` per anomaly insight
+         to ``stream:insights.cost_anomaly``.
+      4. Calls ``InsightsEngine.create_captain_log_proposals(insights)``.
+      5. Saves each proposal via ``CaptainLogManager.save_entry()``
+         (ADR-0030 fingerprint dedup + ADR-0040 suppression apply).
+
+    All bus publishes and CL saves are best-effort — exceptions are logged
+    and swallowed so a single failure never poisons the scan.
 
     Args:
-        memory_service: Optional connected :class:`~personal_agent.memory.service.MemoryService`
-            for graph-backed insights (e.g. freshness staleness tiers).
+        memory_service: Optional connected MemoryService for graph-backed insights.
+        event_bus: Optional EventBus override (used in tests). When None, the
+            handler lazily fetches ``get_event_bus()`` at invocation time.
 
     Returns:
         Async handler for ``cg:insights`` on ``stream:consolidation.completed``.
@@ -65,6 +80,7 @@ def build_consolidation_insights_handler(memory_service: Any | None = None) -> A
                 event_id=event.event_id,
             )
             return
+        from personal_agent.config.settings import get_settings
         from personal_agent.insights.engine import InsightsEngine
         from personal_agent.telemetry.queries import TelemetryQueries
 
@@ -79,10 +95,166 @@ def build_consolidation_insights_handler(memory_service: Any | None = None) -> A
                 captures_processed=event.captures_processed,
                 insights_count=len(insights),
             )
+
+            # Short-circuit: no signals or wiring disabled → nothing to publish.
+            # This keeps existing tests (which mock analyze_patterns → []) passing
+            # without requiring them to mock create_captain_log_proposals.
+            if not insights or not get_settings().insights_wiring_enabled:
+                return
+
+            # Resolve bus lazily when not injected (production path)
+            bus = event_bus
+            if bus is None:
+                from personal_agent.events.bus import get_event_bus
+
+                bus = get_event_bus()
+
+            await _publish_insight_events(bus, insights)
+
+            proposals = await engine.create_captain_log_proposals(insights)
+            await _save_proposals(proposals)
         finally:
             await queries.disconnect()
 
     return handler
+
+
+def _insight_pattern_fingerprint(insight_type: str, pattern_kind: str, title: str) -> str:
+    """Deterministic 16-hex fingerprint for an insight (ADR-0057 §D6).
+
+    Mirrors ``insights.engine._pattern_fingerprint`` so the handler has no
+    import dependency on the engine module (which tests mock entirely).
+    """
+    import hashlib
+    import re
+
+    normalised = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
+    key = f"{insight_type}:{pattern_kind}:{normalised}".encode()
+    return hashlib.sha256(key).hexdigest()[:16]
+
+
+def _insight_cost_fingerprint(anomaly_type: str, observation_date: str) -> str:
+    """Deterministic 16-hex fingerprint for a cost anomaly (ADR-0057 §D6).
+
+    Mirrors ``insights.engine._cost_fingerprint`` for the same reason.
+    """
+    import hashlib
+
+    key = f"{anomaly_type}:{observation_date}".encode()
+    return hashlib.sha256(key).hexdigest()[:16]
+
+
+def _insight_severity_for_cost_ratio(ratio: float) -> Literal["low", "medium", "high"]:
+    """Classify cost anomaly severity (ADR-0057 §D5).
+
+    Returns "low" (< 2.5), "medium" (2.5–4.0), or "high" (≥ 4.0).
+    Mirrors ``insights.engine._severity_for_cost_ratio`` for the same reason.
+    """
+    if ratio >= 4.0:
+        return "high"
+    if ratio >= 2.5:
+        return "medium"
+    return "low"
+
+
+async def _publish_insight_events(bus: Any, insights: list[Any]) -> None:
+    """Publish InsightsPatternDetectedEvent + InsightsCostAnomalyEvent per insight.
+
+    Each insight produces a pattern event. Insights where ``insight_type == "anomaly"``
+    additionally produce a typed cost anomaly event with structured numeric fields.
+
+    Args:
+        bus: EventBus instance to publish on.
+        insights: List of Insight objects from InsightsEngine.analyze_patterns().
+    """
+    from datetime import datetime, timezone
+
+    from personal_agent.events.models import (
+        STREAM_INSIGHTS_COST_ANOMALY,
+        STREAM_INSIGHTS_PATTERN_DETECTED,
+        InsightsCostAnomalyEvent,
+        InsightsPatternDetectedEvent,
+    )
+
+    today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    for insight in insights:
+        pattern_kind = getattr(insight, "pattern_kind", "") or ""
+        fingerprint = _insight_pattern_fingerprint(
+            insight.insight_type, pattern_kind, insight.title
+        )
+        try:
+            await bus.publish(
+                STREAM_INSIGHTS_PATTERN_DETECTED,
+                InsightsPatternDetectedEvent(
+                    source_component="insights.engine",
+                    insight_type=insight.insight_type,
+                    pattern_kind=pattern_kind,
+                    title=insight.title,
+                    summary=insight.summary,
+                    confidence=float(insight.confidence),
+                    actionable=bool(insight.actionable),
+                    evidence=dict(insight.evidence),
+                    fingerprint=fingerprint,
+                    analysis_window_days=7,
+                ),
+            )
+        except Exception as exc:
+            log.warning(
+                "insights_pattern_event_publish_failed",
+                error=str(exc),
+                insight_type=insight.insight_type,
+            )
+
+        if insight.insight_type == "anomaly":
+            evidence = dict(insight.evidence)
+            ratio = float(evidence.get("ratio", 0.0))
+            try:
+                await bus.publish(
+                    STREAM_INSIGHTS_COST_ANOMALY,
+                    InsightsCostAnomalyEvent(
+                        source_component="insights.engine",
+                        anomaly_type="daily_cost_spike",
+                        message=insight.summary,
+                        observed_cost_usd=float(evidence.get("observed_cost_usd", 0.0)),
+                        baseline_cost_usd=float(evidence.get("baseline_cost_usd", 0.0)),
+                        ratio=ratio,
+                        confidence=float(insight.confidence),
+                        severity=_insight_severity_for_cost_ratio(ratio),
+                        fingerprint=_insight_cost_fingerprint("daily_cost_spike", today_iso),
+                        observation_date=today_iso,
+                    ),
+                )
+            except Exception as exc:
+                log.warning(
+                    "insights_cost_anomaly_event_publish_failed",
+                    error=str(exc),
+                )
+
+
+async def _save_proposals(proposals: list[Any]) -> None:
+    """Save each CaptainLogEntry proposal via CaptainLogManager (best-effort).
+
+    ADR-0030 fingerprint dedup and ADR-0040 suppression are applied by
+    CaptainLogManager.save_entry() — no additional handling needed here.
+
+    Args:
+        proposals: List of CaptainLogEntry objects from create_captain_log_proposals().
+    """
+    if not proposals:
+        return
+    from personal_agent.captains_log.manager import CaptainLogManager
+
+    manager = CaptainLogManager()
+    for proposal in proposals:
+        try:
+            manager.save_entry(proposal)
+        except Exception as exc:
+            log.warning(
+                "insights_captain_log_save_failed",
+                error=str(exc),
+                proposal_title=getattr(proposal, "title", None),
+            )
 
 
 def build_consolidation_promotion_handler(
@@ -311,10 +483,7 @@ def build_error_pattern_captain_log_handler(manager: Any | None = None) -> Any:
                 f"Representative messages: {list(event.sample_messages)}."
             ),
             proposed_change=ProposedChange(
-                what=(
-                    f"Investigate and mitigate repeated {event.event_name} in "
-                    f"{event.component}"
-                ),
+                what=(f"Investigate and mitigate repeated {event.event_name} in {event.component}"),
                 why=(
                     "Sustained error pattern detected by Level 3 self-observability. "
                     "Repeated failures of this class degrade the capability served "
@@ -366,5 +535,3 @@ def build_error_pattern_captain_log_handler(manager: Any | None = None) -> Any:
         )
 
     return handler
-
-

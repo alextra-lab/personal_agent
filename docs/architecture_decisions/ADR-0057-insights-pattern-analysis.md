@@ -1,6 +1,6 @@
 # ADR-0057: Insights & Pattern Analysis Stream
 
-**Status**: Proposed — In Review
+**Status**: Accepted
 **Date**: 2026-04-23
 **Deciders**: Project owner
 **Depends on**: ADR-0041 (Event Bus — Redis Streams), ADR-0043 (Three-Layer Architectural Separation), ADR-0053 (Gate Feedback-Loop Monitoring Framework — template), ADR-0054 (Feedback Stream Bus Convention)

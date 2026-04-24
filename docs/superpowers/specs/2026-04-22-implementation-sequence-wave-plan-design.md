@@ -117,3 +117,37 @@ Wave 4: FRE-251 (ADR-0061) → impl       FRE-226 → impl
 - `docs/architecture/FEEDBACK_STREAM_ARCHITECTURE.md` — stream catalog and ADR sequence
 - `docs/architecture_decisions/ADR-0053-gate-feedback-monitoring.md` — Feedback Stream ADR Template (all stream ADRs follow this)
 - `docs/plans/MASTER_PLAN.md` — approved issue list and dependency graph
+
+---
+
+## Amendment 2026-04-24 — Wave 2.5 insertion (ADR-0063)
+
+A parallel track opens on 2026-04-24: **ADR-0063 Primitive Tools & Action-Boundary Governance** (`docs/architecture_decisions/ADR-0063-primitive-tools-action-boundary-governance.md`). Migration plan: `docs/plans/2026-04-24-primitive-tools-migration-plan.md`.
+
+### Relationship to the original wave plan
+
+- Wave 2 (FRE-246 / 244 / 247 / 248) proceeds unchanged. No code intersections.
+- **FRE-246** (Mode Manager, ADR-0055) is a hard prerequisite for PIVOT-2 (action-boundary governance reads mode state).
+- **FRE-226** original scope splits:
+  - Phase 1 (hand-authored skill docs) is **absorbed into PIVOT-3** — without skill docs the primitives in ADR-0063 cannot be driven reliably.
+  - Phase 2 (agent writes its own skills via self-improvement) retains its Wave 4 position and continues to depend on ADR-0058 (FRE-248).
+- **FRE-252** (Per-TaskType tool allowlist) is superseded in effect by ADR-0063 P1, which removes the consumer wire it established. FRE-252's Stage 4-before-Stage 3 pipeline reorder remains — that change is independent and correct.
+
+### Insertion in wave sequence
+
+| Wave | Tracks in flight |
+|------|------------------|
+| 2 | FRE-246 (Mode Manager) → FRE-244 / FRE-247 / FRE-248 (as originally planned) |
+| 2.5 (parallel) | PIVOT-1 (sever filter wire) → PIVOT-2 (primitives + sandbox, blocked on FRE-246) → PIVOT-3 (skill docs + eval) → PIVOT-4 (flag-gated deprecation) → PIVOT-5 (loop gate split + model_config fix) → PIVOT-6 (delete legacy tools) |
+| 3 | FRE-249 / FRE-250 — unchanged |
+| 4 | FRE-251 and FRE-226 phase 2 — unchanged |
+
+### Merge discipline
+
+- Pivot PRs rebase on `main` before merge.
+- 48h freeze on `request_gateway/governance.py` and `orchestrator/executor.py:step_llm_call` immediately after PIVOT-1 merge to capture baseline telemetry.
+- No further freezes required.
+
+### North-star note
+
+ADR-0063 treats the six-phase migration as a **learning-oriented path** to a primitive-first, action-boundary-governed agent (Claude-Code-class composability). Each phase is independently reversible. The broader endpoint — collapsing all tool governance to action-boundary + skill docs — is held as the long-term direction but not forced in one pivot. Pivoting safely is worth more than pivoting fast.

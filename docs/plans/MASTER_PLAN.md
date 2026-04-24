@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-23 (Wave 1 complete — ADR-0054 accepted and implemented; `EventBase` flattened; Wave 2 unblocked, next focus FRE-246/ADR-0055)
+> **Last updated**: 2026-04-24 (ADR-0063 proposed — Primitive Tools & Action-Boundary Governance; Wave 2.5 opened in parallel to Wave 2)
 > **Implementation sequence**: `docs/superpowers/specs/2026-04-22-implementation-sequence-wave-plan-design.md`
 
 ---
@@ -18,6 +18,7 @@
 | ~~1~~ | ~~3a~~ | ~~Investigate step-count reduction (interaction latency)~~ | ~~[FRE-254](https://linear.app/frenchforest/issue/FRE-254)~~ | ~~Investigation~~ | ~~Done 2026-04-22~~ |
 | ~~1~~ | ~~3b~~ | ~~Feedback Stream Bus Convention (ADR-0054)~~ | ~~[FRE-245](https://linear.app/frenchforest/issue/FRE-245)~~ | ~~ADR + implementation~~ | ~~Done 2026-04-23 — Accepted, flattened `EventBase`, 10 producer sites migrated~~ |
 | 2 | 4 | System Health & Homeostasis — Mode Manager fix (ADR-0055) | [FRE-246](https://linear.app/frenchforest/issue/FRE-246) | ADR + fix | Approved — unblocked |
+| 2.5 | — | ADR-0063 Primitive Tools & Action-Boundary Governance | *(epic pending)* | ADR + 6-phase migration | In Review — proposed 2026-04-24 |
 
 ## Upcoming — Approved
 
@@ -38,7 +39,9 @@ Ordered by recommended implementation sequence. All items Approved in Linear. De
 
 ## Needs Approval
 
-_(none)_
+| Work Item | ADR / Plan | Notes |
+|-----------|------------|-------|
+| ADR-0063 Primitive Tools & Action-Boundary Governance | `docs/architecture_decisions/ADR-0063-primitive-tools-action-boundary-governance.md` | Root cause of FRE-254 class addressed structurally. 6-phase migration; reversible per-phase. Coexists with Wave 2. Migration plan: `docs/plans/2026-04-24-primitive-tools-migration-plan.md`. |
 
 ### Dependency graph (project-level)
 
@@ -47,6 +50,7 @@ ADR-0053: Gate Feedback Monitoring (FRE-233) ✅ Done 2026-04-22 — spawned FRE
     ↓
 ADR-0054: Bus Convention (FRE-245) ✅ Done 2026-04-23 — Wave 2 unblocked
     ├── ADR-0055: System Health & Homeostasis (FRE-246)  ← fixes app.py:176 hardcoded Mode.NORMAL
+    │                                                      ← PREREQ for ADR-0063 phase 2
     ├── ADR-0056: Error Pattern Monitoring (FRE-244)     ← Level 3 observability
     ├── ADR-0057: Insights & Pattern Analysis (FRE-247)  ← wires InsightsEngine
     └── ADR-0058: Self-Improvement Pipeline (FRE-248)    ← adds captain_log.entry_created event
@@ -55,8 +59,15 @@ ADR-0054: Bus Convention (FRE-245) ✅ Done 2026-04-23 — Wave 2 unblocked
         ADR-0060: Knowledge Graph Quality (FRE-250)      ← depends on 0054 + 0057
             ↓ (Phase 4)
         ADR-0061: Within-Session Compression (FRE-251)   ← depends on ADR-0059
-        FRE-226:  Agent skill files (agentskills.io)     ← depends on ADR-0058 (FRE-248)
-        FRE-252:  Per-TaskType tool allowlist             ← independent (no blockers)
+        FRE-226:  Agent skill files (agentskills.io)     ← SPLIT by ADR-0063:
+                                                            phase 1 (hand-authored) → PIVOT-3
+                                                            phase 2 (self-updating) → depends on ADR-0058
+        FRE-252:  Per-TaskType tool allowlist             ← superseded by ADR-0063 phase 1
+
+ADR-0063: Primitive Tools & Action-Boundary Governance (2026-04-24) ← PROPOSED
+    Parallel to Wave 2 (no code intersection); P2 depends on FRE-246.
+    Phases P1 → P2 → P3 → P4 → P5 → P6 (see migration plan).
+    P1 severs TaskType→tool-filter wire; P2-P4 adds primitives; P5-P6 removes legacy.
 
 Architecture reference: docs/architecture/FEEDBACK_STREAM_ARCHITECTURE.md
 
@@ -65,6 +76,8 @@ Proactive Memory (ADR-0039)
 Context Intelligence Stretch Goals (4.7, 4.S1, 4.S2)
 
 CLI Migration (ADR-0028)
+    ↓ (natural continuation)
+ADR-0063 Primitive Tools (bash + read + write + run_python)
     ↓
 3.0 Daily-Use Interface (FRE-22 plugin arch)
 

@@ -16,6 +16,8 @@ from personal_agent.events.models import (
     CG_SESSION_WRITER,
     STREAM_CONSOLIDATION_COMPLETED,
     STREAM_FEEDBACK_RECEIVED,
+    STREAM_INSIGHTS_COST_ANOMALY,
+    STREAM_INSIGHTS_PATTERN_DETECTED,
     STREAM_MEMORY_ACCESSED,
     STREAM_PROMOTION_ISSUE_CREATED,
     STREAM_REQUEST_CAPTURED,
@@ -23,8 +25,9 @@ from personal_agent.events.models import (
     STREAM_SYSTEM_IDLE,
     AccessContext,
     ConsolidationCompletedEvent,
-    EventBase,
     FeedbackReceivedEvent,
+    InsightsCostAnomalyEvent,
+    InsightsPatternDetectedEvent,
     MemoryAccessedEvent,
     PromotionIssueCreatedEvent,
     RequestCapturedEvent,
@@ -410,13 +413,17 @@ class TestConstants:
         assert STREAM_MEMORY_ACCESSED == "stream:memory.accessed"
         assert CG_FRESHNESS == "cg:freshness"
 
+    def test_wave2_streams(self) -> None:
+        """Wave 2 (ADR-0057) stream constants are correctly defined."""
+        assert STREAM_INSIGHTS_PATTERN_DETECTED == "stream:insights.pattern_detected"
+        assert STREAM_INSIGHTS_COST_ANOMALY == "stream:insights.cost_anomaly"
+
 
 class TestInsightsPatternDetectedEvent:
     """InsightsPatternDetectedEvent (ADR-0057)."""
 
     def test_event_type(self) -> None:
-        from personal_agent.events.models import InsightsPatternDetectedEvent
-
+        """event_type is always 'insights.pattern_detected'."""
         event = InsightsPatternDetectedEvent(
             source_component="insights.engine",
             insight_type="correlation",
@@ -434,11 +441,7 @@ class TestInsightsPatternDetectedEvent:
         assert event.session_id is None
 
     def test_parse_stream_event_dispatch(self) -> None:
-        from personal_agent.events.models import (
-            InsightsPatternDetectedEvent,
-            parse_stream_event,
-        )
-
+        """parse_stream_event correctly dispatches insights.pattern_detected payloads."""
         event = InsightsPatternDetectedEvent(
             source_component="insights.engine",
             insight_type="anomaly",
@@ -460,8 +463,7 @@ class TestInsightsCostAnomalyEvent:
     """InsightsCostAnomalyEvent (ADR-0057)."""
 
     def test_event_type(self) -> None:
-        from personal_agent.events.models import InsightsCostAnomalyEvent
-
+        """event_type is always 'insights.cost_anomaly'."""
         event = InsightsCostAnomalyEvent(
             source_component="insights.engine",
             anomaly_type="daily_cost_spike",
@@ -475,13 +477,11 @@ class TestInsightsCostAnomalyEvent:
             observation_date="2026-04-19",
         )
         assert event.event_type == "insights.cost_anomaly"
+        assert event.trace_id is None
+        assert event.session_id is None
 
     def test_parse_stream_event_dispatch(self) -> None:
-        from personal_agent.events.models import (
-            InsightsCostAnomalyEvent,
-            parse_stream_event,
-        )
-
+        """parse_stream_event correctly dispatches insights.cost_anomaly payloads."""
         event = InsightsCostAnomalyEvent(
             source_component="insights.engine",
             anomaly_type="daily_cost_spike",

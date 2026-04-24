@@ -547,7 +547,7 @@ class InsightsCostAnomalyEvent(EventBase):
     baseline_cost_usd: float
     ratio: float
     confidence: float
-    severity: str
+    severity: Literal["low", "medium", "high"]
     fingerprint: str
     observation_date: str
 

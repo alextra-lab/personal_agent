@@ -205,9 +205,10 @@ class AppConfig(BaseSettings):
         description="Metrics daemon ring buffer size",
     )
     mode_controller_enabled: bool = Field(
-        default=False,
+        default=True,
         description="Enable ADR-0055 mode controller (cg:mode-controller consumer + "
-        "dual-write of metrics.sampled and mode.transition events).",
+        "dual-write of metrics.sampled and mode.transition events). "
+        "Defaults True — the full ADR-0055 pipeline is active in production.",
     )
     metrics_sampled_stream_maxlen: int = Field(
         default=720,

@@ -12,6 +12,12 @@ from fastapi import Depends, FastAPI, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from personal_agent.brainstem import (
+    get_current_mode,
+    get_mode_controller,
+    get_mode_manager,
+    get_or_create_metrics_daemon,
+)
 from personal_agent.brainstem.scheduler import BrainstemScheduler
 from personal_agent.brainstem.sensors.metrics_daemon import (
     MetricsDaemon,
@@ -172,7 +178,7 @@ async def _process_chat_stream_background(
                 session_id=session_id,
                 session_messages=prior_messages,
                 trace_id=trace_id,
-                mode=Mode.NORMAL,
+                mode=get_current_mode(),
                 memory_adapter=memory_adapter,
                 expansion_budget=expansion_budget,
                 full_session_messages=db_messages,
@@ -195,7 +201,7 @@ async def _process_chat_stream_background(
             session_mgr = orchestrator.session_manager
 
             if not session_mgr.get_session(session_id):
-                session_mgr.create_session(Mode.NORMAL, Channel.CHAT, session_id=session_id)
+                session_mgr.create_session(get_current_mode(), Channel.CHAT, session_id=session_id)
             if prior_messages:
                 session_mgr.update_session(session_id, messages=prior_messages)
 
@@ -405,6 +411,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         set_global_event_bus(NoOpBus())
         log.info("event_bus_disabled_using_noop")
 
+    # ADR-0055: wire bus producers into brainstem singletons so metrics.sampled
+    # and mode.transition events flow through the event bus from this point on.
+    # MetricsDaemon is created above without a bus (bus wasn't ready yet); inject
+    # now that the bus is resolved.  ModeManager singleton is created here for
+    # the first time so it receives the bus in its constructor.
+    from personal_agent.events.bus import get_event_bus as _get_event_bus_for_wiring
+
+    _wiring_bus = _get_event_bus_for_wiring()
+    # Inject bus into the already-running MetricsDaemon singleton.
+    if metrics_daemon is not None:
+        metrics_daemon._event_bus = _wiring_bus  # noqa: SLF001
+    # Boot ModeManager singleton with bus so mode.transition events are published.
+    get_mode_manager(event_bus=_wiring_bus)
+    log.info("brainstem_bus_producers_wired", bus_type=type(_wiring_bus).__name__)
+
     # LinearClient: key-based, no gateway dependency (FRE-243 follow-up of FRE-224).
     if settings.linear_api_key:
         from personal_agent.captains_log.linear_client import LinearClient
@@ -480,12 +501,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         CG_FEEDBACK,
         CG_FRESHNESS,
         CG_INSIGHTS,
+        CG_MODE_CONTROLLER,
         CG_PROMOTION,
         CG_SESSION_WRITER,
         STREAM_CONSOLIDATION_COMPLETED,
         STREAM_FEEDBACK_RECEIVED,
         STREAM_MEMORY_ACCESSED,
         STREAM_MEMORY_ENTITIES_UPDATED,
+        STREAM_METRICS_SAMPLED,
+        STREAM_MODE_TRANSITION,
         STREAM_PROMOTION_ISSUE_CREATED,
         STREAM_REQUEST_CAPTURED,
         STREAM_REQUEST_COMPLETED,
@@ -605,6 +629,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             consumer_name="freshness-entities-0",
             handler=_noop_freshness_entities,
         )
+
+        # ADR-0055: cg:mode-controller — receives metrics.sampled and
+        # mode.transition events, drives ModeManager.evaluate_transitions().
+        if settings.mode_controller_enabled:
+            _mode_controller = get_mode_controller()
+            await active_bus.subscribe(
+                stream=STREAM_METRICS_SAMPLED,
+                group=CG_MODE_CONTROLLER,
+                consumer_name="mode-controller-0",
+                handler=_mode_controller.handle,
+            )
+            await active_bus.subscribe(
+                stream=STREAM_MODE_TRANSITION,
+                group=CG_MODE_CONTROLLER,
+                consumer_name="mode-controller-transition-0",
+                handler=_mode_controller.handle,
+            )
+            log.info("mode_controller_registered", consumer_group=CG_MODE_CONTROLLER)
 
         consumer_runner = ConsumerRunner(active_bus)
         await consumer_runner.start()
@@ -910,7 +952,7 @@ async def chat(
                 session_id=str(session.session_id),
                 session_messages=prior_messages,
                 trace_id=trace_id,
-                mode=Mode.NORMAL,  # From brainstem in future
+                mode=get_current_mode(),
                 memory_adapter=memory_adapter,
                 expansion_budget=expansion_budget,
                 full_session_messages=db_messages,
@@ -941,7 +983,7 @@ async def chat(
                 from personal_agent.orchestrator.channels import Channel
 
                 session_manager.create_session(
-                    Mode.NORMAL, Channel.CHAT, session_id=str(session.session_id)
+                    get_current_mode(), Channel.CHAT, session_id=str(session.session_id)
                 )
 
             if prior_messages:

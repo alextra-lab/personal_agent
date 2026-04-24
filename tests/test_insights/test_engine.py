@@ -1,5 +1,6 @@
 """Tests for proactive insights engine (FRE-24)."""
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -213,3 +214,85 @@ class TestInsightsEngineHelpers:
         assert _scope_for_insight_type("feedback_category") == ChangeScope.CAPTAINS_LOG
         assert _scope_for_insight_type("delegation") == ChangeScope.ORCHESTRATOR
         assert _scope_for_insight_type("unknown_future_type") == ChangeScope.CROSS_CUTTING
+
+
+@pytest.mark.asyncio
+class TestCreateCaptainLogProposalsFingerprinted:
+    """ADR-0057: proposals carry fingerprint/category/scope/seen_count=1."""
+
+    async def test_anomaly_insight_gets_cost_fingerprint_and_cost_category(self) -> None:
+        """Anomaly insights use cost fingerprint keyed on today's date."""
+        today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        engine = InsightsEngine()
+        insight = Insight(
+            insight_type="anomaly",
+            title="Cost spike detected",
+            summary="Cost spike today",
+            confidence=0.75,
+            evidence={"observed_cost_usd": 4.12, "ratio": 3.22},
+            actionable=True,
+        )
+        proposals = await engine.create_captain_log_proposals([insight])
+        assert len(proposals) == 1
+        pc = proposals[0].proposed_change
+        assert pc is not None
+        assert pc.fingerprint == _cost_fingerprint("daily_cost_spike", today_iso)
+        assert pc.category == ChangeCategory.COST
+        assert pc.scope == ChangeScope.LLM_CLIENT
+        assert pc.seen_count == 1
+        assert pc.first_seen is not None
+
+    async def test_correlation_insight_gets_pattern_fingerprint(self) -> None:
+        """Correlation insights use pattern fingerprint keyed on insight_type + title."""
+        engine = InsightsEngine()
+        insight = Insight(
+            insight_type="correlation",
+            title="Higher failure risk when memory is elevated",
+            summary="Task success rate 70% while memory p90 78%",
+            confidence=0.68,
+            evidence={"memory_p90_percent": 78.0},
+            actionable=True,
+        )
+        proposals = await engine.create_captain_log_proposals([insight])
+        assert len(proposals) == 1
+        pc = proposals[0].proposed_change
+        assert pc is not None
+        assert pc.fingerprint == _pattern_fingerprint("correlation", "", insight.title)
+        assert pc.category == ChangeCategory.PERFORMANCE
+        assert pc.scope == ChangeScope.CROSS_CUTTING
+
+    async def test_below_confidence_threshold_dropped(self) -> None:
+        """Insights below DEFAULT_ACTIONABLE_CONFIDENCE (0.55) are not proposed."""
+        engine = InsightsEngine()
+        insight = Insight(
+            insight_type="correlation",
+            title="Low confidence insight",
+            summary="",
+            confidence=0.40,
+            evidence={},
+            actionable=True,
+        )
+        proposals = await engine.create_captain_log_proposals([insight])
+        assert proposals == []
+
+    async def test_delegation_insight_carries_pattern_kind(self) -> None:
+        """Delegation insights encode pattern_kind in their fingerprint."""
+        engine = InsightsEngine()
+        insight = Insight(
+            insight_type="delegation",
+            pattern_kind="delegation_success_rate",
+            title="Low success rate for ClaudeCode delegations (42%)",
+            summary="13/31 successful over 30d",
+            confidence=0.78,
+            evidence={"success_rate": 0.42, "total_delegations": 31},
+            actionable=True,
+        )
+        proposals = await engine.create_captain_log_proposals([insight])
+        assert len(proposals) == 1
+        pc = proposals[0].proposed_change
+        assert pc is not None
+        assert pc.category == ChangeCategory.RELIABILITY
+        assert pc.scope == ChangeScope.ORCHESTRATOR
+        assert pc.fingerprint == _pattern_fingerprint(
+            "delegation", "delegation_success_rate", insight.title
+        )

@@ -39,6 +39,7 @@ class Insight:
     confidence: float
     evidence: dict[str, float | int | str]
     actionable: bool = True
+    pattern_kind: str = ""
 
 
 @dataclass(frozen=True)
@@ -313,6 +314,14 @@ class InsightsEngine:
                 )
                 for metric_name, metric_value in insight.evidence.items()
             ]
+            now = datetime.now(timezone.utc)
+            if insight.insight_type == "anomaly":
+                observation_date = now.strftime("%Y-%m-%d")
+                fingerprint = _cost_fingerprint("daily_cost_spike", observation_date)
+            else:
+                fingerprint = _pattern_fingerprint(
+                    insight.insight_type, insight.pattern_kind, insight.title
+                )
             proposed_change = ProposedChange(
                 what=f"Address insight pattern: {insight.title}",
                 why=insight.summary,
@@ -320,6 +329,10 @@ class InsightsEngine:
                     "Run targeted mitigation experiment for 7 days, monitor impact metrics, "
                     "and apply change if confidence improves."
                 ),
+                category=_category_for_insight_type(insight.insight_type),
+                scope=_scope_for_insight_type(insight.insight_type),
+                fingerprint=fingerprint,
+                first_seen=now,
             )
             proposals.append(
                 CaptainLogEntry(

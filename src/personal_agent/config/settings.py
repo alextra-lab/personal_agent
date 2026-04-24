@@ -640,6 +640,19 @@ class AppConfig(BaseSettings):
         description="UTC hour for weekly Captain's Log insight proposals",
     )
 
+    # ADR-0057 — dual-write wiring enable flag (independent of insights_enabled so the
+    # engine can produce insights without CL/bus wiring if needed during rollout).
+    insights_wiring_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable ADR-0057 wiring: publish InsightsPatternDetectedEvent + "
+            "InsightsCostAnomalyEvent on the bus and emit CaptainLogEntry "
+            "proposals via CaptainLogManager on every consolidation. Flip "
+            "False if a CL flood occurs post-rollout; the engine still "
+            "analyses and indexes to agent-insights-*."
+        ),
+    )
+
     # Captain's Log promotion + Linear feedback loop (ADR-0040)
     promotion_pipeline_enabled: bool = Field(
         default=True,

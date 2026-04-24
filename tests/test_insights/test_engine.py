@@ -136,3 +136,86 @@ class TestInsightsEngine:
             insights = await engine.analyze_patterns(days=7)
             assert len(insights) > 0
             assert mock_schedule.call_count >= 1
+
+
+class TestInsightsEngineHelpers:
+    """ADR-0057 helpers: fingerprints, category/scope mapping, severity."""
+
+    def test_pattern_fingerprint_stable_across_equivalent_titles(self) -> None:
+        """Digit-normalised titles produce the same fingerprint."""
+        from personal_agent.insights.engine import _pattern_fingerprint
+
+        fp1 = _pattern_fingerprint("anomaly", "", "Cost spike: $4.12 on 2026-04-19")
+        fp2 = _pattern_fingerprint("anomaly", "", "Cost spike: $5.23 on 2026-04-20")
+        assert fp1 == fp2, "digits in title must be normalised to # for dedup"
+        assert len(fp1) == 16
+
+    def test_pattern_fingerprint_distinguishes_insight_types(self) -> None:
+        """Different insight_type values → different fingerprints."""
+        from personal_agent.insights.engine import _pattern_fingerprint
+
+        fp1 = _pattern_fingerprint("anomaly", "", "same title")
+        fp2 = _pattern_fingerprint("correlation", "", "same title")
+        assert fp1 != fp2
+
+    def test_pattern_fingerprint_includes_pattern_kind(self) -> None:
+        """Different pattern_kind values → different fingerprints."""
+        from personal_agent.insights.engine import _pattern_fingerprint
+
+        fp1 = _pattern_fingerprint("delegation", "delegation_success_rate", "Low success")
+        fp2 = _pattern_fingerprint("delegation", "delegation_rounds", "Low success")
+        assert fp1 != fp2
+
+    def test_cost_fingerprint_keyed_on_anomaly_date(self) -> None:
+        """Different observation dates → different fingerprints."""
+        from personal_agent.insights.engine import _cost_fingerprint
+
+        fp1 = _cost_fingerprint("daily_cost_spike", "2026-04-19")
+        fp2 = _cost_fingerprint("daily_cost_spike", "2026-04-20")
+        assert fp1 != fp2
+        assert len(fp1) == 16
+
+    def test_severity_thresholds(self) -> None:
+        """Severity classification matches ADR-0057 §D5 thresholds."""
+        from personal_agent.insights.engine import _severity_for_cost_ratio
+
+        assert _severity_for_cost_ratio(1.8) == "low"
+        assert _severity_for_cost_ratio(2.4999) == "low"
+        assert _severity_for_cost_ratio(2.5) == "medium"
+        assert _severity_for_cost_ratio(3.9) == "medium"
+        assert _severity_for_cost_ratio(4.0) == "high"
+        assert _severity_for_cost_ratio(12.0) == "high"
+
+    def test_category_for_insight_type(self) -> None:
+        """insight_type → ChangeCategory mapping per ADR-0057 §D7."""
+        from personal_agent.captains_log.models import ChangeCategory
+        from personal_agent.insights.engine import _category_for_insight_type
+
+        assert _category_for_insight_type("correlation") == ChangeCategory.PERFORMANCE
+        assert _category_for_insight_type("optimization") == ChangeCategory.PERFORMANCE
+        assert _category_for_insight_type("trend") == ChangeCategory.OBSERVABILITY
+        assert _category_for_insight_type("anomaly") == ChangeCategory.COST
+        assert _category_for_insight_type("graph_staleness") == ChangeCategory.KNOWLEDGE_QUALITY
+        assert (
+            _category_for_insight_type("graph_staleness_trend") == ChangeCategory.KNOWLEDGE_QUALITY
+        )
+        assert _category_for_insight_type("feedback_summary") == ChangeCategory.OBSERVABILITY
+        assert _category_for_insight_type("feedback_category") == ChangeCategory.OBSERVABILITY
+        assert _category_for_insight_type("delegation") == ChangeCategory.RELIABILITY
+        assert _category_for_insight_type("unknown_future_type") == ChangeCategory.OBSERVABILITY
+
+    def test_scope_for_insight_type(self) -> None:
+        """insight_type → ChangeScope mapping per ADR-0057 §D7."""
+        from personal_agent.captains_log.models import ChangeScope
+        from personal_agent.insights.engine import _scope_for_insight_type
+
+        assert _scope_for_insight_type("correlation") == ChangeScope.CROSS_CUTTING
+        assert _scope_for_insight_type("optimization") == ChangeScope.BRAINSTEM
+        assert _scope_for_insight_type("trend") == ChangeScope.CROSS_CUTTING
+        assert _scope_for_insight_type("anomaly") == ChangeScope.LLM_CLIENT
+        assert _scope_for_insight_type("graph_staleness") == ChangeScope.SECOND_BRAIN
+        assert _scope_for_insight_type("graph_staleness_trend") == ChangeScope.SECOND_BRAIN
+        assert _scope_for_insight_type("feedback_summary") == ChangeScope.CAPTAINS_LOG
+        assert _scope_for_insight_type("feedback_category") == ChangeScope.CAPTAINS_LOG
+        assert _scope_for_insight_type("delegation") == ChangeScope.ORCHESTRATOR
+        assert _scope_for_insight_type("unknown_future_type") == ChangeScope.CROSS_CUTTING

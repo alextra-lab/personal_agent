@@ -1,6 +1,10 @@
 """Proactive insights engine for cross-data pattern detection (FRE-24)."""
 
+from __future__ import annotations
+
+import hashlib
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from statistics import mean, median, pstdev
@@ -430,7 +434,9 @@ class InsightsEngine:
             )
         )
 
-        for cat, bucket in sorted(by_category.items(), key=lambda x: -(x[1]["Rejected"] + x[1]["Approved"])):
+        for cat, bucket in sorted(
+            by_category.items(), key=lambda x: -(x[1]["Rejected"] + x[1]["Approved"])
+        ):
             total = bucket["Approved"] + bucket["Rejected"]
             if total < 2:
                 continue
@@ -454,7 +460,12 @@ class InsightsEngine:
                     )
                 )
 
-        log.info("insights_feedback_patterns_analyzed", days=days, records=n_records, insights=len(insights))
+        log.info(
+            "insights_feedback_patterns_analyzed",
+            days=days,
+            records=n_records,
+            insights=len(insights),
+        )
         return insights
 
     def _build_resource_insights(
@@ -756,3 +767,87 @@ def _metric_unit(metric_name: str) -> str | None:
     if lower_name.endswith("_seconds"):
         return "s"
     return None
+
+
+_DIGIT_RUN_RE = re.compile(r"\d+")
+
+
+def _normalise_title(title: str) -> str:
+    """Collapse digit runs so "$4.12 on 2026-04-19" and "$5.23 on 2026-04-20".
+
+    Produces the same fingerprint (ADR-0057 §D6).
+    """
+    return _DIGIT_RUN_RE.sub("#", title.strip().lower())
+
+
+def _pattern_fingerprint(insight_type: str, pattern_kind: str, title: str) -> str:
+    """Deterministic 16-hex fingerprint for an insight (ADR-0057 §D6).
+
+    Collision probability is negligible for the expected insight volume.
+    """
+    key = f"{insight_type}:{pattern_kind}:{_normalise_title(title)}".encode()
+    return hashlib.sha256(key).hexdigest()[:16]
+
+
+def _cost_fingerprint(anomaly_type: str, observation_date: str) -> str:
+    """Deterministic 16-hex fingerprint for a cost anomaly (ADR-0057 §D6).
+
+    Same day + same anomaly type → same fingerprint; CaptainLogManager dedup
+    increments seen_count rather than creating a duplicate entry.
+    """
+    key = f"{anomaly_type}:{observation_date}".encode()
+    return hashlib.sha256(key).hexdigest()[:16]
+
+
+def _severity_for_cost_ratio(ratio: float) -> str:
+    """Classify cost anomaly severity (ADR-0057 §D5).
+
+    Returns "low" (< 2.5), "medium" (2.5–4.0), or "high" (≥ 4.0).
+    """
+    if ratio >= 4.0:
+        return "high"
+    if ratio >= 2.5:
+        return "medium"
+    return "low"
+
+
+def _category_for_insight_type(insight_type: str) -> ChangeCategory:  # noqa: F821
+    """Map Insight.insight_type to ChangeCategory (ADR-0057 §D7).
+
+    Unknown types fall back to OBSERVABILITY.
+    """
+    from personal_agent.captains_log.models import ChangeCategory
+
+    mapping: dict[str, ChangeCategory] = {
+        "correlation": ChangeCategory.PERFORMANCE,
+        "optimization": ChangeCategory.PERFORMANCE,
+        "trend": ChangeCategory.OBSERVABILITY,
+        "anomaly": ChangeCategory.COST,
+        "graph_staleness": ChangeCategory.KNOWLEDGE_QUALITY,
+        "graph_staleness_trend": ChangeCategory.KNOWLEDGE_QUALITY,
+        "feedback_summary": ChangeCategory.OBSERVABILITY,
+        "feedback_category": ChangeCategory.OBSERVABILITY,
+        "delegation": ChangeCategory.RELIABILITY,
+    }
+    return mapping.get(insight_type, ChangeCategory.OBSERVABILITY)
+
+
+def _scope_for_insight_type(insight_type: str) -> ChangeScope:  # noqa: F821
+    """Map Insight.insight_type to ChangeScope (ADR-0057 §D7).
+
+    Unknown types fall back to CROSS_CUTTING.
+    """
+    from personal_agent.captains_log.models import ChangeScope
+
+    mapping: dict[str, ChangeScope] = {
+        "correlation": ChangeScope.CROSS_CUTTING,
+        "optimization": ChangeScope.BRAINSTEM,
+        "trend": ChangeScope.CROSS_CUTTING,
+        "anomaly": ChangeScope.LLM_CLIENT,
+        "graph_staleness": ChangeScope.SECOND_BRAIN,
+        "graph_staleness_trend": ChangeScope.SECOND_BRAIN,
+        "feedback_summary": ChangeScope.CAPTAINS_LOG,
+        "feedback_category": ChangeScope.CAPTAINS_LOG,
+        "delegation": ChangeScope.ORCHESTRATOR,
+    }
+    return mapping.get(insight_type, ChangeScope.CROSS_CUTTING)

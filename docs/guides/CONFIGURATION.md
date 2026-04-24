@@ -207,6 +207,10 @@ from personal_agent.config import settings
 log_level = settings.log_level
 ```
 
+## Error Pattern Monitoring (ADR-0056)
+
+`AGENT_FAILURE_PATH_REFLECTION_ENABLED` controls Phase 2 of ADR-0056, which extends Captain's Log reflection with GEPA-inspired failure-path analysis. It is off by default (`false`). To activate it: set the flag to `true` in `.env` after at least one week of Phase 1 data has accumulated — this gives the pattern monitor enough signal to validate that the surgical fix suggestions are useful before they begin appearing in every reflection. If Phase 2 suggestions are too broad or noisy after another week, flip the flag back to `false`.
+
 ## Architecture
 
 Configuration management follows **ADR-0007: Unified Configuration Management**.

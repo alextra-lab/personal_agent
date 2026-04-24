@@ -409,3 +409,91 @@ class TestConstants:
     def test_phase4_constants(self) -> None:
         assert STREAM_MEMORY_ACCESSED == "stream:memory.accessed"
         assert CG_FRESHNESS == "cg:freshness"
+
+
+class TestInsightsPatternDetectedEvent:
+    """InsightsPatternDetectedEvent (ADR-0057)."""
+
+    def test_event_type(self) -> None:
+        from personal_agent.events.models import InsightsPatternDetectedEvent
+
+        event = InsightsPatternDetectedEvent(
+            source_component="insights.engine",
+            insight_type="correlation",
+            pattern_kind="",
+            title="Higher failure risk when memory is elevated",
+            summary="Task success rate is 70% while memory p90 is 78%",
+            confidence=0.68,
+            actionable=True,
+            evidence={"task_success_rate": 0.7, "memory_p90_percent": 78.0},
+            fingerprint="a1b2c3d4e5f60718",
+            analysis_window_days=7,
+        )
+        assert event.event_type == "insights.pattern_detected"
+        assert event.trace_id is None
+        assert event.session_id is None
+
+    def test_parse_stream_event_dispatch(self) -> None:
+        from personal_agent.events.models import (
+            InsightsPatternDetectedEvent,
+            parse_stream_event,
+        )
+
+        event = InsightsPatternDetectedEvent(
+            source_component="insights.engine",
+            insight_type="anomaly",
+            pattern_kind="",
+            title="Cost spike detected",
+            summary="Cost spike: $4.12 vs $1.28 avg.",
+            confidence=0.75,
+            actionable=True,
+            evidence={"ratio": 3.22},
+            fingerprint="c1d2e3f4a5b6c7d8",
+            analysis_window_days=14,
+        )
+        parsed = parse_stream_event(event.model_dump(mode="json"))
+        assert isinstance(parsed, InsightsPatternDetectedEvent)
+        assert parsed.pattern_kind == ""
+
+
+class TestInsightsCostAnomalyEvent:
+    """InsightsCostAnomalyEvent (ADR-0057)."""
+
+    def test_event_type(self) -> None:
+        from personal_agent.events.models import InsightsCostAnomalyEvent
+
+        event = InsightsCostAnomalyEvent(
+            source_component="insights.engine",
+            anomaly_type="daily_cost_spike",
+            message="Cost spike: $4.12 on 2026-04-19 vs $1.28 avg.",
+            observed_cost_usd=4.12,
+            baseline_cost_usd=1.28,
+            ratio=3.22,
+            confidence=0.75,
+            severity="medium",
+            fingerprint="c1d2e3f4a5b6c7d8",
+            observation_date="2026-04-19",
+        )
+        assert event.event_type == "insights.cost_anomaly"
+
+    def test_parse_stream_event_dispatch(self) -> None:
+        from personal_agent.events.models import (
+            InsightsCostAnomalyEvent,
+            parse_stream_event,
+        )
+
+        event = InsightsCostAnomalyEvent(
+            source_component="insights.engine",
+            anomaly_type="daily_cost_spike",
+            message="m",
+            observed_cost_usd=5.0,
+            baseline_cost_usd=1.0,
+            ratio=5.0,
+            confidence=0.85,
+            severity="high",
+            fingerprint="ff00ee11dd22cc33",
+            observation_date="2026-04-20",
+        )
+        parsed = parse_stream_event(event.model_dump(mode="json"))
+        assert isinstance(parsed, InsightsCostAnomalyEvent)
+        assert parsed.severity == "high"

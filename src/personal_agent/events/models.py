@@ -89,6 +89,13 @@ STREAM_ERRORS_PATTERN_DETECTED = "stream:errors.pattern_detected"
 CG_ERROR_MONITOR = "cg:error-monitor"
 """Consumer group: error pattern monitor (Wave 2 — ADR-0056)."""
 
+# Wave 2 — ADR-0057 (Insights & Pattern Analysis)
+STREAM_INSIGHTS_PATTERN_DETECTED = "stream:insights.pattern_detected"
+"""Stream for insights-pattern-detected events (Wave 2 — ADR-0057)."""
+
+STREAM_INSIGHTS_COST_ANOMALY = "stream:insights.cost_anomaly"
+"""Stream for insights-cost-anomaly events (Wave 2 — ADR-0057)."""
+
 
 # ---------------------------------------------------------------------------
 # Base model
@@ -468,6 +475,83 @@ class ErrorPatternDetectedEvent(EventBase):
         return list(v)[:3] if v else []
 
 
+class InsightsPatternDetectedEvent(EventBase):
+    """Published when InsightsEngine.analyze_patterns() produces an insight (ADR-0057).
+
+    One event per insight per consolidation. trace_id and session_id are
+    None — consolidation-triggered, not request-correlated.
+
+    Consumers:
+      - cg:captain-log reaches CL via create_captain_log_proposals() in the
+        producer handler; this event is for FUTURE consumers that want to act
+        on patterns without touching the proposal pipeline.
+      - FRE-250 (KG Quality) filters on insight_type in
+        {"graph_staleness", "graph_staleness_trend"}.
+
+    Attributes:
+        insight_type: One of the 6 built-in types or "delegation".
+        pattern_kind: Discriminator within insight_type (e.g.
+            "delegation_success_rate"). Empty string for the 6 built-ins.
+        title: Short human-readable title.
+        summary: Multi-line summary.
+        confidence: 0..1 confidence score.
+        actionable: Whether this insight warrants a proposal.
+        evidence: Structured evidence fields.
+        fingerprint: sha256(insight_type:pattern_kind:normalised_title)[:16].
+        analysis_window_days: Lookback window used to generate the insight.
+    """
+
+    event_type: Literal["insights.pattern_detected"] = "insights.pattern_detected"
+    source_component: str = "insights.engine"
+    trace_id: str | None = None
+    session_id: str | None = None
+
+    insight_type: str
+    pattern_kind: str
+    title: str
+    summary: str
+    confidence: float
+    actionable: bool
+    evidence: dict[str, float | int | str]
+    fingerprint: str
+    analysis_window_days: int
+
+
+class InsightsCostAnomalyEvent(EventBase):
+    """Published when InsightsEngine.detect_cost_anomalies() detects a spike (ADR-0057).
+
+    Separate from pattern events because the response path is fundamentally
+    different — patterns propose self-improvement; cost anomalies may trigger
+    governance responses (Phase 2, deferred).
+
+    Attributes:
+        anomaly_type: Today only "daily_cost_spike".
+        message: Human-readable description.
+        observed_cost_usd: Observed daily cost that triggered the anomaly.
+        baseline_cost_usd: Rolling baseline mean.
+        ratio: observed / baseline.
+        confidence: 0..1 confidence score.
+        severity: "low" | "medium" | "high".
+        fingerprint: sha256(anomaly_type:observation_date)[:16].
+        observation_date: ISO yyyy-mm-dd of the day that spiked.
+    """
+
+    event_type: Literal["insights.cost_anomaly"] = "insights.cost_anomaly"
+    source_component: str = "insights.engine"
+    trace_id: str | None = None
+    session_id: str | None = None
+
+    anomaly_type: str
+    message: str
+    observed_cost_usd: float
+    baseline_cost_usd: float
+    ratio: float
+    confidence: float
+    severity: str
+    fingerprint: str
+    observation_date: str
+
+
 def parse_stream_event(payload: dict[str, Any]) -> EventBase:
     """Deserialize a stream JSON payload into the correct event subclass.
 
@@ -506,4 +590,8 @@ def parse_stream_event(payload: dict[str, Any]) -> EventBase:
         return ModeTransitionEvent.model_validate(payload)
     if raw_type == "errors.pattern_detected":
         return ErrorPatternDetectedEvent.model_validate(payload)
+    if raw_type == "insights.pattern_detected":
+        return InsightsPatternDetectedEvent.model_validate(payload)
+    if raw_type == "insights.cost_anomaly":
+        return InsightsCostAnomalyEvent.model_validate(payload)
     raise ValueError(f"unknown event_type: {raw_type!r}")

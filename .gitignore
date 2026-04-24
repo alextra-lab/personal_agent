@@ -1,5 +1,6 @@
 .qodo
 .playwright-mcp/
+.worktrees/
 
 .DS_Store
 

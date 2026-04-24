@@ -1,6 +1,6 @@
 # ADR-0053: Deterministic Gate Feedback-Loop Monitoring Framework
 
-**Status**: Proposed
+**Status**: Approved
 **Date**: 2026-04-22
 **Deciders**: Project owner
 **Depends on**: ADR-0041 (Event Bus — Redis Streams), ADR-0043 (Three-Layer Separation)

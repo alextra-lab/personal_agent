@@ -13,6 +13,8 @@ from personal_agent.captains_log.es_indexer import schedule_es_index
 from personal_agent.captains_log.models import (
     CaptainLogEntry,
     CaptainLogEntryType,
+    ChangeCategory,
+    ChangeScope,
     Metric,
     ProposedChange,
 )
@@ -750,7 +752,7 @@ class InsightsEngine:
             schedule_es_index(index_name, document)
 
 
-def _metric_value(raw: float | int | str) -> float | int | str:
+def _metric_value(raw: object) -> float | int | str:
     """Normalize evidence value for Metric model."""
     if isinstance(raw, (float, int, str)):
         return raw
@@ -773,10 +775,7 @@ _DIGIT_RUN_RE = re.compile(r"\d+")
 
 
 def _normalise_title(title: str) -> str:
-    """Collapse digit runs so "$4.12 on 2026-04-19" and "$5.23 on 2026-04-20".
-
-    Produces the same fingerprint (ADR-0057 §D6).
-    """
+    """Collapse digit runs so equivalent titles produce the same fingerprint (ADR-0057 §D6)."""
     return _DIGIT_RUN_RE.sub("#", title.strip().lower())
 
 
@@ -811,13 +810,11 @@ def _severity_for_cost_ratio(ratio: float) -> str:
     return "low"
 
 
-def _category_for_insight_type(insight_type: str) -> ChangeCategory:  # noqa: F821
+def _category_for_insight_type(insight_type: str) -> ChangeCategory:
     """Map Insight.insight_type to ChangeCategory (ADR-0057 §D7).
 
     Unknown types fall back to OBSERVABILITY.
     """
-    from personal_agent.captains_log.models import ChangeCategory
-
     mapping: dict[str, ChangeCategory] = {
         "correlation": ChangeCategory.PERFORMANCE,
         "optimization": ChangeCategory.PERFORMANCE,
@@ -832,13 +829,11 @@ def _category_for_insight_type(insight_type: str) -> ChangeCategory:  # noqa: F8
     return mapping.get(insight_type, ChangeCategory.OBSERVABILITY)
 
 
-def _scope_for_insight_type(insight_type: str) -> ChangeScope:  # noqa: F821
+def _scope_for_insight_type(insight_type: str) -> ChangeScope:
     """Map Insight.insight_type to ChangeScope (ADR-0057 §D7).
 
     Unknown types fall back to CROSS_CUTTING.
     """
-    from personal_agent.captains_log.models import ChangeScope
-
     mapping: dict[str, ChangeScope] = {
         "correlation": ChangeScope.CROSS_CUTTING,
         "optimization": ChangeScope.BRAINSTEM,

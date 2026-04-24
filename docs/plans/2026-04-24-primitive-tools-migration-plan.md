@@ -1,10 +1,10 @@
 # Primitive Tools Migration Plan
 
 **Date**: 2026-04-24
-**Status**: Proposed — In Review
+**Status**: Approved (2026-04-24)
 **ADR**: [ADR-0063](../architecture_decisions/ADR-0063-primitive-tools-action-boundary-governance.md)
 **Master Plan entry**: Wave 2.5 (parallel to Wave 2 feedback streams)
-**Linear Epic**: *(to be created)*
+**Linear Epic**: [FRE-259](https://linear.app/frenchforest/issue/FRE-259)
 
 ---
 
@@ -367,11 +367,11 @@ Revert advisory change for the offending signal. Keep that signal terminal. Docu
 
 ## Open items at plan approval
 
-- [ ] Linear epic created and linked.
-- [ ] 7 Linear issues created (PIVOT-1 through PIVOT-6, plus Wave 2 re-sequencing), all in state `Needs Approval`.
-- [ ] MASTER_PLAN.md updated with Wave 2.5 row and dependency graph amendment.
-- [ ] Wave sequence spec updated.
-- [ ] FRE-226 re-scoped (phase 1 hand-authored skills absorbed into PIVOT-3; phase 2 self-updating retains original position).
+- [x] Linear epic created and linked. → [FRE-259](https://linear.app/frenchforest/issue/FRE-259)
+- [x] 7 Linear issues created (PIVOT-1 through PIVOT-6, plus Wave 2 re-sequencing), all in state `Approved`: FRE-260 (P1), FRE-261 (P2), FRE-262 (P3), FRE-263 (P4), FRE-264 (P5), FRE-265 (P6), FRE-266 (PIVOT-WAVE2).
+- [x] MASTER_PLAN.md updated with Wave 2.5 row and dependency graph amendment.
+- [x] Wave sequence spec updated.
+- [x] FRE-226 re-scoped (phase 1 hand-authored skills absorbed into PIVOT-3/FRE-262; phase 2 self-updating retains original Wave 4 position).
 - [ ] Pentest checklist drafted for P2.
 - [ ] Evaluation trace prompt list drafted for P3.
 - [ ] Baseline metrics captured pre-P1 (prompt tokens, cache hit rate, tool success rate, iteration counts per task_type).

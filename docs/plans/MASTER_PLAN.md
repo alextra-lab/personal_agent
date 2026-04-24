@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-24 (ADR-0063 proposed — Primitive Tools & Action-Boundary Governance; Wave 2.5 opened in parallel to Wave 2)
+> **Last updated**: 2026-04-24 (ADR-0063 approved — Wave 2.5 PIVOT-1..6 in Upcoming; FRE-259 epic + FRE-260..265 created in Linear)
 > **Implementation sequence**: `docs/superpowers/specs/2026-04-22-implementation-sequence-wave-plan-design.md`
 
 ---
@@ -20,7 +20,7 @@
 | ~~2~~ | ~~4~~ | ~~System Health & Homeostasis — Mode Manager fix (ADR-0055)~~ | ~~[FRE-246](https://linear.app/frenchforest/issue/FRE-246)~~ | ~~ADR + fix~~ | ~~Done 2026-04-24~~ |
 | ~~2~~ | ~~3~~ | ~~Error Pattern Monitoring — Level 3 observability (ADR-0056)~~ | ~~[FRE-244](https://linear.app/frenchforest/issue/FRE-244)~~ | ~~ADR + implementation~~ | ~~Done 2026-04-24 — Phase 1 (cg:error-monitor + dual-write) + Phase 2 (GEPA failure-path reflection, flag off)~~ |
 | ~~2~~ | ~~4~~ | ~~Insights & Pattern Analysis — wire InsightsEngine~~ | ~~[FRE-247](https://linear.app/frenchforest/issue/FRE-247)~~ | ~~ADR + implementation~~ | ~~Done 2026-04-24~~ |
-| 2.5 | — | ADR-0063 Primitive Tools & Action-Boundary Governance | *(epic pending)* | ADR + 6-phase migration | In Review — proposed 2026-04-24 |
+| 2.5 | — | ADR-0063 Primitive Tools & Action-Boundary Governance | [FRE-259](https://linear.app/frenchforest/issue/FRE-259) | ADR + 6-phase migration | **Approved 2026-04-24** — FRE-260 (PIVOT-1) ready in parallel with FRE-248 |
 
 ## Upcoming — Approved
 
@@ -31,18 +31,24 @@ Ordered by recommended implementation sequence. All items Approved in Linear. De
 | ~~2~~ | ~~System Health & Homeostasis — Mode Manager fix~~ | ~~[FRE-246](https://linear.app/frenchforest/issue/FRE-246)~~ | ~~ADR-0055~~ | ~~FRE-245~~ |
 | ~~3~~ | ~~Error Pattern Monitoring — Level 3 observability~~ | ~~[FRE-244](https://linear.app/frenchforest/issue/FRE-244)~~ | ~~ADR-0056~~ | ~~FRE-245~~ |
 | 5 | Self-Improvement Pipeline — formalize Streams 1-3 | [FRE-248](https://linear.app/frenchforest/issue/FRE-248) | ADR-0058 | ~~FRE-245~~ (unblocked) |
-| 6 | Context Quality — compaction full loop | [FRE-249](https://linear.app/frenchforest/issue/FRE-249) | ADR-0059 | ~~FRE-245~~ (unblocked), FRE-244 |
-| 7 | Knowledge Graph Quality — consolidation + decay→reranking | [FRE-250](https://linear.app/frenchforest/issue/FRE-250) | ADR-0060 | ~~FRE-245~~ (unblocked), FRE-247 |
+| 2.5-P1 | ADR-0063 — Sever TaskType→tool-filter wire *(parallel to FRE-248)* | [FRE-260](https://linear.app/frenchforest/issue/FRE-260) | ADR-0063 §D1 | None — start immediately |
+| 2.5-P2 | ADR-0063 — Four primitives + sandbox + action-boundary | [FRE-261](https://linear.app/frenchforest/issue/FRE-261) | ADR-0063 §D2-D3 | FRE-260, ~~FRE-246~~ |
+| 2.5-P5 | ADR-0063 — Loop gate signal split + model_config fix *(parallel to P2/P3/P4)* | [FRE-264](https://linear.app/frenchforest/issue/FRE-264) | ADR-0063 §D5-D6 | FRE-260 |
+| 6 | Context Quality — compaction full loop | [FRE-249](https://linear.app/frenchforest/issue/FRE-249) | ADR-0059 | ~~FRE-245~~, ~~FRE-244~~ |
+| 7 | Knowledge Graph Quality — consolidation + decay→reranking | [FRE-250](https://linear.app/frenchforest/issue/FRE-250) | ADR-0060 | ~~FRE-245~~, ~~FRE-247~~ |
+| 2.5-P3 | ADR-0063 — Skill docs + model evaluation *(absorbs FRE-226 phase 1)* | [FRE-262](https://linear.app/frenchforest/issue/FRE-262) | ADR-0063 §D7 | FRE-261 |
 | 8 | Within-Session Progressive Context Compression | [FRE-251](https://linear.app/frenchforest/issue/FRE-251) | ADR-0061 | FRE-249 |
-| 9 | Agent self-updating skills (agentskills.io format) | [FRE-226](https://linear.app/frenchforest/issue/FRE-226) | ADR pending | FRE-248 |
-| 8 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |
-| 9 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2 | Proactive Memory MVP done (FRE-176) |
+| 2.5-P4 | ADR-0063 — Flag-gated deprecation of legacy tools | [FRE-263](https://linear.app/frenchforest/issue/FRE-263) | ADR-0063 §D4 | FRE-262 (eval gate) |
+| 9 | Agent self-updating skills — phase 2 *(phase 1 absorbed into FRE-262)* | [FRE-226](https://linear.app/frenchforest/issue/FRE-226) | ADR-0058 | FRE-248 |
+| 2.5-P6 | ADR-0063 — Delete legacy tool code | [FRE-265](https://linear.app/frenchforest/issue/FRE-265) | ADR-0063 | FRE-263 (2-week window) |
+| 10 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |
+| 11 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2 | Proactive Memory MVP done (FRE-176) |
 
 ## Needs Approval
 
 | Work Item | ADR / Plan | Notes |
 |-----------|------------|-------|
-| ADR-0063 Primitive Tools & Action-Boundary Governance | `docs/architecture_decisions/ADR-0063-primitive-tools-action-boundary-governance.md` | Root cause of FRE-254 class addressed structurally. 6-phase migration; reversible per-phase. Coexists with Wave 2. Migration plan: `docs/plans/2026-04-24-primitive-tools-migration-plan.md`. |
+*(none)*
 
 ### Dependency graph (project-level)
 
@@ -65,7 +71,7 @@ ADR-0054: Bus Convention (FRE-245) ✅ Done 2026-04-23 — Wave 2 unblocked
                                                             phase 2 (self-updating) → depends on ADR-0058
         FRE-252:  Per-TaskType tool allowlist             ← superseded by ADR-0063 phase 1
 
-ADR-0063: Primitive Tools & Action-Boundary Governance (2026-04-24) ← PROPOSED
+ADR-0063: Primitive Tools & Action-Boundary Governance (2026-04-24) ← APPROVED
     Parallel to Wave 2 (no code intersection); P2 depends on FRE-246.
     Phases P1 → P2 → P3 → P4 → P5 → P6 (see migration plan).
     P1 severs TaskType→tool-filter wire; P2-P4 adds primitives; P5-P6 removes legacy.
@@ -146,6 +152,7 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 | 0056 | Error Pattern Monitoring Stream | Approved (FRE-244 — blocked by 0054) |
 | 0055 | System Health & Homeostasis Stream | Approved (FRE-246 — blocked by 0054) |
 | 0054 | Feedback Stream Bus Convention | Accepted (Implemented — FRE-245 done 2026-04-23) |
+| 0063 | Primitive Tools & Action-Boundary Governance | Approved (2026-04-24 — Wave 2.5; epic [FRE-259](https://linear.app/frenchforest/issue/FRE-259), PIVOT-1..6 = FRE-260..265) |
 | 0062 | Tool Loop Gate — Per-Tool FSM-Based Loop Detection | Accepted (Implemented — 2026-04-22) |
 | 0053 | Deterministic Gate Feedback-Loop Monitoring Framework | Accepted (Implemented — FRE-233 done 2026-04-22) |
 | 0052 | Seshat Owner Identity Primitive | Proposed (Needs Approval) |

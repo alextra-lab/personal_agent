@@ -1,12 +1,12 @@
 # ADR-0063: Primitive Tools & Action-Boundary Governance
 
-**Status**: Proposed — In Review
+**Status**: Approved (2026-04-24)
 **Date**: 2026-04-24
 **Deciders**: Project owner
 **Depends on**: ADR-0005 (Governance Configuration), ADR-0028 (External Tool CLI Migration), ADR-0032 (Hybrid Tool Calling Strategy), ADR-0044 (Provider Abstraction), ADR-0062 (Tool Loop Gate)
 **Supersedes in part**: FRE-252 TaskType tool-allowlist consumption in `evaluate_governance()`
 **Related**: ADR-0053 (Gate Feedback Monitoring), ADR-0058 (Self-Improvement Pipeline), FRE-226 (Agent Self-Updating Skills)
-**Linear Epic**: *(to be created — "Primitive Tool Capability + Tool-Filter Decoupling")*
+**Linear Epic**: [FRE-259](https://linear.app/frenchforest/issue/FRE-259) — "Primitive Tool Capability + Tool-Filter Decoupling"
 **Migration Plan**: `docs/plans/2026-04-24-primitive-tools-migration-plan.md`
 
 ---

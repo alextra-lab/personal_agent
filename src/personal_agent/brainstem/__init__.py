@@ -23,8 +23,14 @@ from personal_agent.governance.models import Mode
 _mode_manager: ModeManager | None = None
 
 
-def get_mode_manager() -> ModeManager:
+def get_mode_manager(event_bus: EventBus | None = None) -> ModeManager:
     """Get or create the global mode manager instance.
+
+    Args:
+        event_bus: Optional event bus to inject when creating the singleton for
+            the first time.  If the singleton already exists the ``event_bus``
+            argument is silently ignored — the running instance keeps the bus
+            it was originally constructed with.
 
     Returns:
         Global ModeManager instance.
@@ -34,7 +40,7 @@ def get_mode_manager() -> ModeManager:
     """
     global _mode_manager
     if _mode_manager is None:
-        _mode_manager = ModeManager()
+        _mode_manager = ModeManager(event_bus=event_bus)
     return _mode_manager
 
 

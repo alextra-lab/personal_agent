@@ -5,10 +5,13 @@ operational mode and evaluates transitions based on sensor data and
 governance configuration.
 """
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
 from personal_agent.config.governance_loader import GovernanceConfigError, load_governance_config
+from personal_agent.events.bus import EventBus
+from personal_agent.events.models import STREAM_MODE_TRANSITION, ModeTransitionEvent
 from personal_agent.governance.models import GovernanceConfig, Mode, TransitionRule
 from personal_agent.telemetry import MODE_TRANSITION, get_logger
 
@@ -34,12 +37,19 @@ class ModeManager:
         _transition_history: History of mode transitions for debugging.
     """
 
-    def __init__(self, governance_config: GovernanceConfig | None = None) -> None:
+    def __init__(
+        self,
+        governance_config: GovernanceConfig | None = None,
+        event_bus: EventBus | None = None,
+    ) -> None:
         """Initialize mode manager.
 
         Args:
             governance_config: Optional governance configuration.
                 If None, loads from default config path.
+            event_bus: Optional event bus for publishing ``ModeTransitionEvent``
+                on ``stream:mode.transition``.  When ``None``, dual-write is
+                skipped silently (structlog emission is unaffected).
 
         Raises:
             ModeManagerError: If configuration cannot be loaded.
@@ -51,6 +61,8 @@ class ModeManager:
                 raise ModeManagerError(f"Failed to load governance config: {e}") from None
         else:
             self.governance_config = governance_config
+
+        self._event_bus = event_bus
 
         # Start in NORMAL mode
         self.current_mode = Mode.NORMAL
@@ -199,27 +211,53 @@ class ModeManager:
             )
             return
 
-        old_mode = self.current_mode
+        from_mode_value = self.current_mode
         self.current_mode = new_mode
 
         # Record transition history
         transition_record = {
             "timestamp": datetime.now(timezone.utc),
-            "from_mode": old_mode.value,
+            "from_mode": from_mode_value.value,
             "to_mode": new_mode.value,
             "reason": reason,
             "sensor_data": sensor_data or {},
         }
         self._transition_history.append(transition_record)
 
-        # Emit telemetry
+        # Emit structlog telemetry (primary, synchronous)
         log.info(
             MODE_TRANSITION,
-            from_mode=old_mode.value,
+            from_mode=from_mode_value.value,
             to_mode=new_mode.value,
             reason=reason,
             sensor_data=sensor_data or {},
         )
+
+        # Dual-write: publish ModeTransitionEvent on stream:mode.transition (ADR-0055)
+        if self._event_bus is not None:
+            async def _publish_transition() -> None:
+                try:
+                    await self._event_bus.publish(  # type: ignore[union-attr]
+                        STREAM_MODE_TRANSITION,
+                        ModeTransitionEvent(
+                            source_component="brainstem.mode_manager",
+                            from_mode=from_mode_value,
+                            to_mode=new_mode,
+                            reason=reason,
+                            sensor_snapshot=dict(sensor_data) if sensor_data else {},
+                            transition_index=len(self._transition_history),
+                        ),
+                    )
+                except Exception:
+                    log.warning("mode_transition_bus_publish_failed", new_mode=new_mode.value)
+
+            try:
+                # Preferred path: schedule on the already-running loop (async context)
+                asyncio.get_running_loop().create_task(_publish_transition())
+            except RuntimeError:
+                # Fallback: no running loop (sync test context / startup).  Schedule
+                # on the default loop so the coroutine is not leaked as unawaited.
+                asyncio.get_event_loop().create_task(_publish_transition())
 
     def _is_transition_allowed(self, from_mode: Mode, to_mode: Mode) -> bool:
         """Check if a mode transition is allowed.

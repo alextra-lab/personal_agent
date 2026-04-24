@@ -140,45 +140,134 @@ class InsightsEngine:
         return insights
 
     async def detect_delegation_patterns(self, days: int = 30, trace_id: str = "") -> list[Insight]:
-        """Detect patterns in delegation outcomes.
+        """Detect patterns in delegation outcomes (ADR-0057 §D4).
 
-        Analyzes: success rate by agent/complexity, missing context trends,
-        average rounds needed, time-to-completion.
+        Three aggregations on delegation_outcome_recorded events in agent-logs-*:
+          1. Success rate (count ≥ 10, rate < 0.60) → delegation_success_rate
+          2. Rounds-needed p75 (count ≥ 10, p75 ≥ 3) → delegation_rounds
+          3. Missing-context themes (bucket count ≥ 3) → delegation_missing_context
 
         Args:
             days: Lookback window in days.
-            trace_id: Request trace identifier.
+            trace_id: Request trace identifier for log correlation.
 
         Returns:
-            List of delegation-related insights.
+            List of delegation-related Insights; empty if thresholds not met
+            or ES unavailable.
         """
         insights: list[Insight] = []
-
-        # Query ES for delegation_outcome_recorded events
-        # This is a best-effort analysis — if ES is unavailable, return empty
+        log.info(
+            "delegation_pattern_analysis_start",
+            days=days,
+            trace_id=trace_id,
+        )
         try:
-            log.info(
-                "delegation_pattern_analysis_start",
-                days=days,
-                trace_id=trace_id,
-            )
-
-            # Scaffold: full implementation requires ES query support
-            # which will be added when delegation outcomes accumulate
-            log.info(
-                "delegation_pattern_analysis_complete",
-                insights_found=len(insights),
-                days=days,
-                trace_id=trace_id,
-            )
-
+            buckets = await self._queries.get_delegation_pattern_buckets(days=days)
         except Exception:
             log.warning(
                 "delegation_pattern_analysis_failed",
                 trace_id=trace_id,
                 exc_info=True,
             )
+            return insights
 
+        total = int(buckets.get("total", 0))
+        successes = int(buckets.get("successes", 0))
+        rounds_values: list[int] = list(buckets.get("rounds_needed_values", []))
+        missing_terms: list[tuple[str, int]] = list(buckets.get("missing_context_terms", []))
+
+        # --- Aggregation 1: success rate ---
+        if total >= 10:
+            success_rate = successes / total
+            if success_rate < 0.60:
+                confidence = min(
+                    0.90,
+                    0.70 + min(0.20, (10 - success_rate * 10) * 0.02),
+                )
+                insights.append(
+                    Insight(
+                        insight_type="delegation",
+                        pattern_kind="delegation_success_rate",
+                        title=(
+                            f"Low delegation success rate "
+                            f"({successes}/{total} = {success_rate:.0%} over {days}d)"
+                        ),
+                        summary=(
+                            f"{successes}/{total} successful delegations over {days} days — "
+                            f"consider re-evaluating delegation target fit or briefing quality."
+                        ),
+                        confidence=confidence,
+                        evidence={
+                            "total_delegations": total,
+                            "successful": successes,
+                            "failed": total - successes,
+                            "success_rate": round(success_rate, 4),
+                        },
+                        actionable=True,
+                    )
+                )
+
+        # --- Aggregation 2: rounds-needed p75 ---
+        if total >= 10 and rounds_values:
+            sorted_rounds = sorted(rounds_values)
+            p75_idx = min(int(0.75 * len(sorted_rounds)), len(sorted_rounds) - 1)
+            p75 = sorted_rounds[p75_idx]
+            median_rounds = sorted_rounds[len(sorted_rounds) // 2]
+            if p75 >= 3:
+                confidence = min(0.85, 0.60 + 0.05 * min(10, p75))
+                insights.append(
+                    Insight(
+                        insight_type="delegation",
+                        pattern_kind="delegation_rounds",
+                        title=(
+                            f"Delegations require {p75}+ rounds at p75 "
+                            f"(median {median_rounds}, n={total})"
+                        ),
+                        summary=(
+                            f"Rounds-needed p75 is {p75} over {days}d — the briefing likely "
+                            f"omits context needed for a one-shot delegation."
+                        ),
+                        confidence=confidence,
+                        evidence={
+                            "total_delegations": total,
+                            "median_rounds": median_rounds,
+                            "p75_rounds": p75,
+                        },
+                        actionable=True,
+                    )
+                )
+
+        # --- Aggregation 3: missing-context themes ---
+        for term, count in missing_terms:
+            if count < 3:
+                continue
+            confidence = min(0.95, 0.55 + 0.05 * min(8, count))
+            insights.append(
+                Insight(
+                    insight_type="delegation",
+                    pattern_kind="delegation_missing_context",
+                    title=f"Recurring missing context: '{term}' ({count}x)",
+                    summary=(
+                        f"'{term}' was reported missing in {count} delegation outcomes "
+                        f"over {days}d — briefings should pre-supply this."
+                    ),
+                    confidence=confidence,
+                    evidence={
+                        "term": term,
+                        "occurrences": count,
+                        "window_days": days,
+                    },
+                    actionable=True,
+                )
+            )
+
+        log.info(
+            "delegation_pattern_analysis_complete",
+            insights_found=len(insights),
+            total_delegations=total,
+            days=days,
+            trace_id=trace_id,
+        )
         return insights
 
     async def detect_cost_anomalies(self, days: int = 14) -> list[CostAnomaly]:

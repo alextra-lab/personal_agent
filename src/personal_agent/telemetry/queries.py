@@ -401,6 +401,89 @@ class TelemetryQueries:
             avg_memory_percent=float(aggs.get("avg_memory", {}).get("value", 0.0) or 0.0),
         )
 
+    async def get_delegation_pattern_buckets(self, days: int) -> dict[str, Any]:
+        """Aggregate delegation_outcome_recorded events over trailing ``days``.
+
+        Queries agent-logs-* for events with event == "delegation_outcome_recorded"
+        and returns aggregate stats: total count, success count, distribution of
+        rounds_needed, and a terms aggregation on what_was_missing.
+
+        Args:
+            days: Rolling look-back window size in days.
+
+        Returns:
+            Dict with keys:
+              - ``total`` (int): total delegation records found
+              - ``successes`` (int): sum of success=True records
+              - ``rounds_needed_values`` (list[int]): full distribution (one value per record)
+              - ``missing_context_terms`` (list[tuple[str, int]]): (term, count) pairs,
+                sorted descending by count, lowercased + truncated to 80 chars
+        """
+        client = await self._get_client()
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(days=days)
+
+        response = await client.search(
+            index=f"{self._logs_index_prefix}-*",
+            query={
+                "bool": {
+                    "filter": [
+                        {
+                            "range": {
+                                "@timestamp": {
+                                    "gte": start.isoformat(),
+                                    "lte": now.isoformat(),
+                                }
+                            }
+                        },
+                        {"term": {"event.keyword": "delegation_outcome_recorded"}},
+                    ]
+                }
+            },
+            size=0,
+            aggs={
+                "total": {"value_count": {"field": "task_id.keyword"}},
+                "successes": {"sum": {"field": "success"}},
+                "rounds_histogram": {
+                    "histogram": {"field": "rounds_needed", "interval": 1, "min_doc_count": 1}
+                },
+                "missing_context_terms": {
+                    "terms": {
+                        "script": {
+                            "source": (
+                                "def v = doc['what_was_missing.keyword'].size() == 0 "
+                                "? '' : doc['what_was_missing.keyword'].value; "
+                                "return v.toLowerCase().substring(0, Math.min(v.length(), 80));"
+                            )
+                        },
+                        "size": 20,
+                        "min_doc_count": 1,
+                    }
+                },
+            },
+        )
+        aggs = response.get("aggregations", {})
+        total = int(aggs.get("total", {}).get("value", 0) or 0)
+        successes = int(aggs.get("successes", {}).get("value", 0) or 0)
+        rounds_values: list[int] = []
+        for bucket in aggs.get("rounds_histogram", {}).get("buckets", []):
+            count = int(bucket.get("doc_count", 0) or 0)
+            rounds = int(bucket.get("key", 0) or 0)
+            rounds_values.extend([rounds] * count)
+        missing_terms: list[tuple[str, int]] = []
+        for bucket in aggs.get("missing_context_terms", {}).get("buckets", []):
+            term = str(bucket.get("key", "") or "").strip()
+            count = int(bucket.get("doc_count", 0) or 0)
+            if not term:
+                continue
+            missing_terms.append((term, count))
+        return {
+            "total": total,
+            "successes": successes,
+            "rounds_needed_values": rounds_values,
+            "missing_context_terms": missing_terms,
+        }
+
     async def get_error_events(
         self,
         days: int,
@@ -506,22 +589,14 @@ class TelemetryQueries:
                     "aggs": {
                         "first_seen": {"min": {"field": "@timestamp"}},
                         "last_seen": {"max": {"field": "@timestamp"}},
-                        "sample_trace_ids": {
-                            "terms": {"field": "trace_id.keyword", "size": 5}
-                        },
-                        "sample_messages": {
-                            "terms": {"field": "error.keyword", "size": 3}
-                        },
+                        "sample_trace_ids": {"terms": {"field": "trace_id.keyword", "size": 5}},
+                        "sample_messages": {"terms": {"field": "error.keyword", "size": 3}},
                     },
                 }
             },
         )
 
-        buckets = (
-            response.get("aggregations", {})
-            .get("error_patterns", {})
-            .get("buckets", [])
-        )
+        buckets = response.get("aggregations", {}).get("error_patterns", {}).get("buckets", [])
         clusters: list[ErrorPatternCluster] = []
         for bucket in buckets:
             key = bucket.get("key", {})
@@ -536,20 +611,16 @@ class TelemetryQueries:
             if _is_out_of_scope(component, event_name):
                 continue
 
-            first_seen = _parse_timestamp(
-                bucket.get("first_seen", {}).get("value_as_string")
-            ) or now
-            last_seen = _parse_timestamp(
-                bucket.get("last_seen", {}).get("value_as_string")
-            ) or now
+            first_seen = (
+                _parse_timestamp(bucket.get("first_seen", {}).get("value_as_string")) or now
+            )
+            last_seen = _parse_timestamp(bucket.get("last_seen", {}).get("value_as_string")) or now
 
             sample_trace_ids = tuple(
-                str(b["key"])
-                for b in bucket.get("sample_trace_ids", {}).get("buckets", [])
+                str(b["key"]) for b in bucket.get("sample_trace_ids", {}).get("buckets", [])
             )[:5]
             sample_messages = tuple(
-                str(b["key"])
-                for b in bucket.get("sample_messages", {}).get("buckets", [])
+                str(b["key"]) for b in bucket.get("sample_messages", {}).get("buckets", [])
             )[:3]
 
             fingerprint = _compute_error_fingerprint(component, event_name, error_type)

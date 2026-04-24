@@ -41,6 +41,12 @@ class TestInsightsEngine:
             {"p50": 45.0, "p75": 62.0, "p90": 78.0, "p95": 85.0, "p99": 91.0},
         ]
         telemetry_queries.get_mode_transitions.return_value = [object()] * 12
+        telemetry_queries.get_delegation_pattern_buckets.return_value = {
+            "total": 0,
+            "successes": 0,
+            "rounds_needed_values": [],
+            "missing_context_terms": [],
+        }
 
         engine = InsightsEngine(telemetry_queries=telemetry_queries)
         engine.detect_cost_anomalies = AsyncMock(  # type: ignore[method-assign]
@@ -140,6 +146,12 @@ class TestInsightsEngine:
             {"p50": 30.0, "p75": 60.0, "p90": 75.0, "p95": 85.0, "p99": 95.0},
         ]
         telemetry_queries.get_mode_transitions.return_value = [object()] * 10
+        telemetry_queries.get_delegation_pattern_buckets.return_value = {
+            "total": 0,
+            "successes": 0,
+            "rounds_needed_values": [],
+            "missing_context_terms": [],
+        }
         engine = InsightsEngine(telemetry_queries=telemetry_queries)
         engine.detect_cost_anomalies = AsyncMock(return_value=[])  # type: ignore[method-assign]
 

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
-import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from statistics import mean, median, pstdev
@@ -19,6 +17,12 @@ from personal_agent.captains_log.models import (
     ProposedChange,
 )
 from personal_agent.captains_log.suppression import feedback_history_dir
+from personal_agent.insights.fingerprints import (
+    cost_fingerprint as _cost_fingerprint,
+)
+from personal_agent.insights.fingerprints import (
+    pattern_fingerprint as _pattern_fingerprint,
+)
 from personal_agent.llm_client.cost_tracker import CostTrackerService
 from personal_agent.memory.service import MemoryService
 from personal_agent.telemetry import TaskPatternReport, TelemetryQueries, get_logger
@@ -439,6 +443,11 @@ class InsightsEngine:
                         "Expected to reduce failure/cost risk while preserving normal "
                         "throughput and memory quality."
                     ),
+                    reviewer_notes=None,
+                    linear_issue_id=None,
+                    experiment_design=None,
+                    expected_outcome=None,
+                    potential_implementation=None,
                 )
             )
 
@@ -871,45 +880,6 @@ def _metric_unit(metric_name: str) -> str | None:
     if lower_name.endswith("_seconds"):
         return "s"
     return None
-
-
-_DIGIT_RUN_RE = re.compile(r"\d+")
-
-
-def _normalise_title(title: str) -> str:
-    """Collapse digit runs so equivalent titles produce the same fingerprint (ADR-0057 §D6)."""
-    return _DIGIT_RUN_RE.sub("#", title.strip().lower())
-
-
-def _pattern_fingerprint(insight_type: str, pattern_kind: str, title: str) -> str:
-    """Deterministic 16-hex fingerprint for an insight (ADR-0057 §D6).
-
-    Collision probability is negligible for the expected insight volume.
-    """
-    key = f"{insight_type}:{pattern_kind}:{_normalise_title(title)}".encode()
-    return hashlib.sha256(key).hexdigest()[:16]
-
-
-def _cost_fingerprint(anomaly_type: str, observation_date: str) -> str:
-    """Deterministic 16-hex fingerprint for a cost anomaly (ADR-0057 §D6).
-
-    Same day + same anomaly type → same fingerprint; CaptainLogManager dedup
-    increments seen_count rather than creating a duplicate entry.
-    """
-    key = f"{anomaly_type}:{observation_date}".encode()
-    return hashlib.sha256(key).hexdigest()[:16]
-
-
-def _severity_for_cost_ratio(ratio: float) -> str:
-    """Classify cost anomaly severity (ADR-0057 §D5).
-
-    Returns "low" (< 2.5), "medium" (2.5–4.0), or "high" (≥ 4.0).
-    """
-    if ratio >= 4.0:
-        return "high"
-    if ratio >= 2.5:
-        return "medium"
-    return "low"
 
 
 def _category_for_insight_type(insight_type: str) -> ChangeCategory:

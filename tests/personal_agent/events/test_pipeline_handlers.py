@@ -36,11 +36,16 @@ from personal_agent.events.pipeline_handlers import (
 
 def _insights_modules(engine_instance: MagicMock) -> dict[str, MagicMock]:
     """Stub the insights.engine module so InsightsEngine resolves to a mock."""
+    import personal_agent.insights.fingerprints as _real_fingerprints
+
     mock_engine_mod = MagicMock()
     mock_engine_mod.InsightsEngine = MagicMock(return_value=engine_instance)
     return {
         "personal_agent.insights": MagicMock(),
         "personal_agent.insights.engine": mock_engine_mod,
+        # fingerprints.py has no heavy deps — use the real module so the
+        # handler can import it even when personal_agent.insights is mocked.
+        "personal_agent.insights.fingerprints": _real_fingerprints,
     }
 
 
@@ -225,9 +230,12 @@ class TestConsolidationInsightsHandler:
         mock_engine.analyze_patterns = AsyncMock(return_value=[_StubInsight()])
         mock_engine.create_captain_log_proposals = AsyncMock(return_value=[])
 
+        import personal_agent.insights.fingerprints as _real_fingerprints
+
         handler = build_consolidation_insights_handler(event_bus=_FakeBus())
         with pytest.MonkeyPatch().context() as mp:
             mp.setitem(sys.modules, "personal_agent.insights", MagicMock())
+            mp.setitem(sys.modules, "personal_agent.insights.fingerprints", _real_fingerprints)
             mp.setitem(
                 sys.modules,
                 "personal_agent.insights.engine",
@@ -282,9 +290,12 @@ class TestConsolidationInsightsHandler:
         mock_engine.analyze_patterns = AsyncMock(return_value=[_StubInsight()])
         mock_engine.create_captain_log_proposals = AsyncMock(return_value=[])
 
+        import personal_agent.insights.fingerprints as _real_fingerprints
+
         handler = build_consolidation_insights_handler(event_bus=_FakeBus())
         with pytest.MonkeyPatch().context() as mp:
             mp.setitem(sys.modules, "personal_agent.insights", MagicMock())
+            mp.setitem(sys.modules, "personal_agent.insights.fingerprints", _real_fingerprints)
             mp.setitem(
                 sys.modules,
                 "personal_agent.insights.engine",
@@ -334,9 +345,12 @@ class TestConsolidationInsightsHandler:
         mock_manager = MagicMock()
         mock_manager.save_entry = MagicMock(return_value=None)
 
+        import personal_agent.insights.fingerprints as _real_fingerprints
+
         handler = build_consolidation_insights_handler(event_bus=_FakeBus())
         with pytest.MonkeyPatch().context() as mp:
             mp.setitem(sys.modules, "personal_agent.insights", MagicMock())
+            mp.setitem(sys.modules, "personal_agent.insights.fingerprints", _real_fingerprints)
             mp.setitem(
                 sys.modules,
                 "personal_agent.insights.engine",

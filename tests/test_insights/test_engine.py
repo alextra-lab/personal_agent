@@ -14,8 +14,8 @@ from personal_agent.insights.engine import (
     _cost_fingerprint,
     _pattern_fingerprint,
     _scope_for_insight_type,
-    _severity_for_cost_ratio,
 )
+from personal_agent.insights.fingerprints import severity_for_cost_ratio as _severity_for_cost_ratio
 from personal_agent.telemetry.queries import TaskPatternReport
 
 

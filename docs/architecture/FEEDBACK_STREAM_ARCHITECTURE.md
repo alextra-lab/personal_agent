@@ -1,6 +1,6 @@
 # Feedback Stream Architecture
 
-> **Status**: Living document — updated 2026-04-24 (ADR-0055 drafted, In Review; ADR-0056 + ADR-0057 drafted, In Review)
+> **Status**: Living document — updated 2026-04-24 (ADR-0055 drafted, In Review; ADR-0056 implemented 2026-04-24, ADR-0057 implemented 2026-04-24)
 > **Context**: Surfaced during FRE-233 (ADR-0053) development
 > **Owner**: Project owner
 
@@ -83,13 +83,13 @@ All nine feedback streams, their current state, and their target state after ADR
 - **Source:** `consolidation.completed` event
 - **Collection:** `InsightsEngine.analyze_patterns()` — ES + Neo4j + Postgres cross-query
 - **Processing:** 6 insight types (correlation, optimization, trend, anomaly, graph_staleness, feedback_summary)
-- **Signal:** Indexed to `agent-insights-*` in ES; `Improvement` objects (not wired)
-- **Action:** None — `suggest_improvements()` and `create_captain_log_proposals()` exist but are not called
-- **Human loop:** Partial — Kibana only
-- **Bus?** ❌ No output on bus; delegation patterns are a stub
-- **ADR:** [ADR-0057](../architecture_decisions/ADR-0057-insights-pattern-analysis.md) (FRE-247 — Proposed, In Review 2026-04-23)
+- **Signal:** Indexed to `agent-insights-*` in ES; published via `InsightsPatternDetectedEvent` and `InsightsCostAnomalyEvent` on bus
+- **Action:** Captain's Log entry creation via `create_captain_log_proposals()` wired in handler
+- **Human loop:** Yes — via Captain's Log promotion pipeline
+- **Bus?** ✅ Yes
+- **ADR:** [ADR-0057](../architecture_decisions/ADR-0057-insights-pattern-analysis.md) (Accepted — Implemented, FRE-247, 2026-04-24)
 - **Project:** Insights & Pattern Analysis
-- **Gap:** Improvement objects are a dead end; delegation patterns unimplemented — ADR-0057 wires both
+- **Gap:** None — stream wired end-to-end
 
 ### Stream 5: Brainstem Sensors / Mode Manager
 - **Source:** `MetricsDaemon` — psutil + powermetrics, 5s poll
@@ -143,13 +143,13 @@ All nine feedback streams, their current state, and their target state after ADR
 - **Source:** `InsightsEngine.detect_cost_anomalies()` — triggered by consolidation
 - **Collection:** Postgres `api_costs` table daily aggregates
 - **Processing:** 3-sigma + 2x-floor threshold; `CostAnomaly` with confidence score
-- **Signal:** `insights_cost_anomaly_detected` warning log; `Insight` in ES
-- **Action:** Nothing — `Improvement` objects not wired to any consumer
-- **Human loop:** No (Kibana only)
-- **Bus?** ❌ No
-- **ADR:** None
+- **Signal:** `InsightsCostAnomalyEvent` published on bus; indexed to `agent-insights-*` in ES
+- **Action:** Captain's Log entry creation via `create_captain_log_proposals()` wired in handler
+- **Human loop:** Yes — via Captain's Log promotion pipeline
+- **Bus?** ✅ Yes
+- **ADR:** [ADR-0057](../architecture_decisions/ADR-0057-insights-pattern-analysis.md) (Accepted — Implemented, FRE-247, 2026-04-24)
 - **Project:** Insights & Pattern Analysis
-- **Gap:** Detection only — no response path
+- **Gap:** None — stream wired end-to-end (Phase 2 governance response deferred to follow-on ADR)
 
 ---
 
@@ -181,14 +181,14 @@ PHASE 2 — FIX BROKEN STREAMS (parallel, all depend on ADR-0054)
 │   Project: System Health & Homeostasis
 │   File: docs/architecture_decisions/ADR-0055-system-health-homeostasis-stream.md
 │
-├── ADR-0056: Error Pattern Monitoring Stream [FRE-244 — Done 2026-04-24]
+├── ADR-0056: Error Pattern Monitoring Stream [FRE-244 — Accepted, Implemented 2026-04-24]
 │   Level 3 observability — agent reads its own error logs
 │   stream:errors.pattern_detected + cg:error-monitor consumer
 │   Phase 2: failure-path reflection (GEPA-inspired) inside DSPy GenerateReflection
 │   Depends on: ADR-0053 (template), ADR-0054
 │   Project: Error Pattern Monitoring
 │
-├── ADR-0057: Insights & Pattern Analysis Stream [FRE-247 — drafted 2026-04-23, In Review]
+├── ADR-0057: Insights & Pattern Analysis Stream [FRE-247 — Accepted, Implemented 2026-04-24]
 │   Wires InsightsEngine to full loop; implements delegation patterns
 │   Adds InsightsPatternDetectedEvent + InsightsCostAnomalyEvent
 │   Depends on: ADR-0054, ADR-0041
@@ -236,12 +236,12 @@ PHASE 3 — COMPLETE PARTIAL STREAMS (depend on Phase 2)
 | 1. Self-reflection | Per-task | Partial | ✅ | ADR-0030 | Self-Improvement Pipeline |
 | 2. Linear feedback | Human label | ✅ | ✅ | ADR-0040 | Self-Improvement Pipeline |
 | 3. Promotion pipeline | Threshold | ✅ | ✅ | ADR-0030/0040 | Self-Improvement Pipeline |
-| 4. Insights engine | Patterns | ❌ | ❌ | None | Insights & Pattern Analysis |
+| 4. Insights engine | Patterns | ✅ | ✅ | ADR-0057 (Accepted, Implemented 2026-04-24) | Insights & Pattern Analysis |
 | 5. Mode manager | System metrics | ❌ → ✅ | ❌ → ✅ | ADR-0055 (Drafted, In Review) | System Health & Homeostasis |
 | 6. Memory freshness | Access patterns | ✅ | ⚠️ partial | ADR-0042 | Knowledge Graph Quality |
 | 7. Compaction quality | Context loss | ❌ | ❌ | ADR-0047 D3 | Context Quality Monitoring |
 | 8. Consolidation quality | Graph health | ❌ | ❌ | None | Knowledge Graph Quality |
-| 9. Cost anomaly | Spend spikes | ❌ | ❌ | None | Insights & Pattern Analysis |
+| 9. Cost anomaly | Spend spikes | ✅ | ✅ | ADR-0057 (Accepted, Implemented 2026-04-24) | Insights & Pattern Analysis |
 | NEW. Gate monitoring | Pipeline decisions | ❌ → ✅ | ❌ → ✅ | ADR-0053 | Gate Health Monitoring |
 | 10. Error patterns | Error logs | ✅ | ✅ | ADR-0056 (Done 2026-04-24, FRE-244) | Error Pattern Monitoring |
 
@@ -257,10 +257,10 @@ PHASE 3 — COMPLETE PARTIAL STREAMS (depend on Phase 2)
 - ADR-0047: Context Management & Observability
 - ADR-0053: Deterministic Gate Feedback-Loop Monitoring Framework (`docs/architecture_decisions/ADR-0053-gate-feedback-monitoring.md`)
 - FRE-233: ADR-0053 — Gate Feedback Monitoring (awaiting acceptance)
-- FRE-244: ADR-0056 — Error Pattern Monitoring (Drafted 2026-04-23, In Review)
+- FRE-244: ADR-0056 — Error Pattern Monitoring (✅ Accepted, Implemented 2026-04-24)
 - FRE-245: ADR-0054 — Feedback Stream Bus Convention (✅ Accepted + implemented 2026-04-23)
 - FRE-246: ADR-0055 — System Health & Homeostasis (Drafted 2026-04-24, In Review)
-- FRE-247: ADR-0057 — Insights & Pattern Analysis (Drafted 2026-04-23, In Review)
+- FRE-247: ADR-0057 — Insights & Pattern Analysis (✅ Accepted, Implemented 2026-04-24)
 - FRE-248: ADR-0058 — Self-Improvement Pipeline Stream (Needs Approval, blocked by FRE-245)
 - FRE-249: ADR-0059 — Context Quality Monitoring (Needs Approval, blocked by FRE-245 + FRE-244)
 - FRE-250: ADR-0060 — Knowledge Graph Quality (Needs Approval, blocked by FRE-245 + FRE-247)

@@ -19,6 +19,7 @@
 | ~~1~~ | ~~3b~~ | ~~Feedback Stream Bus Convention (ADR-0054)~~ | ~~[FRE-245](https://linear.app/frenchforest/issue/FRE-245)~~ | ~~ADR + implementation~~ | ~~Done 2026-04-23 — Accepted, flattened `EventBase`, 10 producer sites migrated~~ |
 | ~~2~~ | ~~4~~ | ~~System Health & Homeostasis — Mode Manager fix (ADR-0055)~~ | ~~[FRE-246](https://linear.app/frenchforest/issue/FRE-246)~~ | ~~ADR + fix~~ | ~~Done 2026-04-24~~ |
 | ~~2~~ | ~~3~~ | ~~Error Pattern Monitoring — Level 3 observability (ADR-0056)~~ | ~~[FRE-244](https://linear.app/frenchforest/issue/FRE-244)~~ | ~~ADR + implementation~~ | ~~Done 2026-04-24 — Phase 1 (cg:error-monitor + dual-write) + Phase 2 (GEPA failure-path reflection, flag off)~~ |
+| ~~2~~ | ~~4~~ | ~~Insights & Pattern Analysis — wire InsightsEngine~~ | ~~[FRE-247](https://linear.app/frenchforest/issue/FRE-247)~~ | ~~ADR + implementation~~ | ~~Done 2026-04-24~~ |
 | 2.5 | — | ADR-0063 Primitive Tools & Action-Boundary Governance | *(epic pending)* | ADR + 6-phase migration | In Review — proposed 2026-04-24 |
 
 ## Upcoming — Approved
@@ -29,14 +30,12 @@ Ordered by recommended implementation sequence. All items Approved in Linear. De
 |---|---------|--------|------------|------------|
 | ~~2~~ | ~~System Health & Homeostasis — Mode Manager fix~~ | ~~[FRE-246](https://linear.app/frenchforest/issue/FRE-246)~~ | ~~ADR-0055~~ | ~~FRE-245~~ |
 | ~~3~~ | ~~Error Pattern Monitoring — Level 3 observability~~ | ~~[FRE-244](https://linear.app/frenchforest/issue/FRE-244)~~ | ~~ADR-0056~~ | ~~FRE-245~~ |
-| 4 | Insights & Pattern Analysis — wire InsightsEngine | [FRE-247](https://linear.app/frenchforest/issue/FRE-247) | ADR-0057 | ~~FRE-245~~ (unblocked) |
-| 5 | Self-Improvement Pipeline — formalize Streams 1-3 | [FRE-248](https://linear.app/frenchforest/issue/FRE-248) | ADR-0058 | ~~FRE-245~~ (unblocked) |
-| 6 | Context Quality — compaction full loop | [FRE-249](https://linear.app/frenchforest/issue/FRE-249) | ADR-0059 | ~~FRE-245~~ (unblocked), FRE-244 |
-| 7 | Knowledge Graph Quality — consolidation + decay→reranking | [FRE-250](https://linear.app/frenchforest/issue/FRE-250) | ADR-0060 | ~~FRE-245~~ (unblocked), FRE-247 |
-| 8 | Within-Session Progressive Context Compression | [FRE-251](https://linear.app/frenchforest/issue/FRE-251) | ADR-0061 | FRE-249 |
-| 9 | Agent self-updating skills (agentskills.io format) | [FRE-226](https://linear.app/frenchforest/issue/FRE-226) | ADR pending | FRE-248 |
-| 10 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |
-| 11 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2 | Proactive Memory MVP done (FRE-176) |
+| 4 | Context Quality — compaction full loop | [FRE-249](https://linear.app/frenchforest/issue/FRE-249) | ADR-0059 | ~~FRE-245~~ (unblocked), FRE-244 |
+| 5 | Knowledge Graph Quality — consolidation + decay→reranking | [FRE-250](https://linear.app/frenchforest/issue/FRE-250) | ADR-0060 | ~~FRE-245~~ (unblocked) |
+| 6 | Within-Session Progressive Context Compression | [FRE-251](https://linear.app/frenchforest/issue/FRE-251) | ADR-0061 | FRE-249 |
+| 7 | Agent self-updating skills (agentskills.io format) | [FRE-226](https://linear.app/frenchforest/issue/FRE-226) | ADR pending | FRE-248 |
+| 8 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |
+| 9 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2 | Proactive Memory MVP done (FRE-176) |
 
 ## Needs Approval
 
@@ -96,6 +95,7 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 | Phase | Completed | Summary |
 |-------|-----------|---------|
 | ADR-0055: System Health & Homeostasis — Mode Manager fix (FRE-246) | 2026-04-24 | Closed the critical Mode Manager disconnect: 4 × `Mode.NORMAL` hardcodes in `service/app.py` replaced by `get_current_mode()`. `MetricsDaemon` dual-writes `MetricsSampledEvent` to `stream:metrics.sampled` every 5 s (MAXLEN 720). `ModeManager.transition_to()` dual-writes `ModeTransitionEvent` to `stream:mode.transition`. `cg:mode-controller` consumer drives the FSM: rolling 60 s window → 30 s evaluation cadence → `ModeManager.evaluate_transitions()`. Anomalous transition cadence (≥3 per 10 min per edge) → `CaptainLogEntry(RELIABILITY, scope=mode_calibration)` with SHA-256 fingerprint. `mode_controller_enabled` defaults True. 56 new tests. ADR-0055 and FEEDBACK_STREAM_ARCHITECTURE.md updated. |
+| ADR-0057: Insights & Pattern Analysis (FRE-247) | 2026-04-24 | Closes Streams 4 & 9. `build_consolidation_insights_handler` extended: publishes `InsightsPatternDetectedEvent` per insight + `InsightsCostAnomalyEvent` per anomaly on the bus; calls `create_captain_log_proposals` → `CaptainLogManager.save_entry` (ADR-0030 fingerprint dedup applies). New `Insight.pattern_kind` field. `_pattern_fingerprint` / `_cost_fingerprint` / `_severity_for_cost_ratio` / `_category_for_insight_type` / `_scope_for_insight_type` helpers extracted to `insights/fingerprints.py`. `InsightsEngine.detect_delegation_patterns()` stub replaced with 3 real ES aggregations (success rate, rounds p75, missing-context themes). Config flag `insights_wiring_enabled=True`. |
 | Investigation: Step-count latency reduction (FRE-254) | 2026-04-22 | Root cause: Qwen3-35B-A3B emits one tool call per turn regardless of batching instructions — orchestrator already supports N calls/turn. Top findings: (1) `get_tool_definitions_for_llm()` ignores TaskType `allowed_categories` — wiring it eliminates ~3,000–4,000 tokens on conversational turns; (2) no step-budget hint in system prompt (`_TOOL_RULES` prompts.py:39) — add `"≤ 6 tool calls"` guidance; (3) total tool description cost ~4,200–4,600 tokens with redundant/stale references. Full report: `docs/research/FRE-254-step-count-investigation.md`. |
 | ADR-0054: Feedback Stream Bus Convention accepted + implemented (FRE-245) | 2026-04-23 | ADR rewritten from the "two-base" draft to a single flattened `EventBase` carrying `trace_id` / `session_id` / `source_component` / `schema_version`. D3 now describes the flat design; Alternatives table flips the verdict (A "flatten" adopted; C "FeedbackEventBase as second root" rejected with explicit post-hoc rationale). Implementation in the same change: `EventBase` fields added in `events/models.py`; 10 production `xadd` sites migrated with `source_component=<dotted-module-path>`; ~40 test event constructions updated; 5 new tests cover `source_component` required, `schema_version` default, nullable trace on scheduled events, forward-compat v1-consumer-reads-v2-payload. Verified: 118 tests pass across `events/`, `memory/test_memory_access_events`, `second_brain/`, `brainstem/`; mypy surfaces no new errors. Still reserves 8 Phase 2 stream names + 6 consumer group names. Wave 2 unblocked. |
 | ADR-0054 draft (FRE-245) | 2026-04-22 | Initial draft written at `docs/architecture_decisions/ADR-0054-feedback-stream-bus-convention.md` (Status: Proposed — In Review). Seven decisions D1–D7 drafted with a `FeedbackEventBase` as a secondary root; superseded in place on 2026-04-23 by the flatten decision (see row above). |
@@ -141,7 +141,7 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 | 0060 | Knowledge Graph Quality Stream | Approved (FRE-250 — blocked by 0054, 0057) |
 | 0059 | Context Quality Monitoring Stream | Approved (FRE-249 — blocked by 0054, 0056) |
 | 0058 | Self-Improvement Pipeline Stream | Approved (FRE-248 — blocked by 0054) |
-| 0057 | Insights & Pattern Analysis Stream | Approved (FRE-247 — blocked by 0054) |
+| 0057 | Insights & Pattern Analysis Stream | Accepted (Implemented — FRE-247 2026-04-24) |
 | 0056 | Error Pattern Monitoring Stream | Approved (FRE-244 — blocked by 0054) |
 | 0055 | System Health & Homeostasis Stream | Approved (FRE-246 — blocked by 0054) |
 | 0054 | Feedback Stream Bus Convention | Accepted (Implemented — FRE-245 done 2026-04-23) |

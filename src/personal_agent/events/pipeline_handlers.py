@@ -7,7 +7,7 @@ lazily so the module loads cheaply and stays testable with lightweight mocks.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from personal_agent.captains_log.models import ChangeScope
 from personal_agent.events.models import (
@@ -119,44 +119,6 @@ def build_consolidation_insights_handler(
     return handler
 
 
-def _insight_pattern_fingerprint(insight_type: str, pattern_kind: str, title: str) -> str:
-    """Deterministic 16-hex fingerprint for an insight (ADR-0057 §D6).
-
-    Mirrors ``insights.engine._pattern_fingerprint`` so the handler has no
-    import dependency on the engine module (which tests mock entirely).
-    """
-    import hashlib
-    import re
-
-    normalised = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
-    key = f"{insight_type}:{pattern_kind}:{normalised}".encode()
-    return hashlib.sha256(key).hexdigest()[:16]
-
-
-def _insight_cost_fingerprint(anomaly_type: str, observation_date: str) -> str:
-    """Deterministic 16-hex fingerprint for a cost anomaly (ADR-0057 §D6).
-
-    Mirrors ``insights.engine._cost_fingerprint`` for the same reason.
-    """
-    import hashlib
-
-    key = f"{anomaly_type}:{observation_date}".encode()
-    return hashlib.sha256(key).hexdigest()[:16]
-
-
-def _insight_severity_for_cost_ratio(ratio: float) -> Literal["low", "medium", "high"]:
-    """Classify cost anomaly severity (ADR-0057 §D5).
-
-    Returns "low" (< 2.5), "medium" (2.5–4.0), or "high" (≥ 4.0).
-    Mirrors ``insights.engine._severity_for_cost_ratio`` for the same reason.
-    """
-    if ratio >= 4.0:
-        return "high"
-    if ratio >= 2.5:
-        return "medium"
-    return "low"
-
-
 async def _publish_insight_events(bus: Any, insights: list[Any]) -> None:
     """Publish InsightsPatternDetectedEvent + InsightsCostAnomalyEvent per insight.
 
@@ -175,14 +137,17 @@ async def _publish_insight_events(bus: Any, insights: list[Any]) -> None:
         InsightsCostAnomalyEvent,
         InsightsPatternDetectedEvent,
     )
+    from personal_agent.insights.fingerprints import (
+        cost_fingerprint,
+        pattern_fingerprint,
+        severity_for_cost_ratio,
+    )
 
     today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     for insight in insights:
         pattern_kind = getattr(insight, "pattern_kind", "") or ""
-        fingerprint = _insight_pattern_fingerprint(
-            insight.insight_type, pattern_kind, insight.title
-        )
+        fingerprint = pattern_fingerprint(insight.insight_type, pattern_kind, insight.title)
         try:
             await bus.publish(
                 STREAM_INSIGHTS_PATTERN_DETECTED,
@@ -220,8 +185,8 @@ async def _publish_insight_events(bus: Any, insights: list[Any]) -> None:
                         baseline_cost_usd=float(evidence.get("baseline_cost_usd", 0.0)),
                         ratio=ratio,
                         confidence=float(insight.confidence),
-                        severity=_insight_severity_for_cost_ratio(ratio),
-                        fingerprint=_insight_cost_fingerprint("daily_cost_spike", today_iso),
+                        severity=severity_for_cost_ratio(ratio),
+                        fingerprint=cost_fingerprint("daily_cost_spike", today_iso),
                         observation_date=today_iso,
                     ),
                 )
@@ -329,6 +294,14 @@ def build_promotion_captain_log_handler() -> Any:
                 f"Fingerprint: {event.fingerprint or 'n/a'}."
             ),
             status=CaptainLogStatus.APPROVED,
+            proposed_change=None,
+            metrics_structured=None,
+            impact_assessment=None,
+            reviewer_notes=None,
+            linear_issue_id=None,
+            experiment_design=None,
+            expected_outcome=None,
+            potential_implementation=None,
         )
         manager = CaptainLogManager()
         manager.save_entry(entry)

@@ -75,7 +75,7 @@ Two streams carry Stream 5's signal, in keeping with ADR-0054's rule that one st
 | `stream:metrics.sampled`   | `brainstem.sensors.metrics_daemon`         | 5 s (configurable) | `MetricsSampledEvent`             |
 | `stream:mode.transition`   | `brainstem.mode_manager`                   | On transition      | `ModeTransitionEvent`             |
 
-**`stream:metrics.sampled`** carries raw 5-second samples. Producer is `MetricsDaemon._run_loop()` — the publish is fire-and-forget (bus failures logged at `warning`, never propagated) and gated behind `settings.mode_controller_enabled`. The stream is bounded by `MAXLEN ~ 720` (≈ 1 h of samples at 5 s), configurable via `metrics_sampled_stream_maxlen`.
+**`stream:metrics.sampled`** carries raw 5-second samples. Producer is `MetricsDaemon._poll_loop()` — the publish is fire-and-forget (bus failures logged at `warning`, never propagated) and gated behind `settings.mode_controller_enabled`. The stream is bounded by `MAXLEN ~ 720` (≈ 1 h of samples at 5 s), configurable via `metrics_sampled_stream_maxlen`.
 
 **`stream:mode.transition`** carries FSM transitions. Producer is `ModeManager.transition_to()` — dual-write: the existing `MODE_TRANSITION` structlog call is preserved verbatim (Layer C durable write) and a `ModeTransitionEvent` is published after the structlog succeeds (Layer B bus write). The stream is bounded by `MAXLEN ~ 1000` (transitions are rare; this is months of history).
 
@@ -118,11 +118,13 @@ class MetricsSampledEvent(EventBase):
 
     event_type: Literal["metrics.sampled"] = "metrics.sampled"
     sample_timestamp: datetime
-    metrics: Mapping[str, float]          # e.g. {"cpu_load": 0.72, "mem_used": 0.58, ...}
+    metrics: Mapping[str, float]          # e.g. {"perf_system_cpu_load": 0.72, "perf_system_mem_used": 0.58, "perf_system_gpu_load": 0.31, ...}
     sample_interval_seconds: float        # nominal cadence (5.0 by default)
     # trace_id / session_id: None (system sample, not request-correlated; ADR-0054 D3)
     # source_component: "brainstem.sensors.metrics_daemon"
 
+
+The `metrics` dict is the raw output of `poll_system_metrics()` — keys use the `perf_system_*` / `safety_*` prefix convention from the sensor layer (e.g. `perf_system_cpu_load`, `perf_system_mem_used`, `perf_system_gpu_load`, `perf_system_disk_used`, `safety_violations`).
 
 class ModeTransitionEvent(EventBase):
     """FSM transition fired by ModeManager.transition_to().
@@ -157,18 +159,24 @@ The FSM's `_check_transition_rule` + `_is_transition_allowed` logic is unchanged
 
 **Window aggregation** (consumer-side, every 30 s over the last 60 s of samples):
 
-| Metric field          | Aggregation | Rationale                                                      |
-|-----------------------|-------------|----------------------------------------------------------------|
-| `cpu_load`            | `mean`      | Smooths momentary spikes; rule thresholds match steady load    |
-| `mem_used`            | `mean`      | Same as CPU                                                    |
-| `gpu_load`            | `max`       | GPU bursts are the interesting signal; mean hides them         |
-| `disk_usage`          | `last`      | Slow-changing gauge; mean and last are near-identical          |
-| `safety_violations`   | `sum`       | Count semantic — any violation in the window counts            |
-| `safety_violations_5m`| default 0   | Rolling counter maintained elsewhere; default when absent     |
+| Metric field                | Aggregation | Rationale                                                      |
+|-----------------------------|-------------|----------------------------------------------------------------|
+| `perf_system_cpu_load`      | `mean`      | Smooths momentary spikes; rule thresholds match steady load    |
+| `perf_system_mem_used`      | `mean`      | Same as CPU                                                    |
+| `perf_system_gpu_load`      | `max`       | GPU bursts are the interesting signal; mean hides them         |
+| `perf_system_disk_used`     | `last`      | Slow-changing gauge; mean and last are near-identical          |
+| `safety_violations`         | `sum`       | Count semantic — any violation in the window counts            |
+| `safety_violations_5m`      | default 0   | Rolling counter maintained elsewhere; default when absent     |
+
+_Note: `metrics_daemon.py` currently looks up `perf_system_disk_usage_percent` internally — the consumer should use the key present in the published `MetricsSampledEvent.metrics` dict and verify the exact key during implementation._
 
 The dict is flat (`{metric_name: aggregated_value}`) to match the existing `evaluate_transitions(sensor_data: dict[str, Any])` signature. Rule authors writing `config/governance/modes.yaml` continue to reference metrics by name; only the producer of the dict changes.
 
 **Per-condition windowing is *not* implemented in Phase 1.** `TransitionCondition` in `modes.yaml` carries `duration_seconds` / `window_seconds` fields that the current `_check_transition_rule` ignores. Honouring them requires per-rule sample queues, which is a scope expansion. See Open Question 1.
+
+`modes.yaml` defines `ALERT_to_NORMAL` with `requires_human_approval: true`, but `ModeManager._check_transition_rule()` does not read this field — the flag is silently ignored. The consumer-driven `ALERT→NORMAL` transition will therefore proceed automatically. Honouring `requires_human_approval` is tracked in Open Question 2 (recovery path) and deferred to Phase 2.
+
+Only two transition rules are currently defined in `config/governance/modes.yaml`: `NORMAL_to_ALERT` and `ALERT_to_NORMAL`. Other edges permitted by `_is_transition_allowed` (e.g. `NORMAL → DEGRADED`, `ALERT → LOCKDOWN`) will not fire without corresponding rule entries — Phase 2 rule expansion is out of scope.
 
 ### D5: Signal — `CaptainLogEntry(RELIABILITY, scope=mode_calibration)`
 
@@ -239,7 +247,7 @@ No new dashboard is introduced.
 ### D7: Full automation cycle
 
 ```
-1. MetricsDaemon._run_loop() polls psutil + powermetrics every 5 s
+1. MetricsDaemon._poll_loop() polls psutil + powermetrics every 5 s
    └─ builds metrics dict, appends to in-process ring buffer (DURABLE-in-memory)
    └─ if settings.mode_controller_enabled: publishes MetricsSampledEvent to
       stream:metrics.sampled (fire-and-forget, bus-failure swallowed at warning)
@@ -315,7 +323,7 @@ Out of scope:
 | Option | Description | Verdict |
 |--------|-------------|---------|
 | A. Scheduler loop polls the MetricsDaemon ring buffer directly | `BrainstemScheduler` wakes every 30 s, reads the in-process buffer, calls `evaluate_transitions()` | Rejected — couples scheduler to daemon internals; bypasses bus; future consumers (ADR-0057 Phase 2, ADR-0063 PIVOT-2) cannot subscribe without re-plumbing |
-| B. In-process call from `MetricsDaemon._run_loop` directly to `ModeManager.evaluate_transitions()` | Every 5 s sample triggers a full evaluation in the daemon task | Rejected — evaluates 12× too often; sensor task and FSM task become one; violates ADR-0054 (no bus event = not composable) |
+| B. In-process call from `MetricsDaemon._poll_loop` directly to `ModeManager.evaluate_transitions()` | Every 5 s sample triggers a full evaluation in the daemon task | Rejected — evaluates 12× too often; sensor task and FSM task become one; violates ADR-0054 (no bus event = not composable) |
 | **C. Bus consumer on `stream:metrics.sampled` with throttled window evaluation** | Daemon publishes 5-s samples; `cg:mode-controller` windows 60 s, evaluates every 30 s | **Selected** — ADR-0054 convention; `cg:mode-controller` name already reserved in ADR-0054 D2; evaluation cadence decoupled from sample cadence |
 | D. Periodic scheduled job (cron) independent of MetricsDaemon | New cron entry calls `MetricsDaemon.get_snapshot()` + `evaluate_transitions()` | Rejected — two scheduling surfaces; daemon snapshot API does not exist; bus path is simpler |
 
@@ -385,7 +393,7 @@ Out of scope:
 |-------|------|-----------|------|
 | 1 | `MetricsSampledEvent`, `ModeTransitionEvent`, stream/cg constants in `events/models.py` | Types first | Tier-3: Haiku |
 | 2 | `parse_stream_event()` dispatch arms for both events | Deserialisation | Tier-3: Haiku |
-| 3 | `MetricsDaemon._run_loop()` publish hook behind `settings.mode_controller_enabled` | Producer A | Tier-2: Sonnet |
+| 3 | `MetricsDaemon._poll_loop()` publish hook behind `settings.mode_controller_enabled` | Producer A | Tier-2: Sonnet |
 | 4 | `ModeManager.transition_to()` dual-write — structlog preserved, bus event added | Producer B | Tier-2: Sonnet |
 | 5 | `brainstem/consumers/mode_controller.py::ModeControllerConsumer` — window, throttle, cadence counter, calibration proposal | Core consumer | Tier-2: Sonnet |
 | 6 | `service/app.py` lifespan — subscribe `cg:mode-controller` to both streams; replace 4 `Mode.NORMAL` literals with `get_current_mode()` | Integration | Tier-2: Sonnet |

@@ -132,6 +132,10 @@ async def test_metrics_daemon_publishes_when_enabled(monkeypatch: pytest.MonkeyP
     assert isinstance(event, MetricsSampledEvent)
     assert event.source_component == "brainstem.sensors.metrics_daemon"
     assert event.metrics["perf_system_cpu_load"] == 42.0
+    # ADR-0055: maxlen must be wired through to cap stream:metrics.sampled at ~720.
+    assert call_args.kwargs.get("maxlen") == 720, (
+        f"expected maxlen=720, got {call_args.kwargs.get('maxlen')!r}"
+    )
 
 
 @pytest.mark.asyncio

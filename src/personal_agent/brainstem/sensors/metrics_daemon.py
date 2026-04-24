@@ -145,7 +145,11 @@ class MetricsDaemon:
                         ) -> None:
                             """Fire-and-forget publish with error swallowing."""
                             try:
-                                await bus.publish(STREAM_METRICS_SAMPLED, evt)
+                                await bus.publish(
+                                    STREAM_METRICS_SAMPLED,
+                                    evt,
+                                    maxlen=settings.metrics_sampled_stream_maxlen,
+                                )
                             except Exception as exc:
                                 log.warning(
                                     "metrics_daemon_publish_error",

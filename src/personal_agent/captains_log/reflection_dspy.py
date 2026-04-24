@@ -97,6 +97,16 @@ try:
         metrics_summary: str = dspy.InputField(  # type: ignore[misc]
             desc="Pre-formatted system metrics from RequestMonitor (e.g., 'cpu: 9.3%, duration: 5.4s')"
         )
+        # ADR-0056 Phase 2 — failure-path reflection (GEPA-inspired)
+        failure_excerpt: str = dspy.InputField(  # type: ignore[misc]
+            desc=(
+                "JSON-serialized FailureExcerpt with failed tool calls, error summary, "
+                "and recovery actions. Empty string when had_errors is False."
+            )
+        )
+        had_errors: bool = dspy.InputField(  # type: ignore[misc]
+            desc="True when the trace contained at least one tool call failure or error event."
+        )
 
         # Output fields (metrics removed - now deterministically extracted)
         rationale: str = dspy.OutputField(  # type: ignore[misc]
@@ -127,6 +137,21 @@ try:
         )
         impact_assessment: str = dspy.OutputField(  # type: ignore[misc]
             desc="Expected benefits if change is implemented (empty string if none)"
+        )
+        # ADR-0056 Phase 2 — failure-path fix suggestion
+        failure_path_fix_what: str = dspy.OutputField(  # type: ignore[misc]
+            desc=(
+                "Surgical fix (≤ 80 chars) that would have prevented this exact failure. "
+                "Example: 'Add retry-with-scope-reduction note to query_elasticsearch tool description.' "
+                "Return empty string if had_errors is False or no specific fix is identifiable."
+            )
+        )
+        failure_path_fix_location: str = dspy.OutputField(  # type: ignore[misc]
+            desc=(
+                "File path + symbol of the text to edit, if known. "
+                "Example: 'src/personal_agent/tools/fetch_url.py::DESCRIPTION' or "
+                "'docs/skills/fetch_url.md'. Empty string if had_errors is False or unknown."
+            )
         )
 
     DSPY_AVAILABLE = True
@@ -160,6 +185,8 @@ def generate_reflection_dspy(
     llm_client: LocalLLMClient,
     metrics_summary: dict[str, Any] | None = None,
     captains_log_role: str | None = None,
+    failure_excerpt_json: str = "",
+    had_errors: bool = False,
 ) -> CaptainLogEntry:
     """Generate reflection using DSPy ChainOfThought with deterministic metrics extraction.
 
@@ -185,6 +212,11 @@ def generate_reflection_dspy(
             ``"gpt-5.4-nano"``, ``"claude_sonnet"``). When provided, DSPy is
             configured with this model — supporting both local and cloud
             endpoints. When None, falls back to ``llm_client`` PRIMARY model.
+        failure_excerpt_json: JSON-serialized ``FailureExcerpt`` from
+            ``_extract_failure_excerpt()``. Empty string when Phase 2 is
+            disabled or no failures were found (ADR-0056 §D6).
+        had_errors: ``True`` when the trace contained at least one failure
+            event. Controls whether failure-path output fields are populated.
 
     Returns:
         CaptainLogEntry with DSPy-generated reflection and deterministic metrics.
@@ -264,6 +296,8 @@ def generate_reflection_dspy(
                 reply_length=reply_length,
                 telemetry_summary=telemetry_summary,
                 metrics_summary=metrics_string,  # Pre-formatted, deterministic
+                failure_excerpt=failure_excerpt_json,
+                had_errors=had_errors,
             )
 
             log.info(
@@ -304,6 +338,15 @@ def generate_reflection_dspy(
         # Create title
         title = f"Task: {user_message[:50]}" if len(user_message) > 50 else f"Task: {user_message}"
 
+        # Phase 2: extract surgical fix suggestion (ADR-0056 §D6)
+        fix_what = _ensure_str(getattr(result, "failure_path_fix_what", ""), "").strip()
+        fix_location = _ensure_str(getattr(result, "failure_path_fix_location", ""), "").strip()
+        potential_impl: list[str] | None = None
+        if fix_what and had_errors:
+            potential_impl = [fix_what]
+            if fix_location:
+                potential_impl.append(f"Location: {fix_location}")
+
         # Create entry with BOTH metric formats (ADR-0014)
         # - string_metrics: Human-readable (deterministic extraction)
         # - structured_metrics: Typed values for analytics
@@ -322,6 +365,7 @@ def generate_reflection_dspy(
             related_adrs=[],  # Could be enhanced with LLM extraction
             related_experiments=[],  # Could be enhanced with LLM extraction
             telemetry_refs=[TelemetryRef(trace_id=trace_id)] if trace_id else [],
+            potential_implementation=potential_impl,
         )
 
         log.info(

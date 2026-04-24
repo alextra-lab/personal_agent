@@ -181,8 +181,9 @@ PHASE 2 — FIX BROKEN STREAMS (parallel, all depend on ADR-0054)
 │   Project: System Health & Homeostasis
 │   File: docs/architecture_decisions/ADR-0055-system-health-homeostasis-stream.md
 │
-├── ADR-0056: Error Pattern Monitoring Stream [FRE-244 — drafted 2026-04-23, In Review]
+├── ADR-0056: Error Pattern Monitoring Stream [FRE-244 — Done 2026-04-24]
 │   Level 3 observability — agent reads its own error logs
+│   stream:errors.pattern_detected + cg:error-monitor consumer
 │   Phase 2: failure-path reflection (GEPA-inspired) inside DSPy GenerateReflection
 │   Depends on: ADR-0053 (template), ADR-0054
 │   Project: Error Pattern Monitoring
@@ -242,7 +243,7 @@ PHASE 3 — COMPLETE PARTIAL STREAMS (depend on Phase 2)
 | 8. Consolidation quality | Graph health | ❌ | ❌ | None | Knowledge Graph Quality |
 | 9. Cost anomaly | Spend spikes | ❌ | ❌ | None | Insights & Pattern Analysis |
 | NEW. Gate monitoring | Pipeline decisions | ❌ → ✅ | ❌ → ✅ | ADR-0053 | Gate Health Monitoring |
-| NEW. Error patterns | Error logs | ❌ → ✅ | ❌ → ✅ | ADR-0056 | Error Pattern Monitoring |
+| 10. Error patterns | Error logs | ✅ | ✅ | ADR-0056 (Done 2026-04-24, FRE-244) | Error Pattern Monitoring |
 
 ---
 

@@ -11,6 +11,8 @@ Based on:
 
 import asyncio
 import json
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -45,6 +47,110 @@ except ImportError:
         "dspy_reflection_unavailable",
         message="DSPy not available, will use manual JSON parsing fallback",
         component="reflection",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — Failure-path reflection types (ADR-0056 §D6)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FailedToolCall:
+    """One failed tool call extracted from a trace (ADR-0056 Phase 2).
+
+    Attributes:
+        name: Tool name (e.g. ``"fetch_url"``).
+        arguments: Tool arguments at the time of the failure.
+        error_message: Exception message or status description.
+        trace_id: Trace ID for ES correlation.
+    """
+
+    name: str
+    arguments: Mapping[str, Any]
+    error_message: str
+    trace_id: str
+
+
+@dataclass
+class FailureExcerpt:
+    """Failure-path summary extracted from a single trace (ADR-0056 Phase 2).
+
+    Attributes:
+        failed_tool_calls: Tool calls that ended in error or timeout.
+        error_summary: Short human-readable summary of the failure (≤ 200 chars).
+        recovery_actions: What the agent did after each failure (retry, fallback, etc.).
+    """
+
+    failed_tool_calls: list[FailedToolCall] = field(default_factory=list)
+    error_summary: str = ""
+    recovery_actions: list[str] = field(default_factory=list)
+
+
+def _extract_failure_excerpt(trace_events: Sequence[dict[str, Any]]) -> FailureExcerpt | None:
+    """Extract a failure-path excerpt from a trace's raw events.
+
+    Walks ``trace_events`` looking for events whose ``event`` name or ``status``
+    field signals a tool failure (``"tool_call_failed"``, ``status in {"error",
+    "timeout"}``). For each failure, checks the next event to detect retries or
+    fallback strategies.
+
+    Returns ``None`` when the trace has no error events (Phase 2 should skip).
+
+    Args:
+        trace_events: List of structlog event dicts from ``get_trace_events()``.
+
+    Returns:
+        ``FailureExcerpt`` when at least one failure is present, else ``None``.
+    """
+    failed_calls: list[FailedToolCall] = []
+    recovery_actions: list[str] = []
+    last_error: str = ""
+
+    for i, event in enumerate(trace_events):
+        ev_name = str(event.get("event", ""))
+        status = str(event.get("status", ""))
+        is_failure = ev_name in {
+            "tool_call_failed",
+            "tool_execution_failed",
+            "tool_timeout",
+        } or status in {"error", "timeout", "failed"}
+
+        if not is_failure:
+            continue
+
+        tool_name = str(event.get("tool_name", event.get("tool", "unknown")))
+        error_msg = str(event.get("error", event.get("error_message", status or "unknown error")))
+        trace_id = str(event.get("trace_id", ""))
+        arguments: Mapping[str, Any] = event.get("arguments", {}) or {}
+
+        failed_calls.append(
+            FailedToolCall(
+                name=tool_name,
+                arguments=arguments,
+                error_message=error_msg,
+                trace_id=trace_id,
+            )
+        )
+        last_error = error_msg
+
+        # Check for recovery in the next event
+        if i + 1 < len(trace_events):
+            next_ev = trace_events[i + 1]
+            next_tool = str(next_ev.get("tool_name", next_ev.get("tool", "")))
+            if next_tool == tool_name:
+                recovery_actions.append(f"Retried {tool_name} with same arguments")
+            elif next_tool:
+                recovery_actions.append(f"Switched from {tool_name} to {next_tool}")
+
+    if not failed_calls:
+        return None
+
+    error_summary = last_error[:200] if last_error else f"{len(failed_calls)} tool failure(s)"
+    return FailureExcerpt(
+        failed_tool_calls=failed_calls,
+        error_summary=error_summary,
+        recovery_actions=recovery_actions,
     )
 
 
@@ -155,12 +261,37 @@ async def generate_reflection_entry(
         max_retries=settings.llm_max_retries,
     )
 
+    # Phase 2: failure-path excerpt (ADR-0056 §D6, default False until validated)
+    failure_excerpt_json = ""
+    had_errors = False
+    if settings.failure_path_reflection_enabled:
+        excerpt = _extract_failure_excerpt(trace_events)
+        if excerpt is not None:
+            had_errors = True
+            failure_excerpt_json = json.dumps(
+                {
+                    "failed_tool_calls": [
+                        {
+                            "name": fc.name,
+                            "error_message": fc.error_message,
+                            "trace_id": fc.trace_id,
+                        }
+                        for fc in excerpt.failed_tool_calls
+                    ],
+                    "error_summary": excerpt.error_summary,
+                    "recovery_actions": excerpt.recovery_actions,
+                },
+                ensure_ascii=False,
+            )
+
     # Try DSPy approach first (if available)
     if DSPY_AVAILABLE:
         try:
             log.info(
                 "attempting_dspy_reflection",
                 trace_id=trace_id,
+                had_errors=had_errors,
+                failure_path_enabled=settings.failure_path_reflection_enabled,
                 component="reflection",
             )
             entry = await asyncio.to_thread(
@@ -174,6 +305,8 @@ async def generate_reflection_entry(
                 llm_client=llm_client,
                 metrics_summary=metrics_summary,  # ADR-0014: Deterministic extraction
                 captains_log_role=_captains_log_role,
+                failure_excerpt_json=failure_excerpt_json,
+                had_errors=had_errors,
             )
             log.info(
                 "dspy_reflection_succeeded",

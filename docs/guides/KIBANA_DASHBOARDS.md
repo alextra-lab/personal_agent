@@ -234,6 +234,34 @@ Quick reference for building Lens panels and KQL filters.
 
 ---
 
+## Error Pattern Monitoring panels (ADR-0056)
+
+Two panels ship with the **Agent Reliability** dashboard. If you need to build them manually:
+
+**Error pattern top-N** (Lens bar chart)
+- Data view: `agent-logs-*`
+- KQL filter: `level: ERROR`
+- Aggregation: Top 10 terms on `source_component.keyword` + `event.keyword` (combined label) sorted by Count descending
+- Time range: Last 7 days
+
+**Error pattern timeline** (Lens date histogram)
+- Data view: `agent-logs-*`
+- KQL filter: `level: ERROR`
+- X-axis: `@timestamp` (auto interval)
+- Y-axis: Count (doc count)
+- Break down by: `source_component.keyword` (top 5)
+- Time range: Last 30 days
+
+**Durable pattern files** (for operational drill-down)
+- Check `telemetry/error_patterns/EP-*.json` on disk — one file per fingerprint, includes `scan_history` (capped at 30 entries).
+
+**Useful KQL queries:**
+- Error events by component: `level: ERROR AND source_component: "tools.*"`, data view `agent-logs-*`
+- Error pattern detections: `event_type: error_pattern_detected`, data view `agent-logs-*`
+- Specific fingerprint: `event_type: error_pattern_detected AND fingerprint: "<fp>"`, data view `agent-logs-*`
+
+---
+
 ## Custom query examples
 
 - **Tasks that used memory context:**

@@ -9,12 +9,13 @@ consumers fetch full data from the source system when needed.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from personal_agent.governance.models import Mode
 
@@ -80,6 +81,13 @@ STREAM_MODE_TRANSITION = "stream:mode.transition"
 # Phase 2 consumer groups — ADR-0055
 CG_MODE_CONTROLLER = "cg:mode-controller"
 """Consumer group: mode controller (Phase 2 — ADR-0055)."""
+
+# Wave 2 — ADR-0056 (Error Pattern Monitoring)
+STREAM_ERRORS_PATTERN_DETECTED = "stream:errors.pattern_detected"
+"""Stream for error-pattern-detected events (Wave 2 — ADR-0056)."""
+
+CG_ERROR_MONITOR = "cg:error-monitor"
+"""Consumer group: error pattern monitor (Wave 2 — ADR-0056)."""
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +377,97 @@ class ModeTransitionEvent(EventBase):
     transition_index: int
 
 
+@dataclass(frozen=True)
+class ErrorPatternCluster:
+    """In-memory cluster of error events sharing a fingerprint (ADR-0056 Layer A).
+
+    Built by ``ErrorMonitor.scan()`` from the ES composite aggregation.
+    Used to construct ``ErrorPatternDetectedEvent`` for bus publication and
+    the ``EP-<fingerprint>.json`` durable file.
+
+    Attributes:
+        fingerprint: sha256(component:event_name:error_type)[:16].
+        component: Structlog logger/module (e.g. ``"tools.fetch_url"``).
+        event_name: Structlog event name (e.g. ``"fetch_url_timeout"``).
+        error_type: Normalised exception class or ``"<no_exc>"``.
+        level: ``"ERROR"`` or ``"WARNING"``.
+        occurrences: Count in the scan window.
+        first_seen: Earliest timestamp in the window.
+        last_seen: Most recent timestamp in the window.
+        sample_trace_ids: Up to 5 representative trace IDs.
+        sample_messages: Up to 3 distinct error messages.
+        window_hours: Window that produced this cluster.
+    """
+
+    fingerprint: str
+    component: str
+    event_name: str
+    error_type: str
+    level: str
+    occurrences: int
+    first_seen: datetime
+    last_seen: datetime
+    sample_trace_ids: tuple[str, ...]
+    sample_messages: tuple[str, ...]
+    window_hours: int
+
+
+class ErrorPatternDetectedEvent(EventBase):
+    """Published by the error-monitor scan when a sustained error pattern is found.
+
+    One event per cluster per scan.  ``trace_id`` and ``session_id`` are ``None``
+    — scan is system-scoped, not request-correlated (ADR-0054 §D3).
+    ``source_component`` defaults to ``"telemetry.error_monitor"``.
+
+    Consumers:
+      - ``cg:captain-log`` → ``CaptainLogEntry(category=RELIABILITY, scope=<derived>)``
+      - Future: ``cg:context-quality`` (FRE-249), ``cg:skill-updater`` (FRE-226)
+
+    Attributes:
+        fingerprint: sha256(component:event_name:error_type)[:16].
+        component: Structlog logger/module (e.g. "tools.fetch_url").
+        event_name: Structlog event name (e.g. "fetch_url_timeout").
+        error_type: Normalised exception class or ``"<no_exc>"``.
+        level: ``"ERROR"`` or ``"WARNING"``.
+        occurrences: Number of matching records in the scan window.
+        first_seen: Earliest timestamp in the window.
+        last_seen: Most recent timestamp in the window.
+        window_hours: Size of the scan window that produced this cluster.
+        sample_trace_ids: Up to 5 representative trace IDs.
+        sample_messages: Up to 3 distinct error messages.
+    """
+
+    event_type: Literal["errors.pattern_detected"] = "errors.pattern_detected"
+    source_component: str = "telemetry.error_monitor"
+    trace_id: str | None = None
+
+    fingerprint: str
+    component: str
+    event_name: str
+    error_type: str
+    level: str
+    occurrences: int
+    first_seen: datetime
+    last_seen: datetime
+    window_hours: int
+    sample_trace_ids: list[str] = Field(default_factory=list)
+    sample_messages: list[str] = Field(default_factory=list)
+
+    @field_validator("sample_trace_ids", mode="before")
+    @classmethod
+    def _cap_trace_ids(cls, v: Any) -> list[str]:
+        if isinstance(v, list):
+            return v[:5]
+        return list(v)[:5] if v else []
+
+    @field_validator("sample_messages", mode="before")
+    @classmethod
+    def _cap_messages(cls, v: Any) -> list[str]:
+        if isinstance(v, list):
+            return v[:3]
+        return list(v)[:3] if v else []
+
+
 def parse_stream_event(payload: dict[str, Any]) -> EventBase:
     """Deserialize a stream JSON payload into the correct event subclass.
 
@@ -405,4 +504,6 @@ def parse_stream_event(payload: dict[str, Any]) -> EventBase:
         return MetricsSampledEvent.model_validate(payload)
     if raw_type == "mode.transition":
         return ModeTransitionEvent.model_validate(payload)
+    if raw_type == "errors.pattern_detected":
+        return ErrorPatternDetectedEvent.model_validate(payload)
     raise ValueError(f"unknown event_type: {raw_type!r}")

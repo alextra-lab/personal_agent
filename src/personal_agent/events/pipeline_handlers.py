@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from personal_agent.captains_log.models import ChangeScope
 from personal_agent.events.models import (
     ConsolidationCompletedEvent,
+    ErrorPatternDetectedEvent,
     EventBase,
     FeedbackReceivedEvent,
     PromotionIssueCreatedEvent,
@@ -221,6 +223,146 @@ def build_feedback_suppression_handler() -> Any:
             event_id=event.event_id,
             issue_identifier=event.issue_identifier,
             fingerprint=event.fingerprint,
+        )
+
+    return handler
+
+
+# ---------------------------------------------------------------------------
+# Error-pattern → Captain's Log handler (ADR-0056 §D5)
+# ---------------------------------------------------------------------------
+
+# Prefix → ChangeScope mapping per ADR-0056 §D5.  First matching prefix wins.
+_COMPONENT_TO_SCOPE: list[tuple[str, ChangeScope]] = [
+    ("tools.", ChangeScope.TOOLS),
+    ("mcp.", ChangeScope.TOOLS),
+    ("orchestrator.", ChangeScope.ORCHESTRATOR),
+    ("request_gateway.", ChangeScope.ORCHESTRATOR),
+    ("memory.", ChangeScope.SECOND_BRAIN),
+    ("second_brain.", ChangeScope.SECOND_BRAIN),
+    ("captains_log.", ChangeScope.CAPTAINS_LOG),
+    ("brainstem.", ChangeScope.BRAINSTEM),
+    ("telemetry.", ChangeScope.TELEMETRY),
+    ("governance.", ChangeScope.GOVERNANCE),
+    ("insights.", ChangeScope.INSIGHTS),
+    ("llm_client.", ChangeScope.LLM_CLIENT),
+]
+
+
+def _scope_from_component(component: str) -> ChangeScope:
+    """Derive ChangeScope from a component path per ADR-0056 §D5."""
+    for prefix, scope in _COMPONENT_TO_SCOPE:
+        if component.startswith(prefix):
+            return scope
+    return ChangeScope.CROSS_CUTTING
+
+
+def build_error_pattern_captain_log_handler(manager: Any | None = None) -> Any:
+    """Build handler that writes a Captain's Log entry on ``errors.pattern_detected``.
+
+    Subscribes ``cg:captain-log`` to ``stream:errors.pattern_detected``.  Each
+    ``ErrorPatternDetectedEvent`` becomes a ``CONFIG_PROPOSAL`` entry with
+    ``category=RELIABILITY`` and ``scope`` derived from the component prefix.
+
+    Dedup and suppression are handled by the existing ``CaptainLogManager``
+    infrastructure (ADR-0030): passing the same fingerprint increments
+    ``seen_count`` rather than creating a duplicate entry.
+
+    Args:
+        manager: Optional ``CaptainLogManager`` instance.  When ``None``, a
+            fresh instance is created lazily inside the handler.
+
+    Returns:
+        Async handler for ``cg:captain-log`` on ``stream:errors.pattern_detected``.
+    """
+
+    async def handler(event: EventBase) -> None:
+        if not isinstance(event, ErrorPatternDetectedEvent):
+            return
+
+        from datetime import datetime, timezone
+
+        from personal_agent.captains_log.manager import CaptainLogManager
+        from personal_agent.captains_log.models import (
+            CaptainLogEntry,
+            CaptainLogEntryType,
+            ChangeCategory,
+            Metric,
+            ProposedChange,
+            TelemetryRef,
+        )
+
+        _manager = manager or CaptainLogManager()
+        now = datetime.now(timezone.utc)
+        scope = _scope_from_component(event.component)
+
+        entry = CaptainLogEntry(
+            entry_id=f"CL-{now.strftime('%Y%m%d-%H%M%S')}-ep-{event.fingerprint[:6]}",
+            type=CaptainLogEntryType.CONFIG_PROPOSAL,
+            title=(
+                f"Error pattern: {event.event_name} in {event.component} "
+                f"({event.occurrences}x/{event.window_hours}h)"
+            ),
+            rationale=(
+                f"{event.occurrences} occurrences of `{event.event_name}` in "
+                f"`{event.component}` over the last {event.window_hours} hours "
+                f"(error_type={event.error_type}). "
+                f"Sample traces: {list(event.sample_trace_ids)}. "
+                f"Representative messages: {list(event.sample_messages)}."
+            ),
+            proposed_change=ProposedChange(
+                what=(
+                    f"Investigate and mitigate repeated {event.event_name} in "
+                    f"{event.component}"
+                ),
+                why=(
+                    "Sustained error pattern detected by Level 3 self-observability. "
+                    "Repeated failures of this class degrade the capability served "
+                    f"by {event.component}."
+                ),
+                how=(
+                    "1) Open representative traces in Kibana to understand the "
+                    "immediate cause.\n"
+                    "2) Decide whether the fix is a retry/backoff policy, a guard, "
+                    "a schema change, or a tool description update.\n"
+                    "3) If Phase 2 failure-path reflection is enabled, the surgical "
+                    "edit suggestion is attached in `potential_implementation`."
+                ),
+                category=ChangeCategory.RELIABILITY,
+                scope=scope,
+                fingerprint=event.fingerprint,
+                first_seen=None,
+            ),
+            supporting_metrics=[
+                f"occurrences: {event.occurrences}",
+                f"window_hours: {event.window_hours}",
+                f"first_seen: {event.first_seen.isoformat()}",
+                f"last_seen: {event.last_seen.isoformat()}",
+            ],
+            metrics_structured=[
+                Metric(name="occurrences", value=event.occurrences, unit="count"),
+                Metric(name="window_hours", value=event.window_hours, unit="h"),
+            ],
+            telemetry_refs=[
+                TelemetryRef(trace_id=tid, metric_name=None, value=None)
+                for tid in event.sample_trace_ids
+            ],
+            impact_assessment=None,
+            reviewer_notes=None,
+            linear_issue_id=None,
+            experiment_design=None,
+            expected_outcome=None,
+            potential_implementation=None,
+        )
+
+        _manager.save_entry(entry)
+        log.info(
+            "error_pattern_captain_log_saved",
+            fingerprint=event.fingerprint,
+            component=event.component,
+            event_name=event.event_name,
+            occurrences=event.occurrences,
+            scope=scope.value,
         )
 
     return handler

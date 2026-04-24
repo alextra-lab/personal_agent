@@ -210,6 +210,37 @@ class AppConfig(BaseSettings):
         "dual-write of metrics.sampled and mode.transition events). "
         "Defaults True — the full ADR-0055 pipeline is active in production.",
     )
+
+    # ADR-0056 — Error Pattern Monitoring (Wave 2)
+    error_monitor_enabled: bool = Field(
+        default=True,
+        description="Enable ADR-0056 error pattern monitor (cg:error-monitor subscribes "
+        "to stream:consolidation.completed, scans ES, dual-writes EP-*.json files and "
+        "stream:errors.pattern_detected events). Flip False if ES load spikes.",
+    )
+    error_monitor_window_hours: int = Field(
+        default=24,
+        ge=1,
+        description="Trailing window (hours) for error-pattern ES aggregation.",
+    )
+    error_monitor_min_occurrences: int = Field(
+        default=5,
+        ge=1,
+        description="Minimum event count for a (component, event, error_type) cluster "
+        "to be emitted as an ErrorPatternDetectedEvent.",
+    )
+    error_monitor_max_patterns_per_scan: int = Field(
+        default=50,
+        ge=1,
+        description="Hard cap on ErrorPatternDetectedEvent emissions per scan run.",
+    )
+    failure_path_reflection_enabled: bool = Field(
+        default=False,
+        description="Enable ADR-0056 Phase 2 GEPA-inspired failure-path reflection. "
+        "Extends GenerateReflection with failure_excerpt inputs and "
+        "failure_path_fix_what/location outputs. Flip True after 1 week of Phase 1 "
+        "observation validates signal quality.",
+    )
     metrics_sampled_stream_maxlen: int = Field(
         default=720,
         ge=60,

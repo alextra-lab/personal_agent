@@ -18,6 +18,7 @@
 | ~~1~~ | ~~3a~~ | ~~Investigate step-count reduction (interaction latency)~~ | ~~[FRE-254](https://linear.app/frenchforest/issue/FRE-254)~~ | ~~Investigation~~ | ~~Done 2026-04-22~~ |
 | ~~1~~ | ~~3b~~ | ~~Feedback Stream Bus Convention (ADR-0054)~~ | ~~[FRE-245](https://linear.app/frenchforest/issue/FRE-245)~~ | ~~ADR + implementation~~ | ~~Done 2026-04-23 — Accepted, flattened `EventBase`, 10 producer sites migrated~~ |
 | ~~2~~ | ~~4~~ | ~~System Health & Homeostasis — Mode Manager fix (ADR-0055)~~ | ~~[FRE-246](https://linear.app/frenchforest/issue/FRE-246)~~ | ~~ADR + fix~~ | ~~Done 2026-04-24~~ |
+| ~~2~~ | ~~3~~ | ~~Error Pattern Monitoring — Level 3 observability (ADR-0056)~~ | ~~[FRE-244](https://linear.app/frenchforest/issue/FRE-244)~~ | ~~ADR + implementation~~ | ~~Done 2026-04-24 — Phase 1 (cg:error-monitor + dual-write) + Phase 2 (GEPA failure-path reflection, flag off)~~ |
 | 2.5 | — | ADR-0063 Primitive Tools & Action-Boundary Governance | *(epic pending)* | ADR + 6-phase migration | In Review — proposed 2026-04-24 |
 
 ## Upcoming — Approved
@@ -26,8 +27,8 @@ Ordered by recommended implementation sequence. All items Approved in Linear. De
 
 | # | Project | Linear | ADR / Spec | Depends On |
 |---|---------|--------|------------|------------|
-| 2 | System Health & Homeostasis — Mode Manager fix | [FRE-246](https://linear.app/frenchforest/issue/FRE-246) | ADR-0055 | ~~FRE-245~~ (unblocked) |
-| 3 | Error Pattern Monitoring — Level 3 observability | [FRE-244](https://linear.app/frenchforest/issue/FRE-244) | ADR-0056 | ~~FRE-245~~ (unblocked) |
+| ~~2~~ | ~~System Health & Homeostasis — Mode Manager fix~~ | ~~[FRE-246](https://linear.app/frenchforest/issue/FRE-246)~~ | ~~ADR-0055~~ | ~~FRE-245~~ |
+| ~~3~~ | ~~Error Pattern Monitoring — Level 3 observability~~ | ~~[FRE-244](https://linear.app/frenchforest/issue/FRE-244)~~ | ~~ADR-0056~~ | ~~FRE-245~~ |
 | 4 | Insights & Pattern Analysis — wire InsightsEngine | [FRE-247](https://linear.app/frenchforest/issue/FRE-247) | ADR-0057 | ~~FRE-245~~ (unblocked) |
 | 5 | Self-Improvement Pipeline — formalize Streams 1-3 | [FRE-248](https://linear.app/frenchforest/issue/FRE-248) | ADR-0058 | ~~FRE-245~~ (unblocked) |
 | 6 | Context Quality — compaction full loop | [FRE-249](https://linear.app/frenchforest/issue/FRE-249) | ADR-0059 | ~~FRE-245~~ (unblocked), FRE-244 |

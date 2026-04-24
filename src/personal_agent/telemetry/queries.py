@@ -4,6 +4,8 @@ This module provides reusable, typed query helpers for telemetry data used by
 the threshold optimizer (FRE-11).
 """
 
+import hashlib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
@@ -14,6 +16,7 @@ else:
     AsyncElasticsearch = Any
 
 from personal_agent.config.settings import get_settings
+from personal_agent.events.models import ErrorPatternCluster
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
@@ -397,6 +400,205 @@ class TelemetryQueries:
             avg_cpu_percent=float(aggs.get("avg_cpu", {}).get("value", 0.0) or 0.0),
             avg_memory_percent=float(aggs.get("avg_memory", {}).get("value", 0.0) or 0.0),
         )
+
+    async def get_error_events(
+        self,
+        days: int,
+        level_filter: Sequence[str] = ("ERROR",),
+    ) -> list[dict[str, Any]]:
+        """Fetch raw ERROR/WARNING log events from Elasticsearch.
+
+        Args:
+            days: Number of days to look back.
+            level_filter: Log levels to include (default: ERROR only).
+
+        Returns:
+            List of ``_source`` dicts from matching ES hits.
+        """
+        client = await self._get_client()
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(days=days)
+        response = await client.search(
+            index=f"{self._logs_index_prefix}-*",
+            query={
+                "bool": {
+                    "filter": [
+                        {"terms": {"level": list(level_filter)}},
+                        {
+                            "range": {
+                                "@timestamp": {
+                                    "gte": start.isoformat(),
+                                    "lte": now.isoformat(),
+                                }
+                            }
+                        },
+                    ]
+                }
+            },
+            size=1000,
+            sort=[{"@timestamp": "desc"}],
+        )
+        return [hit["_source"] for hit in response.get("hits", {}).get("hits", [])]
+
+    async def get_error_patterns(
+        self,
+        window_hours: int,
+        min_occurrences: int,
+    ) -> list[ErrorPatternCluster]:
+        """Aggregate error events into clusters via ES composite aggregation.
+
+        Queries ``agent-logs-*`` for ERROR events (and allowlisted WARNINGs)
+        within the trailing ``window_hours``, groups by
+        ``(source_component, event, error_type_normalised, level)``, applies
+        the D1 out-of-scope filter, and returns clusters with
+        ``occurrences >= min_occurrences``.
+
+        Args:
+            window_hours: Rolling look-back window size in hours.
+            min_occurrences: Minimum event count for a cluster to qualify.
+
+        Returns:
+            List of ``ErrorPatternCluster`` records, one per qualifying group.
+        """
+        client = await self._get_client()
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(hours=window_hours)
+
+        response = await client.search(
+            index=f"{self._logs_index_prefix}-*",
+            query={
+                "bool": {
+                    "filter": [
+                        {
+                            "range": {
+                                "@timestamp": {
+                                    "gte": start.isoformat(),
+                                    "lte": now.isoformat(),
+                                }
+                            }
+                        },
+                    ],
+                    "should": [
+                        {"term": {"level": "ERROR"}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            },
+            size=0,
+            aggs={
+                "error_patterns": {
+                    "composite": {
+                        "size": 200,
+                        "sources": [
+                            {"source_component": {"terms": {"field": "source_component.keyword"}}},
+                            {"event": {"terms": {"field": "event.keyword"}}},
+                            {
+                                "error_type_normalised": {
+                                    "terms": {
+                                        "field": "error_type.keyword",
+                                        "missing_bucket": True,
+                                    }
+                                }
+                            },
+                            {"level": {"terms": {"field": "level.keyword"}}},
+                        ],
+                    },
+                    "aggs": {
+                        "first_seen": {"min": {"field": "@timestamp"}},
+                        "last_seen": {"max": {"field": "@timestamp"}},
+                        "sample_trace_ids": {
+                            "terms": {"field": "trace_id.keyword", "size": 5}
+                        },
+                        "sample_messages": {
+                            "terms": {"field": "error.keyword", "size": 3}
+                        },
+                    },
+                }
+            },
+        )
+
+        buckets = (
+            response.get("aggregations", {})
+            .get("error_patterns", {})
+            .get("buckets", [])
+        )
+        clusters: list[ErrorPatternCluster] = []
+        for bucket in buckets:
+            key = bucket.get("key", {})
+            component = str(key.get("source_component", ""))
+            event_name = str(key.get("event", ""))
+            error_type = str(key.get("error_type_normalised", "<no_exc>") or "<no_exc>")
+            level = str(key.get("level", "ERROR"))
+            doc_count = int(bucket.get("doc_count", 0) or 0)
+
+            if doc_count < min_occurrences:
+                continue
+            if _is_out_of_scope(component, event_name):
+                continue
+
+            first_seen = _parse_timestamp(
+                bucket.get("first_seen", {}).get("value_as_string")
+            ) or now
+            last_seen = _parse_timestamp(
+                bucket.get("last_seen", {}).get("value_as_string")
+            ) or now
+
+            sample_trace_ids = tuple(
+                str(b["key"])
+                for b in bucket.get("sample_trace_ids", {}).get("buckets", [])
+            )[:5]
+            sample_messages = tuple(
+                str(b["key"])
+                for b in bucket.get("sample_messages", {}).get("buckets", [])
+            )[:3]
+
+            fingerprint = _compute_error_fingerprint(component, event_name, error_type)
+            clusters.append(
+                ErrorPatternCluster(
+                    fingerprint=fingerprint,
+                    component=component,
+                    event_name=event_name,
+                    error_type=error_type,
+                    level=level,
+                    occurrences=doc_count,
+                    first_seen=first_seen,
+                    last_seen=last_seen,
+                    sample_trace_ids=sample_trace_ids,
+                    sample_messages=sample_messages,
+                    window_hours=window_hours,
+                )
+            )
+        return clusters
+
+
+# ---------------------------------------------------------------------------
+# Error-pattern helpers (ADR-0056)
+# ---------------------------------------------------------------------------
+
+_OUT_OF_SCOPE_PREFIXES: frozenset[str] = frozenset(
+    {"elastic_transport", "elasticsearch", "neo4j", "httpx", "httpcore"}
+)
+_OUT_OF_SCOPE_EVENT_NAMES: frozenset[str] = frozenset(
+    {"elasticsearch_log_failed", "elasticsearch_bulk_failed"}
+)
+
+
+def _is_out_of_scope(component: str, event_name: str) -> bool:
+    """Return True when a component/event should be excluded per ADR-0056 D1."""
+    root = component.split(".")[0]
+    if root in _OUT_OF_SCOPE_PREFIXES:
+        return True
+    if event_name in _OUT_OF_SCOPE_EVENT_NAMES:
+        return True
+    if component == "telemetry.error_monitor":
+        return True
+    return False
+
+
+def _compute_error_fingerprint(component: str, event_name: str, error_type: str) -> str:
+    """Compute a 16-char hex fingerprint from the cluster key tuple."""
+    raw = f"{component}:{event_name}:{error_type}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
 def _coerce_optional_float(value: Any) -> float | None:

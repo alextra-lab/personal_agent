@@ -494,9 +494,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Wire event bus consumers (ADR-0041 Phase 1 + Phase 2 / FRE-158, Phase 3 / FRE-159)
     from personal_agent.events.bus import get_event_bus
+    from personal_agent.events.consumers.error_monitor import ErrorMonitorConsumer
+    from personal_agent.events.consumers.freshness_consumer import FreshnessConsumer
     from personal_agent.events.models import (
         CG_CAPTAIN_LOG,
         CG_CONSOLIDATOR,
+        CG_ERROR_MONITOR,
         CG_ES_INDEXER,
         CG_FEEDBACK,
         CG_FRESHNESS,
@@ -505,6 +508,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         CG_PROMOTION,
         CG_SESSION_WRITER,
         STREAM_CONSOLIDATION_COMPLETED,
+        STREAM_ERRORS_PATTERN_DETECTED,
         STREAM_FEEDBACK_RECEIVED,
         STREAM_MEMORY_ACCESSED,
         STREAM_MEMORY_ENTITIES_UPDATED,
@@ -516,10 +520,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         STREAM_SYSTEM_IDLE,
         EventBase,
     )
-    from personal_agent.events.consumers.freshness_consumer import FreshnessConsumer
     from personal_agent.events.pipeline_handlers import (
         build_consolidation_insights_handler,
         build_consolidation_promotion_handler,
+        build_error_pattern_captain_log_handler,
         build_feedback_insights_handler,
         build_feedback_suppression_handler,
         build_promotion_captain_log_handler,
@@ -647,6 +651,50 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 handler=_mode_controller.handle,
             )
             log.info("mode_controller_registered", consumer_group=CG_MODE_CONTROLLER)
+
+        # ADR-0056: cg:error-monitor — scans ES on consolidation.completed,
+        # dual-writes EP-*.json and stream:errors.pattern_detected events.
+        # cg:captain-log subscribed to stream:errors.pattern_detected for CL entry.
+        if settings.error_monitor_enabled:
+            from personal_agent.telemetry.error_monitor import ErrorMonitor
+            from personal_agent.telemetry.queries import TelemetryQueries
+
+            _shared_es = (
+                es_handler.es_logger.client
+                if es_handler is not None and getattr(es_handler, "_connected", False)
+                else None
+            )
+            _error_queries = TelemetryQueries(es_client=_shared_es)
+            _error_monitor = ErrorMonitor(
+                queries=_error_queries,
+                bus=active_bus,
+                window_hours=settings.error_monitor_window_hours,
+                min_occurrences=settings.error_monitor_min_occurrences,
+                max_patterns_per_scan=settings.error_monitor_max_patterns_per_scan,
+            )
+            _error_monitor_consumer = ErrorMonitorConsumer(
+                monitor=_error_monitor,
+                enabled=True,
+            )
+            await active_bus.subscribe(
+                stream=STREAM_CONSOLIDATION_COMPLETED,
+                group=CG_ERROR_MONITOR,
+                consumer_name="error-monitor-0",
+                handler=_error_monitor_consumer.handle,
+            )
+            _ep_cl_handler = build_error_pattern_captain_log_handler()
+            await active_bus.subscribe(
+                stream=STREAM_ERRORS_PATTERN_DETECTED,
+                group=CG_CAPTAIN_LOG,
+                consumer_name="captain-log-error-pattern-0",
+                handler=_ep_cl_handler,
+            )
+            log.info(
+                "error_monitor_registered",
+                consumer_group=CG_ERROR_MONITOR,
+                window_hours=settings.error_monitor_window_hours,
+                min_occurrences=settings.error_monitor_min_occurrences,
+            )
 
         consumer_runner = ConsumerRunner(active_bus)
         await consumer_runner.start()

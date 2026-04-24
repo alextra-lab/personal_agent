@@ -204,6 +204,17 @@ class AppConfig(BaseSettings):
         le=10000,
         description="Metrics daemon ring buffer size",
     )
+    mode_controller_enabled: bool = Field(
+        default=False,
+        description="Enable ADR-0055 mode controller (cg:mode-controller consumer + "
+        "dual-write of metrics.sampled and mode.transition events).",
+    )
+    metrics_sampled_stream_maxlen: int = Field(
+        default=720,
+        ge=60,
+        description="MAXLEN (approximate) on stream:metrics.sampled — matches MetricsDaemon "
+        "ring-buffer depth (~1 h at 5 s).",
+    )
 
     # MCP Gateway
     mcp_gateway_enabled: bool = Field(

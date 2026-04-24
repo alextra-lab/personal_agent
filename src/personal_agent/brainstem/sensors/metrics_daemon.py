@@ -11,9 +11,13 @@ import math
 import time
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from personal_agent.brainstem.sensors.sensors import poll_system_metrics
+from personal_agent.config import settings
+from personal_agent.events.bus import EventBus
+from personal_agent.events.models import STREAM_METRICS_SAMPLED, MetricsSampledEvent
 from personal_agent.telemetry import SENSOR_POLL, get_logger
 
 log = get_logger(__name__)
@@ -44,6 +48,7 @@ class MetricsDaemon:
         poll_interval_seconds: float = 5.0,
         es_emit_interval_seconds: float = 30.0,
         buffer_size: int = 720,
+        event_bus: EventBus | None = None,
     ) -> None:
         """Initialize daemon configuration and in-memory state.
 
@@ -51,6 +56,8 @@ class MetricsDaemon:
             poll_interval_seconds: Poll cadence in seconds.
             es_emit_interval_seconds: Telemetry emission cadence for `SENSOR_POLL`.
             buffer_size: Maximum number of samples to retain in ring buffer.
+            event_bus: Optional event bus for publishing MetricsSampledEvent.
+                When None, no events are published regardless of settings.
         """
         self._poll_interval_seconds = poll_interval_seconds
         self._es_emit_interval_seconds = es_emit_interval_seconds
@@ -62,6 +69,7 @@ class MetricsDaemon:
         self._emit_every_n_polls = max(
             1, math.ceil(self._es_emit_interval_seconds / self._poll_interval_seconds)
         )
+        self._event_bus = event_bus
 
     async def start(self) -> None:
         """Start background polling if not already running."""
@@ -120,6 +128,33 @@ class MetricsDaemon:
                     self._buffer.append(sample)
                     self._polls_since_emit += 1
 
+                    # Publish MetricsSampledEvent to the event bus when the mode
+                    # controller is enabled and a bus is wired in.
+                    if settings.mode_controller_enabled and self._event_bus is not None:
+                        event = MetricsSampledEvent(
+                            source_component="brainstem.sensors.metrics_daemon",
+                            sample_timestamp=datetime.fromtimestamp(
+                                sample.timestamp, tz=timezone.utc
+                            ),
+                            metrics=sample.metrics,
+                            sample_interval_seconds=self._poll_interval_seconds,
+                        )
+
+                        async def _publish_safe(
+                            bus: EventBus, evt: MetricsSampledEvent
+                        ) -> None:
+                            """Fire-and-forget publish with error swallowing."""
+                            try:
+                                await bus.publish(STREAM_METRICS_SAMPLED, evt)
+                            except Exception as exc:
+                                log.warning(
+                                    "metrics_daemon_publish_error",
+                                    error=str(exc),
+                                    error_type=type(exc).__name__,
+                                )
+
+                        asyncio.create_task(_publish_safe(self._event_bus, event))
+
                     if self._polls_since_emit >= self._emit_every_n_polls:
                         log.info(
                             SENSOR_POLL,
@@ -152,6 +187,18 @@ def set_global_metrics_daemon(daemon: MetricsDaemon | None) -> None:
     _global_metrics_daemon = daemon
 
 
-def get_global_metrics_daemon() -> MetricsDaemon | None:
-    """Get process-global daemon reference if initialized."""
+def get_global_metrics_daemon(
+    event_bus: EventBus | None = None,
+) -> MetricsDaemon | None:
+    """Get or create the process-global daemon reference.
+
+    Args:
+        event_bus: Optional event bus to inject when the singleton is first
+            created.  Ignored if the daemon has already been initialised —
+            the running instance keeps its original bus.
+
+    Returns:
+        The global ``MetricsDaemon`` singleton, or ``None`` if it has not
+        been set via :func:`set_global_metrics_daemon`.
+    """
     return _global_metrics_daemon

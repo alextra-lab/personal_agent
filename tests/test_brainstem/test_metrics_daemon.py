@@ -2,7 +2,7 @@
 
 import asyncio
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -11,6 +11,7 @@ from personal_agent.brainstem.sensors.metrics_daemon import (
     get_global_metrics_daemon,
     set_global_metrics_daemon,
 )
+from personal_agent.events.models import STREAM_METRICS_SAMPLED, MetricsSampledEvent
 from personal_agent.telemetry import SENSOR_POLL
 
 
@@ -84,3 +85,137 @@ def test_global_metrics_daemon_getter_setter() -> None:
     assert get_global_metrics_daemon() is daemon
     set_global_metrics_daemon(None)
     assert get_global_metrics_daemon() is None
+
+
+# ---------------------------------------------------------------------------
+# ADR-0055: MetricsSampledEvent publish tests
+# ---------------------------------------------------------------------------
+
+_POLL_PAYLOAD: dict[str, Any] = {
+    "perf_system_cpu_load": 42.0,
+    "perf_system_mem_used": 60.0,
+}
+
+
+@pytest.mark.asyncio
+async def test_metrics_daemon_publishes_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Daemon publishes MetricsSampledEvent when mode_controller_enabled is True."""
+    monkeypatch.setattr(
+        "personal_agent.brainstem.sensors.metrics_daemon.settings",
+        type("S", (), {"mode_controller_enabled": True, "metrics_sampled_stream_maxlen": 720})(),
+    )
+
+    mock_bus = AsyncMock()
+    mock_bus.publish = AsyncMock()
+
+    with patch(
+        "personal_agent.brainstem.sensors.metrics_daemon.poll_system_metrics",
+        return_value=_POLL_PAYLOAD,
+    ):
+        daemon = MetricsDaemon(
+            poll_interval_seconds=0.01,
+            es_emit_interval_seconds=1.0,
+            buffer_size=32,
+            event_bus=mock_bus,
+        )
+        await daemon.start()
+        await asyncio.sleep(0.05)
+        await daemon.stop()
+
+    # Allow any pending create_task coroutines to run.
+    await asyncio.sleep(0)
+
+    assert mock_bus.publish.called, "bus.publish should have been called"
+    call_args = mock_bus.publish.call_args
+    assert call_args[0][0] == STREAM_METRICS_SAMPLED
+    event = call_args[0][1]
+    assert isinstance(event, MetricsSampledEvent)
+    assert event.source_component == "brainstem.sensors.metrics_daemon"
+    assert event.metrics["perf_system_cpu_load"] == 42.0
+
+
+@pytest.mark.asyncio
+async def test_metrics_daemon_no_publish_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Daemon does NOT publish events when mode_controller_enabled is False."""
+    monkeypatch.setattr(
+        "personal_agent.brainstem.sensors.metrics_daemon.settings",
+        type("S", (), {"mode_controller_enabled": False, "metrics_sampled_stream_maxlen": 720})(),
+    )
+
+    mock_bus = AsyncMock()
+    mock_bus.publish = AsyncMock()
+
+    with patch(
+        "personal_agent.brainstem.sensors.metrics_daemon.poll_system_metrics",
+        return_value=_POLL_PAYLOAD,
+    ):
+        daemon = MetricsDaemon(
+            poll_interval_seconds=0.01,
+            es_emit_interval_seconds=1.0,
+            buffer_size=32,
+            event_bus=mock_bus,
+        )
+        await daemon.start()
+        await asyncio.sleep(0.05)
+        await daemon.stop()
+
+    await asyncio.sleep(0)
+
+    mock_bus.publish.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_metrics_daemon_no_publish_without_bus(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Daemon does not error and does not publish when event_bus is None."""
+    monkeypatch.setattr(
+        "personal_agent.brainstem.sensors.metrics_daemon.settings",
+        type("S", (), {"mode_controller_enabled": True, "metrics_sampled_stream_maxlen": 720})(),
+    )
+
+    with patch(
+        "personal_agent.brainstem.sensors.metrics_daemon.poll_system_metrics",
+        return_value=_POLL_PAYLOAD,
+    ):
+        daemon = MetricsDaemon(
+            poll_interval_seconds=0.01,
+            es_emit_interval_seconds=1.0,
+            buffer_size=32,
+            event_bus=None,
+        )
+        await daemon.start()
+        await asyncio.sleep(0.05)
+        await daemon.stop()
+
+    # If we got here without exception the test passes.
+    assert daemon.get_latest() is not None
+
+
+@pytest.mark.asyncio
+async def test_metrics_daemon_publish_error_is_swallowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Publish errors must not propagate and must not crash the poll loop."""
+    monkeypatch.setattr(
+        "personal_agent.brainstem.sensors.metrics_daemon.settings",
+        type("S", (), {"mode_controller_enabled": True, "metrics_sampled_stream_maxlen": 720})(),
+    )
+
+    mock_bus = AsyncMock()
+    mock_bus.publish = AsyncMock(side_effect=RuntimeError("redis down"))
+
+    with patch(
+        "personal_agent.brainstem.sensors.metrics_daemon.poll_system_metrics",
+        return_value=_POLL_PAYLOAD,
+    ):
+        daemon = MetricsDaemon(
+            poll_interval_seconds=0.01,
+            es_emit_interval_seconds=1.0,
+            buffer_size=32,
+            event_bus=mock_bus,
+        )
+        await daemon.start()
+        await asyncio.sleep(0.05)
+        await daemon.stop()
+
+    # Daemon should still have collected samples despite publish errors.
+    assert daemon.get_latest() is not None

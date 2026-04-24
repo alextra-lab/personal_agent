@@ -1,6 +1,6 @@
 # ADR-0063: Primitive Tools & Action-Boundary Governance
 
-**Status**: Proposed — In Review
+**Status**: Accepted — In Review
 **Date**: 2026-04-24
 **Deciders**: Project owner
 **Depends on**: ADR-0005 (Governance Configuration), ADR-0028 (External Tool CLI Migration), ADR-0032 (Hybrid Tool Calling Strategy), ADR-0044 (Provider Abstraction), ADR-0062 (Tool Loop Gate)

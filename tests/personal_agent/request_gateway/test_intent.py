@@ -103,6 +103,28 @@ class TestToolUse:
         result = classify_intent(message)
         assert result.task_type == TaskType.TOOL_USE
 
+    @pytest.mark.parametrize(
+        "message",
+        [
+            # Real bug-report phrasings that fell through to CONVERSATIONAL
+            # before FRE-254 follow-up.
+            "Check infrastructure health using the infra_health tool.",
+            "Local test.  Run a health check.  Checks logs and report on any errors.",
+            "Can you see your logs?",
+            "Can your look at the logs and attempt to determine what is happening?",
+            "Query the telemetry for any ERROR events in the last hour.",
+            "Using the self_telemetry_query tool, show me recent errors.",
+            "Check the errors in the logs.",
+            "Confirm that infrastructure is healthy.",
+        ],
+    )
+    def test_tool_use_extended_phrasings(self, message: str) -> None:
+        """Broader tool-intent phrasings must classify as TOOL_USE, not CONVERSATIONAL."""
+        result = classify_intent(message)
+        assert result.task_type == TaskType.TOOL_USE, (
+            f"{message!r} → {result.task_type.value} (signals={result.signals})"
+        )
+
 
 class TestSelfImprove:
     """Self-improvement patterns -- agent discussing its own architecture."""

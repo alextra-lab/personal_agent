@@ -64,6 +64,7 @@ def _get_cached_governance_config() -> object:
     global _cached_governance_config
     if _cached_governance_config is None:
         from personal_agent.config import load_governance_config  # noqa: PLC0415
+
         _cached_governance_config = load_governance_config()
     return _cached_governance_config
 
@@ -138,11 +139,13 @@ def _gate_blocked_result(
         "tool_call_id": tool_call_id,
         "role": "tool",
         "name": tool_name,
-        "content": json.dumps({
-            "status": "done",
-            "hint": hints.get(gate_result.decision, "Tool call blocked by loop gate."),
-            "gate_decision": gate_result.decision.value,
-        }),
+        "content": json.dumps(
+            {
+                "status": "done",
+                "hint": hints.get(gate_result.decision, "Tool call blocked by loop gate."),
+                "gate_decision": gate_result.decision.value,
+            }
+        ),
     }
 
 
@@ -1249,7 +1252,9 @@ async def step_llm_call(
 
     system_prompt: str | None = None
 
-    # Inject deployment context so the model doesn't try to access host-only paths
+    # Inject deployment context so the model doesn't try to access host-only paths.
+    # Tool-name hints are appended later, only when tools are actually being passed
+    # — otherwise the model sees named tools it can't call and hallucinates pseudo-code.
     if settings.environment == Environment.PRODUCTION:
         system_prompt = (
             "## Deployment Context\n"
@@ -1257,13 +1262,9 @@ async def step_llm_call(
             "- App code is at `/app` — the host path `/opt/seshat` is the host mount point and is NOT accessible from here\n"
             "- Configuration is injected as environment variables at startup; there is no `.env` file inside the container\n"
             "- Do NOT search for files at `/opt/seshat`, `/home/debian`, or other host paths — they do not exist inside the container\n"
-            "- Use `run_sysdiag` to inspect the container filesystem starting at `/app`\n"
             "- All backend services are reachable via Docker internal DNS:\n"
             "    postgres:5432  |  neo4j:7687 (bolt) / neo4j:7474 (HTTP)  |  elasticsearch:9200\n"
-            "    redis:6379  |  embeddings:8503  |  reranker:8504\n"
-            "- Use `infra_health` to check connectivity and health of all these services at once\n"
-            "- Use `self_telemetry_query` to inspect logs, errors, and execution history\n"
-            "- Use `search_memory` or `query_elasticsearch` to query the knowledge graph and trace data"
+            "    redis:6379  |  embeddings:8503  |  reranker:8504"
         )
 
     # Create span for LLM call
@@ -1317,13 +1318,14 @@ async def step_llm_call(
                     ),
                 }
             )
-            log.info("force_synthesis_injected", trace_id=ctx.trace_id, iteration=ctx.tool_iteration_count)
+            log.info(
+                "force_synthesis_injected",
+                trace_id=ctx.trace_id,
+                iteration=ctx.tool_iteration_count,
+            )
 
         # Budget warning: when 2 calls from the per-TaskType limit, ask the LLM to wrap up
-        elif (
-            not is_synthesizing
-            and ctx.tool_iteration_count >= _resolve_max_iterations(ctx) - 2
-        ):
+        elif not is_synthesizing and ctx.tool_iteration_count >= _resolve_max_iterations(ctx) - 2:
             _effective_max = _resolve_max_iterations(ctx)
             ctx.messages.append(
                 {
@@ -1364,7 +1366,8 @@ async def step_llm_call(
                     trace_id=ctx.trace_id,
                     task_type=(
                         ctx.gateway_output.intent.task_type.value
-                        if ctx.gateway_output else "unknown"
+                        if ctx.gateway_output
+                        else "unknown"
                     ),
                     allowed_categories=_allowed_cats,
                 )
@@ -1455,10 +1458,33 @@ async def step_llm_call(
             # Add tool awareness so agent can answer questions about its capabilities
             tool_awareness = get_tool_awareness_prompt()
 
+            # Production-only: append deployment-specific tool hints, filtered to
+            # only mention tools that are actually available this turn. Naming a
+            # tool the model can't call teaches it to hallucinate pseudo-code.
+            deployment_tool_hints = ""
+            if settings.environment == Environment.PRODUCTION:
+                _available_tool_names = {
+                    (t.get("function", {}).get("name") or "") for t in (tools or [])
+                }
+                _hint_map = {
+                    "run_sysdiag": "- Use `run_sysdiag` to inspect the container filesystem starting at `/app`",
+                    "infra_health": "- Use `infra_health` to check connectivity and health of all backend services at once",
+                    "self_telemetry_query": "- Use `self_telemetry_query` to inspect logs, errors, and execution history",
+                    "search_memory": "- Use `search_memory` to query the knowledge graph",
+                    "query_elasticsearch": "- Use `query_elasticsearch` to query trace data",
+                }
+                _hint_lines = [
+                    hint for name, hint in _hint_map.items() if name in _available_tool_names
+                ]
+                if _hint_lines:
+                    deployment_tool_hints = "\n\n## Deployment Tools\n" + "\n".join(_hint_lines)
+
             if system_prompt:
-                system_prompt = f"{tool_awareness}\n\n{system_prompt}\n\n{tool_prompt}"
+                system_prompt = (
+                    f"{tool_awareness}\n\n{system_prompt}{deployment_tool_hints}\n\n{tool_prompt}"
+                )
             else:
-                system_prompt = f"{tool_awareness}\n\n{tool_prompt}"
+                system_prompt = f"{tool_awareness}{deployment_tool_hints}\n\n{tool_prompt}"
 
         # HYBRID decomposition prompt (autonomous mode only — enforced mode
         # uses the expansion controller which has already run by this point).
@@ -1748,10 +1774,12 @@ async def _dispatch_tool_call(
             return {
                 "tool_call_id": tool_call_id,
                 "tool_name": tool_name,
-                "content": json.dumps({
-                    "status": "retry",
-                    "hint": f"Missing required params: {', '.join(missing_params)}. Retry with these included.",
-                }),
+                "content": json.dumps(
+                    {
+                        "status": "retry",
+                        "hint": f"Missing required params: {', '.join(missing_params)}. Retry with these included.",
+                    }
+                ),
                 "success": False,
                 "latency_ms": 0,
                 "output_hash": None,
@@ -1768,9 +1796,7 @@ async def _dispatch_tool_call(
 
         if result.success:
             content = (
-                json.dumps(result.output)
-                if isinstance(result.output, dict)
-                else str(result.output)
+                json.dumps(result.output) if isinstance(result.output, dict) else str(result.output)
             )
             output_hash: str | None = stable_hash(result.output)
         else:
@@ -1804,10 +1830,12 @@ async def _dispatch_tool_call(
         return {
             "tool_call_id": tool_call_id,
             "tool_name": tool_name,
-            "content": json.dumps({
-                "status": "error",
-                "hint": f"{tool_name} failed to execute. Try a different approach or tool.",
-            }),
+            "content": json.dumps(
+                {
+                    "status": "error",
+                    "hint": f"{tool_name} failed to execute. Try a different approach or tool.",
+                }
+            ),
             "success": False,
             "latency_ms": 0,
             "output_hash": None,
@@ -1931,8 +1959,8 @@ async def step_tool_execution(
     # ── Phase 1: Sequential gate check ────────────────────────────────────────
     # Gate FSM mutations must be sequential so call-count and consecutive-count
     # thresholds are correct before any I/O is dispatched (ADR-0062).
-    tool_results: list[dict[str, Any]] = []     # blocked + error results (immediate)
-    allowed_plans: list[dict[str, Any]] = []    # tool calls cleared for async dispatch
+    tool_results: list[dict[str, Any]] = []  # blocked + error results (immediate)
+    allowed_plans: list[dict[str, Any]] = []  # tool calls cleared for async dispatch
 
     for tool_call in tool_calls:
         tool_call_id = tool_call.get("id", "")
@@ -1950,18 +1978,26 @@ async def step_tool_execution(
         except json.JSONDecodeError as e:
             log.error(
                 "tool_call_invalid_arguments",
-                trace_id=ctx.trace_id, tool_name=tool_name,
-                tool_call_id=tool_call_id, error=str(e),
+                trace_id=ctx.trace_id,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                error=str(e),
             )
             # Concise, neutral error — avoids poisoning the model's confidence
             # in tool use on subsequent turns (ADR-0032 §3.1).
-            tool_results.append({
-                "tool_call_id": tool_call_id, "role": "tool", "name": tool_name,
-                "content": json.dumps({
-                    "status": "retry",
-                    "hint": f"Arguments for {tool_name} were malformed JSON. Retry with valid JSON.",
-                }),
-            })
+            tool_results.append(
+                {
+                    "tool_call_id": tool_call_id,
+                    "role": "tool",
+                    "name": tool_name,
+                    "content": json.dumps(
+                        {
+                            "status": "retry",
+                            "hint": f"Arguments for {tool_name} were malformed JSON. Retry with valid JSON.",
+                        }
+                    ),
+                }
+            )
             continue
 
         # Gate pre-check (sequential — FSM state mutations happen here)
@@ -1971,22 +2007,32 @@ async def step_tool_execution(
         log.info(
             "tool_loop_gate",
             trace_id=ctx.trace_id,
-            decision=gate_result.decision.value, tool_name=gate_result.tool_name,
-            state_before=gate_result.state_before.value, state_after=gate_result.state_after.value,
-            reason=gate_result.reason, consecutive_count=gate_result.consecutive_count,
+            decision=gate_result.decision.value,
+            tool_name=gate_result.tool_name,
+            state_before=gate_result.state_before.value,
+            state_after=gate_result.state_after.value,
+            reason=gate_result.reason,
+            consecutive_count=gate_result.consecutive_count,
             total_calls=gate_result.total_calls,
         )
         if gate_result.decision in (
-            GateDecision.BLOCK_IDENTITY, GateDecision.BLOCK_OUTPUT, GateDecision.BLOCK_CONSECUTIVE,
+            GateDecision.BLOCK_IDENTITY,
+            GateDecision.BLOCK_OUTPUT,
+            GateDecision.BLOCK_CONSECUTIVE,
         ):
             tool_results.append(_gate_blocked_result(tool_call_id, tool_name, gate_result))
             continue
 
-        allowed_plans.append({
-            "tool_call_id": tool_call_id, "tool_name": tool_name,
-            "arguments": arguments, "args_hash": args_hash,
-            "loop_policy": loop_policy, "gate_result": gate_result,
-        })
+        allowed_plans.append(
+            {
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "args_hash": args_hash,
+                "loop_policy": loop_policy,
+                "gate_result": gate_result,
+            }
+        )
 
     # ── Phase 2: Parallel async dispatch ──────────────────────────────────────
     # I/O-bound tool executions (network, ES, Neo4j) run concurrently; the gate
@@ -1998,9 +2044,15 @@ async def step_tool_execution(
             await asyncio.gather(
                 *[
                     _dispatch_tool_call(
-                        p["tool_call_id"], p["tool_name"], p["arguments"],
-                        p["args_hash"], p["gate_result"], p["loop_policy"],
-                        tool_layer, ctx, trace_ctx,
+                        p["tool_call_id"],
+                        p["tool_name"],
+                        p["arguments"],
+                        p["args_hash"],
+                        p["gate_result"],
+                        p["loop_policy"],
+                        tool_layer,
+                        ctx,
+                        trace_ctx,
                     )
                     for p in allowed_plans
                 ],
@@ -2020,16 +2072,23 @@ async def step_tool_execution(
             # Unexpected exception escaped _dispatch_tool_call's internal handler
             log.error(
                 "tool_dispatch_unexpected_exception",
-                trace_id=ctx.trace_id, tool_name=plan["tool_name"], error=str(raw),
+                trace_id=ctx.trace_id,
+                tool_name=plan["tool_name"],
+                error=str(raw),
             )
-            tool_results.append({
-                "tool_call_id": plan["tool_call_id"], "role": "tool",
-                "name": plan["tool_name"],
-                "content": json.dumps({
-                    "status": "error",
-                    "hint": f"{plan['tool_name']} failed to execute. Try a different approach or tool.",
-                }),
-            })
+            tool_results.append(
+                {
+                    "tool_call_id": plan["tool_call_id"],
+                    "role": "tool",
+                    "name": plan["tool_name"],
+                    "content": json.dumps(
+                        {
+                            "status": "error",
+                            "hint": f"{plan['tool_name']} failed to execute. Try a different approach or tool.",
+                        }
+                    ),
+                }
+            )
             continue
 
         dr: dict[str, Any] = raw
@@ -2056,31 +2115,39 @@ async def step_tool_execution(
                 pass
 
         # Persist in ctx.tool_results and ctx.steps (sequential — shared state)
-        ctx.tool_results.append({
-            "tool_name": dr["tool_name"],
-            "success": dr["success"],
-            "output": dr["tool_layer_output"],
-            "error": dr["tool_layer_error"],
-            "latency_ms": dr["latency_ms"],
-        })
-        ctx.steps.append({
-            "type": "tool_call",
-            "description": f"Executed tool: {dr['tool_name']}",
-            "metadata": {
+        ctx.tool_results.append(
+            {
                 "tool_name": dr["tool_name"],
-                "tool_call_id": dr["tool_call_id"],
                 "success": dr["success"],
+                "output": dr["tool_layer_output"],
+                "error": dr["tool_layer_error"],
                 "latency_ms": dr["latency_ms"],
-            },
-        })
+            }
+        )
+        ctx.steps.append(
+            {
+                "type": "tool_call",
+                "description": f"Executed tool: {dr['tool_name']}",
+                "metadata": {
+                    "tool_name": dr["tool_name"],
+                    "tool_call_id": dr["tool_call_id"],
+                    "success": dr["success"],
+                    "latency_ms": dr["latency_ms"],
+                },
+            }
+        )
 
         _total_serial_ms += dr["latency_ms"]
         _max_dispatch_ms = max(_max_dispatch_ms, dr["latency_ms"])
 
-        tool_results.append({
-            "tool_call_id": dr["tool_call_id"], "role": "tool",
-            "name": dr["tool_name"], "content": content,
-        })
+        tool_results.append(
+            {
+                "tool_call_id": dr["tool_call_id"],
+                "role": "tool",
+                "name": dr["tool_name"],
+                "content": content,
+            }
+        )
 
     # Emit parallel-dispatch telemetry for Kibana efficiency tracking
     if allowed_plans:

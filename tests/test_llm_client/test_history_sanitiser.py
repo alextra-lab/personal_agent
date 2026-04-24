@@ -291,3 +291,53 @@ class TestSanitiseReport:
     def test_was_dirty_true_when_truncated(self) -> None:
         r = SanitiseReport(0, 0, 0, True)
         assert r.was_dirty
+
+
+# ---------------------------------------------------------------------------
+# tool_code mimicry — strip poisoned assistant content so the model stops copying
+# ---------------------------------------------------------------------------
+
+
+class TestToolCodeStripping:
+    def test_strips_tool_code_from_assistant_content(self) -> None:
+        """<tool_code> blocks are removed from assistant content."""
+        messages = [
+            _user("check health"),
+            {
+                "role": "assistant",
+                "content": (
+                    "<tool_code>\nprint(infra_health())\n</tool_code>\n"
+                    "I'll check the services."
+                ),
+            },
+            _user("and logs"),
+        ]
+        sanitised, report = sanitise_messages(messages)
+        assistant = sanitised[1]
+        assert "<tool_code>" not in assistant["content"]
+        assert "print(infra_health" not in assistant["content"]
+        assert "I'll check the services." in assistant["content"]
+        assert report.was_dirty
+
+    def test_drops_assistant_message_when_only_tool_code(self) -> None:
+        """Assistant turn with only tool_code (no other content) is dropped."""
+        messages = [
+            _user("check health"),
+            {
+                "role": "assistant",
+                "content": "<tool_code>\nprint(infra_health())\n</tool_code>",
+            },
+            _user("and logs"),
+        ]
+        sanitised, _ = sanitise_messages(messages)
+        assert all(m.get("role") != "assistant" for m in sanitised)
+
+    def test_leaves_user_content_untouched(self) -> None:
+        """User messages quoting <tool_code> (e.g. debugging) are NOT stripped."""
+        pasted = "<tool_code>\nprint(infra_health())\n</tool_code>"
+        messages = [
+            {"role": "user", "content": f"why do you output {pasted} as text?"},
+            _assistant(content="I shouldn't. Let me call it natively."),
+        ]
+        sanitised, _ = sanitise_messages(messages)
+        assert sanitised[0]["content"] == messages[0]["content"]

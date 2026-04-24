@@ -18,6 +18,7 @@ so real-world occurrence rates can be tracked.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,6 +26,14 @@ from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.events import HISTORY_SANITISED
 
 log = get_logger(__name__)
+
+# Matches Gemini-style `<tool_code>...</tool_code>` blocks emitted by models
+# that fell back to pseudo-code instead of native tool_calls. Leaving these in
+# assistant history teaches the next turn to mimic the same pattern, which
+# silently breaks tool execution even when tools are properly passed.
+_TOOL_CODE_BLOCK_RE: re.Pattern[str] = re.compile(
+    r"<tool_code>.*?</tool_code>\s*", re.DOTALL | re.IGNORECASE
+)
 
 
 @dataclass(frozen=True)
@@ -57,6 +66,7 @@ class SanitiseReport:
         return bool(
             self.orphaned_results_stripped
             or self.orphaned_calls_stripped
+            or self.assistant_messages_modified
             or self.truncated
         )
 
@@ -94,6 +104,10 @@ def sanitise_messages(
         Tuple of (sanitised_messages, SanitiseReport). When the history was
         already clean, sanitised_messages is the same object as the input.
     """
+    # Pass 0: strip <tool_code> blocks from assistant messages so the model
+    # doesn't learn the pseudo-code pattern from its own poisoned output.
+    messages, tool_code_stripped, tool_code_assistants_dropped = _strip_tool_code_blocks(messages)
+
     # Pass 1: collect issued and result IDs.
     issued_ids: set[str] = set()
     result_ids: set[str] = set()
@@ -122,11 +136,20 @@ def sanitise_messages(
     )
 
     if not orphaned_results and not orphaned_calls:
+        # Reflect any tool_code modifications in the report so was_dirty is correct.
+        modified = tool_code_assistants_dropped + (1 if tool_code_stripped else 0)
+        report = SanitiseReport(
+            orphaned_results_stripped=0,
+            orphaned_calls_stripped=0,
+            assistant_messages_modified=modified,
+            truncated=False,
+        )
         log.debug(
             HISTORY_SANITISED,
             orphaned_results_stripped=0,
             orphaned_calls_stripped=0,
-            assistant_messages_modified=0,
+            assistant_messages_modified=modified,
+            tool_code_blocks_stripped=tool_code_stripped,
             truncated=False,
             message_count=len(messages),
             trace_id=trace_id,
@@ -200,6 +223,62 @@ def sanitise_messages(
     )
 
     return sanitised, report
+
+
+def _strip_tool_code_blocks(
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Remove ``<tool_code>`` blocks from assistant messages only.
+
+    User messages are left untouched (the user might quote the pattern when
+    debugging the very bug this guards against). Assistant messages whose
+    content is entirely ``<tool_code>`` (no surrounding prose and no
+    ``tool_calls``) are dropped so the next turn doesn't see a useless ghost.
+
+    Args:
+        messages: Original message list.
+
+    Returns:
+        Tuple of (messages, blocks_stripped, assistants_dropped). When no
+        block was found the original list is returned unchanged.
+    """
+    has_block = any(
+        m.get("role") == "assistant"
+        and isinstance(m.get("content"), str)
+        and _TOOL_CODE_BLOCK_RE.search(m["content"])
+        for m in messages
+    )
+    if not has_block:
+        return messages, 0, 0
+
+    result: list[dict[str, Any]] = []
+    blocks_stripped = 0
+    assistants_dropped = 0
+
+    for msg in messages:
+        if msg.get("role") != "assistant" or not isinstance(msg.get("content"), str):
+            result.append(msg)
+            continue
+
+        content: str = msg["content"]
+        new_content, n = _TOOL_CODE_BLOCK_RE.subn("", content)
+        if n == 0:
+            result.append(msg)
+            continue
+
+        blocks_stripped += n
+        new_content = new_content.strip()
+
+        # Drop the assistant turn if it had nothing but tool_code and no tool_calls.
+        if not new_content and not msg.get("tool_calls"):
+            assistants_dropped += 1
+            continue
+
+        msg_copy = dict(msg)
+        msg_copy["content"] = new_content
+        result.append(msg_copy)
+
+    return result, blocks_stripped, assistants_dropped
 
 
 def _truncate_if_still_broken(

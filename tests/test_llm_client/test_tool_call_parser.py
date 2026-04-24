@@ -136,3 +136,61 @@ def test_parse_bracket_fallback_with_trailing_noise() -> None:
     assert len(calls) == 1
     assert calls[0]["name"] == "mcp_perplexity_ask"
     assert json.loads(calls[0]["arguments"])["messages"][0]["content"] == "OpenAI pricing?"
+
+
+# ── Strategy 5: <tool_code> Gemini-style print(fn(...)) ──────────────────────
+
+
+def test_parse_tool_code_positional_string() -> None:
+    """Parses `<tool_code>print(fn("x"))</tool_code>` with a single string arg."""
+    content = '<tool_code>\nprint(self_telemetry_query("ERROR", limit=5))\n</tool_code>'
+    calls = parse_text_tool_calls(content)
+    assert len(calls) == 1
+    assert calls[0]["name"] == "self_telemetry_query"
+    args = json.loads(calls[0]["arguments"])
+    # Positional "ERROR" is threaded to the first-arg-like slot; kwargs preserved.
+    assert args.get("limit") == 5
+
+
+def test_parse_tool_code_no_args() -> None:
+    """Parses `<tool_code>print(fn())</tool_code>` with no arguments."""
+    content = "<tool_code>\nprint(infra_health())\n</tool_code>"
+    calls = parse_text_tool_calls(content)
+    assert len(calls) == 1
+    assert calls[0]["name"] == "infra_health"
+    assert json.loads(calls[0]["arguments"]) == {}
+
+
+def test_parse_tool_code_kwargs_only() -> None:
+    """Parses `<tool_code>print(fn(key=value))</tool_code>` with kwargs."""
+    content = (
+        "<tool_code>\n"
+        'print(self_telemetry_query(query_type="errors", limit=10))\n'
+        "</tool_code>"
+    )
+    calls = parse_text_tool_calls(content)
+    assert len(calls) == 1
+    assert calls[0]["name"] == "self_telemetry_query"
+    args = json.loads(calls[0]["arguments"])
+    assert args == {"query_type": "errors", "limit": 10}
+
+
+def test_parse_tool_code_multiple_blocks() -> None:
+    """Parses multiple `<tool_code>` blocks in one response."""
+    content = (
+        "<tool_code>\nprint(infra_health())\n</tool_code>\n"
+        '<tool_code>\nprint(self_telemetry_query(query_type="errors", limit=5))\n</tool_code>'
+    )
+    calls = parse_text_tool_calls(content)
+    assert len(calls) == 2
+    assert calls[0]["name"] == "infra_health"
+    assert calls[1]["name"] == "self_telemetry_query"
+
+
+def test_parse_tool_code_bare_call_no_print() -> None:
+    """Parses `<tool_code>fn(arg=value)</tool_code>` without the `print(...)` wrapper."""
+    content = '<tool_code>\nself_telemetry_query(query_type="errors")\n</tool_code>'
+    calls = parse_text_tool_calls(content)
+    assert len(calls) == 1
+    assert calls[0]["name"] == "self_telemetry_query"
+    assert json.loads(calls[0]["arguments"]) == {"query_type": "errors"}

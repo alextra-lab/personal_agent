@@ -81,10 +81,24 @@ _TOOL_INTENT_PATTERNS: re.Pattern[str] = re.compile(
     # Explicit tool invocation
     r"|(?:(?:call|use|invoke|execute|run)\s+(?:the\s+)?(?:\w+\s+)?tool)"
     r"|(?:using\s+the\s+\w+\s+tool)"
-    # Health / status / diagnostics
+    # Explicit tool name mention (native tools registered in tools.yaml)
+    r"|(?:\b(?:infra_health|self_telemetry_query|run_sysdiag|search_memory|"
+    r"query_elasticsearch|system_metrics_snapshot|web_search|fetch_url|"
+    r"perplexity_query|read_file|list_directory|get_library_docs|"
+    r"create_linear_issue|find_linear_issues|list_linear_projects)\b)"
+    # Log/telemetry observation verbs ("see logs", "look at the logs")
+    r"|(?:(?:see|look\s+at|read|tail|watch|show\s+me)\s+(?:the\s+|my\s+|your\s+)?"
+    r"(?:logs?|errors?|telemetry|traces?|metrics?|events?))"
+    # "query the telemetry/logs/metrics/…"
+    r"|(?:query\s+(?:the\s+|my\s+|your\s+)?"
+    r"(?:telemetry|logs?|elasticsearch|kibana|neo4j|memory|metrics?|traces?))"
+    # Health / status / diagnostics (noun can be any word preceding a health term)
     r"|(?:health\s*check)"
+    r"|(?:(?:check|inspect|monitor|diagnose|confirm|verify|report\s+on)\s+"
+    r"(?:that\s+)?(?:the\s+|my\s+|your\s+)?\w+\s+(?:is\s+)?"
+    r"(?:health(?:y|iness)?|status|errors?|logs?|infra(?:structure)?|performance|services?|reachable|up))"
     r"|(?:(?:check|inspect|monitor|diagnose|report\s+on)\s+"
-    r"(?:the\s+)?(?:health|status|errors?|logs?|infra(?:structure)?|performance|services?))"
+    r"(?:the\s+|my\s+|your\s+)?(?:health|status|errors?|logs?|infra(?:structure)?|performance|services?))"
     r"|(?:(?:run|do|perform)\s+(?:a\s+)?(?:health|status|diagnostic|infra)\s*(?:check|report|scan)?)",
 )
 

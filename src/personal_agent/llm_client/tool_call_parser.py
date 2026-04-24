@@ -11,10 +11,15 @@ Supported formats:
     (Qwen XML-parameter variant)
 3. Tool: tool_name(arg1=value1, arg2=value2)
 4. [tool_name, {"arg":"value"}]  (common malformed fallback from some models)
+5. <tool_code>print(tool_name(arg1=value1, ...))</tool_code>  (Gemini-style;
+    also matches the bare form without the print wrapper — observed when a
+    prior assistant turn's pseudo-code poisoned the session history)
 """
 
+import ast
 import json
 import re
+from ast import literal_eval as _literal  # safe: evaluates only Python literals
 from typing import Any
 
 from personal_agent.llm_client.types import ToolCall
@@ -110,6 +115,59 @@ def _extract_bracket_fallback_calls(content: str) -> list[tuple[str, str]]:
         idx = j + 1
 
     return extracted
+
+
+def _parse_python_call_expr(expr: str) -> dict[str, Any] | None:
+    """Parse a Python call expression like ``fn("x", k=v)`` into name + arguments.
+
+    Uses :mod:`ast` with ``literal_eval`` so only literal values are accepted
+    (strings, numbers, lists, dicts, booleans, ``None``). Arbitrary code is
+    never executed. Positional args are mapped to keys ``arg0``, ``arg1``, …
+    and kwargs are preserved by name.
+
+    Returns ``None`` if the expression isn't a simple call with literal args.
+    """
+    try:
+        node = ast.parse(expr.strip(), mode="eval").body
+    except SyntaxError:
+        return None
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+        return None
+
+    arguments: dict[str, Any] = {}
+    for idx, arg in enumerate(node.args):
+        try:
+            arguments[f"arg{idx}"] = _literal(arg)
+        except (ValueError, SyntaxError):
+            return None
+    for kw in node.keywords:
+        if kw.arg is None:  # **kwargs unpacking — reject
+            return None
+        try:
+            arguments[kw.arg] = _literal(kw.value)
+        except (ValueError, SyntaxError):
+            return None
+
+    return {"name": node.func.id, "arguments": arguments}
+
+
+_TOOL_CODE_BLOCK_RE: re.Pattern[str] = re.compile(
+    r"<tool_code>(.*?)</tool_code>", re.DOTALL | re.IGNORECASE
+)
+
+
+def _parse_tool_code_block(block: str) -> dict[str, Any] | None:
+    """Extract a function call from a ``<tool_code>`` block body.
+
+    Accepts both ``print(fn(...))`` (the common Gemini-style output) and the
+    bare ``fn(...)`` form. Strips the ``print(...)`` wrapper when present,
+    then delegates to :func:`_parse_python_call_expr`.
+    """
+    body = block.strip()
+    m = re.fullmatch(r"print\s*\((.*)\)\s*", body, re.DOTALL)
+    if m:
+        body = m.group(1).strip()
+    return _parse_python_call_expr(body)
 
 
 def _parse_qwen_xml_tool_call(block: str) -> dict[str, Any] | None:
@@ -289,6 +347,33 @@ def parse_text_tool_calls(content: str, trace_id: str | None = None) -> list[Too
                 error=str(e),
                 trace_id=trace_id,
             )
+
+    # Strategy 5: <tool_code>print(fn(...))</tool_code>  (Gemini-style)
+    # Also covers bare fn(...) inside tool_code when sessions are poisoned by
+    # prior mimicked assistant output.
+    for match in _TOOL_CODE_BLOCK_RE.findall(content):
+        parsed = _parse_tool_code_block(match)
+        if parsed is None:
+            log.warning(
+                "failed_to_parse_tool_request",
+                format="tool_code",
+                match=match[:120],
+                trace_id=trace_id,
+            )
+            continue
+        tool_calls.append(
+            ToolCall(
+                id=f"text_tool_{len(tool_calls)}",
+                name=parsed["name"],
+                arguments=json.dumps(parsed["arguments"]),
+            )
+        )
+        log.debug(
+            "parsed_text_tool_call",
+            format="tool_code",
+            tool_name=parsed["name"],
+            trace_id=trace_id,
+        )
 
     # Strategy 4: [tool_name, {"arg":"value"}]
     # Some models emit this instead of required [TOOL_REQUEST] JSON envelope.

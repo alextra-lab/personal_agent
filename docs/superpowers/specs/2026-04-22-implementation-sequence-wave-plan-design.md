@@ -46,7 +46,7 @@
 |---|-------|------|----------|-------|
 | 4 | FRE-244 | ADR draft → impl | FRE-249 | ADR-0056: Error Pattern Monitoring — Level 3 observability; closes the gap in the four-level framework |
 | 5 | FRE-247 | ADR draft → impl | FRE-250 | ADR-0057: Insights & Pattern Analysis — wires InsightsEngine to full loop; delegation patterns |
-| 6 | FRE-246 | ADR draft → impl | — | ADR-0055: Mode Manager fix — critical disconnect (`app.py:176` hardcodes `Mode.NORMAL`); no Phase 3 deps |
+| ~~6~~ | ~~FRE-246~~ | ~~ADR draft → impl~~ | — | ~~ADR-0055: Mode Manager fix — critical disconnect (`app.py:176` hardcodes `Mode.NORMAL`); no Phase 3 deps~~ ✅ Done 2026-04-24 |
 | 7 | FRE-248 | ADR draft → impl | FRE-226 | ADR-0058: Self-Improvement Pipeline — formalizes Streams 1-3; adds `captain_log.entry_created` bus event |
 
 **Note:** 4 and 5 can be drafted in parallel (different worktrees). 6 and 7 follow.

@@ -1,6 +1,6 @@
 # Feedback Stream Architecture
 
-> **Status**: Living document — updated 2026-04-23 (ADR-0056 + ADR-0057 drafted, In Review)
+> **Status**: Living document — updated 2026-04-24 (ADR-0055 drafted, In Review; ADR-0056 + ADR-0057 drafted, In Review)
 > **Context**: Surfaced during FRE-233 (ADR-0053) development
 > **Owner**: Project owner
 
@@ -14,7 +14,7 @@ The agent's self-monitoring operates at four distinct levels, each observing a d
 
 | Level | What it observes | Timescale | Streams |
 |-------|-----------------|-----------|---------|
-| **1 — System metrics** | CPU, memory, disk, GPU — hardware signals; operational mode | Seconds (5s poll) | Stream 5: Brainstem Sensors / Mode Manager (ADR-0055 Proposed) |
+| **1 — System metrics** | CPU, memory, disk, GPU — hardware signals; operational mode | Seconds (5s poll) | Stream 5: Brainstem Sensors / Mode Manager ([ADR-0055](../architecture_decisions/ADR-0055-system-health-homeostasis-stream.md) Drafted — In Review 2026-04-24) |
 | **2 — Gate decisions** | Intent classification quality, strategy distribution, per-stage latency, confidence scores | Per-request | Stream NEW: Gate Feedback Monitoring ([ADR-0053](../architecture_decisions/ADR-0053-gate-feedback-monitoring.md) Proposed) |
 | **3 — Application errors** | Exceptions, ERROR/WARNING log events, tool failures, LLM errors, repeated failure patterns | Rolling window | Stream NEW: Error Pattern Monitoring ([ADR-0056](../architecture_decisions/ADR-0056-error-pattern-monitoring.md) Proposed — In Review 2026-04-23) |
 | **4 — Self-reflection** | LLM-generated post-task analysis — what happened, what to improve, capability gaps | Per-task | Streams 1–3: Self-Improvement Pipeline (ADR-0030/0040); Phase 2 failure-path reflection proposed by ADR-0056 |
@@ -95,13 +95,13 @@ All nine feedback streams, their current state, and their target state after ADR
 - **Source:** `MetricsDaemon` — psutil + powermetrics, 5s poll
 - **Collection:** In-memory ring buffer; `evaluate_transitions()` against rule set
 - **Processing:** State machine (NORMAL → ALERT → DEGRADED → LOCKDOWN → RECOVERY)
-- **Signal:** `MODE_TRANSITION` log to ES; mode state in `ModeManager` singleton
-- **Action:** None — **`app.py:176` hardcodes `Mode.NORMAL`; mode never reaches the gateway**
-- **Human loop:** No
-- **Bus?** ❌ No
-- **ADR:** ADR-0005 (partial)
+- **Signal:** `MODE_TRANSITION` log to ES + `ModeTransitionEvent` on `stream:mode.transition`; 5 s samples on `stream:metrics.sampled`
+- **Action:** ADR-0055 Phase 1 — `cg:mode-controller` consumer holds a 60 s rolling window, evaluates transitions every 30 s, and publishes `mode.transition` events; the 4 hardcoded `Mode.NORMAL` sites in `service/app.py` are replaced by `get_current_mode()`
+- **Human loop:** Yes — calibration proposals via Captain's Log → Linear
+- **Bus?** ❌ → ✅ (ADR-0055)
+- **ADR:** [ADR-0055](../architecture_decisions/ADR-0055-system-health-homeostasis-stream.md) (Drafted 2026-04-24, In Review) — supersedes ADR-0005 (partial)
 - **Project:** System Health & Homeostasis
-- **Gap:** Critical disconnect — the entire mode system has zero runtime effect
+- **Gap:** Closed by ADR-0055 Phase 1; per-condition windowing (`duration_seconds`) and `DEGRADED → NORMAL` recovery path deferred to Phase 2
 
 ### Stream 6: Memory Access Freshness
 - **Source:** Every Neo4j read in `MemoryService`
@@ -174,10 +174,12 @@ PHASE 1 — CONVENTION ✅ Accepted 2026-04-23
     Enables: ALL subsequent stream ADRs — Phase 2 drafting unblocked
 
 PHASE 2 — FIX BROKEN STREAMS (parallel, all depend on ADR-0054)
-├── ADR-0055: System Health & Homeostasis Stream [FRE-246]
+├── ADR-0055: System Health & Homeostasis Stream [FRE-246 — drafted 2026-04-24, In Review]
 │   Fixes: Mode Manager disconnect (hardcoded Mode.NORMAL)
+│   Adds: MetricsSampledEvent + ModeTransitionEvent; cg:mode-controller consumer
 │   Depends on: ADR-0054, ADR-0041, ADR-0053 (pattern)
 │   Project: System Health & Homeostasis
+│   File: docs/architecture_decisions/ADR-0055-system-health-homeostasis-stream.md
 │
 ├── ADR-0056: Error Pattern Monitoring Stream [FRE-244 — drafted 2026-04-23, In Review]
 │   Level 3 observability — agent reads its own error logs
@@ -234,7 +236,7 @@ PHASE 3 — COMPLETE PARTIAL STREAMS (depend on Phase 2)
 | 2. Linear feedback | Human label | ✅ | ✅ | ADR-0040 | Self-Improvement Pipeline |
 | 3. Promotion pipeline | Threshold | ✅ | ✅ | ADR-0030/0040 | Self-Improvement Pipeline |
 | 4. Insights engine | Patterns | ❌ | ❌ | None | Insights & Pattern Analysis |
-| 5. Mode manager | System metrics | ❌ | ❌ 🔴 critical | Partial | System Health & Homeostasis |
+| 5. Mode manager | System metrics | ❌ → ✅ | ❌ → ✅ | ADR-0055 (Drafted, In Review) | System Health & Homeostasis |
 | 6. Memory freshness | Access patterns | ✅ | ⚠️ partial | ADR-0042 | Knowledge Graph Quality |
 | 7. Compaction quality | Context loss | ❌ | ❌ | ADR-0047 D3 | Context Quality Monitoring |
 | 8. Consolidation quality | Graph health | ❌ | ❌ | None | Knowledge Graph Quality |
@@ -256,7 +258,7 @@ PHASE 3 — COMPLETE PARTIAL STREAMS (depend on Phase 2)
 - FRE-233: ADR-0053 — Gate Feedback Monitoring (awaiting acceptance)
 - FRE-244: ADR-0056 — Error Pattern Monitoring (Drafted 2026-04-23, In Review)
 - FRE-245: ADR-0054 — Feedback Stream Bus Convention (✅ Accepted + implemented 2026-04-23)
-- FRE-246: ADR-0055 — System Health & Homeostasis (Approved, unblocked)
+- FRE-246: ADR-0055 — System Health & Homeostasis (Drafted 2026-04-24, In Review)
 - FRE-247: ADR-0057 — Insights & Pattern Analysis (Drafted 2026-04-23, In Review)
 - FRE-248: ADR-0058 — Self-Improvement Pipeline Stream (Needs Approval, blocked by FRE-245)
 - FRE-249: ADR-0059 — Context Quality Monitoring (Needs Approval, blocked by FRE-245 + FRE-244)

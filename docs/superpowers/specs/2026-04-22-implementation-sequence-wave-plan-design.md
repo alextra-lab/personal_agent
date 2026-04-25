@@ -138,7 +138,7 @@ A parallel track opened on 2026-04-24 and was **approved 2026-04-24**: **ADR-006
 | Wave | Tracks in flight |
 |------|------------------|
 | 2 | ~~FRE-246~~ (done) / ~~FRE-244~~ (done) / ~~FRE-247~~ (done) / FRE-248 (next) |
-| 2.5 (parallel) | FRE-260/PIVOT-1 (sever filter wire — **start now, parallel to FRE-248**) → FRE-261/PIVOT-2 (primitives + sandbox, FRE-246 done ✅) → FRE-262/PIVOT-3 (skill docs + eval) → FRE-263/PIVOT-4 (flag-gated deprecation) → FRE-265/PIVOT-6 (delete legacy tools); FRE-264/PIVOT-5 parallel after FRE-260 |
+| 2.5 (parallel) | **FRE-260/PIVOT-1** (in progress 2026-04-25 — sever filter wire) → FRE-261/PIVOT-2 (primitives + sandbox, FRE-246 done ✅, 48h gate after PIVOT-1) → FRE-262/PIVOT-3 (skill docs + eval) → FRE-263/PIVOT-4 (flag-gated deprecation) → FRE-265/PIVOT-6 (delete legacy tools); FRE-264/PIVOT-5 parallel after FRE-260 |
 | 3 | FRE-249 / FRE-250 — unchanged |
 | 4 | FRE-251 and FRE-226 phase 2 — unchanged |
 

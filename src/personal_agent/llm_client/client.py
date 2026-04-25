@@ -345,6 +345,7 @@ class LocalLLMClient:
                     presence_penalty=model_config.presence_penalty,
                     disable_thinking=model_config.disable_thinking,
                     thinking_budget_tokens=model_config.thinking_budget_tokens,
+                    parallel_tool_calls=model_config.parallel_tool_calls,
                 )
 
                 # Debug: Log payload structure

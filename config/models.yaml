@@ -24,6 +24,7 @@
 #   top_k            Passed via extra_body (vLLM/LM Studio extension)
 #   disable_thinking Hard-disables thinking via chat_template_kwargs (Qwen3.5+)
 #   thinking_budget_tokens  Caps thinking tokens via extra_body (Qwen3.5+)
+#   parallel_tool_calls     Allow multiple tool calls per turn (default true; requires updated llama.cpp)
 #   min_concurrency  Floor for adaptive concurrency (ADR-0033)
 #
 # Cloud-model fields:

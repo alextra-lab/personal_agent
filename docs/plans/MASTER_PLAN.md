@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-25 (FRE-260 / PIVOT-1 done — TaskType→tool-filter wire severed + verified in prod; 48h gate before PIVOT-2 / FRE-261)
+> **Last updated**: 2026-04-25 (FRE-248 / ADR-0058 done — Stream 1 bus hook implemented; FRE-261 / PIVOT-2 pending 48h gate)
 > **Implementation sequence**: `docs/superpowers/specs/2026-04-22-implementation-sequence-wave-plan-design.md`
 
 ---
@@ -30,7 +30,7 @@ Ordered by recommended implementation sequence. All items Approved in Linear. De
 |---|---------|--------|------------|------------|
 | ~~2~~ | ~~System Health & Homeostasis — Mode Manager fix~~ | ~~[FRE-246](https://linear.app/frenchforest/issue/FRE-246)~~ | ~~ADR-0055~~ | ~~FRE-245~~ |
 | ~~3~~ | ~~Error Pattern Monitoring — Level 3 observability~~ | ~~[FRE-244](https://linear.app/frenchforest/issue/FRE-244)~~ | ~~ADR-0056~~ | ~~FRE-245~~ |
-| 5 | Self-Improvement Pipeline — formalize Streams 1-3 | [FRE-248](https://linear.app/frenchforest/issue/FRE-248) | ADR-0058 | ~~FRE-245~~ (unblocked) |
+| ~~5~~ | ~~Self-Improvement Pipeline — formalize Streams 1-3~~ | ~~[FRE-248](https://linear.app/frenchforest/issue/FRE-248)~~ | ~~ADR-0058~~ | ~~Done 2026-04-25~~ |
 | ~~2.5-P1~~ | ~~ADR-0063 — Sever TaskType→tool-filter wire~~ | ~~[FRE-260](https://linear.app/frenchforest/issue/FRE-260)~~ | ~~ADR-0063 §D1~~ | ~~Done 2026-04-25 — verified in prod; 48h gate active~~ |
 | 2.5-P2 | ADR-0063 — Four primitives + sandbox + action-boundary | [FRE-261](https://linear.app/frenchforest/issue/FRE-261) | ADR-0063 §D2-D3 | FRE-260, ~~FRE-246~~ |
 | 2.5-P5 | ADR-0063 — Loop gate signal split + model_config fix *(parallel to P2/P3/P4)* | [FRE-264](https://linear.app/frenchforest/issue/FRE-264) | ADR-0063 §D5-D6 | FRE-260 |
@@ -101,6 +101,7 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 
 | Phase | Completed | Summary |
 |-------|-----------|---------|
+| ADR-0058: Self-Improvement Pipeline Stream (FRE-248) | 2026-04-25 | Closes the Stream 1 bus gap (ADR-0054). `CaptainLogEntryCreatedEvent` published on `stream:captain_log.entry_created` from both `CaptainLogManager.save_entry()` (new writes) and `_merge_into_existing()` (dedup merges, `is_merge=True`). Suppression path correctly skips. Bus publish uses fire-and-forget `asyncio.create_task` pattern (durable-first per ADR-0054 D4; bus failure logged+swallowed per D6). No new consumer group — producer-only ADR. Stream 1 `Bus?` flipped to ✅ in FEEDBACK_STREAM_ARCHITECTURE.md. 9 new unit tests. Unblocks FRE-226 phase 2 (agent self-updating skills). |
 | ADR-0055: System Health & Homeostasis — Mode Manager fix (FRE-246) | 2026-04-24 | Closed the critical Mode Manager disconnect: 4 × `Mode.NORMAL` hardcodes in `service/app.py` replaced by `get_current_mode()`. `MetricsDaemon` dual-writes `MetricsSampledEvent` to `stream:metrics.sampled` every 5 s (MAXLEN 720). `ModeManager.transition_to()` dual-writes `ModeTransitionEvent` to `stream:mode.transition`. `cg:mode-controller` consumer drives the FSM: rolling 60 s window → 30 s evaluation cadence → `ModeManager.evaluate_transitions()`. Anomalous transition cadence (≥3 per 10 min per edge) → `CaptainLogEntry(RELIABILITY, scope=mode_calibration)` with SHA-256 fingerprint. `mode_controller_enabled` defaults True. 56 new tests. ADR-0055 and FEEDBACK_STREAM_ARCHITECTURE.md updated. |
 | ADR-0057: Insights & Pattern Analysis (FRE-247) | 2026-04-24 | Closes Streams 4 & 9. `build_consolidation_insights_handler` extended: publishes `InsightsPatternDetectedEvent` per insight + `InsightsCostAnomalyEvent` per anomaly on the bus; calls `create_captain_log_proposals` → `CaptainLogManager.save_entry` (ADR-0030 fingerprint dedup applies). New `Insight.pattern_kind` field. `_pattern_fingerprint` / `_cost_fingerprint` / `_severity_for_cost_ratio` / `_category_for_insight_type` / `_scope_for_insight_type` helpers extracted to `insights/fingerprints.py`. `InsightsEngine.detect_delegation_patterns()` stub replaced with 3 real ES aggregations (success rate, rounds p75, missing-context themes). Config flag `insights_wiring_enabled=True`. |
 | Investigation: Step-count latency reduction (FRE-254) | 2026-04-22 | Root cause: Qwen3-35B-A3B emits one tool call per turn regardless of batching instructions — orchestrator already supports N calls/turn. Top findings: (1) `get_tool_definitions_for_llm()` ignores TaskType `allowed_categories` — wiring it eliminates ~3,000–4,000 tokens on conversational turns; (2) no step-budget hint in system prompt (`_TOOL_RULES` prompts.py:39) — add `"≤ 6 tool calls"` guidance; (3) total tool description cost ~4,200–4,600 tokens with redundant/stale references. Full report: `docs/research/FRE-254-step-count-investigation.md`. |
@@ -147,7 +148,7 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 | 0061 | Within-Session Progressive Context Compression | Approved (FRE-251 — blocked by 0059) |
 | 0060 | Knowledge Graph Quality Stream | Approved (FRE-250 — blocked by 0054, 0057) |
 | 0059 | Context Quality Monitoring Stream | Approved (FRE-249 — blocked by 0054, 0056) |
-| 0058 | Self-Improvement Pipeline Stream | Approved (FRE-248 — blocked by 0054) |
+| 0058 | Self-Improvement Pipeline Stream | Accepted (Implemented — FRE-248 done 2026-04-25) |
 | 0057 | Insights & Pattern Analysis Stream | Accepted (Implemented — FRE-247 2026-04-24) |
 | 0056 | Error Pattern Monitoring Stream | Approved (FRE-244 — blocked by 0054) |
 | 0055 | System Health & Homeostasis Stream | Approved (FRE-246 — blocked by 0054) |

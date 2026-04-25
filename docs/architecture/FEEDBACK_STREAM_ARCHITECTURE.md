@@ -52,10 +52,10 @@ All nine feedback streams, their current state, and their target state after ADR
 - **Signal:** JSON file to `telemetry/captains_log/` + ES index
 - **Action:** Promotion pipeline (Stream 3) picks it up
 - **Human loop:** Yes — via Linear
-- **Bus?** Partial — promotion triggered by bus, entry creation is not
-- **ADR:** ADR-0030
+- **Bus?** ✅ Yes — `CaptainLogEntryCreatedEvent` on `stream:captain_log.entry_created` (ADR-0058)
+- **ADR:** ADR-0030, ADR-0058
 - **Project:** Self-Improvement Pipeline
-- **Gap:** No `captain_log.entry_created` bus event — not composable
+- **Gap:** Closed by ADR-0058 (implemented FRE-248 2026-04-25)
 
 ### Stream 2: Linear Human Feedback
 - **Source:** Human applies label to Linear issue
@@ -194,7 +194,7 @@ PHASE 2 — FIX BROKEN STREAMS (parallel, all depend on ADR-0054)
 │   Depends on: ADR-0054, ADR-0041
 │   Project: Insights & Pattern Analysis
 │
-└── ADR-0058: Self-Improvement Pipeline Stream [FRE-248]
+└── ADR-0058: Self-Improvement Pipeline Stream [FRE-248 — Accepted, Implemented 2026-04-25]
     Formalizes Streams 1–3 with bus convention
     Adds captain_log.entry_created bus event
     Depends on: ADR-0030, ADR-0040, ADR-0054
@@ -233,7 +233,7 @@ PHASE 3 — COMPLETE PARTIAL STREAMS (depend on Phase 2)
 
 | Stream | Detects | Bus? | Complete loop? | ADR | Project |
 |--------|---------|------|----------------|-----|---------|
-| 1. Self-reflection | Per-task | Partial | ✅ | ADR-0030 | Self-Improvement Pipeline |
+| 1. Self-reflection | Per-task | ✅ | ✅ | ADR-0030, ADR-0058 (Accepted, Implemented 2026-04-25) | Self-Improvement Pipeline |
 | 2. Linear feedback | Human label | ✅ | ✅ | ADR-0040 | Self-Improvement Pipeline |
 | 3. Promotion pipeline | Threshold | ✅ | ✅ | ADR-0030/0040 | Self-Improvement Pipeline |
 | 4. Insights engine | Patterns | ✅ | ✅ | ADR-0057 (Accepted, Implemented 2026-04-24) | Insights & Pattern Analysis |
@@ -261,7 +261,7 @@ PHASE 3 — COMPLETE PARTIAL STREAMS (depend on Phase 2)
 - FRE-245: ADR-0054 — Feedback Stream Bus Convention (✅ Accepted + implemented 2026-04-23)
 - FRE-246: ADR-0055 — System Health & Homeostasis (Drafted 2026-04-24, In Review)
 - FRE-247: ADR-0057 — Insights & Pattern Analysis (✅ Accepted, Implemented 2026-04-24)
-- FRE-248: ADR-0058 — Self-Improvement Pipeline Stream (Needs Approval, blocked by FRE-245)
+- FRE-248: ADR-0058 — Self-Improvement Pipeline Stream (✅ Accepted, Implemented 2026-04-25)
 - FRE-249: ADR-0059 — Context Quality Monitoring (Needs Approval, blocked by FRE-245 + FRE-244)
 - FRE-250: ADR-0060 — Knowledge Graph Quality (Needs Approval, blocked by FRE-245 + FRE-247)
 - FRE-251: ADR-0061 — Within-Session Compression (Needs Approval, blocked by FRE-249)

@@ -3,6 +3,7 @@
 Extended by ADR-0030: fingerprint-based deduplication on write.
 """
 
+import asyncio
 import json as _json
 import pathlib
 import re
@@ -168,6 +169,73 @@ class CaptainLogManager:
         self.es_handler = es_handler or self.__class__._default_es_handler
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
+    def _schedule_entry_created_event(
+        self,
+        entry: CaptainLogEntry,
+        seen_count: int,
+        is_merge: bool,
+    ) -> None:
+        """Schedule a fire-and-forget bus publish of CaptainLogEntryCreatedEvent.
+
+        Follows the same async-from-sync pattern as ``schedule_es_index`` —
+        uses ``asyncio.create_task`` when a loop is running; silently skips
+        in CLI / test contexts with no loop.  Durable write must have already
+        succeeded before this is called (ADR-0054 D4 ordering rule).
+
+        Bus failure is logged and swallowed per ADR-0054 D6.
+
+        Args:
+            entry: The entry that was just durably written.
+            seen_count: Current dedup count (1 for first write; ≥ 2 for merge).
+            is_merge: True when this write was a dedup merge.
+        """
+        pc = entry.proposed_change
+        fingerprint = pc.fingerprint if pc else None
+        category = pc.category.value if pc and pc.category else None
+        scope = pc.scope.value if pc and pc.scope else None
+
+        trace_id: str | None = None
+        if entry.telemetry_refs:
+            raw = entry.telemetry_refs[0].trace_id
+            if isinstance(raw, str):
+                trace_id = raw
+
+        entry_id = entry.entry_id or ""
+
+        async def _publish() -> None:
+            try:
+                from personal_agent.events.bus import get_event_bus
+                from personal_agent.events.models import (
+                    STREAM_CAPTAIN_LOG_ENTRY_CREATED,
+                    CaptainLogEntryCreatedEvent,
+                )
+
+                event = CaptainLogEntryCreatedEvent(
+                    entry_id=entry_id,
+                    entry_type=entry.type.value,
+                    title=entry.title,
+                    fingerprint=fingerprint,
+                    seen_count=seen_count,
+                    is_merge=is_merge,
+                    category=category,
+                    scope=scope,
+                    trace_id=trace_id,
+                )
+                bus = get_event_bus()
+                await bus.publish(STREAM_CAPTAIN_LOG_ENTRY_CREATED, event)
+            except Exception as exc:
+                log.warning(
+                    "captain_log_entry_event_publish_failed",
+                    entry_id=entry_id,
+                    error=str(exc),
+                )
+
+        try:
+            asyncio.get_running_loop()
+            asyncio.create_task(_publish())
+        except RuntimeError:
+            pass  # No running loop (CLI / tests without asyncio) — skip bus publish
+
     def save_entry(
         self,
         entry: CaptainLogEntry,
@@ -245,6 +313,7 @@ class CaptainLogManager:
             handler = es_handler or self.es_handler
             schedule_es_index(index_name, doc, es_handler=handler, doc_id=entry.entry_id)
 
+        self._schedule_entry_created_event(entry, seen_count=1, is_merge=False)
         return file_path
 
     # ------------------------------------------------------------------
@@ -327,6 +396,11 @@ class CaptainLogManager:
             handler = es_handler or self.es_handler
             schedule_es_index(index_name, doc, es_handler=handler, doc_id=existing_entry.entry_id)
 
+        self._schedule_entry_created_event(
+            existing_entry,
+            seen_count=pc["seen_count"],
+            is_merge=True,
+        )
         return existing_path
 
     def write_entry(

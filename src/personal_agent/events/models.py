@@ -96,6 +96,17 @@ STREAM_INSIGHTS_PATTERN_DETECTED = "stream:insights.pattern_detected"
 STREAM_INSIGHTS_COST_ANOMALY = "stream:insights.cost_anomaly"
 """Stream for insights-cost-anomaly events (Wave 2 — ADR-0057)."""
 
+# Wave 2 — ADR-0058 (Self-Improvement Pipeline Stream)
+STREAM_CAPTAIN_LOG_ENTRY_CREATED = "stream:captain_log.entry_created"
+"""Stream for captain-log-entry-created events (Wave 2 — ADR-0058).
+
+Producer: ``CaptainLogManager.save_entry()`` / ``_merge_into_existing()``.
+Fires on every successful durable write — both first writes (``is_merge=False``)
+and dedup merges (``is_merge=True``).  Suppressed entries (ADR-0040 rejection)
+do not fire.  Ordering rule: durable file write must succeed before publish
+(ADR-0054 D4).  Bus failures are logged and swallowed (ADR-0054 D6).
+"""
+
 
 # ---------------------------------------------------------------------------
 # Base model
@@ -552,6 +563,53 @@ class InsightsCostAnomalyEvent(EventBase):
     observation_date: str
 
 
+class CaptainLogEntryCreatedEvent(EventBase):
+    """Published after a Captain's Log entry is durably written (ADR-0058).
+
+    Fires from ``CaptainLogManager.save_entry()`` and
+    ``CaptainLogManager._merge_into_existing()`` — the two persist sites that
+    all CL construction call sites funnel through.  Suppressed entries
+    (ADR-0040 rejection fingerprint) do **not** fire this event.
+
+    ``trace_id`` and ``session_id`` are ``None`` for scheduled / system-scoped
+    entries (consolidation insights, freshness review, mode-controller
+    proposals).  They are populated for task-reflection entries where a
+    request trace is available.
+
+    ``source_component`` defaults to ``"captains_log.manager"`` — the single
+    producer of this event.
+
+    Attributes:
+        entry_id: Captain's Log entry identifier (``CL-<date>-<hash>`` form).
+        entry_type: ``CaptainLogEntryType.value`` string (e.g. ``"REFLECTION"``).
+        title: Short human-readable title from the CL entry.
+        fingerprint: Proposal fingerprint from ``ProposedChange.fingerprint``,
+            or ``None`` if the entry has no proposal.
+        seen_count: Dedup count at write time.  ``1`` for a first write;
+            ``≥ 2`` for a merge that incremented an existing entry.
+        is_merge: ``True`` when this write was a dedup merge; ``False`` for a
+            first write.
+        category: ``ChangeCategory.value`` string (e.g. ``"performance"``,
+            ``"reliability"``) if the entry carries a proposed change, else
+            ``None``.
+        scope: ``ChangeScope.value`` string (e.g. ``"orchestrator"``,
+            ``"captains_log"``) if the entry carries a proposed change, else
+            ``None``.
+    """
+
+    event_type: Literal["captain_log.entry_created"] = "captain_log.entry_created"
+    source_component: str = "captains_log.manager"
+
+    entry_id: str
+    entry_type: str
+    title: str
+    fingerprint: str | None = None
+    seen_count: int = 1
+    is_merge: bool = False
+    category: str | None = None
+    scope: str | None = None
+
+
 def parse_stream_event(payload: dict[str, Any]) -> EventBase:
     """Deserialize a stream JSON payload into the correct event subclass.
 
@@ -594,4 +652,6 @@ def parse_stream_event(payload: dict[str, Any]) -> EventBase:
         return InsightsPatternDetectedEvent.model_validate(payload)
     if raw_type == "insights.cost_anomaly":
         return InsightsCostAnomalyEvent.model_validate(payload)
+    if raw_type == "captain_log.entry_created":
+        return CaptainLogEntryCreatedEvent.model_validate(payload)
     raise ValueError(f"unknown event_type: {raw_type!r}")

@@ -1,6 +1,6 @@
 # ADR-0058: Self-Improvement Pipeline Stream
 
-**Status**: Proposed — In Review
+**Status**: Accepted (Implemented — FRE-248 — 2026-04-25)
 **Date**: 2026-04-25
 **Deciders**: Project owner
 **Depends on**: ADR-0030 (Captain's Log Dedup & Self-Improvement Pipeline), ADR-0040 (Linear as Async Feedback Channel), ADR-0041 (Event Bus — Redis Streams), ADR-0054 (Feedback Stream Bus Convention)

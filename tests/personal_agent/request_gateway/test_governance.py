@@ -4,7 +4,7 @@ import pytest
 
 from personal_agent.governance.models import Mode
 from personal_agent.request_gateway.governance import evaluate_governance
-from personal_agent.request_gateway.types import GovernanceContext, TaskType
+from personal_agent.request_gateway.types import GovernanceContext
 
 
 class TestEvaluateGovernance:
@@ -53,45 +53,15 @@ class TestEvaluateGovernance:
             result.expansion_permitted = False  # type: ignore[misc]
 
 
-class TestEvaluateGovernanceTaskTypePolicy:
-    """Tests for per-TaskType tool allowlist (FRE-252)."""
+class TestGovernanceContextDeprecatedField:
+    """Verify allowed_tool_categories is deprecated and always None (ADR-0063 §D1)."""
 
-    def test_no_task_type_returns_none_categories(self) -> None:
-        """Backward compat: omitting task_type keeps allowed_tool_categories None."""
+    def test_allowed_tool_categories_always_none(self) -> None:
+        """TaskType→tool-filter wire severed in FRE-260: field is always None."""
         result = evaluate_governance(mode=Mode.NORMAL)
         assert result.allowed_tool_categories is None
 
-    def test_conversational_task_type_returns_empty_categories(self) -> None:
-        """CONVERSATIONAL tasks need no tools."""
-        result = evaluate_governance(mode=Mode.NORMAL, task_type=TaskType.CONVERSATIONAL)
-        assert result.allowed_tool_categories == []
-
-    def test_memory_recall_task_type_returns_read_only(self) -> None:
-        """MEMORY_RECALL tasks only need read_only category."""
-        result = evaluate_governance(mode=Mode.NORMAL, task_type=TaskType.MEMORY_RECALL)
-        assert result.allowed_tool_categories is not None
-        assert set(result.allowed_tool_categories) == {"read_only"}
-
-    def test_tool_use_normal_mode_returns_broad_categories(self) -> None:
-        """TOOL_USE in NORMAL mode allows read_only, network, system_write."""
-        result = evaluate_governance(mode=Mode.NORMAL, task_type=TaskType.TOOL_USE)
-        assert result.allowed_tool_categories is not None
-        assert "read_only" in result.allowed_tool_categories
-        assert "network" in result.allowed_tool_categories
-        assert "system_write" in result.allowed_tool_categories
-
-    def test_degraded_mode_narrows_tool_use_categories(self) -> None:
-        """DEGRADED mode intersects with TOOL_USE to remove system_write and network."""
-        result = evaluate_governance(mode=Mode.DEGRADED, task_type=TaskType.TOOL_USE)
-        assert result.allowed_tool_categories is not None
-        assert "system_write" not in result.allowed_tool_categories
-        assert "network" not in result.allowed_tool_categories
-        assert "read_only" in result.allowed_tool_categories
-
-    def test_lockdown_mode_restricts_all_task_types_to_health_check(self) -> None:
-        """LOCKDOWN mode allows only essential_health_check regardless of task type."""
-        result = evaluate_governance(mode=Mode.LOCKDOWN, task_type=TaskType.TOOL_USE)
-        assert result.allowed_tool_categories is not None
-        assert "system_write" not in result.allowed_tool_categories
-        assert "network" not in result.allowed_tool_categories
-        assert "read_only" not in result.allowed_tool_categories
+    def test_allowed_tool_categories_none_in_lockdown(self) -> None:
+        """Even in LOCKDOWN mode the deprecated field is None (mode gate is elsewhere)."""
+        result = evaluate_governance(mode=Mode.LOCKDOWN)
+        assert result.allowed_tool_categories is None

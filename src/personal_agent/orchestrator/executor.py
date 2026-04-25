@@ -1349,29 +1349,10 @@ async def step_llm_call(
             if _tool_registry is None:
                 _tool_registry = get_default_registry()
 
-            # Derive per-TaskType category filter from the gateway governance output.
-            # When allowed_categories is [] (e.g. conversational intent), no tools are
-            # sent — the caller must not pass tools=[] to providers that reject that.
-            _allowed_cats: list[str] | None = None
-            if ctx.gateway_output is not None:
-                _allowed_cats = ctx.gateway_output.governance.allowed_tool_categories
-            tool_defs = _tool_registry.get_tool_definitions_for_llm(
-                mode=ctx.mode, allowed_categories=_allowed_cats
-            )
-
-            # Empty tool list means the TaskType policy allows no tools — omit entirely.
-            if not tool_defs:
-                log.debug(
-                    "tools_suppressed_by_task_type",
-                    trace_id=ctx.trace_id,
-                    task_type=(
-                        ctx.gateway_output.intent.task_type.value
-                        if ctx.gateway_output
-                        else "unknown"
-                    ),
-                    allowed_categories=_allowed_cats,
-                )
-                is_synthesizing = True  # treat as no-tools path for prompt assembly
+            # Per ADR-0063 §D1 (FRE-260), governance is mode-only — the
+            # TaskType→tool-filter wire is severed. Every turn sees every tool
+            # the active mode allows.
+            tool_defs = _tool_registry.get_tool_definitions_for_llm(mode=ctx.mode)
 
             if tool_strategy == ToolCallingStrategy.NATIVE:
                 # Pass tools in the API request — model uses native function calling

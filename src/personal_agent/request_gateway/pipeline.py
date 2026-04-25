@@ -82,8 +82,10 @@ async def run_gateway_pipeline(
 
     # Stage 2: Session (handled by caller -- messages passed in as session_messages)
 
-    # Stage 4: Intent Classification (runs before Stage 3 so task_type is
-    # available for per-TaskType tool allowlist intersection — FRE-252)
+    # Stage 4: Intent Classification — runs before Stage 3 so task_type is
+    # available downstream (decomposition, iteration budgets, memory retrieval,
+    # context assembly, telemetry). The TaskType→tool-filter wire was severed in
+    # ADR-0063 §D1 (FRE-260); governance is mode-only.
     intent = classify_intent(user_message)
 
     logger.info(
@@ -122,11 +124,10 @@ async def run_gateway_pipeline(
             reclassified_by="recall_controller",
         )
 
-    # Stage 3: Governance (after Stage 4 so task_type is available — FRE-252)
+    # Stage 3: Governance (mode-only after ADR-0063 §D1 / FRE-260)
     governance = evaluate_governance(
         mode=mode,
         expansion_budget=expansion_budget,
-        task_type=intent.task_type,
     )
 
     # Stage 5: Decomposition Assessment

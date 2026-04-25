@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-25 (FRE-260 / PIVOT-1 in progress — TaskType→tool-filter wire severed; 48h post-merge gate before PIVOT-2)
+> **Last updated**: 2026-04-25 (FRE-260 / PIVOT-1 done — TaskType→tool-filter wire severed + verified in prod; 48h gate before PIVOT-2 / FRE-261)
 > **Implementation sequence**: `docs/superpowers/specs/2026-04-22-implementation-sequence-wave-plan-design.md`
 
 ---
@@ -20,7 +20,7 @@
 | ~~2~~ | ~~4~~ | ~~System Health & Homeostasis — Mode Manager fix (ADR-0055)~~ | ~~[FRE-246](https://linear.app/frenchforest/issue/FRE-246)~~ | ~~ADR + fix~~ | ~~Done 2026-04-24~~ |
 | ~~2~~ | ~~3~~ | ~~Error Pattern Monitoring — Level 3 observability (ADR-0056)~~ | ~~[FRE-244](https://linear.app/frenchforest/issue/FRE-244)~~ | ~~ADR + implementation~~ | ~~Done 2026-04-24 — Phase 1 (cg:error-monitor + dual-write) + Phase 2 (GEPA failure-path reflection, flag off)~~ |
 | ~~2~~ | ~~4~~ | ~~Insights & Pattern Analysis — wire InsightsEngine~~ | ~~[FRE-247](https://linear.app/frenchforest/issue/FRE-247)~~ | ~~ADR + implementation~~ | ~~Done 2026-04-24~~ |
-| 2.5 | — | ADR-0063 Primitive Tools & Action-Boundary Governance | [FRE-259](https://linear.app/frenchforest/issue/FRE-259) | ADR + 6-phase migration | **Approved 2026-04-24** — FRE-260 (PIVOT-1) **in progress 2026-04-25** |
+| 2.5 | — | ADR-0063 Primitive Tools & Action-Boundary Governance | [FRE-259](https://linear.app/frenchforest/issue/FRE-259) | ADR + 6-phase migration | **Approved 2026-04-24** — FRE-260 (PIVOT-1) ~~done 2026-04-25~~ · FRE-261 (PIVOT-2) pending 48h gate |
 
 ## Upcoming — Approved
 
@@ -31,7 +31,7 @@ Ordered by recommended implementation sequence. All items Approved in Linear. De
 | ~~2~~ | ~~System Health & Homeostasis — Mode Manager fix~~ | ~~[FRE-246](https://linear.app/frenchforest/issue/FRE-246)~~ | ~~ADR-0055~~ | ~~FRE-245~~ |
 | ~~3~~ | ~~Error Pattern Monitoring — Level 3 observability~~ | ~~[FRE-244](https://linear.app/frenchforest/issue/FRE-244)~~ | ~~ADR-0056~~ | ~~FRE-245~~ |
 | 5 | Self-Improvement Pipeline — formalize Streams 1-3 | [FRE-248](https://linear.app/frenchforest/issue/FRE-248) | ADR-0058 | ~~FRE-245~~ (unblocked) |
-| **2.5-P1** | **ADR-0063 — Sever TaskType→tool-filter wire** *(in progress 2026-04-25)* | [FRE-260](https://linear.app/frenchforest/issue/FRE-260) | ADR-0063 §D1 | None — 48h post-merge gate before PIVOT-2 |
+| ~~2.5-P1~~ | ~~ADR-0063 — Sever TaskType→tool-filter wire~~ | ~~[FRE-260](https://linear.app/frenchforest/issue/FRE-260)~~ | ~~ADR-0063 §D1~~ | ~~Done 2026-04-25 — verified in prod; 48h gate active~~ |
 | 2.5-P2 | ADR-0063 — Four primitives + sandbox + action-boundary | [FRE-261](https://linear.app/frenchforest/issue/FRE-261) | ADR-0063 §D2-D3 | FRE-260, ~~FRE-246~~ |
 | 2.5-P5 | ADR-0063 — Loop gate signal split + model_config fix *(parallel to P2/P3/P4)* | [FRE-264](https://linear.app/frenchforest/issue/FRE-264) | ADR-0063 §D5-D6 | FRE-260 |
 | 6 | Context Quality — compaction full loop | [FRE-249](https://linear.app/frenchforest/issue/FRE-249) | ADR-0059 | ~~FRE-245~~, ~~FRE-244~~ |

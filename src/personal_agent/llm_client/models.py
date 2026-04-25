@@ -156,6 +156,16 @@ class ModelDefinition(BaseModel):
             "from supports_function_calling for backward compatibility."
         ),
     )
+    parallel_tool_calls: bool = Field(
+        default=True,
+        description=(
+            "Include parallel_tool_calls=True in the chat completions payload, "
+            "allowing the model to emit multiple tool calls in a single response turn. "
+            "Only active when tool_calling_strategy=NATIVE. Requires llama.cpp >= build "
+            "with QwenLM/#1831 Qwen3.x template fixes (FRE-232). "
+            "Set False for models whose chat template does not handle parallel calls."
+        ),
+    )
     disable_thinking: bool = Field(
         default=False,
         description=(

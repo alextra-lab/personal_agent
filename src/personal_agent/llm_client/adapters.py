@@ -413,6 +413,7 @@ def build_chat_completions_request(
     presence_penalty: float | None = None,
     disable_thinking: bool = False,
     thinking_budget_tokens: int | None = None,
+    parallel_tool_calls: bool = True,
 ) -> dict[str, Any]:
     """Build a chat_completions API request payload.
 
@@ -436,6 +437,8 @@ def build_chat_completions_request(
             Mutually exclusive with thinking_budget_tokens.
         thinking_budget_tokens: Cap on thinking tokens; passed as thinking_budget in extra_body.
             Mutually exclusive with disable_thinking.
+        parallel_tool_calls: If True, include parallel_tool_calls=True in the payload so the
+            model may emit multiple tool calls per turn. Only meaningful when tools are provided.
 
     Returns:
         Request payload dictionary.
@@ -473,8 +476,9 @@ def build_chat_completions_request(
         if tool_choice:
             payload["tool_choice"] = tool_choice
         else:
-            # Default to "auto" if tools are provided
             payload["tool_choice"] = "auto"
+        if parallel_tool_calls:
+            payload["parallel_tool_calls"] = True
 
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens

@@ -336,3 +336,35 @@ class TestBuildChatCompletionsRequest:
         )
 
         assert payload["response_format"] == response_format
+
+    def test_parallel_tool_calls_included_when_tools_present(self) -> None:
+        """parallel_tool_calls=True is included in payload when tools are provided."""
+        messages = [{"role": "user", "content": "Hello"}]
+        tools = [{"type": "function", "function": {"name": "do_thing"}}]
+
+        payload = build_chat_completions_request(
+            messages=messages, model="test-model", tools=tools, parallel_tool_calls=True
+        )
+
+        assert payload["parallel_tool_calls"] is True
+
+    def test_parallel_tool_calls_omitted_without_tools(self) -> None:
+        """parallel_tool_calls is not sent when no tools are provided."""
+        messages = [{"role": "user", "content": "Hello"}]
+
+        payload = build_chat_completions_request(
+            messages=messages, model="test-model", parallel_tool_calls=True
+        )
+
+        assert "parallel_tool_calls" not in payload
+
+    def test_parallel_tool_calls_disabled(self) -> None:
+        """parallel_tool_calls is not sent when explicitly False."""
+        messages = [{"role": "user", "content": "Hello"}]
+        tools = [{"type": "function", "function": {"name": "do_thing"}}]
+
+        payload = build_chat_completions_request(
+            messages=messages, model="test-model", tools=tools, parallel_tool_calls=False
+        )
+
+        assert "parallel_tool_calls" not in payload

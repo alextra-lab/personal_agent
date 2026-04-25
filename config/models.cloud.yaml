@@ -71,7 +71,7 @@ models:
     # Focused single-task completion for HYBRID expansion sub-agents.
     # No thinking. Lower temperature for deterministic output. Bounded tokens.
     # Renamed from "standard" (ADR-0033). Parameters tuned for focused tasks.
-    id: "unsloth/qwen3.5-9b"
+    id: "mlx-community/Qwen3.5-9B-8bit"
     context_length: 16384
     quantization: "8bit"
     min_concurrency: 1

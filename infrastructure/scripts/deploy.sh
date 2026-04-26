@@ -49,6 +49,7 @@ fi
 if $FULL; then
   REMOTE_CMD="
     cd $DEPLOY_PATH &&
+    test -f .env || { echo 'ERROR: .env not found at $DEPLOY_PATH — see .env.example'; exit 1; } &&
     git pull --ff-only &&
     docker compose -f $COMPOSE_FILE build &&
     docker compose -f $COMPOSE_FILE up -d
@@ -57,6 +58,7 @@ if $FULL; then
 elif $BUILD; then
   REMOTE_CMD="
     cd $DEPLOY_PATH &&
+    test -f .env || { echo 'ERROR: .env not found at $DEPLOY_PATH — see .env.example'; exit 1; } &&
     git pull --ff-only &&
     docker compose -f $COMPOSE_FILE build seshat-gateway &&
     docker compose -f $COMPOSE_FILE up -d seshat-gateway
@@ -65,6 +67,7 @@ elif $BUILD; then
 else
   REMOTE_CMD="
     cd $DEPLOY_PATH &&
+    test -f .env || { echo 'ERROR: .env not found at $DEPLOY_PATH — see .env.example'; exit 1; } &&
     git pull --ff-only &&
     docker compose -f $COMPOSE_FILE up -d
   "

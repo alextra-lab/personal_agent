@@ -24,7 +24,7 @@ services:
     container_name: cloud-sim-postgres
     environment:
       POSTGRES_USER: agent
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cloud_sim_password}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required — set in .env}
       POSTGRES_DB: personal_agent
     volumes:
       - postgres_data_cloud:/var/lib/postgresql/data
@@ -52,7 +52,7 @@ services:
     image: neo4j:5.26-community
     container_name: cloud-sim-neo4j
     environment:
-      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-cloud_sim_password}
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?NEO4J_PASSWORD required — set in .env}
       NEO4J_PLUGINS: '["apoc"]'
       NEO4J_dbms_usage__report_enabled: "false"
       NEO4J_dbms_security_allow__csv__import__from__file__urls: "true"
@@ -247,25 +247,25 @@ services:
     container_name: cloud-sim-seshat-gateway
     environment:
       # All settings use AGENT_ prefix (see config/settings.py env_prefix)
-      AGENT_DATABASE_URL: postgresql+asyncpg://agent:${POSTGRES_PASSWORD:-cloud_sim_password}@postgres:5432/personal_agent
+      AGENT_DATABASE_URL: postgresql+asyncpg://agent:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required — set in .env}@postgres:5432/personal_agent
       AGENT_NEO4J_URI: bolt://neo4j:7687
       AGENT_NEO4J_USER: neo4j
-      AGENT_NEO4J_PASSWORD: ${NEO4J_PASSWORD:-cloud_sim_password}
+      AGENT_NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD required — set in .env}
       AGENT_ELASTICSEARCH_URL: http://elasticsearch:9200
       AGENT_EVENT_BUS_REDIS_URL: redis://redis:6379/0
-      AGENT_ENABLE_MEMORY_GRAPH: "true"
-      AGENT_EVENT_BUS_ENABLED: "true"
-      AGENT_ENABLE_SECOND_BRAIN: "true"
-      AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED: "false"
-      AGENT_PROACTIVE_MEMORY_ENABLED: "true"
-      AGENT_FRESHNESS_ENABLED: "true"
+      AGENT_ENABLE_MEMORY_GRAPH: "${AGENT_ENABLE_MEMORY_GRAPH:-true}"
+      AGENT_EVENT_BUS_ENABLED: "${AGENT_EVENT_BUS_ENABLED:-true}"
+      AGENT_ENABLE_SECOND_BRAIN: "${AGENT_ENABLE_SECOND_BRAIN:-true}"
+      AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED: "${AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED:-false}"
+      AGENT_PROACTIVE_MEMORY_ENABLED: "${AGENT_PROACTIVE_MEMORY_ENABLED:-true}"
+      AGENT_FRESHNESS_ENABLED: "${AGENT_FRESHNESS_ENABLED:-true}"
       AGENT_MCP_GATEWAY_ENABLED: "true"
       AGENT_MCP_GATEWAY_COMMAND: '["/app/docker/mcp/run-gateway.sh"]'
-      AGENT_MCP_GATEWAY_ENABLED_SERVERS: '["sequentialthinking", "context7"]'
-      AGENT_MCP_GATEWAY_TIMEOUT_SECONDS: "90"
+      AGENT_MCP_GATEWAY_ENABLED_SERVERS: "${AGENT_MCP_GATEWAY_ENABLED_SERVERS:-[\"sequentialthinking\", \"context7\"]}"
+      AGENT_MCP_GATEWAY_TIMEOUT_SECONDS: "${AGENT_MCP_GATEWAY_TIMEOUT_SECONDS:-90}"
       # Host path of MCP secrets .env — must exist on VPS before first deploy.
       # See docker/mcp/mcp-secrets.env.example → copy to /opt/seshat/mcp-secrets.env on host.
-      MCP_SECRETS_FILE: /opt/seshat/mcp-secrets.env
+      MCP_SECRETS_FILE: "${MCP_SECRETS_FILE:-/opt/seshat/mcp-secrets.env}"
       AGENT_GATEWAY_AUTH_ENABLED: "true"
       # Gateway bearer tokens — must match config/gateway_access.yaml secrets
       GATEWAY_TOKEN_PWA: ${GATEWAY_TOKEN_PWA}
@@ -275,7 +275,7 @@ services:
       AGENT_CF_ACCESS_CLIENT_ID: ${CF_ACCESS_CLIENT_ID}
       AGENT_CF_ACCESS_CLIENT_SECRET: ${CF_ACCESS_CLIENT_SECRET}
       # Use cloud model config (embedding/reranker point to Docker service hostnames)
-      AGENT_MODEL_CONFIG_PATH: /app/config/models.cloud.yaml
+      AGENT_MODEL_CONFIG_PATH: "${AGENT_MODEL_CONFIG_PATH:-/app/config/models.cloud.yaml}"
       # Cloud LLM API keys (injected from VPS .env)
       AGENT_ANTHROPIC_API_KEY: ${AGENT_ANTHROPIC_API_KEY}
       AGENT_OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY}
@@ -286,7 +286,7 @@ services:
       API_PORT: "9001"
       APP_ENV: production
       # Logging
-      AGENT_LOG_LEVEL: info
+      AGENT_LOG_LEVEL: "${AGENT_LOG_LEVEL:-info}"
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
     ports:
       # Localhost only — Caddy proxies to this port internally

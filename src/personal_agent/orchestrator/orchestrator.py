@@ -4,6 +4,8 @@ This module provides the public API for the orchestrator, matching
 the interface defined in ORCHESTRATOR_CORE_SPEC_v0.1.md.
 """
 
+from uuid import UUID
+
 from personal_agent.brainstem import get_current_mode
 from personal_agent.governance.models import Mode
 from personal_agent.orchestrator.channels import Channel
@@ -42,6 +44,7 @@ class Orchestrator:
         trace_id: str | None = None,
         request_timer: RequestTimer | None = None,
         gateway_output: GatewayOutput | None = None,
+        user_id: UUID | None = None,
     ) -> OrchestratorResult:
         """Top-level entrypoint for a single user turn.
 
@@ -60,6 +63,8 @@ class Orchestrator:
                 If provided, the orchestrator records timing spans for each phase.
             gateway_output: Optional GatewayOutput from the request gateway pipeline.
                 When present, executor skips inline routing and uses pre-assembled context.
+            user_id: Authenticated user UUID — passed through to TaskCapture for
+                visibility scoping of written memory nodes (FRE-229).
 
         Returns:
             OrchestratorResult with reply, steps, and trace_id.
@@ -95,6 +100,7 @@ class Orchestrator:
             channel=channel,
             request_timer=request_timer,
             gateway_output=gateway_output,
+            user_id=user_id,
         )
 
         # Execute task

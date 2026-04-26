@@ -3,6 +3,7 @@
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import UUID
 
 import orjson
 import structlog
@@ -43,6 +44,37 @@ ConversationNode = TurnNode
 
 log = structlog.get_logger()
 settings = get_settings()
+
+
+def _build_visibility_filter(
+    alias: str,
+    user_id: UUID | None,
+    authenticated: bool,
+) -> tuple[str, dict[str, Any]]:
+    """Build a Cypher WHERE fragment for memory visibility scoping (FRE-229).
+
+    This is the single chokepoint for all memory read access. Every MATCH on
+    :Turn and :Entity in this module must merge the returned params and append
+    the fragment to its WHERE clause.
+
+    Args:
+        alias: The Cypher node alias to qualify (e.g. "c", "e", "t").
+        user_id: Authenticated user UUID; None for unauthenticated paths.
+        authenticated: True when the request carries a verified CF Access identity.
+
+    Returns:
+        Tuple of (cypher_fragment, params_dict). Params use unique keys
+        (``vis_authenticated``, ``vis_user_id``) to avoid collisions.
+    """
+    user_id_str = str(user_id) if user_id else ""
+    fragment = (
+        f"({alias}.visibility IS NULL "
+        f"OR {alias}.visibility = 'public' "
+        f"OR ({alias}.visibility = 'group' AND $vis_authenticated = true) "
+        f"OR {alias}.visibility = 'private:' + $vis_user_id)"
+    )
+    params: dict[str, Any] = {"vis_authenticated": authenticated, "vis_user_id": user_id_str}
+    return fragment, params
 
 
 class MemoryService:
@@ -130,25 +162,35 @@ class MemoryService:
         """
         return await self.turn_exists(conversation_id)
 
-    async def fetch_session_discussed_entity_names(self, session_id: str) -> list[str]:
+    async def fetch_session_discussed_entity_names(
+        self,
+        session_id: str,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
+    ) -> list[str]:
         """Return distinct Entity names linked to turns in the given session.
 
         Args:
             session_id: Session identifier (matches ``Turn.session_id``).
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity (FRE-229).
 
         Returns:
             Sorted entity names; empty if unavailable or on error.
         """
         if not session_id or not self.connected or not self.driver:
             return []
+        vis_frag, vis_params = _build_visibility_filter("t", user_id, authenticated)
         try:
             async with self.driver.session() as session:
                 result = await session.run(
-                    """
-                    MATCH (t:Turn {session_id: $session_id})-[:DISCUSSES]->(e:Entity)
+                    f"""
+                    MATCH (t:Turn {{session_id: $session_id}})-[:DISCUSSES]->(e:Entity)
+                    WHERE {vis_frag}
                     RETURN collect(DISTINCT e.name) AS names
                     """,
                     session_id=session_id,
+                    **vis_params,
                 )
                 rec = await result.single()
                 if not rec:
@@ -168,6 +210,8 @@ class MemoryService:
         query_embedding: list[float],
         current_session_id: str,
         trace_id: str,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
     ) -> list[dict[str, Any]]:
         """Vector entity retrieval plus best cross-session turn per entity (ADR-0039).
 
@@ -175,6 +219,8 @@ class MemoryService:
             query_embedding: Query embedding (zero vector yields no rows).
             current_session_id: Exclude turns from this session.
             trace_id: For error logging.
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity (FRE-229).
 
         Returns:
             Row dicts for :func:`personal_agent.memory.proactive.build_proactive_suggestions`.
@@ -186,17 +232,21 @@ class MemoryService:
         if not query_embedding or not any(x != 0.0 for x in query_embedding):
             return []
         sid = current_session_id or ""
+        node_vis_frag, vis_params = _build_visibility_filter("node", user_id, authenticated)
+        turn_vis_frag, _ = _build_visibility_filter("t", user_id, authenticated)
         try:
             async with self.driver.session() as session:
                 result = await session.run(
-                    """
+                    f"""
                     CALL db.index.vector.queryNodes('entity_embedding', $top_k, $embedding)
                     YIELD node, score
                     WITH node, score
+                    WHERE {node_vis_frag}
                     ORDER BY score DESC
                     LIMIT $top_k
                     OPTIONAL MATCH (node)<-[:DISCUSSES]-(t:Turn)
-                    WHERE t IS NULL OR coalesce(t.session_id, '') <> $current_session
+                    WHERE (t IS NULL OR coalesce(t.session_id, '') <> $current_session)
+                      AND (t IS NULL OR {turn_vis_frag})
                     WITH node, score, t
                     ORDER BY node, t.timestamp DESC
                     WITH node, score, collect(t)[0] AS t
@@ -214,6 +264,7 @@ class MemoryService:
                     top_k=top_k,
                     embedding=query_embedding,
                     current_session=sid,
+                    **vis_params,
                 )
                 rows = await result.data()
         except Exception as e:
@@ -252,11 +303,16 @@ class MemoryService:
             )
         return out
 
-    async def create_conversation(self, conversation: TurnNode) -> bool:
+    async def create_conversation(
+        self, conversation: TurnNode, visibility: str = "public"
+    ) -> bool:
         """Create a Turn node in the graph.
 
         Args:
             conversation: Turn node to create (accepts TurnNode or legacy ConversationNode).
+            visibility: Visibility scope for the Turn node (FRE-229). Defaults to "public"
+                for backward compatibility; callers should pass "group" for authenticated
+                sessions.
 
         Returns:
             True if successful, False otherwise.
@@ -286,7 +342,8 @@ class MemoryService:
                         t.user_message = $user_message,
                         t.assistant_response = $assistant_response,
                         t.key_entities = $key_entities,
-                        t.properties = $properties
+                        t.properties = $properties,
+                        t.visibility = $visibility
                     """,
                     turn_id=turn_id,
                     trace_id=conversation.trace_id,
@@ -298,6 +355,7 @@ class MemoryService:
                     assistant_response=conversation.assistant_response,
                     key_entities=conversation.key_entities,
                     properties=orjson.dumps(conversation.properties).decode(),
+                    visibility=visibility,
                 )
 
                 # Create Turn→Entity DISCUSSES edges.
@@ -318,6 +376,7 @@ class MemoryService:
                             e.first_seen = COALESCE(e.first_seen, $timestamp),
                             e.entity_type = CASE WHEN $entity_type <> '' THEN $entity_type
                                                  ELSE COALESCE(e.entity_type, '') END
+                        ON CREATE SET e.visibility = $visibility
                         WITH e
                         MATCH (t:Turn {turn_id: $turn_id})
                         MERGE (t)-[:DISCUSSES]->(e)
@@ -326,6 +385,7 @@ class MemoryService:
                         entity_type=entity_type,
                         timestamp=conversation.timestamp.isoformat(),
                         turn_id=turn_id,
+                        visibility=visibility,
                     )
 
                 log.info(
@@ -453,11 +513,14 @@ class MemoryService:
             log.error("link_session_turns_failed", error=str(e), exc_info=True)
             return 0
 
-    async def create_entity(self, entity: Entity) -> str:
+    async def create_entity(self, entity: Entity, visibility: str = "public") -> str:
         """Create or update an entity node with dedup and optional embedding.
 
         Args:
             entity: Entity to create.
+            visibility: Visibility scope for the Entity node (FRE-229). Uses ON CREATE SET
+                semantics — an existing entity's visibility is never overwritten on merge,
+                preserving first-write semantics.
 
         Returns:
             Entity ID (name-based, may be canonical name if deduplicated).
@@ -539,9 +602,11 @@ class MemoryService:
                     set_clauses.append("e.geocoded = $geocoded")
                     params["geocoded"] = entity.geocoded
 
+                params["visibility"] = visibility
                 query = (
                     "MERGE (e:Entity {name: $name})\n"
                     "SET " + ",\n    ".join(set_clauses) + "\n"
+                    "ON CREATE SET e.visibility = $visibility\n"
                     "RETURN e.name as entity_id"
                 )
 
@@ -619,11 +684,15 @@ class MemoryService:
             log.error("vector_index_creation_failed", error=str(e), exc_info=True)
             return False
 
-    async def create_relationship(self, relationship: Relationship) -> str | None:
+    async def create_relationship(
+        self, relationship: Relationship, visibility: str = "public"
+    ) -> str | None:
         """Create a relationship between nodes.
 
         Args:
             relationship: Relationship to create
+            visibility: Visibility scope for the relationship (FRE-229). Stored as a
+                property on the relationship edge.
 
         Returns:
             Neo4j ``elementId(rel)`` on success, or ``None`` on failure.
@@ -650,6 +719,7 @@ class MemoryService:
                         {},
                         {
                             weight: $weight,
+                            visibility: $visibility,
                             created_at: datetime(),
                             first_accessed_at: datetime(),
                             last_accessed_at: datetime(),
@@ -664,6 +734,7 @@ class MemoryService:
                     target_id=relationship.target_id,
                     relationship_type=relationship.relationship_type,
                     weight=relationship.weight,
+                    visibility=visibility,
                 )
                 rec = await result.single()
                 element_id = rec.get("element_id") if rec else None
@@ -758,6 +829,8 @@ class MemoryService:
         access_context: AccessContext = AccessContext.SEARCH,
         trace_id: str | None = None,
         session_id: str | None = None,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
     ) -> MemoryQueryResult:
         """Query memory graph for relevant conversations and entities.
 
@@ -771,13 +844,21 @@ class MemoryService:
                 Used for access tracking events (ADR-0042).
             trace_id: Optional request trace identifier for event correlation.
             session_id: Optional session identifier for event correlation.
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity (FRE-229).
 
         Returns:
             MemoryQueryResult with conversations, entities, and relationships
         """
+        # Prefer caller-supplied args; fall back to query fields for adapter callers.
+        effective_user_id = user_id if user_id is not None else query.user_id
+        effective_authenticated = authenticated or query.authenticated
+
         if not self.connected or not self.driver:
             log.warning("neo4j_not_connected")
             return MemoryQueryResult()
+
+        vis_frag, vis_params = _build_visibility_filter("c", effective_user_id, effective_authenticated)
 
         try:
             async with self.driver.session() as session:
@@ -786,9 +867,10 @@ class MemoryService:
 
                 # Build main query - find turns related to entities
                 if query.entity_names or query.entity_types:
-                    base_query = """
+                    base_query = f"""
                     MATCH (c:Turn)-[:DISCUSSES]->(e:Entity)
-                    WHERE """
+                    WHERE {vis_frag}
+                    AND """
                     if query.entity_names:
                         base_query += "e.name IN $entity_names"
                         cypher_parts.append("entity_names: $entity_names")
@@ -797,7 +879,7 @@ class MemoryService:
                         cypher_parts.append("entity_types: $entity_types")
                 elif query.conversation_ids or query.trace_ids:
                     # Direct turn/trace lookup (conversation_ids maps to turn_id)
-                    base_query = "MATCH (c:Turn) WHERE "
+                    base_query = f"MATCH (c:Turn) WHERE {vis_frag} AND "
                     if query.conversation_ids:
                         base_query += "c.turn_id IN $conversation_ids"
                         cypher_parts.append("conversation_ids: $conversation_ids")
@@ -805,17 +887,14 @@ class MemoryService:
                         base_query += "c.trace_id IN $trace_ids"
                         cypher_parts.append("trace_ids: $trace_ids")
                 else:
-                    base_query = "MATCH (c:Turn)"
+                    base_query = f"MATCH (c:Turn) WHERE {vis_frag}"
 
                 # Add WHERE clauses for recency
                 if query.recency_days:
                     cutoff_date = (
                         datetime.utcnow() - timedelta(days=query.recency_days)
                     ).isoformat()
-                    if "WHERE" in base_query:
-                        base_query += " AND c.timestamp >= $cutoff_date"
-                    else:
-                        base_query += " WHERE c.timestamp >= $cutoff_date"
+                    base_query += " AND c.timestamp >= $cutoff_date"
 
                 # Add ordering and limiting
                 base_query += """
@@ -828,6 +907,7 @@ class MemoryService:
                 params: dict[str, Any] = {
                     "limit": query.limit,
                     "max_depth": query.max_depth,
+                    **vis_params,
                 }
 
                 if query.entity_names:
@@ -1011,6 +1091,8 @@ class MemoryService:
         access_context: AccessContext = AccessContext.SEARCH,
         trace_id: str | None = None,
         session_id: str | None = None,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
     ) -> dict[str, Any]:
         """Broad memory recall: return entities and session summaries (ADR-0025).
 
@@ -1024,6 +1106,8 @@ class MemoryService:
             access_context: Typed context where the query originated (ADR-0042).
             trace_id: Optional request trace identifier for event correlation.
             session_id: Optional session identifier for event correlation.
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity (FRE-229).
 
         Returns:
             Dict with keys:
@@ -1035,14 +1119,17 @@ class MemoryService:
             return {"entities": [], "sessions": [], "turns_summary": []}
 
         cutoff = (datetime.now(timezone.utc) - timedelta(days=recency_days)).isoformat()
+        turn_vis_frag, vis_params = _build_visibility_filter("t", user_id, authenticated)
+        sess_vis_frag, _ = _build_visibility_filter("s", user_id, authenticated)
 
         try:
             async with self.driver.session() as db_session:
                 # Entities (optionally filtered by type)
                 if entity_types:
-                    entity_q = """
+                    entity_q = f"""
                         MATCH (e:Entity)<-[:DISCUSSES]-(t:Turn)
-                        WHERE e.entity_type IN $entity_types
+                        WHERE {turn_vis_frag}
+                          AND e.entity_type IN $entity_types
                           AND t.timestamp >= $cutoff
                         RETURN e.name as name, e.entity_type as type,
                                e.description as description,
@@ -1054,41 +1141,45 @@ class MemoryService:
                         entity_types=entity_types,
                         cutoff=cutoff,
                         limit=limit,
+                        **vis_params,
                     )
                 else:
-                    entity_q = """
+                    entity_q = f"""
                         MATCH (e:Entity)<-[:DISCUSSES]-(t:Turn)
-                        WHERE t.timestamp >= $cutoff
+                        WHERE {turn_vis_frag}
+                          AND t.timestamp >= $cutoff
                         RETURN e.name as name, e.entity_type as type,
                                e.description as description,
                                count(t) as mentions
                         ORDER BY mentions DESC LIMIT $limit
                     """
-                    r = await db_session.run(entity_q, cutoff=cutoff, limit=limit)
+                    r = await db_session.run(entity_q, cutoff=cutoff, limit=limit, **vis_params)
                 entities = await r.data()
 
                 # Recent sessions with dominant topics
-                session_q = """
+                session_q = f"""
                     MATCH (s:Session)
-                    WHERE s.started_at >= $cutoff
+                    WHERE {sess_vis_frag}
+                      AND s.started_at >= $cutoff
                     RETURN s.session_id as session_id,
                            s.dominant_entities as dominant_entities,
                            s.turn_count as turn_count,
                            s.started_at as started_at
                     ORDER BY s.started_at DESC LIMIT 10
                 """
-                r = await db_session.run(session_q, cutoff=cutoff)
+                r = await db_session.run(session_q, cutoff=cutoff, **vis_params)
                 sessions = await r.data()
 
                 # Recent turn summaries
-                turn_q = """
+                turn_q = f"""
                     MATCH (t:Turn)
-                    WHERE t.timestamp >= $cutoff
+                    WHERE {turn_vis_frag}
+                      AND t.timestamp >= $cutoff
                     RETURN t.summary as summary, t.key_entities as entities,
                            t.timestamp as ts
                     ORDER BY t.timestamp DESC LIMIT 10
                 """
-                r = await db_session.run(turn_q, cutoff=cutoff)
+                r = await db_session.run(turn_q, cutoff=cutoff, **vis_params)
                 turns = await r.data()
 
                 payload = {
@@ -1306,15 +1397,20 @@ class MemoryService:
         # Get entity importance scores if querying by entities
         entity_importance: dict[str, float] = {}
         if query.entity_names and self.driver:
+            ent_vis_frag, ent_vis_params = _build_visibility_filter(
+                "e", query.user_id, query.authenticated
+            )
             try:
                 async with self.driver.session() as session:
                     result = await session.run(
-                        """
+                        f"""
                         MATCH (e:Entity)
                         WHERE e.name IN $entity_names
+                          AND {ent_vis_frag}
                         RETURN e.name as name, e.mention_count as mentions
                         """,
                         entity_names=query.entity_names,
+                        **ent_vis_params,
                     )
                     async for record in result:
                         name = record["name"]
@@ -1331,19 +1427,24 @@ class MemoryService:
         if current_settings.freshness_enabled and query.entity_names and self.driver:
             from personal_agent.memory.freshness import compute_freshness  # noqa: PLC0415
 
+            fresh_vis_frag, fresh_vis_params = _build_visibility_filter(
+                "e", query.user_id, query.authenticated
+            )
             try:
                 async with self.driver.session() as session:
                     result = await session.run(
-                        """
+                        f"""
                         MATCH (e:Entity)
                         WHERE e.name IN $entity_names
                           AND e.access_count IS NOT NULL
                           AND e.access_count > 0
+                          AND {fresh_vis_frag}
                         RETURN e.name AS name,
                                e.last_accessed_at AS last_accessed_at,
                                e.access_count AS access_count
                         """,
                         entity_names=query.entity_names,
+                        **fresh_vis_params,
                     )
                     async for record in result:
                         raw_ts = record.get("last_accessed_at")
@@ -1510,11 +1611,18 @@ class MemoryService:
         result = await self.query_memory(query)
         return result.conversations
 
-    async def get_user_interests(self, limit: int = 20) -> list[EntityNode]:
+    async def get_user_interests(
+        self,
+        limit: int = 20,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
+    ) -> list[EntityNode]:
         """Get entities the user frequently mentions (interest profile).
 
         Args:
             limit: Maximum number of entities to return
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity (FRE-229).
 
         Returns:
             List of entities sorted by mention frequency
@@ -1523,17 +1631,20 @@ class MemoryService:
             log.warning("neo4j_not_connected")
             return []
 
+        vis_frag, vis_params = _build_visibility_filter("e", user_id, authenticated)
         try:
             async with self.driver.session() as session:
                 result = await session.run(
-                    """
+                    f"""
                     MATCH (e:Entity)
                     WHERE e.mention_count > 0
+                      AND {vis_frag}
                     RETURN e
                     ORDER BY e.mention_count DESC, e.last_seen DESC
                     LIMIT $limit
                     """,
                     limit=limit,
+                    **vis_params,
                 )
 
                 entities = []

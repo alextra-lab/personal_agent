@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
+from uuid import UUID
 
 import structlog
 
@@ -141,6 +142,8 @@ async def _query_memory_for_intent(
     trace_id: str,
     session_id: str,
     session_messages: Sequence[dict[str, Any]],
+    user_id: UUID | None = None,
+    authenticated: bool = False,
 ) -> list[dict[str, Any]] | None:
     """Query memory based on intent type.
 
@@ -151,6 +154,8 @@ async def _query_memory_for_intent(
         trace_id: Request trace identifier.
         session_id: Current session id for proactive retrieval.
         session_messages: Session history for topic proxy extraction.
+        user_id: Authenticated user UUID for visibility scoping (FRE-229).
+        authenticated: Whether the request carries a verified identity (FRE-229).
 
     Returns:
         Memory context list, or None if no relevant memory found.
@@ -166,6 +171,8 @@ async def _query_memory_for_intent(
                 recency_days=90,
                 limit=20,
                 trace_id=trace_id,
+                user_id=user_id,
+                authenticated=authenticated,
             )
             return _format_broad_recall_context(broad)
 
@@ -176,6 +183,8 @@ async def _query_memory_for_intent(
                 session_topic_hint=_session_topic_hint(session_messages),
                 current_session_id=session_id,
                 trace_id=trace_id,
+                user_id=user_id,
+                authenticated=authenticated,
             )
             if suggestions.candidates:
                 return [c.payload for c in suggestions.candidates]
@@ -191,6 +200,8 @@ async def _query_memory_for_intent(
             recency_days=30,
             limit=5,
             query_text=user_message,
+            user_id=user_id,
+            authenticated=authenticated,
         )
         result = await memory_adapter.recall(query, trace_id=trace_id)
         context: list[dict[str, Any]] = []
@@ -241,6 +252,8 @@ async def assemble_context(
     trace_id: str,
     session_id: str = "",
     recall_context: RecallResult | None = None,
+    user_id: UUID | None = None,
+    authenticated: bool = False,
 ) -> AssembledContext:
     """Assemble the full context for the primary agent.
 
@@ -256,6 +269,8 @@ async def assemble_context(
         trace_id: Request trace identifier.
         session_id: Client session id for proactive memory session scoping.
         recall_context: Recall controller result from Stage 4b (None if not triggered).
+        user_id: Authenticated user UUID for visibility scoping (FRE-229).
+        authenticated: Whether the request carries a verified identity (FRE-229).
 
     Returns:
         AssembledContext with messages and metadata.
@@ -280,6 +295,8 @@ async def assemble_context(
             trace_id=trace_id,
             session_id=session_id,
             session_messages=session_messages,
+            user_id=user_id,
+            authenticated=authenticated,
         )
 
     # Inject session fact candidates from recall controller (as system message

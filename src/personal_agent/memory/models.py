@@ -1,11 +1,31 @@
 """Data models for memory graph."""
 
 from datetime import datetime
+from enum import Enum
 from typing import Any
+from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, Field
 
 from personal_agent.memory.weight import KnowledgeWeight
+
+
+class Visibility(str, Enum):
+    """Memory node visibility scope (FRE-229 / ADR-0064 §D6).
+
+    Stored as a plain string property on Neo4j nodes for cheap WHERE filtering.
+    The PRIVATE level is reserved for a follow-up classification ticket; nodes
+    are never tagged private in the current slice.
+
+    Attributes:
+        PUBLIC: Visible to everyone, including unauthenticated CLI paths.
+        GROUP: Visible to all CF Access authenticated users (the household/family).
+        PRIVATE: Visible only to the owning user; serialized as "private:<user_id>".
+    """
+
+    PUBLIC = "public"
+    GROUP = "group"
+    PRIVATE = "private"
 
 
 class Entity(BaseModel):
@@ -27,6 +47,8 @@ class Entity(BaseModel):
     first_accessed_at: datetime | None = None
     # D5: Knowledge confidence metadata (ADR-0047)
     weight: KnowledgeWeight = Field(default_factory=KnowledgeWeight)
+    # FRE-229: visibility scope
+    visibility: str = Visibility.PUBLIC
 
 
 class Relationship(BaseModel):
@@ -44,6 +66,8 @@ class Relationship(BaseModel):
         None  # "search", "context_assembly", "consolidation", "suggest_relevant", "tool_call"
     )
     first_accessed_at: datetime | None = None
+    # FRE-229: visibility scope
+    visibility: str = Visibility.PUBLIC
 
 
 class TurnNode(BaseModel):
@@ -65,6 +89,8 @@ class TurnNode(BaseModel):
     assistant_response: str | None = None
     key_entities: list[str] = Field(default_factory=list)
     properties: dict[str, Any] = Field(default_factory=dict)
+    # FRE-229: visibility scope
+    visibility: str = Visibility.PUBLIC
 
     @property
     def conversation_id(self) -> str:
@@ -89,6 +115,8 @@ class SessionNode(BaseModel):
     turn_count: int = 0
     dominant_entities: list[str] = Field(default_factory=list)
     session_summary: str | None = None
+    # FRE-229: visibility scope
+    visibility: str = Visibility.PUBLIC
 
 
 class EntityNode(BaseModel):
@@ -103,6 +131,8 @@ class EntityNode(BaseModel):
     last_seen: datetime
     mention_count: int = 0
     properties: dict[str, Any] = Field(default_factory=dict)
+    # FRE-229: visibility scope
+    visibility: str = Visibility.PUBLIC
 
 
 class MemoryQuery(BaseModel):
@@ -117,6 +147,9 @@ class MemoryQuery(BaseModel):
     limit: int = Field(default=10, ge=1, le=100)
     min_interest_weight: float = Field(default=0.0, ge=0.0, le=1.0)
     recency_days: int | None = None  # Only return conversations from last N days
+    # FRE-229: visibility scoping (chokepoint filter)
+    user_id: UUID | None = None
+    authenticated: bool = False
 
 
 class MemoryQueryResult(BaseModel):

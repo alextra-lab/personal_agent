@@ -12,6 +12,7 @@ This module defines the data structures used throughout the orchestrator:
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, TypedDict
+from uuid import UUID
 
 from personal_agent.governance.models import Mode
 from personal_agent.llm_client import ModelRole
@@ -190,6 +191,9 @@ class ExecutionContext:
 
     # Gateway output (Cognitive Architecture Redesign v2)
     gateway_output: GatewayOutput | None = None  # From request_gateway pipeline
+
+    # FRE-229: owning user UUID — passed from the authenticated request for TaskCapture
+    user_id: UUID | None = None
 
     # --- Expansion controller state (Slice 3, ADR-0036) ---
     expansion_strategy: str | None = None

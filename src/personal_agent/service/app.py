@@ -197,6 +197,8 @@ async def _process_chat_stream_background(
                 memory_adapter=memory_adapter,
                 expansion_budget=expansion_budget,
                 full_session_messages=db_messages,
+                user_id=user_id,
+                authenticated=True,
             )
         except Exception as e:
             log.warning(
@@ -232,6 +234,7 @@ async def _process_chat_stream_background(
                 trace_id=trace_id,
                 request_timer=RequestTimer(trace_id=trace_id),
                 gateway_output=gateway_output,
+                user_id=user_id,
             )
             response_content = result.get("reply", "No response generated")
 
@@ -1051,6 +1054,8 @@ async def chat(
                 memory_adapter=memory_adapter,
                 expansion_budget=expansion_budget,
                 full_session_messages=db_messages,
+                user_id=request_user.user_id,
+                authenticated=True,
             )
     except Exception as e:
         log.warning(
@@ -1096,6 +1101,7 @@ async def chat(
             trace_id=trace_id,
             request_timer=timer,
             gateway_output=gateway_output,
+            user_id=request_user.user_id,
         )
 
         response_content = result.get("reply", "No response generated")

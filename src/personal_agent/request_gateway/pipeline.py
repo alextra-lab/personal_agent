@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from typing import Any
+from uuid import UUID
 
 import structlog
 
@@ -44,6 +45,8 @@ async def run_gateway_pipeline(
     expansion_budget: int | None = None,
     max_context_tokens: int | None = None,
     full_session_messages: Sequence[dict[str, Any]] | None = None,
+    user_id: UUID | None = None,
+    authenticated: bool = False,
 ) -> GatewayOutput:
     """Run the full request gateway pipeline.
 
@@ -63,6 +66,8 @@ async def run_gateway_pipeline(
         full_session_messages: Complete untruncated session history, used by the
             recall controller so it can scan beyond the context window limit.
             Falls back to session_messages when None.
+        user_id: Authenticated user UUID for memory visibility scoping (FRE-229).
+        authenticated: Whether the request carries a verified CF Access identity (FRE-229).
 
     Returns:
         GatewayOutput with intent, governance, decomposition, and context.
@@ -151,6 +156,8 @@ async def run_gateway_pipeline(
         trace_id=trace_id,
         session_id=session_id,
         recall_context=recall_result,
+        user_id=user_id,
+        authenticated=authenticated,
     )
     context = apply_budget(
         context=context,

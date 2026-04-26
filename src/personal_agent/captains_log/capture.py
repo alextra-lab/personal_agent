@@ -8,6 +8,7 @@ the second brain for deep reflection.
 import pathlib
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 import orjson
 from pydantic import BaseModel, Field
@@ -60,6 +61,8 @@ class TaskCapture(BaseModel):
     total_tokens: int = 0
     # Raw tool results (tool_name, success, output, error, latency_ms) for comparing LLM reply vs actual tool output
     tool_results: list[dict[str, Any]] = Field(default_factory=list)
+    # FRE-229: owning user UUID — None for CLI/unauthenticated paths; used by consolidator to set visibility
+    user_id: UUID | None = None
 
 
 def _get_captures_dir() -> pathlib.Path:

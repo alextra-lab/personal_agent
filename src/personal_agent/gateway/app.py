@@ -252,7 +252,7 @@ class _KnowledgeGraphAdapter:
         Returns:
             Entity identifier string.
         """
-        entity_id: str = await self._service.create_entity(fact)
+        entity_id: str = await self._service.create_entity(fact, visibility="public")
         return entity_id
 
     async def get_relationships(self, entity_id: str) -> list[Any]:

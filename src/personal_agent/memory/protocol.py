@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
+from uuid import UUID
 
 from personal_agent.memory.proactive_types import ProactiveMemorySuggestions
 
@@ -97,6 +98,8 @@ class MemoryRecallQuery:
         recency_days: Only return memories from the last N days (None = no limit).
         limit: Maximum results to return.
         query_text: Free-text query for relevance scoring.
+        user_id: Authenticated user UUID for visibility scoping (FRE-229).
+        authenticated: Whether the request is from an authenticated user (FRE-229).
     """
 
     entity_names: list[str] = field(default_factory=list)
@@ -105,6 +108,9 @@ class MemoryRecallQuery:
     recency_days: int | None = 30
     limit: int = 10
     query_text: str | None = None
+    # FRE-229: visibility scoping fields
+    user_id: UUID | None = None
+    authenticated: bool = False
 
 
 @dataclass(frozen=True)

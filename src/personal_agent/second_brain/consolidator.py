@@ -395,6 +395,11 @@ class SecondBrainConsolidator:
                 "relationship_element_ids": [],
             }
 
+        # FRE-229: set visibility based on whether the capture has an owning user.
+        # Authenticated sessions produce "group" nodes (visible to all CF Access users);
+        # CLI/unauthenticated captures (user_id=None) produce "public" nodes.
+        visibility = "group" if getattr(capture, "user_id", None) else "public"
+
         # Create Turn node
         turn = TurnNode(
             turn_id=capture.trace_id,
@@ -415,7 +420,7 @@ class SecondBrainConsolidator:
         # This is a transient attribute — not part of the Pydantic model — used only during write.
         object.__setattr__(turn, "_entity_data", extraction_result.get("entities", []))
 
-        await self.memory_service.create_conversation(turn)
+        await self.memory_service.create_conversation(turn, visibility=visibility)
         turns_created = 1
 
         relationship_element_ids: list[str] = list(
@@ -434,7 +439,7 @@ class SecondBrainConsolidator:
                 description=entity_data.get("description"),
                 properties=entity_data.get("properties", {}),
             )
-            entity_id = await self.memory_service.create_entity(entity)
+            entity_id = await self.memory_service.create_entity(entity, visibility=visibility)
             if entity_id:
                 entities_created += 1
                 entity_ids.append(entity_id)
@@ -449,7 +454,7 @@ class SecondBrainConsolidator:
                 weight=rel_data.get("weight", 1.0),
                 properties=rel_data.get("properties", {}),
             )
-            rel_eid = await self.memory_service.create_relationship(relationship)
+            rel_eid = await self.memory_service.create_relationship(relationship, visibility=visibility)
             if rel_eid:
                 relationships_created += 1
                 relationship_element_ids.append(rel_eid)

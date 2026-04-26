@@ -8,6 +8,7 @@ while the underlying service remains unchanged.
 from __future__ import annotations
 
 import time
+from uuid import UUID
 
 import structlog
 
@@ -54,6 +55,8 @@ class MemoryServiceAdapter:
             entity_types=query.entity_types,
             recency_days=query.recency_days,
             limit=query.limit,
+            user_id=query.user_id,
+            authenticated=query.authenticated,
         )
         result = await self._service.query_memory(
             service_query,
@@ -61,6 +64,8 @@ class MemoryServiceAdapter:
             query_text=query.query_text,
             access_context=AccessContext.CONTEXT_ASSEMBLY,
             trace_id=trace_id,
+            user_id=query.user_id,
+            authenticated=query.authenticated,
         )
         return MemoryRecallResult(
             episodes=[
@@ -94,6 +99,8 @@ class MemoryServiceAdapter:
         recency_days: int,
         limit: int,
         trace_id: str,
+        user_id: "UUID | None" = None,
+        authenticated: bool = False,
     ) -> BroadRecallResult:
         """Broad recall delegating to query_memory_broad().
 
@@ -102,6 +109,8 @@ class MemoryServiceAdapter:
             recency_days: Lookback window in days.
             limit: Maximum entities to return.
             trace_id: Request trace identifier.
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity (FRE-229).
 
         Returns:
             Broad recall result with entities grouped by type.
@@ -112,6 +121,8 @@ class MemoryServiceAdapter:
             limit=limit,
             access_context=AccessContext.CONTEXT_ASSEMBLY,
             trace_id=trace_id,
+            user_id=user_id,
+            authenticated=authenticated,
         )
         entities = raw.get("entities", [])
         entities_by_type: dict[str, list[dict[str, object]]] = {}
@@ -228,6 +239,8 @@ class MemoryServiceAdapter:
         session_topic_hint: str | None,
         current_session_id: str,
         trace_id: str,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
     ) -> ProactiveMemorySuggestions:
         """Proactive ranked memory for context injection (ADR-0039)."""
         log.info(
@@ -249,7 +262,9 @@ class MemoryServiceAdapter:
                 return ProactiveMemorySuggestions(candidates=[], query_embedding_ms=emb_ms)
 
             db_entities = await self._service.fetch_session_discussed_entity_names(
-                current_session_id
+                current_session_id,
+                user_id=user_id,
+                authenticated=authenticated,
             )
             merged = set(session_entity_names) | set(db_entities)
 
@@ -257,6 +272,8 @@ class MemoryServiceAdapter:
                 embedding,
                 current_session_id,
                 trace_id,
+                user_id=user_id,
+                authenticated=authenticated,
             )
             if not raw:
                 log.info(

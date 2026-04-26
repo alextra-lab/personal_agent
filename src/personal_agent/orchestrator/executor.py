@@ -130,10 +130,6 @@ def _gate_blocked_result(
         GateDecision.BLOCK_OUTPUT: (
             "Retrieved the same result before. Use the previous tool output to answer."
         ),
-        GateDecision.BLOCK_CONSECUTIVE: (
-            f"{tool_name} called too many times consecutively. "
-            "Synthesize from already-gathered results."
-        ),
     }
     return {
         "tool_call_id": tool_call_id,
@@ -1292,9 +1288,10 @@ async def step_llm_call(
         is_synthesizing = False
 
         # ── Strategy-aware tool setup (ADR-0032) ──────────────────────
+        from personal_agent.config.profile import resolve_model_key
         from personal_agent.llm_client.models import ToolCallingStrategy
 
-        model_config = llm_client.model_configs.get(model_role.value)
+        model_config = llm_client.model_configs.get(resolve_model_key(model_role.value))
         tool_strategy = (
             model_config.effective_tool_strategy if model_config else ToolCallingStrategy.NATIVE
         )
@@ -1498,7 +1495,6 @@ async def step_llm_call(
         #   Note: We always inject the suffix when tools are present. LM Studio ignores extra_body
         #   chat_template_kwargs, so the suffix is the only working thinking control for Qwen3.5.
         request_messages = ctx.messages
-        model_config = llm_client.model_configs.get(model_role.value)
 
         if tools:
             request_messages = _append_no_think_to_last_user_message(request_messages)
@@ -1999,7 +1995,6 @@ async def step_tool_execution(
         if gate_result.decision in (
             GateDecision.BLOCK_IDENTITY,
             GateDecision.BLOCK_OUTPUT,
-            GateDecision.BLOCK_CONSECUTIVE,
         ):
             tool_results.append(_gate_blocked_result(tool_call_id, tool_name, gate_result))
             continue
@@ -2082,15 +2077,25 @@ async def step_tool_execution(
 
         content: str = dr["content"]
 
-        # Inject gate warning into content if consecutive threshold just hit
-        if dr["gate_result"].decision == GateDecision.WARN_CONSECUTIVE:
+        # Inject gate advisory hint into content for advisory decisions
+        _ADVISORY_DECISIONS = frozenset(
+            {GateDecision.WARN_CONSECUTIVE, GateDecision.ADVISE_IDENTITY}
+        )
+        if dr["gate_result"].decision in _ADVISORY_DECISIONS:
             try:
                 parsed = json.loads(content)
                 if isinstance(parsed, dict):
-                    parsed["_gate_warning"] = (
-                        f"{dr['tool_name']} called {dr['gate_result'].consecutive_count} times "
-                        "consecutively. Consider synthesizing from gathered results."
-                    )
+                    if dr["gate_result"].decision == GateDecision.WARN_CONSECUTIVE:
+                        parsed["_gate_warning"] = (
+                            f"{dr['tool_name']} called {dr['gate_result'].consecutive_count} times "
+                            "consecutively. Consider synthesizing from gathered results."
+                        )
+                    else:  # ADVISE_IDENTITY
+                        parsed["_gate_warning"] = (
+                            f"{dr['tool_name']} called with the same args "
+                            f"{dr['gate_result'].total_calls}x. "
+                            "Consider whether the result is stable or use prior output."
+                        )
                     content = json.dumps(parsed)
             except (json.JSONDecodeError, TypeError):
                 pass

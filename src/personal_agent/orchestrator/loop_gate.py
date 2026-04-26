@@ -5,6 +5,12 @@ Each tool call in a request is evaluated against three signals:
   2. Output identity: same (tool, args) produced identical output on ≥2 prior executions
   3. Consecutiveness: same tool called N times in a row (loop_max_consecutive)
 
+Signal severity (ADR-0063 §D5):
+  - Output identity: terminal (BLOCK_OUTPUT). Identical output is pathological.
+  - Call identity: advisory (ADVISE_IDENTITY) up to max+2, then terminal (BLOCK_IDENTITY).
+    Retries after transient errors are often legitimate.
+  - Consecutiveness: advisory only (WARN_CONSECUTIVE). Reading N files in a row is legitimate.
+
 The gate is a registry of per-tool ToolFSM instances. ExecutionContext
 holds one ToolLoopGate per request. All decisions are returned as GateResult
 dataclasses for structured telemetry logging.
@@ -18,24 +24,32 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+#: Number of advisory calls permitted above loop_max_per_signature before
+#: the identity signal escalates to terminal BLOCK_IDENTITY.
+IDENTITY_TERMINAL_OFFSET = 2
+
 
 class ToolCallState(str, Enum):
     """FSM states for a single tool's call history within a request."""
 
-    IDLE = "idle"      # not yet called this request
+    IDLE = "idle"  # not yet called this request
     ACTIVE = "active"  # called, within all thresholds
-    WARNED = "warned"  # consecutive threshold reached; hint injected, execution still allowed
     BLOCKED = "blocked"  # terminal; all further calls return a blocked result
 
 
 class GateDecision(str, Enum):
-    """Gate verdict — maps directly to FSM transitions."""
+    """Gate verdict — maps directly to FSM transitions.
 
-    ALLOW = "allow"                          # IDLE→ACTIVE or ACTIVE→ACTIVE
-    WARN_CONSECUTIVE = "warn_consecutive"    # ACTIVE→WARNED (execute + inject hint)
-    BLOCK_CONSECUTIVE = "block_consecutive"  # WARNED→BLOCKED
-    BLOCK_IDENTITY = "block_identity"        # any→BLOCKED (same args exceeded limit)
-    BLOCK_OUTPUT = "block_output"            # any→BLOCKED (same output hash seen ≥2x)
+    Advisory decisions (ADVISE_IDENTITY, WARN_CONSECUTIVE) allow execution
+    but inject a hint into the tool result content. Terminal decisions
+    (BLOCK_IDENTITY, BLOCK_OUTPUT) skip dispatch entirely.
+    """
+
+    ALLOW = "allow"  # IDLE→ACTIVE or ACTIVE→ACTIVE
+    WARN_CONSECUTIVE = "warn_consecutive"  # advisory: same tool N times in a row (execute + hint)
+    ADVISE_IDENTITY = "advise_identity"  # advisory: same args > max (execute + hint)
+    BLOCK_IDENTITY = "block_identity"  # terminal: same args > max + IDENTITY_TERMINAL_OFFSET
+    BLOCK_OUTPUT = "block_output"  # terminal: same output hash seen ≥2x
 
 
 @dataclass(frozen=True)
@@ -55,8 +69,8 @@ class GateResult:
 class ToolLoopPolicy:
     """Loop-specific policy for a tool. Extracted from governance ToolPolicy by executor."""
 
-    loop_max_per_signature: int = 1      # max executions of same (tool, args) per request
-    loop_max_consecutive: int = 2        # WARN at N consecutive calls; BLOCK at N+1
+    loop_max_per_signature: int = 1  # max executions of same (tool, args) before advisory
+    loop_max_consecutive: int = 2  # WARN_CONSECUTIVE fires at N consecutive calls
     loop_output_sensitive: bool = False  # if True, skip output-identity blocking
 
 
@@ -111,31 +125,29 @@ class ToolLoopGate:
         """Pre-execution check. Drives FSM transition. Returns gate decision.
 
         Evaluation order (first match wins):
-          1. Call identity: signature_counts[args_hash] > loop_max_per_signature
-          2. Consecutive block: fsm.state == WARNED (grace turn already used)
-          3. Consecutive warn: consecutive_count >= loop_max_consecutive
-          4. Output identity: ≥2 prior identical outputs for same args
+          1. Call identity terminal: count > max + IDENTITY_TERMINAL_OFFSET → BLOCK_IDENTITY
+          2. Call identity advisory: count > max → ADVISE_IDENTITY (execute + hint)
+          3. Consecutive advisory: count >= loop_max_consecutive → WARN_CONSECUTIVE (execute + hint)
+          4. Output identity: ≥2 prior identical outputs for same args → BLOCK_OUTPUT
           5. Allow
         """
         fsm = self._get_or_create_fsm(tool_name)
         state_before = fsm.state
 
-        # Update consecutive counter
+        # Update consecutive counter — reset when a different tool runs
         if self._last_tool_name == tool_name:
             fsm.consecutive_count += 1
         else:
             fsm.consecutive_count = 1
-            # WARNED → ACTIVE reset when a different tool ran in between
-            if fsm.state == ToolCallState.WARNED:
-                fsm.state = ToolCallState.ACTIVE
         self._last_tool_name = tool_name
 
         # Increment signature call count and total before any blocking check
         fsm.signature_counts[args_hash] = fsm.signature_counts.get(args_hash, 0) + 1
         fsm.total_calls += 1
 
-        # Signal 1: Call identity
-        if fsm.signature_counts[args_hash] > policy.loop_max_per_signature:
+        # Signal 1a: Call identity terminal
+        terminal_threshold = policy.loop_max_per_signature + IDENTITY_TERMINAL_OFFSET
+        if fsm.signature_counts[args_hash] > terminal_threshold:
             fsm.state = ToolCallState.BLOCKED
             return GateResult(
                 decision=GateDecision.BLOCK_IDENTITY,
@@ -144,36 +156,34 @@ class ToolLoopGate:
                 state_after=ToolCallState.BLOCKED,
                 reason=(
                     f"Same args called {fsm.signature_counts[args_hash]}x, "
-                    f"max={policy.loop_max_per_signature}"
+                    f"terminal ceiling={terminal_threshold}"
                 ),
                 consecutive_count=fsm.consecutive_count,
                 total_calls=fsm.total_calls,
             )
 
-        # Signal 3a: Consecutive block — grace turn (WARNED) already used
-        if fsm.state == ToolCallState.WARNED:
-            fsm.state = ToolCallState.BLOCKED
+        # Signal 1b: Call identity advisory — allow execution but inject hint
+        if fsm.signature_counts[args_hash] > policy.loop_max_per_signature:
             return GateResult(
-                decision=GateDecision.BLOCK_CONSECUTIVE,
+                decision=GateDecision.ADVISE_IDENTITY,
                 tool_name=tool_name,
                 state_before=state_before,
-                state_after=ToolCallState.BLOCKED,
+                state_after=fsm.state,  # stays ACTIVE — advisory does not block
                 reason=(
-                    f"Consecutive calls exceeded after warning "
-                    f"({fsm.consecutive_count} consecutive)"
+                    f"Same args called {fsm.signature_counts[args_hash]}x "
+                    f"(advisory window: >{policy.loop_max_per_signature} to <={terminal_threshold})"
                 ),
                 consecutive_count=fsm.consecutive_count,
                 total_calls=fsm.total_calls,
             )
 
-        # Signal 3b: Consecutive warn — first threshold breach, one grace turn follows
+        # Signal 3: Consecutive advisory — warn but never block
         if fsm.consecutive_count >= policy.loop_max_consecutive:
-            fsm.state = ToolCallState.WARNED
             return GateResult(
                 decision=GateDecision.WARN_CONSECUTIVE,
                 tool_name=tool_name,
                 state_before=state_before,
-                state_after=ToolCallState.WARNED,
+                state_after=fsm.state,  # stays ACTIVE — advisory does not block
                 reason=(
                     f"Consecutive threshold reached "
                     f"({fsm.consecutive_count}/{policy.loop_max_consecutive})"

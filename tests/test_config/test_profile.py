@@ -13,6 +13,8 @@ from personal_agent.config.profile import (
     ExecutionProfile,
     list_profiles,
     load_profile,
+    resolve_model_key,
+    set_current_profile,
 )
 
 
@@ -271,3 +273,78 @@ class TestListProfiles:
         names = list_profiles(profiles_dir=tmp_path)
         assert names == ["local"]
         assert "notes" not in names
+
+
+# ---------------------------------------------------------------------------
+# resolve_model_key tests (ADR-0063 §D6)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveModelKey:
+    """Tests for resolve_model_key() — profile-aware model config key resolution."""
+
+    def test_returns_role_name_without_active_profile(self) -> None:
+        """resolve_model_key returns the role name unchanged when no profile is set."""
+        assert resolve_model_key("primary") == "primary"
+        assert resolve_model_key("sub_agent") == "sub_agent"
+        assert resolve_model_key("compressor") == "compressor"
+
+    def test_redirects_primary_via_active_profile(self) -> None:
+        """resolve_model_key returns profile.primary_model when a profile is active."""
+        profile = ExecutionProfile(
+            name="cloud",
+            primary_model="claude_sonnet",
+            sub_agent_model="claude_haiku",
+            provider_type="cloud",
+        )
+        token = set_current_profile(profile)
+        try:
+            assert resolve_model_key("primary") == "claude_sonnet"
+        finally:
+            from personal_agent.config.profile import _current_profile
+            _current_profile.reset(token)
+
+    def test_redirects_sub_agent_via_active_profile(self) -> None:
+        """resolve_model_key returns profile.sub_agent_model for sub_agent role."""
+        profile = ExecutionProfile(
+            name="cloud",
+            primary_model="claude_sonnet",
+            sub_agent_model="claude_haiku",
+            provider_type="cloud",
+        )
+        token = set_current_profile(profile)
+        try:
+            assert resolve_model_key("sub_agent") == "claude_haiku"
+        finally:
+            from personal_agent.config.profile import _current_profile
+            _current_profile.reset(token)
+
+    def test_does_not_redirect_compressor_role(self) -> None:
+        """resolve_model_key never redirects compressor — only primary and sub_agent."""
+        profile = ExecutionProfile(
+            name="cloud",
+            primary_model="claude_sonnet",
+            sub_agent_model="claude_haiku",
+            provider_type="cloud",
+        )
+        token = set_current_profile(profile)
+        try:
+            assert resolve_model_key("compressor") == "compressor"
+        finally:
+            from personal_agent.config.profile import _current_profile
+            _current_profile.reset(token)
+
+    def test_unknown_role_passes_through_unchanged(self) -> None:
+        """resolve_model_key returns unrecognised role strings unchanged."""
+        profile = ExecutionProfile(
+            name="cloud",
+            primary_model="claude_sonnet",
+            sub_agent_model="claude_haiku",
+            provider_type="cloud",
+        )
+        token = set_current_profile(profile)
+        try:
+            assert resolve_model_key("unknown_role") == "unknown_role"
+        finally:
+            from personal_agent.config.profile import _current_profile
+            _current_profile.reset(token)

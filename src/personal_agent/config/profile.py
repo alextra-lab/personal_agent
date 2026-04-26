@@ -48,6 +48,34 @@ def get_current_profile() -> ExecutionProfile | None:
     return _current_profile.get()
 
 
+def resolve_model_key(role_name: str) -> str:
+    """Resolve a model role name to its config key, accounting for the active ExecutionProfile.
+
+    Without an active profile, returns ``role_name`` unchanged (local/default execution).
+    With a profile, ``primary`` and ``sub_agent`` roles are redirected to the profile's
+    model identifiers (e.g. ``"claude_sonnet"``). ``compressor`` and unrecognised roles
+    are never redirected.
+
+    This mirrors the resolution logic in :func:`~personal_agent.llm_client.factory.get_llm_client`
+    and must stay in sync with it. Having a single canonical helper prevents the two sites
+    from drifting (ADR-0063 §D6).
+
+    Args:
+        role_name: The model role string (e.g. ``"primary"``, ``"sub_agent"``).
+
+    Returns:
+        The resolved config key to use for ``model_configs.get()``.
+    """
+    profile = get_current_profile()
+    if profile is None:
+        return role_name
+    if role_name == "primary" and profile.primary_model:
+        return profile.primary_model
+    if role_name == "sub_agent" and profile.sub_agent_model:
+        return profile.sub_agent_model
+    return role_name
+
+
 class DelegationConfig(BaseModel):
     """Delegation rules for cross-provider escalation.
 

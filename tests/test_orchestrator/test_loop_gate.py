@@ -75,14 +75,62 @@ def test_first_call_is_allowed():
     assert result.state_after == ToolCallState.ACTIVE
 
 
-def test_second_call_same_args_blocked_when_max_is_one():
-    """Gate blocks second call with same args when max_per_signature=1."""
+def test_second_call_same_args_is_advisory_when_max_is_one():
+    """Gate issues ADVISE_IDENTITY (advisory) on the 2nd call with max_per_signature=1."""
     gate = ToolLoopGate()
     policy = ToolLoopPolicy(loop_max_per_signature=1)
     gate.check_before("web_search", "hash_abc", policy)
     result = gate.check_before("web_search", "hash_abc", policy)
+    assert result.decision == GateDecision.ADVISE_IDENTITY
+    # Advisory: FSM state stays ACTIVE, tool is still dispatched
+    assert result.state_after == ToolCallState.ACTIVE
+
+
+def test_identity_advisory_persists_until_terminal_threshold():
+    """Gate keeps issuing ADVISE_IDENTITY until max+2 is exceeded (ADR-0063 §D5)."""
+    gate = ToolLoopGate()
+    # max=1 → advisory at count 2,3 (> 1 and <= 1+2=3); terminal at count 4 (> 3)
+    policy = ToolLoopPolicy(loop_max_per_signature=1, loop_max_consecutive=10)
+    gate.check_before("web_search", "hash_abc", policy)  # count=1, ALLOW
+    r2 = gate.check_before("web_search", "hash_abc", policy)  # count=2, ADVISE
+    assert r2.decision == GateDecision.ADVISE_IDENTITY
+    r3 = gate.check_before("web_search", "hash_abc", policy)  # count=3, ADVISE
+    assert r3.decision == GateDecision.ADVISE_IDENTITY
+
+
+def test_identity_terminal_after_threshold_plus_two():
+    """Gate blocks terminally once same args exceed max_per_signature + 2 (ADR-0063 §D5)."""
+    gate = ToolLoopGate()
+    # max=1, OFFSET=2 → terminal at count > 3, i.e. count=4+
+    policy = ToolLoopPolicy(loop_max_per_signature=1, loop_max_consecutive=10)
+    gate.check_before("web_search", "hash_abc", policy)  # 1 → ALLOW
+    gate.check_before("web_search", "hash_abc", policy)  # 2 → ADVISE
+    gate.check_before("web_search", "hash_abc", policy)  # 3 → ADVISE
+    result = gate.check_before("web_search", "hash_abc", policy)  # 4 → BLOCK_IDENTITY
     assert result.decision == GateDecision.BLOCK_IDENTITY
     assert result.state_after == ToolCallState.BLOCKED
+
+
+def test_blocked_tool_stays_blocked():
+    """Once terminally blocked, tool returns BLOCK_IDENTITY on every subsequent call."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(loop_max_per_signature=1, loop_max_consecutive=10)
+    for _ in range(4):  # reach terminal at count=4
+        gate.check_before("web_search", "hash_abc", policy)
+    result = gate.check_before("web_search", "hash_abc", policy)  # count=5, still BLOCKED
+    assert result.decision == GateDecision.BLOCK_IDENTITY
+    assert result.state_after == ToolCallState.BLOCKED
+
+
+def test_advise_identity_does_not_set_blocked_state():
+    """ADVISE_IDENTITY decisions must not transition the FSM to BLOCKED."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(loop_max_per_signature=1, loop_max_consecutive=10)
+    gate.check_before("fetch_url", "hash_x", policy)  # ALLOW
+    result = gate.check_before("fetch_url", "hash_x", policy)  # ADVISE
+    assert result.decision == GateDecision.ADVISE_IDENTITY
+    fsm = gate._fsms["fetch_url"]
+    assert fsm.state != ToolCallState.BLOCKED  # advisory must not block the FSM
 
 
 def test_different_args_not_blocked_by_identity():
@@ -96,26 +144,16 @@ def test_different_args_not_blocked_by_identity():
 
 
 def test_identity_respects_per_tool_max():
-    """Gate respects loop_max_per_signature > 1."""
+    """Gate respects loop_max_per_signature > 1: advisory fires only above max."""
     gate = ToolLoopGate()
     # Use high consecutive limit so only identity blocking is tested here.
+    # max=2 → calls 1,2 ALLOW; call 3 ADVISE_IDENTITY (count=3 > 2)
     policy = ToolLoopPolicy(loop_max_per_signature=2, loop_max_consecutive=10)
     gate.check_before("run_sysdiag", "hash_same", policy)
     result2 = gate.check_before("run_sysdiag", "hash_same", policy)
     assert result2.decision == GateDecision.ALLOW  # second call within limit
     result3 = gate.check_before("run_sysdiag", "hash_same", policy)
-    assert result3.decision == GateDecision.BLOCK_IDENTITY  # third call exceeds limit
-
-
-def test_blocked_tool_stays_blocked():
-    """Once blocked, tool stays blocked on subsequent calls."""
-    gate = ToolLoopGate()
-    policy = ToolLoopPolicy(loop_max_per_signature=1)
-    gate.check_before("web_search", "hash_abc", policy)
-    gate.check_before("web_search", "hash_abc", policy)  # → BLOCKED
-    result = gate.check_before("web_search", "hash_abc", policy)
-    assert result.decision == GateDecision.BLOCK_IDENTITY
-    assert result.state_after == ToolCallState.BLOCKED
+    assert result3.decision == GateDecision.ADVISE_IDENTITY  # third call: advisory (not terminal)
 
 
 # ── Consecutive signal tests ───────────────────────────────────────────────
@@ -129,34 +167,46 @@ def test_consecutive_warn_at_threshold():
     gate.check_before("run_sysdiag", "hash_a", policy)  # consecutive=1, ALLOW
     result = gate.check_before("run_sysdiag", "hash_b", policy)  # consecutive=2, WARN
     assert result.decision == GateDecision.WARN_CONSECUTIVE
-    assert result.state_after == ToolCallState.WARNED
+    # ADR-0063 §D5: consecutive is advisory only — FSM stays ACTIVE, tool is dispatched
+    assert result.state_after == ToolCallState.ACTIVE
 
 
-def test_consecutive_block_after_warn():
-    """Gate issues BLOCK_CONSECUTIVE on the call after WARN_CONSECUTIVE."""
+def test_consecutive_warn_repeated_above_threshold():
+    """Gate keeps issuing WARN_CONSECUTIVE on calls above threshold — never blocks."""
     gate = ToolLoopGate()
     policy = ToolLoopPolicy(loop_max_per_signature=10, loop_max_consecutive=2)
     gate.check_before("run_sysdiag", "hash_a", policy)
-    gate.check_before("run_sysdiag", "hash_b", policy)  # → WARNED
-    result = gate.check_before("run_sysdiag", "hash_c", policy)  # → BLOCKED
-    assert result.decision == GateDecision.BLOCK_CONSECUTIVE
-    assert result.state_after == ToolCallState.BLOCKED
+    gate.check_before("run_sysdiag", "hash_b", policy)  # → WARN
+    result = gate.check_before("run_sysdiag", "hash_c", policy)  # → WARN again, not BLOCK
+    assert result.decision == GateDecision.WARN_CONSECUTIVE
+    assert result.state_after == ToolCallState.ACTIVE
+
+
+def test_consecutive_never_terminally_blocks():
+    """Repeated consecutive calls (even 20) never produce a terminal BLOCK."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(loop_max_per_signature=100, loop_max_consecutive=2)
+    for i in range(20):
+        result = gate.check_before("read_file", f"hash_{i}", policy)
+        # Each call past threshold is advisory, never terminal
+        assert result.decision in (GateDecision.ALLOW, GateDecision.WARN_CONSECUTIVE)
+        assert result.state_after != ToolCallState.BLOCKED
 
 
 def test_consecutive_counter_resets_when_different_tool_runs():
-    """Calling a different tool resets the consecutive counter and unblocks WARNED state."""
+    """Calling a different tool resets the consecutive counter."""
     gate = ToolLoopGate()
     policy = ToolLoopPolicy(loop_max_per_signature=10, loop_max_consecutive=2)
     gate.check_before("run_sysdiag", "hash_a", policy)
-    gate.check_before("run_sysdiag", "hash_b", policy)  # → WARNED
+    gate.check_before("run_sysdiag", "hash_b", policy)  # → WARN_CONSECUTIVE
     gate.check_before("web_search", "hash_q", ToolLoopPolicy())  # different tool
-    result = gate.check_before("run_sysdiag", "hash_c", policy)  # consecutive=1, ALLOW (reset from WARNED→ACTIVE)
+    result = gate.check_before("run_sysdiag", "hash_c", policy)  # consecutive=1, ALLOW
     assert result.decision == GateDecision.ALLOW
     assert result.state_after == ToolCallState.ACTIVE
 
 
 def test_two_tools_alternating_do_not_trigger_consecutive():
-    """Alternating between two tools never triggers consecutive blocking."""
+    """Alternating between two tools never triggers consecutive warning."""
     gate = ToolLoopGate()
     policy = ToolLoopPolicy(loop_max_per_signature=10, loop_max_consecutive=2)
     for i in range(5):
@@ -248,10 +298,10 @@ def test_output_sensitive_still_records_for_telemetry():
 
 
 def test_full_request_scenario_self_telemetry():
-    """Simulates self_telemetry_query: max=2, output_sensitive=True; third call blocks by identity."""
+    """Simulates self_telemetry_query with max=2: 3rd same-args call is advisory."""
     gate = ToolLoopGate()
-    # Use loop_max_consecutive=10 so consecutive blocking doesn't interfere with
-    # the identity-blocking assertion (the test's purpose is to verify max_per_signature=2).
+    # Use loop_max_consecutive=10 so consecutive blocking doesn't interfere.
+    # max=2 → advisory at count 3,4; terminal at count 5+
     policy = ToolLoopPolicy(loop_max_per_signature=2, loop_output_sensitive=True, loop_max_consecutive=10)
     args_hash = stable_hash({"query_type": "health"})
 
@@ -264,7 +314,8 @@ def test_full_request_scenario_self_telemetry():
     gate.record_output("self_telemetry_query", args_hash, stable_hash({"status": "ok"}), policy)
 
     r3 = gate.check_before("self_telemetry_query", args_hash, policy)
-    assert r3.decision == GateDecision.BLOCK_IDENTITY  # 3rd call exceeds max=2
+    # ADR-0063 §D5: 3rd call (count=3 > max=2) is advisory, not terminal
+    assert r3.decision == GateDecision.ADVISE_IDENTITY
 
 
 def test_consecutive_warn_then_synthesis_via_different_tool():

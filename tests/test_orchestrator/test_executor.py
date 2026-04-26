@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from personal_agent.config.profile import ExecutionProfile, _current_profile, set_current_profile
 from personal_agent.governance.models import Mode
+from personal_agent.llm_client.models import ToolCallingStrategy
 from personal_agent.memory.models import MemoryQueryResult, TurnNode
 from personal_agent.orchestrator import Channel, Orchestrator
 from personal_agent.orchestrator.executor import (
@@ -689,3 +691,73 @@ class TestToolUsingFlow:
         assert len(tool_messages) >= 1
         content = tool_messages[0].get("content", "")
         assert "matched_turns" in content or "entity_match" in content
+
+
+@patch("personal_agent.llm_client.factory.get_llm_client")
+@pytest.mark.asyncio
+async def test_execute_task_uses_profile_resolved_model_config(mock_client_class) -> None:
+    """Executor reads model_config via profile-resolved key, not raw role name (ADR-0063 §D6).
+
+    When a cloud profile is active (primary → claude_sonnet), the executor must
+    look up model_configs["claude_sonnet"], not model_configs["primary"].
+    The two configs carry different effective_tool_strategy values so we can
+    observe which one was used.
+    """
+    mock_client = AsyncMock()
+
+    # Two distinct configs: "primary" returns PROMPT_INJECTED (old, wrong path);
+    # "claude_sonnet" returns NATIVE (correct, profile-resolved path).
+    primary_def = MagicMock()
+    primary_def.effective_tool_strategy = ToolCallingStrategy.PROMPT_INJECTED  # wrong path
+    cloud_def = MagicMock()
+    cloud_def.effective_tool_strategy = ToolCallingStrategy.NATIVE  # correct path
+
+    mock_client.model_configs = {
+        "primary": primary_def,
+        "claude_sonnet": cloud_def,
+    }
+    mock_client_class.return_value = mock_client
+    mock_client.respond.return_value = {
+        "role": "assistant",
+        "content": "Done.",
+        "tool_calls": [],
+        "reasoning_trace": None,
+        "usage": {"total_tokens": 10},
+        "raw": {},
+    }
+
+    cloud_profile = ExecutionProfile(
+        name="cloud",
+        primary_model="claude_sonnet",
+        sub_agent_model="claude_haiku",
+        provider_type="cloud",
+    )
+    token = set_current_profile(cloud_profile)
+    try:
+        session_manager = SessionManager()
+        session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
+        trace_ctx = TraceContext.new_trace()
+        ctx = ExecutionContext(
+            session_id=session_id,
+            trace_id=trace_ctx.trace_id,
+            user_message="Hello",
+            mode=Mode.NORMAL,
+            channel=Channel.CHAT,
+        )
+        result = await execute_task_safe(ctx, session_manager)
+    finally:
+        _current_profile.reset(token)
+
+    # If executor looked up model_configs["primary"] (bug), it would get PROMPT_INJECTED
+    # strategy and pass a prompt-injected tool text in the respond() call.
+    # If it looked up model_configs["claude_sonnet"] (fix), NATIVE strategy is used —
+    # tools are passed as a tools= kwarg, not injected into the system prompt.
+    assert result["reply"]  # execution completed
+    call_kwargs = mock_client.respond.call_args_list[0].kwargs
+    # NATIVE strategy: tools passed via tools= kwarg (may be None if no tools registered)
+    # PROMPT_INJECTED strategy: system_prompt contains tool XML — distinct observable
+    system_prompt = call_kwargs.get("system_prompt", "") or ""
+    assert "<tools>" not in system_prompt, (
+        "Executor used PROMPT_INJECTED strategy from wrong model config lookup. "
+        "Fix: executor must resolve model key through the active ExecutionProfile."
+    )

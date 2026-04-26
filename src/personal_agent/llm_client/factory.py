@@ -86,18 +86,12 @@ def get_llm_client(role_name: str = "primary") -> Any:
         >>> set_current_profile(load_profile("cloud"))
         >>> client = get_llm_client("primary")  # → LiteLLMClient(claude-sonnet-4-6)
     """
-    from personal_agent.config.profile import get_current_profile
+    from personal_agent.config.profile import resolve_model_key
 
     config = load_model_config()
 
     # Resolve the model key: profile overrides role_name when profile is active.
-    profile = get_current_profile()
-    resolved_key = role_name
-    if profile is not None:
-        if role_name == "primary" and profile.primary_model:
-            resolved_key = profile.primary_model
-        elif role_name == "sub_agent" and profile.sub_agent_model:
-            resolved_key = profile.sub_agent_model
+    resolved_key = resolve_model_key(role_name)
 
     model_def = config.models.get(resolved_key)
 

@@ -262,6 +262,22 @@ This creates the `users` table, adds `user_id` to `sessions`, and backfills all 
 
 See [ADR-0064](../architecture_decisions/ADR-0064-inbound-user-identity-cloudflare-access.md) for the full decision record.
 
+### Memory Visibility Setup (FRE-229)
+
+Memory nodes in Neo4j now carry a `visibility` property: `public` (world/shared knowledge), `group` (all CF Access users — the household), or `private:<user_id>` (reserved, not yet assigned). New writes from authenticated sessions default to `group`; CLI/unauthenticated writes default to `public`.
+
+**One-time Neo4j backfill** — tag all existing nodes `public` to match their original behaviour:
+
+```bash
+uv run python scripts/migrate_fre229_visibility_backfill.py
+```
+
+Run this after deploying the FRE-229 build. The service has an IS NULL grace clause so existing data remains readable until the backfill runs, but running it promptly makes the data model canonical. The script is idempotent.
+
+**Adding a household member** — add their email to the Cloudflare Access email policy. No admin console change needed inside the agent; group membership = CF Access policy.
+
+**Visibility at query time** is applied automatically by the chokepoint filter in `memory/service.py`. Callers never need to filter manually — the `user_id` + `authenticated` flags flow from the request through the gateway pipeline to every Cypher query.
+
 ### Governance Configuration
 
 Edit `config/governance/` files to customize:

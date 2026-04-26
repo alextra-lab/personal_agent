@@ -25,9 +25,11 @@ ENV     ?= local
 SERVICE ?=
 
 ifeq ($(ENV),cloud)
-    COMPOSE := docker compose -f docker-compose.cloud.yml
+    COMPOSE      := docker compose -f docker-compose.cloud.yml
+    SERVICE_PORT ?= 9001
 else
-    COMPOSE := docker compose
+    COMPOSE      := docker compose
+    SERVICE_PORT ?= 9000
 endif
 
 # Cloud compose always available for VPS-specific targets regardless of ENV
@@ -53,7 +55,7 @@ help:
 	@echo "  make logs [SERVICE=x]     Tail service logs"
 	@echo "  make rebuild SERVICE=x    Local: build + restart one service"
 	@echo "  make shell SERVICE=x      Exec shell into a service (bash, sh fallback)"
-	@echo "  make health               Ping /health on localhost:9000"
+	@echo "  make health               Ping /health (port 9000 local, 9001 cloud)"
 	@echo ""
 	@echo "  make dev                  Start agent service with hot-reload (local only)"
 	@echo ""
@@ -118,7 +120,7 @@ shell:
 	@$(COMPOSE) exec $(SERVICE) bash 2>/dev/null || $(COMPOSE) exec $(SERVICE) sh
 
 health:
-	@curl -sf http://localhost:9000/health | python3 -m json.tool
+	@curl -sf http://localhost:$(SERVICE_PORT)/health | python3 -m json.tool
 
 # ─── Backward-compat aliases ─────────────────────────────────────────────────
 

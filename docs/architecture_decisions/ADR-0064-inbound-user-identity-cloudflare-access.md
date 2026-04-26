@@ -1,6 +1,6 @@
 # ADR-0064: Inbound User Identity via Cloudflare Access
 
-**Status**: Proposed (Needs Approval)
+**Status**: Accepted — FRE-268 (session scoping) shipped 2026-04-26; FRE-229 (memory visibility layer) shipped 2026-04-26
 **Date**: 2026-04-26
 **Deciders**: Project owner
 **Related**: ADR-0052 (Seshat Owner Identity Primitive / FRE-213), FRE-228 (`:User` node + me/I/my resolution — parked), FRE-229 (memory visibility model — redirected by this ADR), FRE-235 (session list drawer — the live leak)

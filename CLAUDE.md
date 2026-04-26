@@ -16,7 +16,7 @@ make restart         # restart all services
 make ps              # show container status
 make logs            # tail all logs
 make services        # list all available service names
-make health          # ping /health on localhost:9000
+make health          # ping /health (port 9000 local, 9001 cloud; use ENV=cloud make health)
 
 # Target a single service with SERVICE=<name>  (see: make services)
 make up SERVICE=neo4j

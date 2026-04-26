@@ -76,7 +76,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
         seedMessages(
           serverMsgs.map((m) => ({
             id: generateUUID(),
-            role: m.role as 'user' | 'assistant',
+            role: (m.role === 'user' || m.role === 'assistant') ? m.role : 'assistant',
             content: m.content,
             timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
             traceId: m.trace_id,

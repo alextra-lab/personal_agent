@@ -30,6 +30,8 @@ export interface UseSSEStreamReturn {
   resolveInterrupt: (choice: string) => void;
   disconnect: () => void;
   clearMessages: () => void;
+  /** Replace the message list with a server-hydrated history. */
+  seedMessages: (msgs: ChatMessage[]) => void;
 }
 
 // --------------------------------------------------------------------------
@@ -227,6 +229,11 @@ export function useSSEStream(): UseSSEStreamReturn {
     currentContentRef.current = '';
   }, []);
 
+  const seedMessages = useCallback((msgs: ChatMessage[]) => {
+    setMessages(msgs);
+    currentContentRef.current = '';
+  }, []);
+
   return {
     messages,
     isStreaming,
@@ -237,5 +244,6 @@ export function useSSEStream(): UseSSEStreamReturn {
     resolveInterrupt,
     disconnect,
     clearMessages,
+    seedMessages,
   };
 }

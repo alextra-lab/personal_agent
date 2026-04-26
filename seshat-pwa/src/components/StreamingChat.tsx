@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 
-import { resumeInterrupt } from '@/lib/agui-client';
+import { resumeInterrupt, getSessionMessages } from '@/lib/agui-client';
 import { generateUUID } from '@/lib/uuid';
 import type { ExecutionProfile } from '@/lib/types';
 import { useSSEStream } from '@/hooks/useSSEStream';
@@ -13,21 +14,27 @@ import { ContextBudgetMeter } from './ContextBudgetMeter';
 import { ToolIndicator } from './ToolIndicator';
 
 const PROFILE_STORAGE_KEY = 'seshat_profile';
+const LAST_SESSION_KEY = 'seshat_last_session_id';
 
 interface StreamingChatProps {
+  /** Session ID sourced from the /c/[sessionId] URL param. */
   sessionId?: string;
 }
 
 /**
  * Primary chat interface composing all sub-components.
  *
+ * Session identity is driven by the URL param — this component never
+ * mints or stores session IDs itself. Navigating to a new /c/{id} URL
+ * causes a natural remount and state reset.
+ *
  * Layout:
  * - Header: Seshat title + New button (safe-area aware)
- * - Body:   Scrollable message list
+ * - Body:   Scrollable message list (with loading skeleton while hydrating)
  * - Footer: Tool indicators + chat input with inline model selector (safe-area aware)
  */
-export function StreamingChat({ sessionId: initialSessionId }: StreamingChatProps) {
-  const [sessionId, setSessionId] = useState(initialSessionId ?? generateUUID);
+export function StreamingChat({ sessionId }: StreamingChatProps) {
+  const router = useRouter();
 
   const [profile, setProfile] = useState<ExecutionProfile>(() => {
     if (typeof window !== 'undefined') {
@@ -36,6 +43,8 @@ export function StreamingChat({ sessionId: initialSessionId }: StreamingChatProp
     }
     return 'local';
   });
+
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   const handleProfileChange = useCallback((p: ExecutionProfile) => {
     setProfile(p);
@@ -52,8 +61,39 @@ export function StreamingChat({ sessionId: initialSessionId }: StreamingChatProp
     pendingInterrupt,
     sendMessage,
     resolveInterrupt,
-    clearMessages,
+    seedMessages,
   } = useSSEStream();
+
+  // Hydrate message history from the backend when the session changes.
+  useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    setIsLoadingHistory(true);
+
+    getSessionMessages(sessionId)
+      .then((serverMsgs) => {
+        if (cancelled || serverMsgs.length === 0) return;
+        seedMessages(
+          serverMsgs.map((m) => ({
+            id: generateUUID(),
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+            timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
+            traceId: m.trace_id,
+          })),
+        );
+      })
+      .catch(() => {
+        // Treat fetch errors as empty history — present new-session UX.
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingHistory(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, seedMessages]);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -61,21 +101,27 @@ export function StreamingChat({ sessionId: initialSessionId }: StreamingChatProp
   }, [messages, activeTools]);
 
   const handleSend = (text: string) => {
+    if (!sessionId) return;
+    // Persist last-known session ID so root / can redirect here on next visit.
+    localStorage.setItem(LAST_SESSION_KEY, sessionId);
     sendMessage(text, sessionId, profile);
   };
 
   const handleInterruptChoice = async (choice: string) => {
+    if (!sessionId) return;
     try {
       await resumeInterrupt({ sessionId, choice });
       resolveInterrupt(choice);
     } catch {
-      // stale stream — user can retry
+      // Stale stream — user can retry.
     }
   };
 
   const handleNewConversation = () => {
-    clearMessages();
-    setSessionId(generateUUID());
+    const newId = generateUUID();
+    localStorage.setItem(LAST_SESSION_KEY, newId);
+    router.push(`/c/${newId}`);
+    // URL change triggers a remount which resets all hook state naturally.
   };
 
   return (
@@ -100,7 +146,11 @@ export function StreamingChat({ sessionId: initialSessionId }: StreamingChatProp
 
       {/* Message list */}
       <main className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
-        {messages.length === 0 ? (
+        {isLoadingHistory ? (
+          <div className="flex flex-col items-center justify-center h-full text-slate-500 gap-2">
+            <p className="text-sm">Loading conversation…</p>
+          </div>
+        ) : messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-slate-500 gap-2">
             <p className="text-sm">Ask Seshat anything...</p>
           </div>

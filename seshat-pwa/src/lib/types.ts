@@ -81,6 +81,8 @@ export interface ChatMessage {
   timestamp: Date;
   /** Tool calls associated with this assistant turn. */
   toolCalls?: ToolCall[];
+  /** Trace ID from the backend, populated when hydrating from history. */
+  traceId?: string;
 }
 
 /** Execution profile — determines which model the backend uses. */

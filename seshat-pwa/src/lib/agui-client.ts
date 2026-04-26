@@ -168,3 +168,67 @@ export async function resumeInterrupt(opts: ResumeOptions): Promise<void> {
     throw new Error(`Resume failed: ${resp.status} ${resp.statusText}`);
   }
 }
+
+// --------------------------------------------------------------------------
+// Session history
+// --------------------------------------------------------------------------
+
+/** Summary of a persisted session from GET /api/v1/sessions. */
+export interface SessionSummary {
+  session_id: string;
+  created_at: string;
+  last_active_at: string;
+  mode: string;
+  channel: string | null;
+  message_count: number;
+  title: string | null;
+}
+
+/** A single persisted message from GET /api/v1/sessions/{id}/messages. */
+export interface ServerMessage {
+  role: string;
+  content: string;
+  timestamp?: string;
+  trace_id?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * List recent sessions from the backend.
+ *
+ * @param limit - Maximum number of sessions to return (default 20).
+ * @returns Array of session summaries, most-recent first.
+ * @throws Error when the backend returns a non-2xx status.
+ */
+export async function listSessions(limit = 20): Promise<SessionSummary[]> {
+  const resp = await fetch(
+    `${SESHAT_API}/api/v1/sessions?limit=${limit}`,
+    { headers: authHeaders() },
+  );
+  if (!resp.ok) throw new Error(`listSessions failed: ${resp.status}`);
+  return resp.json() as Promise<SessionSummary[]>;
+}
+
+/**
+ * Fetch the message history for a session.
+ *
+ * Returns an empty array when the session does not exist (404) so callers
+ * can treat it as a fresh session without special-casing.
+ *
+ * @param sessionId - The session to fetch messages for.
+ * @param limit     - Maximum number of messages to return (default 200).
+ * @returns Array of server messages in chronological order.
+ * @throws Error when the backend returns a non-2xx, non-404 status.
+ */
+export async function getSessionMessages(
+  sessionId: string,
+  limit = 200,
+): Promise<ServerMessage[]> {
+  const resp = await fetch(
+    `${SESHAT_API}/api/v1/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}`,
+    { headers: authHeaders() },
+  );
+  if (resp.status === 404) return [];
+  if (!resp.ok) throw new Error(`getSessionMessages failed: ${resp.status}`);
+  return resp.json() as Promise<ServerMessage[]>;
+}

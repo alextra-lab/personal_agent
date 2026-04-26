@@ -48,6 +48,15 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
+  useEffect(() => {
+    if (!isDrawerOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsDrawerOpen(false);
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [isDrawerOpen]);
+
   const handleProfileChange = useCallback((p: ExecutionProfile) => {
     setProfile(p);
     if (typeof window !== 'undefined') {

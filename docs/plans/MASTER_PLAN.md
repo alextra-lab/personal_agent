@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-25 (FRE-248 / ADR-0058 done — Stream 1 bus hook implemented; FRE-261 / PIVOT-2 pending 48h gate)
+> **Last updated**: 2026-04-26 (FRE-235 done — PWA persistent sessions + cross-device resume; FRE-267 filed for thumbs feedback)
 > **Implementation sequence**: `docs/superpowers/specs/2026-04-22-implementation-sequence-wave-plan-design.md`
 
 ---
@@ -48,7 +48,7 @@ Ordered by recommended implementation sequence. All items Approved in Linear. De
 
 | Work Item | ADR / Plan | Notes |
 |-----------|------------|-------|
-*(none)*
+| PWA: per-session thumbs feedback → Captain's Log + Insights consumer | — | [FRE-267](https://linear.app/frenchforest/issue/FRE-267) — deferred from FRE-235; design groundwork complete in `plans/let-s-analyze-and-wisely-stateless-tome.md` |
 
 ### Dependency graph (project-level)
 
@@ -101,6 +101,7 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 
 | Phase | Completed | Summary |
 |-------|-----------|---------|
+| FRE-235: PWA persistent sessions + cross-device resume | 2026-04-26 | Cloud gateway `chat_api.py` now session-persistent: loads prior messages, persists every turn with `(trace_id, timestamp, metadata.source)`, emits `RequestCompletedEvent` to bus. PWA: permanent `/c/{sessionId}` URLs, cold-start hydration from `GET /api/v1/sessions/{id}/messages`, session list drawer (hamburger), Escape to close. `GET /api/v1/sessions` now returns `title` field. All message appends on all paths now carry full observability payloads. Sibling issue FRE-267 filed for thumbs feedback. |
 | ADR-0058: Self-Improvement Pipeline Stream (FRE-248) | 2026-04-25 | Closes the Stream 1 bus gap (ADR-0054). `CaptainLogEntryCreatedEvent` published on `stream:captain_log.entry_created` from both `CaptainLogManager.save_entry()` (new writes) and `_merge_into_existing()` (dedup merges, `is_merge=True`). Suppression path correctly skips. Bus publish uses fire-and-forget `asyncio.create_task` pattern (durable-first per ADR-0054 D4; bus failure logged+swallowed per D6). No new consumer group — producer-only ADR. Stream 1 `Bus?` flipped to ✅ in FEEDBACK_STREAM_ARCHITECTURE.md. 9 new unit tests. Unblocks FRE-226 phase 2 (agent self-updating skills). |
 | ADR-0055: System Health & Homeostasis — Mode Manager fix (FRE-246) | 2026-04-24 | Closed the critical Mode Manager disconnect: 4 × `Mode.NORMAL` hardcodes in `service/app.py` replaced by `get_current_mode()`. `MetricsDaemon` dual-writes `MetricsSampledEvent` to `stream:metrics.sampled` every 5 s (MAXLEN 720). `ModeManager.transition_to()` dual-writes `ModeTransitionEvent` to `stream:mode.transition`. `cg:mode-controller` consumer drives the FSM: rolling 60 s window → 30 s evaluation cadence → `ModeManager.evaluate_transitions()`. Anomalous transition cadence (≥3 per 10 min per edge) → `CaptainLogEntry(RELIABILITY, scope=mode_calibration)` with SHA-256 fingerprint. `mode_controller_enabled` defaults True. 56 new tests. ADR-0055 and FEEDBACK_STREAM_ARCHITECTURE.md updated. |
 | ADR-0057: Insights & Pattern Analysis (FRE-247) | 2026-04-24 | Closes Streams 4 & 9. `build_consolidation_insights_handler` extended: publishes `InsightsPatternDetectedEvent` per insight + `InsightsCostAnomalyEvent` per anomaly on the bus; calls `create_captain_log_proposals` → `CaptainLogManager.save_entry` (ADR-0030 fingerprint dedup applies). New `Insight.pattern_kind` field. `_pattern_fingerprint` / `_cost_fingerprint` / `_severity_for_cost_ratio` / `_category_for_insight_type` / `_scope_for_insight_type` helpers extracted to `insights/fingerprints.py`. `InsightsEngine.detect_delegation_patterns()` stub replaced with 3 real ES aggregations (success rate, rounds p75, missing-context themes). Config flag `insights_wiring_enabled=True`. |

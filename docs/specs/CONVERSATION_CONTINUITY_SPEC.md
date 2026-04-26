@@ -1,7 +1,7 @@
 # Conversation Continuity Spec
 
 **Date**: 2026-02-22
-**Status**: Implemented — `context_window.py` implements token-aware truncation with LLM-based rolling summarization (ADR-0038). Evicted turns are compressed by `context_compressor.py` via async background compression (`compression_manager.py`) when `context_compression_enabled=True`. Structured context assembly via `state_document.py`. See `CONTEXT_INTELLIGENCE_SPEC.md` Phase 4 for full details.
+**Status**: Implemented (orchestrator path since 2026-03-xx; cloud gateway path extended by FRE-235, 2026-04-26). Orchestrator path: `context_window.py` implements token-aware truncation with LLM-based rolling summarization (ADR-0038); evicted turns compressed by `context_compressor.py`; structured context assembly via `state_document.py`. Cloud gateway path (`gateway/chat_api.py`): loads full prior message history from PostgreSQL before each Anthropic call; persists user + assistant messages with `(trace_id, timestamp, metadata.source)`; emits `RequestCompletedEvent` to Redis bus. PWA surfaces cross-device resume via `GET /api/v1/sessions/{id}/messages` hydration on mount and permanent `/c/{sessionId}` URLs. See `CONTEXT_INTELLIGENCE_SPEC.md` Phase 4 for context-window details; see FRE-235 plan at `plans/let-s-analyze-and-wisely-stateless-tome.md` for cloud-path design.
 **Phase**: 2.6 Conversational Agent MVP
 **Related**: ADR-0018 (Seshat), Architecture Assessment 2026-02-22, `CLI_SERVICE_CLIENT_SPEC.md`
 

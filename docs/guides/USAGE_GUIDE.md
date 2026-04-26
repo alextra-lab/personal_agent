@@ -130,8 +130,27 @@ Response:
 ### List Sessions
 
 ```bash
-curl http://localhost:9000/sessions
+curl http://localhost:9000/api/v1/sessions \
+  -H "Authorization: Bearer $GATEWAY_TOKEN"
 ```
+
+Returns the 20 most recent sessions ordered by last activity. Each entry includes a `title` field (first user message, ≤ 60 chars) and `message_count`.
+
+### Resume a Session
+
+The PWA does this automatically via the `/c/{session_id}` URL. Via API:
+
+```bash
+# Fetch history for an existing session
+curl "http://localhost:9000/api/v1/sessions/YOUR_SESSION_ID/messages?limit=200" \
+  -H "Authorization: Bearer $GATEWAY_TOKEN"
+
+# Continue the conversation using the same session_id
+curl -X POST http://localhost:9000/chat/stream \
+  -d "message=What did we discuss earlier?&session_id=YOUR_SESSION_ID&profile=cloud"
+```
+
+The backend loads the prior message history before calling the model — conversation memory is preserved across browser reloads, devices, and sessions.
 
 ## API Endpoints
 
@@ -166,10 +185,20 @@ Sends a message to the agent and receives a response.
 ### List Sessions
 
 ```bash
-GET /sessions?limit=10&offset=0
+GET /api/v1/sessions?limit=20
+Authorization: Bearer <token>
 ```
 
-Returns recent sessions.
+Returns recent sessions ordered by last activity. Response includes `title` (first user message ≤ 60 chars), `message_count`, `created_at`, `last_active_at`.
+
+### Get Session Messages
+
+```bash
+GET /api/v1/sessions/{session_id}/messages?limit=200
+Authorization: Bearer <token>
+```
+
+Returns full message history in chronological order. Each message includes `role`, `content`, `timestamp`, `trace_id`, and `metadata.source`. Returns 404 if the session does not exist.
 
 ### Get Session
 
@@ -177,7 +206,7 @@ Returns recent sessions.
 GET /sessions/{session_id}
 ```
 
-Returns session details and history.
+Returns session details and history (local service path).
 
 ## Configuration
 

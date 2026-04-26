@@ -1,6 +1,6 @@
 # Seshat Schema Reference
 
-> **Last updated**: 2026-04-16  
+> **Last updated**: 2026-04-26  
 > **Applies to**: service/app.py, transport/agui/, config/, infrastructure/terraform/
 
 Formal definitions for every schema boundary in Seshat: API endpoints, AG-UI wire events, configuration YAML files, the PostgreSQL database, and Terraform variables.
@@ -49,15 +49,19 @@ Fire-and-forget streaming endpoint for the PWA. Returns immediately; events arri
 ```json
 {
   "session_id": "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx",
+  "trace_id": "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx",
   "status": "streaming"
 }
 ```
+
+`trace_id` identifies this specific request turn in Elasticsearch traces and Captain's Log entries. The PWA can store it on the optimistic message object for future "view trace" affordances.
 
 #### Errors
 
 | Code | Condition |
 |------|-----------|
 | `422` | `session_id` is not a valid UUID v4 |
+| `503` | Anthropic API key not configured (cloud path only) |
 
 ---
 
@@ -192,9 +196,41 @@ Update session fields.
 
 All fields are optional; only provided fields are updated.
 
+#### `GET /api/v1/sessions`
+
+List recent sessions, ordered by `last_active_at DESC`. Requires `sessions:read` scope.
+
+**Query parameters**: `limit` (default 20)
+
+**Response** (`list[SessionSummary]`, 200):
+
+```json
+[
+  {
+    "session_id": "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx",
+    "created_at": "2026-04-26T10:00:00Z",
+    "last_active_at": "2026-04-26T10:05:00Z",
+    "mode": "NORMAL",
+    "channel": "CHAT",
+    "message_count": 6,
+    "title": "Hello, my name is Boris"
+  }
+]
+```
+
+`title` is derived server-side from the first user message, truncated to ≤ 60 characters (with `…` suffix). Returns `null` for empty sessions.
+
+#### `GET /api/v1/sessions/{session_id}/messages`
+
+Fetch the full message history for a session. Requires `sessions:read` scope.
+
+**Query parameters**: `limit` (default 50, `0` = all)
+
+**Response** (`list[Message]`, 200): Messages in chronological order. Each message includes all persisted metadata (see PostgreSQL schema §4 for element schema). Returns 404 if session does not exist.
+
 #### `GET /sessions`
 
-List all sessions. Returns `list[SessionResponse]`.
+*(Legacy — local service path only)* List all sessions. Returns `list[SessionResponse]`.
 
 ---
 
@@ -531,10 +567,16 @@ Connection: `AGENT_DATABASE_URL` environment variable (Pydantic settings).
 {
   "role": "user | assistant | system | tool",
   "content": "string",
-  "timestamp": "ISO 8601 datetime",
-  "metadata": {}
+  "timestamp": "ISO 8601 datetime (UTC)",
+  "trace_id": "UUID string — identifies the request turn in ES traces and Captain's Log",
+  "metadata": {
+    "source": "gateway.chat_api | service.app | request_completed_handler",
+    "model": "claude-sonnet-4-6"
+  }
 }
 ```
+
+Every message persisted after FRE-235 (2026-04-26) carries `trace_id`, `timestamp`, and `metadata.source`, enabling end-to-end correlation: `session_id → trace_id → ES request trace → Captain's Log reflection`. The `model` key is present on assistant messages from the cloud gateway path. Older messages (pre-FRE-235) may omit these fields.
 
 ---
 

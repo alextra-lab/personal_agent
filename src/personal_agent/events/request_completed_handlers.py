@@ -52,7 +52,7 @@ def build_session_writer_handler() -> Any:
                         "content": event.assistant_response,
                         "trace_id": event.trace_id,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "metadata": {"source": "service.app"},
+                        "metadata": {"source": event.source_component},
                     },
                 )
         except Exception as e:

@@ -156,7 +156,13 @@ async def _process_chat_stream_background(
             db_messages = list(session.messages or [])
             max_history = settings.conversation_max_history_messages
             prior_messages = db_messages[-max_history:] if max_history > 0 else db_messages
-            await repo.append_message(session_uuid, {"role": "user", "content": message})
+            await repo.append_message(session_uuid, {
+                "role": "user",
+                "content": message,
+                "trace_id": trace_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "metadata": {"source": "service.app"},
+            })
 
         # ── Gateway pipeline ─────────────────────────────────────────────
         from personal_agent.brainstem.expansion import compute_expansion_budget
@@ -995,7 +1001,13 @@ async def chat(
     # --- Phase: db_append_user_message ---
     with timer.span("db_append_user_message"):
         await repo.append_message(
-            cast(UUID, session.session_id), {"role": "user", "content": message}
+            cast(UUID, session.session_id), {
+                "role": "user",
+                "content": message,
+                "trace_id": trace_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "metadata": {"source": "service.app"},
+            }
         )
 
     # --- Phase: gateway_pipeline ---

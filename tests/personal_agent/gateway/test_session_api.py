@@ -27,8 +27,18 @@ def _make_session_model(
     mode: str = "NORMAL",
     channel: str = "CHAT",
     message_count: int = 2,
+    messages: list[dict] | None = None,
 ) -> Any:
-    """Build a minimal mock SessionModel."""
+    """Build a minimal mock SessionModel.
+
+    Args:
+        session_id: Optional UUID string; generated if not provided.
+        mode: Session mode string.
+        channel: Session channel string.
+        message_count: Number of synthetic messages to generate when
+            ``messages`` is not provided.
+        messages: Explicit list of message dicts; overrides ``message_count``.
+    """
     sid = session_id or str(uuid4())
     session = MagicMock()
     session.session_id = sid
@@ -36,9 +46,12 @@ def _make_session_model(
     session.last_active_at = datetime(2026, 1, 1, 10, 5, 0)
     session.mode = mode
     session.channel = channel
-    session.messages = [
-        {"role": "user", "content": f"message {i}"} for i in range(message_count)
-    ]
+    if messages is not None:
+        session.messages = messages
+    else:
+        session.messages = [
+            {"role": "user", "content": f"message {i}"} for i in range(message_count)
+        ]
     return session
 
 
@@ -198,3 +211,53 @@ def test_get_session_messages_limit_applied() -> None:
 
     assert resp.status_code == 200
     assert len(resp.json()) == 3
+
+
+# ---------------------------------------------------------------------------
+# Session title derivation
+# ---------------------------------------------------------------------------
+
+
+def test_list_sessions_includes_title() -> None:
+    """GET /sessions includes a ``title`` derived from the first user message."""
+    db_session = AsyncMock()
+    session_model = _make_session_model(
+        messages=[{"role": "user", "content": "Hello world this is a test message"}]
+    )
+
+    with patch(
+        "personal_agent.service.repositories.session_repository.SessionRepository.list_recent",
+        new_callable=AsyncMock,
+        return_value=[session_model],
+    ):
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get("/api/v1/sessions")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data[0]["title"] == "Hello world this is a test message"
+
+
+def test_list_sessions_truncates_title() -> None:
+    """GET /sessions truncates titles longer than 60 chars with an ellipsis."""
+    db_session = AsyncMock()
+    long_content = "A" * 80  # 80 characters
+    session_model = _make_session_model(
+        messages=[{"role": "user", "content": long_content}]
+    )
+
+    with patch(
+        "personal_agent.service.repositories.session_repository.SessionRepository.list_recent",
+        new_callable=AsyncMock,
+        return_value=[session_model],
+    ):
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get("/api/v1/sessions")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    # 60 chars + the single '…' character = 61 characters total
+    assert len(data[0]["title"]) == 61
+    assert data[0]["title"].endswith("…")

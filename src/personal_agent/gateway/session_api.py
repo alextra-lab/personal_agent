@@ -191,6 +191,24 @@ async def get_session_messages(
 # ---------------------------------------------------------------------------
 
 
+def _extract_title(messages: list[dict[str, Any]]) -> str | None:
+    """Derive a session title from the first user message.
+
+    Args:
+        messages: List of message dicts from the session.
+
+    Returns:
+        First 60 characters of the first user message, with a trailing
+        ellipsis when truncated, or ``None`` when no user message exists.
+    """
+    for msg in messages:
+        if msg.get("role") == "user" and msg.get("content"):
+            text = str(msg["content"]).strip()
+            if text:
+                return text[:60] + ("…" if len(text) > 60 else "")
+    return None
+
+
 def _session_to_dict(session: Any) -> dict[str, Any]:
     """Serialise a ``SessionModel`` to a plain dict.
 
@@ -198,13 +216,15 @@ def _session_to_dict(session: Any) -> dict[str, Any]:
         session: SQLAlchemy ``SessionModel`` instance.
 
     Returns:
-        Dict with serialised session fields.
+        Dict with serialised session fields including a derived ``title``.
     """
+    msgs = list(session.messages or [])
     return {
         "session_id": str(session.session_id),
         "created_at": session.created_at.isoformat() if session.created_at else None,
         "last_active_at": session.last_active_at.isoformat() if session.last_active_at else None,
         "mode": session.mode,
         "channel": session.channel,
-        "message_count": len(session.messages or []),
+        "message_count": len(msgs),
+        "title": _extract_title(msgs),
     }

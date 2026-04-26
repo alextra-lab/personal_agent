@@ -3,6 +3,7 @@
 import asyncio
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, cast
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
@@ -70,7 +71,16 @@ async def _append_assistant_message_background(
     try:
         async with AsyncSessionLocal() as db:
             repo = SessionRepository(db)
-            await repo.append_message(session_id, {"role": "assistant", "content": content})
+            await repo.append_message(
+                session_id,
+                {
+                    "role": "assistant",
+                    "content": content,
+                    "trace_id": trace_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "metadata": {"source": "service.app"},
+                },
+            )
     except Exception as e:
         log.error(
             "db_append_assistant_message_background_failed",
@@ -243,7 +253,14 @@ async def _process_chat_stream_background(
             async with AsyncSessionLocal() as db:
                 repo = SessionRepository(db)
                 await repo.append_message(
-                    session_uuid, {"role": "assistant", "content": response_content}
+                    session_uuid,
+                    {
+                        "role": "assistant",
+                        "content": response_content,
+                        "trace_id": trace_id,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "metadata": {"source": "service.app"},
+                    },
                 )
         except Exception as e:
             log.error(

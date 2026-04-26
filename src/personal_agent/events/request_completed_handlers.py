@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -46,7 +47,13 @@ def build_session_writer_handler() -> Any:
                 repo = SessionRepository(db)
                 await repo.append_message(
                     UUID(sid),
-                    {"role": "assistant", "content": event.assistant_response},
+                    {
+                        "role": "assistant",
+                        "content": event.assistant_response,
+                        "trace_id": event.trace_id,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "metadata": {"source": "service.app"},
+                    },
                 )
         except Exception as e:
             log.error(

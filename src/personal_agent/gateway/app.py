@@ -308,8 +308,8 @@ def create_gateway_app() -> FastAPI:
     )
     add_error_handlers(app)
     app.include_router(create_gateway_router())  # /api/v1/* — storage APIs
-    app.include_router(chat_router)              # /chat   — Anthropic streaming
-    app.include_router(transport_router)          # /stream/* — AG-UI SSE
+    app.include_router(chat_router)  # /chat   — Anthropic streaming
+    app.include_router(transport_router)  # /stream/* — AG-UI SSE
     return app
 
 

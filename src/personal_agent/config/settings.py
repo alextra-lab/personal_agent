@@ -900,6 +900,34 @@ class AppConfig(BaseSettings):
             "Injected as CF-Access-Client-Secret header on requests to slm.frenchforet.com."
         ),
     )
+    cf_access_team_domain: str | None = Field(
+        default=None,
+        alias="CF_ACCESS_TEAM_DOMAIN",
+        description=(
+            "Cloudflare Access team domain (e.g. 'myteam.cloudflareaccess.com'). "
+            "Used to fetch the JWKS for verifying Cf-Access-Jwt-Assertion on inbound requests. "
+            "When set, JWT verification is enabled on all authenticated endpoints."
+        ),
+    )
+    cf_access_aud: str | None = Field(
+        default=None,
+        alias="CF_ACCESS_AUD",
+        description=(
+            "Cloudflare Access application audience tag (AUD). "
+            "Must match the aud claim in Cf-Access-Jwt-Assertion JWTs. "
+            "Required when cf_access_team_domain is set."
+        ),
+    )
+    agent_owner_email: str | None = Field(
+        default=None,
+        alias="AGENT_OWNER_EMAIL",
+        description=(
+            "Deployment owner's email address — must match the Cloudflare Access "
+            "email for the owner so that CLI paths and CF Access paths resolve to "
+            "the same user_id. Used as the dev-mode fallback identity when "
+            "gateway_auth_enabled=False and no CF Access header is present."
+        ),
+    )
 
 
 _settings: AppConfig | None = None

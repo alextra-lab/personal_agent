@@ -5,12 +5,33 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
-from sqlalchemy import BigInteger, Column, DateTime, Float, String
+from sqlalchemy import BigInteger, Column, DateTime, Float, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
+
+
+# ============================================================================
+# User Identity (inbound CF Access identity — ADR-0064)
+# ============================================================================
+
+
+class UserModel(Base):
+    """SQLAlchemy model for the users table.
+
+    Populated automatically on first authenticated request via CF Access.
+    user_id is the durable FK used for ownership; email may be updated if
+    the CF Access email changes.
+    """
+
+    __tablename__ = "users"
+
+    user_id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    email = Column(Text, unique=True, nullable=False)
+    display_name = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False)
 
 
 # ============================================================================
@@ -126,6 +147,12 @@ class SessionModel(Base):
     __tablename__ = "sessions"
 
     session_id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.user_id"),
+        nullable=False,
+        index=True,
+    )
     created_at = Column(DateTime(timezone=True), nullable=False)
     last_active_at = Column(DateTime(timezone=True), nullable=False)
     mode = Column(String(20), nullable=False, default="NORMAL")

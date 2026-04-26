@@ -14,6 +14,9 @@ from uuid import uuid4
 import pytest
 
 from personal_agent.service.app import chat
+from personal_agent.service.auth import RequestUser
+
+_TEST_REQUEST_USER = RequestUser(user_id=uuid4(), email="test@example.com")
 
 
 def _make_session(messages: list | None = None) -> SimpleNamespace:
@@ -70,7 +73,7 @@ class TestExpansionBudgetWiring:
         orchestrator, _ = _make_mock_orchestrator()
         mock_orchestrator_cls.return_value = orchestrator
 
-        await chat(message="hello", session_id=None, db=AsyncMock())
+        await chat(message="hello", session_id=None, request_user=_TEST_REQUEST_USER, db=AsyncMock())
 
         # Sensors polled
         mock_poll.assert_called_once()
@@ -107,7 +110,7 @@ class TestExpansionBudgetWiring:
         orchestrator, _ = _make_mock_orchestrator()
         mock_orchestrator_cls.return_value = orchestrator
 
-        await chat(message="hello", session_id=None, db=AsyncMock())
+        await chat(message="hello", session_id=None, request_user=_TEST_REQUEST_USER, db=AsyncMock())
 
         mock_pipeline.assert_called_once()
         call_kwargs = mock_pipeline.call_args.kwargs
@@ -141,7 +144,7 @@ class TestExpansionBudgetWiring:
         orchestrator, _ = _make_mock_orchestrator()
         mock_orchestrator_cls.return_value = orchestrator
 
-        await chat(message="hello", session_id=None, db=AsyncMock())
+        await chat(message="hello", session_id=None, request_user=_TEST_REQUEST_USER, db=AsyncMock())
 
         mock_pipeline.assert_called_once()
         call_kwargs = mock_pipeline.call_args.kwargs

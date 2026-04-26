@@ -22,11 +22,16 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncGenerator
+from uuid import UUID
 
 import structlog
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from personal_agent.service.auth import RequestUser, get_request_user
+from personal_agent.service.database import get_db_session
+from personal_agent.service.repositories.session_repository import SessionRepository
 from personal_agent.transport.agui.adapter import serialize_event
 from personal_agent.transport.events import InternalEvent
 
@@ -108,7 +113,12 @@ async def _event_generator(
 
 
 @router.get("/stream/{session_id}")
-async def stream_session(session_id: str, request: Request) -> StreamingResponse:
+async def stream_session(
+    session_id: str,
+    request: Request,
+    request_user: RequestUser = Depends(get_request_user),  # noqa: B008
+    db: AsyncSession = Depends(get_db_session),  # noqa: B008
+) -> StreamingResponse:
     """AG-UI SSE endpoint.
 
     Clients connect and receive real-time agent events as Server-Sent Events.
@@ -120,14 +130,27 @@ async def stream_session(session_id: str, request: Request) -> StreamingResponse
     * A ``None`` sentinel is pushed to the session queue (normal completion).
     * The client disconnects.
 
+    Returns 404 (not 403) when the session does not exist or belongs to
+    another user — do not confirm existence of other users' sessions.
+
     Args:
         session_id: The session to stream events for.
         request: FastAPI request (used for disconnect detection).
+        request_user: Resolved user identity (injected by FastAPI).
+        db: Database session (injected by FastAPI).
 
     Returns:
         Streaming SSE response with ``text/event-stream`` media type.
+
+    Raises:
+        HTTPException: 404 if session not found or owned by another user.
     """
-    log.info("sse.stream_requested", session_id=session_id)
+    repo = SessionRepository(db)
+    session = await repo.get(UUID(session_id), user_id=request_user.user_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    log.info("sse.stream_requested", session_id=session_id, user_id=str(request_user.user_id))
     return StreamingResponse(
         _event_generator(session_id, request),
         media_type="text/event-stream",

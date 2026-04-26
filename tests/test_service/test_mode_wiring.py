@@ -64,6 +64,8 @@ class TestGetCurrentModeCalledInChat:
     ) -> None:
         """When get_current_mode returns ALERT the gateway receives ALERT, not NORMAL."""
         from personal_agent.service.app import chat
+        from personal_agent.service.auth import RequestUser
+        _test_user = RequestUser(user_id=uuid4(), email="test@example.com")
 
         mock_get_mode.return_value = Mode.ALERT
         mock_poll.return_value = {"cpu_percent": 20.0, "memory_percent": 40.0}
@@ -86,7 +88,7 @@ class TestGetCurrentModeCalledInChat:
         )
         mock_orchestrator_cls.return_value = orchestrator
 
-        await chat(message="hello", session_id=None, db=AsyncMock())
+        await chat(message="hello", session_id=None, request_user=_test_user, db=AsyncMock())
 
         # get_current_mode must have been called (not Mode.NORMAL literal).
         assert mock_get_mode.call_count >= 1, "get_current_mode was never called"

@@ -385,7 +385,7 @@ services:
     cpus: 0.25
     networks:
       cloud-sim:
-        ipv4_address: 172.25.0.10
+        ipv4_address: 172.25.0.12
     restart: unless-stopped
 
   # Cloudflare Tunnel — WARP private network access

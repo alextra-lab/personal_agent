@@ -84,30 +84,38 @@ ADR-0052's single-operator stanza (FRE-213) likewise stays as-is for this slice:
 
 ### D6 — Target end-state for memory partitioning (informs follow-ups, not this ADR's slice)
 
-When memory partitioning is desired, the model is **two levels** rather than three:
+When memory partitioning is desired, the model is **three levels with a single unnamed group**:
 
-| Level | Meaning | Source |
+| Level | Meaning | Who sees it |
 |---|---|---|
-| `public` (default) | Shared across all users | Anything not explicitly user-bound |
-| `private:<user_id>` | Visible only to the owning user | Self-referential facts about the authenticated user |
+| `public` | World/shared knowledge — public figures, project facts, general concepts | All users, including unauthenticated fallback (CLI) |
+| `group` | Household/family knowledge — facts about the family unit, shared context, routines | All CF Access authenticated users |
+| `private` | Individual knowledge — personal facts about the specific user | Only the owning user |
 
-A single chokepoint Cypher filter applies to all reads:
+**The group is unnamed and has no membership management.** Group = "is authenticated via CF Access." Adding a person to the family = adding them to the Cloudflare Access email policy. This eliminates the need for an admin console inside the agent entirely.
+
+A single chokepoint Cypher filter applies to all reads in `memory/service.py`:
 
 ```cypher
-WHERE m.visibility = 'public' OR m.visibility = 'private:' + $user_id
+WHERE m.visibility = 'public'
+   OR (m.visibility = 'group' AND $authenticated = true)
+   OR m.visibility = 'private:' + $user_id
 ```
 
-When `user_id` is NULL (CLI / dev fallback), the filter degrades to `m.visibility = 'public'`, returning the shared graph.
+When `authenticated = false` (CLI / dev fallback, `user_id = NULL`), the filter returns only `public` nodes — the shared world-knowledge graph.
 
-### D7 — Pivot from FRE-229's three-level model
+**Default visibility at extraction time**: `group`. A new fact extracted from an authenticated session is household-visible by default; the agent or user can promote to `public` or demote to `private` based on classification heuristics (see FRE-229).
 
-FRE-229 originally specified a three-level scope (`private` / `group` / `public`) with `:Group` nodes, `:MEMBER_OF` edges, and a `MULTI_USER_ENABLED` flag. **This ADR redirects FRE-229 to the two-level model in D6.** Justification:
+### D7 — Simplified redirect of FRE-229
 
-- No group/team/family use case exists in the actual user's roadmap.
-- Group membership lifecycle, scope inheritance, and default-scope policy are real complexity the trusted-group setting does not need.
-- The two-level model delivers the user's stated goal ("shared knowledge with user-specific access") at a fraction of the design and code cost.
+FRE-229 originally specified a three-level scope (`private` / `group` / `public`) with `:Group` nodes, `:MEMBER_OF` edges, and a `MULTI_USER_ENABLED` flag. **This ADR simplifies FRE-229's model** — the three levels are retained, but the group infrastructure is removed:
 
-FRE-229 should be edited to reflect this: drop `:Group`, drop `:MEMBER_OF`, drop the `MULTI_USER_ENABLED` flag, replace three-level scope with two-level visibility on memory/entity nodes plus the chokepoint filter.
+- ~~`:Group` node with `type` (family/friends/team/custom)~~
+- ~~`(:User)-[:MEMBER_OF {role, since}]->(:Group)` relation~~
+- ~~`MULTI_USER_ENABLED` feature flag~~
+- ~~Admin console for group management~~
+
+Justification: the deployment is a family assistant. The family unit is exactly the set of people in the CF Access policy, which the operator already manages. Building group-management infrastructure inside the agent would duplicate what CF Access already provides. The three-level visibility model is correct; the group management layer is unnecessary.
 
 ### D8 — No PWA changes
 
@@ -155,9 +163,9 @@ CF Access authenticates every PWA request at the edge. The PWA's existing `NEXT_
 
 *Rejected as the primary path; accepted as the dev-mode fallback.* In the production deployment the only path to the service is via CF Access, so reading the header is "good enough" for correctness today. Verifying the JWT is cheap with PyJWT + cached JWKS and protects against any future direct path (misconfigured tunnel, dev port forwarding, accidental exposure). The asymmetry between cost and protection makes verification the right default.
 
-### D. FRE-229's original three-level visibility model (`private` / `group` / `public`)
+### D. FRE-229's original group infrastructure (`:Group` nodes, `:MEMBER_OF`, `MULTI_USER_ENABLED` flag)
 
-*Rejected.* The trusted small-group setting has no group/team/family use case; the lifecycle complexity (group creation, membership transfer, scope inheritance, default-scope policy, `MULTI_USER_ENABLED` flag) is unjustified for 2–5 users. The two-level model in D6 delivers the stated goal at a fraction of the design and code cost.
+*Rejected.* The three-level scope (public / group / private) is retained in D6/D7. What is rejected is the group *management* infrastructure: named groups, membership edges, and the admin console they require. The family/household group is not a managed entity — it is the CF Access policy. Group membership = "has a CF Access login." This eliminates the entire group lifecycle problem (creation, membership transfer, scope inheritance) without giving up the family-assistant use case.
 
 ### E. Memory partitioning in the same slice as session ownership
 

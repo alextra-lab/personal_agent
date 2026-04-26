@@ -11,6 +11,7 @@ import { useSSEStream } from '@/hooks/useSSEStream';
 import { ChatInput } from './ChatInput';
 import { ChatMessage } from './ChatMessage';
 import { ContextBudgetMeter } from './ContextBudgetMeter';
+import { SessionList } from './SessionList';
 import { ToolIndicator } from './ToolIndicator';
 
 const PROFILE_STORAGE_KEY = 'seshat_profile';
@@ -45,6 +46,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
   });
 
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
   const handleProfileChange = useCallback((p: ExecutionProfile) => {
     setProfile(p);
@@ -125,13 +127,60 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
   };
 
   return (
-    <div className="flex flex-col h-full bg-slate-900 text-slate-100">
+    <div className="relative flex flex-col h-full bg-slate-900 text-slate-100">
+      {/* Session list drawer */}
+      {isDrawerOpen && (
+        <>
+          {/* Backdrop — tap to close */}
+          <div
+            className="absolute inset-0 z-20 bg-black/50"
+            onClick={() => setIsDrawerOpen(false)}
+          />
+          {/* Panel */}
+          <div className="absolute inset-y-0 left-0 z-30 w-full md:w-80 bg-slate-900 border-r border-slate-700 flex flex-col">
+            {/* Drawer header */}
+            <div
+              className="flex items-center justify-between px-4 border-b border-slate-700 flex-shrink-0"
+              style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)', paddingBottom: '0.75rem' }}
+            >
+              <h2 className="text-sm font-semibold text-slate-100">Conversations</h2>
+              <button
+                onClick={() => setIsDrawerOpen(false)}
+                aria-label="Close session list"
+                className="p-1 rounded text-slate-400 hover:text-slate-100 transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+            {/* Session list — remounts on each open (fresh fetch) */}
+            <SessionList
+              currentSessionId={sessionId}
+              onSelect={() => setIsDrawerOpen(false)}
+            />
+          </div>
+        </>
+      )}
+
       {/* Header — safe-area top padding */}
       <header
         className="flex items-center justify-between px-4 border-b border-slate-700 bg-slate-900/80 backdrop-blur-sm flex-shrink-0"
         style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)', paddingBottom: '0.75rem' }}
       >
-        <h1 className="text-base font-semibold text-slate-100">Seshat</h1>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsDrawerOpen(true)}
+            aria-label="Open session list"
+            className="p-1 rounded text-slate-400 hover:text-slate-100 transition-colors"
+          >
+            {/* Hamburger icon — three horizontal lines */}
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor">
+              <rect x="0" y="3" width="18" height="2" rx="1" />
+              <rect x="0" y="8" width="18" height="2" rx="1" />
+              <rect x="0" y="13" width="18" height="2" rx="1" />
+            </svg>
+          </button>
+          <h1 className="text-base font-semibold text-slate-100">Seshat</h1>
+        </div>
         {messages.length > 0 && (
           <button
             onClick={handleNewConversation}

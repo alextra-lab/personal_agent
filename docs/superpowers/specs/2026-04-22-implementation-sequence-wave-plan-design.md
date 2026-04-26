@@ -47,7 +47,7 @@
 | ~~4~~ | ~~FRE-244~~ | ~~ADR draft → impl~~ | ~~FRE-249~~ | ~~ADR-0056: Error Pattern Monitoring — Level 3 observability; closes the gap in the four-level framework~~ ✅ Done 2026-04-24 |
 | ~~5~~ | ~~FRE-247~~ | ~~ADR draft → impl~~ | ~~FRE-250~~ | ~~ADR-0057: Insights & Pattern Analysis — wires InsightsEngine to full loop; delegation patterns~~ ✅ Done 2026-04-24 |
 | ~~6~~ | ~~FRE-246~~ | ~~ADR draft → impl~~ | — | ~~ADR-0055: Mode Manager fix — critical disconnect (`app.py:176` hardcodes `Mode.NORMAL`); no Phase 3 deps~~ ✅ Done 2026-04-24 |
-| 7 | FRE-248 | ADR draft → impl | FRE-226 | ADR-0058: Self-Improvement Pipeline — formalizes Streams 1-3; adds `captain_log.entry_created` bus event |
+| ~~7~~ | ~~FRE-248~~ | ~~ADR draft → impl~~ | ~~FRE-226~~ | ~~ADR-0058: Self-Improvement Pipeline — formalizes Streams 1-3; adds `captain_log.entry_created` bus event~~ ✅ Done 2026-04-25 |
 
 **Note:** 4 and 5 can be drafted in parallel (different worktrees). 6 and 7 follow.
 Each ADR draft → acceptance → implementation issues spun off → implementation → next ADR.
@@ -137,7 +137,7 @@ A parallel track opened on 2026-04-24 and was **approved 2026-04-24**: **ADR-006
 
 | Wave | Tracks in flight |
 |------|------------------|
-| 2 | ~~FRE-246~~ (done) / ~~FRE-244~~ (done) / ~~FRE-247~~ (done) / FRE-248 (next) |
+| 2 | ~~FRE-246~~ (done) / ~~FRE-244~~ (done) / ~~FRE-247~~ (done) / ~~FRE-248~~ (done 2026-04-25) |
 | 2.5 (parallel) | ~~FRE-260/PIVOT-1~~ (done 2026-04-25 ✅) → FRE-261/PIVOT-2 (primitives + sandbox — pending 48h gate, opens ~2026-04-27) → FRE-262/PIVOT-3 (skill docs + eval) → FRE-263/PIVOT-4 (flag-gated deprecation) → FRE-265/PIVOT-6 (delete legacy tools); FRE-264/PIVOT-5 parallel after FRE-260 ✅ |
 | 3 | FRE-249 / FRE-250 — unchanged |
 | 4 | FRE-251 and FRE-226 phase 2 — unchanged |

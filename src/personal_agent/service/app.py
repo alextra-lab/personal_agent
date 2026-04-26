@@ -17,7 +17,6 @@ from personal_agent.brainstem import (
     get_current_mode,
     get_mode_controller,
     get_mode_manager,
-    get_or_create_metrics_daemon,
 )
 from personal_agent.brainstem.scheduler import BrainstemScheduler
 from personal_agent.brainstem.sensors.metrics_daemon import (
@@ -26,7 +25,6 @@ from personal_agent.brainstem.sensors.metrics_daemon import (
 )
 from personal_agent.captains_log.es_indexer import build_es_indexer_from_handler, set_es_indexer
 from personal_agent.config.settings import get_settings
-from personal_agent.governance.models import Mode
 from personal_agent.memory.protocol_adapter import MemoryServiceAdapter
 from personal_agent.memory.service import MemoryService
 from personal_agent.request_gateway import run_gateway_pipeline
@@ -163,7 +161,6 @@ async def _process_chat_stream_background(
         # ── Gateway pipeline ─────────────────────────────────────────────
         from personal_agent.brainstem.expansion import compute_expansion_budget
         from personal_agent.brainstem.sensors import poll_system_metrics
-        from personal_agent.governance.models import Mode
 
         try:
             system_metrics = poll_system_metrics()
@@ -339,7 +336,14 @@ async def _preflight_check_tcp(service: str, host: str, port: int) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan management."""
-    global es_handler, memory_service, scheduler, metrics_daemon, mcp_adapter, consumer_runner, freshness_consumer
+    global \
+        es_handler, \
+        memory_service, \
+        scheduler, \
+        metrics_daemon, \
+        mcp_adapter, \
+        consumer_runner, \
+        freshness_consumer
 
     # Startup
     log.info("service_starting")
@@ -643,6 +647,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             consumer_name="freshness-access-0",
             handler=freshness_consumer.handle,
         )
+
         # memory.entities_updated events are informational at this phase — no-op ACK
         async def _noop_freshness_entities(event: EventBase) -> None:
             pass
@@ -960,8 +965,10 @@ async def chat(
         if session_id:
             try:
                 parsed_session_id = UUID(session_id)
-            except ValueError:
-                raise HTTPException(status_code=422, detail="session_id must be a valid UUID")
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=422, detail="session_id must be a valid UUID"
+                ) from exc
             session = await repo.get(parsed_session_id)
             if not session:
                 raise HTTPException(status_code=404, detail="Session not found")
@@ -1188,9 +1195,7 @@ async def chat_stream_endpoint(
     try:
         UUID(session_id)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=422, detail="session_id must be a valid UUID v4"
-        ) from exc
+        raise HTTPException(status_code=422, detail="session_id must be a valid UUID v4") from exc
 
     asyncio.create_task(
         _process_chat_stream_background(

@@ -10,12 +10,10 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from personal_agent.gateway.app import create_gateway_router
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -243,9 +241,7 @@ def test_list_sessions_truncates_title() -> None:
     """GET /sessions truncates titles longer than 60 chars with an ellipsis."""
     db_session = AsyncMock()
     long_content = "A" * 80  # 80 characters
-    session_model = _make_session_model(
-        messages=[{"role": "user", "content": long_content}]
-    )
+    session_model = _make_session_model(messages=[{"role": "user", "content": long_content}])
 
     with patch(
         "personal_agent.service.repositories.session_repository.SessionRepository.list_recent",

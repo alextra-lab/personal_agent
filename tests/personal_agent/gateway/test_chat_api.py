@@ -12,12 +12,10 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from personal_agent.gateway.chat_api import router as chat_router
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -91,6 +89,7 @@ def test_chat_starts_streaming() -> None:
     assert "trace_id" in data
     assert len(data["trace_id"]) == 36  # UUID canonical form
     assert data["trace_id"].count("-") == 4
+    mock_create_task.assert_called_once()
 
 
 def test_chat_invalid_uuid() -> None:

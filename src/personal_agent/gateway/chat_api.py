@@ -5,10 +5,12 @@ into the AG-UI event queue for the given session.  The client should connect
 to ``GET /stream/{session_id}`` immediately after this call returns to receive
 ``TEXT_DELTA`` events as the model generates its reply.
 
-Session persistence: messages are written to PostgreSQL with full trace_id
-correlation so the session history survives across turns.  The gateway never
-wires ``build_session_writer_handler``, so the assistant message written here
-is the only persistence path (no double-write risk).
+Session persistence: the user message is written synchronously in ``chat()``
+before the background task is launched (no cancellation risk).  The assistant
+message uses the same Redis-or-direct pattern as ``service.app``: when a
+``RedisStreamBus`` is active the bus consumer (``build_session_writer_handler``)
+performs the write; on the ``NoOpBus`` path the background task writes directly.
+This invariant prevents double-writes when ``gateway_mount_local=True``.
 """
 
 from __future__ import annotations
@@ -48,47 +50,30 @@ _MAX_TOKENS = 8192
 async def _stream_to_queue(
     trace_id: str,
     session_uuid: UUID,
-    user_message: str,
     anthropic_messages: list[Any],
     api_key: str,
 ) -> None:
     """Stream an Anthropic response into the AG-UI per-session event queue.
 
     Runs as an ``asyncio.Task``; errors surface as a final error TEXT_DELTA
-    rather than propagating as unhandled exceptions.  Persists the user
-    message before streaming and the assistant message afterwards.  Also
-    emits a ``RequestCompletedEvent`` to the event bus on success.
+    rather than propagating as unhandled exceptions.  Persists the assistant
+    message using the same Redis-or-direct pattern as ``service.app``:
+    - ``RedisStreamBus``: emits ``RequestCompletedEvent``; the
+      ``build_session_writer_handler`` consumer performs the DB write.
+    - ``NoOpBus``: writes directly to PostgreSQL (no consumer running).
+
+    The user message is **not** persisted here — ``chat()`` does that
+    synchronously before launching this task to avoid cancellation races.
 
     Args:
         trace_id: Correlation identifier for this request.
         session_uuid: Target session UUID for DB writes and event routing.
-        user_message: Raw user message text to persist.
         anthropic_messages: Full conversation history (prior + new user turn)
             in Anthropic wire format (``role`` + ``content`` only).
         api_key: Anthropic API key.
     """
     session_id_str = str(session_uuid)
     queue = get_event_queue(session_id_str)
-
-    # --- Persist user message with full correlation payload ----------------
-    now_iso = datetime.now(timezone.utc).isoformat()
-    user_payload: dict[str, Any] = {
-        "role": "user",
-        "content": user_message,
-        "trace_id": trace_id,
-        "timestamp": now_iso,
-        "metadata": {"source": "gateway.chat_api"},
-    }
-    try:
-        async with AsyncSessionLocal() as db:
-            await SessionRepository(db).append_message(session_uuid, user_payload)
-    except Exception as exc:
-        log.error(
-            "chat.persist_user_message_failed",
-            trace_id=trace_id,
-            session_id=session_id_str,
-            error=str(exc),
-        )
 
     # --- Stream from Anthropic --------------------------------------------
     full_text = ""
@@ -104,27 +89,7 @@ async def _stream_to_queue(
                 full_text += text
                 await queue.put(TextDeltaEvent(text=text, session_id=session_id_str))
 
-        # --- Persist assistant message ------------------------------------
-        assistant_now_iso = datetime.now(timezone.utc).isoformat()
-        assistant_payload: dict[str, Any] = {
-            "role": "assistant",
-            "content": full_text,
-            "trace_id": trace_id,
-            "timestamp": assistant_now_iso,
-            "metadata": {"source": "gateway.chat_api", "model": _CLOUD_MODEL},
-        }
-        try:
-            async with AsyncSessionLocal() as db:
-                await SessionRepository(db).append_message(session_uuid, assistant_payload)
-        except Exception as exc:
-            log.error(
-                "chat.persist_assistant_message_failed",
-                trace_id=trace_id,
-                session_id=session_id_str,
-                error=str(exc),
-            )
-
-        # --- Emit RequestCompletedEvent to bus ----------------------------
+        # --- Persist assistant message: bus consumer or direct write ------
         try:
             from personal_agent.events.bus import get_event_bus
             from personal_agent.events.models import STREAM_REQUEST_COMPLETED, RequestCompletedEvent
@@ -132,6 +97,9 @@ async def _stream_to_queue(
 
             bus = get_event_bus()
             if isinstance(bus, RedisStreamBus):
+                # Consumer (build_session_writer_handler) will write the
+                # assistant message — do NOT write directly here to avoid
+                # double-write when gateway_mount_local=True.
                 await bus.publish(
                     STREAM_REQUEST_COMPLETED,
                     RequestCompletedEvent(
@@ -147,9 +115,20 @@ async def _stream_to_queue(
                         source_component="gateway.chat_api",
                     ),
                 )
+            else:
+                # NoOpBus — no consumer running; write directly.
+                assistant_payload: dict[str, Any] = {
+                    "role": "assistant",
+                    "content": full_text,
+                    "trace_id": trace_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "metadata": {"source": "gateway.chat_api", "model": _CLOUD_MODEL},
+                }
+                async with AsyncSessionLocal() as db:
+                    await SessionRepository(db).append_message(session_uuid, assistant_payload)
         except Exception as exc:
-            log.warning(
-                "chat.bus_publish_failed",
+            log.error(
+                "chat.persist_assistant_message_failed",
                 trace_id=trace_id,
                 session_id=session_id_str,
                 error=str(exc),
@@ -265,11 +244,32 @@ async def chat(
 
     anthropic_messages: list[Any] = prior_messages + [{"role": "user", "content": message}]
 
+    # Persist user message synchronously before launching the background task
+    # so that (a) the write is never lost to task cancellation and (b) a
+    # follow-up request finds the user turn in session history immediately.
+    now_iso = datetime.now(timezone.utc).isoformat()
+    user_payload: dict[str, Any] = {
+        "role": "user",
+        "content": message,
+        "trace_id": trace_id,
+        "timestamp": now_iso,
+        "metadata": {"source": "gateway.chat_api"},
+    }
+    try:
+        async with AsyncSessionLocal() as db:
+            await SessionRepository(db).append_message(session_uuid, user_payload)
+    except Exception as exc:
+        log.error(
+            "chat.persist_user_message_failed",
+            trace_id=trace_id,
+            session_id=session_id,
+            error=str(exc),
+        )
+
     asyncio.create_task(
         _stream_to_queue(
             trace_id=trace_id,
             session_uuid=session_uuid,
-            user_message=message,
             anthropic_messages=anthropic_messages,
             api_key=api_key,
         )

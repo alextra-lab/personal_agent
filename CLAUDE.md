@@ -8,12 +8,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install dependencies
 uv sync
 
-# Start infrastructure (PostgreSQL, Elasticsearch, Kibana, Neo4j, SearXNG, Redis)
-make infra-up        # docker compose up + init-services.sh
-make infra-down      # tear down containers
+# Infrastructure — local (PostgreSQL, Elasticsearch, Kibana, Neo4j, SearXNG, Redis)
+make up              # start all services (docker compose + init-services.sh)
+make down            # remove containers
+make stop            # stop containers (preserve volumes)
+make restart         # restart all services
+make ps              # show container status
+make logs            # tail all logs
+make services        # list all available service names
+make health          # ping /health on localhost:9000
+
+# Target a single service with SERVICE=<name>  (see: make services)
+make up SERVICE=neo4j
+make logs SERVICE=seshat-gateway
+make restart SERVICE=searxng
+make rebuild SERVICE=seshat-gateway  # local build + restart
+make shell SERVICE=neo4j             # exec into container
 
 # Run the agent service (requires infra up)
 make dev             # uvicorn --reload on port 9000
+
+# VPS / cloud (run from Mac)
+make deploy          # SSH → pull + restart (no rebuild)
+make build           # SSH → pull + rebuild seshat-gateway
+make build-full      # SSH → pull + rebuild all images
+make tunnel-up       # start cloudflared tunnel
+make tunnel-status   # show tunnel container status
+ENV=cloud make ps    # check VPS container status
 
 # Chat CLI
 uv run agent "Your message here"

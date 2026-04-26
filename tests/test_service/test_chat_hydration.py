@@ -7,6 +7,9 @@ from uuid import uuid4
 import pytest
 
 from personal_agent.service.app import chat
+from personal_agent.service.auth import RequestUser
+
+_TEST_REQUEST_USER = RequestUser(user_id=uuid4(), email="test@example.com")
 
 
 @pytest.mark.asyncio
@@ -39,7 +42,12 @@ async def test_chat_hydrates_prior_messages_before_current_turn(
     )
     mock_orchestrator_cls.return_value = orchestrator
 
-    result = await chat(message="What is my name?", session_id=str(session_id), db=AsyncMock())
+    result = await chat(
+        message="What is my name?",
+        session_id=str(session_id),
+        request_user=_TEST_REQUEST_USER,
+        db=AsyncMock(),
+    )
 
     assert result["response"] == "Alex"
     session_manager.update_session.assert_called_once_with(str(session_id), messages=prior_messages)

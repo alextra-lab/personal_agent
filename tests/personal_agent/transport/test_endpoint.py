@@ -3,15 +3,51 @@ from __future__ import annotations
 
 import asyncio
 import json
+from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
 
+from personal_agent.service.auth import RequestUser
+from personal_agent.service.models import SessionModel
 from personal_agent.transport.agui.endpoint import (
     _session_queues,
     cleanup_session,
     get_event_queue,
 )
 from personal_agent.transport.events import TextDeltaEvent
+
+_TEST_USER_ID = uuid4()
+_TEST_USER = RequestUser(user_id=_TEST_USER_ID, email="test@example.com")
+
+
+def _make_test_app():
+    """Create a minimal FastAPI app with auth + db dependencies overridden."""
+    from fastapi import FastAPI
+    from personal_agent.service.auth import get_request_user
+    from personal_agent.service.database import get_db_session
+    from personal_agent.transport.agui.endpoint import router
+
+    test_app = FastAPI()
+    test_app.include_router(router)
+
+    # Override identity: always return the test user
+    test_app.dependency_overrides[get_request_user] = lambda: _TEST_USER
+
+    # Override DB: return a mock session that finds a matching session model
+    mock_session_model = MagicMock(spec=SessionModel)
+    mock_session_model.session_id = uuid4()
+    mock_session_model.user_id = _TEST_USER_ID
+
+    async def _mock_db_session():
+        mock_db = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_session_model
+        mock_db.execute.return_value = mock_result
+        yield mock_db
+
+    test_app.dependency_overrides[get_db_session] = _mock_db_session
+    return test_app
 
 
 class TestGetEventQueue:
@@ -91,19 +127,15 @@ class TestSseEndpoint:
     def test_stream_endpoint_returns_done_for_completed_session(self) -> None:
         """Push a None sentinel before the client connects; the SSE stream should emit DONE."""
         try:
-            from httpx import Client
+            from httpx import Client  # noqa: F401
         except ImportError:
             pytest.skip("httpx not available")
 
         from fastapi.testclient import TestClient
 
-        from personal_agent.transport.agui.endpoint import router
-        from fastapi import FastAPI
+        test_app = _make_test_app()
 
-        test_app = FastAPI()
-        test_app.include_router(router)
-
-        sid = "test-done-session"
+        sid = str(uuid4())
         queue = get_event_queue(sid)
         # Pre-fill queue with a text event and then the sentinel.
         queue.put_nowait(TextDeltaEvent(text="hi", session_id=sid))
@@ -133,14 +165,10 @@ class TestSseEndpoint:
             pytest.skip("httpx not available")
 
         from fastapi.testclient import TestClient
-        from fastapi import FastAPI
 
-        from personal_agent.transport.agui.endpoint import router
+        test_app = _make_test_app()
 
-        test_app = FastAPI()
-        test_app.include_router(router)
-
-        sid = "test-text-session"
+        sid = str(uuid4())
         queue = get_event_queue(sid)
         queue.put_nowait(TextDeltaEvent(text="streaming", session_id=sid))
         queue.put_nowait(None)

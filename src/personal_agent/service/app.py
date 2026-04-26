@@ -29,6 +29,7 @@ from personal_agent.memory.protocol_adapter import MemoryServiceAdapter
 from personal_agent.memory.service import MemoryService
 from personal_agent.request_gateway import run_gateway_pipeline
 from personal_agent.security import sanitize_error_message
+from personal_agent.service.auth import RequestUser, get_request_user
 from personal_agent.service.database import AsyncSessionLocal, get_db_session, init_db
 from personal_agent.service.models import SessionCreate, SessionResponse, SessionUpdate
 from personal_agent.service.repositories.session_repository import SessionRepository
@@ -96,6 +97,7 @@ async def _process_chat_stream_background(
     session_id: str,
     message: str,
     profile_name: str,
+    user_id: UUID,
 ) -> None:
     """Run the full orchestrator pipeline and push the result to the SSE queue.
 
@@ -106,6 +108,7 @@ async def _process_chat_stream_background(
         session_id: Client-generated session UUID (used for SSE queue key and DB).
         message: User's message text.
         profile_name: Execution profile name (e.g. ``"local"``, ``"cloud"``).
+        user_id: Authenticated user UUID — used for session ownership scoping.
     """
     from personal_agent.config.profile import load_profile, set_current_profile
 
@@ -131,17 +134,16 @@ async def _process_chat_stream_background(
 
         async with AsyncSessionLocal() as db:
             repo = SessionRepository(db)
-            session = await repo.get(session_uuid)
+            session = await repo.get(session_uuid, user_id=user_id)
             if not session:
                 # Create with client-provided UUID so history is addressable
                 # across turns without the client needing to track a separate DB ID.
-                from datetime import datetime
-
                 from personal_agent.service.models import SessionModel
 
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 session = SessionModel(
                     session_id=session_uuid,
+                    user_id=user_id,
                     created_at=now,
                     last_active_at=now,
                     mode="NORMAL",
@@ -871,18 +873,19 @@ async def health_check() -> HealthResponse:
 @app.post("/sessions", response_model=SessionResponse)
 async def create_session(
     data: SessionCreate,
+    request_user: RequestUser = Depends(get_request_user),  # noqa: B008
     db: AsyncSession = Depends(get_db_session),  # noqa: B008
 ) -> SessionResponse:
     """Create a new session."""
     repo = SessionRepository(db)
-    session = await repo.create(data)
+    session = await repo.create(data, user_id=request_user.user_id)
 
-    # Log session creation (now automatic via ES handler)
     log.info(
         "session_created",
         session_id=str(session.session_id),
         channel=session.channel,
         mode=session.mode,
+        user_id=str(request_user.user_id),
     )
 
     return session
@@ -891,11 +894,12 @@ async def create_session(
 @app.get("/sessions/{session_id}", response_model=SessionResponse)
 async def get_session(
     session_id: str,
+    request_user: RequestUser = Depends(get_request_user),  # noqa: B008
     db: AsyncSession = Depends(get_db_session),  # noqa: B008
 ) -> SessionResponse:
     """Get session by ID."""
     repo = SessionRepository(db)
-    session = await repo.get(UUID(session_id))
+    session = await repo.get(UUID(session_id), user_id=request_user.user_id)
 
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -907,11 +911,12 @@ async def get_session(
 async def update_session(
     session_id: str,
     data: SessionUpdate,
+    request_user: RequestUser = Depends(get_request_user),  # noqa: B008
     db: AsyncSession = Depends(get_db_session),  # noqa: B008
 ) -> SessionResponse:
     """Update session."""
     repo = SessionRepository(db)
-    session = await repo.update(UUID(session_id), data)
+    session = await repo.update(UUID(session_id), data, user_id=request_user.user_id)
 
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -922,11 +927,12 @@ async def update_session(
 @app.get("/sessions", response_model=list[SessionResponse])
 async def list_sessions(
     limit: int = 50,
+    request_user: RequestUser = Depends(get_request_user),  # noqa: B008
     db: AsyncSession = Depends(get_db_session),  # noqa: B008
 ) -> list[SessionResponse]:
     """List recent sessions."""
     repo = SessionRepository(db)
-    sessions = await repo.list_recent(limit)
+    sessions = await repo.list_recent(limit, user_id=request_user.user_id)
     return cast(list[SessionResponse], sessions)
 
 
@@ -939,6 +945,7 @@ async def list_sessions(
 async def chat(
     message: str,
     session_id: str | None = None,
+    request_user: RequestUser = Depends(get_request_user),  # noqa: B008
     db: AsyncSession = Depends(get_db_session),  # noqa: B008
 ) -> dict[str, str]:
     """Process a chat message.
@@ -948,6 +955,7 @@ async def chat(
     Args:
         message: User's message
         session_id: Optional existing session ID (creates new if not provided)
+        request_user: Resolved user identity (injected by FastAPI)
         db: Database session (injected by FastAPI)
 
     Returns:
@@ -975,11 +983,11 @@ async def chat(
                 raise HTTPException(
                     status_code=422, detail="session_id must be a valid UUID"
                 ) from exc
-            session = await repo.get(parsed_session_id)
+            session = await repo.get(parsed_session_id, user_id=request_user.user_id)
             if not session:
                 raise HTTPException(status_code=404, detail="Session not found")
         else:
-            session = await repo.create(SessionCreate())
+            session = await repo.create(SessionCreate(), user_id=request_user.user_id)
 
     # FRE-51: await prior turn's assistant append (NoOp: background task; Redis: session-writer).
     sid = str(cast(UUID, session.session_id))
@@ -1181,6 +1189,7 @@ async def chat_stream_endpoint(
     message: str = Form(...),
     session_id: str = Form(...),
     profile: str = Form(default="local"),
+    request_user: RequestUser = Depends(get_request_user),  # noqa: B008
 ) -> dict[str, str]:
     """AG-UI fire-and-forget chat endpoint for the PWA.
 
@@ -1196,6 +1205,7 @@ async def chat_stream_endpoint(
         message: User message text.
         session_id: Client-generated session UUID.
         profile: Execution profile name (e.g. ``"local"``, ``"cloud"``).
+        request_user: Resolved user identity (injected by FastAPI).
 
     Returns:
         ``{"session_id": ..., "status": "streaming"}`` once the background
@@ -1214,6 +1224,7 @@ async def chat_stream_endpoint(
             session_id=session_id,
             message=message,
             profile_name=profile,
+            user_id=request_user.user_id,
         )
     )
 

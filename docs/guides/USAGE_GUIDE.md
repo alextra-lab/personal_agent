@@ -235,6 +235,33 @@ AGENT_MCP_GATEWAY_ENABLED=false
 AGENT_MCP_GATEWAY_COMMAND='["docker", "mcp", "gateway", "run"]'
 ```
 
+### Identity Setup — Cloudflare Access (multi-user / FRE-268)
+
+If the service runs behind Cloudflare Access (recommended for any shared deployment), add the following to `.env`:
+
+```bash
+# ── Inbound Identity (Cloudflare Access) ─────────────────────────────────────
+# CRITICAL: AGENT_OWNER_EMAIL must match the deployment owner's CF Access email
+# so that CLI paths and CF Access paths resolve to the same user_id in Postgres.
+AGENT_OWNER_EMAIL=your-cf-access-email@example.com
+
+# Optional: enable JWT verification of Cf-Access-Jwt-Assertion (defense-in-depth)
+# CF_ACCESS_TEAM_DOMAIN=yourteam.cloudflareaccess.com
+# CF_ACCESS_AUD=<application-audience-tag-from-cf-dashboard>
+```
+
+Before starting the service for the first time after upgrading, run the one-time migration:
+
+```bash
+uv run python scripts/migrate_fre268_add_user_identity.py
+```
+
+This creates the `users` table, adds `user_id` to `sessions`, and backfills all existing sessions to the deployment owner. The script is idempotent — safe to re-run.
+
+**Without Cloudflare Access** (local dev / CLI): set `AGENT_GATEWAY_AUTH_ENABLED=false` (default) and `AGENT_OWNER_EMAIL`. The CLI will resolve to the owner identity automatically. Session isolation is enforced in production via the CF Access email header.
+
+See [ADR-0064](../architecture_decisions/ADR-0064-inbound-user-identity-cloudflare-access.md) for the full decision record.
+
 ### Governance Configuration
 
 Edit `config/governance/` files to customize:

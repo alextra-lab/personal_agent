@@ -29,7 +29,15 @@ def test_user_id_coercion() -> None:
     assert isinstance(c1.user_id, StdUUID)
     orjson.dumps(c1.model_dump())
 
-    # asyncpg-style object (only __str__) → uuid.UUID
+    # asyncpg-style subclass (isinstance passes but type() is not uuid.UUID) → must coerce
+    class _SubUUID(StdUUID):
+        pass
+
+    c2_sub = TaskCapture(**_base, user_id=_SubUUID(_UUID_STR))
+    assert type(c2_sub.user_id) is StdUUID  # strict type, not subclass
+    orjson.dumps(c2_sub.model_dump())  # would fail with asyncpg UUID before this fix
+
+    # duck-typed __str__ only → uuid.UUID
     class _FakeUUID:
         def __str__(self) -> str:
             return _UUID_STR

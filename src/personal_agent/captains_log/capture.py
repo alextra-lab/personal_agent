@@ -69,7 +69,7 @@ class TaskCapture(BaseModel):
     def _coerce_user_id(cls, v: Any) -> UUID | None:
         if v is None:
             return None
-        if isinstance(v, UUID):
+        if type(v) is UUID:
             return v
         return UUID(str(v))
 

@@ -1,7 +1,14 @@
 # SearXNG configuration for personal agent (ADR-0034)
 # Docs: https://docs.searxng.org/admin/settings/
 
-use_default_settings: true
+use_default_settings:
+  engines:
+    # Completely remove engines that fail to load in this image build,
+    # rather than just disabling them (disabled still triggers a load attempt).
+    remove:
+      - ahmia        # missing Tor/onion deps
+      - torch        # missing sentence-transformers extras
+      - wikidata     # SPARQL init fails due to upstream API change
 
 general:
   instance_name: "PersonalAgent Search"
@@ -48,9 +55,20 @@ engines:
     shortcut: wp
     disabled: false
 
+  - name: startpage
+    engine: startpage
+    shortcut: sp
+    disabled: false
+
+  - name: qwant
+    engine: qwant
+    qwant_categ: web
+    shortcut: qw
+    categories: [general, web]
+    disabled: false
+
   # ── IT / Development ────────────────────────────────────
   - name: stackoverflow
-    engine: stackoverflow
     shortcut: so
     disabled: false
     categories: it
@@ -62,7 +80,6 @@ engines:
     categories: it
 
   - name: mdn
-    engine: mdn
     shortcut: mdn
     disabled: false
     categories: it
@@ -70,6 +87,43 @@ engines:
   - name: pypi
     engine: pypi
     shortcut: pypi
+    disabled: false
+    categories: it
+
+  - name: hackernews
+    engine: hackernews
+    shortcut: hn
+    disabled: false
+    categories: it
+
+  - name: lobste.rs
+    shortcut: lo
+    disabled: false
+    categories: it
+
+  - name: docker hub
+    engine: docker_hub
+    shortcut: dh
+    disabled: false
+    categories: it
+
+  - name: huggingface
+    engine: huggingface
+    shortcut: hf
+    disabled: false
+    categories: it
+
+  - name: huggingface datasets
+    engine: huggingface
+    huggingface_endpoint: datasets
+    shortcut: hfd
+    disabled: false
+    categories: it
+
+  - name: huggingface spaces
+    engine: huggingface
+    huggingface_endpoint: spaces
+    shortcut: hfs
     disabled: false
     categories: it
 
@@ -86,6 +140,35 @@ engines:
     disabled: false
     categories: science
 
+  - name: google scholar
+    engine: google_scholar
+    shortcut: gos
+    disabled: false
+    categories: science
+
+  - name: pubmed
+    engine: pubmed
+    shortcut: pm
+    disabled: false
+    categories: science
+
+  - name: crossref
+    engine: crossref
+    shortcut: cr
+    disabled: false
+    categories: science
+
+  - name: openalex
+    engine: openalex
+    shortcut: oa
+    disabled: false
+    categories: science
+
+  - name: openairepublications
+    shortcut: oap
+    disabled: false
+    categories: science
+
   # ── News ────────────────────────────────────────────────
   - name: google news
     engine: google_news
@@ -99,12 +182,81 @@ engines:
     disabled: false
     categories: news
 
+  - name: reuters
+    engine: reuters
+    shortcut: reu
+    disabled: false
+    categories: news
+
+  - name: wikinews
+    shortcut: wn
+    disabled: false
+    categories: news
+
+  - name: qwant news
+    engine: qwant
+    qwant_categ: news
+    shortcut: qwn
+    categories: news
+    network: qwant
+    disabled: false
+
+  # Note: google_news and bing_news validate language codes against internal
+  # traits and do not support arbitrary locale overrides in settings.yml.
+  # French press (LeMonde, Le Figaro, etc.) is surfaced via !qwn (Qwant News,
+  # a French engine) and !gn / !bn when querying in French.
+  # BBC / UK press is surfaced via !gn and !bn using English queries.
+
+  # ── Social Media ─────────────────────────────────────────
+  - name: reddit
+    engine: reddit
+    shortcut: re
+    disabled: false
+    categories: social_media
+
+  - name: lemmy posts
+    shortcut: lm
+    disabled: false
+    categories: social_media
+
+  # ── Recipes ──────────────────────────────────────────────
+  # Note: chefkoch is the primary recipe engine available in SearXNG.
+  # For English recipes, use !g site:allrecipes.com or !g site:seriouseats.com
+  # via the google engine — there is no dedicated English recipe engine upstream.
+  - name: chefkoch
+    engine: chefkoch
+    shortcut: ck
+    disabled: false
+    categories: general
+
   # ── Weather ─────────────────────────────────────────────
+  # WeatherUnderground has no SearXNG engine. openmeteo is the
+  # best open-data alternative with hyperlocal forecast data.
   - name: wttr.in
     engine: wttr
     shortcut: wttr
     disabled: false
     categories: weather
+
+  - name: openmeteo
+    engine: open_meteo
+    shortcut: om
+    disabled: false
+    categories: weather
+
+  # ── Additional Science ───────────────────────────────────
+  - name: springer nature
+    engine: springer
+    shortcut: sn
+    disabled: false
+    categories: science
+
+  - name: astrophysics data system
+    engine: astrophysics_data_system
+    shortcut: ads
+    disabled: false
+    categories: science
+
 
 outgoing:
   request_timeout: 8

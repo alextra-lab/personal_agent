@@ -22,9 +22,16 @@ web_search_tool = ToolDefinition(
     name="web_search",
     description=(
         "Search the web via a private self-hosted metasearch engine. "
-        "Returns titles, URLs, and snippets. "
-        "Categories: general (default), it, science, news, weather. "
-        "Use for routine web lookups; prefer perplexity_query for synthesized answers with citations."
+        "Returns titles, URLs, snippets, infoboxes, and plugin answers. "
+        "\n\nPlugin capabilities (returned in the 'answers' field — no engine needed):\n"
+        "  - Timezone: query 'time Berlin' or 'clock Tokyo' → current local time\n"
+        "  - Unit conversion: query '20 °C in °F' or '10 EUR in USD' (use symbols, not words) → converted value\n"
+        "  - Calculator: query '2^10 * 3' → computed result\n"
+        "\nWeather: use engines='openmeteo' or categories='weather' for current conditions + hourly forecast.\n"
+        "\nCategories: general (default), it, science, news, weather, social_media, files, images, music, videos.\n"
+        "Use 'it' for programming questions, 'science' for academic research, "
+        "'news' for current events, 'social_media' for Reddit/Lemmy discussions.\n"
+        "Prefer perplexity_query for synthesized answers with citations."
     ),
     category="network",
     parameters=[
@@ -41,9 +48,10 @@ web_search_tool = ToolDefinition(
             type="string",
             description=(
                 "Comma-separated SearXNG categories to search. "
-                "Options: general, it, science, news, weather, files, images, music, videos. "
+                "Options: general, it, science, news, weather, social_media, files, images, music, videos. "
                 "Default: 'general'. Use 'it' for programming questions, "
-                "'science' for academic research, 'weather' for forecasts."
+                "'science' for academic research, 'weather' for forecasts, "
+                "'social_media' for Reddit/Lemmy community discussions."
             ),
             required=False,
             default=None,
@@ -55,7 +63,13 @@ web_search_tool = ToolDefinition(
             description=(
                 "Comma-separated engine names to query directly. "
                 "Overrides categories if provided. "
-                "Examples: 'google,stackoverflow', 'arxiv,semantic scholar'."
+                "General: google, brave, duckduckgo, startpage, qwant. "
+                "IT: stackoverflow, github, hackernews, lobste.rs, huggingface, docker hub. "
+                "Science: arxiv, google scholar, pubmed, crossref, openalex, springer nature, astrophysics data system, semantic scholar. "
+                "News: google news, bing news, reuters, wikinews, qwant news. "
+                "Social: reddit, lemmy posts. "
+                "Weather: openmeteo, wttr.in. "
+                "Recipes: chefkoch."
             ),
             required=False,
             default=None,
@@ -126,7 +140,8 @@ async def web_search_executor(
         ctx: Optional trace context for logging.
 
     Returns:
-        Dict with ``results``, ``result_count``, ``suggestions``,
+        Dict with ``answers`` (plugin results: timezone, unit conversion,
+        calculator, weather), ``results``, ``result_count``, ``suggestions``,
         ``infoboxes``, and query metadata.
 
     Raises:
@@ -207,7 +222,34 @@ async def web_search_executor(
         for item in (data.get("results") or [])[:capped_max]
     ]
 
+    # Plugin answers (timezone, unit converter, calculator, openmeteo weather).
+    # These are returned in the top-level "answers" array rather than "results".
+    answers: list[dict[str, Any]] = []
+    for item in data.get("answers") or []:
+        engine = item.get("engine", "")
+        if engine == "openmeteo" or item.get("service") == "Open-meteo":
+            # Weather answer: surface the current conditions summary + location.
+            current = item.get("current", {})
+            location = current.get("location", {})
+            answers.append({
+                "engine": engine,
+                "type": "weather",
+                "location": location.get("name", ""),
+                "country": location.get("country_code", ""),
+                "summary": current.get("summary", ""),
+                "temperature": current.get("temperature", {}),
+                "condition": current.get("condition", ""),
+                "feels_like": current.get("feels_like", {}),
+                "humidity": current.get("humidity", {}),
+                "wind_speed": current.get("wind_speed", {}),
+            })
+        else:
+            text = item.get("answer")
+            if text:
+                answers.append({"engine": engine, "answer": text})
+
     output: dict[str, Any] = {
+        "answers": answers,
         "results": results,
         "result_count": len(results),
         "suggestions": data.get("suggestions", []),

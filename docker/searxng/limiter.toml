@@ -1,0 +1,10 @@
+# SearXNG bot-detection / rate-limiter config
+# Private instance (personal agent only) — all limiters off.
+# See: https://docs.searxng.org/admin/searxng-filter.html
+
+[botdetection.ip_limit]
+link_token = false
+
+[botdetection.ip_lists]
+pass_ip = []
+block_ip = []

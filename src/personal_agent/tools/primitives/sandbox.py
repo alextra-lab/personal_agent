@@ -145,6 +145,7 @@ async def run_in_sandbox(
         "run",
         "--rm",
         f"--memory={memory_mb}m",
+        f"--memory-swap={memory_mb}m",
         f"--cpus={cpus}",
         f"--network={network_arg}",
         "--read-only",

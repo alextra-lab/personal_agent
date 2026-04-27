@@ -39,6 +39,7 @@ COMPOSE_CLOUD := docker compose -f docker-compose.cloud.yml
         infra-up infra-down dev \
         deploy build build-full vps-bootstrap \
         tunnel-up tunnel-down tunnel-status \
+        sandbox-build \
         test test-integration test-all test-file test-verbose test-k test-cov eval \
         mypy ruff-check ruff-format
 
@@ -197,6 +198,11 @@ test-k:
 
 test-cov:
 	@uv run pytest -m "not integration" --cov=src/personal_agent --cov-report=term-missing
+
+# ─── Sandbox image ────────────────────────────────────────────────────────────
+
+sandbox-build:  ## Build the Python sandbox image for run_python
+	docker build -t seshat-sandbox-python:0.1 docker/sandbox/ -f docker/sandbox/Dockerfile.python
 
 # ─── Code quality ─────────────────────────────────────────────────────────────
 

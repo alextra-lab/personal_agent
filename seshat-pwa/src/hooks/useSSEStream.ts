@@ -4,6 +4,7 @@ import { useState, useCallback, useRef } from 'react';
 
 import {
   connectToStream,
+  postApprovalDecision,
   sendChatMessage,
   type StreamConnection,
 } from '@/lib/agui-client';
@@ -12,6 +13,7 @@ import type {
   AGUIEvent,
   ChatMessage,
   PendingInterrupt,
+  ToolApprovalRequestData,
   ToolCall,
 } from '@/lib/types';
 
@@ -26,8 +28,12 @@ export interface UseSSEStreamReturn {
   /** Context window utilisation in [0, 1]; null until first STATE_DELTA. */
   contextBudget: number | null;
   pendingInterrupt: PendingInterrupt | null;
+  /** Pending tool-approval request; non-null while agent is waiting for a decision. */
+  pendingApproval: ToolApprovalRequestData | null;
   sendMessage: (text: string, sessionId: string, profile?: string) => Promise<void>;
   resolveInterrupt: (choice: string) => void;
+  /** Post an approve/deny decision for the current pendingApproval. */
+  handleApprovalDecision: (decision: 'approve' | 'deny') => void;
   disconnect: () => void;
   clearMessages: () => void;
   /** Replace the message list with a server-hydrated history. */
@@ -56,6 +62,7 @@ export function useSSEStream(): UseSSEStreamReturn {
   const [activeTools, setActiveTools] = useState<ToolCall[]>([]);
   const [contextBudget, setContextBudget] = useState<number | null>(null);
   const [pendingInterrupt, setPendingInterrupt] = useState<PendingInterrupt | null>(null);
+  const [pendingApproval, setPendingApproval] = useState<ToolApprovalRequestData | null>(null);
 
   // Refs that survive re-renders without causing them.
   const streamRef = useRef<StreamConnection | null>(null);
@@ -144,6 +151,14 @@ export function useSSEStream(): UseSSEStreamReturn {
         break;
       }
 
+      case 'tool_approval_request': {
+        // Agent is blocked waiting for a tool-approval decision.
+        // The stream remains open — do NOT set isStreaming=false here.
+        // The ApprovalModal will call handleApprovalDecision when resolved.
+        setPendingApproval(event.data as ToolApprovalRequestData);
+        break;
+      }
+
       case 'DONE': {
         streamRef.current?.close();
         streamRef.current = null;
@@ -177,6 +192,7 @@ export function useSSEStream(): UseSSEStreamReturn {
       setMessages((prev) => [...prev, userMessage]);
       setIsStreaming(true);
       setPendingInterrupt(null);
+      setPendingApproval(null);
       setActiveTools([]);
 
       // 1. Send the message (triggers backend processing).
@@ -218,6 +234,33 @@ export function useSSEStream(): UseSSEStreamReturn {
     setIsStreaming(true);
   }, []);
 
+  /**
+   * Post an approve/deny decision for the current pendingApproval.
+   *
+   * Clears pendingApproval immediately (optimistic) and sends the decision
+   * to the backend. Errors are logged to console but do not crash — the
+   * backend will auto-deny when the request expires.
+   */
+  const handleApprovalDecision = useCallback(
+    (decision: 'approve' | 'deny'): void => {
+      if (pendingApproval === null) return;
+
+      const { request_id } = pendingApproval;
+      const sessionId = currentSessionRef.current;
+
+      // Optimistically clear the modal so the user sees a response immediately.
+      setPendingApproval(null);
+
+      postApprovalDecision(sessionId, request_id, decision).catch((err: unknown) => {
+        console.error(
+          '[useSSEStream] postApprovalDecision failed',
+          { request_id, decision, error: err instanceof Error ? err.message : String(err) },
+        );
+      });
+    },
+    [pendingApproval],
+  );
+
   const disconnect = useCallback(() => {
     streamRef.current?.close();
     streamRef.current = null;
@@ -240,8 +283,10 @@ export function useSSEStream(): UseSSEStreamReturn {
     activeTools,
     contextBudget,
     pendingInterrupt,
+    pendingApproval,
     sendMessage,
     resolveInterrupt,
+    handleApprovalDecision,
     disconnect,
     clearMessages,
     seedMessages,

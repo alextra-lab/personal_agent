@@ -114,6 +114,13 @@ class ToolPolicy(BaseModel):
     )
     allowed_paths: list[str] = Field(default_factory=list, description="Allowed path patterns")
     forbidden_paths: list[str] = Field(default_factory=list, description="Forbidden path patterns")
+    unattended_paths: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Path globs where 'write' may proceed without interactive approval "
+            "(scratch / sandbox directories, e.g. /tmp/**, /app/agent_workspace/sandbox/**)"
+        ),
+    )
     allowed_commands: list[str] = Field(
         default_factory=list, description="Allowed command patterns"
     )
@@ -137,6 +144,21 @@ class ToolPolicy(BaseModel):
     loop_output_sensitive: bool = Field(
         default=False,
         description="If True, skip output-identity blocking (for polling tools whose output changes each call)",
+    )
+    auto_approve_prefixes: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description=(
+            "Per-mode list of command prefixes (first word or 'first two words') that bypass "
+            "the PWA approval prompt. Key is mode name (e.g. 'NORMAL'), value is list of "
+            "prefix strings (e.g. ['curl', 'git log'])."
+        ),
+    )
+    hard_deny_patterns: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Regex patterns (IGNORECASE) that hard-deny a command before execution. "
+            "Evaluated at executor level as belt-and-suspenders against misconfigured governance."
+        ),
     )
 
 

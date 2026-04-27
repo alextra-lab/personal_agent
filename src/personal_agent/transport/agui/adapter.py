@@ -23,6 +23,7 @@ from personal_agent.transport.events import (
     InterruptEvent,
     StateUpdateEvent,
     TextDeltaEvent,
+    ToolApprovalRequestEvent,
     ToolEndEvent,
     ToolStartEvent,
 )
@@ -73,6 +74,28 @@ def to_agui_event(event: InternalEvent) -> dict[str, Any]:
                 "data": {"context": ctx, "options": list(opts)},
                 "session_id": sid,
             }
+        case ToolApprovalRequestEvent(
+            request_id=request_id,
+            trace_id=trace_id,
+            session_id=_sid,
+            tool=tool,
+            args=args,
+            risk_level=risk_level,
+            reason=reason,
+            expires_at=expires_at,
+        ):
+            return {
+                "type": "tool_approval_request",
+                "request_id": request_id,
+                "trace_id": trace_id,
+                "tool": tool,
+                "args": dict(args),
+                "risk_level": risk_level,
+                "reason": reason,
+                "expires_at": expires_at,
+            }
+        case _:
+            raise ValueError(f"Unhandled event type: {type(event).__name__}")
 
 
 def serialize_event(event: InternalEvent) -> str:

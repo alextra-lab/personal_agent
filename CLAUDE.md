@@ -27,6 +27,7 @@ make shell SERVICE=neo4j             # exec into container
 
 # Run the agent service (requires infra up)
 make dev             # uvicorn --reload on port 9000
+make sandbox-build   # build seshat-sandbox-python:0.1 Docker image (required for run_python)
 
 # VPS / cloud (run from Mac)
 make deploy          # SSH → pull + restart (no rebuild)

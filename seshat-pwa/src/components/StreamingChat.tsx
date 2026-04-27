@@ -8,6 +8,7 @@ import { generateUUID } from '@/lib/uuid';
 import type { ExecutionProfile } from '@/lib/types';
 import { useSSEStream } from '@/hooks/useSSEStream';
 
+import { ApprovalModal } from './ApprovalModal';
 import { ChatInput } from './ChatInput';
 import { ChatMessage } from './ChatMessage';
 import { ContextBudgetMeter } from './ContextBudgetMeter';
@@ -70,8 +71,10 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     activeTools,
     contextBudget,
     pendingInterrupt,
+    pendingApproval,
     sendMessage,
     resolveInterrupt,
+    handleApprovalDecision,
     seedMessages,
   } = useSSEStream();
 
@@ -137,6 +140,15 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
 
   return (
     <div className="relative flex flex-col h-full bg-slate-900 text-slate-100">
+      {/* Tool-approval modal — rendered above everything else (z-50) */}
+      {pendingApproval !== null && (
+        <ApprovalModal
+          data={pendingApproval}
+          onApprove={() => handleApprovalDecision('approve')}
+          onDeny={() => handleApprovalDecision('deny')}
+        />
+      )}
+
       {/* Session list drawer */}
       {isDrawerOpen && (
         <>
@@ -262,7 +274,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
         <ToolIndicator tools={activeTools} />
         <ChatInput
           onSend={handleSend}
-          disabled={isStreaming || pendingInterrupt !== null}
+          disabled={isStreaming || pendingInterrupt !== null || pendingApproval !== null}
           profile={profile}
           onProfileChange={handleProfileChange}
         />

@@ -372,6 +372,6 @@ Revert advisory change for the offending signal. Keep that signal terminal. Docu
 - [x] MASTER_PLAN.md updated with Wave 2.5 row and dependency graph amendment.
 - [x] Wave sequence spec updated.
 - [x] FRE-226 re-scoped (phase 1 hand-authored skills absorbed into PIVOT-3/FRE-262; phase 2 self-updating retains original Wave 4 position).
-- [ ] Pentest checklist drafted for P2.
+- [x] Pentest checklist drafted for P2 → `tests/security/test_pivot2_pentest.py` (15 cases).
 - [ ] Evaluation trace prompt list drafted for P3.
 - [ ] Baseline metrics captured pre-P1 (prompt tokens, cache hit rate, tool success rate, iteration counts per task_type).

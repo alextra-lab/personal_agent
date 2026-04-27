@@ -5,6 +5,7 @@
  * - Sending chat messages via POST /chat/stream
  * - Connecting to the AG-UI SSE stream at GET /stream/{session_id}
  * - Resuming HITL interrupts via POST /stream/{session_id}/resume
+ * - Submitting tool-approval decisions via POST /approval/{request_id}
  *
  * All requests include an Authorization header when NEXT_PUBLIC_GATEWAY_TOKEN
  * is set (production). In local dev (token absent) the header is omitted and
@@ -166,6 +167,53 @@ export async function resumeInterrupt(opts: ResumeOptions): Promise<void> {
 
   if (!resp.ok) {
     throw new Error(`Resume failed: ${resp.status} ${resp.statusText}`);
+  }
+}
+
+// --------------------------------------------------------------------------
+// Tool approval decisions
+// --------------------------------------------------------------------------
+
+/**
+ * Submit an approve or deny decision for a pending tool-approval request.
+ *
+ * The backend endpoint is ``POST /approval/{request_id}``.  The agent is
+ * blocking on this call and will proceed (or abort) once the decision lands.
+ *
+ * @param sessionId  - Current session (unused in the URL, kept for symmetry with resumeInterrupt).
+ * @param requestId  - The ``request_id`` from the ``tool_approval_request`` SSE event.
+ * @param decision   - ``'approve'`` or ``'deny'``.
+ * @param reason     - Optional free-text rationale shown in backend logs.
+ * @throws Error when the backend returns a non-2xx status.
+ */
+export async function postApprovalDecision(
+  // _sessionId is accepted for call-site symmetry with resumeInterrupt but is
+  // not used in the URL — the backend derives ownership from the auth token.
+  _sessionId: string,
+  requestId: string,
+  decision: 'approve' | 'deny',
+  reason?: string,
+): Promise<void> {
+
+  const body: Record<string, unknown> = { decision };
+  if (reason !== undefined) {
+    body['reason'] = reason;
+  }
+
+  const resp = await fetch(
+    `${SESHAT_API}/approval/${encodeURIComponent(requestId)}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders(),
+      },
+      body: JSON.stringify(body),
+    },
+  );
+
+  if (!resp.ok) {
+    throw new Error(`postApprovalDecision failed: ${resp.status} ${resp.statusText}`);
   }
 }
 

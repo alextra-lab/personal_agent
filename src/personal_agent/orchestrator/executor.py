@@ -1770,7 +1770,7 @@ async def _dispatch_tool_call(
 
     # Execute tool
     try:
-        result = await tool_layer.execute_tool(tool_name, arguments, trace_ctx)
+        result = await tool_layer.execute_tool(tool_name, arguments, trace_ctx, session_id=ctx.session_id)
 
         if result.success:
             content = (

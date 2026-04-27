@@ -7,10 +7,11 @@ with permission checks, argument validation, execution, and telemetry.
 import os
 import time
 from fnmatch import fnmatch
-from typing import Any
+from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from personal_agent.brainstem import ModeManager, get_mode_manager
-from personal_agent.config import load_governance_config
+from personal_agent.config import load_governance_config, settings
 from personal_agent.governance.models import GovernanceConfig, Mode
 from personal_agent.telemetry import (
     POLICY_VIOLATION,
@@ -23,6 +24,9 @@ from personal_agent.telemetry import (
 from personal_agent.telemetry.events import TOOL_SCHEMA_VALIDATION_FAILED
 from personal_agent.tools.registry import ToolRegistry
 from personal_agent.tools.types import ToolResult
+
+if TYPE_CHECKING:
+    from personal_agent.transport.agui.transport import AGUITransport
 
 log = get_logger(__name__)
 
@@ -121,14 +125,17 @@ def _validate_tool_arguments(
     return PermissionResult(allowed=True)
 
 
-def _check_permissions(
+async def _check_permissions(
     tool_name: str,
     tool_def: Any,
     arguments: dict[str, Any],
     current_mode: Mode,
     governance_config: GovernanceConfig,
+    transport: "AGUITransport | None" = None,
+    session_id: str | None = None,
+    trace_ctx: TraceContext | None = None,
 ) -> PermissionResult:
-    """Check if tool execution is permitted.
+    """Check if tool execution is permitted, requesting UI approval if required.
 
     Args:
         tool_name: Name of the tool.
@@ -136,6 +143,11 @@ def _check_permissions(
         arguments: Tool arguments.
         current_mode: Current operational mode.
         governance_config: Governance configuration.
+        transport: Optional AG-UI transport for interactive approval round-trips.
+            When ``None``, approval-required tools log a warning and are allowed
+            (legacy MVP behaviour, preserved until approval UI is deployed).
+        session_id: Session identifier forwarded to the approval waiter.
+        trace_ctx: Trace context for telemetry correlation in approval events.
 
     Returns:
         PermissionResult indicating if execution is allowed.
@@ -150,17 +162,50 @@ def _check_permissions(
     if tool_policy and mode_str in tool_policy.forbidden_in_modes:
         return PermissionResult(allowed=False, reason=f"Tool forbidden in {mode_str} mode")
 
-    # 2. Approval check (for MVP, we skip interactive approval - just log)
-    # TODO: Implement interactive approval workflow in Phase 2
-    if tool_policy:
-        if mode_str in tool_policy.requires_approval_in_modes or tool_policy.requires_approval:
+    # 2. Approval check
+    if tool_policy and (
+        mode_str in tool_policy.requires_approval_in_modes or tool_policy.requires_approval
+    ):
+        if settings.approval_ui_enabled and not session_id:
+            # Guard: approval UI is enabled but no session_id was supplied.
+            # Registering a waiter with an empty session_id can never be
+            # correctly resolved by the endpoint (it compares caller_session_id
+            # against the registered value).  Fall through to the warn-and-allow
+            # path rather than creating an un-resolvable waiter.
+            log.warning(
+                "approval_skipped_no_session_id",
+                tool_name=tool_name,
+                mode=mode_str,
+                message="Approval required but session_id is empty; skipping interactive approval",
+            )
+        elif settings.approval_ui_enabled and transport is not None:
+            # Perform interactive approval round-trip via the PWA.
+            # Import here to avoid circular imports at module load time.
+            from personal_agent.transport.agui.approval_waiter import ApprovalDecision  # noqa: PLC0415, I001
+
+            decision: ApprovalDecision = await transport.request_tool_approval(
+                request_id=str(uuid4()),
+                trace_id=trace_ctx.trace_id if trace_ctx else "",
+                session_id=session_id or "",
+                tool=tool_name,
+                args=arguments,
+                risk_level="high",  # primitives will pass the real level later
+                reason=f"Tool '{tool_name}' requires approval in {mode_str} mode",
+                timeout_seconds=settings.approval_timeout_seconds,
+            )
+            if decision.decision != "approve":
+                return PermissionResult(
+                    allowed=False,
+                    reason=f"approval_{decision.decision}",
+                )
+        else:
             log.warning(
                 "approval_required_but_not_implemented",
                 tool_name=tool_name,
                 mode=mode_str,
                 message="Approval required but interactive approval not yet implemented",
             )
-            # For MVP, we allow with warning (Phase 2 will implement approval)
+            # For MVP, allow with warning when approval UI is not enabled.
 
     # 3. Rate limit check (for MVP, we skip - Phase 2 will implement)
     # TODO: Implement rate limiting via telemetry query
@@ -181,6 +226,7 @@ class ToolExecutionLayer:
         registry: ToolRegistry,
         governance_config: GovernanceConfig | None = None,
         mode_manager: ModeManager | None = None,
+        transport: "AGUITransport | None" = None,
     ) -> None:
         """Initialize tool execution layer.
 
@@ -188,6 +234,9 @@ class ToolExecutionLayer:
             registry: Tool registry containing registered tools.
             governance_config: Governance configuration. If None, loads from default.
             mode_manager: Mode manager. If None, uses global instance.
+            transport: Optional AG-UI transport used for interactive tool-approval
+                round-trips (FRE-261).  When ``None``, approval-required tools
+                fall back to the legacy warn-and-allow path.
         """
         self.registry = registry
         if governance_config is None:
@@ -200,6 +249,8 @@ class ToolExecutionLayer:
         else:
             self.mode_manager = mode_manager
 
+        self.transport = transport
+
         log.debug("tool_execution_layer_initialized")
 
     async def execute_tool(
@@ -207,6 +258,7 @@ class ToolExecutionLayer:
         tool_name: str,
         arguments: dict[str, Any],
         trace_ctx: TraceContext,
+        session_id: str | None = None,
     ) -> ToolResult:
         """Execute a tool with full governance and observability.
 
@@ -214,6 +266,9 @@ class ToolExecutionLayer:
             tool_name: Name of the tool to execute.
             arguments: Tool arguments (keyword arguments for executor).
             trace_ctx: Trace context for telemetry.
+            session_id: Optional session identifier forwarded to the approval
+                waiter so that approval requests are scoped to the originating
+                session.
 
         Returns:
             ToolResult with execution outcome.
@@ -239,10 +294,17 @@ class ToolExecutionLayer:
 
         tool_def, executor = tool_result
 
-        # 2. Check permissions
+        # 2. Check permissions (async — may perform interactive approval round-trip)
         current_mode = self.mode_manager.get_current_mode()
-        permission = _check_permissions(
-            tool_name, tool_def, arguments, current_mode, self.governance_config
+        permission = await _check_permissions(
+            tool_name,
+            tool_def,
+            arguments,
+            current_mode,
+            self.governance_config,
+            transport=self.transport,
+            session_id=session_id,
+            trace_ctx=trace_ctx,
         )
 
         if not permission.allowed:

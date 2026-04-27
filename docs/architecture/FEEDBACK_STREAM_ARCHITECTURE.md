@@ -247,6 +247,12 @@ PHASE 3 — COMPLETE PARTIAL STREAMS (depend on Phase 2)
 
 ---
 
+## FRE-261 Addition (2026-04-27)
+
+**Tool-approval decisions captured in Captain's Log captures.** When primitives are enabled (`AGENT_PRIMITIVE_TOOLS_ENABLED=true`), approval decisions are written to `agent-captains-captures-*.approval_decisions[]` via `AGUITransport.request_tool_approval` → structlog. Each entry records `request_id`, `tool`, `decision` (approve/deny/timeout), `trace_id`, `session_id`, `timestamp`. No new event stream; decisions are written inline alongside the tool execution trace. This data feeds future policy-learning (approval pattern auto-promotion — tracked as a post-pivot ADR, see ADR-0063 Open Question 1).
+
+---
+
 ## References
 
 - ADR-0030: Captain's Log Dedup & Self-Improvement Pipeline

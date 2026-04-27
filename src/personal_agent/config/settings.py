@@ -929,31 +929,46 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # FRE-261 PIVOT-2: Primitive tools feature flags (ADR-0063 Phase 2)
+    # All flags default OFF — enable after pentest gate clears.
+    # Env vars are resolved via the AGENT_ prefix (SettingsConfigDict env_prefix).
+    primitive_tools_enabled: bool = Field(
+        default=False,
+        description=(
+            "Master gate for the four FRE-261 primitive tools: read, write, bash, "
+            "run_python.  When False (default) none are registered in the tool "
+            "registry.  Enable with AGENT_PRIMITIVE_TOOLS_ENABLED=true after the "
+            "pentest gate clears (ADR-0063 Phase 2)."
+        ),
+    )
+
     # Docker sandbox (FRE-261 — Step 5: run_python primitive)
     sandbox_image: str = Field(
         default="seshat-sandbox-python:0.1",
         description=(
             "Docker image used by the run_python primitive tool. "
-            "Build with: make sandbox-build"
+            "Build with: make sandbox-build. "
+            "Env var: AGENT_SANDBOX_IMAGE"
         ),
     )
     sandbox_scratch_root: str = Field(
-        default="/tmp/agent_sandbox",
+        default="/app/agent_workspace/sandbox",
         description=(
             "Host-side root directory for per-trace sandbox scratch dirs. "
             "Each invocation gets a sub-directory keyed by trace_id. "
-            "In cloud deployments set to a path on the seshat_workspace_cloud volume."
+            "In cloud deployments set to a path on the seshat_workspace_cloud volume. "
+            "Env var: AGENT_SANDBOX_SCRATCH_ROOT"
         ),
     )
 
-    # Tool approval UI (FRE-261 — Step 1 stub; Step 6 adds env alias)
+    # Tool approval UI (FRE-261 — Steps 1 & 6)
     approval_ui_enabled: bool = Field(
         default=False,
         description=(
             "Enable interactive tool-approval round-trips via the PWA (FRE-261). "
             "When True, tools with requires_approval=True pause and await a human "
             "decision via POST /agui/approval/{request_id} before executing. "
-            "Step 6 will add the AGENT_ env alias."
+            "Env var: AGENT_APPROVAL_UI_ENABLED"
         ),
     )
     approval_timeout_seconds: float = Field(
@@ -961,7 +976,8 @@ class AppConfig(BaseSettings):
         gt=0,
         description=(
             "Seconds to wait for a tool-approval decision from the PWA before "
-            "auto-denying with decision='timeout' (FRE-261)."
+            "auto-denying with decision='timeout' (FRE-261). "
+            "Env var: AGENT_APPROVAL_TIMEOUT_SECONDS"
         ),
     )
 

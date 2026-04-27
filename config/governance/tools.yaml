@@ -6,11 +6,11 @@
 # ADR-0063 §D1 (FRE-260). mode is the only tool-availability signal.
 mode_policies:
   NORMAL:
-    allowed_categories: ["read_only", "network", "system_write", "essential_health_check"]
+    allowed_categories: ["read_only", "network", "system_write", "system_dangerous", "essential_health_check"]
   ALERT:
-    allowed_categories: ["read_only", "essential_health_check"]
+    allowed_categories: ["read_only", "system_dangerous", "essential_health_check"]
   DEGRADED:
-    allowed_categories: ["read_only", "essential_health_check"]
+    allowed_categories: ["read_only", "system_dangerous", "essential_health_check"]
   LOCKDOWN:
     allowed_categories: ["essential_health_check"]
   RECOVERY:
@@ -21,6 +21,10 @@ tool_categories:
     description: "Tools that only observe, never modify"
     risk_level: "low"
     examples: ["read_file", "list_directory", "system_metrics_snapshot"]
+
+  system_dangerous:
+    description: "Tools that execute arbitrary code or shell commands; governed at action-boundary"
+    risk_level: "high"
 
   system_write:
     description: "Tools that modify system state"
@@ -409,6 +413,69 @@ tools:
     # forbidden_paths: []
     # allowed_paths: []
     # timeout_seconds: 30
+
+  # FRE-261 Step 4: sandboxed bash executor with allowlist-based approval model
+  bash:
+    category: "system_dangerous"
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
+    forbidden_in_modes: ["LOCKDOWN", "RECOVERY"]
+    requires_approval: true
+    auto_approve_prefixes:
+      NORMAL:
+        - "curl"
+        - "grep"
+        - "ls"
+        - "cat"
+        - "find"
+        - "jq"
+        - "docker ps"
+        - "docker logs"
+        - "git log"
+        - "git status"
+        - "git diff"
+        - "psql -c"
+        - "redis-cli"
+        - "ps"
+        - "top"
+        - "free"
+        - "df"
+        - "uptime"
+        - "wc"
+        - "rg"
+        - "awk"
+        - "sed"
+      ALERT:
+        - "curl"
+        - "grep"
+        - "ls"
+        - "cat"
+        - "ps"
+        - "top"
+        - "free"
+        - "df"
+      DEGRADED:
+        - "curl"
+        - "grep"
+        - "ls"
+        - "cat"
+        - "ps"
+        - "top"
+        - "free"
+        - "df"
+    hard_deny_patterns:
+      - 'rm\s+-rf'
+      - 'dd\s+if='
+      - 'mkfs'
+      - 'sudo'
+      - 'wget'
+      - 'ssh'
+      - 'nc\s+-l'
+      - ':\(\)\s*\{\s*:\|:&\s*\};:'
+    timeout_seconds: 30
+    rate_limit_per_hour: 200
+    loop_max_per_signature: 5
+    loop_max_consecutive: 10
+    loop_output_sensitive: true
 
   # FRE-188: System diagnostics — subprocess allow-list (ps, lsof, find, iostat, …)
   run_sysdiag:

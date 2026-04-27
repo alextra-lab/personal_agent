@@ -145,6 +145,21 @@ class ToolPolicy(BaseModel):
         default=False,
         description="If True, skip output-identity blocking (for polling tools whose output changes each call)",
     )
+    auto_approve_prefixes: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description=(
+            "Per-mode list of command prefixes (first word or 'first two words') that bypass "
+            "the PWA approval prompt. Key is mode name (e.g. 'NORMAL'), value is list of "
+            "prefix strings (e.g. ['curl', 'git log'])."
+        ),
+    )
+    hard_deny_patterns: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Regex patterns (IGNORECASE) that hard-deny a command before execution. "
+            "Evaluated at executor level as belt-and-suspenders against misconfigured governance."
+        ),
+    )
 
 
 class ModelRoleConstraints(BaseModel):

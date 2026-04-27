@@ -15,6 +15,7 @@ export type AGUIEventType =
   | 'TOOL_CALL_END'
   | 'STATE_DELTA'
   | 'INTERRUPT'
+  | 'tool_approval_request'
   | 'DONE';
 
 export interface AGUIEvent {
@@ -59,6 +60,24 @@ export interface StateDeltaData {
 export interface InterruptData {
   context: string;
   options: string[];
+}
+
+/**
+ * tool_approval_request payload — primitive tool awaiting human approval.
+ *
+ * The agent has paused execution and will not proceed until the user
+ * posts an ``approve`` or ``deny`` decision to POST /approval/{request_id}.
+ * The request expires at ``expires_at``; the UI should auto-deny on timeout.
+ */
+export interface ToolApprovalRequestData {
+  request_id: string;
+  trace_id: string;
+  tool: string;
+  args: Record<string, unknown>;
+  risk_level: 'low' | 'medium' | 'high';
+  reason: string;
+  /** ISO-8601 UTC timestamp after which the backend auto-denies. */
+  expires_at: string;
 }
 
 // --------------------------------------------------------------------------

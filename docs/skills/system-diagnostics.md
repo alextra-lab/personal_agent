@@ -84,7 +84,8 @@ bash ps -ef | head -c 30000
 
 ## Governance
 
-- Auto-approved in NORMAL, ALERT, and DEGRADED: `ps`, `pgrep`, `top`, `lsof`, `find`, `df`, `du`, `iostat`, `vmstat`, `free`, `ip`, `ifconfig`, `ss`, `netstat`, `uptime`, `sysctl`, `who`, `last`, `uname`.
+- Auto-approved in NORMAL: `ps`, `pgrep`, `top`, `lsof`, `find`, `df`, `du`, `iostat`, `vmstat`, `free`, `ip`, `ifconfig`, `ss`, `netstat`, `uptime`, `sysctl`, `who`, `last`, `uname`.
+- **ALERT/DEGRADED mode auto-approve subset** (no PWA prompt): `ps`, `top`, `free`, `df`. Commands like `ss`, `netstat`, `vmstat`, `iostat`, `lsof`, `uname`, `uptime` require PWA approval in ALERT/DEGRADED modes. During incidents, use `ps` and `top` first.
 - LOCKDOWN / RECOVERY: `bash` disabled. No equivalent available in those modes.
 - Combined stdout + stderr capped at 50 KiB by the bash executor. Use `head -c 30000` to stay within limits on verbose commands.
 - See also: `bash.md` for hard-denied patterns and full auto-approve list.

@@ -6,6 +6,14 @@
 
 Probes all 7 services: Postgres, Neo4j (Bolt + HTTP), Elasticsearch, Redis, Embeddings, Reranker.
 
+**Required invocation form** — `network=True` is mandatory; the sandbox runs with `--network=none` by default and stdlib socket/urllib cannot bypass kernel-level network namespace isolation:
+
+```
+run_python(script=<snippet below>, network=True)
+```
+
+> **ALERT/DEGRADED modes:** `network=True` requires PWA approval in ALERT and DEGRADED. In those modes prefer the individual bash quick-checks below, which use the bash executor (already has network access) and are auto-approved.
+
 ```python
 import socket, json, urllib.request, urllib.error
 
@@ -37,8 +45,6 @@ result = {
 result["all_reachable"] = all(v.get("reachable") for v in result.values())
 print(json.dumps(result, indent=2))
 ```
-
-Uses stdlib `socket` and `urllib` only — no network flag needed in the sandbox.
 
 ## Quick single-service checks (bash)
 
@@ -73,7 +79,8 @@ bash curl -s http://reranker:8504/health
 
 ## Governance
 
-- `run_python`: auto-approved in NORMAL/ALERT/DEGRADED. Uses stdlib only (no subprocess). No `network=true` flag needed — socket/urllib bypass `--network=none` restriction when attaching to the Docker bridge.
-- `bash curl`/`psql`/`redis-cli`: auto-approved in NORMAL, ALERT, DEGRADED.
+- `run_python` with `network=True`: auto-approved in NORMAL. Requires PWA approval in ALERT/DEGRADED. Uses stdlib only (no subprocess); `network=True` is required — the sandbox runs with `--network=none` by default.
+- `bash curl`: auto-approved in NORMAL, ALERT, DEGRADED.
+- `bash psql -c` and `bash redis-cli`: auto-approved in NORMAL only — require PWA approval in ALERT/DEGRADED.
 - LOCKDOWN: `run_python` disabled; `bash` also disabled. No health check is available in LOCKDOWN mode.
 - See also: `run-python.md` (sandbox details), `bash.md` (auto-approve list).

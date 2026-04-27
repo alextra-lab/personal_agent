@@ -4,8 +4,12 @@
 
 ## Quick snapshot (human-readable)
 
+Run each command separately to stay within the auto-approve list (`sh` is not auto-approved):
+
 ```bash
-bash sh -c 'echo "=CPU="; top -bn1 | head -5; echo "=MEM="; free -m; echo "=DISK="; df -h /'
+bash top -bn1 | head -5
+bash free -m
+bash df -h /
 ```
 
 ## Individual metrics
@@ -33,20 +37,32 @@ Swap:          2047           0        2047
 
 ## Structured output via run_python
 
-Use `run_python` when downstream code needs structured key/value data matching the legacy `perf_system_*` naming:
+Use `run_python` when downstream code needs structured key/value data. The sandbox image does **not** include `psutil`; use `/proc` and `shutil` instead. No `network=True` needed — reads local files only.
 
 ```python
-import psutil, json
-m = psutil.virtual_memory()
-d = psutil.disk_usage("/")
-print(json.dumps({
-    "cpu_percent": psutil.cpu_percent(interval=1),
-    "perf_system_cpu_count": psutil.cpu_count(),
-    "perf_system_mem_used": m.used // 1048576,
-    "perf_system_mem_total": m.total // 1048576,
-    "perf_system_mem_available": m.available // 1048576,
-    "disk_used_pct": d.percent,
-}))
+import json, shutil
+# CPU load from /proc/loadavg
+with open('/proc/loadavg') as f:
+    loadavg = f.read().split()
+    load_1m, load_5m, load_15m = loadavg[0], loadavg[1], loadavg[2]
+# Memory from /proc/meminfo
+mem = {}
+with open('/proc/meminfo') as f:
+    for line in f:
+        parts = line.split()
+        if parts[0] in ('MemTotal:', 'MemAvailable:', 'MemFree:'):
+            mem[parts[0].rstrip(':')] = int(parts[1])
+# Disk from Python stdlib
+disk = shutil.disk_usage('/')
+result = {
+    "load_1m": float(load_1m),
+    "load_5m": float(load_5m),
+    "load_15m": float(load_15m),
+    "mem_total_mb": mem.get('MemTotal', 0) // 1024,
+    "mem_available_mb": mem.get('MemAvailable', 0) // 1024,
+    "disk_used_pct": round(disk.used / disk.total * 100, 1),
+}
+print(json.dumps(result, indent=2))
 ```
 
 ## Regression note
@@ -60,5 +76,5 @@ print(json.dumps({
 - `top`, `free`, `df` are auto-approved in all non-LOCKDOWN modes — no PWA prompt.
 - Available in NORMAL, ALERT, and DEGRADED modes.
 - `bash` is disabled in LOCKDOWN and RECOVERY — no workaround for those modes.
-- `run_python` for `psutil`: available in NORMAL/ALERT/DEGRADED; requires the sandbox image (`make sandbox-build`).
+- `run_python` for `/proc`-based metrics: available in NORMAL/ALERT/DEGRADED; no `network=True` needed (reads local files only); requires sandbox image (`make sandbox-build`).
 - See also: `bash.md` (output cap 50 KiB), `run-python.md` (sandbox details).

@@ -64,7 +64,8 @@ bash find /path -maxdepth 3 -type f -name "*.py" | sort
 
 ## Governance
 
-- `ls` and `find` are auto-approved in all non-LOCKDOWN modes — no PWA prompt.
+- `ls` is auto-approved in NORMAL, ALERT, and DEGRADED — no PWA prompt.
+- `find` is auto-approved in NORMAL only — in ALERT/DEGRADED it requires PWA approval. Prefer `ls -la` in ALERT/DEGRADED modes.
 - Available in LOCKDOWN via the `read` primitive for single-file inspection (not directory listing).
 - Read-only; neither `ls` nor `find` modifies the filesystem.
 - Hidden files: `ls -la` includes dotfiles; `ls -l` omits them. Use `-la` to match legacy `list_directory` behaviour.

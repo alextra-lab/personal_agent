@@ -94,6 +94,8 @@ def to_agui_event(event: InternalEvent) -> dict[str, Any]:
                 "reason": reason,
                 "expires_at": expires_at,
             }
+        case _:
+            raise ValueError(f"Unhandled event type: {type(event).__name__}")
 
 
 def serialize_event(event: InternalEvent) -> str:

@@ -19,11 +19,10 @@ from fastapi.testclient import TestClient
 from personal_agent.service.auth import RequestUser
 from personal_agent.transport.agui.approval_waiter import (
     ApprovalDecision,
-    ApprovalWaiterEntry,
     _pending,
+    register_approval_waiter,
 )
 from personal_agent.transport.agui.endpoint import router
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -45,15 +44,18 @@ def _make_app(user_id: UUID) -> FastAPI:
 
 
 def _inject_waiter(request_id: str, session_id: str) -> asyncio.Future[ApprovalDecision]:
-    """Directly inject a pre-created Future into _pending without needing a running loop.
+    """Register an approval waiter using the canonical registration function.
 
-    This avoids the ``asyncio.get_running_loop()`` requirement of
-    ``register_approval_waiter`` in sync test contexts (TestClient is sync).
+    Runs ``register_approval_waiter`` inside ``asyncio.run()`` so it can call
+    ``asyncio.get_running_loop()`` internally.  The returned Future is valid for
+    synchronous ``.set_result()`` / ``.result()`` calls even after the
+    temporary loop is closed.
     """
-    loop = asyncio.new_event_loop()
-    fut: asyncio.Future[ApprovalDecision] = loop.create_future()
-    _pending[request_id] = ApprovalWaiterEntry(future=fut, session_id=session_id)
-    return fut
+
+    async def _register() -> asyncio.Future[ApprovalDecision]:
+        return register_approval_waiter(request_id, session_id)
+
+    return asyncio.run(_register())
 
 
 @pytest.fixture(autouse=True)

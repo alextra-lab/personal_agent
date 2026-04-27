@@ -61,7 +61,9 @@ class AGUITransport:
         await queue.put(TextDeltaEvent(text=text, session_id=session_id))
         log.debug("transport.text_delta_queued", session_id=session_id, length=len(text))
 
-    async def send_tool_event(self, event: Any, session_id: str) -> None:
+    async def send_tool_event(
+        self, event: ToolStartEvent | ToolEndEvent | dict[str, Any], session_id: str
+    ) -> None:
         """Deliver a tool lifecycle event to the UI (start or end).
 
         Accepts both :class:`~personal_agent.transport.events.ToolStartEvent`

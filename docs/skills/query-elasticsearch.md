@@ -89,3 +89,5 @@ print(json.dumps(captures, default=str, indent=2))
 - LOCKDOWN: `bash` disabled. Use `read` primitive to read raw JSONL directly from log files (e.g. `read path="/opt/seshat/telemetry/events.jsonl"`).
 - `run_python` for self-telemetry: available in NORMAL/ALERT/DEGRADED; disabled in LOCKDOWN/RECOVERY.
 - Output cap: pipe large responses through `| head -c 50000` or use `LIMIT` in ES|QL.
+
+See also: [bash — Shell Command Executor](bash.md) · [run_python — Python Docker Sandbox](run-python.md)

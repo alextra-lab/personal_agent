@@ -78,3 +78,7 @@ curl -s -L -A 'personal-agent/0.1 (research bot)' --max-time 20 \
 - Max content to surface to the model: 10,000–50,000 chars. The HTML stripper above caps at 10,000; increase the slice (`:10000`) if more is needed, up to 50,000.
 - Always use `--max-time 20` to prevent hanging on slow hosts.
 - Hard-denied: `wget` is blocked by the bash governance layer — always use `curl`.
+
+**ALERT-mode note:** `bash curl` is auto-approved in ALERT mode — unlike the legacy `fetch_url` tool (which was disabled in ALERT mode), primitive `curl` has no ALERT-mode restriction. Be aware outbound network calls continue in degraded states.
+
+See also: [bash — Shell Command Executor](bash.md)

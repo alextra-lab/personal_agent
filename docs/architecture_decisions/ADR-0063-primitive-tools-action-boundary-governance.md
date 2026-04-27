@@ -1,6 +1,7 @@
 # ADR-0063: Primitive Tools & Action-Boundary Governance
 
 **Status**: Approved (2026-04-24)
+**Phase 2 implementation**: Complete (FRE-261 — branch `starry-plaza-1s/fre-261-pivot-2-primitive-tools-sandbox-action-boundary-governance`)
 **Date**: 2026-04-24
 **Deciders**: Project owner
 **Depends on**: ADR-0005 (Governance Configuration), ADR-0028 (External Tool CLI Migration), ADR-0032 (Hybrid Tool Calling Strategy), ADR-0044 (Provider Abstraction), ADR-0062 (Tool Loop Gate)
@@ -231,7 +232,7 @@ Summary:
 | Phase | Scope | Risk | Gate to next |
 |---|---|---|---|
 | P1 | Sever TaskType→tool-filter wire | Low | Token cost / latency within 5% of baseline after 48h |
-| P2 | Add `bash` / `read` / `write` / `run_python` + sandbox + approval | Medium | Pentest clean; approval UX acceptable |
+| P2 | Add `bash` / `read` / `write` / `run_python` + sandbox + approval | Medium | Pentest clean; approval UX acceptable *(implemented — FRE-261, pentest integration run + E2E approval flow pending gate)* |
 | P3 | Skill docs for 8 deprecated tools + model eval | Medium | Primitive success ≥ curated success on 20 traces |
 | P4 | Flag-gated deprecation (`AGENT_LEGACY_TOOLS_ENABLED=false`) | Medium | 2 weeks production stability |
 | P5 | Loop gate signal split + `model_config` fix | Low | Existing output-identity decisions unchanged |

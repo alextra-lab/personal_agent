@@ -98,10 +98,16 @@ export function ApprovalModal({ data, onApprove, onDeny }: ApprovalModalProps): 
     denyRef.current?.focus();
   }, []);
 
+  // Guard ref — ensures onDeny() fires at most once on timeout.
+  const deniedRef = useRef(false);
+
   // Countdown timer — tick every second; auto-deny at 0.
   useEffect(() => {
     if (countdown <= 0) {
-      onDeny();
+      if (!deniedRef.current) {
+        deniedRef.current = true;
+        onDeny();
+      }
       return;
     }
 

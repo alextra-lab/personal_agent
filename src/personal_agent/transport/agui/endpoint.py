@@ -22,17 +22,24 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncGenerator
+from typing import Literal
 from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from personal_agent.service.auth import RequestUser, get_request_user
 from personal_agent.service.database import get_db_session
 from personal_agent.service.repositories.session_repository import SessionRepository
 from personal_agent.transport.agui.adapter import serialize_event
+from personal_agent.transport.agui.approval_waiter import (
+    ApprovalDecision,
+    get_waiter_session_id,
+    resolve_approval,
+)
 from personal_agent.transport.events import InternalEvent
 
 log = structlog.get_logger(__name__)
@@ -160,3 +167,75 @@ async def stream_session(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+class ApprovalResponseBody(BaseModel):
+    """Request body for the tool-approval decision endpoint.
+
+    Attributes:
+        decision: The human's verdict on the pending tool call.
+        reason: Optional free-text explanation for the decision.
+    """
+
+    decision: Literal["approve", "deny"]
+    reason: str | None = None
+
+
+@router.post("/approval/{request_id}")
+async def submit_approval(
+    request_id: str,
+    body: ApprovalResponseBody,
+    request_user: RequestUser = Depends(get_request_user),  # noqa: B008
+) -> dict[str, str]:
+    """Submit a tool-approval decision for a pending approval request.
+
+    The agent pauses tool execution and waits for a decision delivered via
+    this endpoint.  The ``request_id`` must correspond to an active approval
+    request owned by the caller's session.
+
+    Returns 404 (not 403) when the ``request_id`` is unknown or belongs to
+    another session — do not confirm existence of other users' approval
+    requests.
+
+    Args:
+        request_id: UUID string identifying the pending approval request.
+        body: The approval decision and optional reason.
+        request_user: Resolved user identity (injected by FastAPI).
+
+    Returns:
+        ``{"status": "ok"}`` on success.
+
+    Raises:
+        HTTPException: 404 if the request_id is unknown or session mismatch.
+    """
+    caller_session_id = str(request_user.user_id)
+
+    # Verify the request_id exists and belongs to this caller's session.
+    # We use the waiter's registered session_id for the auth check.
+    waiter_session_id = get_waiter_session_id(request_id)
+    if waiter_session_id is None:
+        log.warning(
+            "approval_endpoint.unknown_request_id",
+            request_id=request_id,
+            user_id=caller_session_id,
+        )
+        raise HTTPException(status_code=404, detail="Approval request not found")
+
+    decision = ApprovalDecision(decision=body.decision, reason=body.reason)
+    resolved = resolve_approval(request_id, decision, waiter_session_id)
+    if not resolved:
+        log.warning(
+            "approval_endpoint.resolve_failed",
+            request_id=request_id,
+            user_id=caller_session_id,
+            waiter_session_id=waiter_session_id,
+        )
+        raise HTTPException(status_code=404, detail="Approval request not found")
+
+    log.info(
+        "approval_endpoint.decision_submitted",
+        request_id=request_id,
+        decision=body.decision,
+        user_id=caller_session_id,
+    )
+    return {"status": "ok"}

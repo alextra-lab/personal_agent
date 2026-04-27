@@ -929,6 +929,25 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # Tool approval UI (FRE-261 — Step 1 stub; Step 6 adds env alias)
+    approval_ui_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable interactive tool-approval round-trips via the PWA (FRE-261). "
+            "When True, tools with requires_approval=True pause and await a human "
+            "decision via POST /agui/approval/{request_id} before executing. "
+            "Step 6 will add the AGENT_ env alias."
+        ),
+    )
+    approval_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        description=(
+            "Seconds to wait for a tool-approval decision from the PWA before "
+            "auto-denying with decision='timeout' (FRE-261)."
+        ),
+    )
+
 
 _settings: AppConfig | None = None
 

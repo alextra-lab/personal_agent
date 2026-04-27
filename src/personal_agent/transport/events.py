@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
@@ -85,5 +85,40 @@ class InterruptEvent:
     session_id: str
 
 
+@dataclass(frozen=True)
+class ToolApprovalRequestEvent:
+    """Tool approval request pushed to the PWA before executing a gated tool.
+
+    The PWA renders this as an approval card.  The agent pauses and awaits
+    a ``POST /agui/approval/{request_id}`` response before proceeding.
+
+    Attributes:
+        request_id: Unique identifier for this approval round-trip (UUID string).
+        trace_id: Trace context identifier for telemetry correlation.
+        session_id: Target session identifier (used to route the SSE event).
+        tool: Name of the tool awaiting approval.
+        args: Arguments that will be passed to the tool if approved.
+        risk_level: Qualitative risk label for the PWA to display.
+        reason: Human-readable explanation of why approval is required.
+        expires_at: ISO-8601 UTC timestamp after which the request times out.
+    """
+
+    request_id: str
+    trace_id: str
+    session_id: str
+    tool: str
+    args: Mapping[str, Any]
+    risk_level: Literal["low", "medium", "high"]
+    reason: str
+    expires_at: str  # ISO-8601 UTC
+
+
 # Discriminated union of all internal transport events.
-InternalEvent = TextDeltaEvent | ToolStartEvent | ToolEndEvent | StateUpdateEvent | InterruptEvent
+InternalEvent = (
+    TextDeltaEvent
+    | ToolStartEvent
+    | ToolEndEvent
+    | StateUpdateEvent
+    | InterruptEvent
+    | ToolApprovalRequestEvent
+)

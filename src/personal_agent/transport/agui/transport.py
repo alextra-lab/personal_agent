@@ -13,15 +13,22 @@ See: docs/architecture_decisions/ADR-0046.md
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
 
 import structlog
 
+from personal_agent.transport.agui.approval_waiter import (
+    ApprovalDecision,
+    register_approval_waiter,
+    wait_for_approval,
+)
 from personal_agent.transport.agui.endpoint import get_event_queue
 from personal_agent.transport.events import (
     InterruptEvent,
     StateUpdateEvent,
     TextDeltaEvent,
+    ToolApprovalRequestEvent,
     ToolEndEvent,
     ToolStartEvent,
 )
@@ -145,3 +152,78 @@ class AGUITransport:
             )
         log.info("transport.interrupt_queued", session_id=session_id)
         return None  # Response handling deferred to FRE-209
+
+    async def request_tool_approval(
+        self,
+        *,
+        request_id: str,
+        trace_id: str,
+        session_id: str,
+        tool: str,
+        args: Mapping[str, Any],
+        risk_level: Literal["low", "medium", "high"],
+        reason: str,
+        timeout_seconds: float = 60.0,
+    ) -> ApprovalDecision:
+        """Push an approval request event and await the human's decision.
+
+        Registers a waiter Future, pushes a
+        :class:`~personal_agent.transport.events.ToolApprovalRequestEvent` to
+        the session SSE queue so the PWA can render an approval card, then
+        suspends until the frontend POSTs a decision to
+        ``/agui/approval/{request_id}`` or the timeout elapses.
+
+        The waiter is always cleaned up after this method returns, regardless
+        of the outcome.
+
+        Args:
+            request_id: Unique identifier for this round-trip (UUID string).
+            trace_id: Trace context identifier for telemetry correlation.
+            session_id: Target session identifier for the SSE event and waiter.
+            tool: Name of the tool awaiting approval.
+            args: Arguments that will be passed to the tool if approved.
+            risk_level: Qualitative risk label shown in the PWA approval card.
+            reason: Human-readable explanation of why approval is required.
+            timeout_seconds: Seconds before auto-returning a timeout decision.
+
+        Returns:
+            :class:`ApprovalDecision` with ``decision`` set to ``"approve"``,
+            ``"deny"``, or ``"timeout"``.
+        """
+        expires_at = (datetime.now(UTC) + timedelta(seconds=timeout_seconds)).isoformat()
+
+        # Register the waiter *before* pushing the event to avoid a race where
+        # the frontend responds before the waiter is in place.
+        register_approval_waiter(request_id, session_id)
+
+        queue = get_event_queue(session_id)
+        await queue.put(
+            ToolApprovalRequestEvent(
+                request_id=request_id,
+                trace_id=trace_id,
+                session_id=session_id,
+                tool=tool,
+                args=args,
+                risk_level=risk_level,
+                reason=reason,
+                expires_at=expires_at,
+            )
+        )
+        log.info(
+            "transport.approval_request_queued",
+            request_id=request_id,
+            session_id=session_id,
+            tool=tool,
+            risk_level=risk_level,
+            timeout_seconds=timeout_seconds,
+        )
+
+        decision = await wait_for_approval(request_id, timeout_seconds)
+        log.info(
+            "transport.approval_decision_received",
+            request_id=request_id,
+            session_id=session_id,
+            tool=tool,
+            decision=decision.decision,
+        )
+        return decision

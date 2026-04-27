@@ -71,7 +71,7 @@ Wave F (after Wave E) — Cleanup + housekeeping
 
 ---
 
-## Wave A — Production bugs (parallel, ~1–2 days)
+## Wave A — Production bugs ✅ COMPLETE (2026-04-27, main @ d0a66b5)
 
 These are independent of the eval and of each other. They are surfaced by the eval but they exist in production traffic too. Land them first because they remove noise from the eval's signal channel and fix real prod regressions.
 
@@ -82,7 +82,7 @@ These are independent of the eval and of each other. They are surfaced by the ev
 | FRE-272 | Rename log key `approval_required_but_not_implemented` → `approval_ui_disabled_proceeding`; update message text | Grep logs after a non-auto-approved bash call with `AGENT_APPROVAL_UI_ENABLED=false`; confirm new message text |
 | FRE-280 | Sequential init in `lifespan`: complete Redis subscriptions before MCP gateway | `make dev` with `AGENT_MCP_GATEWAY_ENABLED=true` on a host without `docker mcp`; confirm service boots |
 
-**Gate to Wave B:** all four merged to main; quick smoke test against prod gateway shows clean logs (no `capture_write_failed`, no `context_compression_failed`).
+**Gate to Wave B:** ✅ all four merged to main @ d0a66b5. Smoke test (prod log check) pending first `make dev` run — do before starting Wave B infra.
 
 ---
 

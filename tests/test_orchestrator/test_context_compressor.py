@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -128,3 +128,26 @@ class TestCompressTurns:
     async def test_returns_fallback_for_empty_messages(self) -> None:
         result = await compress_turns([], trace_id="test-trace")
         assert result == FALLBACK_MARKER
+
+    @pytest.mark.asyncio
+    async def test_missing_compressor_role_returns_fallback_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Returns FALLBACK_MARKER immediately and warns only once when role is absent."""
+        import personal_agent.orchestrator.context_compressor as cc_module
+
+        monkeypatch.setattr(cc_module, "_compressor_role_missing_logged", False)
+
+        mock_config = MagicMock()
+        mock_config.models = {}
+
+        with patch(
+            "personal_agent.orchestrator.context_compressor.load_model_config",
+            return_value=mock_config,
+        ):
+            result1 = await compress_turns([_msg("user", "hello")], trace_id="t-1")
+            result2 = await compress_turns([_msg("user", "world")], trace_id="t-2")
+
+        assert result1 == FALLBACK_MARKER
+        assert result2 == FALLBACK_MARKER
+        assert cc_module._compressor_role_missing_logged is True

@@ -473,30 +473,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             reason="AGENT_LINEAR_API_KEY not set — promotion and feedback polling disabled",
         )
 
-    # MCP gateway (other MCP tools may rely on it — keep independent of LinearClient).
-    if settings.mcp_gateway_enabled:
-        try:
-            from personal_agent.mcp.gateway import MCPGatewayAdapter
-            from personal_agent.tools import get_default_registry
-
-            log.info("mcp_gateway_initializing", command=settings.mcp_gateway_command)
-            registry = get_default_registry()
-            mcp_adapter = MCPGatewayAdapter(registry)
-            await mcp_adapter.initialize()
-            log.info(
-                "mcp_gateway_initialized",
-                tools_count=len(mcp_adapter._mcp_tool_names),
-                tools=list(mcp_adapter._mcp_tool_names)[:10],
-            )
-        except Exception as e:
-            log.warning(
-                "mcp_gateway_init_failed",
-                error=sanitize_error_message(e),
-                error_type=type(e).__name__,
-                exc_info=True,
-            )
-            mcp_adapter = None
-
     # Start Brainstem scheduler for second brain, lifecycle, and/or insights tasks.
     if (
         settings.enable_second_brain
@@ -788,6 +764,34 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         log.info("gateway_state_wired")
 
     log.info("service_ready", port=settings.service_port)
+
+    # MCP gateway — initialised last so that an anyio cancel-scope leak from a
+    # failed 'docker mcp' subprocess cannot cascade into Redis subscriptions that
+    # are already running.  asyncio.shield() prevents the lifespan task from being
+    # cancelled by anyio's internal task-group cleanup.  BaseExceptionGroup covers
+    # the Python 3.11+ grouped exception that anyio raises on subprocess failure.
+    if settings.mcp_gateway_enabled:
+        try:
+            from personal_agent.mcp.gateway import MCPGatewayAdapter
+            from personal_agent.tools import get_default_registry
+
+            log.info("mcp_gateway_initializing", command=settings.mcp_gateway_command)
+            registry = get_default_registry()
+            mcp_adapter = MCPGatewayAdapter(registry)
+            await asyncio.shield(mcp_adapter.initialize())
+            log.info(
+                "mcp_gateway_initialized",
+                tools_count=len(mcp_adapter._mcp_tool_names),
+                tools=list(mcp_adapter._mcp_tool_names)[:10],
+            )
+        except (Exception, BaseExceptionGroup) as e:
+            log.warning(
+                "mcp_gateway_init_failed",
+                error=sanitize_error_message(e),
+                error_type=type(e).__name__,
+                exc_info=True,
+            )
+            mcp_adapter = None
 
     yield
 

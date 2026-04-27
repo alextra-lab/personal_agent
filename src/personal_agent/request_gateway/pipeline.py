@@ -108,8 +108,11 @@ async def run_gateway_pipeline(
     recall_result = run_recall_controller(
         intent=intent,
         user_message=user_message,
-        session_messages=full_session_messages if full_session_messages is not None else session_messages,
+        session_messages=full_session_messages
+        if full_session_messages is not None
+        else session_messages,
         trace_id=trace_id,
+        session_id=session_id,
     )
 
     if recall_result is not None and recall_result.reclassified:

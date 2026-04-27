@@ -981,6 +981,53 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # ADR-0059 — Context Quality Stream (Wave 3 — FRE-249)
+    context_quality_stream_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable ADR-0059 context quality stream. When True, "
+            "request_gateway.recall_controller dual-writes detected "
+            "compaction-quality incidents to telemetry/context_quality/CQ-*.jsonl "
+            "and publishes CompactionQualityIncidentEvent on "
+            "stream:context.compaction_quality_poor for the Captain's Log "
+            "consumer. Set False to disable Stream 7 emission while keeping "
+            "the structlog warning (which feeds ADR-0056 cluster monitoring). "
+            "Env var: AGENT_CONTEXT_QUALITY_STREAM_ENABLED"
+        ),
+    )
+    context_quality_governance_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable ADR-0059 §D6 Phase 2 per-session budget tightening. When "
+            "True, Stage 7 reduces max_tokens by "
+            "context_quality_governance_budget_reduction whenever a session has "
+            "≥ context_quality_governance_threshold incidents in the trailing "
+            "24 h. Default False — flip after 14 days of Phase 1 telemetry "
+            "validates signal quality. "
+            "Env var: AGENT_CONTEXT_QUALITY_GOVERNANCE_ENABLED"
+        ),
+    )
+    context_quality_governance_threshold: int = Field(
+        default=2,
+        ge=1,
+        description=(
+            "Minimum compaction-quality incident count in the trailing 24 h "
+            "for a session to trigger Phase 2 budget tightening (ADR-0059 §D6). "
+            "Env var: AGENT_CONTEXT_QUALITY_GOVERNANCE_THRESHOLD"
+        ),
+    )
+    context_quality_governance_budget_reduction: float = Field(
+        default=0.15,
+        ge=0.0,
+        le=0.95,
+        description=(
+            "Fraction by which Stage 7 reduces max_tokens when the session "
+            "incident threshold is exceeded (ADR-0059 §D6). 0.15 = 15 %% "
+            "tightening for the next request in that session. "
+            "Env var: AGENT_CONTEXT_QUALITY_GOVERNANCE_BUDGET_REDUCTION"
+        ),
+    )
+
 
 _settings: AppConfig | None = None
 

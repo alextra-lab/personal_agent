@@ -16,8 +16,10 @@ from typing import Any
 
 import structlog
 
+from personal_agent.config import settings
 from personal_agent.request_gateway.types import AssembledContext
 from personal_agent.telemetry.compaction import CompactionRecord, log_compaction
+from personal_agent.telemetry.context_quality import get_incident_tracker
 
 logger = structlog.get_logger(__name__)
 
@@ -56,6 +58,46 @@ def _total_context_tokens(
             parts.append(str(tool))
 
     return estimate_tokens(" ".join(parts))
+
+
+def _extract_entity_ids(
+    memory_context: list[Any] | None,
+) -> tuple[str, ...]:
+    """Extract stable identifiers from memory context items (FRE-249 Bug A fix).
+
+    The Stage 6 context assembler emits entity items shaped like
+    ``{"type": "entity", "name": ...}``, session items shaped like
+    ``{"type": "session", "session_id": ...}``, and proactive payloads that
+    may carry ``entity_id`` or ``id``.  This helper probes those fields in
+    priority order so the resulting tuple feeds ADR-0047 D3's dropped-entity
+    cache with usable identifiers.
+
+    Args:
+        memory_context: Memory context items about to be dropped, or None.
+
+    Returns:
+        Tuple of non-empty identifier strings (deduplicated, order preserved).
+        Empty tuple if memory_context is None or yields no identifiers.
+    """
+    if not memory_context:
+        return ()
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in memory_context:
+        if not isinstance(item, dict):
+            continue
+        ident_raw = (
+            item.get("entity_id")
+            or item.get("name")
+            or item.get("id")
+            or item.get("session_id")
+            or ""
+        )
+        ident = str(ident_raw).strip()
+        if ident and ident not in seen:
+            seen.add(ident)
+            out.append(ident)
+    return tuple(out)
 
 
 def _trim_history(
@@ -117,11 +159,32 @@ def apply_budget(
     tool_definitions = context.tool_definitions
     overflow_action: str | None = None
 
+    effective_max_tokens = max_tokens
+    governance_tightened = False
+    governance_incident_count = 0
+    if settings.context_quality_governance_enabled and session_id:
+        tracker = get_incident_tracker()
+        governance_incident_count = tracker.count_in_window(session_id, hours=24)
+        if governance_incident_count >= settings.context_quality_governance_threshold:
+            reduction = max(0.0, min(0.95, settings.context_quality_governance_budget_reduction))
+            effective_max_tokens = max(1, int(round(max_tokens * (1.0 - reduction))))
+            governance_tightened = True
+            logger.info(
+                "context_quality_governance_tightened",
+                trace_id=trace_id,
+                session_id=session_id,
+                original_max_tokens=max_tokens,
+                effective_max_tokens=effective_max_tokens,
+                incident_count=governance_incident_count,
+                threshold=settings.context_quality_governance_threshold,
+                reduction=reduction,
+            )
+
     tokens_before_all = _total_context_tokens(messages, memory_context, tool_definitions)
     total_tokens = tokens_before_all
 
     # Phase 1: drop oldest history
-    if total_tokens > max_tokens:
+    if total_tokens > effective_max_tokens:
         tokens_phase_before = total_tokens
         messages, did_trim = _trim_history(messages)
         if did_trim:
@@ -146,8 +209,12 @@ def apply_budget(
             )
 
     # Phase 2: drop memory context
-    if total_tokens > max_tokens and memory_context is not None:
+    if total_tokens > effective_max_tokens and memory_context is not None:
         tokens_phase_before = total_tokens
+        # FRE-249 Bug A fix: capture entity identifiers before discarding the
+        # memory context so the recall controller can detect when a later user
+        # turn references something we just dropped (ADR-0047 D3, ADR-0059).
+        dropped_entity_ids = _extract_entity_ids(memory_context)
         memory_context = None
         overflow_action = "dropped_memory_context"
         total_tokens = _total_context_tokens(messages, memory_context, tool_definitions)
@@ -165,12 +232,12 @@ def apply_budget(
                 strategy="drop_oldest",
                 content_summary="Dropped Seshat memory context to fit token budget",
                 entities_preserved=(),
-                entities_dropped=(),
+                entities_dropped=dropped_entity_ids,
             )
         )
 
     # Phase 3: drop tool definitions
-    if total_tokens > max_tokens and tool_definitions is not None:
+    if total_tokens > effective_max_tokens and tool_definitions is not None:
         tokens_phase_before = total_tokens
         tool_definitions = None
         overflow_action = "dropped_tool_definitions"
@@ -200,6 +267,9 @@ def apply_budget(
         trimmed=trimmed,
         total_tokens=total_tokens,
         max_tokens=max_tokens,
+        effective_max_tokens=effective_max_tokens,
+        governance_tightened=governance_tightened,
+        governance_incident_count=governance_incident_count,
         overflow_action=overflow_action,
         message_count=len(messages),
         has_memory=memory_context is not None,

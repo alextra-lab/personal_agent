@@ -107,6 +107,18 @@ do not fire.  Ordering rule: durable file write must succeed before publish
 (ADR-0054 D4).  Bus failures are logged and swallowed (ADR-0054 D6).
 """
 
+# Wave 3 — ADR-0059 (Context Quality Stream)
+STREAM_CONTEXT_COMPACTION_QUALITY_POOR = "stream:context.compaction_quality_poor"
+"""Stream for compaction-quality-poor incidents (Wave 3 — ADR-0059).
+
+Producer: ``request_gateway.recall_controller`` via
+``telemetry.context_quality.record_incident``. One event per detected overlap
+between a recalled noun phrase and a previously dropped entity in the same
+session. Consumer ``cg:captain-log`` writes ``CaptainLogEntry(category=
+KNOWLEDGE_QUALITY, scope=ORCHESTRATOR)``. Ordering rule: durable JSONL append
+must succeed before publish (ADR-0054 D4).
+"""
+
 
 # ---------------------------------------------------------------------------
 # Base model
@@ -610,6 +622,55 @@ class CaptainLogEntryCreatedEvent(EventBase):
     scope: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# Wave 3 events — ADR-0059 (Context Quality Stream)
+# ---------------------------------------------------------------------------
+
+
+class CompactionQualityIncidentEvent(EventBase):
+    """Published when the recall controller detects a poor-compaction incident.
+
+    One event per detection — fires inline in Stage 4b when a noun phrase
+    extracted from the user message substring-matches an entity that Stage 7
+    dropped earlier in the same session (ADR-0047 D3, ADR-0059).
+
+    Consumers:
+      - ``cg:captain-log`` →
+        ``CaptainLogEntry(category=KNOWLEDGE_QUALITY, scope=ORCHESTRATOR)``.
+      - Phase 2 (flag-gated): in-process ``IncidentTracker`` per-session
+        counter consumed by Stage 7 budget hook to tighten ``max_tokens``.
+
+    The ADR-0056 cluster path (``compaction_quality.poor`` warning →
+    ``ErrorPatternDetectedEvent``) and this per-incident path produce
+    distinct fingerprints by construction; ADR-0030 fingerprint dedup at
+    ``CaptainLogManager.save_entry()`` merges any overlap cleanly.
+
+    Attributes:
+        fingerprint: sha256(noun_phrase:dropped_entity:component)[:16].
+        noun_phrase: Cue extracted from the user message that triggered match.
+        dropped_entity: Identifier of the entity dropped earlier in the
+            session by Stage 7 compaction.
+        recall_cue: Regex cue from ``_RECALL_CUE_PATTERNS`` that engaged the
+            recall controller.
+        tier_affected: Compaction tier the dropped entity originated from
+            (``"near"`` | ``"episodic"`` | ``"long_term"``).
+        tokens_removed: Tokens removed by the originating compaction event;
+            ``0`` when not available at detection time.
+        detected_at: UTC timestamp when the incident was detected.
+    """
+
+    event_type: Literal["context.compaction_quality_poor"] = "context.compaction_quality_poor"
+    source_component: str = "telemetry.context_quality"
+
+    fingerprint: str
+    noun_phrase: str
+    dropped_entity: str
+    recall_cue: str
+    tier_affected: str
+    tokens_removed: int = 0
+    detected_at: datetime
+
+
 def parse_stream_event(payload: dict[str, Any]) -> EventBase:
     """Deserialize a stream JSON payload into the correct event subclass.
 
@@ -654,4 +715,6 @@ def parse_stream_event(payload: dict[str, Any]) -> EventBase:
         return InsightsCostAnomalyEvent.model_validate(payload)
     if raw_type == "captain_log.entry_created":
         return CaptainLogEntryCreatedEvent.model_validate(payload)
+    if raw_type == "context.compaction_quality_poor":
+        return CompactionQualityIncidentEvent.model_validate(payload)
     raise ValueError(f"unknown event_type: {raw_type!r}")

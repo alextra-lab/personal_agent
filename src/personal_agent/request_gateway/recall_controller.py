@@ -17,9 +17,12 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from datetime import datetime, timezone
 
 import structlog
 
+from personal_agent.config import settings
+from personal_agent.events.bus import EventBus, get_event_bus
 from personal_agent.request_gateway.types import (
     IntentResult,
     RecallCandidate,
@@ -27,6 +30,11 @@ from personal_agent.request_gateway.types import (
     TaskType,
 )
 from personal_agent.telemetry.compaction import get_dropped_entities
+from personal_agent.telemetry.context_quality import (
+    CompactionQualityIncident,
+    fingerprint_incident,
+    schedule_record_incident,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -69,23 +77,53 @@ _INTERROG_NOUN_RE = re.compile(
 # Verb words that signal the start of a trailing clause to strip from a noun phrase
 # (e.g., "tool we discussed" → strip from "we" onwards → "tool").
 # Implemented as a set lookup (not regex) to avoid ReDoS on user-controlled input.
-_TRAILING_VERB_WORDS: frozenset[str] = frozenset({
-    "we", "i", "you", "they", "he", "she",
-    "did", "does", "was", "were", "is", "are", "have", "had",
-    "pick", "picked", "chose", "choose",
-    "use", "used",
-    "discuss", "discussed",
-    "mention", "mentioned",
-    "decide", "decided",
-    "do",
-})
+_TRAILING_VERB_WORDS: frozenset[str] = frozenset(
+    {
+        "we",
+        "i",
+        "you",
+        "they",
+        "he",
+        "she",
+        "did",
+        "does",
+        "was",
+        "were",
+        "is",
+        "are",
+        "have",
+        "had",
+        "pick",
+        "picked",
+        "chose",
+        "choose",
+        "use",
+        "used",
+        "discuss",
+        "discussed",
+        "mention",
+        "mentioned",
+        "decide",
+        "decided",
+        "do",
+    }
+)
 
 # Query-artifact stop words to strip from the trailing position of a noun phrase
 # (e.g., "tool again" → "tool").
 # Implemented as a set lookup (not regex) to avoid ReDoS on user-controlled input.
-_TRAILING_STOP_WORDS: frozenset[str] = frozenset({
-    "again", "now", "today", "here", "there", "then", "please", "yet",
-})
+_TRAILING_STOP_WORDS: frozenset[str] = frozenset(
+    {
+        "again",
+        "now",
+        "today",
+        "here",
+        "there",
+        "then",
+        "please",
+        "yet",
+    }
+)
 
 
 def run_recall_controller(
@@ -93,8 +131,10 @@ def run_recall_controller(
     user_message: str,
     session_messages: Sequence[dict[str, str]],
     trace_id: str = "",
+    session_id: str = "",
     max_candidates: int = 3,
     max_scan_turns: int = 20,
+    event_bus: EventBus | None = None,
 ) -> RecallResult | None:
     """Run the recall controller (Stage 4b).
 
@@ -103,8 +143,15 @@ def run_recall_controller(
         user_message: Current user message.
         session_messages: Conversation history (most recent last).
         trace_id: Request trace identifier for telemetry correlation.
+        session_id: Client session identifier — used to look up entities
+            dropped earlier in the same session by Stage 7 compaction
+            (ADR-0047 D3, ADR-0059 Bug B fix).  Empty string disables the
+            compaction quality check.
         max_candidates: Max session fact candidates to return.
         max_scan_turns: Max turns to scan in session history.
+        event_bus: Optional bus for publishing compaction-quality incidents
+            (ADR-0059).  When None, the dual-write degrades to the durable
+            JSONL append only; structlog warning is always emitted.
 
     Returns:
         RecallResult if reclassification occurred, None if passed through.
@@ -182,20 +229,50 @@ def run_recall_controller(
         )
 
     # D3: Compaction quality check — warn when a recalled noun phrase matches
-    # an entity that was dropped by a recent compaction event.
-    session_id_for_check = trace_id  # best available proxy when session_id not threaded here
-    dropped = get_dropped_entities(session_id_for_check)
-    if dropped:
-        for np in noun_phrases:
-            for dropped_entity in dropped:
-                if np in dropped_entity.lower() or dropped_entity.lower() in np:
-                    logger.warning(
-                        "compaction_quality.poor",
-                        entity_id=dropped_entity,
-                        noun_phrase=np,
-                        session_id=session_id_for_check,
-                        trace_id=trace_id,
-                    )
+    # an entity that was dropped by a recent compaction event.  Per ADR-0059,
+    # we dual-write: the structlog warning is retained for ADR-0056 cross-trace
+    # clustering, and a typed CompactionQualityIncidentEvent is published for
+    # per-incident Captain's Log + Phase 2 governance response.
+    # FRE-249 Bug B fix: session_id is now plumbed in directly instead of
+    # falling back to trace_id (the cache is keyed by session_id).
+    if session_id:
+        dropped = get_dropped_entities(session_id)
+        if dropped:
+            seen_pairs: set[tuple[str, str]] = set()
+            for np in noun_phrases:
+                for dropped_entity in dropped:
+                    if (np, dropped_entity) in seen_pairs:
+                        continue
+                    de_lower = dropped_entity.lower()
+                    if np in de_lower or de_lower in np:
+                        seen_pairs.add((np, dropped_entity))
+                        logger.warning(
+                            "compaction_quality.poor",
+                            entity_id=dropped_entity,
+                            noun_phrase=np,
+                            session_id=session_id,
+                            trace_id=trace_id,
+                        )
+                        if settings.context_quality_stream_enabled:
+                            bus_for_publish = (
+                                event_bus if event_bus is not None else get_event_bus()
+                            )
+                            incident = CompactionQualityIncident(
+                                fingerprint=fingerprint_incident(
+                                    noun_phrase=np,
+                                    dropped_entity=dropped_entity,
+                                    component="request_gateway.recall_controller",
+                                ),
+                                trace_id=trace_id,
+                                session_id=session_id,
+                                noun_phrase=np,
+                                dropped_entity=dropped_entity,
+                                recall_cue=cue,
+                                tier_affected="episodic",
+                                tokens_removed=0,
+                                detected_at=datetime.now(timezone.utc),
+                            )
+                            schedule_record_incident(incident, bus_for_publish)
 
     # Reclassify
     logger.info(

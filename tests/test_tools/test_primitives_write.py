@@ -128,10 +128,44 @@ async def test_write_forbidden_path() -> None:
     object.__setattr__(mock_config, "tools", {"write": policy})
 
     with patch(
-        "personal_agent.tools.primitives.write.load_governance_config",
+        "personal_agent.tools.primitives._governance.load_governance_config",
         return_value=mock_config,
     ):
         result = await write_executor("/etc/shadow", content="pwned", mode="overwrite")
 
     assert result["success"] is False
     assert result["error"] == "forbidden_path"
+
+
+# ---------------------------------------------------------------------------
+# path_not_allowed check — path outside allowed_paths list
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_write_path_not_in_allowed_paths() -> None:
+    """A path outside allowed_paths list returns path_not_allowed error."""
+    from personal_agent.governance.models import GovernanceConfig
+
+    # Policy with a narrow allowed_paths that does NOT cover /var/tmp/
+    policy = _make_policy(
+        allowed_paths=["/nonexistent/**"],
+        forbidden_paths=[],
+        unattended_paths=[],
+    )
+
+    mock_config = GovernanceConfig.__new__(GovernanceConfig)
+    object.__setattr__(mock_config, "tools", {"write": policy})
+
+    with TemporaryDirectory(dir="/var/tmp") as tmpdir:
+        target = Path(tmpdir) / "probe.txt"
+
+        with patch(
+            "personal_agent.tools.primitives._governance.load_governance_config",
+            return_value=mock_config,
+        ):
+            result = await write_executor(str(target), content="data", mode="overwrite")
+
+    assert result["success"] is False
+    assert result["error"] == "path_not_allowed"
+    assert "path" in result

@@ -6,15 +6,16 @@ Reads a file's content from the filesystem with explicit path-governance checks
 FRE-261 Step 3.
 """
 
-import os
-from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
 import structlog
 
-from personal_agent.config import load_governance_config
 from personal_agent.telemetry import TraceContext
+from personal_agent.tools.primitives._governance import (
+    _check_path_governance,
+    _expand_path,
+)
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = structlog.get_logger(__name__)
@@ -58,81 +59,6 @@ read_tool = ToolDefinition(
 
 
 # ---------------------------------------------------------------------------
-# Path-governance helpers (mirrors executor._validate_path_against_patterns)
-# ---------------------------------------------------------------------------
-
-
-def _expand(path: str) -> str:
-    """Expand environment variables and home directory in *path*.
-
-    Args:
-        path: Raw path string possibly containing ``~`` or ``$VAR`` tokens.
-
-    Returns:
-        Expanded string.
-    """
-    return os.path.expanduser(os.path.expandvars(path))
-
-
-def _matches_any(path: str, patterns: list[str]) -> bool:
-    """Return True if *path* matches at least one glob *pattern*.
-
-    Args:
-        path: Resolved filesystem path to test.
-        patterns: List of glob patterns (may contain ``~`` / ``$VAR``).
-
-    Returns:
-        True if any pattern matches.
-    """
-    return any(fnmatch(path, _expand(p)) for p in patterns)
-
-
-def _check_path_governance(
-    resolved: Path,
-    tool_name: str = "read",
-) -> dict[str, Any] | None:
-    """Validate *resolved* against allowed_paths / forbidden_paths for *tool_name*.
-
-    Args:
-        resolved: Fully resolved absolute path.
-        tool_name: Key to look up in ``governance_config.tools``.
-
-    Returns:
-        An error dict (with ``success=False``) when the path is rejected,
-        or ``None`` when the path is permitted.
-    """
-    try:
-        governance = load_governance_config()
-    except Exception as exc:  # noqa: BLE001 — we surface as a tool error
-        log.warning("read_governance_load_error", error=str(exc))
-        return None  # fail open: let the executor proceed
-
-    policy = governance.tools.get(tool_name)
-    if policy is None:
-        return None  # no policy → permitted
-
-    path_str = str(resolved)
-
-    if policy.forbidden_paths and _matches_any(path_str, policy.forbidden_paths):
-        return {
-            "success": False,
-            "error": "forbidden_path",
-            "path": path_str,
-            "detail": f"Path {path_str!r} is in the forbidden_paths list for tool '{tool_name}'",
-        }
-
-    if policy.allowed_paths and not _matches_any(path_str, policy.allowed_paths):
-        return {
-            "success": False,
-            "error": "path_not_allowed",
-            "path": path_str,
-            "detail": f"Path {path_str!r} is not in the allowed_paths list for tool '{tool_name}'",
-        }
-
-    return None
-
-
-# ---------------------------------------------------------------------------
 # Executor
 # ---------------------------------------------------------------------------
 
@@ -155,7 +81,13 @@ async def read_executor(
     Returns:
         On success::
 
-            {"success": True, "path": str, "size_bytes": int, "content": str}
+            {
+                "success": True,
+                "path": str,
+                "size_bytes": int,
+                "content": str,
+                "truncated": bool,
+            }
 
         On failure::
 
@@ -173,7 +105,7 @@ async def read_executor(
     trace_id = ctx.trace_id if ctx else "n/a"
 
     # 1. Resolve path
-    resolved = Path(_expand(path)).expanduser().resolve()
+    resolved = Path(_expand_path(path)).expanduser().resolve()
     log.debug("read_executor_called", path=path, resolved=str(resolved), trace_id=trace_id)
 
     # 2. Path governance
@@ -196,7 +128,7 @@ async def read_executor(
             "detail": f"Path {str(resolved)!r} is not an existing regular file",
         }
 
-    # 4. Size check
+    # 4. Size check — stat first so we can reject huge files without reading them
     actual_size = resolved.stat().st_size
     if actual_size > max_bytes:
         return {
@@ -210,9 +142,13 @@ async def read_executor(
             ),
         }
 
-    # 5. Read (binary decode with replacement to handle non-UTF-8 bytes)
+    # 5. Bounded read — read one extra byte to detect truncation without loading
+    #    the full file into RAM when max_bytes < actual_size.
     try:
-        content = resolved.read_bytes().decode("utf-8", errors="replace")[:max_bytes]
+        with resolved.open("rb") as fh:
+            raw = fh.read(max_bytes + 1)
+        truncated = len(raw) > max_bytes
+        content = raw[:max_bytes].decode("utf-8", errors="replace")
     except PermissionError as exc:
         log.warning("read_permission_denied", path=str(resolved), error=str(exc), trace_id=trace_id)
         return {
@@ -234,6 +170,7 @@ async def read_executor(
         "read_executor_success",
         path=str(resolved),
         size_bytes=actual_size,
+        truncated=truncated,
         trace_id=trace_id,
     )
     return {
@@ -241,4 +178,5 @@ async def read_executor(
         "path": str(resolved),
         "size_bytes": actual_size,
         "content": content,
+        "truncated": truncated,
     }

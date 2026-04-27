@@ -7,8 +7,6 @@ checks (allowed_paths / forbidden_paths / unattended_paths from
 FRE-261 Step 3.
 """
 
-import os
-from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +14,11 @@ import structlog
 
 from personal_agent.config import load_governance_config
 from personal_agent.telemetry import TraceContext
+from personal_agent.tools.primitives._governance import (
+    _check_path_governance,
+    _expand_path,
+    _matches_any,
+)
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = structlog.get_logger(__name__)
@@ -67,82 +70,8 @@ write_tool = ToolDefinition(
 
 
 # ---------------------------------------------------------------------------
-# Path-governance helpers
+# Write-specific governance helper
 # ---------------------------------------------------------------------------
-
-
-def _expand(path: str) -> str:
-    """Expand environment variables and home directory in *path*.
-
-    Args:
-        path: Raw path string possibly containing ``~`` or ``$VAR`` tokens.
-
-    Returns:
-        Expanded string.
-    """
-    return os.path.expanduser(os.path.expandvars(path))
-
-
-def _matches_any(path: str, patterns: list[str]) -> bool:
-    """Return True if *path* matches at least one glob *pattern*.
-
-    Args:
-        path: Resolved filesystem path to test.
-        patterns: List of glob patterns (may contain ``~`` / ``$VAR``).
-
-    Returns:
-        True if any pattern matches.
-    """
-    return any(fnmatch(path, _expand(p)) for p in patterns)
-
-
-def _check_path_governance(
-    resolved: Path,
-    tool_name: str = "write",
-) -> dict[str, Any] | None:
-    """Validate *resolved* against allowed_paths / forbidden_paths for *tool_name*.
-
-    Args:
-        resolved: Fully resolved absolute path.
-        tool_name: Key to look up in ``governance_config.tools``.
-
-    Returns:
-        An error dict (with ``success=False``) when the path is rejected,
-        or ``None`` when the path is permitted.
-    """
-    try:
-        governance = load_governance_config()
-    except Exception as exc:  # noqa: BLE001 — surface as tool error
-        log.warning("write_governance_load_error", error=str(exc))
-        return None  # fail open
-
-    policy = governance.tools.get(tool_name)
-    if policy is None:
-        return None
-
-    path_str = str(resolved)
-
-    if policy.forbidden_paths and _matches_any(path_str, policy.forbidden_paths):
-        return {
-            "success": False,
-            "error": "forbidden_path",
-            "path": path_str,
-            "detail": (
-                f"Path {path_str!r} is in the forbidden_paths list for tool '{tool_name}'"
-            ),
-        }
-
-    if policy.allowed_paths and not _matches_any(path_str, policy.allowed_paths):
-        return {
-            "success": False,
-            "error": "path_not_allowed",
-            "path": path_str,
-            "detail": (
-                f"Path {path_str!r} is not in the allowed_paths list for tool '{tool_name}'"
-            ),
-        }
-
-    return None
 
 
 def _is_unattended_path(resolved: Path, tool_name: str = "write") -> bool:
@@ -235,7 +164,7 @@ async def write_executor(
         }
 
     # 2. Resolve path
-    resolved = Path(_expand(path)).expanduser().resolve()
+    resolved = Path(_expand_path(path)).expanduser().resolve()
     log.debug("write_executor_called", path=path, resolved=str(resolved), mode=mode, trace_id=trace_id)
 
     # 3. Path governance

@@ -112,10 +112,44 @@ async def test_read_path_traversal() -> None:
     object.__setattr__(mock_config, "tools", {"read": policy})
 
     with patch(
-        "personal_agent.tools.primitives.read.load_governance_config",
+        "personal_agent.tools.primitives._governance.load_governance_config",
         return_value=mock_config,
     ):
         result = await read_executor("/etc/shadow")
 
     assert result["success"] is False
     assert result["error"] == "forbidden_path"
+
+
+# ---------------------------------------------------------------------------
+# path_not_allowed check — path outside allowed_paths list
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_read_path_not_in_allowed_paths() -> None:
+    """A path outside allowed_paths list returns path_not_allowed error."""
+    from personal_agent.governance.models import GovernanceConfig
+
+    # Policy with a narrow allowed_paths that does NOT cover /var/tmp/
+    policy = _make_policy(
+        allowed_paths=["/nonexistent/**"],
+        forbidden_paths=[],
+    )
+
+    mock_config = GovernanceConfig.__new__(GovernanceConfig)
+    object.__setattr__(mock_config, "tools", {"read": policy})
+
+    with TemporaryDirectory(dir="/var/tmp") as tmpdir:
+        test_file = Path(tmpdir) / "probe.txt"
+        test_file.write_text("data", encoding="utf-8")
+
+        with patch(
+            "personal_agent.tools.primitives._governance.load_governance_config",
+            return_value=mock_config,
+        ):
+            result = await read_executor(str(test_file))
+
+    assert result["success"] is False
+    assert result["error"] == "path_not_allowed"
+    assert "path" in result

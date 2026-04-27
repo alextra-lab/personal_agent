@@ -943,6 +943,7 @@ class AppConfig(BaseSettings):
     )
     prefer_primitives_enabled: bool = Field(
         default=False,
+        alias="AGENT_PREFER_PRIMITIVES",
         description=(
             "Inject skill library docs into system prompt and nudge the model to prefer "
             "primitives over MCP tools. Enable AFTER pentest gate clears AND 6+ skill docs "

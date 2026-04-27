@@ -51,7 +51,7 @@ dependencies = [
   "neo4j>=5.15.0",        # Neo4j driver for knowledge graph
   # Claude API (Phase 2.2 - second brain). Optional at runtime: only loaded when using Claude.
   "anthropic>=0.18.0",
-  "litellm>=1.83.0",
+  "litellm>=1.83.7",
   # Event bus (ADR-0041 — Redis Streams)
   "redis[hiredis]>=5.0.0",
   "python-multipart>=0.0.26",

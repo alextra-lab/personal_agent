@@ -1,0 +1,75 @@
+# FRE-262 PIVOT-3 evaluation prompts
+# 20 prompts covering deprecated-tool use cases.
+# Run with tests/evaluation/run_primitive_tools_eval.py
+prompts:
+  # query_elasticsearch + self_telemetry_query (4)
+  - id: es-01
+    category: query-elasticsearch
+    prompt: "Show me errors in the last hour."
+  - id: es-02
+    category: query-elasticsearch
+    prompt: "How many request.completed events fired today, by task_type?"
+  - id: es-03
+    category: query-elasticsearch
+    prompt: "What's the p95 LLM call latency over the last 24 hours?"
+  - id: es-04
+    category: query-elasticsearch
+    prompt: "Find the trace where the agent looped on web_search this week."
+
+  # fetch_url (3)
+  - id: fetch-01
+    category: fetch-url
+    prompt: "Fetch https://example.com/api/status and tell me what it says."
+  - id: fetch-02
+    category: fetch-url
+    prompt: "Read the README on https://github.com/anthropics/anthropic-sdk-python and summarize what the package does."
+  - id: fetch-03
+    category: fetch-url
+    prompt: "What's the current Anthropic pricing? Check https://www.anthropic.com/pricing."
+
+  # list_directory (3)
+  - id: ls-01
+    category: list-directory
+    prompt: "List files in /app/config."
+  - id: ls-02
+    category: list-directory
+    prompt: "What's in the /app/src/personal_agent/tools folder?"
+  - id: ls-03
+    category: list-directory
+    prompt: "How many YAML files are under /app/config?"
+
+  # system_metrics_snapshot (3)
+  - id: metrics-01
+    category: system-metrics
+    prompt: "What's the current CPU load?"
+  - id: metrics-02
+    category: system-metrics
+    prompt: "How much memory is the agent service using right now?"
+  - id: metrics-03
+    category: system-metrics
+    prompt: "Is disk space getting low?"
+
+  # run_sysdiag (3)
+  - id: diag-01
+    category: system-diagnostics
+    prompt: "List the top 10 processes by memory usage."
+  - id: diag-02
+    category: system-diagnostics
+    prompt: "Which container ports are listening?"
+  - id: diag-03
+    category: system-diagnostics
+    prompt: "Show me what the system has been doing for the last 5 minutes (load, swap, IO)."
+
+  # infra_health (4)
+  - id: infra-01
+    category: infrastructure-health
+    prompt: "Check infrastructure health."
+  - id: infra-02
+    category: infrastructure-health
+    prompt: "Is Postgres reachable?"
+  - id: infra-03
+    category: infrastructure-health
+    prompt: "Are Neo4j and Elasticsearch both up?"
+  - id: infra-04
+    category: infrastructure-health
+    prompt: "All backend services healthy right now?"

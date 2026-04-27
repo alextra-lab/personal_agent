@@ -137,6 +137,13 @@ def parse_args() -> argparse.Namespace:
         metavar="STR",
         help=f"Prefix for session IDs (default: {_DEFAULT_SESSION_PREFIX!r})",
     )
+    parser.add_argument(
+        "--skip",
+        nargs="*",
+        default=[],
+        metavar="ID",
+        help="Prompt IDs to skip (e.g. --skip es-04 es-01)",
+    )
     return parser.parse_args()
 
 
@@ -370,11 +377,19 @@ def run_harness(args: argparse.Namespace) -> None:
     sys.stdout.flush()
 
     results: list[dict[str, Any]] = []
+    skip_ids = set(args.skip or [])
+    if skip_ids:
+        sys.stdout.write(f"Skipping: {', '.join(sorted(skip_ids))}\n")
 
     for i, prompt in enumerate(prompts, start=1):
         pid = prompt["id"]
         category = prompt["category"]
         message = prompt["prompt"]
+
+        if pid in skip_ids:
+            sys.stdout.write(f"[{i:02d}/{n}] {pid}: SKIPPED\n")
+            sys.stdout.flush()
+            continue
         # uuid5 gives deterministic, valid UUIDs traceable by prompt ID
         ctrl_session = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{args.session_prefix}-ctrl-{pid}"))
         trt_session = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{args.session_prefix}-trt-{pid}"))
@@ -419,10 +434,13 @@ def run_harness(args: argparse.Namespace) -> None:
             }
         )
 
+        # Incremental write after every prompt so kills don't lose data
+        _write_results_json(results, output_dir)
+
         if i < n and args.delay > 0:
             time.sleep(args.delay)
 
-    # Write output files
+    # Final write output files
     json_path = _write_results_json(results, output_dir)
     md_path = _write_report_md(
         results,

@@ -1,0 +1,61 @@
+# Eval-only model config — routes primary + sub_agent to Claude Sonnet (Anthropic).
+# Used for FRE-262 PIVOT-3 evaluation where two concurrent instances run on VPS
+# without the Mac SLM tunnel. Do NOT use in production.
+entity_extraction_role: claude_sonnet
+captains_log_role: claude_sonnet
+insights_role: claude_sonnet
+
+models:
+  primary:
+    id: "claude-sonnet-4-6"
+    provider: "anthropic"
+    provider_type: "cloud"
+    max_tokens: 8192
+    context_length: 200000
+    min_concurrency: 1
+    max_concurrency: 10
+    default_timeout: 60
+    supports_function_calling: true
+    tool_calling_strategy: "native"
+
+  sub_agent:
+    id: "claude-sonnet-4-6"
+    provider: "anthropic"
+    provider_type: "cloud"
+    max_tokens: 4096
+    context_length: 200000
+    min_concurrency: 1
+    max_concurrency: 10
+    default_timeout: 60
+    supports_function_calling: true
+    tool_calling_strategy: "native"
+
+  claude_sonnet:
+    id: "claude-sonnet-4-6"
+    provider: "anthropic"
+    provider_type: "cloud"
+    max_tokens: 8192
+    context_length: 200000
+    min_concurrency: 1
+    max_concurrency: 10
+    default_timeout: 60
+
+  claude_haiku:
+    id: "claude-haiku-4-5-20251001"
+    provider: "anthropic"
+    provider_type: "cloud"
+    max_tokens: 4096
+    context_length: 200000
+    min_concurrency: 1
+    max_concurrency: 20
+    default_timeout: 30
+
+  gpt-5.4-nano:
+    id: "gpt-4o-mini"
+    provider: "openai"
+    provider_type: "cloud"
+    max_tokens: 4096
+    context_length: 128000
+    min_concurrency: 1
+    max_concurrency: 20
+    default_timeout: 30

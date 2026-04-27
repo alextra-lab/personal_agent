@@ -1,0 +1,90 @@
+# system-diagnostics — Run system diagnostic commands (ps, ss, vmstat, lsof, …)
+
+**Category:** `system_read` · **Risk:** low · **Approval:** all listed commands are auto-approved (NORMAL); no PWA prompt
+
+All commands the legacy `run_sysdiag` tool allowed are on the bash auto-approve list. Write the full command directly — no `shlex.split` needed.
+
+## Processes
+
+```bash
+# All processes, full listing
+bash ps -ef
+
+# Top memory consumers
+bash ps aux --sort=-%mem | head -15
+
+# Top CPU consumers
+bash ps aux --sort=-%cpu | head -15
+
+# Find a specific process by name
+bash pgrep -a uvicorn
+```
+
+## Network / ports
+
+```bash
+# Listening ports (TCP + UDP, numeric, with process)
+bash ss -tunlp
+
+# Established connections
+bash ss -tnp state established
+
+# Equivalent using netstat
+bash netstat -tunlp
+```
+
+## Load and I/O
+
+```bash
+# System load + memory (3 samples, 1 s apart)
+bash vmstat 1 3
+
+# Disk I/O throughput (3 samples, 1 s apart)
+bash iostat 1 3
+
+# Current uptime + load average
+bash uptime
+```
+
+## Disk usage
+
+```bash
+# Summary per top-level directory
+bash du -sh /app/*
+
+# Largest directories under /opt
+bash du -sh /opt/* | sort -rh | head -10
+```
+
+## File handles and open connections
+
+```bash
+# All open network connections
+bash lsof -i
+
+# Open files for a specific process (PID or name)
+bash lsof -p <pid>
+```
+
+## System info
+
+```bash
+bash uname -a
+bash uptime
+```
+
+## Output cap
+
+For commands that may produce large output, pipe through `head -c`:
+
+```bash
+bash lsof -i | head -c 30000
+bash ps -ef | head -c 30000
+```
+
+## Governance
+
+- Auto-approved in NORMAL, ALERT, and DEGRADED: `ps`, `pgrep`, `top`, `lsof`, `find`, `df`, `du`, `iostat`, `vmstat`, `free`, `ip`, `ifconfig`, `ss`, `netstat`, `uptime`, `sysctl`, `who`, `last`, `uname`.
+- LOCKDOWN / RECOVERY: `bash` disabled. No equivalent available in those modes.
+- Combined stdout + stderr capped at 50 KiB by the bash executor. Use `head -c 30000` to stay within limits on verbose commands.
+- See also: `bash.md` for hard-denied patterns and full auto-approve list.

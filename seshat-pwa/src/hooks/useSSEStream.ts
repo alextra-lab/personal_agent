@@ -155,7 +155,7 @@ export function useSSEStream(): UseSSEStreamReturn {
         // Agent is blocked waiting for a tool-approval decision.
         // The stream remains open — do NOT set isStreaming=false here.
         // The ApprovalModal will call handleApprovalDecision when resolved.
-        setPendingApproval(event.data as ToolApprovalRequestData);
+        setPendingApproval(event.data as unknown as ToolApprovalRequestData);
         break;
       }
 

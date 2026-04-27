@@ -1,0 +1,344 @@
+[
+  {
+    "id": "es-01",
+    "category": "query-elasticsearch",
+    "prompt": "Show me errors in the last hour.",
+    "control": {
+      "status": 200,
+      "response": "Here's a summary of errors in the **last hour**:\n\n---\n\n### 📊 Overview\n| Metric | Count |\n|---|---|\n| **Total Errors** | 187 |\n| `task_failed` | 86 |\n| `model_call_error` | 86 |\n| `tool_call_failed` | 15 |\n\n**By Component:**\n- `executor` → **144 errors**\n- `client` → **43 errors**\n\n**Trend:** Stable (errors are not accelerating)\n\n---\n\n### 🔴 Root Cause — LLM Service Unreachable\n\nThe dominant error across all recent entries is the same:\n\n> **`Failed to connect to http://localhost:8000/v1/chat/completions: All connection attempts failed`**\n\nThis means the **local language model service** (likely an Ollama or vLLM instance on port `8000`) is **down or unreachable**. The executor is repeatedly failing to reach it, generating paired `task_failed` + `model_call_error` events.\n\n---\n\n### 🔧 Recommended Actions\n\n1. **Check if the LLM service is running** — verify the process on port `8000` is alive (e.g., via `pgrep` or `ps`).\n2. **Check service logs** for the LLM backend to see why it went down.\n3. **Restart the LLM service** if it has crashed.\n4. The 15 `tool_call_failed` errors are likely cascading failures triggered by the unavailable model.\n\nWould you like me to dig deeper — e.g., check process state, inspect a specific trace, or file a Linear issue?",
+      "latency_ms": 19043,
+      "session_id": "1de6dd11-90dc-553c-a5e7-01ced7271d1e"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "Here's a summary of errors in the last hour:\n\n---\n\n## 🔴 Error Summary — Last 1 Hour\n\n**Total errors: 187** (trend: stable)\n\n| Type | Count | Component |\n|---|---|---|\n| `task_failed` | 86 | executor |\n| `model_call_error` | 86 | client |\n| `tool_call_failed` | 15 | executor |\n\n---\n\n### 🔥 #1 — LLM Connection Failures (86 errors, most critical)\n**Error:** `LLMConnectionError: Failed to connect to http://localhost:8000/v1/chat/completions: All connection attempts failed`\n- **Model:** `unsloth/qwen3.6-35-A3B` (primary)\n- **Component:** `personal_agent.llm_client.client` → `personal_agent.orchestrator.executor`\n- **Pattern:** Recurring bursts — large cluster at ~17:09 and again at ~17:12 UTC\n- **Impact:** Tasks fail completely when the local LLM inference server is unreachable\n\n---\n\n### ⚠️ #2 — Sandbox Permission Denied (multiple errors)\n**Error:** `[Errno 13] Permission denied: '/app'`\n- **Component:** `personal_agent.tools.primitives.sandbox`\n- **Event:** `sandbox_scratch_mkdir_failed`\n- **Cause:** The sandbox cannot create scratch directories under `/app/agent_workspace/sandbox/`\n- **Impact:** Any `run_python` tool calls will fail\n\n---\n\n### ⚠️ #3 — Elasticsearch Query Errors (15 tool_call_failed)\nSeveral `query_elasticsearch` calls hit HTTP 400 errors:\n- `Unknown index [agent-events-*]` — index doesn't exist yet\n- `Unknown index [agent-traces-*]` / `[agent-traces*]` — index pattern not found\n- `Unknown column [event]`, `Unknown column [event.action]`, `Unknown column [tool.name]` — schema mismatches in ES|QL queries\n\n---\n\n### ℹ️ #4 — HTTP 404 from fetch_url\n**Error:** `HTTP 404 fetching https://example.com/api/status`\n- Single isolated tool call failure, low impact\n\n---\n\n### 🔑 Key Issues to Address\n1. **LLM inference server** (`localhost:8000`) is intermittently or consistently down — the biggest source of failures\n2. **Sandbox scratch dir permissions** — `/app/agent_workspace/sandbox/` is not writable\n3. **Missing ES indices** — `agent-events-*` and `agent-traces-*` patterns don't exist; queries should be scoped to existing indices",
+      "latency_ms": 21001,
+      "session_id": "f3be5be4-702a-56e9-8664-1fe39c60f7fa"
+    },
+    "quality": ""
+  },
+  {
+    "id": "es-02",
+    "category": "query-elasticsearch",
+    "prompt": "How many request.completed events fired today, by task_type?",
+    "control": {
+      "status": 200,
+      "response": "No `request.completed` events were found for today. The query returned an empty result set, which means either:\n\n- **No requests have completed yet today**, or\n- The event name may differ slightly in your logs (e.g. `request_completed`, `task.completed`, etc.)\n\nWould you like me to search for a different event name or broaden the time window to confirm?",
+      "latency_ms": 19999,
+      "session_id": "51d73386-168f-5344-905c-6c10f8a0e318"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "I wasn't able to retrieve the data — the `agent-events-*` index doesn't exist, and I've hit the tool call budget before I could discover the correct index name.\n\nTo get this answered properly, could you let me know the correct Elasticsearch index name for agent events? Alternatively, I can retry in a fresh conversation where I'll first list indices to find the right one, then run the aggregation query.",
+      "latency_ms": 18095,
+      "session_id": "6c4004c8-83db-5be8-bbe4-7704633edca7"
+    },
+    "quality": ""
+  },
+  {
+    "id": "es-03",
+    "category": "query-elasticsearch",
+    "prompt": "What's the p95 LLM call latency over the last 24 hours?",
+    "control": {
+      "status": 200,
+      "response": "The performance telemetry for the last 24 hours shows that **all latency percentiles (p50, p75, p90, p95) are currently returning `null`** — meaning per-interaction end-to-end latency data isn't being recorded or surfaced in the metrics store at this time.\n\nHere's what *is* available:\n\n| Metric | Value |\n|---|---|\n| Total interactions | 100 |\n| Avg interactions/hour | 4.17 |\n| Total tokens | 7,590 |\n| Avg tokens/interaction | 75.9 |\n| Latency trend | Stable |\n| Bottleneck | None detected |\n\n**Top tool latencies (what is measured):**\n- `system_metrics_snapshot`: ~102ms avg\n- `read_file`: ~0.84ms avg\n- `search_memory`: ~0.6ms avg\n\nThe missing LLM call latency figures suggest that model call durations aren't being instrumented at the interaction level right now. Would you like me to dig into the raw event logs to try to extract LLM call timings directly, or file an issue to improve latency instrumentation?",
+      "latency_ms": 8719,
+      "session_id": "38fdfd03-4f64-54f6-b668-1a87b1fceec8"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "The performance telemetry returned **null for all latency percentiles** (p50, p75, p90, p95) over the last 24 hours. This means duration/latency data isn't being captured in the interaction records — the telemetry pipeline is tracking throughput and token counts, but not per-call timing for LLM calls specifically.\n\nHere's what **is** available from the last 24 hours:\n\n| Metric | Value |\n|---|---|\n| Total interactions | 100 |\n| Avg interactions/hour | 4.17 |\n| Total tokens | 7,590 |\n| Avg tokens/interaction | 75.9 |\n| p95 LLM latency | **N/A** (not recorded) |\n| Latency trend | Stable |\n\nThe only tool-level latency data available is for individual tools (e.g. `system_metrics_snapshot` averaged ~102ms), but LLM call duration is not being persisted in the telemetry store.\n\nThis looks like a gap worth filing — want me to create a Linear issue to track adding LLM call latency instrumentation?",
+      "latency_ms": 21504,
+      "session_id": "5b54f236-f518-5131-bb84-579a14413d91"
+    },
+    "quality": ""
+  },
+  {
+    "id": "fetch-01",
+    "category": "fetch-url",
+    "prompt": "Fetch https://example.com/api/status and tell me what it says.",
+    "control": {
+      "status": 200,
+      "response": "The URL **https://example.com/api/status** returned a **404 Not Found** error. This means the endpoint does not exist (or is not publicly accessible). A few possible reasons:\n\n- The path `/api/status` doesn't exist on `example.com` — which is expected, as `example.com` is a reserved demonstration domain with no real API.\n- The endpoint may require authentication, be behind a firewall, or be restricted to certain IP ranges.\n- There could be a typo in the URL.\n\nIf you meant a different URL or have a specific API in mind, feel free to share the correct address and I'll fetch it for you!",
+      "latency_ms": 12020,
+      "session_id": "fec90373-ad01-59f8-ad98-8c6411a2a965"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "The URL `https://example.com/api/status` does **not** return a real API status endpoint. Instead, it responds with the standard **Example Domain** HTML page — meaning there is no `/api/status` route on that server. The page simply reads:\n\n> **Example Domain**\n> This domain is for use in documentation examples without needing permission. Avoid use in operations.\n> [Learn more](https://iana.org/domains/example)\n\nIn short, `example.com` is a reserved placeholder domain maintained by IANA. It doesn't host any real API, so any path you append (like `/api/status`) just returns the same generic HTML page rather than a structured API response.",
+      "latency_ms": 8441,
+      "session_id": "962a1f5e-e932-55f0-9a00-f57a09335b42"
+    },
+    "quality": ""
+  },
+  {
+    "id": "fetch-02",
+    "category": "fetch-url",
+    "prompt": "Read the README on https://github.com/anthropics/anthropic-sdk-python and summarize what the package does.",
+    "control": {
+      "status": 200,
+      "response": "Here's a summary of what the **`anthropic`** Python package does:\n\n---\n\n### 🐍 Claude SDK for Python (`anthropic`)\n\n**What it is:** The official Python SDK that provides convenient access to Anthropic's [Claude API](https://docs.anthropic.com/en/api/) from any Python application.\n\n**Core functionality:**\n- Lets you send messages to Claude models (e.g. `claude-opus-4`) and receive AI-generated responses\n- Wraps the Claude REST API in a clean, idiomatic Python client (`Anthropic` class)\n- Handles authentication via an `ANTHROPIC_API_KEY`\n\n**Key features (from the quickstart):**\n- Simple client instantiation with `Anthropic(api_key=...)`\n- Message creation via `client.messages.create(...)`, where you pass a model name, a list of messages, and token limits\n- Returns structured response objects with the model's reply in `.content`\n\n**Installation:**\n```sh\npip install anthropic\n```\n\n**Requirements:** Python 3.9+\n\n**License:** MIT\n\n---\n\nIn short, it's the go-to library for integrating Claude's language model capabilities into Python projects — whether for chatbots, automation, summarization, code generation, or any other LLM-powered use case.",
+      "latency_ms": 22864,
+      "session_id": "90460ab5-74b4-5008-bdf8-f61850ed043d"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "Here's a summary of the **`anthropic` Python SDK** (a.k.a. the Claude SDK for Python):\n\n---\n\n### 📦 What It Is\nThe `anthropic` package is Anthropic's **official Python SDK** that provides programmatic access to the **Claude API** from Python applications.\n\n### 🔧 What It Does\n- Lets you send messages to Claude models and receive responses — the core use case is building conversational AI, text generation, summarization, and similar LLM-powered features.\n- Wraps the Claude REST API into a clean, idiomatic Python client so you don't have to manage raw HTTP requests yourself.\n\n### 🚀 Key Details\n| Item | Detail |\n|---|---|\n| **Install** | `pip install anthropic` |\n| **Python requirement** | Python 3.9+ |\n| **Primary interface** | `Anthropic` client class → `client.messages.create(...)` |\n| **Auth** | API key via `ANTHROPIC_API_KEY` env var (or passed directly) |\n| **License** | MIT |\n\n### 💡 Basic Usage Pattern\n```python\nfrom anthropic import Anthropic\n\nclient = Anthropic()  # reads ANTHROPIC_API_KEY from env\n\nmessage = client.messages.create(\n    model=\"claude-opus-4-6\",\n    max_tokens=1024,\n    messages=[{\"role\": \"user\", \"content\": \"Hello, Claude\"}],\n)\nprint(message.content)\n```\n\n### 📚 More\nFull documentation is at [platform.claude.com/docs/en/api/sdks/python](https://platform.claude.com/docs/en/api/sdks/python).\n\n---\n\nIn short: it's the **official, batteries-included Python client for talking to Claude** — install it, set your API key, and start making calls to Claude models in just a few lines of code.",
+      "latency_ms": 17702,
+      "session_id": "8b393e40-57c4-5c37-b75d-318e0f38f43a"
+    },
+    "quality": ""
+  },
+  {
+    "id": "fetch-03",
+    "category": "fetch-url",
+    "prompt": "What's the current Anthropic pricing? Check https://www.anthropic.com/pricing.",
+    "control": {
+      "status": 200,
+      "response": "Unfortunately, both the direct page fetch and the web search failed to return Anthropic's current pricing data (the page is JavaScript-rendered and the search didn't return relevant results).\n\nHere's what I know from my training data, though **please verify directly at [anthropic.com/pricing](https://www.anthropic.com/pricing)** as prices change frequently:\n\n---\n\n## Claude API Pricing (as of early 2025 training data)\n\n| Model | Input (per 1M tokens) | Output (per 1M tokens) |\n|---|---|---|\n| **Claude Opus 4** | ~$15.00 | ~$75.00 |\n| **Claude Sonnet 4 / 3.7** | ~$3.00 | ~$15.00 |\n| **Claude Haiku 3.5** | ~$0.80 | ~$4.00 |\n\n> **Note:** A HackerNews result also mentioned **Claude Opus 4.5** with price cuts, suggesting pricing may have decreased further — but I couldn't retrieve the exact figures.\n\n---\n\nFor the most accurate, up-to-date numbers:\n- 👉 Visit **https://www.anthropic.com/pricing** directly in your browser\n- Or check the **[Anthropic docs](https://docs.anthropic.com/en/docs/about-claude/models)** which also lists model pricing",
+      "latency_ms": 36888,
+      "session_id": "e138c8f0-1aac-53f4-9021-02da317cd2a2"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "Here's the current Anthropic pricing based on the latest data from their site:\n\n---\n\n## 🖥️ Claude.ai Plans (Consumer)\n\n| Plan | Price |\n|------|-------|\n| **Free** | $0 |\n| **Pro** | $20/month (or ~$17/month billed annually at $200/year) |\n| **Max** | Higher usage limits (available where Claude is offered) |\n\n---\n\n## 🔌 API Pricing (per million tokens)\n\n| Model | Input | Output | Notes |\n|-------|-------|--------|-------|\n| **Claude Opus 4.x** (e.g. Opus 4.5, 4.6, 4.7) | $5 | $25 | Up to 90% savings w/ prompt caching; 50% w/ batch |\n| **Claude Haiku 4.5** | $1 | $5 | Most economical; up to 90% savings w/ prompt caching |\n| **Claude Sonnet 4.x** | See pricing page | See pricing page | Versatile mid-tier model |\n\n---\n\n## 💡 Key Savings\n- **Prompt Caching:** Up to **90% off** on repeated/cached input tokens\n- **Batch Processing:** Up to **50% off** for async batch jobs\n\n---\n\n> ⚠️ **Note:** The pricing page (`anthropic.com/pricing`) is JavaScript-rendered and couldn't be fetched directly. The figures above are sourced from Anthropic's own model pages and news posts. For the most complete and up-to-date breakdown (especially for Sonnet tiers and enterprise plans), visit **[anthropic.com/pricing](https://www.anthropic.com/pricing)** directly in your browser.",
+      "latency_ms": 37383,
+      "session_id": "1c3d2795-91ef-5ee7-a701-acaa7c8462e0"
+    },
+    "quality": ""
+  },
+  {
+    "id": "ls-01",
+    "category": "list-directory",
+    "prompt": "List files in /app/config.",
+    "control": {
+      "status": 200,
+      "response": "The directory `/app/config` does not exist inside the container. It's possible the configuration is injected via environment variables at startup rather than stored as files.\n\nIf you'd like, I can:\n- **List `/app`** to see what directories/files are present at the top level.\n- **Check environment variables** or other config-related paths.\n\nJust let me know!",
+      "latency_ms": 6118,
+      "session_id": "58bd338b-1891-5622-a2a8-17554abec1c1"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "The directory `/app/config` does not exist inside the container. The path was not found.\n\nIf you're looking for configuration files, they may be located elsewhere. Common alternatives to check:\n- `/app` — the root app directory\n- Environment variables (config is injected at startup in this deployment)\n- A subdirectory like `/app/personal_agent/config` or `/app/src/config`\n\nWould you like me to list `/app` to explore the actual directory structure?",
+      "latency_ms": 73451,
+      "session_id": "56810fe5-8f87-57d7-861d-dd90eb750066"
+    },
+    "quality": ""
+  },
+  {
+    "id": "ls-02",
+    "category": "list-directory",
+    "prompt": "What's in the /app/src/personal_agent/tools folder?",
+    "control": {
+      "status": 200,
+      "response": "The directory `/app/src/personal_agent/tools` does not exist in the container. The path likely doesn't match the actual structure on disk.\n\nWould you like me to explore the `/app` directory to find where the tools code actually lives? I can do a quick listing of `/app` or `/app/src` to locate it.",
+      "latency_ms": 16544,
+      "session_id": "77481659-a76f-5dc9-8a8c-9739d08d3dc0"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "It looks like `/app` doesn't exist in this container environment. The path `/app/src/personal_agent/tools` (and its parent `/app`) is not accessible — the directory simply doesn't exist here.\n\nA few possibilities:\n- The code may be mounted at a different path inside the container.\n- The container may not have the application source mounted at all.\n\nIf you know an alternative path (e.g. something like `/opt/...` or a different mount point visible inside the container), I can look there instead. Alternatively, you could check the Docker run/compose config on the host to see where the source is mounted.",
+      "latency_ms": 20158,
+      "session_id": "4d9cf45d-7999-5601-8564-7a129be859de"
+    },
+    "quality": ""
+  },
+  {
+    "id": "ls-03",
+    "category": "list-directory",
+    "prompt": "How many YAML files are under /app/config?",
+    "control": {
+      "status": 200,
+      "response": "The directory `/app/config` does not exist inside the container. Would you like me to check what's available under `/app` instead?",
+      "latency_ms": 4964,
+      "session_id": "77165cb3-0f46-5485-9f96-ee4252ad6d73"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "It looks like piping (`|`) isn't supported in the bash tool's command parser. Unfortunately I've exhausted my tool budget attempting to fix the syntax.\n\nBased on the errors, the issue is that the bash executor doesn't support shell pipes (`|`). To answer your question manually, you could run this directly on the host:\n\n```bash\nfind /app/config \\( -name \"*.yaml\" -o -name \"*.yml\" \\) | wc -l\n```\n\nWould you like me to try a different approach, such as using `list_directory` on `/app/config` to count YAML files from the returned listing?",
+      "latency_ms": 18785,
+      "session_id": "51c6da08-1f46-54ce-b714-3da0688636d2"
+    },
+    "quality": ""
+  },
+  {
+    "id": "metrics-01",
+    "category": "system-metrics",
+    "prompt": "What's the current CPU load?",
+    "control": {
+      "status": 200,
+      "response": "Here's the current CPU snapshot:\n\n| Metric | Value |\n|---|---|\n| **CPU Load** | **54.3%** |\n| **CPU Cores** | 8 |\n| **Load Average** | 4.15 (1m) · 3.69 (5m) · 3.51 (15m) |\n\nThe system is running at moderate-to-high utilization (~54%), with load averages hovering just above 4 across all windows — roughly half the available cores are saturated. Memory looks healthy at ~16 GB available out of ~23 GB total.",
+      "latency_ms": 6483,
+      "session_id": "c5aab7d2-eb51-5eb0-8095-1a136ab25408"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "Here's the current CPU load from `uptime`:\n\n| Window | Load Average |\n|--------|-------------|\n| 1 min  | **3.90**    |\n| 5 min  | **3.66**    |\n| 15 min | **3.51**    |\n\nThe system has been up for **12 days, 12 hours**, with 9 active users. The load is steadily climbing slightly (3.51 → 3.90 over 15 min), which suggests increasing activity. Whether this is concerning depends on the number of CPU cores — a load of ~3.9 is fine on a 4+ core machine but would indicate saturation on a 1–2 core system.",
+      "latency_ms": 16544,
+      "session_id": "a779ff39-fc48-568a-bce7-b8669a88b529"
+    },
+    "quality": ""
+  },
+  {
+    "id": "metrics-02",
+    "category": "system-metrics",
+    "prompt": "How much memory is the agent service using right now?",
+    "control": {
+      "status": 200,
+      "response": "Here's the current memory usage for the agent service (this container):\n\n| Metric | Value |\n|---|---|\n| **Memory Used** | **29.3 GB** |\n| **Total Memory** | **22.93 GB** |\n| **Available Memory** | **16.20 GB** |\n\n> ⚠️ Note: The \"used\" figure (29.3 GB) appears to exceed total physical RAM (22.93 GB), which likely means the system metric includes swap usage on top of physical RAM. Available memory sits at ~16.2 GB, so there's still headroom on the host.\n\nThe agent container itself is sharing this host memory pool — if you'd like a more precise per-process breakdown (RSS/VSZ for the agent process specifically), I can run a `ps` diagnostic to drill down further.",
+      "latency_ms": 14049,
+      "session_id": "ef6920e5-e014-50a6-85ba-6c8c328ad048"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "I'm hitting `ps` syntax errors in this container's environment — the `-o` and `--sort` flags aren't supported in the busybox-style `ps` available here. Unfortunately I've run out of tool budget to try alternative approaches (like `free -m` or `/proc` inspection).\n\nHere's what I'd suggest you try directly if you have shell access to the host:\n\n```bash\n# On the host, check the agent container's memory usage:\ndocker stats --no-stream personal-agent\n\n# Or inspect /proc inside the container:\ncat /proc/meminfo | grep -E 'MemTotal|MemAvailable|MemFree'\n```\n\nI'll make a note to use `free -m` or `cat /proc/meminfo` for memory queries next time, since `ps` with custom format flags isn't available in this container environment.",
+      "latency_ms": 19127,
+      "session_id": "6db0dcbc-e67d-50ef-bceb-2613b02b570f"
+    },
+    "quality": ""
+  },
+  {
+    "id": "metrics-03",
+    "category": "system-metrics",
+    "prompt": "Is disk space getting low?",
+    "control": {
+      "status": 200,
+      "response": "Disk space looks healthy — no concerns at all:\n\n| Filesystem | Size | Used | Avail | Use% |\n|---|---|---|---|---|\n| `/dev/sda1` (root) | 197 GB | 46 GB | 144 GB | **25%** |\n| `/boot/efi` | 124 MB | 12 MB | 113 MB | 10% |\n| tmpfs/dev/shm | — | ~0 | — | 0–1% |\n\nThe main disk (`/dev/sda1`) is only **25% full** with **144 GB free**. Plenty of headroom — nothing to worry about.",
+      "latency_ms": 6596,
+      "session_id": "06a03e4b-56e0-55e2-a364-6f4a2b2cc12d"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "Disk space looks healthy — no concerns at all:\n\n| Filesystem | Size | Used | Available | Use% |\n|---|---|---|---|---|\n| `/` (main disk) | 197 GB | 46 GB | 144 GB | **25%** |\n| `/boot/efi` | 124 MB | 12 MB | 113 MB | 10% |\n| tmpfs (RAM-backed) | various | ~2 MB | plenty | ~0% |\n\nThe root filesystem is only **25% full** with **144 GB still free**. You've got plenty of headroom. No action needed.",
+      "latency_ms": 6541,
+      "session_id": "094a82f8-b65a-5fbf-96c4-aed544957a57"
+    },
+    "quality": ""
+  },
+  {
+    "id": "diag-01",
+    "category": "system-diagnostics",
+    "prompt": "List the top 10 processes by memory usage.",
+    "control": {
+      "status": 200,
+      "response": "Here are the **top 10 processes by memory usage** on the host:\n\n| # | PID | User | %MEM | RSS | Command |\n|---|-----|------|------|-----|---------|\n| 1 | 235547 | root | **9.7%** | ~2.24 GB | `llama-server` — Qwen3 Embedding model (port 8503) |\n| 2 | 235548 | root | **6.8%** | ~1.56 GB | `llama-server` — Qwen3 Reranker model (port 8504) |\n| 3 | 196204 | debian | **4.1%** | ~981 MB | `java` — Elasticsearch JVM |\n| 4 | 194899 | 7474 | **2.4%** | ~570 MB | `java` — Neo4j JVM |\n| 5 | 44124 | debian | **2.2%** | ~519 MB | `claude -n primitive_tools` (Claude CLI) |\n| 6 | 503434 | debian | **1.5%** | ~356 MB | Python multiprocessing worker (seshat venv) |\n| 7 | 502780 | debian | **1.4%** | ~347 MB | Python multiprocessing worker (seshat venv) |\n| 8 | 430413 | root | **1.4%** | ~339 MB | `uvicorn personal_agent.service.app:app` (port 9001) |\n| 9 | 2905316 | root | **1.0%** | ~244 MB | `dockerd` (Docker daemon) |\n| 10 | 196141 | root | **0.6%** | ~158 MB | `searxng worker-1` |\n\n**Key observations:**\n- The two **llama-server** inference processes (embeddings + reranker) dominate, consuming a combined **~16.5%** of RAM (~3.8 GB).\n- **Elasticsearch** and **Neo4j** JVMs are the next largest consumers at ~4.1% and ~2.4% respectively.\n- There are also **3 Python processes** (`python -c while True: pass`, PIDs 249038, 250575, 247061) burning **~100% CPU each** — they're CPU hogs rather than memory hogs, but worth noting as they appear to be intentional busy-loop stress tests.",
+      "latency_ms": 14029,
+      "session_id": "414ef4fa-e73c-5a64-8b58-8e9e630dcfe7"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "It seems the `ps` binary inside this container is a stripped-down version (likely from BusyBox) that doesn't support the GNU-style `--sort` flag or `-o` custom format options.\n\nHere are the options going forward:\n\n1. **Use `top`** — I can run `top -b -n 1 -o %MEM` on the next attempt, which is more broadly supported.\n2. **Use `run_python`** — I can read `/proc/*/status` files directly to gather per-process memory stats without relying on `ps`.\n\nWould you like me to try one of these alternatives? I recommend the `run_python` `/proc`-based approach as it's the most reliable in a minimal container environment.",
+      "latency_ms": 17810,
+      "session_id": "63a6a018-db88-5052-906a-9c6976b88624"
+    },
+    "quality": ""
+  },
+  {
+    "id": "diag-02",
+    "category": "system-diagnostics",
+    "prompt": "Which container ports are listening?",
+    "control": {
+      "status": 200,
+      "response": "Here's a summary of all listening TCP ports:\n\n### 🌐 Public (all interfaces `0.0.0.0` / `[::]`)\n| Port | Protocol | Notes |\n|------|----------|-------|\n| **80** | HTTP | Web traffic |\n| **443** | HTTPS | Secure web traffic |\n| **5355** | LLMNR | Link-Local Multicast Name Resolution |\n| **49206** | — | Ephemeral/unknown (backlog 128, likely SSH or similar) |\n\n---\n\n### 🔒 Localhost-only (`127.0.0.1`)\n| Port | Service | Notes |\n|------|---------|-------|\n| **53** | DNS | systemd-resolved |\n| **3000** | — | Likely Grafana or similar dashboard |\n| **5432** | PostgreSQL | |\n| **6379** | Redis | |\n| **7474** | Neo4j HTTP | |\n| **7687** | Neo4j Bolt | |\n| **8503** | Embeddings | Per deployment config |\n| **8504** | Reranker | Per deployment config |\n| **8888** | — | Jupyter or similar |\n| **9001** | — | Unknown service |\n| **9002** | Uvicorn/Python | Worker process (pid 498134) |\n| **9003** | Uvicorn/Python | Worker process (pid 498371) |\n| **9200** | Elasticsearch | |\n\n---\n\n### Key observations:\n- **Two Uvicorn app instances** are active on **9002** and **9003** — these are your Python API workers.\n- All backend services (Postgres, Redis, Neo4j, ES, Embeddings, Reranker) are bound **loopback-only**, which is good security hygiene.\n- Only **80, 443, and 5355** are publicly exposed.",
+      "latency_ms": 11612,
+      "session_id": "d1e0a26a-15e7-522a-b998-ce1c64f8ac40"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "Here's a summary of all listening ports:\n\n### 🌐 Public (0.0.0.0 / ::) — Accessible externally\n| Port | Proto | Notes |\n|------|-------|-------|\n| **80** | TCP | HTTP |\n| **443** | TCP | HTTPS |\n| **5355** | TCP/UDP | LLMNR (name resolution) |\n| **49206** | TCP | Unknown / ephemeral |\n\n### 🔒 Localhost only (127.x.x.x) — Internal services\n| Port | Proto | Service |\n|------|-------|---------|\n| **53** | UDP/TCP | DNS (systemd-resolved, two listeners) |\n| **3000** | TCP | Likely Grafana or similar dashboard |\n| **5432** | TCP | **PostgreSQL** |\n| **6379** | TCP | **Redis** |\n| **7474** | TCP | **Neo4j HTTP** |\n| **7687** | TCP | **Neo4j Bolt** |\n| **8503** | TCP | **Embeddings service** |\n| **8504** | TCP | **Reranker service** |\n| **8888** | TCP | Jupyter Notebook (likely) |\n| **9001** | TCP | Unknown |\n| **9002** | TCP | **Uvicorn** (Python app) |\n| **9003** | TCP | **Uvicorn** (Python app, also has `ss` process attached) |\n| **9200** | TCP | **Elasticsearch** |\n\n### Key observations:\n- All backend infrastructure (Postgres, Redis, Neo4j, ES, Embeddings, Reranker) is **localhost-only** — not directly exposed.\n- The agent app runs on **ports 9002 and 9003** via Uvicorn.\n- **80/443** are the only application-facing public ports (likely a reverse proxy like Nginx/Caddy in front).\n- Port **49206** is open on all interfaces — worth noting if its purpose is unknown.",
+      "latency_ms": 11504,
+      "session_id": "81aa98ae-1af1-5476-9cea-3a38a841bab0"
+    },
+    "quality": ""
+  },
+  {
+    "id": "diag-03",
+    "category": "system-diagnostics",
+    "prompt": "Show me what the system has been doing for the last 5 minutes (load, swap, IO).",
+    "control": {
+      "status": 0,
+      "response": "ERROR: request timed out",
+      "latency_ms": 120049,
+      "session_id": "e1ece170-0f62-5b6c-aace-6dfb279dda81"
+    },
+    "treatment": {
+      "status": 0,
+      "response": "ERROR: request timed out",
+      "latency_ms": 120151,
+      "session_id": "64dc0b4b-246e-5ac3-ac9b-e06a1f67c628"
+    },
+    "quality": ""
+  },
+  {
+    "id": "infra-01",
+    "category": "infrastructure-health",
+    "prompt": "Check infrastructure health.",
+    "control": {
+      "status": 200,
+      "response": "Here's a summary of the infrastructure health check:\n\n| Service | Status | Notes |\n|---|---|---|\n| **PostgreSQL** | ✅ Reachable | `localhost:5432` |\n| **Neo4j (Bolt)** | ✅ Reachable | `localhost:7687` — v5.26.24 Community |\n| **Neo4j (HTTP)** | ✅ Reachable | `localhost:7474` — HTTP 200 |\n| **Elasticsearch** | ⚠️ Reachable | HTTP 200, but cluster status is **yellow** |\n| **Redis** | ✅ Reachable | `localhost:6379` |\n| **Embeddings** | ➖ Skipped | No endpoint configured in models config |\n| **Reranker** | ➖ Skipped | No endpoint configured in models config |\n\n### Key Observations:\n- **All core services are reachable** — no hard failures.\n- **Elasticsearch is `yellow`**: This means all 48 primary shards are active, but **48 replica shards are unassigned**. This is expected in a **single-node cluster** (replicas can't be assigned without additional nodes) and is generally not a problem in this setup.\n- **Embeddings & Reranker**: Not configured — if these are needed for semantic search or re-ranking features, they'll need endpoints added to the models config.\n\nOverall, the stack is **healthy and operational**. 🟢",
+      "latency_ms": 8243,
+      "session_id": "57ed7c1c-539f-5c98-a9b6-54ca5bd1c781"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "Here's the infrastructure health summary:\n\n| Service | Status | Notes |\n|---|---|---|\n| **Postgres** | ✅ Reachable | TCP OK on port 5432 |\n| **Neo4j (Bolt)** | ✅ Reachable | TCP OK on port 7687 |\n| **Neo4j (HTTP)** | ✅ Reachable | HTTP 200 — v5.26.24 Community |\n| **Elasticsearch** | ⚠️ Yellow | HTTP 200, but 48 unassigned shards |\n| **Redis** | ✅ Reachable | TCP OK on port 6379 |\n| **Embeddings** | ⚪ Unknown | No endpoint configured in models config |\n| **Reranker** | ⚪ Unknown | No endpoint configured in models config |\n\n### Key Observations\n\n1. **Elasticsearch — `yellow` status:** The cluster is single-node (expected in dev/VPS deployments), with **48 unassigned replica shards**. This is normal for a single-node setup since replicas can't be assigned without additional nodes. Primary shards (48) are all active, so data is safe and queries work. No action needed unless you're scaling to multi-node.\n\n2. **Embeddings & Reranker — not configured:** These services have no endpoint registered in the models config, so they weren't probed. If you intend to use semantic search or reranking, their endpoints need to be added to the config.\n\n3. **Everything else is healthy** — Postgres, Neo4j, and Redis are all up and reachable.\n\n**Overall: Operational** ✅ (with the caveats above being expected for a single-node environment).",
+      "latency_ms": 10838,
+      "session_id": "58c2ac7e-40c5-5037-ad1a-f44a8fdaf843"
+    },
+    "quality": ""
+  },
+  {
+    "id": "infra-02",
+    "category": "infrastructure-health",
+    "prompt": "Is Postgres reachable?",
+    "control": {
+      "status": 200,
+      "response": "Yes! ✅ **Postgres is reachable** at `localhost:5432`. All core backend services are up and healthy:\n\n| Service | Status |\n|---|---|\n| **Postgres** | ✅ Reachable (port 5432) |\n| **Neo4j** | ✅ Reachable (Bolt + HTTP) |\n| **Elasticsearch** | ✅ Reachable (HTTP 200) |\n| **Redis** | ✅ Reachable (port 6379) |",
+      "latency_ms": 4854,
+      "session_id": "81832ed5-b68b-56ea-b80a-c48eb4f3ab0c"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "Based on the checks performed, **Postgres does not appear to be reachable**:\n\n- The `psql` binary wasn't found in the container (`No such file or directory`).\n- A direct TCP probe via `curl telnet://postgres:5432` returned exit code 6 (couldn't resolve host / connection failed), suggesting the `postgres` host is either down, not on the network, or not accepting connections on port 5432.\n\n**Possible causes:**\n- The Postgres container isn't running or hasn't started yet.\n- A Docker networking issue is preventing DNS resolution of the `postgres` hostname.\n- The service may be healthy on the host but isolated from this container's network.\n\nYou may want to check `docker ps` on the host to confirm the Postgres container is up and on the correct Docker network.",
+      "latency_ms": 60842,
+      "session_id": "e4f37bf3-22c5-5bbf-9b3a-17c1223020db"
+    },
+    "quality": ""
+  },
+  {
+    "id": "infra-03",
+    "category": "infrastructure-health",
+    "prompt": "Are Neo4j and Elasticsearch both up?",
+    "control": {
+      "status": 200,
+      "response": "Both are up and healthy:\n\n- **Neo4j** ✅ — Reachable on both Bolt (`:7687`) and HTTP (`:7474`), running **v5.26.24 Community Edition**.\n- **Elasticsearch** ✅ — Reachable on `:9200`, cluster status is **yellow** (expected for a single-node setup — 48 unassigned replica shards, but all 48 primary shards are active, so data is fully accessible).\n\nEverything looks operational.",
+      "latency_ms": 5461,
+      "session_id": "64c4f23b-2431-5714-835c-db29931d7b74"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "Both services appear to be **unreachable** from inside the container:\n\n| Service | Status |\n|---|---|\n| **Neo4j** (`:7474`) | ❌ Down / unreachable (curl exit code 6 — could not resolve host) |\n| **Elasticsearch** (`:9200`) | ❌ Down / unreachable (curl exit code 3 — URL malformed or DNS failure) |\n\nExit code 6 typically means DNS resolution failed, and exit code 3 means the URL couldn't be parsed or the host wasn't found. This suggests either:\n\n1. The services are **not running** (containers stopped/crashed), or\n2. **Docker internal DNS** is not resolving the hostnames `neo4j` and `elasticsearch` from this container — possibly a network configuration issue.\n\nWould you like me to run a deeper infrastructure health check or inspect the container's network/DNS settings?",
+      "latency_ms": 19738,
+      "session_id": "208295df-f903-58dd-b040-514ce0ba31bd"
+    },
+    "quality": ""
+  },
+  {
+    "id": "infra-04",
+    "category": "infrastructure-health",
+    "prompt": "All backend services healthy right now?",
+    "control": {
+      "status": 200,
+      "response": "Here's the current health summary:\n\n| Service | Status | Notes |\n|---|---|---|\n| **Postgres** | ✅ Healthy | TCP reachable on port 5432 |\n| **Neo4j** | ✅ Healthy | Bolt + HTTP (200 OK), v5.26.24 Community |\n| **Elasticsearch** | ⚠️ Yellow | HTTP 200, but **48 unassigned shards** (expected on a single-node cluster — no replicas can be placed) |\n| **Redis** | ✅ Healthy | TCP reachable on port 6379 |\n| **Embeddings** | ⚪ N/A | No endpoint configured in models config |\n| **Reranker** | ⚪ N/A | No endpoint configured in models config |\n\n**TL;DR — all configured services are reachable.** The Elasticsearch `yellow` status is normal for a single-node setup (replica shards simply have nowhere to go), not an operational issue. Embeddings and reranker are not wired up in the current config, so they weren't probed.",
+      "latency_ms": 7898,
+      "session_id": "a91bf980-b19d-5741-941e-9d82f1f12eff"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "Here's the current status of all backend services:\n\n| Service | Status | Notes |\n|---|---|---|\n| **Postgres** | ✅ Healthy | TCP reachable on :5432 |\n| **Neo4j (Bolt)** | ✅ Healthy | TCP reachable on :7687 |\n| **Neo4j (HTTP)** | ✅ Healthy | HTTP 200, v5.26.24 Community |\n| **Elasticsearch** | ⚠️ Yellow | Reachable & responding, but 48 unassigned shards |\n| **Redis** | ✅ Healthy | TCP reachable on :6379 |\n| **Embeddings** | ❔ Unknown | No endpoint configured in models config |\n| **Reranker** | ❔ Unknown | No endpoint configured in models config |\n\n**Summary:** All core data services are up and reachable. Two notes to be aware of:\n\n- **Elasticsearch** is in `yellow` status — this is expected for a single-node cluster (replica shards can't be assigned when there's only one node), so it's functionally fine.\n- **Embeddings & Reranker** couldn't be probed because no endpoint is registered in the models config — not necessarily down, just not configured for health checks.",
+      "latency_ms": 8579,
+      "session_id": "655157f8-4c0b-5b08-aa47-4c71d5d8d26c"
+    },
+    "quality": ""
+  }
+]

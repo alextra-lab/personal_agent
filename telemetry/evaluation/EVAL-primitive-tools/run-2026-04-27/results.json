@@ -1,0 +1,362 @@
+[
+  {
+    "id": "es-01",
+    "category": "query-elasticsearch",
+    "prompt": "Show me errors in the last hour.",
+    "control": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 115,
+      "session_id": "eval-fre262-ctrl-es-01"
+    },
+    "treatment": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 33,
+      "session_id": "eval-fre262-trt-es-01"
+    },
+    "quality": ""
+  },
+  {
+    "id": "es-02",
+    "category": "query-elasticsearch",
+    "prompt": "How many request.completed events fired today, by task_type?",
+    "control": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 18,
+      "session_id": "eval-fre262-ctrl-es-02"
+    },
+    "treatment": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 17,
+      "session_id": "eval-fre262-trt-es-02"
+    },
+    "quality": ""
+  },
+  {
+    "id": "es-03",
+    "category": "query-elasticsearch",
+    "prompt": "What's the p95 LLM call latency over the last 24 hours?",
+    "control": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 13,
+      "session_id": "eval-fre262-ctrl-es-03"
+    },
+    "treatment": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 13,
+      "session_id": "eval-fre262-trt-es-03"
+    },
+    "quality": ""
+  },
+  {
+    "id": "es-04",
+    "category": "query-elasticsearch",
+    "prompt": "Find the trace where the agent looped on web_search this week.",
+    "control": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 13,
+      "session_id": "eval-fre262-ctrl-es-04"
+    },
+    "treatment": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 13,
+      "session_id": "eval-fre262-trt-es-04"
+    },
+    "quality": ""
+  },
+  {
+    "id": "fetch-01",
+    "category": "fetch-url",
+    "prompt": "Fetch https://example.com/api/status and tell me what it says.",
+    "control": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 14,
+      "session_id": "eval-fre262-ctrl-fetch-01"
+    },
+    "treatment": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 12,
+      "session_id": "eval-fre262-trt-fetch-01"
+    },
+    "quality": ""
+  },
+  {
+    "id": "fetch-02",
+    "category": "fetch-url",
+    "prompt": "Read the README on https://github.com/anthropics/anthropic-sdk-python and summarize what the package does.",
+    "control": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 15,
+      "session_id": "eval-fre262-ctrl-fetch-02"
+    },
+    "treatment": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 18,
+      "session_id": "eval-fre262-trt-fetch-02"
+    },
+    "quality": ""
+  },
+  {
+    "id": "fetch-03",
+    "category": "fetch-url",
+    "prompt": "What's the current Anthropic pricing? Check https://www.anthropic.com/pricing.",
+    "control": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 15,
+      "session_id": "eval-fre262-ctrl-fetch-03"
+    },
+    "treatment": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 24,
+      "session_id": "eval-fre262-trt-fetch-03"
+    },
+    "quality": ""
+  },
+  {
+    "id": "ls-01",
+    "category": "list-directory",
+    "prompt": "List files in /app/config.",
+    "control": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 21,
+      "session_id": "eval-fre262-ctrl-ls-01"
+    },
+    "treatment": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 14,
+      "session_id": "eval-fre262-trt-ls-01"
+    },
+    "quality": ""
+  },
+  {
+    "id": "ls-02",
+    "category": "list-directory",
+    "prompt": "What's in the /app/src/personal_agent/tools folder?",
+    "control": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 28,
+      "session_id": "eval-fre262-ctrl-ls-02"
+    },
+    "treatment": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 18,
+      "session_id": "eval-fre262-trt-ls-02"
+    },
+    "quality": ""
+  },
+  {
+    "id": "ls-03",
+    "category": "list-directory",
+    "prompt": "How many YAML files are under /app/config?",
+    "control": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 13,
+      "session_id": "eval-fre262-ctrl-ls-03"
+    },
+    "treatment": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 11,
+      "session_id": "eval-fre262-trt-ls-03"
+    },
+    "quality": ""
+  },
+  {
+    "id": "metrics-01",
+    "category": "system-metrics",
+    "prompt": "What's the current CPU load?",
+    "control": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 15,
+      "session_id": "eval-fre262-ctrl-metrics-01"
+    },
+    "treatment": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 16,
+      "session_id": "eval-fre262-trt-metrics-01"
+    },
+    "quality": ""
+  },
+  {
+    "id": "metrics-02",
+    "category": "system-metrics",
+    "prompt": "How much memory is the agent service using right now?",
+    "control": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 24,
+      "session_id": "eval-fre262-ctrl-metrics-02"
+    },
+    "treatment": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 13,
+      "session_id": "eval-fre262-trt-metrics-02"
+    },
+    "quality": ""
+  },
+  {
+    "id": "metrics-03",
+    "category": "system-metrics",
+    "prompt": "Is disk space getting low?",
+    "control": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 17,
+      "session_id": "eval-fre262-ctrl-metrics-03"
+    },
+    "treatment": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 26,
+      "session_id": "eval-fre262-trt-metrics-03"
+    },
+    "quality": ""
+  },
+  {
+    "id": "diag-01",
+    "category": "system-diagnostics",
+    "prompt": "List the top 10 processes by memory usage.",
+    "control": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 28,
+      "session_id": "eval-fre262-ctrl-diag-01"
+    },
+    "treatment": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 12,
+      "session_id": "eval-fre262-trt-diag-01"
+    },
+    "quality": ""
+  },
+  {
+    "id": "diag-02",
+    "category": "system-diagnostics",
+    "prompt": "Which container ports are listening?",
+    "control": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 20,
+      "session_id": "eval-fre262-ctrl-diag-02"
+    },
+    "treatment": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 15,
+      "session_id": "eval-fre262-trt-diag-02"
+    },
+    "quality": ""
+  },
+  {
+    "id": "diag-03",
+    "category": "system-diagnostics",
+    "prompt": "Show me what the system has been doing for the last 5 minutes (load, swap, IO).",
+    "control": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 27,
+      "session_id": "eval-fre262-ctrl-diag-03"
+    },
+    "treatment": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 17,
+      "session_id": "eval-fre262-trt-diag-03"
+    },
+    "quality": ""
+  },
+  {
+    "id": "infra-01",
+    "category": "infrastructure-health",
+    "prompt": "Check infrastructure health.",
+    "control": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 13,
+      "session_id": "eval-fre262-ctrl-infra-01"
+    },
+    "treatment": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 12,
+      "session_id": "eval-fre262-trt-infra-01"
+    },
+    "quality": ""
+  },
+  {
+    "id": "infra-02",
+    "category": "infrastructure-health",
+    "prompt": "Is Postgres reachable?",
+    "control": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 17,
+      "session_id": "eval-fre262-ctrl-infra-02"
+    },
+    "treatment": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 15,
+      "session_id": "eval-fre262-trt-infra-02"
+    },
+    "quality": ""
+  },
+  {
+    "id": "infra-03",
+    "category": "infrastructure-health",
+    "prompt": "Are Neo4j and Elasticsearch both up?",
+    "control": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 20,
+      "session_id": "eval-fre262-ctrl-infra-03"
+    },
+    "treatment": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 14,
+      "session_id": "eval-fre262-trt-infra-03"
+    },
+    "quality": ""
+  },
+  {
+    "id": "infra-04",
+    "category": "infrastructure-health",
+    "prompt": "All backend services healthy right now?",
+    "control": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 32,
+      "session_id": "eval-fre262-ctrl-infra-04"
+    },
+    "treatment": {
+      "status": 422,
+      "response": "ERROR: 422 Unprocessable Entity",
+      "latency_ms": 15,
+      "session_id": "eval-fre262-trt-infra-04"
+    },
+    "quality": ""
+  }
+]

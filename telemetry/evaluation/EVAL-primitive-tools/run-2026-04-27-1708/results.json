@@ -1,0 +1,362 @@
+[
+  {
+    "id": "es-01",
+    "category": "query-elasticsearch",
+    "prompt": "Show me errors in the last hour.",
+    "control": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 122,
+      "session_id": "1de6dd11-90dc-553c-a5e7-01ced7271d1e"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 156,
+      "session_id": "f3be5be4-702a-56e9-8664-1fe39c60f7fa"
+    },
+    "quality": ""
+  },
+  {
+    "id": "es-02",
+    "category": "query-elasticsearch",
+    "prompt": "How many request.completed events fired today, by task_type?",
+    "control": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 62,
+      "session_id": "51d73386-168f-5344-905c-6c10f8a0e318"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 61,
+      "session_id": "6c4004c8-83db-5be8-bbe4-7704633edca7"
+    },
+    "quality": ""
+  },
+  {
+    "id": "es-03",
+    "category": "query-elasticsearch",
+    "prompt": "What's the p95 LLM call latency over the last 24 hours?",
+    "control": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 57,
+      "session_id": "38fdfd03-4f64-54f6-b668-1a87b1fceec8"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 60,
+      "session_id": "5b54f236-f518-5131-bb84-579a14413d91"
+    },
+    "quality": ""
+  },
+  {
+    "id": "es-04",
+    "category": "query-elasticsearch",
+    "prompt": "Find the trace where the agent looped on web_search this week.",
+    "control": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 54,
+      "session_id": "921ad12a-886e-569e-ab29-52d2c33ee6db"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 61,
+      "session_id": "b2e85705-4ad1-50aa-8626-b43f03229584"
+    },
+    "quality": ""
+  },
+  {
+    "id": "fetch-01",
+    "category": "fetch-url",
+    "prompt": "Fetch https://example.com/api/status and tell me what it says.",
+    "control": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 67,
+      "session_id": "fec90373-ad01-59f8-ad98-8c6411a2a965"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 59,
+      "session_id": "962a1f5e-e932-55f0-9a00-f57a09335b42"
+    },
+    "quality": ""
+  },
+  {
+    "id": "fetch-02",
+    "category": "fetch-url",
+    "prompt": "Read the README on https://github.com/anthropics/anthropic-sdk-python and summarize what the package does.",
+    "control": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 66,
+      "session_id": "90460ab5-74b4-5008-bdf8-f61850ed043d"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 58,
+      "session_id": "8b393e40-57c4-5c37-b75d-318e0f38f43a"
+    },
+    "quality": ""
+  },
+  {
+    "id": "fetch-03",
+    "category": "fetch-url",
+    "prompt": "What's the current Anthropic pricing? Check https://www.anthropic.com/pricing.",
+    "control": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 61,
+      "session_id": "e138c8f0-1aac-53f4-9021-02da317cd2a2"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 62,
+      "session_id": "1c3d2795-91ef-5ee7-a701-acaa7c8462e0"
+    },
+    "quality": ""
+  },
+  {
+    "id": "ls-01",
+    "category": "list-directory",
+    "prompt": "List files in /app/config.",
+    "control": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 51,
+      "session_id": "58bd338b-1891-5622-a2a8-17554abec1c1"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 45,
+      "session_id": "56810fe5-8f87-57d7-861d-dd90eb750066"
+    },
+    "quality": ""
+  },
+  {
+    "id": "ls-02",
+    "category": "list-directory",
+    "prompt": "What's in the /app/src/personal_agent/tools folder?",
+    "control": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 61,
+      "session_id": "77481659-a76f-5dc9-8a8c-9739d08d3dc0"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 51,
+      "session_id": "4d9cf45d-7999-5601-8564-7a129be859de"
+    },
+    "quality": ""
+  },
+  {
+    "id": "ls-03",
+    "category": "list-directory",
+    "prompt": "How many YAML files are under /app/config?",
+    "control": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 47,
+      "session_id": "77165cb3-0f46-5485-9f96-ee4252ad6d73"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 52,
+      "session_id": "51c6da08-1f46-54ce-b714-3da0688636d2"
+    },
+    "quality": ""
+  },
+  {
+    "id": "metrics-01",
+    "category": "system-metrics",
+    "prompt": "What's the current CPU load?",
+    "control": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 42,
+      "session_id": "c5aab7d2-eb51-5eb0-8095-1a136ab25408"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 44,
+      "session_id": "a779ff39-fc48-568a-bce7-b8669a88b529"
+    },
+    "quality": ""
+  },
+  {
+    "id": "metrics-02",
+    "category": "system-metrics",
+    "prompt": "How much memory is the agent service using right now?",
+    "control": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 47,
+      "session_id": "ef6920e5-e014-50a6-85ba-6c8c328ad048"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 50,
+      "session_id": "6db0dcbc-e67d-50ef-bceb-2613b02b570f"
+    },
+    "quality": ""
+  },
+  {
+    "id": "metrics-03",
+    "category": "system-metrics",
+    "prompt": "Is disk space getting low?",
+    "control": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 41,
+      "session_id": "06a03e4b-56e0-55e2-a364-6f4a2b2cc12d"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 64,
+      "session_id": "094a82f8-b65a-5fbf-96c4-aed544957a57"
+    },
+    "quality": ""
+  },
+  {
+    "id": "diag-01",
+    "category": "system-diagnostics",
+    "prompt": "List the top 10 processes by memory usage.",
+    "control": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 44,
+      "session_id": "414ef4fa-e73c-5a64-8b58-8e9e630dcfe7"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 52,
+      "session_id": "63a6a018-db88-5052-906a-9c6976b88624"
+    },
+    "quality": ""
+  },
+  {
+    "id": "diag-02",
+    "category": "system-diagnostics",
+    "prompt": "Which container ports are listening?",
+    "control": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 51,
+      "session_id": "d1e0a26a-15e7-522a-b998-ce1c64f8ac40"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 65,
+      "session_id": "81aa98ae-1af1-5476-9cea-3a38a841bab0"
+    },
+    "quality": ""
+  },
+  {
+    "id": "diag-03",
+    "category": "system-diagnostics",
+    "prompt": "Show me what the system has been doing for the last 5 minutes (load, swap, IO).",
+    "control": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 51,
+      "session_id": "e1ece170-0f62-5b6c-aace-6dfb279dda81"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 44,
+      "session_id": "64dc0b4b-246e-5ac3-ac9b-e06a1f67c628"
+    },
+    "quality": ""
+  },
+  {
+    "id": "infra-01",
+    "category": "infrastructure-health",
+    "prompt": "Check infrastructure health.",
+    "control": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 46,
+      "session_id": "57ed7c1c-539f-5c98-a9b6-54ca5bd1c781"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 45,
+      "session_id": "58c2ac7e-40c5-5037-ad1a-f44a8fdaf843"
+    },
+    "quality": ""
+  },
+  {
+    "id": "infra-02",
+    "category": "infrastructure-health",
+    "prompt": "Is Postgres reachable?",
+    "control": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 43,
+      "session_id": "81832ed5-b68b-56ea-b80a-c48eb4f3ab0c"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 44,
+      "session_id": "e4f37bf3-22c5-5bbf-9b3a-17c1223020db"
+    },
+    "quality": ""
+  },
+  {
+    "id": "infra-03",
+    "category": "infrastructure-health",
+    "prompt": "Are Neo4j and Elasticsearch both up?",
+    "control": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 43,
+      "session_id": "64c4f23b-2431-5714-835c-db29931d7b74"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 43,
+      "session_id": "208295df-f903-58dd-b040-514ce0ba31bd"
+    },
+    "quality": ""
+  },
+  {
+    "id": "infra-04",
+    "category": "infrastructure-health",
+    "prompt": "All backend services healthy right now?",
+    "control": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 59,
+      "session_id": "a91bf980-b19d-5741-941e-9d82f1f12eff"
+    },
+    "treatment": {
+      "status": 200,
+      "response": "An error occurred while processing your request. Please try again.",
+      "latency_ms": 39,
+      "session_id": "655157f8-4c0b-5b08-aa47-4c71d5d8d26c"
+    },
+    "quality": ""
+  }
+]

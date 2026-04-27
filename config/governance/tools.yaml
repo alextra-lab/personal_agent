@@ -69,6 +69,45 @@ tools:
     loop_max_per_signature: 1
     loop_max_consecutive: 2
 
+  # FRE-261 Step 3: primitive read tool (supersedes read_file)
+  read:
+    category: "read_only"
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"]
+    max_file_size_mb: 10
+    allowed_paths:
+      - "/app/**"
+      - "$HOME/**/personal_agent/**"
+      - "$HOME/Documents/agent_workspace/**"
+      - "/tmp/**"
+      - "/opt/seshat/**"
+    forbidden_paths:
+      - "$HOME/.ssh/**"
+      - "/etc/shadow"
+      - "/etc/passwd"
+      - "/proc/**"
+
+  # FRE-261 Step 3: primitive write tool (supersedes write_file)
+  write:
+    category: "system_write"
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
+    forbidden_in_modes: ["LOCKDOWN"]
+    requires_approval_in_modes: ["ALERT", "DEGRADED", "RECOVERY"]
+    unattended_paths:
+      - "/app/agent_workspace/sandbox/**"
+      - "/tmp/**"
+    allowed_paths:
+      - "/app/**"
+      - "$HOME/**/personal_agent/**"
+      - "$HOME/Documents/agent_workspace/**"
+      - "/tmp/**"
+      - "/opt/seshat/**"
+    forbidden_paths:
+      - "$HOME/.ssh/**"
+      - "/etc/**"
+      - "/proc/**"
+    loop_max_per_signature: 1
+    loop_max_consecutive: 2
+
   system_metrics_snapshot:
     category: "read_only"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"]

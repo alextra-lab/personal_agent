@@ -40,6 +40,14 @@ from personal_agent.tools.linear import (
     list_linear_projects_executor,
     list_linear_projects_tool,
 )
+from personal_agent.tools.primitives.read import (
+    read_executor,
+    read_tool,
+)
+from personal_agent.tools.primitives.write import (
+    write_executor,
+    write_tool,
+)
 from personal_agent.tools.memory_search import (
     search_memory_executor,
     search_memory_tool,
@@ -78,6 +86,11 @@ __all__ = [
     # Tool registration function
     "register_mvp_tools",
     "get_default_registry",
+    # FRE-261 primitives
+    "read_tool",
+    "read_executor",
+    "write_tool",
+    "write_executor",
 ]
 
 
@@ -116,6 +129,9 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
     registry.register(run_sysdiag_tool, run_sysdiag_executor)
     # Infrastructure health (TCP/HTTP probes — container-safe, no CLI tools needed)
     registry.register(infra_health_tool, infra_health_executor)
+    # FRE-261 Step 3: primitive read/write tools (supersede read_file / write_file)
+    registry.register(read_tool, read_executor)
+    registry.register(write_tool, write_executor)
     # FRE-224: native Linear tool (Tier-1, no MCP gateway required)
     registry.register(create_linear_issue_tool, create_linear_issue_executor)
     registry.register(find_linear_issues_tool, find_linear_issues_executor)

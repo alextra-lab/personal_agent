@@ -114,6 +114,13 @@ class ToolPolicy(BaseModel):
     )
     allowed_paths: list[str] = Field(default_factory=list, description="Allowed path patterns")
     forbidden_paths: list[str] = Field(default_factory=list, description="Forbidden path patterns")
+    unattended_paths: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Path globs where 'write' may proceed without interactive approval "
+            "(scratch / sandbox directories, e.g. /tmp/**, /app/agent_workspace/sandbox/**)"
+        ),
+    )
     allowed_commands: list[str] = Field(
         default_factory=list, description="Allowed command patterns"
     )

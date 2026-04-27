@@ -168,7 +168,10 @@ def _post_chat(
         resp = httpx.post(url, json=payload, timeout=timeout)
         status = resp.status_code
         if status == 200:
-            body = resp.json()
+            try:
+                body = resp.json()
+            except (json.JSONDecodeError, ValueError):
+                return status, f"ERROR: non-JSON response: {resp.text[:200]}"
             # Try common response field names in order of preference
             text: str = (
                 body.get("response")
@@ -287,11 +290,7 @@ def _write_report_md(
         "",
         "## Grading Key",
         "",
-        "Fill in the Quality column after reading each pair of responses:",
-        "",
-        "- check (correct/complete) — equivalent or better than the curated baseline",
-        "- warn (partial) — partial answer, minor error, or used more turns than necessary",
-        "- fail (wrong/missing) — wrong answer, missing, or model could not find the primitive equivalent",
+        "Fill in the Quality column:  ✅ = correct/complete  ⚠️ = partial/extra turns  ❌ = wrong/missing",
         "",
         "Session IDs are in results.json — use them to look up full traces in Elasticsearch / Kibana.",
     ]
@@ -322,7 +321,11 @@ def load_prompts(prompts_path: Path) -> list[dict[str, str]]:
         sys.stderr.write(f"ERROR: prompts file not found: {prompts_path}\n")
         sys.exit(1)
     with prompts_path.open() as fh:
-        data = yaml.safe_load(fh)
+        try:
+            data = yaml.safe_load(fh) or {}
+        except yaml.YAMLError as exc:
+            sys.stderr.write(f"ERROR: failed to parse {prompts_path}: {exc}\n")
+            sys.exit(1)
     prompts: list[dict[str, str]] = data.get("prompts", [])
     if not prompts:
         sys.stderr.write(f"ERROR: no prompts found in {prompts_path}\n")

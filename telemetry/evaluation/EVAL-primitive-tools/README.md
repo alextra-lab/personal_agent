@@ -4,7 +4,7 @@ Dual-path evaluation comparing the curated-tool baseline against the primitives 
 
 ## Purpose
 
-PIVOT-3 replaces a set of deprecated curated tools (`query_elasticsearch`, `fetch_url`, `list_directory`, `system_metrics_snapshot`, `run_sysdiag`, `infra_health`) with two primitives (`run_bash`, `run_python`) backed by nine SKILL.md skill docs. This eval measures whether the agent can satisfy the same 20 prompts via primitives at least as well as it did via curated tools.
+PIVOT-3 replaces a set of deprecated curated tools (`query_elasticsearch`, `fetch_url`, `list_directory`, `system_metrics_snapshot`, `run_sysdiag`, `infra_health`) with two primitives (`bash`, `run_python`) backed by nine SKILL.md skill docs. This eval measures whether the agent can satisfy the same 20 prompts via primitives at least as well as it did via curated tools.
 
 ## Gate Criteria
 
@@ -27,7 +27,7 @@ AGENT_SERVICE_PORT=9001 AGENT_PRIMITIVE_TOOLS_ENABLED=true AGENT_PREFER_PRIMITIV
 ```
 
 > **CRITICAL**: `AGENT_APPROVAL_UI_ENABLED=false` is required for the treatment instance.
-> Without it, `run_bash` commands not in the auto-approve list will block indefinitely
+> Without it, `bash` commands not in the auto-approve list will block indefinitely
 > waiting for PWA approval input, causing the eval to hang.
 
 ## Run the Eval

@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from personal_agent.config import load_governance_config
+from personal_agent.config.governance_loader import GovernanceConfigError
 from personal_agent.telemetry import TraceContext, get_logger
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
@@ -113,7 +114,8 @@ def _load_deny_patterns() -> list[str]:
         policy = governance.tools.get("bash")
         if policy is not None and policy.hard_deny_patterns:
             return policy.hard_deny_patterns
-    except Exception as exc:  # noqa: BLE001 -- log and fall through
+    except GovernanceConfigError as exc:
+        # Config directory missing, YAML parse error, or Pydantic validation failure.
         log.warning("bash_governance_load_error", error=str(exc))
     return _FALLBACK_DENY
 
@@ -132,6 +134,24 @@ def _is_hard_denied(command: str, patterns: list[str]) -> str | None:
         if re.search(pattern, command, re.IGNORECASE):
             return pattern
     return None
+
+
+def _truncate_to_bytes(s: str, max_bytes: int) -> str:
+    """Truncate a string to at most max_bytes when UTF-8 encoded.
+
+    Args:
+        s: Input string.
+        max_bytes: Maximum byte length of the returned UTF-8 encoding.
+
+    Returns:
+        Possibly-shorter string that encodes to at most max_bytes bytes.
+        If truncation splits a multi-byte character, the replacement character
+        U+FFFD is used (via ``errors='replace'`` on decode).
+    """
+    encoded = s.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return s
+    return encoded[:max_bytes].decode("utf-8", errors="replace")
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +297,7 @@ async def bash_executor(
     truncated_path: str | None = None
 
     if len(combined.encode("utf-8")) > MAX_OUTPUT_BYTES:
-        # Write overflow to scratch directory keyed by trace_id
+        # Write overflow to scratch directory keyed by trace_id (when ctx available).
         if ctx is not None:
             try:
                 scratch = Path("/tmp/agent_scratch") / trace_id
@@ -297,11 +317,15 @@ async def bash_executor(
                 log.warning(
                     "bash_overflow_write_error", trace_id=trace_id, error=str(exc)
                 )
+                truncated_path = "<truncated: scratch write failed>"
+        else:
+            # No trace context — caller must know data was discarded silently.
+            truncated_path = "<truncated: no ctx>"
 
-        # Truncate in-memory output to half the cap each
+        # Byte-aware truncation: cap each stream at half the total limit.
         half = MAX_OUTPUT_BYTES // 2
-        stdout_str = stdout_str[:half]
-        stderr_str = stderr_str[:half]
+        stdout_str = _truncate_to_bytes(stdout_str, half)
+        stderr_str = _truncate_to_bytes(stderr_str, half)
 
     log.info(
         "bash_completed",

@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from tempfile import TemporaryDirectory
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -173,9 +171,9 @@ async def test_timeout() -> None:
 
 
 @pytest.mark.asyncio
-async def test_output_cap_truncates() -> None:
-    """Output > 50 KiB is truncated and truncated_path is set when ctx has trace_id."""
-    # Generate 60 KiB of output (well above 50 KiB cap)
+async def test_output_cap_truncates_with_ctx() -> None:
+    """Output > 50 KiB is truncated; truncated_path is set to the scratch file path."""
+    # 60 KiB of ASCII output (well above the 50 KiB cap)
     big_output = b"x" * 61_440
     mock_proc = _make_mock_proc(exit_code=0, stdout=big_output, stderr=b"")
 
@@ -183,36 +181,63 @@ async def test_output_cap_truncates() -> None:
 
     ctx = TraceContext(trace_id="test-trace-overflow")
 
-    with TemporaryDirectory() as tmpdir:
-        scratch_root = Path(tmpdir) / "agent_scratch"
+    # Patch Path so the scratch-file write goes to a controlled temp directory.
+    scratch_root = Path("/tmp/test_agent_scratch")
 
-        with (
-            patch(
-                "personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec",
-                new=AsyncMock(return_value=mock_proc),
-            ),
-            patch(
-                "personal_agent.tools.primitives.bash.Path",
-                side_effect=lambda *args: Path(*args),
-            ),
-        ):
-            # Patch the scratch directory to use our tmpdir
-            import personal_agent.tools.primitives.bash as bash_mod
+    import personal_agent.tools.primitives.bash as bash_mod
 
-            original_path = bash_mod.Path
+    original_path = bash_mod.Path
 
-            def patched_path(*args: Any) -> Path:
-                if args and args[0] == "/tmp/agent_scratch":
-                    return scratch_root
-                return original_path(*args)
+    def patched_path(*args: object) -> Path:
+        if args and args[0] == "/tmp/agent_scratch":
+            return scratch_root
+        return original_path(*args)  # type: ignore[arg-type]
 
-            with patch.object(bash_mod, "Path", side_effect=patched_path):
-                result = await bash_executor("cat bigfile", ctx=ctx)
+    mock_overflow = MagicMock()
+    mock_overflow.__str__ = lambda self: "/tmp/test_agent_scratch/test-trace-overflow/bash_output_0.txt"
+
+    mock_scratch = MagicMock()
+    mock_scratch.glob.return_value = []
+    mock_scratch.__truediv__ = lambda self, name: mock_overflow
+
+    def patched_path_with_scratch(*args: object) -> MagicMock | Path:
+        if args and args[0] == "/tmp/agent_scratch":
+            return mock_scratch  # type: ignore[return-value]
+        return original_path(*args)  # type: ignore[arg-type]
+
+    with (
+        patch(
+            "personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec",
+            new=AsyncMock(return_value=mock_proc),
+        ),
+        patch.object(bash_mod, "Path", side_effect=patched_path_with_scratch),
+    ):
+        result = await bash_executor("cat bigfile", ctx=ctx)
 
     assert result["success"] is True
+    # truncated_path must be set (not None) when output overflows
     assert result["truncated_path"] is not None
-    # In-memory stdout should be capped (25 KiB = 25600 chars)
-    assert len(result["stdout"]) <= 25_600 + 1  # +1 for safety
+    # In-memory stdout + stderr must be within byte budget (+2 for UTF-8 replace tolerance)
+    total_bytes = len((result["stdout"] + result["stderr"]).encode("utf-8"))
+    assert total_bytes <= 51_200 + 2, f"Byte cap exceeded: {total_bytes}"
+
+
+@pytest.mark.asyncio
+async def test_output_cap_truncates_no_ctx() -> None:
+    """Output > 50 KiB with ctx=None sets truncated_path to '<truncated: no ctx>'."""
+    big_output = b"y" * 61_440
+    mock_proc = _make_mock_proc(exit_code=0, stdout=big_output, stderr=b"")
+
+    with patch(
+        "personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec",
+        new=AsyncMock(return_value=mock_proc),
+    ):
+        result = await bash_executor("cat bigfile", ctx=None)
+
+    assert result["truncated_path"] == "<truncated: no ctx>"
+    # In-memory output must still be within byte budget (+2 for UTF-8 replace tolerance)
+    total_bytes = len((result["stdout"] + result["stderr"]).encode("utf-8"))
+    assert total_bytes <= 51_200 + 2, f"Byte cap exceeded: {total_bytes}"
 
 
 # ---------------------------------------------------------------------------
@@ -254,9 +279,11 @@ def test_hard_deny_patterns_from_governance_config() -> None:
 
 def test_hard_deny_patterns_fallback_when_governance_fails() -> None:
     """_load_deny_patterns falls back to _FALLBACK_DENY when config load fails."""
+    from personal_agent.config.governance_loader import GovernanceConfigError
+
     with patch(
         "personal_agent.tools.primitives.bash.load_governance_config",
-        side_effect=Exception("config unavailable"),
+        side_effect=GovernanceConfigError("config unavailable"),
     ):
         patterns = _load_deny_patterns()
 

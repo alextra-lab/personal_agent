@@ -116,14 +116,12 @@ class TestSkillBlockFunctionalInjection:
     """Functional tests: drive step_llm_call and inspect the system_prompt passed to LLM."""
 
     @pytest.mark.asyncio
-    async def test_skill_block_injected_when_flag_enabled(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_skill_block_injected_when_flag_enabled(self) -> None:
         """When get_skill_block() returns content, it must appear in the system_prompt."""
-        from personal_agent.config import settings
         from personal_agent.telemetry.trace import TraceContext
 
-        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
+        # get_skill_block is patched to return a sentinel — settings flag is irrelevant here.
+        # Flag gating is separately tested in test_skills.py::TestFlagGating.
 
         ctx = _make_minimal_ctx()
         trace_ctx = TraceContext.new_trace()
@@ -159,14 +157,12 @@ class TestSkillBlockFunctionalInjection:
         )
 
     @pytest.mark.asyncio
-    async def test_skill_block_not_injected_when_flag_disabled(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_skill_block_not_injected_when_flag_disabled(self) -> None:
         """When get_skill_block() returns '', the sentinel must NOT appear in system_prompt."""
-        from personal_agent.config import settings
         from personal_agent.telemetry.trace import TraceContext
 
-        monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
+        # get_skill_block is patched to return a sentinel — settings flag is irrelevant here.
+        # Flag gating is separately tested in test_skills.py::TestFlagGating.
 
         ctx = _make_minimal_ctx()
         trace_ctx = TraceContext.new_trace()

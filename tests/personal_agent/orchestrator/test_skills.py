@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import logging
+import unittest.mock
 from pathlib import Path
 
 import pytest
 
+import personal_agent.orchestrator.skills
 import personal_agent.orchestrator.skills as skills_module
 from personal_agent.config import settings
 from personal_agent.orchestrator.skills import _load_skill_block, get_skill_block
@@ -51,25 +52,26 @@ class TestMissingFileDegradation:
         assert result != ""
         assert "Minimal content." in result
 
-    def test_missing_files_emit_warnings(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-        """Missing skill files must cause structlog to emit a warning per missing file."""
-        # Only create bash.md — the other 8 are missing
+    def test_missing_files_emit_warnings(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Missing skill doc files emit structlog warnings via the module logger."""
+        # Give the loader a dir with one file — the other 8 will be "missing"
         skill_file = tmp_path / "bash.md"
-        skill_file.write_text("# bash — test", encoding="utf-8")
+        skill_file.write_text("# bash content", encoding="utf-8")
 
-        original_dir = skills_module._SKILLS_DIR
-        skills_module._SKILLS_DIR = tmp_path
-        try:
-            # structlog in test mode writes to stdlib logging; capture at WARNING level
-            with caplog.at_level(logging.WARNING):
-                _load_skill_block()
-        finally:
-            skills_module._SKILLS_DIR = original_dir
+        with unittest.mock.patch.object(
+            personal_agent.orchestrator.skills, "log"
+        ) as mock_log:
+            monkeypatch.setattr(personal_agent.orchestrator.skills, "_SKILLS_DIR", tmp_path)
+            block = personal_agent.orchestrator.skills._load_skill_block()
 
-        # 8 files are missing → 8 warnings (or at least 1 warning fired)
-        warning_messages = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
-        # At minimum we expect warnings for the 8 missing files
-        assert len(warning_messages) >= 1
+        assert mock_log.warning.call_count >= 1, "Expected at least 1 warning for missing files"
+        # Each call should have file= keyword
+        called_files = [
+            call.kwargs.get("file") or (call.args[1] if len(call.args) > 1 else None)
+            for call in mock_log.warning.call_args_list
+        ]
+        assert any(f is not None for f in called_files), "warning calls should include file=name"
+        assert block, "Partial load should still return non-empty block"
 
     def test_all_missing_returns_empty(self, tmp_path: Path) -> None:
         """When no files exist at all, _load_skill_block() returns empty string."""

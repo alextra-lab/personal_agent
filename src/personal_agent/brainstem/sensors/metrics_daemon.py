@@ -140,9 +140,7 @@ class MetricsDaemon:
                             sample_interval_seconds=self._poll_interval_seconds,
                         )
 
-                        async def _publish_safe(
-                            bus: EventBus, evt: MetricsSampledEvent
-                        ) -> None:
+                        async def _publish_safe(bus: EventBus, evt: MetricsSampledEvent) -> None:
                             """Fire-and-forget publish with error swallowing."""
                             try:
                                 await bus.publish(

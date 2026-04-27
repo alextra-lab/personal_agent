@@ -148,6 +148,5 @@ async def rerank(
 def _passthrough(documents: Sequence[str]) -> list[RerankResult]:
     """Return documents in original order with default scores."""
     return [
-        RerankResult(index=i, score=1.0 / (i + 1), document=doc)
-        for i, doc in enumerate(documents)
+        RerankResult(index=i, score=1.0 / (i + 1), document=doc) for i, doc in enumerate(documents)
     ]

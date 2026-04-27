@@ -228,12 +228,10 @@ class LiteLLMClient:
         # and tool list on every turn after the first (cache write: ~$0.30/MTok,
         # cache hit: ~$0.03/MTok vs $3.00/MTok uncached).
         if self.provider == "anthropic":
-            litellm_kwargs.setdefault("extra_headers", {})[
-                "anthropic-beta"
-            ] = "prompt-caching-2024-07-31"
-            _apply_anthropic_cache_control(
-                api_messages, litellm_kwargs.get("tools")
+            litellm_kwargs.setdefault("extra_headers", {})["anthropic-beta"] = (
+                "prompt-caching-2024-07-31"
             )
+            _apply_anthropic_cache_control(api_messages, litellm_kwargs.get("tools"))
             # Reflect updated messages (cache_control blocks mutated in-place)
             litellm_kwargs["messages"] = api_messages
 

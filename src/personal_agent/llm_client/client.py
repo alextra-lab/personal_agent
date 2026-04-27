@@ -382,7 +382,9 @@ class LocalLLMClient:
                 if _SLM_TUNNEL_HOSTNAME in current_endpoint:
                     if settings.cf_access_client_id and settings.cf_access_client_secret:
                         cf_headers[_CF_ACCESS_CLIENT_ID_HEADER] = settings.cf_access_client_id
-                        cf_headers[_CF_ACCESS_CLIENT_SECRET_HEADER] = settings.cf_access_client_secret
+                        cf_headers[_CF_ACCESS_CLIENT_SECRET_HEADER] = (
+                            settings.cf_access_client_secret
+                        )
 
                 async with httpx.AsyncClient(timeout=timeout_config, verify=verify_ssl) as client:
                     response = await client.post(

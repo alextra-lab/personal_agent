@@ -235,6 +235,7 @@ class ModeManager:
 
         # Dual-write: publish ModeTransitionEvent on stream:mode.transition (ADR-0055)
         if self._event_bus is not None:
+
             async def _publish_transition() -> None:
                 try:
                     await self._event_bus.publish(  # type: ignore[union-attr]

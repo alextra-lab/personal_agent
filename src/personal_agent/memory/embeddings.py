@@ -30,9 +30,7 @@ logger = structlog.get_logger(__name__)
 
 # Instruction prefix for query-mode embeddings (Qwen3-Embedding format).
 # Documents are embedded without a prefix.
-_QUERY_PREFIX = (
-    "Instruct: Given a query, retrieve relevant entities and passages\nQuery: "
-)
+_QUERY_PREFIX = "Instruct: Given a query, retrieve relevant entities and passages\nQuery: "
 
 
 def _get_embedding_config() -> tuple[str, str]:
@@ -111,9 +109,7 @@ async def generate_embeddings_batch(
         return []
 
     settings = get_settings()
-    embed_texts = (
-        [f"{_QUERY_PREFIX}{t}" for t in texts] if mode == "query" else texts
-    )
+    embed_texts = [f"{_QUERY_PREFIX}{t}" for t in texts] if mode == "query" else texts
 
     try:
         model_id, endpoint = _get_embedding_config()

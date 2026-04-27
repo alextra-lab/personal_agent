@@ -48,20 +48,44 @@ _MAX_OUTPUT_CHARS = 32_000
 _IS_DARWIN = platform.system() == "Darwin"
 
 _DARWIN_CANDIDATES = [
-    "ps", "pgrep", "top", "lsof",
-    "find", "df", "du",
-    "iostat", "vm_stat",
-    "ifconfig", "netstat",
-    "uptime", "sysctl", "who", "last",
-    "sw_vers", "diskutil",
+    "ps",
+    "pgrep",
+    "top",
+    "lsof",
+    "find",
+    "df",
+    "du",
+    "iostat",
+    "vm_stat",
+    "ifconfig",
+    "netstat",
+    "uptime",
+    "sysctl",
+    "who",
+    "last",
+    "sw_vers",
+    "diskutil",
 ]
 
 _LINUX_CANDIDATES = [
-    "ps", "pgrep", "top", "lsof",
-    "find", "df", "du",
-    "iostat", "vmstat", "free",
-    "ip", "ifconfig", "ss", "netstat",
-    "uptime", "sysctl", "who", "last",
+    "ps",
+    "pgrep",
+    "top",
+    "lsof",
+    "find",
+    "df",
+    "du",
+    "iostat",
+    "vmstat",
+    "free",
+    "ip",
+    "ifconfig",
+    "ss",
+    "netstat",
+    "uptime",
+    "sysctl",
+    "who",
+    "last",
     "uname",
 ]
 
@@ -69,12 +93,11 @@ _candidates = _DARWIN_CANDIDATES if _IS_DARWIN else _LINUX_CANDIDATES
 
 # Build allow-list: name → resolved absolute path (excludes unavailable binaries).
 _ALLOW_LIST: dict[str, str] = {
-    cmd: path
-    for cmd in _candidates
-    if (path := shutil.which(cmd)) is not None
+    cmd: path for cmd in _candidates if (path := shutil.which(cmd)) is not None
 }
 
 _ALLOWED_NAMES = ", ".join(sorted(_ALLOW_LIST))
+
 
 def _build_description() -> str:
     top_hint = "top -l 1 -n 20" if _IS_DARWIN else "top -b -n 1 -o %CPU"

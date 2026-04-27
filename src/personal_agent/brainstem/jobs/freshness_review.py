@@ -101,17 +101,11 @@ def _write_snapshot(path: Path, iso_week: str, summary: GraphStalenessSummary) -
 
 
 def _dormant_entity_what_text() -> str:
-    return (
-        "Review dormant knowledge graph entities for archival or re-validation "
-        "per ADR-0042"
-    )
+    return "Review dormant knowledge graph entities for archival or re-validation per ADR-0042"
 
 
 def _dormant_relationship_what_text() -> str:
-    return (
-        "Review dormant knowledge graph relationships for archival or re-validation "
-        "per ADR-0042"
-    )
+    return "Review dormant knowledge graph relationships for archival or re-validation per ADR-0042"
 
 
 def _build_entity_dormant_proposal(
@@ -152,8 +146,7 @@ def _build_entity_dormant_proposal(
         entry_id="",
         type=CaptainLogEntryType.CONFIG_PROPOSAL,
         title=(
-            f"Dormant entities: {summary.entities.dormant} — review for archival "
-            "or re-validation"
+            f"Dormant entities: {summary.entities.dormant} — review for archival or re-validation"
         ),
         rationale=(
             "Weekly freshness review (ADR-0042) identified dormant entities. "
@@ -173,7 +166,9 @@ def _build_entity_dormant_proposal(
         supporting_metrics=supporting,
         metrics_structured=metrics_structured,
         impact_assessment="Reduces graph noise and surfaces outdated knowledge safely.",
-        telemetry_refs=[TelemetryRef(trace_id=trace_id, metric_name="freshness_review", value=None)],
+        telemetry_refs=[
+            TelemetryRef(trace_id=trace_id, metric_name="freshness_review", value=None)
+        ],
     )
 
 
@@ -217,9 +212,7 @@ def _build_relationship_dormant_proposal(
     return CaptainLogEntry(
         entry_id="",
         type=CaptainLogEntryType.CONFIG_PROPOSAL,
-        title=(
-            f"Dormant relationships: {summary.relationships.dormant} — review for accuracy"
-        ),
+        title=(f"Dormant relationships: {summary.relationships.dormant} — review for accuracy"),
         rationale=(
             "Weekly freshness review (ADR-0042) flagged relationships not accessed within "
             "the cold threshold; some may no longer reflect reality."
@@ -238,7 +231,9 @@ def _build_relationship_dormant_proposal(
         supporting_metrics=supporting,
         metrics_structured=metrics_structured,
         impact_assessment="Improves temporal truthfulness of the knowledge graph.",
-        telemetry_refs=[TelemetryRef(trace_id=trace_id, metric_name="freshness_review", value=None)],
+        telemetry_refs=[
+            TelemetryRef(trace_id=trace_id, metric_name="freshness_review", value=None)
+        ],
     )
 
 

@@ -109,11 +109,7 @@ class ModeControllerConsumer:
             if evaluation_interval_seconds is not None
             else settings.mode_evaluation_interval_seconds
         )
-        _window_size: int = (
-            window_size
-            if window_size is not None
-            else settings.mode_window_size
-        )
+        _window_size: int = window_size if window_size is not None else settings.mode_window_size
         self._calibration_threshold: int = (
             calibration_anomaly_threshold
             if calibration_anomaly_threshold is not None
@@ -272,9 +268,7 @@ class ModeControllerConsumer:
             "safety_policy_violations": 0,
         }
 
-    async def _emit_calibration_proposal(
-        self, event: ModeTransitionEvent, count: int
-    ) -> None:
+    async def _emit_calibration_proposal(self, event: ModeTransitionEvent, count: int) -> None:
         """Write a Captain's Log CONFIG_PROPOSAL for anomalous edge cadence.
 
         De-duplicates within the process lifetime via the

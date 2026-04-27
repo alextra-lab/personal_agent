@@ -30,9 +30,9 @@ _AGENT_FILED_COLOR = "#6B7280"  # neutral gray for auto-filed issues
 
 # Module-level ID cache — avoids repeated API round-trips within a process lifetime.
 _team_id_cache: str | None = None
-_state_id_cache: dict[str, str] = {}          # state_name → id
-_label_id_cache: dict[str, str] = {}          # label_name → id
-_labels_fetched_for_teams: set[str] = set()   # teams whose label list was already fetched
+_state_id_cache: dict[str, str] = {}  # state_name → id
+_label_id_cache: dict[str, str] = {}  # label_name → id
+_labels_fetched_for_teams: set[str] = set()  # teams whose label list was already fetched
 
 # In-memory rate-limit tracker: project_key → list of epoch timestamps
 _rate_log: dict[str, list[float]] = defaultdict(list)
@@ -214,9 +214,7 @@ async def _gql(query: str, variables: dict[str, Any] | None = None) -> dict[str,
     """
     api_key = settings.linear_api_key
     if not api_key:
-        raise ToolExecutionError(
-            "Linear API key not configured. Set AGENT_LINEAR_API_KEY in .env."
-        )
+        raise ToolExecutionError("Linear API key not configured. Set AGENT_LINEAR_API_KEY in .env.")
     try:
         async with httpx.AsyncClient(timeout=25) as client:
             resp = await client.post(
@@ -279,7 +277,9 @@ async def _get_state_id(team_id: str, state_name: str) -> str:
     return _state_id_cache[state_name]
 
 
-async def _get_label_id(team_id: str, label_name: str, *, auto_create_color: str | None = None) -> str:
+async def _get_label_id(
+    team_id: str, label_name: str, *, auto_create_color: str | None = None
+) -> str:
     if label_name in _label_id_cache:
         return _label_id_cache[label_name]
     # Fetch the label list once per team — subsequent calls skip this if team was already fetched.
@@ -399,9 +399,7 @@ async def create_linear_issue_executor(
         raise ToolExecutionError("'priority' must be 1 (Urgent), 2 (High), 3 (Normal), or 4 (Low).")
 
     if not settings.linear_api_key:
-        raise ToolExecutionError(
-            "Linear API key not configured. Set AGENT_LINEAR_API_KEY in .env."
-        )
+        raise ToolExecutionError("Linear API key not configured. Set AGENT_LINEAR_API_KEY in .env.")
 
     project_key = project or "__unassigned__"
     if not dry_run:
@@ -606,9 +604,7 @@ async def create_linear_project_executor(
     if not name:
         raise ToolExecutionError("'name' is required and cannot be empty.")
     if not settings.linear_api_key:
-        raise ToolExecutionError(
-            "Linear API key not configured. Set AGENT_LINEAR_API_KEY in .env."
-        )
+        raise ToolExecutionError("Linear API key not configured. Set AGENT_LINEAR_API_KEY in .env.")
 
     trace_id = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
     log.info("linear_create_project_start", trace_id=trace_id, name=name[:80])

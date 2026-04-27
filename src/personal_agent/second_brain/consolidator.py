@@ -152,9 +152,7 @@ class SecondBrainConsolidator:
                 entities_created += result.get("entities_created", 0)
                 relationships_created += result.get("relationships_created", 0)
                 all_entity_ids.extend(result.get("entity_ids", []))
-                all_relationship_element_ids.extend(
-                    result.get("relationship_element_ids", [])
-                )
+                all_relationship_element_ids.extend(result.get("relationship_element_ids", []))
                 log.debug(
                     "consolidation_capture_done",
                     capture_num=i,

@@ -67,7 +67,8 @@ CREATE TABLE IF NOT EXISTS api_costs (
     output_tokens INTEGER NOT NULL DEFAULT 0,
     cost_usd DECIMAL(10, 6) NOT NULL DEFAULT 0,
     trace_id UUID,
-    purpose VARCHAR(50)  -- 'user_request', 'second_brain', 'entity_extraction'
+    purpose VARCHAR(50),  -- 'user_request', 'second_brain', 'entity_extraction'
+    latency_ms INTEGER
 );
 
 CREATE INDEX idx_api_costs_timestamp ON api_costs(timestamp DESC);

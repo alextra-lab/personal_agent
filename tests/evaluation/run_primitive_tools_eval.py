@@ -32,6 +32,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -163,9 +164,12 @@ def _post_chat(
         On network/timeout errors the status code is 0.
     """
     url = f"{base_url.rstrip('/')}/chat"
-    payload = {"message": message, "session_id": session_id}
+    # /chat takes query params (FastAPI plain-type params = query, not body).
+    # Don't pass session_id — let the server create a new session per prompt
+    # and capture the returned UUID from the response for traceability.
+    params: dict[str, str] = {"message": message}
     try:
-        resp = httpx.post(url, json=payload, timeout=timeout)
+        resp = httpx.post(url, params=params, timeout=timeout)
         status = resp.status_code
         if status == 200:
             try:
@@ -371,8 +375,9 @@ def run_harness(args: argparse.Namespace) -> None:
         pid = prompt["id"]
         category = prompt["category"]
         message = prompt["prompt"]
-        ctrl_session = f"{args.session_prefix}-ctrl-{pid}"
-        trt_session = f"{args.session_prefix}-trt-{pid}"
+        # uuid5 gives deterministic, valid UUIDs traceable by prompt ID
+        ctrl_session = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{args.session_prefix}-ctrl-{pid}"))
+        trt_session = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{args.session_prefix}-trt-{pid}"))
 
         # --- Control ---
         ctrl_start = time.monotonic()

@@ -2,8 +2,22 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-26 (FRE-229 done — memory visibility layer public/group/private; ADR-0064 fully implemented; Makefile `health` port fix)
+> **Last updated**: 2026-04-27 (FRE-262 PIVOT-3 first eval surfaced 12 issues; all other dev paused pending side plan)
 > **Implementation sequence**: `docs/superpowers/specs/2026-04-22-implementation-sequence-wave-plan-design.md`
+
+---
+
+## ⏸ Active Pause — FRE-262 PIVOT-3 Side Plan
+
+**All other development is paused** until the FRE-262 PIVOT-3 side plan completes.
+
+The first PIVOT-3 eval (2026-04-27) surfaced 12 issues across production bugs, eval infrastructure, governance, and skill doc quality. The PIVOT-3 → PIVOT-4 gate cannot be evaluated from existing data. Resolve these in waves before the re-eval.
+
+**Side plan**: `docs/plans/2026-04-27-fre-262-pivot-3-side-plan.md`
+**Linear issues in scope**: FRE-270, FRE-271, FRE-272, FRE-273, FRE-274, FRE-275, FRE-276, FRE-277, FRE-278, FRE-279, FRE-280, FRE-281
+**Resume condition**: FRE-262 transitions to Done with a defensible gate verdict in `EVAL_RESULT.md`.
+
+After the side plan completes, normal master-plan sequencing resumes at Wave 3 (FRE-249, FRE-250).
 
 ---
 

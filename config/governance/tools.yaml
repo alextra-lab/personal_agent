@@ -414,6 +414,18 @@ tools:
     # allowed_paths: []
     # timeout_seconds: 30
 
+  # FRE-261 Step 5: Python Docker sandbox executor
+  run_python:
+    category: "system_dangerous"
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
+    forbidden_in_modes: ["LOCKDOWN", "RECOVERY"]
+    requires_approval: false
+    requires_approval_in_modes: ["ALERT", "DEGRADED"]
+    timeout_seconds: 60
+    rate_limit_per_hour: 60
+    loop_max_per_signature: 5
+    loop_max_consecutive: 10
+
   # FRE-261 Step 4: sandboxed bash executor with allowlist-based approval model
   bash:
     category: "system_dangerous"

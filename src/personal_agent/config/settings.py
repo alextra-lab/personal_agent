@@ -929,6 +929,23 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # Docker sandbox (FRE-261 — Step 5: run_python primitive)
+    sandbox_image: str = Field(
+        default="seshat-sandbox-python:0.1",
+        description=(
+            "Docker image used by the run_python primitive tool. "
+            "Build with: make sandbox-build"
+        ),
+    )
+    sandbox_scratch_root: str = Field(
+        default="/tmp/agent_sandbox",
+        description=(
+            "Host-side root directory for per-trace sandbox scratch dirs. "
+            "Each invocation gets a sub-directory keyed by trace_id. "
+            "In cloud deployments set to a path on the seshat_workspace_cloud volume."
+        ),
+    )
+
     # Tool approval UI (FRE-261 — Step 1 stub; Step 6 adds env alias)
     approval_ui_enabled: bool = Field(
         default=False,

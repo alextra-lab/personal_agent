@@ -1,0 +1,6 @@
+FROM python:3.12-slim
+RUN groupadd -g 1000 appuser && useradd -u 1000 -g 1000 -m appuser
+RUN pip install --no-cache-dir requests httpx pandas numpy pyyaml
+USER appuser
+WORKDIR /sandbox
+ENTRYPOINT ["python", "-c"]

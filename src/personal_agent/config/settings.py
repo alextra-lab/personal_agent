@@ -941,6 +941,15 @@ class AppConfig(BaseSettings):
             "pentest gate clears (ADR-0063 Phase 2)."
         ),
     )
+    prefer_primitives_enabled: bool = Field(
+        default=False,
+        description=(
+            "Inject skill library docs into system prompt and nudge the model to prefer "
+            "primitives over MCP tools. Enable AFTER pentest gate clears AND 6+ skill docs "
+            "are in docs/skills/. Requires AGENT_PRIMITIVE_TOOLS_ENABLED=true to be meaningful. "
+            "Env var: AGENT_PREFER_PRIMITIVES"
+        ),
+    )
 
     # Docker sandbox (FRE-261 — Step 5: run_python primitive)
     sandbox_image: str = Field(

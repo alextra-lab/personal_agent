@@ -26,7 +26,7 @@ _SKILL_FILES = [
 ]
 _SKILLS_DIR = Path(__file__).resolve().parents[3] / "docs" / "skills"
 _SEPARATOR = "\n\n---\n\n"
-_HEADER = (
+SKILL_BLOCK_HEADER = (
     "## Skill Library — How to Drive Primitive Tools\n\n"
     "The following skill docs are reference material for using the `bash`, `read`, "
     "`write`, and `run_python` primitives effectively. Prefer these idioms over named "
@@ -41,8 +41,13 @@ def _load_skill_block() -> str:
         if not p.exists():
             log.warning("skill_doc_missing", file=name)
             continue
-        chunks.append(p.read_text(encoding="utf-8").strip())
-    return _HEADER + _SEPARATOR.join(chunks) if chunks else ""
+        try:
+            content = p.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            log.warning("skill_doc_unreadable", file=name, error=str(exc))
+            continue
+        chunks.append(content)
+    return SKILL_BLOCK_HEADER + _SEPARATOR.join(chunks) if chunks else ""
 
 
 _CACHED_BLOCK: str = _load_skill_block()

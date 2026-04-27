@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import orjson
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from personal_agent.captains_log.es_indexer import schedule_es_index
 from personal_agent.telemetry import get_logger
@@ -63,6 +63,15 @@ class TaskCapture(BaseModel):
     tool_results: list[dict[str, Any]] = Field(default_factory=list)
     # FRE-229: owning user UUID — None for CLI/unauthenticated paths; used by consolidator to set visibility
     user_id: UUID | None = None
+
+    @field_validator("user_id", mode="before")
+    @classmethod
+    def _coerce_user_id(cls, v: Any) -> UUID | None:
+        if v is None:
+            return None
+        if isinstance(v, UUID):
+            return v
+        return UUID(str(v))
 
 
 def _get_captures_dir() -> pathlib.Path:

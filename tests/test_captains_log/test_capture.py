@@ -10,6 +10,40 @@ from personal_agent.captains_log.capture import (
 )
 
 
+def test_user_id_coercion() -> None:
+    """Regression: asyncpg UUID must be coerced to uuid.UUID so orjson can serialize it."""
+    import orjson
+    from uuid import UUID as StdUUID
+
+    _UUID_STR = "550e8400-e29b-41d4-a716-446655440000"
+    _base: dict = dict(
+        trace_id="trace-coerce",
+        session_id="session-coerce",
+        timestamp=datetime(2026, 4, 27, 12, 0, 0, tzinfo=timezone.utc),
+        user_message="test",
+        outcome="completed",
+    )
+
+    # string input → uuid.UUID
+    c1 = TaskCapture(**_base, user_id=_UUID_STR)
+    assert isinstance(c1.user_id, StdUUID)
+    orjson.dumps(c1.model_dump())
+
+    # asyncpg-style object (only __str__) → uuid.UUID
+    class _FakeUUID:
+        def __str__(self) -> str:
+            return _UUID_STR
+
+    c2 = TaskCapture(**_base, user_id=_FakeUUID())
+    assert isinstance(c2.user_id, StdUUID)
+    orjson.dumps(c2.model_dump())
+
+    # None stays None
+    c3 = TaskCapture(**_base, user_id=None)
+    assert c3.user_id is None
+    orjson.dumps(c3.model_dump())
+
+
 class TestWriteCapture:
     """Test write_capture and optional ES indexing."""
 

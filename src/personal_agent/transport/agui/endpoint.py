@@ -222,7 +222,7 @@ async def submit_approval(
         raise HTTPException(status_code=404, detail="Approval request not found")
 
     decision = ApprovalDecision(decision=body.decision, reason=body.reason)
-    resolved = resolve_approval(request_id, decision, waiter_session_id)
+    resolved = resolve_approval(request_id, decision, caller_session_id)
     if not resolved:
         log.warning(
             "approval_endpoint.resolve_failed",

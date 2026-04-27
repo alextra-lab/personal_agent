@@ -166,10 +166,22 @@ async def _check_permissions(
     if tool_policy and (
         mode_str in tool_policy.requires_approval_in_modes or tool_policy.requires_approval
     ):
-        if settings.approval_ui_enabled and transport is not None:
+        if settings.approval_ui_enabled and not session_id:
+            # Guard: approval UI is enabled but no session_id was supplied.
+            # Registering a waiter with an empty session_id can never be
+            # correctly resolved by the endpoint (it compares caller_session_id
+            # against the registered value).  Fall through to the warn-and-allow
+            # path rather than creating an un-resolvable waiter.
+            log.warning(
+                "approval_skipped_no_session_id",
+                tool_name=tool_name,
+                mode=mode_str,
+                message="Approval required but session_id is empty; skipping interactive approval",
+            )
+        elif settings.approval_ui_enabled and transport is not None:
             # Perform interactive approval round-trip via the PWA.
             # Import here to avoid circular imports at module load time.
-            from personal_agent.transport.agui.approval_waiter import ApprovalDecision  # noqa: PLC0415
+            from personal_agent.transport.agui.approval_waiter import ApprovalDecision  # noqa: PLC0415, I001
 
             decision: ApprovalDecision = await transport.request_tool_approval(
                 request_id=str(uuid4()),

@@ -148,6 +148,30 @@ def test_submit_approval_already_resolved_returns_404() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_submit_approval_cross_session_returns_404() -> None:
+    """POST /agui/approval/{id} authenticated as a different session returns 404.
+
+    Registers the waiter under session A's user_id but submits the decision
+    authenticated as session B.  resolve_approval must detect the mismatch and
+    return False so the endpoint returns 404.
+    """
+    session_a_user_id = uuid4()
+    session_b_user_id = uuid4()
+    request_id = str(uuid4())
+
+    # Waiter registered under session A.
+    _inject_waiter(request_id, str(session_a_user_id))
+
+    # Request authenticated as session B.
+    app = _make_app(session_b_user_id)
+    client = TestClient(app, raise_server_exceptions=True)
+    resp = client.post(
+        f"/approval/{request_id}",
+        json={"decision": "approve"},
+    )
+    assert resp.status_code == 404
+
+
 def test_submit_approval_invalid_decision_returns_422() -> None:
     """POST with an invalid decision value returns 422 (Pydantic validation)."""
     user_id = uuid4()

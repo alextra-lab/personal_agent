@@ -158,13 +158,16 @@ async def _process_chat_stream_background(
             db_messages = list(session.messages or [])
             max_history = settings.conversation_max_history_messages
             prior_messages = db_messages[-max_history:] if max_history > 0 else db_messages
-            await repo.append_message(session_uuid, {
-                "role": "user",
-                "content": message,
-                "trace_id": trace_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "metadata": {"source": "service.app"},
-            })
+            await repo.append_message(
+                session_uuid,
+                {
+                    "role": "user",
+                    "content": message,
+                    "trace_id": trace_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "metadata": {"source": "service.app"},
+                },
+            )
 
         # ── Gateway pipeline ─────────────────────────────────────────────
         from personal_agent.brainstem.expansion import compute_expansion_budget
@@ -540,6 +543,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         CG_PROMOTION,
         CG_SESSION_WRITER,
         STREAM_CONSOLIDATION_COMPLETED,
+        STREAM_CONTEXT_COMPACTION_QUALITY_POOR,
         STREAM_ERRORS_PATTERN_DETECTED,
         STREAM_FEEDBACK_RECEIVED,
         STREAM_MEMORY_ACCESSED,
@@ -553,6 +557,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         EventBase,
     )
     from personal_agent.events.pipeline_handlers import (
+        build_compaction_quality_captain_log_handler,
         build_consolidation_insights_handler,
         build_consolidation_promotion_handler,
         build_error_pattern_captain_log_handler,
@@ -730,6 +735,29 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 consumer_group=CG_ERROR_MONITOR,
                 window_hours=settings.error_monitor_window_hours,
                 min_occurrences=settings.error_monitor_min_occurrences,
+            )
+
+        # ADR-0059 — Context Quality Stream (FRE-249).
+        # cg:captain-log subscribes to stream:context.compaction_quality_poor;
+        # each per-incident event becomes a CaptainLogEntry(KNOWLEDGE_QUALITY,
+        # ORCHESTRATOR). Emission gate is the producer-side flag
+        # context_quality_stream_enabled (checked in recall_controller); the
+        # subscription itself is harmless when no events are published, so we
+        # always wire it whenever the bus is RedisStreamBus.
+        if settings.context_quality_stream_enabled:
+            _cq_cl_handler = build_compaction_quality_captain_log_handler()
+            await active_bus.subscribe(
+                stream=STREAM_CONTEXT_COMPACTION_QUALITY_POOR,
+                group=CG_CAPTAIN_LOG,
+                consumer_name="captain-log-compaction-quality-0",
+                handler=_cq_cl_handler,
+            )
+            log.info(
+                "context_quality_stream_registered",
+                consumer_group=CG_CAPTAIN_LOG,
+                stream=STREAM_CONTEXT_COMPACTION_QUALITY_POOR,
+                governance_enabled=settings.context_quality_governance_enabled,
+                governance_threshold=settings.context_quality_governance_threshold,
             )
 
         consumer_runner = ConsumerRunner(active_bus)
@@ -1012,13 +1040,14 @@ async def chat(
     # --- Phase: db_append_user_message ---
     with timer.span("db_append_user_message"):
         await repo.append_message(
-            cast(UUID, session.session_id), {
+            cast(UUID, session.session_id),
+            {
                 "role": "user",
                 "content": message,
                 "trace_id": trace_id,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "metadata": {"source": "service.app"},
-            }
+            },
         )
 
     # --- Phase: gateway_pipeline ---

@@ -497,3 +497,43 @@ class TestInsightsCostAnomalyEvent:
         parsed = parse_stream_event(event.model_dump(mode="json"))
         assert isinstance(parsed, InsightsCostAnomalyEvent)
         assert parsed.severity == "high"
+
+
+class TestCompactionQualityIncidentEvent:
+    """Tests for the FRE-249 / ADR-0059 compaction quality event type."""
+
+    def test_event_type_literal(self) -> None:
+        from personal_agent.events.models import CompactionQualityIncidentEvent
+
+        event = CompactionQualityIncidentEvent(
+            trace_id="t",
+            session_id="s",
+            fingerprint="fp01234567890abc",
+            noun_phrase="cache",
+            dropped_entity="redis",
+            recall_cue="what was our cache again",
+            tier_affected="episodic",
+            tokens_removed=42,
+            detected_at=datetime.now(timezone.utc),
+        )
+        assert event.event_type == "context.compaction_quality_poor"
+        assert event.source_component == "telemetry.context_quality"
+
+    def test_parse_stream_event_dispatch(self) -> None:
+        from personal_agent.events.models import CompactionQualityIncidentEvent
+
+        event = CompactionQualityIncidentEvent(
+            trace_id="t",
+            session_id="s",
+            fingerprint="fp01234567890abc",
+            noun_phrase="cache",
+            dropped_entity="redis",
+            recall_cue="what was our cache again",
+            tier_affected="episodic",
+            tokens_removed=42,
+            detected_at=datetime.now(timezone.utc),
+        )
+        parsed = parse_stream_event(event.model_dump(mode="json"))
+        assert isinstance(parsed, CompactionQualityIncidentEvent)
+        assert parsed.fingerprint == event.fingerprint
+        assert parsed.noun_phrase == "cache"

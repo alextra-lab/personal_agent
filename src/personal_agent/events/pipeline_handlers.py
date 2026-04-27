@@ -11,6 +11,7 @@ from typing import Any
 
 from personal_agent.captains_log.models import ChangeScope
 from personal_agent.events.models import (
+    CompactionQualityIncidentEvent,
     ConsolidationCompletedEvent,
     ErrorPatternDetectedEvent,
     EventBase,
@@ -505,6 +506,125 @@ def build_error_pattern_captain_log_handler(manager: Any | None = None) -> Any:
             event_name=event.event_name,
             occurrences=event.occurrences,
             scope=scope.value,
+        )
+
+    return handler
+
+
+# ---------------------------------------------------------------------------
+# Wave 3 — ADR-0059 (Context Quality Stream)
+# ---------------------------------------------------------------------------
+
+
+def build_compaction_quality_captain_log_handler(manager: Any | None = None) -> Any:
+    """Build handler that writes Captain's Log entries on context-quality incidents.
+
+    Subscribes ``cg:captain-log`` to ``stream:context.compaction_quality_poor``.
+    Each ``CompactionQualityIncidentEvent`` becomes a ``CONFIG_PROPOSAL`` entry
+    with ``category=KNOWLEDGE_QUALITY`` and ``scope=ORCHESTRATOR``.
+
+    Dedup and suppression are handled by the existing ``CaptainLogManager``
+    infrastructure (ADR-0030): passing the same fingerprint increments
+    ``seen_count`` rather than creating a duplicate entry.  ADR-0030 dedup
+    also merges any overlap with the ADR-0056 cluster path that fires on
+    the same ``compaction_quality.poor`` warning.
+
+    Args:
+        manager: Optional ``CaptainLogManager`` instance.  When ``None``, a
+            fresh instance is created lazily inside the handler.
+
+    Returns:
+        Async handler for ``cg:captain-log`` on
+        ``stream:context.compaction_quality_poor``.
+    """
+
+    async def handler(event: EventBase) -> None:
+        if not isinstance(event, CompactionQualityIncidentEvent):
+            return
+
+        from datetime import datetime, timezone
+
+        from personal_agent.captains_log.manager import CaptainLogManager
+        from personal_agent.captains_log.models import (
+            CaptainLogEntry,
+            CaptainLogEntryType,
+            ChangeCategory,
+            Metric,
+            ProposedChange,
+            TelemetryRef,
+        )
+
+        _manager = manager or CaptainLogManager()
+        now = datetime.now(timezone.utc)
+
+        entry = CaptainLogEntry(
+            entry_id=f"CL-{now.strftime('%Y%m%d-%H%M%S')}-cq-{event.fingerprint[:6]}",
+            type=CaptainLogEntryType.CONFIG_PROPOSAL,
+            title=(
+                f'Compaction dropped "{event.dropped_entity}", user then '
+                f'asked about "{event.noun_phrase}"'
+            ),
+            rationale=(
+                f'Stage 7 dropped entity "{event.dropped_entity}" '
+                f"(tier: {event.tier_affected}, {event.tokens_removed} tokens) "
+                f"earlier in this session; the user then asked about "
+                f'"{event.noun_phrase}" with cue "{event.recall_cue}". '
+                f"The recall controller's substring match identified the "
+                f"overlap (ADR-0047 D3, ADR-0059)."
+            ),
+            proposed_change=ProposedChange(
+                what="Investigate Stage 7 trim ordering for entity priority",
+                why=(
+                    "Sustained context-quality incidents indicate the budget "
+                    "stage is dropping entities that the user actively "
+                    "references."
+                ),
+                how=(
+                    "1) Inspect the Captain's Log entry's trace_id in Kibana "
+                    "for the full compaction record.\n"
+                    "2) Decide whether the trim ordering needs entity-priority "
+                    "logic, or whether the budget ceiling itself is too tight.\n"
+                    "3) If patterns concentrate on a single entity class, "
+                    "consider promoting the entity in memory-recall scoring."
+                ),
+                category=ChangeCategory.KNOWLEDGE_QUALITY,
+                scope=ChangeScope.ORCHESTRATOR,
+                fingerprint=event.fingerprint,
+                first_seen=None,
+            ),
+            supporting_metrics=[
+                f"tokens_removed: {event.tokens_removed}",
+                f"tier_affected: {event.tier_affected}",
+                f"detected_at: {event.detected_at.isoformat()}",
+            ],
+            metrics_structured=[
+                Metric(
+                    name="tokens_removed",
+                    value=event.tokens_removed,
+                    unit="tokens",
+                ),
+            ],
+            telemetry_refs=(
+                [TelemetryRef(trace_id=event.trace_id, metric_name=None, value=None)]
+                if event.trace_id
+                else []
+            ),
+            impact_assessment=None,
+            reviewer_notes=None,
+            linear_issue_id=None,
+            experiment_design=None,
+            expected_outcome=None,
+            potential_implementation=None,
+        )
+
+        _manager.save_entry(entry)
+        log.info(
+            "compaction_quality_captain_log_saved",
+            fingerprint=event.fingerprint,
+            session_id=event.session_id,
+            noun_phrase=event.noun_phrase,
+            dropped_entity=event.dropped_entity,
+            tier_affected=event.tier_affected,
         )
 
     return handler

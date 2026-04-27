@@ -1,6 +1,6 @@
 # Feedback Stream Architecture
 
-> **Status**: Living document — updated 2026-04-24 (ADR-0055 drafted, In Review; ADR-0056 implemented 2026-04-24, ADR-0057 implemented 2026-04-24)
+> **Status**: Living document — updated 2026-04-27 (ADR-0059 implemented 2026-04-27 via FRE-249; ADR-0055 drafted, In Review; ADR-0056 implemented 2026-04-24, ADR-0057 implemented 2026-04-24)
 > **Context**: Surfaced during FRE-233 (ADR-0053) development
 > **Owner**: Project owner
 
@@ -116,16 +116,16 @@ All nine feedback streams, their current state, and their target state after ADR
 - **Gap:** Decay scores computed but not used in recall reranking
 
 ### Stream 7: Compaction Quality Detection
-- **Source:** Stage 7 (Budget) fires `log_compaction()` when context overflows
-- **Collection:** `_dropped_entities_by_session` in-memory cache; recall controller overlap check
-- **Processing:** Substring match between dropped entities and user noun phrases
-- **Signal:** `compaction_quality.poor` WARNING log to ES
-- **Action:** Nothing — pure log line, no consumer
-- **Human loop:** No
-- **Bus?** ❌ No
-- **ADR:** ADR-0047 D3 (detection only)
+- **Source:** Stage 7 (Budget) fires `log_compaction()` when context overflows; Stage 4b (Recall Controller) detects substring overlap with dropped entities
+- **Collection:** `_dropped_entities_by_session` in-memory cache; per-session `IncidentTracker` for governance
+- **Processing:** `recall_controller` builds `CompactionQualityIncident`; `telemetry/context_quality.py` dual-writes durable JSONL + bus event
+- **Signal:** `compaction_quality.poor` WARNING log + `stream:context.compaction_quality_poor` typed event + `telemetry/context_quality/CQ-<YYYY-MM-DD>.jsonl`
+- **Action:** ✅ `cg:captain-log` consumes events into `CaptainLogEntry(CONFIG_PROPOSAL, KNOWLEDGE_QUALITY, ORCHESTRATOR)` (Phase 1); Stage 7 budget tightening per session ≥ N incidents/24h (Phase 2, flag-gated)
+- **Human loop:** Yes (via Captain's Log promotion)
+- **Bus?** ✅ Yes (producer + consumer)
+- **ADR:** ADR-0047 D3 (detection) + **ADR-0059 (consumer path, FRE-249)**
 - **Project:** Context Quality Monitoring
-- **Gap:** Dead end — the loop does not close
+- **Gap:** Closed by FRE-249 (Phase 1 default-on; Phase 2 flag-gated off pending 14 days of telemetry)
 
 ### Stream 8: Consolidation Quality Monitor
 - **Source:** `BrainstemScheduler._run_quality_monitoring()` — daily at 5 AM UTC
@@ -201,8 +201,9 @@ PHASE 2 — FIX BROKEN STREAMS (parallel, all depend on ADR-0054)
     Project: Self-Improvement Pipeline
 
 PHASE 3 — COMPLETE PARTIAL STREAMS (depend on Phase 2)
-├── ADR-0059: Context Quality Stream [FRE-249]
+├── ADR-0059: Context Quality Stream [FRE-249 — Accepted, Implemented 2026-04-27]
 │   Compaction quality detection → full feedback loop
+│   Adds CompactionQualityIncidentEvent + cg:captain-log consumer
 │   Depends on: ADR-0047, ADR-0054, ADR-0056 (error monitoring pattern)
 │   Project: Context Quality Monitoring
 │
@@ -239,7 +240,7 @@ PHASE 3 — COMPLETE PARTIAL STREAMS (depend on Phase 2)
 | 4. Insights engine | Patterns | ✅ | ✅ | ADR-0057 (Accepted, Implemented 2026-04-24) | Insights & Pattern Analysis |
 | 5. Mode manager | System metrics | ❌ → ✅ | ❌ → ✅ | ADR-0055 (Drafted, In Review) | System Health & Homeostasis |
 | 6. Memory freshness | Access patterns | ✅ | ⚠️ partial | ADR-0042 | Knowledge Graph Quality |
-| 7. Compaction quality | Context loss | ❌ | ❌ | ADR-0047 D3 | Context Quality Monitoring |
+| 7. Compaction quality | Context loss | ✅ | ✅ | ADR-0047 D3 + ADR-0059 (Accepted, Implemented 2026-04-27) | Context Quality Monitoring |
 | 8. Consolidation quality | Graph health | ❌ | ❌ | None | Knowledge Graph Quality |
 | 9. Cost anomaly | Spend spikes | ✅ | ✅ | ADR-0057 (Accepted, Implemented 2026-04-24) | Insights & Pattern Analysis |
 | NEW. Gate monitoring | Pipeline decisions | ❌ → ✅ | ❌ → ✅ | ADR-0053 | Gate Health Monitoring |
@@ -268,7 +269,7 @@ PHASE 3 — COMPLETE PARTIAL STREAMS (depend on Phase 2)
 - FRE-246: ADR-0055 — System Health & Homeostasis (Drafted 2026-04-24, In Review)
 - FRE-247: ADR-0057 — Insights & Pattern Analysis (✅ Accepted, Implemented 2026-04-24)
 - FRE-248: ADR-0058 — Self-Improvement Pipeline Stream (✅ Accepted, Implemented 2026-04-25)
-- FRE-249: ADR-0059 — Context Quality Monitoring (Needs Approval, blocked by FRE-245 + FRE-244)
+- FRE-249: ADR-0059 — Context Quality Monitoring (✅ Accepted, Implemented 2026-04-27)
 - FRE-250: ADR-0060 — Knowledge Graph Quality (Needs Approval, blocked by FRE-245 + FRE-247)
 - FRE-251: ADR-0061 — Within-Session Compression (Needs Approval, blocked by FRE-249)
 - FRE-252: Governance — Per-TaskType tool allowlist (Needs Approval, independent)

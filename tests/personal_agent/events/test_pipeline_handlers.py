@@ -14,13 +14,17 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from datetime import datetime, timezone
+
 from personal_agent.events.models import (
+    CompactionQualityIncidentEvent,
     ConsolidationCompletedEvent,
     FeedbackReceivedEvent,
     PromotionIssueCreatedEvent,
     RequestCapturedEvent,
 )
 from personal_agent.events.pipeline_handlers import (
+    build_compaction_quality_captain_log_handler,
     build_consolidation_insights_handler,
     build_consolidation_promotion_handler,
     build_feedback_insights_handler,
@@ -489,6 +493,77 @@ class TestPromotionCaptainLogHandler:
                 mp.setitem(sys.modules, k, v)
             await handler(RequestCapturedEvent(trace_id="t", session_id="s", source_component="test"))
 
+        mock_manager_instance.save_entry.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# build_compaction_quality_captain_log_handler (FRE-249 / ADR-0059)
+# ---------------------------------------------------------------------------
+
+
+def _cq_event(
+    *,
+    fingerprint: str = "fpcompact0000abc",
+    trace_id: str = "trace-cq-1",
+    session_id: str = "session-cq-1",
+    noun_phrase: str = "caching system",
+    dropped_entity: str = "redis-config",
+    recall_cue: str = "what was our caching system again",
+    tier_affected: str = "episodic",
+    tokens_removed: int = 412,
+) -> CompactionQualityIncidentEvent:
+    return CompactionQualityIncidentEvent(
+        trace_id=trace_id,
+        session_id=session_id,
+        fingerprint=fingerprint,
+        noun_phrase=noun_phrase,
+        dropped_entity=dropped_entity,
+        recall_cue=recall_cue,
+        tier_affected=tier_affected,
+        tokens_removed=tokens_removed,
+        detected_at=datetime.now(timezone.utc),
+    )
+
+
+class TestCompactionQualityCaptainLogHandler:
+    """Tests for the context-quality → captain-log consumer (FRE-249)."""
+
+    @pytest.mark.asyncio
+    async def test_saves_captain_log_entry(self) -> None:
+        mock_manager_instance = MagicMock()
+        mock_manager_instance.save_entry = MagicMock(return_value=None)
+
+        handler = build_compaction_quality_captain_log_handler(
+            manager=mock_manager_instance
+        )
+        await handler(_cq_event())
+
+        mock_manager_instance.save_entry.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_lazy_manager_instantiated_when_not_passed(self) -> None:
+        mock_manager_instance = MagicMock()
+        mock_manager_instance.save_entry = MagicMock(return_value=None)
+
+        handler = build_compaction_quality_captain_log_handler()
+        with pytest.MonkeyPatch().context() as mp:
+            for k, v in _captain_log_modules(mock_manager_instance).items():
+                mp.setitem(sys.modules, k, v)
+            await handler(_cq_event())
+
+        mock_manager_instance.save_entry.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ignores_wrong_event_type(self) -> None:
+        mock_manager_instance = MagicMock()
+        handler = build_compaction_quality_captain_log_handler(
+            manager=mock_manager_instance
+        )
+        await handler(
+            RequestCapturedEvent(
+                trace_id="t", session_id="s", source_component="test"
+            )
+        )
         mock_manager_instance.save_entry.assert_not_called()
 
 

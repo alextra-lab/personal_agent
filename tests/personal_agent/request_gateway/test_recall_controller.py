@@ -218,3 +218,184 @@ def test_recall_cue_telemetry_when_intent_already_memory_recall(caplog: pytest.L
     )
     assert result is None
     assert "recall_cue_detected" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# FRE-249 Bug B + dual-write — session_id correctly propagated and incident
+# is recorded when a dropped entity overlaps the noun phrase.
+# ---------------------------------------------------------------------------
+
+
+class TestBugBSessionIdAndDualWrite:
+    """Regression + dual-write tests for FRE-249 Bug B."""
+
+    def setup_method(self) -> None:
+        from personal_agent.telemetry.compaction import clear_dropped_entities
+        from personal_agent.telemetry.context_quality import reset_incident_tracker
+
+        clear_dropped_entities("session-bug-b")
+        clear_dropped_entities("session-bug-b-2")
+        reset_incident_tracker()
+
+    def teardown_method(self) -> None:
+        from personal_agent.telemetry.compaction import clear_dropped_entities
+        from personal_agent.telemetry.context_quality import reset_incident_tracker
+
+        clear_dropped_entities("session-bug-b")
+        clear_dropped_entities("session-bug-b-2")
+        reset_incident_tracker()
+
+    def test_session_id_used_for_cache_lookup(
+        self, caplog: pytest.LogCaptureFixture, tmp_path, monkeypatch
+    ) -> None:
+        from datetime import datetime, timezone
+
+        from personal_agent.telemetry.compaction import (
+            CompactionRecord,
+            log_compaction,
+        )
+
+        log_compaction(
+            CompactionRecord(
+                trace_id="trace-bug-b",
+                session_id="session-bug-b",
+                timestamp=datetime.now(timezone.utc),
+                trigger="budget_exceeded",
+                tier_affected="episodic",
+                tokens_before=2000,
+                tokens_after=200,
+                tokens_removed=1800,
+                strategy="drop_oldest",
+                content_summary="test",
+                entities_preserved=(),
+                entities_dropped=("caching",),
+            )
+        )
+
+        monkeypatch.setattr(
+            "personal_agent.telemetry.context_quality._default_output_dir",
+            lambda: tmp_path,
+        )
+
+        caplog.set_level(
+            "WARNING", logger="personal_agent.request_gateway.recall_controller"
+        )
+        caplog.set_level(
+            "INFO", logger="personal_agent.telemetry.context_quality"
+        )
+        caplog.set_level("INFO")
+
+        intent = IntentResult(
+            task_type=TaskType.CONVERSATIONAL,
+            complexity=Complexity.SIMPLE,
+            confidence=0.9,
+            signals=[],
+        )
+        result = run_recall_controller(
+            intent=intent,
+            user_message="What did we decide on the caching layer?",
+            session_messages=[
+                {"role": "user", "content": "let's pick a caching layer"},
+                {
+                    "role": "assistant",
+                    "content": "we are going to use the caching layer",
+                },
+            ],
+            trace_id="trace-bug-b",
+            session_id="session-bug-b",
+        )
+        assert result is not None
+        assert "compaction_quality.poor" in caplog.text
+        assert "context_quality_incident_recorded" in caplog.text
+
+        files = list(tmp_path.glob("CQ-*.jsonl"))
+        assert len(files) == 1
+        line = files[0].read_text().strip()
+        assert "caching" in line
+        assert "session-bug-b" in line
+
+    def test_no_session_id_skips_dual_write(
+        self, caplog: pytest.LogCaptureFixture, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            "personal_agent.telemetry.context_quality._default_output_dir",
+            lambda: tmp_path,
+        )
+        caplog.set_level(
+            "INFO", logger="personal_agent.telemetry.context_quality"
+        )
+
+        intent = IntentResult(
+            task_type=TaskType.CONVERSATIONAL,
+            complexity=Complexity.SIMPLE,
+            confidence=0.9,
+            signals=[],
+        )
+        run_recall_controller(
+            intent=intent,
+            user_message="What did we decide on the caching layer?",
+            session_messages=[
+                {"role": "user", "content": "let's pick a caching layer"},
+            ],
+            trace_id="trace-no-session",
+            session_id="",
+        )
+        assert "context_quality_incident_recorded" not in caplog.text
+        assert list(tmp_path.glob("CQ-*.jsonl")) == []
+
+    def test_disabled_flag_skips_dual_write(
+        self, caplog: pytest.LogCaptureFixture, tmp_path, monkeypatch
+    ) -> None:
+        from datetime import datetime, timezone
+
+        from personal_agent.telemetry.compaction import (
+            CompactionRecord,
+            log_compaction,
+        )
+
+        log_compaction(
+            CompactionRecord(
+                trace_id="trace-disabled",
+                session_id="session-bug-b-2",
+                timestamp=datetime.now(timezone.utc),
+                trigger="budget_exceeded",
+                tier_affected="episodic",
+                tokens_before=1000,
+                tokens_after=100,
+                tokens_removed=900,
+                strategy="drop_oldest",
+                content_summary="test",
+                entities_preserved=(),
+                entities_dropped=("caching",),
+            )
+        )
+        monkeypatch.setattr(
+            "personal_agent.telemetry.context_quality._default_output_dir",
+            lambda: tmp_path,
+        )
+
+        from personal_agent.request_gateway import recall_controller as rc
+
+        monkeypatch.setattr(
+            rc.settings, "context_quality_stream_enabled", False, raising=False
+        )
+        caplog.set_level("INFO")
+
+        intent = IntentResult(
+            task_type=TaskType.CONVERSATIONAL,
+            complexity=Complexity.SIMPLE,
+            confidence=0.9,
+            signals=[],
+        )
+        run_recall_controller(
+            intent=intent,
+            user_message="What did we decide on the caching layer?",
+            session_messages=[
+                {"role": "user", "content": "let's use the caching layer"},
+            ],
+            trace_id="trace-disabled",
+            session_id="session-bug-b-2",
+        )
+        assert "compaction_quality.poor" in caplog.text
+        assert "context_quality_incident_recorded" not in caplog.text
+        assert list(tmp_path.glob("CQ-*.jsonl")) == []

@@ -12,6 +12,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from personal_agent.config import load_model_config
 from personal_agent.llm_client.factory import get_llm_client
 from personal_agent.llm_client.types import LLMClientError, ModelRole
 from personal_agent.telemetry import get_logger
@@ -19,6 +20,8 @@ from personal_agent.telemetry import get_logger
 log = get_logger(__name__)
 
 FALLBACK_MARKER = "[Earlier messages truncated]"
+
+_compressor_role_missing_logged: bool = False
 
 _COMPRESSOR_SYSTEM_PROMPT = """\
 You are a context compressor. Given a sequence of conversation messages that \
@@ -57,6 +60,19 @@ async def compress_turns(
         Structured summary string, or the fallback marker on failure.
     """
     if not evicted_messages:
+        return FALLBACK_MARKER
+
+    config = load_model_config()
+    if "compressor" not in config.models:
+        global _compressor_role_missing_logged
+        if not _compressor_role_missing_logged:
+            log.warning(
+                "context_compressor_role_missing",
+                fallback="static_marker",
+                trace_id=trace_id,
+                remedy="Add 'compressor' role to active models.yaml to enable summarisation",
+            )
+            _compressor_role_missing_logged = True
         return FALLBACK_MARKER
 
     start_ms = time.monotonic() * 1000

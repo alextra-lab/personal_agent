@@ -30,6 +30,16 @@ models:
     supports_function_calling: true
     tool_calling_strategy: "native"
 
+  compressor:
+    id: "claude-haiku-4-5-20251001"
+    provider: "anthropic"
+    provider_type: "cloud"
+    max_tokens: 1024
+    context_length: 200000
+    min_concurrency: 1
+    max_concurrency: 10
+    default_timeout: 30
+
   claude_sonnet:
     id: "claude-sonnet-4-6"
     provider: "anthropic"

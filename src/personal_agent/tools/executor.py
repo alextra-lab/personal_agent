@@ -200,12 +200,12 @@ async def _check_permissions(
                 )
         else:
             log.warning(
-                "approval_required_but_not_implemented",
+                "approval_ui_disabled_proceeding",
                 tool_name=tool_name,
                 mode=mode_str,
-                message="Approval required but interactive approval not yet implemented",
+                message="Approval required but AGENT_APPROVAL_UI_ENABLED=false — proceeding without prompt",
             )
-            # For MVP, allow with warning when approval UI is not enabled.
+            # Allow the call when approval UI is explicitly disabled.
 
     # 3. Rate limit check (for MVP, we skip - Phase 2 will implement)
     # TODO: Implement rate limiting via telemetry query

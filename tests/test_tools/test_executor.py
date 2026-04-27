@@ -173,6 +173,52 @@ async def test_execute_tool_with_path_validation(
     assert result.success is True
 
 
+@pytest.mark.asyncio
+async def test_approval_ui_disabled_warning(governance_config) -> None:
+    """approval_ui_disabled_proceeding is logged and the call is allowed when UI is off."""
+    from unittest.mock import MagicMock, patch
+
+    from personal_agent.governance.models import Mode, ToolPolicy
+    from personal_agent.tools.executor import _check_permissions
+    from personal_agent.tools.types import ToolDefinition, ToolParameter
+
+    tool_def = ToolDefinition(
+        name="bash",
+        description="Bash execution",
+        category="shell_execution",
+        parameters=[ToolParameter(name="command", type="string", description="Command", required=True)],
+        risk_level="high",
+        allowed_modes=["NORMAL", "ALERT", "DEGRADED"],
+    )
+    governance_config.tools["bash"] = ToolPolicy(
+        category="shell_execution",
+        allowed_in_modes=["NORMAL", "ALERT", "DEGRADED"],
+        requires_approval=True,
+    )
+
+    mock_settings = MagicMock()
+    mock_settings.approval_ui_enabled = False
+
+    with patch("personal_agent.tools.executor.settings", mock_settings):
+        with patch("personal_agent.tools.executor.log") as mock_log:
+            result = await _check_permissions(
+                tool_name="bash",
+                tool_def=tool_def,
+                arguments={"command": "ls"},
+                current_mode=Mode.NORMAL,
+                governance_config=governance_config,
+                transport=None,
+            )
+
+    assert result.allowed is True
+    mock_log.warning.assert_called_once_with(
+        "approval_ui_disabled_proceeding",
+        tool_name="bash",
+        mode="NORMAL",
+        message="Approval required but AGENT_APPROVAL_UI_ENABLED=false — proceeding without prompt",
+    )
+
+
 def test_get_default_registry() -> None:
     """Test get_default_registry returns registry with MVP tools."""
     from personal_agent.tools import get_default_registry

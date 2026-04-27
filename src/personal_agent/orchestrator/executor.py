@@ -1264,6 +1264,17 @@ async def step_llm_call(
             "    redis:6379  |  embeddings:8503  |  reranker:8504"
         )
 
+    # Inject skill library docs when prefer_primitives_enabled is set (ADR-0063 §D7).
+    # Placed before dynamic content (memory/decomposition) to stay in the cached prefix.
+    from personal_agent.orchestrator.skills import get_skill_block
+
+    skill_block = get_skill_block()
+    if skill_block:
+        if system_prompt:
+            system_prompt = f"{system_prompt}\n\n{skill_block}"
+        else:
+            system_prompt = skill_block
+
     # Create span for LLM call
     span_ctx, span_id = trace_ctx.new_span()
 

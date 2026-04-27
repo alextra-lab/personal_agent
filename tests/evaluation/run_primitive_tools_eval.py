@@ -155,7 +155,6 @@ def parse_args() -> argparse.Namespace:
 def _post_chat(
     base_url: str,
     message: str,
-    session_id: str,
     timeout: float = _TIMEOUT_SECONDS,
 ) -> tuple[int, str]:
     """POST a single message to /chat and return (status_code, response_text).
@@ -163,7 +162,6 @@ def _post_chat(
     Args:
         base_url: Agent service base URL (e.g. "http://localhost:9000").
         message: The user message to send.
-        session_id: Session identifier to use for this turn.
         timeout: HTTP timeout in seconds.
 
     Returns:
@@ -396,12 +394,12 @@ def run_harness(args: argparse.Namespace) -> None:
 
         # --- Control ---
         ctrl_start = time.monotonic()
-        ctrl_status, ctrl_response = _post_chat(args.control_url, message, ctrl_session)
+        ctrl_status, ctrl_response = _post_chat(args.control_url, message)
         ctrl_ms = int((time.monotonic() - ctrl_start) * 1000)
 
         # --- Treatment ---
         trt_start = time.monotonic()
-        trt_status, trt_response = _post_chat(args.treatment_url, message, trt_session)
+        trt_status, trt_response = _post_chat(args.treatment_url, message)
         trt_ms = int((time.monotonic() - trt_start) * 1000)
 
         # Progress line

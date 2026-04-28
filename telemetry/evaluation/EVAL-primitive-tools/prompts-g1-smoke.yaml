@@ -1,0 +1,34 @@
+prompts:
+- category: system-metrics
+  expected_output: 'Memory usage of the uvicorn/python process. Treatment uses ps
+    aux or free -m; control uses system_metrics_snapshot. Correct = RSS or %MEM for
+    the uvicorn process (~300-400 MB). Wrong = total system memory reported as "service
+    memory", or unavailable.
+
+    '
+  id: metrics-02
+  prompt: How much memory is the agent service using right now?
+- category: system-diagnostics
+  expected_output: 'Top 10 processes sorted by RSS/memory. Treatment uses ps aux --sort=-%mem
+    | head -10; control uses run_sysdiag. Expect uvicorn/python at top (~300MB), then
+    system processes. Correct = process list with PID, command, memory. Wrong = "unavailable"
+    or empty list.
+
+    '
+  id: diag-01
+  prompt: List the top 10 processes by memory usage.
+- category: infrastructure-health
+  expected_output: 'TCP reachability check for postgres:5432. Correct = "reachable:
+    true" or "connected". Wrong = DNS resolution failure (indicates running from host
+    instead of container), timeout.
+
+    '
+  id: infra-02
+  prompt: Is Postgres reachable?
+- category: infrastructure-health
+  expected_output: 'Reachability check for neo4j:7687/7474 and elasticsearch:9200.
+    Correct = both reachable. Wrong = DNS error or "cannot check from this environment".
+
+    '
+  id: infra-03
+  prompt: Are Neo4j and Elasticsearch both up?

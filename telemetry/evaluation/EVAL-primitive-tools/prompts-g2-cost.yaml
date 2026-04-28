@@ -1,0 +1,58 @@
+prompts:
+- category: query-elasticsearch
+  expected_output: 'A count of tool_call_started events where tool_name == "query_elasticsearch"
+    in the last day. Treatment queries agent-logs-* via ES|QL (event_type == "tool_call_started"
+    AND tool_name == "query_elasticsearch"); control uses self_telemetry_query. Correct
+    = a specific number (≥1 given active eval traffic). Wrong = 0 with no attempt,
+    404, or querying wrong index.
+
+    '
+  id: es-02
+  prompt: How many times did the agent call query_elasticsearch today?
+- category: query-elasticsearch
+  expected_output: "A trace_id and tool name from tool_loop_gate events with decision\
+    \ == \"warn_consecutive\" or \"block_consecutive\" in agent-logs-* in the last\
+    \ 7 days. Should include the tool name and consecutive_count. ES|QL: FROM agent-logs-*\
+    \ | WHERE event_type == \"tool_loop_gate\" AND @timestamp > NOW()-7days\n    \
+    \   AND decision IN (\"warn_consecutive\",\"block_consecutive\")\n       | STATS\
+    \ max_count=MAX(consecutive_count) BY trace_id, tool_name | SORT max_count DESC\
+    \ | LIMIT 5\nWrong = \"no data found\", 404, or queries against wrong indices.\
+    \ Terminates in <30s (not 120s timeout).\n"
+  id: es-04
+  prompt: Find a trace from the past week where the agent hit the consecutive loop
+    gate. What tool was involved and how many times was it called?
+- category: fetch-url
+  expected_output: 'Pricing information from anthropic.com/pricing page. Correct =
+    at least mentions Claude models and some price figures or "check the page for
+    current pricing" if the page is dynamic. Wrong = cannot fetch or completely wrong
+    content.
+
+    '
+  id: fetch-03
+  prompt: What's the current Anthropic pricing? Check https://www.anthropic.com/pricing.
+- category: list-directory
+  expected_output: 'A count of .yaml/.yml files under /app/config (recursively). Expect
+    5-10 files. Correct = a specific number and optionally a list. Wrong = 0 with
+    no attempt, or "path not found".
+
+    '
+  id: ls-03
+  prompt: How many YAML files are under /app/config?
+- category: system-metrics
+  expected_output: 'Memory usage of the uvicorn/python process. Treatment uses ps
+    aux or free -m; control uses system_metrics_snapshot. Correct = RSS or %MEM for
+    the uvicorn process (~300-400 MB). Wrong = total system memory reported as "service
+    memory", or unavailable.
+
+    '
+  id: metrics-02
+  prompt: How much memory is the agent service using right now?
+- category: system-diagnostics
+  expected_output: 'Top 10 processes sorted by RSS/memory. Treatment uses ps aux --sort=-%mem
+    | head -10; control uses run_sysdiag. Expect uvicorn/python at top (~300MB), then
+    system processes. Correct = process list with PID, command, memory. Wrong = "unavailable"
+    or empty list.
+
+    '
+  id: diag-01
+  prompt: List the top 10 processes by memory usage.

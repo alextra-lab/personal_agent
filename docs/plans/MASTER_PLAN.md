@@ -2,25 +2,27 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-28 (FRE-262 PIVOT-3 complete — PARTIAL PIVOT-4 verdict; normal sequencing resumes)
+> **Last updated**: 2026-04-28 (FULL PIVOT-4 verdict — FRE-283/FRE-284 fixed bash contract; G3 eval 19/20 quality 1.39× cost; all 8 tools deprecated)
 > **Implementation sequence**: `docs/superpowers/specs/2026-04-22-implementation-sequence-wave-plan-design.md`
 
 ---
 
-## ✅ PIVOT-3 Complete — Partial PIVOT-4 Verdict (2026-04-28)
+## ✅ FULL PIVOT-4 Verdict (2026-04-28) — supersedes PARTIAL PIVOT-4
 
-FRE-262 is Done. Three eval runs (Waves A–E of side plan) produced a defensible gate verdict.
+Root cause of PARTIAL PIVOT-4 identified and fixed:
+- **FRE-283**: bash primitive used `shlex.split + create_subprocess_exec(*argv)` — pipes and shell operators silently failed. Fixed to `/bin/bash -o pipefail -c`. Also wired `auto_approve_prefixes` into `_check_permissions`.
+- **FRE-284**: Seshat skill docs had wrong API paths (missing `/api/v1`), wrong response shapes, wrong Kibana index pattern. Fixed.
 
-**Result**: Partial PIVOT-4 — quality gate 17/20 ✅, cost gate 2.06× ❌ overall.
-**Deprecate** (2 tools): `query_elasticsearch`, `fetch_url` — cost 1.52-1.55×, quality improved.
-**Keep** (4 tools): `list_directory`, `system_metrics_snapshot`, `run_sysdiag`, `infra_health` — quality or cost failures persist.
+**G3 eval result (run-g3-full-sonnet-2026-04-28T1930)**: quality 19/20 ✅, cost 1.39× ✅.
 
-**FRE-263 scope is now 2 tools** (was 8). See updated issue.
-**FRE-277** (eval cleanup script) is open/approved — next optional housekeeping item.
-**Normal sequencing resumes** at FRE-263 (PIVOT-4, narrowed scope), then Wave 3 (FRE-249, FRE-250).
+**All 8 tools: DEPRECATE** via `AGENT_LEGACY_TOOLS_ENABLED=false`:
+`query_elasticsearch`, `fetch_url`, `list_directory`, `system_metrics_snapshot`, `self_telemetry_query`, `run_sysdiag`, `infra_health`, `read_file`
 
-Side plan: `docs/plans/2026-04-27-fre-262-pivot-3-side-plan.md`
+**FRE-263 scope expanded to all 8 tools.** See updated issue.
+**FRE-277** (eval cleanup script) is open/approved — optional housekeeping.
+**Normal sequencing resumes** at FRE-263 (PIVOT-4, full scope), then Wave 3 (FRE-249, FRE-250).
 
+Eval: `telemetry/evaluation/EVAL-primitive-tools/run-g3-full-sonnet-2026-04-28T1930/EVAL_RESULT.md`
 ---
 
 ## Current Focus

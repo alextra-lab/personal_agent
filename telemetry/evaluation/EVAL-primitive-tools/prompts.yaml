@@ -1,75 +1,195 @@
 # FRE-262 PIVOT-3 evaluation prompts
 # 20 prompts covering deprecated-tool use cases.
+# Curated 2026-04-28 (FRE-276): dropped env-coupled prompts, re-enabled es-04,
+# replaced es-02/es-03 with queries against known-present data.
 # Run with tests/evaluation/run_primitive_tools_eval.py
+#
+# expected_output: human-grader guide — what "correct" looks like.
+#   Quality column: ✅ correct answer + right tool  ⚠️ partially correct  ❌ wrong answer or wrong tool
 prompts:
   # query_elasticsearch + self_telemetry_query (4)
   - id: es-01
     category: query-elasticsearch
     prompt: "Show me errors in the last hour."
+    expected_output: >
+      A list or count of ERROR-level log events from agent-logs-* in the last hour.
+      Treatment uses bash curl ES|QL or query_elasticsearch tool; control uses self_telemetry_query.
+      Correct = returns the error count (may be 0 if quiet) or a brief summary with event types.
+      Wrong = 404 errors, "no data found" with no attempt, or queries against non-existent indices.
+
   - id: es-02
     category: query-elasticsearch
-    prompt: "How many request.completed events fired today, by task_type?"
+    # REPLACED (FRE-276): original "request.completed" event type doesn't exist in agent-logs-*.
+    # New prompt uses a known event type with verified data (47 events in last day as of 2026-04-28).
+    prompt: "How many times did the agent call query_elasticsearch today?"
+    expected_output: >
+      A count of tool_call_started events where tool_name == "query_elasticsearch" in the last day.
+      Treatment queries agent-logs-* via ES|QL (event_type == "tool_call_started" AND tool_name == "query_elasticsearch");
+      control uses self_telemetry_query. Correct = a specific number (≥1 given active eval traffic).
+      Wrong = 0 with no attempt, 404, or querying wrong index.
+
   - id: es-03
     category: query-elasticsearch
+    # KEPT: original prompt is valid. Data confirmed present: litellm_request_complete events
+    # have elapsed_s field (p95 ≈ 7.7s as of 2026-04-28).
     prompt: "What's the p95 LLM call latency over the last 24 hours?"
+    expected_output: >
+      A p95 latency value in seconds from litellm_request_complete events (elapsed_s field) in agent-logs-*.
+      ES|QL: FROM agent-logs-* | WHERE event_type == "litellm_request_complete" AND @timestamp > NOW()-24hours
+             | STATS p95=PERCENTILE(elapsed_s, 95). Expected result ~5-10s.
+      Wrong = "no latency data", wrong field name (duration_ms vs elapsed_s), or 404.
+
   - id: es-04
     category: query-elasticsearch
-    prompt: "Find the trace where the agent looped on web_search this week."
+    # RE-ENABLED (FRE-276): previously disabled because it caused the agent to loop on wrong index names.
+    # FRE-279 (loop gate BLOCK_CONSECUTIVE) now terminates pathological ES retry loops.
+    # Updated wording: "web_search" loop → generic "consecutive loop gate" — confirmed 136+85 events in data.
+    prompt: "Find a trace from the past week where the agent hit the consecutive loop gate. What tool was involved and how many times was it called?"
+    expected_output: >
+      A trace_id and tool name from tool_loop_gate events with decision == "warn_consecutive" or "block_consecutive"
+      in agent-logs-* in the last 7 days. Should include the tool name and consecutive_count.
+      ES|QL: FROM agent-logs-* | WHERE event_type == "tool_loop_gate" AND @timestamp > NOW()-7days
+             AND decision IN ("warn_consecutive","block_consecutive")
+             | STATS max_count=MAX(consecutive_count) BY trace_id, tool_name | SORT max_count DESC | LIMIT 5
+      Wrong = "no data found", 404, or queries against wrong indices. Terminates in <30s (not 120s timeout).
 
   # fetch_url (3)
   - id: fetch-01
     category: fetch-url
     prompt: "Fetch https://example.com/api/status and tell me what it says."
+    expected_output: >
+      Response body from https://example.com/api/status. Example.com is IANA-maintained and reliably responds.
+      Treatment uses bash curl or fetch_url; control uses fetch_url.
+      Correct = returns the HTTP status or body. Note: example.com may not have an /api/status endpoint;
+      acceptable if agent reports "404 Not Found" or the actual response body.
+      Wrong = network error on a reachable public URL.
+
   - id: fetch-02
     category: fetch-url
     prompt: "Read the README on https://github.com/anthropics/anthropic-sdk-python and summarize what the package does."
+    expected_output: >
+      A summary of the anthropic-sdk-python package from its GitHub README.
+      Correct = mentions Python SDK for Anthropic API, Claude models, key features.
+      Wrong = cannot fetch, returns GitHub HTML noise without parsing, or hallucinates content.
+
   - id: fetch-03
     category: fetch-url
     prompt: "What's the current Anthropic pricing? Check https://www.anthropic.com/pricing."
+    expected_output: >
+      Pricing information from anthropic.com/pricing page.
+      Correct = at least mentions Claude models and some price figures or "check the page for current pricing"
+      if the page is dynamic. Wrong = cannot fetch or completely wrong content.
 
-  # list_directory (3)
+  # list_directory (3) — paths confirmed present in /app/ container filesystem
   - id: ls-01
     category: list-directory
+    # Container-scoped: /app/config exists in seshat-gateway image.
     prompt: "List files in /app/config."
+    expected_output: >
+      A file listing of /app/config — expect governance/, models.*.yaml, and other config files.
+      Treatment uses bash ls or list_directory; control uses list_directory.
+      Correct = returns actual file names. Wrong = "path not found" or listing root-level files.
+
   - id: ls-02
     category: list-directory
+    # Container-scoped: /app/src/personal_agent/tools exists in seshat-gateway image.
     prompt: "What's in the /app/src/personal_agent/tools folder?"
+    expected_output: >
+      File listing of /app/src/personal_agent/tools — expect executor.py, web.py, fetch.py,
+      elasticsearch.py, filesystem.py, sysdiag.py, infra_health.py, system_health.py, primitives/ subdir, etc.
+      Correct = returns actual file names. Wrong = "path not found".
+
   - id: ls-03
     category: list-directory
+    # Container-scoped: /app/config exists with several YAML files.
     prompt: "How many YAML files are under /app/config?"
+    expected_output: >
+      A count of .yaml/.yml files under /app/config (recursively). Expect 5-10 files.
+      Correct = a specific number and optionally a list. Wrong = 0 with no attempt, or "path not found".
 
   # system_metrics_snapshot (3)
   - id: metrics-01
     category: system-metrics
     prompt: "What's the current CPU load?"
+    expected_output: >
+      CPU load figures — either load average (from uptime / /proc/loadavg) or per-core usage (from top).
+      Treatment uses bash top/free or run_python /proc; control uses system_metrics_snapshot.
+      Correct = a number or percentage. Wrong = "unavailable" without attempt.
+
   - id: metrics-02
     category: system-metrics
     prompt: "How much memory is the agent service using right now?"
+    expected_output: >
+      Memory usage of the uvicorn/python process. Treatment uses ps aux or free -m;
+      control uses system_metrics_snapshot. Correct = RSS or %MEM for the uvicorn process (~300-400 MB).
+      Wrong = total system memory reported as "service memory", or unavailable.
+
   - id: metrics-03
     category: system-metrics
     prompt: "Is disk space getting low?"
+    expected_output: >
+      Disk usage for the root filesystem (df -h). Correct = reports used/available (overlay filesystem,
+      ~50GB used on ~200GB disk as of eval stack). Wrong = "disk check unavailable".
 
   # run_sysdiag (3)
   - id: diag-01
     category: system-diagnostics
     prompt: "List the top 10 processes by memory usage."
+    expected_output: >
+      Top 10 processes sorted by RSS/memory. Treatment uses ps aux --sort=-%mem | head -10;
+      control uses run_sysdiag. Expect uvicorn/python at top (~300MB), then system processes.
+      Correct = process list with PID, command, memory. Wrong = "unavailable" or empty list.
+
   - id: diag-02
     category: system-diagnostics
     prompt: "Which container ports are listening?"
+    expected_output: >
+      Listening ports — expect port 9001 (uvicorn). Treatment uses ss -tunlp or netstat;
+      control uses run_sysdiag. Correct = at least port 9001 listed. Wrong = "unavailable".
+
   - id: diag-03
     category: system-diagnostics
+    # FRE-278 fixed the skill doc: bounded vmstat rule now documented.
+    # IMPORTANT: if agent uses vmstat, it MUST use bounded form (e.g. vmstat 1 3), not vmstat alone.
+    # Grader: flag ❌ if agent runs unbounded vmstat and times out.
     prompt: "Show me what the system has been doing for the last 5 minutes (load, swap, IO)."
+    expected_output: >
+      A summary of recent system activity: CPU load trend, swap usage (expect 0 swap on this host),
+      and disk I/O. Treatment uses bounded vmstat 1 3 or iostat 1 3 for a representative snapshot
+      (not literal 5 minutes — the bash 30s timeout makes that impossible); control uses run_sysdiag.
+      Correct = reports load + swap + IO numbers and frames as "current snapshot / recent trend".
+      Wrong = timeout from unbounded vmstat, or "unavailable".
 
-  # infra_health (4)
+  # infra_health (4) — all use Docker DNS; only valid inside cloud-sim network
   - id: infra-01
     category: infrastructure-health
     prompt: "Check infrastructure health."
+    expected_output: >
+      Status of all 7 services: postgres, neo4j (bolt+http), elasticsearch, redis, embeddings, reranker.
+      Treatment uses run_python socket/urllib probe or bash curl; control uses infra_health tool.
+      Correct = all 7 services reachable: true (as of eval stack). Wrong = "unable to check", DNS errors,
+      or only checks 1-2 services.
+
   - id: infra-02
     category: infrastructure-health
+    # Container-only: "postgres" DNS only resolves inside cloud-sim network.
     prompt: "Is Postgres reachable?"
+    expected_output: >
+      TCP reachability check for postgres:5432. Correct = "reachable: true" or "connected".
+      Wrong = DNS resolution failure (indicates running from host instead of container), timeout.
+
   - id: infra-03
     category: infrastructure-health
+    # Container-only: "neo4j" and "elasticsearch" DNS only resolve inside cloud-sim network.
     prompt: "Are Neo4j and Elasticsearch both up?"
+    expected_output: >
+      Reachability check for neo4j:7687/7474 and elasticsearch:9200.
+      Correct = both reachable. Wrong = DNS error or "cannot check from this environment".
+
   - id: infra-04
     category: infrastructure-health
     prompt: "All backend services healthy right now?"
+    expected_output: >
+      Full health check of all 7 services. Same as infra-01 but phrased as a yes/no.
+      Correct = "Yes, all services are up" with evidence (all_reachable: true).
+      Wrong = partial check, DNS errors, or "I cannot check health".

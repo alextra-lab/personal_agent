@@ -9,8 +9,9 @@
 For "is Postgres reachable?" use a real connection, not a TCP probe to port 5432:
 
 ```bash
-# Postgres — requires the password to be set in $AGENT_DATABASE_URL
-bash psql "$AGENT_DATABASE_URL" -c 'SELECT 1'
+# Postgres — AGENT_DATABASE_URL uses postgresql+asyncpg:// which psql cannot parse.
+# Strip the driver specifier first:
+bash psql "$(echo $AGENT_DATABASE_URL | sed 's|postgresql+asyncpg|postgresql|')" -c 'SELECT 1'
 ```
 
 > **`pg_isready` is NOT installed** on the agent image. Do not use it.

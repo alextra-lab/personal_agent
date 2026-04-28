@@ -82,8 +82,7 @@ bash_tool = ToolDefinition(
             name="timeout_seconds",
             type="number",
             description=(
-                f"Execution timeout in seconds (default {_DEFAULT_TIMEOUT}, "
-                f"max {_MAX_TIMEOUT})"
+                f"Execution timeout in seconds (default {_DEFAULT_TIMEOUT}, max {_MAX_TIMEOUT})"
             ),
             required=False,
             default=_DEFAULT_TIMEOUT,
@@ -314,9 +313,7 @@ async def bash_executor(
                     combined_len=len(combined),
                 )
             except OSError as exc:
-                log.warning(
-                    "bash_overflow_write_error", trace_id=trace_id, error=str(exc)
-                )
+                log.warning("bash_overflow_write_error", trace_id=trace_id, error=str(exc))
                 truncated_path = "<truncated: scratch write failed>"
         else:
             # No trace context — caller must know data was discarded silently.

@@ -30,8 +30,7 @@ log = structlog.get_logger(__name__)
 write_tool = ToolDefinition(
     name="write",
     description=(
-        "Write content to a file. "
-        "Mode 'overwrite' replaces the file; 'append' adds to the end."
+        "Write content to a file. Mode 'overwrite' replaces the file; 'append' adds to the end."
     ),
     category="system_write",
     parameters=[
@@ -165,7 +164,9 @@ async def write_executor(
 
     # 2. Resolve path
     resolved = Path(_expand_path(path)).expanduser().resolve()
-    log.debug("write_executor_called", path=path, resolved=str(resolved), mode=mode, trace_id=trace_id)
+    log.debug(
+        "write_executor_called", path=path, resolved=str(resolved), mode=mode, trace_id=trace_id
+    )
 
     # 3. Path governance
     governance_error = _check_path_governance(resolved, tool_name="write")

@@ -137,9 +137,7 @@ async def read_executor(
             "path": str(resolved),
             "size_bytes": actual_size,
             "max_bytes": max_bytes,
-            "detail": (
-                f"File size {actual_size} bytes exceeds max_bytes limit {max_bytes}"
-            ),
+            "detail": (f"File size {actual_size} bytes exceeds max_bytes limit {max_bytes}"),
         }
 
     # 5. Bounded read — read one extra byte to detect truncation without loading

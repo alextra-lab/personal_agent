@@ -231,18 +231,20 @@ async def web_search_executor(
             # Weather answer: surface the current conditions summary + location.
             current = item.get("current", {})
             location = current.get("location", {})
-            answers.append({
-                "engine": engine,
-                "type": "weather",
-                "location": location.get("name", ""),
-                "country": location.get("country_code", ""),
-                "summary": current.get("summary", ""),
-                "temperature": current.get("temperature", {}),
-                "condition": current.get("condition", ""),
-                "feels_like": current.get("feels_like", {}),
-                "humidity": current.get("humidity", {}),
-                "wind_speed": current.get("wind_speed", {}),
-            })
+            answers.append(
+                {
+                    "engine": engine,
+                    "type": "weather",
+                    "location": location.get("name", ""),
+                    "country": location.get("country_code", ""),
+                    "summary": current.get("summary", ""),
+                    "temperature": current.get("temperature", {}),
+                    "condition": current.get("condition", ""),
+                    "feels_like": current.get("feels_like", {}),
+                    "humidity": current.get("humidity", {}),
+                    "wind_speed": current.get("wind_speed", {}),
+                }
+            )
         else:
             text = item.get("answer")
             if text:

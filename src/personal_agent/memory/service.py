@@ -303,9 +303,7 @@ class MemoryService:
             )
         return out
 
-    async def create_conversation(
-        self, conversation: TurnNode, visibility: str = "public"
-    ) -> bool:
+    async def create_conversation(self, conversation: TurnNode, visibility: str = "public") -> bool:
         """Create a Turn node in the graph.
 
         Args:
@@ -858,7 +856,9 @@ class MemoryService:
             log.warning("neo4j_not_connected")
             return MemoryQueryResult()
 
-        vis_frag, vis_params = _build_visibility_filter("c", effective_user_id, effective_authenticated)
+        vis_frag, vis_params = _build_visibility_filter(
+            "c", effective_user_id, effective_authenticated
+        )
 
         try:
             async with self.driver.session() as session:

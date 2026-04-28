@@ -452,7 +452,9 @@ class SecondBrainConsolidator:
                 weight=rel_data.get("weight", 1.0),
                 properties=rel_data.get("properties", {}),
             )
-            rel_eid = await self.memory_service.create_relationship(relationship, visibility=visibility)
+            rel_eid = await self.memory_service.create_relationship(
+                relationship, visibility=visibility
+            )
             if rel_eid:
                 relationships_created += 1
                 relationship_element_ids.append(rel_eid)

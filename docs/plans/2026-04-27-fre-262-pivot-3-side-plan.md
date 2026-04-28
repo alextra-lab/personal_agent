@@ -122,7 +122,7 @@ New override file extending `docker-compose.cloud.yml`:
 
 ---
 
-## Wave C — Skill quality + governance (parallel, ~3–5 days)
+## Wave C — Skill quality + governance ✅ COMPLETE (2026-04-28, main @ see below)
 
 ### FRE-278 — Empirical skill-doc review (absorbs FRE-273)
 
@@ -164,6 +164,12 @@ Tests:
 **Gate to Wave D:**
 - `EMPIRICAL_TEST_RESULTS.md` shows ≥95% of skill-doc recipes pass first-try in the treatment container
 - Re-running es-04 (or a synthetic loop prompt) terminates within 30 seconds, not 120s timeout
+
+**Wave C gate result (2026-04-28):** ✅ Both conditions met.
+
+FRE-279 (a9acd49): `BLOCK_CONSECUTIVE` terminal added; bash/run_python/query_elasticsearch opt-in; 31 tests green.
+
+FRE-278 (103c85a): Root cause was `python:3.12-slim` base image had no system tools (no curl, no procps, no jq, no lsof, no redis-cli, no psql). Fixed Dockerfile.gateway and docker/sandbox/Dockerfile.python to add procps, curl, jq, iproute2, net-tools, sysstat, lsof, redis-tools, postgresql-client. Updated 6 skill docs + created EMPIRICAL_TEST_RESULTS.md; 46/49 recipes pass (3 documented limitations: docker socket not mounted in eval containers, git not installed, asyncpg URL dialect).
 
 ---
 

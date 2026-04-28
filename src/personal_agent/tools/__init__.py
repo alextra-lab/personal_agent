@@ -88,56 +88,63 @@ __all__ = [
 def register_mvp_tools(registry: ToolRegistry) -> None:
     """Register all native tools with the registry.
 
-    Registers the MVP tools plus CLI-first native tools that replace
-    MCP tools per ADR-0028:
-    - read_file: Read file contents
-    - list_directory: List directory contents
-    - system_metrics_snapshot: Get system health metrics
+    Always registered:
     - search_memory: Query memory graph (ADR-0026)
-    - self_telemetry_query: Query agent execution history
     - web_search: Private web search via SearXNG (ADR-0034)
-    - query_elasticsearch: ES|QL + index ops (ADR-0028 Phase 1)
     - perplexity_query: Perplexity AI synthesized answers (ADR-0028 Phase 2)
-    - fetch_url: Fetch and extract webpage text (ADR-0028 Phase 3)
     - get_library_docs: Context7 library documentation (ADR-0028 Phase 3)
-    - run_sysdiag: System diagnostic commands via subprocess allow-list (FRE-188)
+    - Linear tools: create/find/list (FRE-224, Tier-1)
+
+    Registered unless ``settings.prefer_primitives_enabled`` is True
+    (treatment eval path — hides curated tools so the agent can't fall back):
+    - read_file, list_directory, system_metrics_snapshot, self_telemetry_query
+    - query_elasticsearch (ADR-0028 Phase 1)
+    - fetch_url (ADR-0028 Phase 3)
+    - run_sysdiag (FRE-188)
+    - infra_health
 
     When ``settings.primitive_tools_enabled`` is True (opt-in, default False),
     the four FRE-261 primitive tools are also registered:
-    - read: Low-level file reader (supersedes read_file for primitives path)
+    - read: Low-level file reader
     - write: Low-level file writer
-    - bash: Sandboxed shell command executor
+    - bash: Shell command executor via /bin/bash (FRE-283)
     - run_python: Python Docker-sandbox executor
 
     Args:
         registry: Tool registry to register tools with.
     """
-    registry.register(read_file_tool, read_file_executor)
-    registry.register(list_directory_tool, list_directory_executor)
-    registry.register(system_metrics_snapshot_tool, system_metrics_snapshot_executor)
+    from personal_agent.config import settings  # noqa: PLC0415
+
+    # --- Always-available tools ---
     registry.register(search_memory_tool, search_memory_executor)
-    registry.register(self_telemetry_query_tool, self_telemetry_query_executor)
     registry.register(web_search_tool, web_search_executor)  # ADR-0034
-    # ADR-0028 CLI-first native tools
-    registry.register(query_elasticsearch_tool, query_elasticsearch_executor)
     registry.register(perplexity_query_tool, perplexity_query_executor)
-    registry.register(fetch_url_tool, fetch_url_executor)
     registry.register(get_library_docs_tool, get_library_docs_executor)
-    # FRE-188: system diagnostics
-    registry.register(run_sysdiag_tool, run_sysdiag_executor)
-    # Infrastructure health (TCP/HTTP probes — container-safe, no CLI tools needed)
-    registry.register(infra_health_tool, infra_health_executor)
     # FRE-224: native Linear tool (Tier-1, no MCP gateway required)
     registry.register(create_linear_issue_tool, create_linear_issue_executor)
     registry.register(find_linear_issues_tool, find_linear_issues_executor)
     registry.register(list_linear_projects_tool, list_linear_projects_executor)
     registry.register(create_linear_project_tool, create_linear_project_executor)
 
+    # --- Curated tools superseded by primitives + skill docs (ADR-0063 §D4).
+    # Hidden when prefer_primitives_enabled=True so the treatment eval side
+    # cannot fall back to these and contaminate the eval signal. ---
+    if not settings.prefer_primitives_enabled:
+        registry.register(read_file_tool, read_file_executor)
+        registry.register(list_directory_tool, list_directory_executor)
+        registry.register(system_metrics_snapshot_tool, system_metrics_snapshot_executor)
+        registry.register(self_telemetry_query_tool, self_telemetry_query_executor)
+        # ADR-0028 CLI-first native tools (legacy: gated per FRE-283)
+        registry.register(query_elasticsearch_tool, query_elasticsearch_executor)
+        registry.register(fetch_url_tool, fetch_url_executor)
+        # FRE-188: system diagnostics
+        registry.register(run_sysdiag_tool, run_sysdiag_executor)
+        # Infrastructure health (TCP/HTTP probes — container-safe, no CLI tools needed)
+        registry.register(infra_health_tool, infra_health_executor)
+
     # FRE-261 PIVOT-2 — primitive tools (ADR-0063 Phase 2).
     # Lazy imports inside the guard to avoid circular-import issues and to
     # ensure these modules are never loaded when the flag is off.
-    from personal_agent.config import settings  # noqa: PLC0415
-
     if settings.primitive_tools_enabled:
         from personal_agent.tools.primitives.bash import bash_executor, bash_tool  # noqa: PLC0415, I001
         from personal_agent.tools.primitives.read import read_executor, read_tool  # noqa: PLC0415

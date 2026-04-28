@@ -2,19 +2,19 @@
 
 **Category:** `filesystem_read` · **Risk:** none · **Approval:** auto-approved in all non-LOCKDOWN modes
 
-## Counting files — use bash find, not list_directory
+## Counting files — use `find | wc -l`
 
-`list_directory` is **non-recursive** — it sees only the top level. For any question asking "how many files" or "how many X files under a path", use `bash find` directly:
+`bash ls -R | wc -l` is **wrong** — it counts directory header lines and blank separators, not files. For any "how many files" question use `find`:
 
 ```bash
-# Count all YAML files recursively (the right approach)
-bash find /app/config -name "*.yaml" | wc -l
+# Count all YAML files recursively (correct)
+bash find /app/config -name "*.yaml" -type f | wc -l
 
 # Count all Python files recursively
-bash find /app/src -name "*.py" | wc -l
+bash find /app/src -name "*.py" -type f | wc -l
 ```
 
-This is a single tool call and returns the correct total across all subdirectories. Using `list_directory` followed by drilling into each subdir one-by-one takes 4–6 extra turns.
+Single call, correct count across all subdirectories. Pipes work (FRE-283).
 
 ## Quick reference
 

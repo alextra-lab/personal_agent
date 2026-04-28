@@ -9,15 +9,20 @@ Security model
 * Hard-deny regex patterns are checked *before* any subprocess is spawned.
   Even if governance config is misconfigured, these patterns prevent the most
   catastrophic commands from executing.
-* Commands are parsed via ``shlex.split`` -- never ``shell=True``.
+* Commands run via ``/bin/bash -o pipefail -c <command>`` — shell semantics are
+  fully supported: pipes (``|``), logical operators (``&&``, ``||``), command
+  separators (``;``), redirects, glob expansion, and env substitution all work.
+  This is safe because no user-visible string is interpolated into the shell
+  invocation itself; the command is passed as a single ``-c`` argument.
+* Auto-approve logic (``_check_segment_allowlist``) splits the command on
+  top-level operators and verifies the first word of every segment against the
+  per-mode ``auto_approve_prefixes`` from ``tools.yaml``.  It is evaluated by
+  the ``_check_permissions`` layer in ``tools/executor.py``, not by the executor.
 * Timeout is clamped to [1, 120] seconds.
 * Output is capped at 50 KiB (combined stdout + stderr); overflow is written to
   a scratch file and the path is returned.
-* The auto_approve_prefixes list in tools.yaml controls which commands bypass
-  the PWA approval prompt (evaluated by the governance / _check_permissions
-  layer, not the executor itself).
 
-FRE-261 Step 4.
+FRE-261 Step 4 · FRE-283 (real shell contract).
 """
 
 from __future__ import annotations
@@ -63,17 +68,18 @@ _FALLBACK_DENY: list[str] = [
 bash_tool = ToolDefinition(
     name="bash",
     description=(
-        "Execute a shell command in the agent's container. "
-        "Commands must pass an allowlist check. "
-        "Hard-denied patterns are refused before execution. "
-        "Commands not in the auto-approve list require user approval via the PWA."
+        "Execute a shell command in the agent's container via /bin/bash. "
+        "Pipes (|), &&, ||, ;, redirects, globs, and env expansion all work. "
+        "Hard-deny patterns refuse catastrophic commands before the shell sees them. "
+        "Commands whose every pipeline segment matches the auto-approve allowlist run "
+        "without prompting; others require user approval via the PWA."
     ),
     category="system_dangerous",
     parameters=[
         ToolParameter(
             name="command",
             type="string",
-            description="Shell command to execute (no shell=True; parsed via shlex)",
+            description="Shell command to run via /bin/bash (pipes and composition operators work)",
             required=True,
             default=None,
             json_schema=None,
@@ -135,6 +141,126 @@ def _is_hard_denied(command: str, patterns: list[str]) -> str | None:
     return None
 
 
+def _split_command_segments(command: str) -> list[str]:
+    """Split a shell command into pipeline / sequence segments.
+
+    Splits on top-level ``|``, ``||``, ``&&``, and ``;`` while respecting
+    single-quoted strings, double-quoted strings, and backslash escapes.
+    Sub-shells (``$(…)`` or backticks) are treated as opaque and are NOT
+    recursively split — their content is included in the surrounding segment.
+
+    Args:
+        command: Raw shell command string.
+
+    Returns:
+        Non-empty, stripped segment strings.  An empty command returns ``[]``.
+    """
+    segments: list[str] = []
+    current: list[str] = []
+    in_single = False
+    in_double = False
+    i = 0
+    n = len(command)
+
+    while i < n:
+        c = command[i]
+
+        if in_single:
+            current.append(c)
+            if c == "'":
+                in_single = False
+            i += 1
+        elif in_double:
+            if c == "\\" and i + 1 < n:
+                # Backslash escapes are two characters inside double quotes.
+                current.append(c)
+                i += 1
+                current.append(command[i])
+                i += 1
+            else:
+                current.append(c)
+                if c == '"':
+                    in_double = False
+                i += 1
+        elif c == "\\" and i + 1 < n:
+            current.append(c)
+            i += 1
+            current.append(command[i])
+            i += 1
+        elif c == "'":
+            in_single = True
+            current.append(c)
+            i += 1
+        elif c == '"':
+            in_double = True
+            current.append(c)
+            i += 1
+        elif c == ";":
+            segments.append("".join(current).strip())
+            current = []
+            i += 1
+        elif c == "|":
+            if i + 1 < n and command[i + 1] == "|":
+                segments.append("".join(current).strip())
+                current = []
+                i += 2
+            else:
+                segments.append("".join(current).strip())
+                current = []
+                i += 1
+        elif c == "&":
+            if i + 1 < n and command[i + 1] == "&":
+                segments.append("".join(current).strip())
+                current = []
+                i += 2
+            else:
+                # Single ``&`` (background execution) — treat as part of segment.
+                current.append(c)
+                i += 1
+        else:
+            current.append(c)
+            i += 1
+
+    remaining = "".join(current).strip()
+    if remaining:
+        segments.append(remaining)
+
+    return [s for s in segments if s]
+
+
+def _check_segment_allowlist(command: str, allowlist: list[str]) -> str | None:
+    """Check every pipeline segment's first word against the auto-approve allowlist.
+
+    Multi-word allowlist entries (e.g. ``"psql -c"``, ``"docker ps"``) match
+    when the segment begins with those exact words in order.
+
+    Args:
+        command: Raw shell command string.
+        allowlist: Ordered list of allowed prefix strings for the current mode.
+
+    Returns:
+        The first non-matching segment string, or ``None`` if all segments pass
+        (indicating the command may be auto-approved).
+    """
+    segments = _split_command_segments(command)
+    for segment in segments:
+        try:
+            words = shlex.split(segment)
+        except ValueError:
+            # Unparseable segment — conservative: treat as not approved.
+            return segment
+        if not words:
+            continue
+        matched = any(
+            words[: len(prefix_words)] == prefix_words
+            for entry in allowlist
+            if (prefix_words := entry.split())
+        )
+        if not matched:
+            return segment
+    return None
+
+
 def _truncate_to_bytes(s: str, max_bytes: int) -> str:
     """Truncate a string to at most max_bytes when UTF-8 encoded.
 
@@ -163,18 +289,24 @@ async def bash_executor(
     timeout_seconds: int = _DEFAULT_TIMEOUT,
     ctx: TraceContext | None = None,
 ) -> dict[str, Any]:
-    """Execute a shell command with hard-deny guards and output capping.
+    """Execute a shell command via ``/bin/bash`` with hard-deny guards and output capping.
 
     Security guards fire in this order:
-    1. Hard-deny regex check (never reaches subprocess on match).
-    2. shlex parse (rejects malformed quoting).
-    3. Empty-command guard.
-    4. Subprocess execution with timeout.
-    5. Output cap (50 KiB; overflow written to scratch).
+    1. Hard-deny regex check on the raw command string (never reaches the shell on match).
+    2. Empty-command guard.
+    3. Subprocess via ``/bin/bash -o pipefail -c <command>`` with timeout.
+    4. Output cap (50 KiB; overflow written to scratch).
+
+    Pipes (``|``), logical operators (``&&``, ``||``), separators (``;``),
+    redirects, glob expansion, and env substitution all work because the
+    command is passed to a real ``/bin/bash`` process as a single ``-c``
+    argument — nothing is interpolated into the invocation string itself.
+
+    Auto-approve enforcement (``_check_segment_allowlist``) runs in the
+    ``_check_permissions`` layer in ``tools/executor.py`` before this is called.
 
     Args:
-        command: Shell command string to execute. Parsed via ``shlex.split``
-            so no ``shell=True`` injection surface exists.
+        command: Shell command string to execute via ``/bin/bash -c``.
         timeout_seconds: Max seconds to wait for the process. Clamped to
             [1, 120]; defaults to 30.
         ctx: Optional trace context for structured logging.
@@ -182,7 +314,7 @@ async def bash_executor(
     Returns:
         Dict with keys:
         - ``success`` (bool): True when exit_code == 0.
-        - ``exit_code`` (int): Process return code.
+        - ``exit_code`` (int): Process return code (reflects ``pipefail`` semantics).
         - ``stdout`` (str): Captured stdout (possibly truncated).
         - ``stderr`` (str): Captured stderr (possibly truncated).
         - ``command`` (str): Original command string.
@@ -190,8 +322,7 @@ async def bash_executor(
           exceeded 50 KiB, else None.
 
         On guard failures, returns a dict with ``success=False`` and an
-        ``error`` key set to one of: ``hard_denied``, ``parse_error``,
-        ``empty_command``, ``timeout``.
+        ``error`` key set to one of: ``hard_denied``, ``empty_command``, ``timeout``.
     """
     trace_id = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
 
@@ -215,26 +346,13 @@ async def bash_executor(
         }
 
     # ------------------------------------------------------------------
-    # 2. Parse command via shlex (no shell=True)
+    # 2. Empty-command guard
     # ------------------------------------------------------------------
-    try:
-        argv = shlex.split(command)
-    except ValueError as exc:
-        return {
-            "success": False,
-            "error": "parse_error",
-            "detail": str(exc),
-            "command": command,
-        }
-
-    # ------------------------------------------------------------------
-    # 3. Empty-command guard
-    # ------------------------------------------------------------------
-    if not argv:
+    if not command.strip():
         return {"success": False, "error": "empty_command", "command": command}
 
     # ------------------------------------------------------------------
-    # 4. Clamp timeout
+    # 3. Clamp timeout
     # ------------------------------------------------------------------
     timeout_seconds = min(max(int(timeout_seconds), 1), _MAX_TIMEOUT)
 
@@ -246,11 +364,18 @@ async def bash_executor(
     )
 
     # ------------------------------------------------------------------
-    # 5. Execute
+    # 4. Execute via /bin/bash (real shell — pipes and composition work).
+    #    -o pipefail: exit code reflects the worst-failing pipe segment.
+    #    The command string is passed as the sole -c argument, so it is
+    #    never interpolated into the invocation — no shell injection surface.
     # ------------------------------------------------------------------
+    _shell = "/bin/bash"
+    _flags = ("-o", "pipefail", "-c")
     try:
         proc = await asyncio.create_subprocess_exec(
-            *argv,
+            _shell,
+            *_flags,
+            command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

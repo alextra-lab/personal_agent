@@ -41,15 +41,21 @@ bash command="ps aux --sort=-%mem | head -10"
 bash command="curl -s http://elasticsearch:9200/_cluster/health | jq .status"
 ```
 
+## Shell semantics (FRE-283)
+
+`bash` runs commands via `/bin/bash -o pipefail -c <command>`. Pipes (`|`), logical operators (`&&`, `||`), separators (`;`), redirects (`>`, `>>`), globs, and env substitution all work — the command is passed as a single argument to the shell.
+
+The auto-approve check splits the command on top-level operators and verifies the first word of every segment. A command like `curl … | grep foo | wc -l` is auto-approved if all three first words (`curl`, `grep`, `wc`) are on the allowlist.
+
 ## Auto-approve list (no PWA prompt required)
 
-The following command prefixes are auto-approved in NORMAL mode:
+**NORMAL mode** — auto-approved first words:
 
-`curl`, `grep`, `ls`, `cat`, `find`, `jq`, `docker ps`, `docker logs`, `git log`, `git status`, `git diff`, `psql -c`, `redis-cli`, `ps`, `top`, `free`, `df`, `uptime`, `wc`, `rg`, `awk`, `sed`
+`curl`, `grep`, `ls`, `cat`, `find`, `jq`, `docker ps`, `docker logs`, `git log`, `git status`, `git diff`, `psql -c`, `redis-cli`, `ps`, `top`, `free`, `df`, `uptime`, `wc`, `rg`, `awk`, `sed`, `ss`, `vmstat`, `iostat`, `lsof`, `netstat`, `uname`, `pgrep`, `pg_isready`, `tr`, `sort`, `uniq`, `head`, `tail`, `echo`, `date`, `du`, `id`, `env`, `which`, `python3`
 
-In ALERT and DEGRADED modes the list shrinks to: `curl`, `grep`, `ls`, `cat`, `ps`, `top`, `free`, `df`.
+**ALERT/DEGRADED** — smaller subset: `curl`, `grep`, `ls`, `cat`, `ps`, `top`, `free`, `df`, `ss`, `netstat`, `uname`, `pgrep`, `echo`, `date`
 
-Commands not in the list pause for user approval via the PWA before executing.
+Commands whose first word is not in the list (or a piped segment whose first word is not) pause for user approval via the PWA before executing.
 
 ## Hard-denied patterns (immediate block — no subprocess spawned)
 

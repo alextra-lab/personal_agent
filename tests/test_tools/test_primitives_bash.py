@@ -106,17 +106,19 @@ async def test_hard_deny_wget() -> None:
 
 
 @pytest.mark.asyncio
-async def test_shlex_error() -> None:
-    """Unclosed quote must return parse_error without spawning subprocess."""
-    with patch(
-        "personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec"
-    ) as mock_exec:
-        result = await bash_executor("echo 'unclosed")
+async def test_unclosed_quote_fails_via_bash() -> None:
+    """Unclosed quote is now detected by bash itself (FRE-283: real shell contract).
 
-    mock_exec.assert_not_called()
+    Previously the Python shlex.split() step returned parse_error before the
+    subprocess was spawned.  Now the command is passed directly to /bin/bash
+    which exits non-zero with a syntax-error message in stderr.
+    """
+    result = await bash_executor("echo 'unclosed")
     assert result["success"] is False
-    assert result["error"] == "parse_error"
-    assert "detail" in result
+    # bash reports a syntax error and exits with code 2
+    assert result.get("exit_code") in (1, 2)
+    # error key is absent (no hard-deny or guard fired) — check stderr or exit_code
+    assert "error" not in result or result["error"] not in ("parse_error", "hard_denied")
 
 
 # ---------------------------------------------------------------------------

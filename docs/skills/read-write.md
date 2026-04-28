@@ -18,7 +18,7 @@ at executor time, so bad paths are rejected before the filesystem is touched.
 | Situation | Use |
 |-----------|-----|
 | Writing to a scratch area (`/tmp/`, sandbox) | `write` — proceeds unattended |
-| Writing to a project file | `write` — advisory flag emitted; approval layer in executor.py gates it |
+| Writing to a project file | `write` — advisory flag emitted in result; no automatic blocking (Planned: FRE-261 follow-up) |
 | Appending log lines to an existing file | `write` with `mode="append"` |
 | Legacy code using `write_file` | keep until `write_file` is removed |
 
@@ -51,7 +51,7 @@ See `config/governance/tools.yaml` entries `read` and `write` for exact patterns
 {
   "tool": "read",
   "arguments": {
-    "path": "/opt/seshat/config/governance/tools.yaml"
+    "path": "/app/config/governance/tools.yaml"
   }
 }
 ```
@@ -62,7 +62,7 @@ See `config/governance/tools.yaml` entries `read` and `write` for exact patterns
 {
   "tool": "read",
   "arguments": {
-    "path": "/opt/seshat/logs/agent.log",
+    "path": "/app/logs/agent.log",
     "max_bytes": 4096
   }
 }

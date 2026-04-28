@@ -162,6 +162,35 @@ async def _check_permissions(
     if tool_policy and mode_str in tool_policy.forbidden_in_modes:
         return PermissionResult(allowed=False, reason=f"Tool forbidden in {mode_str} mode")
 
+    # 1.5. Bash auto-approve shortcut (FRE-283 — wires auto_approve_prefixes from tools.yaml).
+    # If every pipeline segment's first word is in the per-mode allowlist, skip the
+    # approval round-trip entirely.  This runs BEFORE the general approval check so
+    # fully-safe bash commands never prompt the user.
+    if tool_name == "bash" and tool_policy:
+        mode_prefixes: list[str] = tool_policy.auto_approve_prefixes.get(mode_str, [])
+        command: str = arguments.get("command", "")
+        if mode_prefixes and command.strip():
+            from personal_agent.tools.primitives.bash import (
+                _check_segment_allowlist,  # noqa: PLC0415
+            )
+
+            bad_segment = _check_segment_allowlist(command, mode_prefixes)
+            if bad_segment is None:
+                log.info(
+                    "bash_auto_approved",
+                    mode=mode_str,
+                    command=command,
+                    trace_id=getattr(trace_ctx, "trace_id", "unknown") if trace_ctx else "unknown",
+                )
+                return PermissionResult(allowed=True)
+            log.debug(
+                "bash_allowlist_miss",
+                mode=mode_str,
+                bad_segment=bad_segment,
+                trace_id=getattr(trace_ctx, "trace_id", "unknown") if trace_ctx else "unknown",
+            )
+            # Fall through to normal approval flow with the bad segment as context.
+
     # 2. Approval check
     if tool_policy and (
         mode_str in tool_policy.requires_approval_in_modes or tool_policy.requires_approval

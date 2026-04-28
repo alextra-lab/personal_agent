@@ -3,6 +3,10 @@
 Verifies that the four primitive tools (read, write, bash, run_python) are
 only registered when ``settings.primitive_tools_enabled`` is True.
 
+Also verifies the FRE-283 treatment-side gating: curated tools superseded by
+primitives are hidden when ``settings.prefer_primitives_enabled`` is True so
+the eval cannot fall back to them.
+
 These are pure unit tests — no LLM, no infrastructure required.
 """
 
@@ -33,9 +37,7 @@ class TestPrimitivesNotRegisteredByDefault:
 class TestPrimitivesRegisteredWhenFlagEnabled:
     """Primitives ARE registered when the flag is flipped on."""
 
-    def test_primitives_registered_when_flag_enabled(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_primitives_registered_when_flag_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """When primitive_tools_enabled=True, all four primitives are in the registry."""
         monkeypatch.setattr(settings, "primitive_tools_enabled", True)
 
@@ -53,9 +55,7 @@ class TestPrimitivesRegisteredWhenFlagEnabled:
         assert "write" in tool_names
         assert "run_python" in tool_names
 
-    def test_primitives_absent_when_flag_disabled(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_primitives_absent_when_flag_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """When primitive_tools_enabled=False, all four primitives are absent."""
         monkeypatch.setattr(settings, "primitive_tools_enabled", False)
 
@@ -70,3 +70,67 @@ class TestPrimitivesRegisteredWhenFlagEnabled:
         assert "read" not in tool_names
         assert "write" not in tool_names
         assert "run_python" not in tool_names
+
+
+_CURATED_GATED = [
+    "query_elasticsearch",
+    "fetch_url",
+    "list_directory",
+    "system_metrics_snapshot",
+    "self_telemetry_query",
+    "run_sysdiag",
+    "infra_health",
+]
+
+
+class TestPreferPrimitivesDeregistersCurated:
+    """FRE-283: curated tools are hidden when prefer_primitives_enabled=True."""
+
+    def test_curated_absent_when_prefer_primitives_enabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
+        monkeypatch.setattr(settings, "primitive_tools_enabled", False)
+
+        from personal_agent.tools import register_mvp_tools
+        from personal_agent.tools.registry import ToolRegistry
+
+        registry = ToolRegistry()
+        register_mvp_tools(registry)
+        tool_names = registry.list_tool_names()
+
+        for name in _CURATED_GATED:
+            assert name not in tool_names, f"{name} should be absent when prefer_primitives_enabled"
+
+    def test_curated_present_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
+        monkeypatch.setattr(settings, "primitive_tools_enabled", False)
+
+        from personal_agent.tools import register_mvp_tools
+        from personal_agent.tools.registry import ToolRegistry
+
+        registry = ToolRegistry()
+        register_mvp_tools(registry)
+        tool_names = registry.list_tool_names()
+
+        for name in _CURATED_GATED:
+            assert name in tool_names, (
+                f"{name} should be present when prefer_primitives_enabled=False"
+            )
+
+    def test_always_available_tools_present_regardless_of_flag(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """search_memory, web_search, Linear tools, etc. are always registered."""
+        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
+        monkeypatch.setattr(settings, "primitive_tools_enabled", False)
+
+        from personal_agent.tools import register_mvp_tools
+        from personal_agent.tools.registry import ToolRegistry
+
+        registry = ToolRegistry()
+        register_mvp_tools(registry)
+        tool_names = registry.list_tool_names()
+
+        for name in ("search_memory", "web_search", "perplexity_query", "create_linear_issue"):
+            assert name in tool_names, f"{name} should always be present"

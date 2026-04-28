@@ -434,6 +434,7 @@ tools:
     forbidden_in_modes: ["LOCKDOWN", "RECOVERY"]
     requires_approval: true
     auto_approve_prefixes:
+      # FRE-283: extended to cover all binaries referenced in skill docs
       NORMAL:
         - "curl"
         - "grep"
@@ -457,6 +458,26 @@ tools:
         - "rg"
         - "awk"
         - "sed"
+        - "ss"
+        - "vmstat"
+        - "iostat"
+        - "lsof"
+        - "netstat"
+        - "uname"
+        - "pgrep"
+        - "pg_isready"
+        - "tr"
+        - "sort"
+        - "uniq"
+        - "head"
+        - "tail"
+        - "echo"
+        - "date"
+        - "du"
+        - "id"
+        - "env"
+        - "which"
+        - "python3"
       ALERT:
         - "curl"
         - "grep"
@@ -466,6 +487,12 @@ tools:
         - "top"
         - "free"
         - "df"
+        - "ss"
+        - "netstat"
+        - "uname"
+        - "pgrep"
+        - "echo"
+        - "date"
       DEGRADED:
         - "curl"
         - "grep"
@@ -475,6 +502,8 @@ tools:
         - "top"
         - "free"
         - "df"
+        - "uname"
+        - "echo"
     hard_deny_patterns:
       - 'rm\s+-rf'
       - 'dd\s+if='

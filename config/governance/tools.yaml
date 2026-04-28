@@ -425,6 +425,7 @@ tools:
     rate_limit_per_hour: 60
     loop_max_per_signature: 5
     loop_max_consecutive: 10
+    loop_consecutive_terminal: true  # FRE-279: syntax errors → 400s; terminate instead of indefinite retry
 
   # FRE-261 Step 4: sandboxed bash executor with allowlist-based approval model
   bash:
@@ -488,6 +489,7 @@ tools:
     loop_max_per_signature: 5
     loop_max_consecutive: 10
     loop_output_sensitive: true
+    loop_consecutive_terminal: true  # FRE-279: unknown commands fail; terminate instead of indefinite retry
 
   # FRE-188: System diagnostics — subprocess allow-list (ps, lsof, find, iostat, …)
   run_sysdiag:
@@ -527,6 +529,9 @@ tools:
     requires_approval: false
     timeout_seconds: 30
     rate_limit_per_hour: 200
+    loop_max_per_signature: 3   # FRE-279: allow 3 attempts with same query before advisory
+    loop_max_consecutive: 5     # FRE-279: allow 5 consecutive ES calls before terminal
+    loop_consecutive_terminal: true  # FRE-279: wrong index names → 400s; terminate instead of 120s timeout
 
   # ADR-0028 Phase 2: Replaced by native perplexity_query tool
   perplexity_query:

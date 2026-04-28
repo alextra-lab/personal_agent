@@ -42,7 +42,7 @@ class GateDecision(str, Enum):
 
     Advisory decisions (ADVISE_IDENTITY, WARN_CONSECUTIVE) allow execution
     but inject a hint into the tool result content. Terminal decisions
-    (BLOCK_IDENTITY, BLOCK_OUTPUT) skip dispatch entirely.
+    (BLOCK_IDENTITY, BLOCK_OUTPUT, BLOCK_CONSECUTIVE) skip dispatch entirely.
     """
 
     ALLOW = "allow"  # IDLE→ACTIVE or ACTIVE→ACTIVE
@@ -50,6 +50,9 @@ class GateDecision(str, Enum):
     ADVISE_IDENTITY = "advise_identity"  # advisory: same args > max (execute + hint)
     BLOCK_IDENTITY = "block_identity"  # terminal: same args > max + IDENTITY_TERMINAL_OFFSET
     BLOCK_OUTPUT = "block_output"  # terminal: same output hash seen ≥2x
+    BLOCK_CONSECUTIVE = (
+        "block_consecutive"  # terminal: N consecutive calls when loop_consecutive_terminal=True
+    )
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,9 @@ class ToolLoopPolicy:
     loop_max_per_signature: int = 1  # max executions of same (tool, args) before advisory
     loop_max_consecutive: int = 2  # WARN_CONSECUTIVE fires at N consecutive calls
     loop_output_sensitive: bool = False  # if True, skip output-identity blocking
+    loop_consecutive_terminal: bool = (
+        False  # if True, WARN_CONSECUTIVE escalates to BLOCK_CONSECUTIVE
+    )
 
 
 @dataclass
@@ -177,8 +183,23 @@ class ToolLoopGate:
                 total_calls=fsm.total_calls,
             )
 
-        # Signal 3: Consecutive advisory — warn but never block
+        # Signal 3: Consecutive — terminal when opted-in, advisory otherwise
         if fsm.consecutive_count >= policy.loop_max_consecutive:
+            if policy.loop_consecutive_terminal:
+                fsm.state = ToolCallState.BLOCKED
+                return GateResult(
+                    decision=GateDecision.BLOCK_CONSECUTIVE,
+                    tool_name=tool_name,
+                    state_before=state_before,
+                    state_after=ToolCallState.BLOCKED,
+                    reason=(
+                        f"Consecutive terminal threshold reached "
+                        f"({fsm.consecutive_count}/{policy.loop_max_consecutive}); "
+                        "loop_consecutive_terminal=True"
+                    ),
+                    consecutive_count=fsm.consecutive_count,
+                    total_calls=fsm.total_calls,
+                )
             return GateResult(
                 decision=GateDecision.WARN_CONSECUTIVE,
                 tool_name=tool_name,

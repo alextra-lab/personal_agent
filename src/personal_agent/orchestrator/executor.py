@@ -87,6 +87,7 @@ def _get_tool_loop_policy(tool_name: str) -> ToolLoopPolicy:
             loop_max_per_signature=tool_policy.loop_max_per_signature,
             loop_max_consecutive=tool_policy.loop_max_consecutive,
             loop_output_sensitive=tool_policy.loop_output_sensitive,
+            loop_consecutive_terminal=tool_policy.loop_consecutive_terminal,
         )
     except Exception:  # noqa: BLE001
         return ToolLoopPolicy()
@@ -129,6 +130,10 @@ def _gate_blocked_result(
         ),
         GateDecision.BLOCK_OUTPUT: (
             "Retrieved the same result before. Use the previous tool output to answer."
+        ),
+        GateDecision.BLOCK_CONSECUTIVE: (
+            "Same tool called too many times consecutively without converging. "
+            "Stop and synthesize from results gathered so far, or report what is missing."
         ),
     }
     return {
@@ -2007,6 +2012,7 @@ async def step_tool_execution(
         if gate_result.decision in (
             GateDecision.BLOCK_IDENTITY,
             GateDecision.BLOCK_OUTPUT,
+            GateDecision.BLOCK_CONSECUTIVE,
         ):
             tool_results.append(_gate_blocked_result(tool_call_id, tool_name, gate_result))
             continue

@@ -145,6 +145,14 @@ class ToolPolicy(BaseModel):
         default=False,
         description="If True, skip output-identity blocking (for polling tools whose output changes each call)",
     )
+    loop_consecutive_terminal: bool = Field(
+        default=False,
+        description=(
+            "If True, WARN_CONSECUTIVE escalates to terminal BLOCK_CONSECUTIVE at loop_max_consecutive. "
+            "For tools whose consecutive-different-args mode is dominantly pathological (e.g. query_elasticsearch "
+            "guessing wrong index names, bash retrying unknown commands). Default False preserves ADR-0063 §D5."
+        ),
+    )
     auto_approve_prefixes: dict[str, list[str]] = Field(
         default_factory=dict,
         description=(

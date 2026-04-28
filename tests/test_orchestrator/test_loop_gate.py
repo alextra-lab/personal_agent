@@ -182,10 +182,10 @@ def test_consecutive_warn_repeated_above_threshold():
     assert result.state_after == ToolCallState.ACTIVE
 
 
-def test_consecutive_never_terminally_blocks():
-    """Repeated consecutive calls (even 20) never produce a terminal BLOCK."""
+def test_consecutive_never_terminally_blocks_when_flag_false():
+    """Repeated consecutive calls (even 20) never produce a terminal BLOCK when flag is off."""
     gate = ToolLoopGate()
-    policy = ToolLoopPolicy(loop_max_per_signature=100, loop_max_consecutive=2)
+    policy = ToolLoopPolicy(loop_max_per_signature=100, loop_max_consecutive=2, loop_consecutive_terminal=False)
     for i in range(20):
         result = gate.check_before("read_file", f"hash_{i}", policy)
         # Each call past threshold is advisory, never terminal
@@ -214,6 +214,44 @@ def test_two_tools_alternating_do_not_trigger_consecutive():
         r2 = gate.check_before("tool_b", f"hash_{i}b", policy)
         assert r1.decision == GateDecision.ALLOW
         assert r2.decision == GateDecision.ALLOW
+
+
+def test_consecutive_terminal_when_flag_set():
+    """BLOCK_CONSECUTIVE fires at threshold when loop_consecutive_terminal=True (different args each call)."""
+    gate = ToolLoopGate()
+    # With terminal=True, threshold hit on call #2 (consecutive_count=2 >= loop_max_consecutive=2)
+    policy = ToolLoopPolicy(loop_max_per_signature=10, loop_max_consecutive=2, loop_consecutive_terminal=True)
+    r1 = gate.check_before("query_elasticsearch", "hash_a", policy)  # consecutive=1, ALLOW
+    assert r1.decision == GateDecision.ALLOW
+    r2 = gate.check_before("query_elasticsearch", "hash_b", policy)  # consecutive=2, BLOCK_CONSECUTIVE
+    assert r2.decision == GateDecision.BLOCK_CONSECUTIVE
+    assert r2.state_after == ToolCallState.BLOCKED
+
+
+def test_consecutive_terminal_default_false_preserves_warn():
+    """Default flag=False (omitting the field) keeps advisory WARN_CONSECUTIVE behavior unchanged."""
+    gate = ToolLoopGate()
+    # No loop_consecutive_terminal kwarg → defaults to False
+    policy = ToolLoopPolicy(loop_max_per_signature=10, loop_max_consecutive=2)
+    gate.check_before("query_elasticsearch", "hash_a", policy)
+    r2 = gate.check_before("query_elasticsearch", "hash_b", policy)
+    # Must remain advisory (ADR-0063 §D5 default preserved)
+    assert r2.decision == GateDecision.WARN_CONSECUTIVE
+    assert r2.state_after != ToolCallState.BLOCKED
+
+
+def test_consecutive_terminal_blocked_tool_stays_blocked():
+    """Once BLOCK_CONSECUTIVE fires, every subsequent call for that tool is also terminal."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(loop_max_per_signature=10, loop_max_consecutive=2, loop_consecutive_terminal=True)
+    gate.check_before("run_python", "hash_a", policy)  # ALLOW
+    gate.check_before("run_python", "hash_b", policy)  # BLOCK_CONSECUTIVE (consecutive=2)
+    # All further calls (different args) also terminate — consecutive_count stays >= threshold
+    r3 = gate.check_before("run_python", "hash_c", policy)
+    assert r3.decision == GateDecision.BLOCK_CONSECUTIVE
+    assert r3.state_after == ToolCallState.BLOCKED
+    r4 = gate.check_before("run_python", "hash_d", policy)
+    assert r4.decision == GateDecision.BLOCK_CONSECUTIVE
 
 
 def test_gate_result_includes_consecutive_count():

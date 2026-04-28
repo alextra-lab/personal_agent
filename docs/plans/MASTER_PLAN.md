@@ -2,22 +2,24 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-27 (FRE-262 PIVOT-3 first eval surfaced 12 issues; all other dev paused pending side plan)
+> **Last updated**: 2026-04-28 (FRE-262 PIVOT-3 complete — PARTIAL PIVOT-4 verdict; normal sequencing resumes)
 > **Implementation sequence**: `docs/superpowers/specs/2026-04-22-implementation-sequence-wave-plan-design.md`
 
 ---
 
-## ⏸ Active Pause — FRE-262 PIVOT-3 Side Plan
+## ✅ PIVOT-3 Complete — Partial PIVOT-4 Verdict (2026-04-28)
 
-**All other development is paused** until the FRE-262 PIVOT-3 side plan completes.
+FRE-262 is Done. Three eval runs (Waves A–E of side plan) produced a defensible gate verdict.
 
-The first PIVOT-3 eval (2026-04-27) surfaced 12 issues across production bugs, eval infrastructure, governance, and skill doc quality. The PIVOT-3 → PIVOT-4 gate cannot be evaluated from existing data. Resolve these in waves before the re-eval.
+**Result**: Partial PIVOT-4 — quality gate 17/20 ✅, cost gate 2.06× ❌ overall.
+**Deprecate** (2 tools): `query_elasticsearch`, `fetch_url` — cost 1.52-1.55×, quality improved.
+**Keep** (4 tools): `list_directory`, `system_metrics_snapshot`, `run_sysdiag`, `infra_health` — quality or cost failures persist.
 
-**Side plan**: `docs/plans/2026-04-27-fre-262-pivot-3-side-plan.md`
-**Linear issues in scope**: FRE-270, FRE-271, FRE-272, FRE-273, FRE-274, FRE-275, FRE-276, FRE-277, FRE-278, FRE-279, FRE-280, FRE-281
-**Resume condition**: FRE-262 transitions to Done with a defensible gate verdict in `EVAL_RESULT.md`.
+**FRE-263 scope is now 2 tools** (was 8). See updated issue.
+**FRE-277** (eval cleanup script) is open/approved — next optional housekeeping item.
+**Normal sequencing resumes** at FRE-263 (PIVOT-4, narrowed scope), then Wave 3 (FRE-249, FRE-250).
 
-After the side plan completes, normal master-plan sequencing resumes at Wave 3 (FRE-249, FRE-250).
+Side plan: `docs/plans/2026-04-27-fre-262-pivot-3-side-plan.md`
 
 ---
 
@@ -34,7 +36,7 @@ After the side plan completes, normal master-plan sequencing resumes at Wave 3 (
 | ~~2~~ | ~~4~~ | ~~System Health & Homeostasis — Mode Manager fix (ADR-0055)~~ | ~~[FRE-246](https://linear.app/frenchforest/issue/FRE-246)~~ | ~~ADR + fix~~ | ~~Done 2026-04-24~~ |
 | ~~2~~ | ~~3~~ | ~~Error Pattern Monitoring — Level 3 observability (ADR-0056)~~ | ~~[FRE-244](https://linear.app/frenchforest/issue/FRE-244)~~ | ~~ADR + implementation~~ | ~~Done 2026-04-24 — Phase 1 (cg:error-monitor + dual-write) + Phase 2 (GEPA failure-path reflection, flag off)~~ |
 | ~~2~~ | ~~4~~ | ~~Insights & Pattern Analysis — wire InsightsEngine~~ | ~~[FRE-247](https://linear.app/frenchforest/issue/FRE-247)~~ | ~~ADR + implementation~~ | ~~Done 2026-04-24~~ |
-| 2.5 | — | ADR-0063 Primitive Tools & Action-Boundary Governance | [FRE-259](https://linear.app/frenchforest/issue/FRE-259) | ADR + 6-phase migration | FRE-260 (PIVOT-1) ~~done 2026-04-25~~ · ~~FRE-261 (PIVOT-2) done 2026-04-27~~ · FRE-262 (PIVOT-3) pending P2 gate |
+| 2.5 | — | ADR-0063 Primitive Tools & Action-Boundary Governance | [FRE-259](https://linear.app/frenchforest/issue/FRE-259) | ADR + 6-phase migration | ~~FRE-260 (PIVOT-1) done 2026-04-25~~ · ~~FRE-261 (PIVOT-2) done 2026-04-27~~ · ~~FRE-262 (PIVOT-3) done 2026-04-28 — PARTIAL PIVOT-4~~ · FRE-263 (PIVOT-4, 2 tools) next |
 
 ## Upcoming — Approved
 
@@ -50,7 +52,7 @@ Ordered by recommended implementation sequence. All items Approved in Linear. De
 | 2.5-P5 | ADR-0063 — Loop gate signal split + model_config fix *(parallel to P2/P3/P4)* | [FRE-264](https://linear.app/frenchforest/issue/FRE-264) | ADR-0063 §D5-D6 | FRE-260 |
 | 6 | Context Quality — compaction full loop | [FRE-249](https://linear.app/frenchforest/issue/FRE-249) | ADR-0059 | ~~FRE-245~~, ~~FRE-244~~ |
 | 7 | Knowledge Graph Quality — consolidation + decay→reranking | [FRE-250](https://linear.app/frenchforest/issue/FRE-250) | ADR-0060 | ~~FRE-245~~, ~~FRE-247~~ |
-| 2.5-P3 | ADR-0063 — Skill docs + model evaluation *(absorbs FRE-226 phase 1)* | [FRE-262](https://linear.app/frenchforest/issue/FRE-262) | ADR-0063 §D7 | FRE-261 |
+| ~~2.5-P3~~ | ~~ADR-0063 — Skill docs + model evaluation~~ | ~~[FRE-262](https://linear.app/frenchforest/issue/FRE-262)~~ | ~~ADR-0063 §D7~~ | ~~Done 2026-04-28 — PARTIAL PIVOT-4~~ |
 | 8 | Within-Session Progressive Context Compression | [FRE-251](https://linear.app/frenchforest/issue/FRE-251) | ADR-0061 | FRE-249 |
 | 2.5-P4 | ADR-0063 — Flag-gated deprecation of legacy tools | [FRE-263](https://linear.app/frenchforest/issue/FRE-263) | ADR-0063 §D4 | FRE-262 (eval gate) |
 | 9 | Agent self-updating skills — phase 2 *(phase 1 absorbed into FRE-262)* | [FRE-226](https://linear.app/frenchforest/issue/FRE-226) | ADR-0058 | FRE-248 |

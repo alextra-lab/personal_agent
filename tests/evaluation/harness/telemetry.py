@@ -78,7 +78,9 @@ class TelemetryChecker:
                     query={
                         "bool": {
                             "filter": [
-                                {"term": {"trace_id": trace_id}},
+                                # trace_id is a text field in the index; use .keyword
+                                # sub-field for exact-match term queries
+                                {"term": {"trace_id.keyword": trace_id}},
                             ]
                         }
                     },

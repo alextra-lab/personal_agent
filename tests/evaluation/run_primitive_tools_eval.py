@@ -258,7 +258,7 @@ async def _fetch_trace_metrics(es_url: str, trace_id: str) -> dict[str, Any]:
     if not trace_id:
         return dict(_EMPTY_METRICS)
     try:
-        checker = TelemetryChecker(es_url=es_url, max_retries=6, retry_delay_s=2.0)
+        checker = TelemetryChecker(es_url=es_url, max_retries=5, retry_delay_s=2.0)
         events = await checker.fetch_events(trace_id)
     except Exception:
         return dict(_EMPTY_METRICS)
@@ -635,32 +635,46 @@ def run_harness(args: argparse.Namespace) -> None:
             }
         )
 
-        # Incremental write — saves partial result before ES fetch
+        # Incremental write — saves partial result (token fields all zero until post-run fetch)
         _write_results_json(results, output_dir)
 
-        # Sleep between prompts; also gives ES time to index the trace events
         if i < n and args.delay > 0:
             time.sleep(args.delay)
 
-        # Fetch token / turn metrics from ES (concurrent for both sides)
-        sys.stdout.write(f"          fetching ES metrics for {pid}...\n")
-        sys.stdout.flush()
-        ctrl_metrics, trt_metrics = asyncio.run(
-            _fetch_both_metrics(args.es_url, ctrl_trace_id, trt_trace_id)
-        )
-        results[-1]["control"].update(ctrl_metrics)
-        results[-1]["treatment"].update(trt_metrics)
-        ctrl_tok = ctrl_metrics["prompt_tokens"] + ctrl_metrics["completion_tokens"]
-        trt_tok = trt_metrics["prompt_tokens"] + trt_metrics["completion_tokens"]
+    # Post-run ES metric fetch.
+    # Container async ES writes lag behind the HTTP response by up to ~60s
+    # under typical load. Batch-fetching after all LLM calls complete avoids
+    # per-prompt timing races and lets the 30s wait amortise across the whole run.
+    graded = [r for r in results if r["control"].get("trace_id")]
+    if graded and args.es_url:
         sys.stdout.write(
-            f"          tokens: ctrl={ctrl_tok}  trt={trt_tok}"
-            f"  turns: ctrl={ctrl_metrics['iteration_count']}"
-            f"  trt={trt_metrics['iteration_count']}\n"
+            f"\nWaiting 15s for ES to index {len(graded)} trace(s)...\n"
         )
+        sys.stdout.flush()
+        time.sleep(15)
+
+        sys.stdout.write("Fetching ES token metrics...\n")
         sys.stdout.flush()
 
-        # Write again with token data included
-        _write_results_json(results, output_dir)
+        async def _fetch_all_metrics() -> None:
+            for r in graded:
+                ctrl_metrics, trt_metrics = await _fetch_both_metrics(
+                    args.es_url,
+                    r["control"].get("trace_id", ""),
+                    r["treatment"].get("trace_id", ""),
+                )
+                r["control"].update(ctrl_metrics)
+                r["treatment"].update(trt_metrics)
+                pid = r["id"]
+                ctrl_tok = ctrl_metrics["prompt_tokens"] + ctrl_metrics["completion_tokens"]
+                trt_tok = trt_metrics["prompt_tokens"] + trt_metrics["completion_tokens"]
+                sys.stdout.write(
+                    f"  {pid}: ctrl={ctrl_tok} tok / {ctrl_metrics['iteration_count']} turns  "
+                    f"trt={trt_tok} tok / {trt_metrics['iteration_count']} turns\n"
+                )
+                sys.stdout.flush()
+
+        asyncio.run(_fetch_all_metrics())
 
     # Final write output files
     json_path = _write_results_json(results, output_dir)

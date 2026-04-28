@@ -77,6 +77,8 @@ services:
       API_PORT: "9001"
       AGENT_LOG_LEVEL: "${AGENT_LOG_LEVEL:-info}"
       # Eval-specific: auth and MCP off; primitives off (baseline)
+      # AGENT_OWNER_EMAIL is the dev-mode fallback when auth is disabled
+      AGENT_OWNER_EMAIL: ${AGENT_OWNER_EMAIL:?AGENT_OWNER_EMAIL required}
       AGENT_GATEWAY_AUTH_ENABLED: "false"
       AGENT_MCP_GATEWAY_ENABLED: "false"
       AGENT_PRIMITIVE_TOOLS_ENABLED: "false"
@@ -104,6 +106,7 @@ services:
       API_PORT: "9001"
       AGENT_LOG_LEVEL: "${AGENT_LOG_LEVEL:-info}"
       # Eval-specific: auth and MCP off; primitives on + auto-approve bash
+      AGENT_OWNER_EMAIL: ${AGENT_OWNER_EMAIL:?AGENT_OWNER_EMAIL required}
       AGENT_GATEWAY_AUTH_ENABLED: "false"
       AGENT_MCP_GATEWAY_ENABLED: "false"
       AGENT_PRIMITIVE_TOOLS_ENABLED: "true"

@@ -13,6 +13,21 @@
 
 FROM python:3.12-slim
 
+# FRE-278: install diagnostic tools referenced by skill docs and bash auto-approve list.
+# procps (ps, top, free, vmstat, uptime), curl, jq, iproute2 (ss), net-tools (netstat).
+RUN apt-get update -qq && \
+    apt-get install -y --no-install-recommends \
+      procps \
+      curl \
+      jq \
+      iproute2 \
+      net-tools \
+      sysstat \
+      lsof \
+      redis-tools \
+      postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Docker CLI — needed to launch docker/mcp-gateway via mounted Docker socket (cloud MCP)
@@ -33,9 +48,8 @@ RUN chmod +x docker/mcp/run-gateway.sh
 # Install dependencies (production-only, no dev dependencies)
 RUN uv sync --frozen --no-dev
 
-# Health check (python instead of curl — slim image has no curl)
 HEALTHCHECK --interval=10s --timeout=5s --retries=5 --start-period=30s \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:9001/health')" || exit 1
+  CMD curl -fsS http://localhost:9001/health || exit 1
 
 # Expose API port
 EXPOSE 9001

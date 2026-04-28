@@ -4,6 +4,35 @@
 
 All commands the legacy `run_sysdiag` tool allowed are on the bash auto-approve list. Write the full command directly — no `shlex.split` needed.
 
+## Container ABI (empirically verified 2026-04-28)
+
+Commands run inside `seshat-gateway` (Debian bookworm base). Installed versions:
+
+| Tool | Version | Supported flags |
+|------|---------|-----------------|
+| `ps` (procps-ng) | 4.0.4 | `--sort=-%mem`, `--sort=-%cpu`, `-o pid,user,pcpu,pmem,cmd`, `-ef`, `aux` |
+| `vmstat` (procps-ng) | 4.0.4 | `vmstat <interval> <count>` (bounded form required — see below) |
+| `iostat` (sysstat) | 12.7.5 | `iostat <interval> <count>` (bounded form required) |
+| `ss` (iproute2) | system | `-tunlp`, `-tnp` |
+| `lsof` | system | `-i`, `-p <pid>` |
+| `uptime` / `uname` | system | Standard flags |
+
+## vmstat / iostat — ALWAYS use bounded form
+
+**`vmstat` without a count limit runs until killed.** The bash tool times out at 30 s — an unbounded `vmstat` blocks the full 30 s and returns nothing useful.
+
+```bash
+# CORRECT — bounded: interval=1s, count=3 → terminates in 3s
+bash vmstat 1 3
+bash iostat 1 3
+
+# WRONG — unbounded: runs until 30s timeout
+bash vmstat 1        # ← DO NOT USE
+bash iostat          # ← DO NOT USE
+```
+
+Rule: `interval × count < 30` seconds. Typical use: `vmstat 1 3` (3 seconds).
+
 ## Processes
 
 ```bash
@@ -17,7 +46,7 @@ bash ps aux --sort=-%mem | head -15
 bash ps aux --sort=-%cpu | head -15
 
 # Find a specific process by name
-bash pgrep -a uvicorn
+bash pgrep -fa uvicorn
 ```
 
 ## Network / ports
@@ -29,17 +58,17 @@ bash ss -tunlp
 # Established connections
 bash ss -tnp state established
 
-# Equivalent using netstat
+# All open network connections (verbose)
 bash netstat -tunlp
 ```
 
 ## Load and I/O
 
 ```bash
-# System load + memory (3 samples, 1 s apart)
+# System load + memory (3 samples, 1 s apart) — BOUNDED
 bash vmstat 1 3
 
-# Disk I/O throughput (3 samples, 1 s apart)
+# Disk I/O throughput (3 samples, 1 s apart) — BOUNDED
 bash iostat 1 3
 
 # Current uptime + load average
@@ -52,8 +81,8 @@ bash uptime
 # Summary per top-level directory
 bash du -sh /app/*
 
-# Largest directories under /opt
-bash du -sh /opt/* | sort -rh | head -10
+# Largest directories under /app
+bash du -sh /app/* | sort -rh | head -10
 ```
 
 ## File handles and open connections

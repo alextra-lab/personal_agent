@@ -2,6 +2,8 @@
 
 **Category:** `system_read` · **Risk:** none · **Approval:** `run_python` auto-approved (NORMAL/ALERT/DEGRADED); bash one-liners auto-approved
 
+> **Container vs host:** All hostnames (`postgres`, `neo4j`, `elasticsearch`, `redis`, `embeddings`, `reranker`) are Docker DNS names that **only resolve from inside the `cloud-sim` Docker network**. Running these checks from the VPS host shell will fail with DNS errors. From the host, use `localhost:<port>` instead (e.g. `curl http://localhost:9200/_cluster/health`).
+
 ## Full health check (run_python — preferred)
 
 Probes all 7 services: Postgres, Neo4j (Bolt + HTTP), Elasticsearch, Redis, Embeddings, Reranker.
@@ -46,14 +48,16 @@ result["all_reachable"] = all(v.get("reachable") for v in result.values())
 print(json.dumps(result, indent=2))
 ```
 
-## Quick single-service checks (bash)
+## Quick single-service checks (bash — inside container only)
+
+These use Docker DNS and **only work from inside the seshat-gateway container**:
 
 ```bash
 # Elasticsearch cluster status
 bash curl -s http://elasticsearch:9200/_cluster/health | jq .status
 
-# Postgres — query test
-bash psql -c 'SELECT 1' postgresql://agent:agent_dev_password@postgres:5432/personal_agent
+# Postgres — query test (note: postgresql:// not postgresql+asyncpg://)
+bash psql -c 'SELECT 1' postgresql://agent:<password>@postgres:5432/personal_agent
 
 # Redis
 bash redis-cli -h redis PING
@@ -67,6 +71,8 @@ bash curl -s http://embeddings:8503/health
 # Reranker service
 bash curl -s http://reranker:8504/health
 ```
+
+> **psql URL note:** `AGENT_DATABASE_URL` uses `postgresql+asyncpg://` which psql cannot parse. Strip `+asyncpg` before passing to psql: `echo $AGENT_DATABASE_URL | sed 's/postgresql+asyncpg/postgresql/'`
 
 ## Interpreting results
 

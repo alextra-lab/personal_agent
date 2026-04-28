@@ -2,15 +2,16 @@
 
 **Category:** `network_read` · **Risk:** low · **Approval:** `curl` auto-approved (NORMAL/ALERT/DEGRADED); not available in LOCKDOWN
 
-## Plain JSON / API response
+## Default recipe — status + body together
 
-For REST APIs or endpoints that return JSON, fetch directly:
+Always get the HTTP status alongside the body so you can confirm the request succeeded:
 
 ```bash
-curl -s -L -A 'personal-agent/0.1 (research bot)' --max-time 20 <url>
+# Status code on first line, then body — works for JSON and text
+curl -s -o /dev/stdout -w '\n--- HTTP %{http_code} ---\n' -L -A 'personal-agent/0.1 (research bot)' --max-time 20 <url>
 ```
 
-Pipe through `jq` for structured inspection:
+Or: pipe to `jq` for JSON APIs and the exit code tells you if it failed:
 
 ```bash
 curl -s -L -A 'personal-agent/0.1 (research bot)' --max-time 20 <url> | jq .

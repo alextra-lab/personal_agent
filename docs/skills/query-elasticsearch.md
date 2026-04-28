@@ -45,20 +45,22 @@ Most important fields for queries:
 | `turn_count` | long | Number of LLM turns in request |
 | `model` / `model_id` | keyword | LLM model used |
 
-## Discovery step — run before every unfamiliar query
+## When to skip discovery
 
-**Never guess index names or field names.** Run these two commands first:
+**For known-pattern questions** (counts, recent errors, cost by task type, trace lookup), use the one-shot canned recipes below directly — no `/_cat/indices` call needed. The index names and field names in this doc are empirically verified (2026-04-28).
+
+**Run discovery only when:** the question involves an index pattern or field name not in this doc, or you're getting empty results/404s that suggest an assumption is wrong.
+
+## Discovery step — for unfamiliar queries only
 
 ```bash
-# 1. Verify the index pattern exists and has data
+# 1. Verify index pattern exists and has data
 curl -s 'http://elasticsearch:9200/_cat/indices?v&h=index,docs.count' | grep agent
 
-# 2. Get the exact field names for the index you'll query
+# 2. Get exact field names
 curl -s 'http://elasticsearch:9200/agent-logs-*/_mapping' \
   | jq 'to_entries[0].value.mappings.properties | keys | sort'
 ```
-
-Only write the ES|QL query once you've confirmed the index exists and identified the exact field names. This prevents the most common failures: 404s from wrong index patterns and empty results from mistyped field names.
 
 ## Querying Elasticsearch (ES|QL)
 

@@ -1,5 +1,10 @@
 # run_python — Python Docker Sandbox
 
+> **Sandbox isolation:** runs in a **separate Docker container** (`seshat-sandbox-python:0.1`), not the agent service container. Consequences:
+> - **May be unavailable** when the Docker socket is not mounted into the gateway container (e.g. some cloud eval environments). Surface the failure plainly rather than retrying in a loop.
+> - **App source is NOT importable.** `from personal_agent import ...` will `ImportError`. Use file reads (`/sandbox/` bind-mount) or HTTP calls (with `network=True`) to inspect the app.
+> - **`/proc` reflects the container's cgroup**, not raw host metrics. For host-level metrics, use `bash top`/`bash free` instead.
+
 Execute Python scripts in an isolated, hardened Docker container.
 
 ## When to use

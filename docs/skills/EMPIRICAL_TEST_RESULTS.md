@@ -3,6 +3,8 @@
 **Date**: 2026-04-28
 **Container**: `cloud-sim-seshat-gateway-treatment` (image `seshat-gateway:latest` rebuilt 2026-04-28)
 **Method**: Each recipe executed inside the running treatment container via `docker exec`. Pass = exit 0 + non-empty meaningful output.
+
+> **Methodology caveat (FRE-284, 2026-04-28):** Testing via `docker exec` into the container bypasses the bash primitive's shell contract, approval logic, and argv parsing. A recipe can pass here while still failing when the agent calls it through the `bash` tool (e.g. if the primitive previously lacked shell support, as was the case before FRE-283). **Future doc-gating must execute through the agent tool API** (POST `/chat` with a prompt that exercises the recipe), not via `docker exec` directly. The FRE-283 fix (real shell contract) makes the two paths equivalent for shell-composition features; this caveat remains relevant for approval and governance divergences.
 **Methodology**: TDD-for-docs (writing-skills RED → GREEN → REFACTOR) — FRE-262 PIVOT-3 first-eval traces as RED baseline.
 
 ---

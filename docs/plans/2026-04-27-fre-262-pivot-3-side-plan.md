@@ -201,7 +201,7 @@ Document expected output shape per prompt in `prompts.yaml` or alongside in `exp
 
 ---
 
-## Wave E — Re-run + analysis ✅ COMPLETE (2026-04-28, run-final-2026-04-28/)
+## Wave E — Re-run + analysis ✅ COMPLETE (2026-04-28, run-final-routing-fixed-2026-04-28/)
 
 1. Bring up `docker-compose.eval.yml` stack
 2. Run full eval:
@@ -220,15 +220,15 @@ Document expected output shape per prompt in `prompts.yaml` or alongside in `exp
    - If ≥17/19 ✅ AND cost ratio >1.5× → **partial PIVOT-4**, deprecate only the categories where treatment is cost-competitive
    - If <17/19 ✅ → **partial deprecation only for categories where treatment ≥ control**
 
-**Wave E gate result (2026-04-28):** ✅ PIVOT-4 CLEARED.
+**Wave E gate result (2026-04-28, third eval run — routing fixed):** PARTIAL PIVOT-4.
 
-20/20 prompts completed. Treatment ≥ control on 19/20. Cost ratio 1.19× (≤1.5× gate). Wall clock 408s trt vs 425s ctrl (treatment faster).
+Three runs required: (1) Dockerfile bug — no skill docs in image, 1.19×, 19/20 → invalid; (2) full-block injection, 4.13×, 15/20 → blocked; (3) FRE-282 intent-based routing, 2.06×, 17/20 → partial PIVOT-4.
 
-Deprecate: query_elasticsearch, self_telemetry_query, fetch_url, list_directory, run_sysdiag, infra_health (6 tools).
-Keep: system_metrics_snapshot (agent-process memory not reliably replicated by primitives — metrics-02 failure).
+Quality gate 17/20 ✅. Cost gate 2.06× ❌ overall.
+DEPRECATE: query_elasticsearch, fetch_url (cost 1.52-1.55×, quality ✅ with improvements on es-02, es-04, fetch-03).
+KEEP: list_directory, system_metrics_snapshot, run_sysdiag, infra_health (quality or cost failures persist).
 
-Shared failures (es-02, es-04): both sides failed equally — ES query construction errors, not primitive gap.
-Notable: ls-03 treatment 3× token overhead (6 turns vs 2). FRE-279 confirmed working (es-04 trt terminated in 68s vs 120s timeout in first eval).
+Routing confirmed working: es-01 0.8× tokens (treatment cheaper), diag-03 0.6×. FRE-279 confirmed: es-04 trt terminated correctly (loop gate fired). Persistent failures: ls-03 non-recursive, diag-01/infra-02 incorrect tool-availability reporting.
 
 **Gate to Wave F:**
 - `EVAL_RESULT.md` written with verdict and per-tool keep/deprecate list ✅

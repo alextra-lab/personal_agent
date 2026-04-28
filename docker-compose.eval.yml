@@ -83,6 +83,7 @@ services:
       AGENT_MCP_GATEWAY_ENABLED: "false"
       AGENT_PRIMITIVE_TOOLS_ENABLED: "false"
       AGENT_PREFER_PRIMITIVES: "false"
+      AGENT_CLOUD_WEEKLY_BUDGET_USD: "10.0"
     ports:
       # Host 9002 → container 9001 (uvicorn port is hardcoded in Dockerfile.gateway)
       - "127.0.0.1:9002:9001"
@@ -113,6 +114,7 @@ services:
       AGENT_PREFER_PRIMITIVES: "true"
       # Required: without this, bash commands block indefinitely for PWA approval
       AGENT_APPROVAL_UI_ENABLED: "false"
+      AGENT_CLOUD_WEEKLY_BUDGET_USD: "10.0"
     ports:
       # Host 9003 → container 9001
       - "127.0.0.1:9003:9001"

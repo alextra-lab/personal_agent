@@ -83,6 +83,7 @@ services:
       AGENT_MCP_GATEWAY_ENABLED: "false"
       AGENT_PRIMITIVE_TOOLS_ENABLED: "false"
       AGENT_PREFER_PRIMITIVES: "false"
+      AGENT_LEGACY_TOOLS_ENABLED: "true"   # control: curated tools visible for comparison
       AGENT_CLOUD_WEEKLY_BUDGET_USD: "50.0"
     ports:
       # Host 9002 → container 9001 (uvicorn port is hardcoded in Dockerfile.gateway)

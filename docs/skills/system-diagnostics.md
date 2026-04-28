@@ -1,5 +1,7 @@
 # system-diagnostics — Run system diagnostic commands (ps, ss, vmstat, lsof, …)
 
+**Status:** Primary path (FRE-263, 2026-04-28). Legacy `run_sysdiag` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
+
 **Category:** `system_read` · **Risk:** low · **Approval:** listed commands auto-approved in NORMAL; subset in ALERT/DEGRADED
 
 Pipes and composition work (`bash` now runs via `/bin/bash`). FRE-283.

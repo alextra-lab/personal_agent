@@ -1,5 +1,7 @@
 # infrastructure-health — Probe all infrastructure services for reachability
 
+**Status:** Primary path (FRE-263, 2026-04-28). Legacy `infra_health` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
+
 **Category:** `system_read` · **Risk:** none · **Approval:** bash one-liners auto-approved in NORMAL; `run_python(network=True)` requires PWA approval in ALERT/DEGRADED
 
 > **Container vs host:** Hostnames (`postgres`, `neo4j`, `elasticsearch`, `redis`) are Docker DNS names that only resolve from **inside** the `cloud-sim` network. From the VPS host shell, use `localhost:<port>` instead.

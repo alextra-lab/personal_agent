@@ -1,5 +1,7 @@
 # list-directory — List directory contents with type and size
 
+**Status:** Primary path (FRE-263, 2026-04-28). Legacy `list_directory` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
+
 **Category:** `filesystem_read` · **Risk:** none · **Approval:** auto-approved in all non-LOCKDOWN modes
 
 ## Counting files — use `find | wc -l`

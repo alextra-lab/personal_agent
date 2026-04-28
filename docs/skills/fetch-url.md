@@ -1,5 +1,7 @@
 # fetch-url — Fetch a URL and return its content as plain text
 
+**Status:** Primary path (FRE-263, 2026-04-28). Legacy `fetch_url` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
+
 **Category:** `network_read` · **Risk:** low · **Approval:** `curl` auto-approved (NORMAL/ALERT/DEGRADED); not available in LOCKDOWN
 
 ## Default recipe — status + body together

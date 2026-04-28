@@ -95,13 +95,14 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
     - get_library_docs: Context7 library documentation (ADR-0028 Phase 3)
     - Linear tools: create/find/list (FRE-224, Tier-1)
 
-    Registered unless ``settings.prefer_primitives_enabled`` is True
-    (treatment eval path — hides curated tools so the agent can't fall back):
+    Registered only when ``settings.legacy_tools_enabled`` is True
+    (rollback mode — default False per ADR-0063 PIVOT-4 / FRE-263):
     - read_file, list_directory, system_metrics_snapshot, self_telemetry_query
     - query_elasticsearch (ADR-0028 Phase 1)
     - fetch_url (ADR-0028 Phase 3)
     - run_sysdiag (FRE-188)
     - infra_health
+    A ``tool_deprecated`` WARNING is emitted at startup when this flag is True.
 
     When ``settings.primitive_tools_enabled`` is True (opt-in, default False),
     the four FRE-261 primitive tools are also registered:
@@ -126,21 +127,34 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
     registry.register(list_linear_projects_tool, list_linear_projects_executor)
     registry.register(create_linear_project_tool, create_linear_project_executor)
 
-    # --- Curated tools superseded by primitives + skill docs (ADR-0063 §D4).
-    # Hidden when prefer_primitives_enabled=True so the treatment eval side
-    # cannot fall back to these and contaminate the eval signal. ---
-    if not settings.prefer_primitives_enabled:
+    # --- 8 legacy curated tools deprecated by ADR-0063 PIVOT-4 (FRE-263) ---
+    # Default off (AGENT_LEGACY_TOOLS_ENABLED=false). Rollback: set True.
+    # Primitives + skill docs cover all 8 use cases (G3 eval 19/20, 1.39×).
+    # Code deletion: FRE-265 after >=2 weeks production stability.
+    if settings.legacy_tools_enabled:
         registry.register(read_file_tool, read_file_executor)
         registry.register(list_directory_tool, list_directory_executor)
         registry.register(system_metrics_snapshot_tool, system_metrics_snapshot_executor)
         registry.register(self_telemetry_query_tool, self_telemetry_query_executor)
-        # ADR-0028 CLI-first native tools (legacy: gated per FRE-283)
         registry.register(query_elasticsearch_tool, query_elasticsearch_executor)
         registry.register(fetch_url_tool, fetch_url_executor)
-        # FRE-188: system diagnostics
         registry.register(run_sysdiag_tool, run_sysdiag_executor)
-        # Infrastructure health (TCP/HTTP probes — container-safe, no CLI tools needed)
         registry.register(infra_health_tool, infra_health_executor)
+        log.warning(
+            "tool_deprecated",
+            tools=[
+                "read_file",
+                "list_directory",
+                "system_metrics_snapshot",
+                "self_telemetry_query",
+                "query_elasticsearch",
+                "fetch_url",
+                "run_sysdiag",
+                "infra_health",
+            ],
+            replacement="bash / read / run_python primitives + skill docs",
+            reason="ADR-0063 PIVOT-4 (FRE-263); AGENT_LEGACY_TOOLS_ENABLED=true is rollback-only",
+        )
 
     # FRE-261 PIVOT-2 — primitive tools (ADR-0063 Phase 2).
     # Lazy imports inside the guard to avoid circular-import issues and to

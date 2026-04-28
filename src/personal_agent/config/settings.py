@@ -952,6 +952,19 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # FRE-263 PIVOT-4: Flag-gated deprecation of legacy tools (ADR-0063 Phase 4)
+    legacy_tools_enabled: bool = Field(
+        default=False,
+        alias="AGENT_LEGACY_TOOLS_ENABLED",
+        description=(
+            "When False (default), the 8 curated tools superseded by primitives + skill docs "
+            "are not registered in the tool registry (ADR-0063 PIVOT-4). Set True only to "
+            "roll back the deprecation; a 'tool_deprecated' warning is emitted at startup. "
+            "Code deletion is FRE-265 after >=2 weeks of production stability. "
+            "Env var: AGENT_LEGACY_TOOLS_ENABLED"
+        ),
+    )
+
     # Docker sandbox (FRE-261 — Step 5: run_python primitive)
     sandbox_image: str = Field(
         default="seshat-sandbox-python:0.1",

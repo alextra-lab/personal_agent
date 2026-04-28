@@ -1,5 +1,7 @@
 # Skill: read / write (primitive filesystem I/O)
 
+**Status:** Primary path (FRE-263, 2026-04-28). Legacy `read_file` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
+
 > FRE-261 Step 3 — supersedes legacy `read_file` and `write_file` tools.
 
 ## When to use `read` vs legacy `read_file`

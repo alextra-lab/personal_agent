@@ -84,12 +84,17 @@ _CURATED_GATED = [
 
 
 class TestPreferPrimitivesDeregistersCurated:
-    """FRE-283: curated tools are hidden when prefer_primitives_enabled=True."""
+    """FRE-283/FRE-263: curated tools gated by legacy_tools_enabled (FRE-263 primary gate).
+
+    prefer_primitives_enabled now only controls skill-doc injection; tool registration
+    is governed exclusively by legacy_tools_enabled (default False per PIVOT-4).
+    """
 
     def test_curated_absent_when_prefer_primitives_enabled(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
+        monkeypatch.setattr(settings, "legacy_tools_enabled", False)
         monkeypatch.setattr(settings, "primitive_tools_enabled", False)
 
         from personal_agent.tools import register_mvp_tools
@@ -100,10 +105,12 @@ class TestPreferPrimitivesDeregistersCurated:
         tool_names = registry.list_tool_names()
 
         for name in _CURATED_GATED:
-            assert name not in tool_names, f"{name} should be absent when prefer_primitives_enabled"
+            assert name not in tool_names, f"{name} should be absent (legacy_tools_enabled=False)"
 
-    def test_curated_present_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_curated_absent_by_default_prefer_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """FRE-263: curated tools absent by default regardless of prefer_primitives_enabled."""
         monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
+        monkeypatch.setattr(settings, "legacy_tools_enabled", False)
         monkeypatch.setattr(settings, "primitive_tools_enabled", False)
 
         from personal_agent.tools import register_mvp_tools
@@ -114,9 +121,25 @@ class TestPreferPrimitivesDeregistersCurated:
         tool_names = registry.list_tool_names()
 
         for name in _CURATED_GATED:
-            assert name in tool_names, (
-                f"{name} should be present when prefer_primitives_enabled=False"
+            assert name not in tool_names, (
+                f"{name} should be absent when legacy_tools_enabled=False (PIVOT-4 default)"
             )
+
+    def test_curated_present_when_legacy_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Curated tools visible only when legacy_tools_enabled=True (rollback mode)."""
+        monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
+        monkeypatch.setattr(settings, "legacy_tools_enabled", True)
+        monkeypatch.setattr(settings, "primitive_tools_enabled", False)
+
+        from personal_agent.tools import register_mvp_tools
+        from personal_agent.tools.registry import ToolRegistry
+
+        registry = ToolRegistry()
+        register_mvp_tools(registry)
+        tool_names = registry.list_tool_names()
+
+        for name in _CURATED_GATED:
+            assert name in tool_names, f"{name} should be present when legacy_tools_enabled=True"
 
     def test_always_available_tools_present_regardless_of_flag(
         self, monkeypatch: pytest.MonkeyPatch

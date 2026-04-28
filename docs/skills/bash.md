@@ -1,5 +1,7 @@
 # bash — Shell Command Executor
 
+**Status:** Primary path (FRE-263, 2026-04-28). Replaces 8 deprecated curated tools via `AGENT_LEGACY_TOOLS_ENABLED=false`. Use `bash`, `read`, `run_python` primitives for all shell operations.
+
 **Category:** `system_dangerous` · **Risk:** high · **Approval:** required (auto-approve list exempts safe commands)
 
 ## Purpose

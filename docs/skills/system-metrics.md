@@ -1,5 +1,7 @@
 # system-metrics — CPU, memory, and disk utilisation snapshot
 
+**Status:** Primary path (FRE-263, 2026-04-28). Legacy `system_metrics_snapshot` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
+
 **Category:** `system_read` · **Risk:** none · **Approval:** auto-approved in all non-LOCKDOWN modes
 
 ## Agent-process RSS (NOT `free -m`)

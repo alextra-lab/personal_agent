@@ -1,5 +1,7 @@
 # query-elasticsearch — Query ES indices, inspect schema, read self-telemetry
 
+**Status:** Primary path (FRE-263, 2026-04-28). Legacy `query_elasticsearch` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).
+
 **Category:** `system_read` · **Risk:** low · **Approval:** `bash curl` auto-approved (NORMAL); `run_python` auto-approved (NORMAL/ALERT/DEGRADED)
 
 ## Actual indices (empirically verified 2026-04-28)

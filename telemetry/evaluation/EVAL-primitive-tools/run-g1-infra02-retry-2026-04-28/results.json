@@ -1,0 +1,40 @@
+[
+  {
+    "id": "infra-02",
+    "category": "infrastructure-health",
+    "prompt": "Is Postgres reachable?",
+    "control": {
+      "trace_id": "2f195352-cdca-44cb-baea-fd5d3a6031c7",
+      "status": 200,
+      "response": "Yes! ✅ **Postgres is reachable** at `postgres:5432`.\n\nAll other core services are up as well — Neo4j, Elasticsearch, and Redis are all reachable.",
+      "latency_ms": 4181,
+      "session_id": "81832ed5-b68b-56ea-b80a-c48eb4f3ab0c",
+      "prompt_tokens": 10818,
+      "completion_tokens": 87,
+      "cache_read_tokens": 19316,
+      "cache_write_tokens": 0,
+      "tool_call_count": 1,
+      "tool_names": [
+        "infra_health"
+      ],
+      "iteration_count": 2
+    },
+    "treatment": {
+      "trace_id": "5ab2800e-0be8-40de-8cc8-cc746fdeb6c4",
+      "status": 200,
+      "response": "✅ **Postgres is reachable.** The query `SELECT 1` returned successfully, confirming a live connection to the database.",
+      "latency_ms": 4627,
+      "session_id": "e4f37bf3-22c5-5bbf-9b3a-17c1223020db",
+      "prompt_tokens": 13045,
+      "completion_tokens": 120,
+      "cache_read_tokens": 18242,
+      "cache_write_tokens": 3069,
+      "tool_call_count": 1,
+      "tool_names": [
+        "bash"
+      ],
+      "iteration_count": 2
+    },
+    "quality": ""
+  }
+]

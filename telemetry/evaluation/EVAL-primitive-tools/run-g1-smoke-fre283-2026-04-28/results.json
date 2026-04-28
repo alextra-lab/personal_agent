@@ -1,0 +1,158 @@
+[
+  {
+    "id": "metrics-02",
+    "category": "system-metrics",
+    "prompt": "How much memory is the agent service using right now?",
+    "control": {
+      "trace_id": "e02311f8-1cad-4807-bd1f-20d4230c099e",
+      "status": 200,
+      "response": "Here's a quick look at the current memory usage for the system hosting the agent service:\n\n| Metric | Value |\n|---|---|\n| **Memory Used** | **33.1%** of total |\n| **Total RAM** | 22.93 GB |\n| **Used RAM** | ~7.59 GB |\n| **Available RAM** | 15.34 GB |\n\nSo roughly **7.6 GB** of the 22.9 GB total is currently in use, leaving about **15.3 GB available**. The system looks healthy — well under memory pressure at only a third of capacity utilized.\n\nWould you like a more granular breakdown by process?",
+      "latency_ms": 13645,
+      "session_id": "ef6920e5-e014-50a6-85ba-6c8c328ad048",
+      "prompt_tokens": 26853,
+      "completion_tokens": 427,
+      "cache_read_tokens": 29644,
+      "cache_write_tokens": 9903,
+      "tool_call_count": 4,
+      "tool_names": [
+        "system_metrics_snapshot",
+        "run_sysdiag",
+        "run_sysdiag",
+        "run_sysdiag"
+      ],
+      "iteration_count": 5
+    },
+    "treatment": {
+      "trace_id": "d51401d4-40a8-4853-b19d-776efdc31242",
+      "status": 200,
+      "response": "Here's the current memory usage for the agent service:\n\n| PID | RSS | % Mem | Process |\n|-----|-----|-------|---------|\n| 19 | **344,072 KB (~336 MB)** | 1.4% | `uvicorn` (main app worker) |\n| 1 | 82,264 KB (~80 MB) | 0.3% | `uv run` (launcher process) |\n\n**Total: ~416 MB RSS** across both processes, with the main Uvicorn worker accounting for the bulk at ~336 MB. Memory usage looks normal — nothing alarming here.",
+      "latency_ms": 7516,
+      "session_id": "6db0dcbc-e67d-50ef-bceb-2613b02b570f",
+      "prompt_tokens": 13961,
+      "completion_tokens": 239,
+      "cache_read_tokens": 13010,
+      "cache_write_tokens": 6505,
+      "tool_call_count": 1,
+      "tool_names": [
+        "bash"
+      ],
+      "iteration_count": 2
+    },
+    "quality": ""
+  },
+  {
+    "id": "diag-01",
+    "category": "system-diagnostics",
+    "prompt": "List the top 10 processes by memory usage.",
+    "control": {
+      "trace_id": "482222c3-c816-4d4a-8b54-e71b51178033",
+      "status": 200,
+      "response": "Here are the top processes by memory usage on this host:\n\n| Rank | User | PID | %CPU | %MEM | VSZ (KB) | RSS (KB) | Command |\n|------|------|-----|------|------|----------|----------|---------|\n| 1 | root | 20 | 26.4% | 1.4% | 1,152,876 | 342,964 | `uvicorn` (Python app worker) |\n| 2 | root | 1 | 1.4% | 0.3% | 147,484 | 85,852 | `uv run uvicorn` (process launcher) |\n| 3 | root | 73 | 0.0% | 0.0% | 6,784 | 3,884 | `ps` (the diagnostic command itself) |\n\n**Notes:**\n- Only **3 processes** are running on this host — it appears to be a minimal/containerized environment.\n- The dominant process is the **Python/Uvicorn worker** (PID 20), consuming **~1.4% RAM (~343 MB RSS)** and currently using **26.4% CPU**.\n- The parent process (PID 1) is the `uv run` launcher, using a modest **~86 MB RSS**.\n- There are no other user processes or background daemons visible, consistent with a lean Docker container setup.",
+      "latency_ms": 8451,
+      "session_id": "414ef4fa-e73c-5a64-8b58-8e9e630dcfe7",
+      "prompt_tokens": 10679,
+      "completion_tokens": 415,
+      "cache_read_tokens": 19316,
+      "cache_write_tokens": 0,
+      "tool_call_count": 1,
+      "tool_names": [
+        "run_sysdiag"
+      ],
+      "iteration_count": 2
+    },
+    "treatment": {
+      "trace_id": "547f0e85-1bbf-4e74-82eb-31f63789fef1",
+      "status": 200,
+      "response": "Here are the **top processes by memory usage** on this container:\n\n| Rank | PID | User | %CPU | %MEM | VSZ | RSS | Command |\n|------|-----|------|------|------|-----|-----|---------|\n| 1 | 19 | root | 23.2 | 1.4% | 1,152,612 KB | **344,600 KB (~337 MB)** | `uvicorn` (Python app worker) |\n| 2 | 1 | root | 1.2 | 0.3% | 143,388 KB | **82,264 KB (~80 MB)** | `uv run uvicorn` (launcher/supervisor) |\n| 3 | 81 | root | 0.0 | 0.0% | 6,784 KB | 3,844 KB | `ps aux` (this diagnostic command) |\n| 4 | 80 | root | 0.0 | 0.0% | 4,488 KB | 3,208 KB | `/bin/bash` (shell wrapper) |\n| 5 | 82 | root | 0.0 | 0.0% | 3,020 KB | 1,156 KB | `head -11` (pipe tail) |\n\n### Summary\n- Only **5 processes** are running in this container — it's a lean, purpose-built environment.\n- The dominant memory consumer is **PID 19** (the Uvicorn Python worker), holding ~**337 MB RSS** and **1.1 GB virtual memory**, which is expected for a FastAPI/async Python application.\n- **PID 1** (the `uv` process launcher) uses ~**80 MB RSS**, acting as the supervisor.\n- The remaining 3 processes are transient shell/diagnostic processes spawned by this very command.",
+      "latency_ms": 9991,
+      "session_id": "63a6a018-db88-5052-906a-9c6976b88624",
+      "prompt_tokens": 12681,
+      "completion_tokens": 511,
+      "cache_read_tokens": 17640,
+      "cache_write_tokens": 2768,
+      "tool_call_count": 1,
+      "tool_names": [
+        "bash"
+      ],
+      "iteration_count": 2
+    },
+    "quality": ""
+  },
+  {
+    "id": "infra-02",
+    "category": "infrastructure-health",
+    "prompt": "Is Postgres reachable?",
+    "control": {
+      "trace_id": "6d8086e8-4a47-4742-a151-5cb105149bf2",
+      "status": 200,
+      "response": "Yes, **Postgres is reachable!** ✅\n\nIt's responding on `postgres:5432` with no issues. All other core services are up as well (Neo4j, Elasticsearch, Redis).",
+      "latency_ms": 3751,
+      "session_id": "81832ed5-b68b-56ea-b80a-c48eb4f3ab0c",
+      "prompt_tokens": 10818,
+      "completion_tokens": 88,
+      "cache_read_tokens": 19316,
+      "cache_write_tokens": 0,
+      "tool_call_count": 1,
+      "tool_names": [
+        "infra_health"
+      ],
+      "iteration_count": 2
+    },
+    "treatment": {
+      "trace_id": "e06ff46c-a80b-4ea2-b694-c809f5da9676",
+      "status": 200,
+      "response": "**Postgres is not reachable.** ❌\n\nThe connection attempt failed with:\n> `connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: No such file or directory`\n\nThis means `$AGENT_DATABASE_URL` is either **unset or empty**, so `psql` fell back to trying a local Unix socket — which doesn't exist in this container.\n\n**Possible causes:**\n1. `AGENT_DATABASE_URL` environment variable is not set in this container.\n2. The Postgres service (`postgres` host) is down or not yet started.\n3. The URL is misconfigured (e.g. uses `postgresql+asyncpg://` instead of `postgresql://`).\n\n**Quick next steps:**\n- Check the env var: `echo $AGENT_DATABASE_URL`\n- If it's set with `+asyncpg`, strip that driver prefix before passing to `psql`.\n- Verify the Postgres container is running in your Docker environment.",
+      "latency_ms": 7768,
+      "session_id": "e4f37bf3-22c5-5bbf-9b3a-17c1223020db",
+      "prompt_tokens": 12980,
+      "completion_tokens": 304,
+      "cache_read_tokens": 18178,
+      "cache_write_tokens": 3037,
+      "tool_call_count": 1,
+      "tool_names": [
+        "bash"
+      ],
+      "iteration_count": 2
+    },
+    "quality": ""
+  },
+  {
+    "id": "infra-03",
+    "category": "infrastructure-health",
+    "prompt": "Are Neo4j and Elasticsearch both up?",
+    "control": {
+      "trace_id": "458c96f0-8753-4319-a96e-1716147d2b77",
+      "status": 200,
+      "response": "Both are up! Here's a quick summary:\n\n| Service | Status | Details |\n|---|---|---|\n| **Neo4j** | ✅ Up | Bolt (7687) + HTTP (7474) both reachable; v5.26.24 Community Edition |\n| **Elasticsearch** | ✅ Up | HTTP (9200) reachable; cluster status is **yellow** (52 unassigned replica shards — expected for a single-node setup) |\n\nThe Elasticsearch **yellow** status is normal in a single-node cluster — it just means replica shards can't be assigned since there's only one node. Primary shards are all active (52/52), so data is fully accessible.",
+      "latency_ms": 7720,
+      "session_id": "64c4f23b-2431-5714-835c-db29931d7b74",
+      "prompt_tokens": 10824,
+      "completion_tokens": 203,
+      "cache_read_tokens": 19316,
+      "cache_write_tokens": 0,
+      "tool_call_count": 1,
+      "tool_names": [
+        "infra_health"
+      ],
+      "iteration_count": 2
+    },
+    "treatment": {
+      "trace_id": "e7570950-faf5-4ed2-b6e9-a5633679ccac",
+      "status": 200,
+      "response": "Both services are up:\n\n| Service | Status | Details |\n|---|---|---|\n| **Neo4j** | ✅ Up | Community Edition v5.26.24, reachable on HTTP (7474) and Bolt (7687) |\n| **Elasticsearch** | ✅ Up | Cluster `docker-cluster`, health status **yellow** |\n\nOne note: Elasticsearch's **yellow** status means the cluster is operational and serving requests, but some replica shards are unassigned. This is normal for a single-node setup (replicas can't be assigned when there's only one node). No action needed unless you expect a multi-node cluster.",
+      "latency_ms": 6664,
+      "session_id": "208295df-f903-58dd-b040-514ce0ba31bd",
+      "prompt_tokens": 13243,
+      "completion_tokens": 281,
+      "cache_read_tokens": 24252,
+      "cache_write_tokens": 0,
+      "tool_call_count": 2,
+      "tool_names": [
+        "bash",
+        "bash"
+      ],
+      "iteration_count": 2
+    },
+    "quality": ""
+  }
+]

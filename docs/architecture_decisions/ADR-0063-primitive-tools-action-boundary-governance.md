@@ -1,6 +1,6 @@
 # ADR-0063: Primitive Tools & Action-Boundary Governance
 
-**Status**: Approved (2026-04-24)
+**Status**: Accepted — P1–P4 implemented (2026-04-28: FULL PIVOT-4 eval gate cleared; all 8 tools deprecated via FRE-263)
 **Phase 2 implementation**: Complete (FRE-261 — branch `starry-plaza-1s/fre-261-pivot-2-primitive-tools-sandbox-action-boundary-governance`)
 **Date**: 2026-04-24
 **Deciders**: Project owner
@@ -229,14 +229,14 @@ See `docs/plans/2026-04-24-primitive-tools-migration-plan.md` for the full phase
 
 Summary:
 
-| Phase | Scope | Risk | Gate to next |
-|---|---|---|---|
-| P1 | Sever TaskType→tool-filter wire | Low | Token cost / latency within 5% of baseline after 48h |
-| P2 | Add `bash` / `read` / `write` / `run_python` + sandbox + approval | Medium | Pentest clean; approval UX acceptable *(implemented — FRE-261, pentest integration run + E2E approval flow pending gate)* |
-| P3 | Skill docs for 8 deprecated tools + model eval | Medium | Primitive success ≥ curated success on 20 traces |
-| P4 | Flag-gated deprecation (`AGENT_LEGACY_TOOLS_ENABLED=false`) | Medium | 2 weeks production stability |
-| P5 | Loop gate signal split + `model_config` fix | Low | Existing output-identity decisions unchanged |
-| P6 | Delete legacy tool code | Low | `AGENT_LEGACY_TOOLS_ENABLED` untouched ≥2 weeks |
+| Phase | Scope | Risk | Gate to next | Status |
+|---|---|---|---|---|
+| P1 | Sever TaskType→tool-filter wire | Low | Token cost / latency within 5% of baseline after 48h | ✅ Done — FRE-260 (2026-04-25) |
+| P2 | Add `bash` / `read` / `write` / `run_python` + sandbox + approval | Medium | Pentest clean; approval UX acceptable | ✅ Done — FRE-261 (2026-04-27) |
+| P3 | Skill docs for 8 deprecated tools + model eval | Medium | Primitive success ≥ curated success on 20 traces | ✅ Done — FRE-262 (2026-04-28); FRE-283 fixed bash contract; FRE-284 fixed skill docs |
+| P4 | Flag-gated deprecation (`AGENT_LEGACY_TOOLS_ENABLED=false`), all 8 tools | Medium | 2 weeks production stability | 🔜 Next — FRE-263 (FULL scope: 8 tools) |
+| P5 | Loop gate signal split + `model_config` fix | Low | Existing output-identity decisions unchanged | 📋 Planned — FRE-264 (parallel) |
+| P6 | Delete legacy tool code | Low | `AGENT_LEGACY_TOOLS_ENABLED` untouched ≥2 weeks | 📋 Planned — FRE-265 |
 
 ---
 

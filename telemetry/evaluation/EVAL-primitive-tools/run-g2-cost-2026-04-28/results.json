@@ -1,0 +1,265 @@
+[
+  {
+    "id": "es-02",
+    "category": "query-elasticsearch",
+    "prompt": "How many times did the agent call query_elasticsearch today?",
+    "control": {
+      "trace_id": "0669d668-f469-424d-bf5c-e1a3c6b8cd27",
+      "status": 200,
+      "response": "Based on the telemetry results, the agent has called **`query_elasticsearch` 0 times** today — no events matching that tool call were found in today's logs.",
+      "latency_ms": 4636,
+      "session_id": "51d73386-168f-5344-905c-6c10f8a0e318",
+      "prompt_tokens": 10474,
+      "completion_tokens": 154,
+      "cache_read_tokens": 19316,
+      "cache_write_tokens": 0,
+      "tool_call_count": 1,
+      "tool_names": [
+        "self_telemetry_query"
+      ],
+      "iteration_count": 2
+    },
+    "treatment": {
+      "trace_id": "6e9cbbbc-0956-4d58-bc0d-40e6cfc842bd",
+      "status": 200,
+      "response": "The agent called **`query_elasticsearch` 79 times** in the last 24 hours.",
+      "latency_ms": 4442,
+      "session_id": "6c4004c8-83db-5be8-bbe4-7704633edca7",
+      "prompt_tokens": 17069,
+      "completion_tokens": 177,
+      "cache_read_tokens": 12104,
+      "cache_write_tokens": 9916,
+      "tool_call_count": 1,
+      "tool_names": [
+        "bash"
+      ],
+      "iteration_count": 2
+    },
+    "quality": ""
+  },
+  {
+    "id": "es-04",
+    "category": "query-elasticsearch",
+    "prompt": "Find a trace from the past week where the agent hit the consecutive loop gate. What tool was involved and how many times was it called?",
+    "control": {
+      "trace_id": "8dc7f1e6-0ee5-4f64-9953-17a2ef3e0d7b",
+      "status": 200,
+      "response": "Here's a full breakdown of what the logs reveal:\n\n---\n\n## 🔁 Consecutive Loop Gate — Trace Found\n\n**Trace ID:** `8dc7f1e6-0ee5-4f64-9953-17a2ef3e0d7b`\n**Date:** April 28, 2026 (~17:22 UTC)\n**Source:** `personal_agent.orchestrator.executor`\n\n---\n\n### 🛠️ Tools Involved\n\nTwo tools were repeatedly called with identical arguments, triggering the loop gate on alternating steps:\n\n| Tool | Role |\n|---|---|\n| `query_elasticsearch` | Primary looping tool |\n| `self_telemetry_query` | Secondary looping tool |\n\nBoth were fired in parallel pairs each iteration, which is why the logs show two `tool_loop_gate` events at nearly every timestamp.\n\n---\n\n### 📊 Call Count\n\nThe gate messages tell the story clearly — the `consecutive_count` field incremented with each blocked step:\n\n- The loop was first flagged at **4 consecutive identical calls** (advisory threshold: >3)\n- It escalated all the way to **20 consecutive identical calls** at the terminal ceiling of 4\n- The gate logged messages like:\n  - `\"Same args called 4x (advisory window: >3 to <=5)\"` → **advisory**\n  - `\"Same args called 20x, terminal ceiling=4\"` → **hard block**\n\nSo across the full runaway sequence, the same tool arguments were called **~20 times** before the gate fully intervened. Both tools were blocked (`status: blocked`) on every gate-triggered step.\n\n---\n\n### 🔍 Summary\n\n> **Trace `8dc7f1e6`** hit the consecutive loop gate on **April 28, 2026**. The agent was alternately calling **`query_elasticsearch`** and **`self_telemetry_query`** with identical arguments in a tight retry loop. The gate first issued advisories at 4 repeats and ultimately issued terminal blocks, with the call count reaching **20 identical consecutive calls** before the loop was halted.",
+      "latency_ms": 118275,
+      "session_id": "921ad12a-886e-569e-ab29-52d2c33ee6db",
+      "prompt_tokens": 55116,
+      "completion_tokens": 1896,
+      "cache_read_tokens": 101508,
+      "cache_write_tokens": 2562,
+      "tool_call_count": 15,
+      "tool_names": [
+        "query_elasticsearch",
+        "self_telemetry_query",
+        "query_elasticsearch",
+        "self_telemetry_query",
+        "query_elasticsearch",
+        "self_telemetry_query",
+        "query_elasticsearch",
+        "self_telemetry_query",
+        "self_telemetry_query",
+        "query_elasticsearch",
+        "query_elasticsearch",
+        "self_telemetry_query",
+        "query_elasticsearch",
+        "query_elasticsearch",
+        "query_elasticsearch"
+      ],
+      "iteration_count": 10
+    },
+    "treatment": {
+      "trace_id": "8938bf1e-a1ad-44c6-85e5-75b342fdd59d",
+      "status": 200,
+      "response": "Here's what was found across the past week's loop gate events:\n\n---\n\n## 🔁 Consecutive Loop Gate Hits — Top Traces (Last 7 Days)\n\n| Rank | Tool | Max Consecutive Calls | Trace ID |\n|------|------|-----------------------|----------|\n| 🥇 | `query_elasticsearch` | **102** | `2ebf1f03-3e2e-4ff7-9123-6ec9bdd2ef3c` |\n| 🥈 | `bash` | 47 | `526e9a41-580b-457d-a067-d617e411186c` |\n| 🥈 | `self_telemetry_query` | 47 | `644c384a-0fa2-4533-8457-66c946e1209c` |\n| 4 | `bash` | 45 | `71dd898d-670d-45b0-8952-55b2ff5ad365` |\n| 5 | `query_elasticsearch` | 44 | `5534e89e-52c0-4432-a064-07a562885d8b` |\n\n---\n\n### 🏆 Worst Offender\n\n- **Tool:** `query_elasticsearch`\n- **Trace:** `2ebf1f03-3e2e-4ff7-9123-6ec9bdd2ef3c`\n- **Consecutive calls:** **102** — by far the most severe loop in the past week\n\nThis trace likely involved the agent repeatedly querying Elasticsearch without making meaningful progress (e.g. getting the same results back and re-querying instead of synthesizing an answer). The loop gate fired to warn/block after the consecutive count climbed to 102.\n\n### Notable Patterns\n- `query_elasticsearch` appears in **4 of the top 10** traces, making it the most loop-prone tool overall\n- `bash` and `self_telemetry_query` also show significant consecutive call patterns (45–47), suggesting similar runaway behavior in diagnostic/introspective sessions\n- `create_linear_issue` also hit the gate (23 consecutive calls), which is unusual for a write tool",
+      "latency_ms": 83945,
+      "session_id": "b2e85705-4ad1-50aa-8626-b43f03229584",
+      "prompt_tokens": 102249,
+      "completion_tokens": 2211,
+      "cache_read_tokens": 181280,
+      "cache_write_tokens": 8432,
+      "tool_call_count": 9,
+      "tool_names": [
+        "bash",
+        "bash",
+        "bash",
+        "bash",
+        "bash",
+        "bash",
+        "bash",
+        "bash",
+        "bash"
+      ],
+      "iteration_count": 12
+    },
+    "quality": ""
+  },
+  {
+    "id": "fetch-03",
+    "category": "fetch-url",
+    "prompt": "What's the current Anthropic pricing? Check https://www.anthropic.com/pricing.",
+    "control": {
+      "trace_id": "f18ac69d-2f2c-4b9c-913a-0d1516d9262e",
+      "status": 200,
+      "response": "Here's the current Anthropic pricing based on the search results:\n\n---\n\n## 🧑‍💻 Claude Subscription Plans (claude.ai)\n\n| Plan | Price |\n|------|-------|\n| **Free** | $0 — basic access, ~10–15 messages/session |\n| **Pro** | $20/month ($17/month billed annually) — ~5x Free usage |\n| **Max** | $100/month (5x Pro) or $200/month (20x Pro) |\n| **Team** | Available (contact Anthropic) |\n| **Enterprise** | Available (contact Anthropic) |\n\n---\n\n## 🔌 API Pricing (per million tokens)\n\n| Model | Input | Output |\n|-------|-------|--------|\n| **Claude Opus 4.7** | $5 | $25 |\n| **Claude Opus 4.6** | $5 | $25 |\n| **Claude Sonnet 4.6** | $3 | $15 |\n| **Claude Haiku 4.5** | $1 | $5 |\n\n### 💡 Notes:\n- **Prompt caching** significantly reduces costs on repeated context.\n- **Batch API** offers discounts for async/bulk workloads.\n- **US-only inference** (`inference_geo` parameter) adds a **1.1× multiplier** on all token categories for Opus 4.6 and newer.\n\n---\n\nFor the most precise and up-to-date numbers, visit the official docs at **[platform.claude.com/docs/en/about-claude/pricing](https://platform.claude.com/docs/en/about-claude/pricing)** or **[claude.com/pricing](https://claude.com/pricing)**.",
+      "latency_ms": 23722,
+      "session_id": "e138c8f0-1aac-53f4-9021-02da317cd2a2",
+      "prompt_tokens": 33509,
+      "completion_tokens": 963,
+      "cache_read_tokens": 57948,
+      "cache_write_tokens": 494,
+      "tool_call_count": 5,
+      "tool_names": [
+        "fetch_url",
+        "web_search",
+        "web_search",
+        "web_search",
+        "web_search"
+      ],
+      "iteration_count": 6
+    },
+    "treatment": {
+      "trace_id": "50c15ee8-4c7a-4285-bb8b-2b58e0c21e2e",
+      "status": 200,
+      "response": "Here's the current Anthropic Claude pricing based on the search results (as of mid-2025):\n\n---\n\n## 🤖 Claude API Pricing (Pay-as-you-go, per million tokens)\n\n| Model | Input | Output |\n|---|---|---|\n| **Claude Opus 4.x** | $5 / MTok | $25 / MTok |\n| **Claude Sonnet 4.x** | $3 / MTok | $15 / MTok |\n| **Claude Haiku** | (lower tier) | (lower tier) |\n\n> **Prompt caching** can save up to **90%** on input costs.\n> **Batch API** offers up to **50% discount**.\n> **Web search** via API: **$10 per 1,000 searches** + standard token costs.\n\n---\n\n## 💳 Consumer Subscription Plans\n\n| Plan | Price |\n|---|---|\n| **Free** | $0/month |\n| **Pro** | $20/month |\n| **Max** | $100–$200/month |\n| **Team** | Custom |\n| **Enterprise** | Custom |\n\n---\n\n> ⚠️ **Note:** The Anthropic pricing page (`anthropic.com/pricing`) is JavaScript-rendered and couldn't be fetched directly. The figures above are sourced from search snippets and third-party summaries. For exact, up-to-date numbers — especially for Haiku and the newest models — please check:\n> - 🔗 [platform.claude.com/docs/en/about-claude/pricing](https://platform.claude.com/docs/en/about-claude/pricing)\n> - 🔗 [anthropic.com/pricing](https://www.anthropic.com/pricing)",
+      "latency_ms": 35138,
+      "session_id": "1c3d2795-91ef-5ee7-a701-acaa7c8462e0",
+      "prompt_tokens": 44146,
+      "completion_tokens": 1404,
+      "cache_read_tokens": 62080,
+      "cache_write_tokens": 5391,
+      "tool_call_count": 7,
+      "tool_names": [
+        "bash",
+        "bash",
+        "web_search",
+        "web_search",
+        "perplexity_query",
+        "web_search",
+        "web_search"
+      ],
+      "iteration_count": 6
+    },
+    "quality": ""
+  },
+  {
+    "id": "ls-03",
+    "category": "list-directory",
+    "prompt": "How many YAML files are under /app/config?",
+    "control": {
+      "trace_id": "eb919996-512d-41e4-a152-87024d1e2e35",
+      "status": 200,
+      "response": "There are **12 YAML files** under `/app/config`:\n\n| # | Path |\n|---|------|\n| 1 | `/app/config/models.eval.yaml` |\n| 2 | `/app/config/models-baseline.yaml` |\n| 3 | `/app/config/governance/safety.yaml` |\n| 4 | `/app/config/governance/tools.yaml` |\n| 5 | `/app/config/governance/modes.yaml` |\n| 6 | `/app/config/governance/models.yaml` |\n| 7 | `/app/config/models.cloud.yaml` |\n| 8 | `/app/config/gateway_access.yaml` |\n| 9 | `/app/config/profiles/local.yaml` |\n| 10 | `/app/config/profiles/cloud.yaml` |\n| 11 | `/app/config/models.yaml` |\n| 12 | `/app/config/models.medium.yaml` |\n\nThey're spread across three subdirectories: `governance/` (4 files), `profiles/` (2 files), and the root of `/app/config` (6 files).",
+      "latency_ms": 6094,
+      "session_id": "77165cb3-0f46-5485-9f96-ee4252ad6d73",
+      "prompt_tokens": 10645,
+      "completion_tokens": 382,
+      "cache_read_tokens": 19316,
+      "cache_write_tokens": 0,
+      "tool_call_count": 1,
+      "tool_names": [
+        "run_sysdiag"
+      ],
+      "iteration_count": 2
+    },
+    "treatment": {
+      "trace_id": "2704490a-87c8-4a0d-84f7-ad1d996430eb",
+      "status": 200,
+      "response": "There are **12 YAML files** under `/app/config`.",
+      "latency_ms": 4485,
+      "session_id": "51c6da08-1f46-54ce-b714-3da0688636d2",
+      "prompt_tokens": 15106,
+      "completion_tokens": 88,
+      "cache_read_tokens": 20342,
+      "cache_write_tokens": 4119,
+      "tool_call_count": 1,
+      "tool_names": [
+        "bash"
+      ],
+      "iteration_count": 2
+    },
+    "quality": ""
+  },
+  {
+    "id": "metrics-02",
+    "category": "system-metrics",
+    "prompt": "How much memory is the agent service using right now?",
+    "control": {
+      "trace_id": "12eb78db-593e-4b1b-a15e-4aa31f234463",
+      "status": 200,
+      "response": "Here's a snapshot of the current memory usage on the system hosting the agent:\n\n| Metric | Value |\n|---|---|\n| **Memory Used** | **33.4%** |\n| **Total RAM** | ~22.9 GB |\n| **Available RAM** | ~15.3 GB |\n| **Used RAM** | ~7.6 GB (estimated) |\n\nSo roughly **7.6 GB out of 22.9 GB** of RAM is currently in use across the whole system, leaving about **15.3 GB available**. The agent service is running comfortably with plenty of headroom.",
+      "latency_ms": 12205,
+      "session_id": "ef6920e5-e014-50a6-85ba-6c8c328ad048",
+      "prompt_tokens": 26849,
+      "completion_tokens": 416,
+      "cache_read_tokens": 49044,
+      "cache_write_tokens": 537,
+      "tool_call_count": 4,
+      "tool_names": [
+        "system_metrics_snapshot",
+        "run_sysdiag",
+        "run_sysdiag",
+        "run_sysdiag"
+      ],
+      "iteration_count": 5
+    },
+    "treatment": {
+      "trace_id": "832433af-5190-42c0-8646-e6ffea441014",
+      "status": 200,
+      "response": "Here's the current memory usage for the agent service:\n\n| PID | RSS (MB) | % Mem | Process |\n|-----|----------|-------|---------|\n| 19 | **338.9 MB** | 1.4% | `uvicorn` (main worker — Python app) |\n| 1 | **76.9 MB** | 0.3% | `uv run uvicorn` (launcher/supervisor) |\n\n**Total: ~415.8 MB RSS** across both processes.\n\nThe main worker (PID 19) is the one doing the heavy lifting at ~339 MB. The `uv run` launcher (PID 1) adds another ~77 MB. Both are well within normal range for a FastAPI/uvicorn service with loaded ML tooling.",
+      "latency_ms": 7679,
+      "session_id": "6db0dcbc-e67d-50ef-bceb-2613b02b570f",
+      "prompt_tokens": 13965,
+      "completion_tokens": 279,
+      "cache_read_tokens": 19062,
+      "cache_write_tokens": 3479,
+      "tool_call_count": 1,
+      "tool_names": [
+        "bash"
+      ],
+      "iteration_count": 2
+    },
+    "quality": ""
+  },
+  {
+    "id": "diag-01",
+    "category": "system-diagnostics",
+    "prompt": "List the top 10 processes by memory usage.",
+    "control": {
+      "trace_id": "4db3fb2a-b890-4035-80f8-1d04bf331116",
+      "status": 200,
+      "response": "Here are the **top 10 processes by memory usage** on this host:\n\n| Rank | PID | USER | %CPU | %MEM | VSZ (KB) | RSS (KB) | Command |\n|------|-----|------|------|------|----------|----------|---------|\n| 1 | 20 | root | 3.1% | 1.7% | 1,314,948 | 412,912 | `uvicorn personal_agent.service.app:app` (Python) |\n| 2 | 1 | root | 0.1% | 0.3% | 147,484 | 85,852 | `uv run uvicorn personal_agent.service.app:app` |\n| 3 | 436 | root | 100% | 0.0% | 6,784 | 3,848 | `ps aux --sort=-%mem` *(this diagnostic command)* |\n\n> **Note:** Only **3 processes** are running in this environment (it appears to be a minimal container). The top memory consumer is the **Uvicorn/Python worker** for the personal agent service, using ~1.7% of system RAM (~403 MB RSS), followed by the **`uv` launcher** at ~0.3% (~84 MB RSS). There are no additional processes to fill a top-10 list.",
+      "latency_ms": 8527,
+      "session_id": "414ef4fa-e73c-5a64-8b58-8e9e630dcfe7",
+      "prompt_tokens": 10677,
+      "completion_tokens": 405,
+      "cache_read_tokens": 19316,
+      "cache_write_tokens": 0,
+      "tool_call_count": 1,
+      "tool_names": [
+        "run_sysdiag"
+      ],
+      "iteration_count": 2
+    },
+    "treatment": {
+      "trace_id": "974ff0c0-37c7-4685-87f2-7b1d3da225a1",
+      "status": 200,
+      "response": "Here are the **top 10 processes by memory usage** on this system:\n\n| Rank | PID | User | %CPU | %MEM | VSZ (KB) | RSS (KB) | Command |\n|------|-----|------|------|------|----------|----------|---------|\n| 1 | 19 | root | 4.2 | 1.4 | 1,285,084 | 346,252 | `uvicorn` (Python app — `personal_agent`) |\n| 2 | 1 | root | 0.1 | 0.3 | 145,944 | 78,760 | `uv run uvicorn` (launcher) |\n| 3 | 374 | root | 0.0 | 0.0 | 6,784 | 3,812 | `ps aux` (this diagnostic) |\n| 4 | 373 | root | 0.0 | 0.0 | 4,488 | 3,280 | `/bin/bash` (shell wrapper) |\n| 5 | 375 | root | 0.0 | 0.0 | 3,020 | 1,100 | `head -11` (pipe tail) |\n\n**Summary:** Only **5 processes** are running in this container — it's a minimal environment. The dominant consumer is the **Uvicorn Python process (PID 19)**, using **~338 MB RSS (1.4% of total system memory)**, which hosts the `personal_agent` application. The `uv` launcher (PID 1) uses ~77 MB, and the remaining processes are transient shell/diagnostic commands with negligible footprints.",
+      "latency_ms": 9372,
+      "session_id": "63a6a018-db88-5052-906a-9c6976b88624",
+      "prompt_tokens": 12681,
+      "completion_tokens": 473,
+      "cache_read_tokens": 12104,
+      "cache_write_tokens": 5536,
+      "tool_call_count": 1,
+      "tool_names": [
+        "bash"
+      ],
+      "iteration_count": 2
+    },
+    "quality": ""
+  }
+]

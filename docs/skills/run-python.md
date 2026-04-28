@@ -14,7 +14,9 @@ Do **not** use for file I/O that modifies the host filesystem outside `/sandbox`
 
 ## Pre-installed libraries
 
-`requests`, `httpx`, `pandas`, `numpy`, `pyyaml`
+`requests`, `httpx`, `pandas`, `numpy`, `pyyaml`, `psutil`
+
+System tools also available in the sandbox: `ps`, `top`, `free`, `vmstat`, `iostat`, `ss`, `lsof`, `curl`, `jq`, `redis-cli`, `psql` (same set as the gateway container).
 
 ## Scratch directory
 

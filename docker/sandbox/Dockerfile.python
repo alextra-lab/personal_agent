@@ -1,6 +1,22 @@
 FROM python:3.12-slim
+
+# FRE-278: install diagnostic tools so run_python scripts can call ps, vmstat, etc.
+# procps (ps, top, free, vmstat, uptime), curl, jq, iproute2 (ss).
+RUN apt-get update -qq && \
+    apt-get install -y --no-install-recommends \
+      procps \
+      curl \
+      jq \
+      iproute2 \
+      net-tools \
+      sysstat \
+      lsof \
+      redis-tools \
+      postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd -g 1000 appuser && useradd -u 1000 -g 1000 -m appuser
-RUN pip install --no-cache-dir requests httpx pandas numpy pyyaml
+RUN pip install --no-cache-dir requests httpx pandas numpy pyyaml psutil
 USER appuser
 WORKDIR /sandbox
 ENTRYPOINT ["python", "-c"]

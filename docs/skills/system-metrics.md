@@ -37,14 +37,18 @@ Swap:          2047           0        2047
 
 ## Structured output via run_python
 
-Use `run_python` when downstream code needs structured key/value data. The sandbox image does **not** include `psutil`; use `/proc` and `shutil` instead. No `network=True` needed — reads local files only.
+Use `run_python` when downstream code needs structured key/value data. The sandbox image now includes `psutil` (installed in `seshat-sandbox-python:0.1`) as well as `/proc` access. No `network=True` needed — reads local files only.
+
+> **Scope note:** Inside the `seshat-sandbox-python:0.1` container, `/proc/meminfo`, `/proc/stat`, and `/proc/loadavg` reflect the **sandbox container's cgroup namespace**, not raw host metrics. Total memory may report the host total, but CPU stats are per-container. For host-level metrics, use the `bash top` / `bash free` / `bash df` recipes — those run in the seshat-gateway container which has direct `/proc` access.
 
 ```python
 import json, shutil
+
 # CPU load from /proc/loadavg
 with open('/proc/loadavg') as f:
     loadavg = f.read().split()
     load_1m, load_5m, load_15m = loadavg[0], loadavg[1], loadavg[2]
+
 # Memory from /proc/meminfo
 mem = {}
 with open('/proc/meminfo') as f:
@@ -52,8 +56,10 @@ with open('/proc/meminfo') as f:
         parts = line.split()
         if parts[0] in ('MemTotal:', 'MemAvailable:', 'MemFree:'):
             mem[parts[0].rstrip(':')] = int(parts[1])
+
 # Disk from Python stdlib
 disk = shutil.disk_usage('/')
+
 result = {
     "load_1m": float(load_1m),
     "load_5m": float(load_5m),

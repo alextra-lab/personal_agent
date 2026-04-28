@@ -173,7 +173,7 @@ FRE-278 (103c85a): Root cause was `python:3.12-slim` base image had no system to
 
 ---
 
-## Wave D — Prompt curation (~1 day)
+## Wave D — Prompt curation ✅ COMPLETE (2026-04-28, main @ 0433b11)
 
 ### FRE-276 — `prompts.yaml` refresh
 
@@ -196,6 +196,8 @@ Document expected output shape per prompt in `prompts.yaml` or alongside in `exp
 - Updated `prompts.yaml` with 20 prompts (es-04 re-enabled, ES prompts replaced where needed)
 - Each prompt has documented expected output shape
 - Sanity check: run 3 prompts each through control and treatment; all produce coherent answers
+
+**Wave D gate result (2026-04-28):** ✅ All three conditions met. es-02 replaced (tool_call_started count, 47 events confirmed); es-03 kept (litellm_request_complete elapsed_s, p95=7.7s confirmed); es-04 re-enabled with updated wording for loop-gate traces (136+85 events confirmed). expected_outputs.md created with ✅/⚠️/❌ grading rubric.
 
 ---
 

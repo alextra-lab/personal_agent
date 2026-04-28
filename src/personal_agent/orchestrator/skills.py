@@ -43,9 +43,10 @@ SKILL_BLOCK_HEADER = (
 # Keywords are lowercased substrings matched against the lowercased user message.
 _KEYWORD_ROUTES: list[tuple[list[str], list[str]]] = [
     # Elasticsearch / telemetry queries
+    # Note: bare "elasticsearch" removed — "are Neo4j and Elasticsearch both up?" is an
+    # infra-health question, not a query question. Use specific query-intent keywords only.
     (
         [
-            "elasticsearch",
             "agent-log",
             "trace_id",
             "kibana",
@@ -65,6 +66,8 @@ _KEYWORD_ROUTES: list[tuple[list[str], list[str]]] = [
             "loop trace",
             "warn_consecutive",
             "block_consecutive",
+            "query elasticsearch",
+            "search elasticsearch",
         ],
         ["query-elasticsearch.md"],
     ),
@@ -104,12 +107,13 @@ _KEYWORD_ROUTES: list[tuple[list[str], list[str]]] = [
         ["list-directory.md", "read-write.md"],
     ),
     # System metrics — CPU / memory / disk
+    # Note: bare "memory usage" removed — "List top 10 processes by memory usage" is a
+    # diagnostics question. Keep specific system-level metric keywords only.
     (
         [
             "cpu load",
             "cpu usage",
-            "memory is",
-            "memory usage",
+            "memory is the agent",
             "disk space",
             "disk usage",
             "load average",

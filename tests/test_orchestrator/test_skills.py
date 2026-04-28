@@ -156,3 +156,34 @@ def test_unrecognised_message_returns_only_bash():
     assert "infrastructure-health" not in block.lower()
     assert "system-metrics" not in block.lower()
     assert "bash" in block.lower()
+
+
+# ── Adversarial cross-category tests (Opus review findings) ───────────────────
+# These test the exact prompts that had priority bugs before the fix:
+#   - "memory usage" in system-metrics fired before "processes by memory" in diag
+#   - bare "elasticsearch" in ES route fired before "neo4j" in infra-health
+
+
+def test_adversarial_process_memory_routes_to_diagnostics_not_metrics():
+    """'processes by memory' must route to system-diagnostics, not system-metrics."""
+    block = get_skill_block("List the top 10 processes by memory usage")
+    # system-diagnostics has vmstat, ss -tunlp, ps aux patterns
+    assert "vmstat" in block or "ps aux" in block or "ss -tunlp" in block
+    # system-metrics (free -m, top -bn1) must NOT win over diagnostics
+    assert "free -m" not in block
+
+
+def test_adversarial_elasticsearch_infra_routes_to_health_not_query():
+    """'Are Neo4j and Elasticsearch both up?' is an infra-health question, not a query."""
+    block = get_skill_block("Are Neo4j and Elasticsearch both up?")
+    # infrastructure-health has postgres and neo4j connection patterns
+    assert "neo4j" in block.lower() and "postgres" in block.lower()
+    # query-elasticsearch.md must NOT be injected (no agent-logs-* patterns)
+    assert "agent-logs-" not in block
+
+
+def test_adversarial_query_elasticsearch_still_routes_after_keyword_prune():
+    """Removing bare 'elasticsearch' must not break ES query routing."""
+    block = get_skill_block("Show me elasticsearch indices with the most docs")
+    # "query elasticsearch" keyword should still match
+    assert "agent-logs-" in block or "ES|QL" in block or "esql" in block.lower()

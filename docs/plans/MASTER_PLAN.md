@@ -38,7 +38,7 @@ Eval: `telemetry/evaluation/EVAL-primitive-tools/run-g3-full-sonnet-2026-04-28T1
 | ~~2~~ | ~~4~~ | ~~System Health & Homeostasis — Mode Manager fix (ADR-0055)~~ | ~~[FRE-246](https://linear.app/frenchforest/issue/FRE-246)~~ | ~~ADR + fix~~ | ~~Done 2026-04-24~~ |
 | ~~2~~ | ~~3~~ | ~~Error Pattern Monitoring — Level 3 observability (ADR-0056)~~ | ~~[FRE-244](https://linear.app/frenchforest/issue/FRE-244)~~ | ~~ADR + implementation~~ | ~~Done 2026-04-24 — Phase 1 (cg:error-monitor + dual-write) + Phase 2 (GEPA failure-path reflection, flag off)~~ |
 | ~~2~~ | ~~4~~ | ~~Insights & Pattern Analysis — wire InsightsEngine~~ | ~~[FRE-247](https://linear.app/frenchforest/issue/FRE-247)~~ | ~~ADR + implementation~~ | ~~Done 2026-04-24~~ |
-| 2.5 | — | ADR-0063 Primitive Tools & Action-Boundary Governance | [FRE-259](https://linear.app/frenchforest/issue/FRE-259) | ADR + 6-phase migration | ~~FRE-260 (PIVOT-1) done 2026-04-25~~ · ~~FRE-261 (PIVOT-2) done 2026-04-27~~ · ~~FRE-262 (PIVOT-3) done 2026-04-28 — PARTIAL PIVOT-4~~ · FRE-263 (PIVOT-4, 2 tools) next |
+| ~~2.5~~ | ~~—~~ | ~~ADR-0063 Primitive Tools & Action-Boundary Governance~~ | ~~[FRE-259](https://linear.app/frenchforest/issue/FRE-259)~~ | ~~ADR + 6-phase migration~~ | ~~FRE-260 done~~ · ~~FRE-261 done~~ · ~~FRE-262+FRE-283+FRE-284 done — FULL PIVOT-4~~ · ~~FRE-263 done 2026-04-28 — all 8 tools deprecated~~ · FRE-265 blocked (2-week window until 2026-05-12) |
 
 ## Upcoming — Approved
 
@@ -54,9 +54,9 @@ Ordered by recommended implementation sequence. All items Approved in Linear. De
 | 2.5-P5 | ADR-0063 — Loop gate signal split + model_config fix *(parallel to P2/P3/P4)* | [FRE-264](https://linear.app/frenchforest/issue/FRE-264) | ADR-0063 §D5-D6 | FRE-260 |
 | 6 | Context Quality — compaction full loop | [FRE-249](https://linear.app/frenchforest/issue/FRE-249) | ADR-0059 | ~~FRE-245~~, ~~FRE-244~~ |
 | 7 | Knowledge Graph Quality — consolidation + decay→reranking | [FRE-250](https://linear.app/frenchforest/issue/FRE-250) | ADR-0060 | ~~FRE-245~~, ~~FRE-247~~ |
-| ~~2.5-P3~~ | ~~ADR-0063 — Skill docs + model evaluation~~ | ~~[FRE-262](https://linear.app/frenchforest/issue/FRE-262)~~ | ~~ADR-0063 §D7~~ | ~~Done 2026-04-28 — PARTIAL PIVOT-4~~ |
+| ~~2.5-P3~~ | ~~ADR-0063 — Skill docs + model evaluation~~ | ~~[FRE-262](https://linear.app/frenchforest/issue/FRE-262)~~ | ~~ADR-0063 §D7~~ | ~~Done 2026-04-28 — FULL PIVOT-4 after FRE-283/FRE-284 fixes~~ |
 | 8 | Within-Session Progressive Context Compression | [FRE-251](https://linear.app/frenchforest/issue/FRE-251) | ADR-0061 | FRE-249 |
-| 2.5-P4 | ADR-0063 — Flag-gated deprecation of legacy tools | [FRE-263](https://linear.app/frenchforest/issue/FRE-263) | ADR-0063 §D4 | FRE-262 (eval gate) |
+| ~~2.5-P4~~ | ~~ADR-0063 — Flag-gated deprecation of all 8 legacy tools~~ | ~~[FRE-263](https://linear.app/frenchforest/issue/FRE-263)~~ | ~~ADR-0063 §D4~~ | ~~Done 2026-04-28 — 2-week stability window until 2026-05-12~~ |
 | 9 | Agent self-updating skills — phase 2 *(phase 1 absorbed into FRE-262)* | [FRE-226](https://linear.app/frenchforest/issue/FRE-226) | ADR-0058 | FRE-248 |
 | 2.5-P6 | ADR-0063 — Delete legacy tool code | [FRE-265](https://linear.app/frenchforest/issue/FRE-265) | ADR-0063 | FRE-263 (2-week window) |
 | 10 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |

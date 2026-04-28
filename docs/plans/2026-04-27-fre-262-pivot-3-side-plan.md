@@ -201,7 +201,7 @@ Document expected output shape per prompt in `prompts.yaml` or alongside in `exp
 
 ---
 
-## Wave E — Re-run + analysis (~1 day)
+## Wave E — Re-run + analysis ✅ COMPLETE (2026-04-28, run-final-2026-04-28/)
 
 1. Bring up `docker-compose.eval.yml` stack
 2. Run full eval:
@@ -220,10 +220,20 @@ Document expected output shape per prompt in `prompts.yaml` or alongside in `exp
    - If ≥17/19 ✅ AND cost ratio >1.5× → **partial PIVOT-4**, deprecate only the categories where treatment is cost-competitive
    - If <17/19 ✅ → **partial deprecation only for categories where treatment ≥ control**
 
+**Wave E gate result (2026-04-28):** ✅ PIVOT-4 CLEARED.
+
+20/20 prompts completed. Treatment ≥ control on 19/20. Cost ratio 1.19× (≤1.5× gate). Wall clock 408s trt vs 425s ctrl (treatment faster).
+
+Deprecate: query_elasticsearch, self_telemetry_query, fetch_url, list_directory, run_sysdiag, infra_health (6 tools).
+Keep: system_metrics_snapshot (agent-process memory not reliably replicated by primitives — metrics-02 failure).
+
+Shared failures (es-02, es-04): both sides failed equally — ES query construction errors, not primitive gap.
+Notable: ls-03 treatment 3× token overhead (6 turns vs 2). FRE-279 confirmed working (es-04 trt terminated in 68s vs 120s timeout in first eval).
+
 **Gate to Wave F:**
-- `EVAL_RESULT.md` written with verdict and per-tool keep/deprecate list
-- FRE-262 transitioned to Done in Linear
-- Master plan updated to reflect FRE-263 (PIVOT-4) status (cleared or partially blocked)
+- `EVAL_RESULT.md` written with verdict and per-tool keep/deprecate list ✅
+- FRE-262 to be transitioned to Done in Linear
+- Master plan to be updated to reflect FRE-263 (PIVOT-4) status: cleared (6 tools), keep system_metrics_snapshot
 
 ---
 

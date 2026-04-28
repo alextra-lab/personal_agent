@@ -1,0 +1,115 @@
+# FRE-275 — Eval override: production-equivalent dual-instance stack
+#
+# Layered on top of docker-compose.cloud.yml.  Adds two seshat-gateway
+# instances (control + treatment) to the existing cloud-sim network so
+# Docker DNS, GNU procps, and /app/* paths all match the prod container.
+#
+# Usage:
+#
+#   docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml \
+#     up -d seshat-gateway-control seshat-gateway-treatment
+#
+#   curl -fsS http://localhost:9002/health   # control
+#   curl -fsS http://localhost:9003/health   # treatment
+#
+#   docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml \
+#     down seshat-gateway-control seshat-gateway-treatment
+#
+# Reusable for FRE-263 (PIVOT-4) and FRE-264 (PIVOT-5) evals.
+
+# Shared base — referenced by both services below via YAML anchor.
+# Not a real service; docker compose ignores top-level x-* keys.
+x-seshat-gateway-eval-base: &seshat-gateway-eval-base
+  build:
+    context: .
+    dockerfile: Dockerfile.gateway
+  image: seshat-gateway:latest
+  depends_on:
+    postgres:
+      condition: service_healthy
+    neo4j:
+      condition: service_healthy
+    elasticsearch:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    embeddings:
+      condition: service_healthy
+    reranker:
+      condition: service_healthy
+    searxng:
+      condition: service_healthy
+  volumes:
+    # Reuse cloud volumes so FRE-277 cleanup covers eval captures too
+    - seshat_captures_cloud:/app/telemetry/captains_log/captures
+    - seshat_workspace_cloud:/app/agent_workspace
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9001/health')"]
+    interval: 10s
+    timeout: 5s
+    retries: 5
+    start_period: 60s
+  mem_limit: 768m
+  cpus: 1.0
+  networks:
+    - cloud-sim
+  # Eval is one-shot; do not mask crashes with silent restarts
+  restart: "no"
+
+services:
+  # Control — curated tools only, primitives disabled
+  seshat-gateway-control:
+    <<: *seshat-gateway-eval-base
+    container_name: cloud-sim-seshat-gateway-control
+    environment:
+      # Infrastructure wiring (mirrors docker-compose.cloud.yml seshat-gateway)
+      AGENT_DATABASE_URL: postgresql+asyncpg://agent:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@postgres:5432/personal_agent
+      AGENT_NEO4J_URI: bolt://neo4j:7687
+      AGENT_NEO4J_USER: neo4j
+      AGENT_NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD required}
+      AGENT_ELASTICSEARCH_URL: http://elasticsearch:9200
+      AGENT_EVENT_BUS_REDIS_URL: redis://redis:6379/0
+      AGENT_SEARXNG_BASE_URL: http://searxng:8080
+      AGENT_MODEL_CONFIG_PATH: /app/config/models.eval.yaml
+      AGENT_ANTHROPIC_API_KEY: ${AGENT_ANTHROPIC_API_KEY}
+      AGENT_OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY}
+      API_HOST: 0.0.0.0
+      API_PORT: "9001"
+      AGENT_LOG_LEVEL: "${AGENT_LOG_LEVEL:-info}"
+      # Eval-specific: auth and MCP off; primitives off (baseline)
+      AGENT_GATEWAY_AUTH_ENABLED: "false"
+      AGENT_MCP_GATEWAY_ENABLED: "false"
+      AGENT_PRIMITIVE_TOOLS_ENABLED: "false"
+      AGENT_PREFER_PRIMITIVES: "false"
+    ports:
+      # Host 9002 → container 9001 (uvicorn port is hardcoded in Dockerfile.gateway)
+      - "127.0.0.1:9002:9001"
+
+  # Treatment — primitives + skill docs enabled, approval gate off
+  seshat-gateway-treatment:
+    <<: *seshat-gateway-eval-base
+    container_name: cloud-sim-seshat-gateway-treatment
+    environment:
+      AGENT_DATABASE_URL: postgresql+asyncpg://agent:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@postgres:5432/personal_agent
+      AGENT_NEO4J_URI: bolt://neo4j:7687
+      AGENT_NEO4J_USER: neo4j
+      AGENT_NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD required}
+      AGENT_ELASTICSEARCH_URL: http://elasticsearch:9200
+      AGENT_EVENT_BUS_REDIS_URL: redis://redis:6379/0
+      AGENT_SEARXNG_BASE_URL: http://searxng:8080
+      AGENT_MODEL_CONFIG_PATH: /app/config/models.eval.yaml
+      AGENT_ANTHROPIC_API_KEY: ${AGENT_ANTHROPIC_API_KEY}
+      AGENT_OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY}
+      API_HOST: 0.0.0.0
+      API_PORT: "9001"
+      AGENT_LOG_LEVEL: "${AGENT_LOG_LEVEL:-info}"
+      # Eval-specific: auth and MCP off; primitives on + auto-approve bash
+      AGENT_GATEWAY_AUTH_ENABLED: "false"
+      AGENT_MCP_GATEWAY_ENABLED: "false"
+      AGENT_PRIMITIVE_TOOLS_ENABLED: "true"
+      AGENT_PREFER_PRIMITIVES: "true"
+      # Required: without this, bash commands block indefinitely for PWA approval
+      AGENT_APPROVAL_UI_ENABLED: "false"
+    ports:
+      # Host 9003 → container 9001
+      - "127.0.0.1:9003:9001"

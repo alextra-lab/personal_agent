@@ -86,7 +86,7 @@ These are independent of the eval and of each other. They are surfaced by the ev
 
 ---
 
-## Wave B — Eval infrastructure (parallel, ~2–3 days)
+## Wave B — Eval infrastructure ✅ COMPLETE (2026-04-27)
 
 These two are independent. Both must land before Wave C can validate skill recipes.
 
@@ -192,7 +192,7 @@ Document expected output shape per prompt in `prompts.yaml` or alongside in `exp
 1. Bring up `docker-compose.eval.yml` stack
 2. Run full eval:
    ```bash
-   PERSONAL_AGENT_EVAL=1 uv run python tests/evaluation/run_primitive_tools_eval.py \
+   PERSONAL_AGENT_EVAL=1 uv run python -m tests.evaluation.run_primitive_tools_eval \
      --control-url http://localhost:9002 \
      --treatment-url http://localhost:9003 \
      --es-url http://localhost:9200 \

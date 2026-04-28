@@ -14,40 +14,53 @@ All three criteria must pass for PIVOT-3 to be declared successful:
 2. **Zero dead-ends**: Zero "model could not figure out primitive equivalent" failures (hand-graded ❌ with this specific failure mode).
 3. **Per-tool gate**: If primitive < curated for a specific tool category, that category's tools are moved to the PIVOT-4 keep list for re-evaluation.
 
-## Setup
+## Setup — production-equivalent dual-instance stack
 
-Two service instances must be running simultaneously. Use separate terminals.
+Bring up the cloud infrastructure plus two seshat-gateway instances.
+Both run inside the `cloud-sim` Docker network, so Docker DNS, GNU
+`procps`, and `/app/*` paths all match the production container.
 
 ```bash
-# Terminal 1 — Control (curated tools only, no primitives)
-AGENT_SERVICE_PORT=9000 AGENT_PRIMITIVE_TOOLS_ENABLED=false AGENT_PREFER_PRIMITIVES=false make dev
-
-# Terminal 2 — Treatment (primitives + skill docs)
-AGENT_SERVICE_PORT=9001 AGENT_PRIMITIVE_TOOLS_ENABLED=true AGENT_PREFER_PRIMITIVES=true AGENT_APPROVAL_UI_ENABLED=false make dev
+docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml \
+  up -d seshat-gateway-control seshat-gateway-treatment
 ```
 
-> **CRITICAL**: `AGENT_APPROVAL_UI_ENABLED=false` is required for the treatment instance.
-> Without it, `bash` commands not in the auto-approve list will block indefinitely
-> waiting for PWA approval input, causing the eval to hang.
+Wait until both report healthy (start-up takes ~60 s):
+
+```bash
+until curl -fsS http://localhost:9002/health && curl -fsS http://localhost:9003/health; do
+  echo "waiting..."; sleep 5
+done
+```
 
 ## Run the Eval
 
 ```bash
-PERSONAL_AGENT_EVAL=1 uv run python tests/evaluation/run_primitive_tools_eval.py \
-  --control-url http://localhost:9000 \
-  --treatment-url http://localhost:9001 \
+PERSONAL_AGENT_EVAL=1 uv run python -m tests.evaluation.run_primitive_tools_eval \
+  --control-url http://localhost:9002 \
+  --treatment-url http://localhost:9003 \
+  --es-url http://localhost:9200 \
   --output-dir telemetry/evaluation/EVAL-primitive-tools/run-$(date +%Y-%m-%d)/
 ```
 
 All flags (defaults shown):
 
 ```
---prompts      telemetry/evaluation/EVAL-primitive-tools/prompts.yaml
---control-url  http://localhost:9000
---treatment-url http://localhost:9001
---output-dir   telemetry/evaluation/EVAL-primitive-tools/run-<timestamp>/
---delay        2        (seconds between prompt pairs)
+--prompts        telemetry/evaluation/EVAL-primitive-tools/prompts.yaml
+--control-url    http://localhost:9000
+--treatment-url  http://localhost:9001
+--es-url         http://localhost:9200
+--output-dir     telemetry/evaluation/EVAL-primitive-tools/run-<timestamp>/
+--delay          2        (seconds between prompt pairs)
 --session-prefix eval-fre262
+--skip           (prompt IDs to omit, e.g. --skip es-04 ls-01)
+```
+
+## Tear Down
+
+```bash
+docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml \
+  down seshat-gateway-control seshat-gateway-treatment
 ```
 
 ## Output
@@ -56,10 +69,12 @@ Each run writes two files to `--output-dir`:
 
 | File | Contents |
 |------|----------|
-| `results.json` | Raw results — one object per prompt with full responses and latency |
-| `report.md` | Side-by-side markdown table for human grading |
+| `results.json` | Raw results — one object per prompt with responses, latency, and token metrics |
+| `report.md` | Side-by-side table with token counts, turn counts, cache hit %, and Quality column |
 
-Session IDs are embedded in `results.json` (format: `eval-fre262-ctrl-{id}` / `eval-fre262-trt-{id}`) so full traces can be looked up in Elasticsearch or Kibana.
+`trace_id` and `session_id` are in each result object — use them to look up full
+traces in Elasticsearch or Kibana. Token metrics are fetched automatically from ES
+after each prompt pair completes.
 
 ## Grading Guide
 

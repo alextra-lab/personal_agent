@@ -86,7 +86,13 @@ These are independent of the eval and of each other. They are surfaced by the ev
 
 ---
 
-## Wave B — Eval infrastructure ✅ COMPLETE (2026-04-27)
+## Wave B — Eval infrastructure ✅ COMPLETE (2026-04-28, main @ eefee54)
+
+Two additional fixes landed during smoke-run verification:
+- `AGENT_OWNER_EMAIL` required alongside `AGENT_GATEWAY_AUTH_ENABLED=false` — added to docker-compose.eval.yml
+- `TelemetryChecker` used `trace_id` (text field) in a term query; corrected to `trace_id.keyword`
+
+Smoke gate passed: fetch-01 via dual-container stack → ctrl=10,510 tok / 2 turns, trt=11,774 tok / 2 turns.
 
 These two are independent. Both must land before Wave C can validate skill recipes.
 

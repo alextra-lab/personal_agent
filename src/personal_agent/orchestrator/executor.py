@@ -1270,10 +1270,19 @@ async def step_llm_call(
         )
 
     # Inject skill library docs when prefer_primitives_enabled is set (ADR-0063 §D7).
+    # FRE-282: pass the user message for keyword-based routing — injects bash.md
+    # plus one relevant skill doc (~2-3K tokens) rather than all 9 (~8.7K tokens).
     # Placed before dynamic content (memory/decomposition) to stay in the cached prefix.
     from personal_agent.orchestrator.skills import get_skill_block
 
-    skill_block = get_skill_block()
+    _user_message: str | None = None
+    for _msg in reversed(ctx.messages):
+        if isinstance(_msg, dict) and _msg.get("role") == "user":
+            _content = _msg.get("content", "")
+            _user_message = _content if isinstance(_content, str) else str(_content)
+            break
+
+    skill_block = get_skill_block(message=_user_message)
     if skill_block:
         if system_prompt:
             system_prompt = f"{system_prompt}\n\n{skill_block}"

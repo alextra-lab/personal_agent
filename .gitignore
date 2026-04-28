@@ -64,6 +64,12 @@ telemetry/evaluation/EVAL-cat-*/
 # Short-lived harness iteration dirs (regeneratable; keep named EVAL-NN-* baselines tracked)
 telemetry/evaluation/EVAL-harness-iter*/
 
+# Single-prompt retest runs (debugging artifacts from eval iteration — not baselines)
+telemetry/evaluation/EVAL-primitive-tools/retest-*/
+
+# Empty or incomplete run directories
+telemetry/evaluation/EVAL-primitive-tools/run-2026-04-27-1716/
+
 # Evaluation research results ARE tracked — they back architectural decisions
 # EVAL-NN-*/ directories (named baselines) are committed
 

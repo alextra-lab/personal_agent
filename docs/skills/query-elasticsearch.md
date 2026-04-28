@@ -45,6 +45,21 @@ Most important fields for queries:
 | `turn_count` | long | Number of LLM turns in request |
 | `model` / `model_id` | keyword | LLM model used |
 
+## Discovery step — run before every unfamiliar query
+
+**Never guess index names or field names.** Run these two commands first:
+
+```bash
+# 1. Verify the index pattern exists and has data
+curl -s 'http://elasticsearch:9200/_cat/indices?v&h=index,docs.count' | grep agent
+
+# 2. Get the exact field names for the index you'll query
+curl -s 'http://elasticsearch:9200/agent-logs-*/_mapping' \
+  | jq 'to_entries[0].value.mappings.properties | keys | sort'
+```
+
+Only write the ES|QL query once you've confirmed the index exists and identified the exact field names. This prevents the most common failures: 404s from wrong index patterns and empty results from mistyped field names.
+
 ## Querying Elasticsearch (ES|QL)
 
 ES|QL is the preferred query language. Send a POST to `_query`:
@@ -87,6 +102,12 @@ curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
 curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
   -H 'Content-Type: application/json' \
   -d '{"query": "FROM agent-logs-* | WHERE event_type == \"tool_call_started\" AND tool_name == \"query_elasticsearch\" AND @timestamp > NOW()-24hours | STATS count=COUNT(*)"}' \
+  | jq '.values'
+
+# Find traces where the loop gate fired (consecutive or identity blocks)
+curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"tool_loop_gate\" AND decision IN (\"warn_consecutive\",\"block_consecutive\",\"block_identity\") AND @timestamp > NOW()-7days | STATS max_count=MAX(consecutive_count) BY trace_id, tool_name | SORT max_count DESC | LIMIT 10"}' \
   | jq '.values'
 ```
 
@@ -137,6 +158,10 @@ print(json.dumps(captures, default=str, indent=2))
 | `term` query on `trace_id` text field | Use `trace_id.keyword` for exact match in JSON queries |
 | No LIMIT on large queries | Always add `\| LIMIT N` to ES|QL; default returns all rows |
 | `_search` with Lucene syntax | Prefer ES|QL (`_query`) — simpler and more predictable |
+| Wrong time boundary for "today" | "Today" is ambiguous. Use `@timestamp > NOW()-24hours` (rolling window) instead of a midnight boundary — events from earlier in the day may be in yesterday's UTC index |
+| `=` instead of `==` for equality | ES|QL uses `==` not `=`. `WHERE level = "ERROR"` is a syntax error; use `WHERE level == "ERROR"` |
+| Single quotes for strings | ES|QL requires double quotes: `WHERE level == "ERROR"` not `WHERE level == 'ERROR'` |
+| Guessing event_type values | Verify with: `FROM agent-logs-* \| STATS count=COUNT(*) BY event_type \| SORT count DESC \| LIMIT 20`. Known values: `tool_call_started`, `tool_call_completed`, `litellm_request_complete`, `tool_loop_gate`, `session_created`, `gateway_request` |
 
 ## Governance
 

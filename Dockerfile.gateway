@@ -42,6 +42,7 @@ COPY pyproject.toml uv.lock ./
 # Copy source code
 COPY src/ src/
 COPY config/ config/
+COPY docs/skills/ docs/skills/
 COPY docker/mcp/ docker/mcp/
 RUN chmod +x docker/mcp/run-gateway.sh
 

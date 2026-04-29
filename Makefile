@@ -32,13 +32,27 @@ else
     SERVICE_PORT ?= 9000
 endif
 
-# Cloud compose always available for VPS-specific targets regardless of ENV
-COMPOSE_CLOUD := docker compose -f docker-compose.cloud.yml
+# ─── VPS execution context ────────────────────────────────────────────────────
+# Detects whether make is running ON the VPS (deploy path exists locally) or
+# on a dev machine that needs to SSH in. All credentials stay in env vars —
+# nothing is hardcoded here.
+#   VPS_DEPLOY_PATH  path to repo on VPS (default: /opt/seshat)
+#   VPS_SSH_HOST     SSH alias/host for the VPS (required on dev machines)
+VPS_DEPLOY_PATH ?= /opt/seshat
+SSH_HOST        := $(VPS_SSH_HOST)
+
+_ON_VPS := $(shell test -d $(VPS_DEPLOY_PATH) && echo 1 || echo 0)
+
+ifeq ($(_ON_VPS),1)
+    CLOUD_EXEC = docker compose -f $(VPS_DEPLOY_PATH)/docker-compose.cloud.yml
+else
+    CLOUD_EXEC = ssh $(SSH_HOST) "cd $(VPS_DEPLOY_PATH) && docker compose -f docker-compose.cloud.yml"
+endif
 
 .PHONY: help services up down stop restart ps logs rebuild shell health \
         infra-up infra-down dev \
         deploy build build-full vps-bootstrap \
-        tunnel-up tunnel-down tunnel-status \
+        tunnel-up tunnel-down tunnel-status _tunnel-guard \
         sandbox-build \
         test test-integration test-all test-file test-verbose test-k test-cov eval \
         mypy ruff-check ruff-format
@@ -151,15 +165,21 @@ vps-bootstrap:
 	@$(MAKE) build-full
 
 # ─── Cloudflare tunnel (VPS cloudflared container) ───────────────────────────
+# Works from the VPS (runs docker compose directly) or from a dev machine
+# (SSHes in). Set VPS_SSH_HOST in your environment for the latter.
 
-tunnel-up:
-	@$(COMPOSE_CLOUD) start cloudflared
+_tunnel-guard:
+	@[ "$(_ON_VPS)" = "1" ] || [ -n "$(SSH_HOST)" ] || \
+	  { echo "ERROR: VPS_SSH_HOST is not set — required to reach the VPS from this machine"; exit 1; }
 
-tunnel-down:
-	@$(COMPOSE_CLOUD) stop cloudflared
+tunnel-up: _tunnel-guard
+	@$(CLOUD_EXEC) start cloudflared
 
-tunnel-status:
-	@$(COMPOSE_CLOUD) ps cloudflared
+tunnel-down: _tunnel-guard
+	@$(CLOUD_EXEC) stop cloudflared
+
+tunnel-status: _tunnel-guard
+	@$(CLOUD_EXEC) ps cloudflared
 
 # ─── Tests ───────────────────────────────────────────────────────────────────
 # SAFE for agents and CI:

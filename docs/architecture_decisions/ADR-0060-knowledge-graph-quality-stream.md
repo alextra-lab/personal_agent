@@ -1,6 +1,6 @@
 # ADR-0060: Knowledge Graph Quality Stream
 
-**Status**: Proposed — In Review
+**Status**: Accepted
 **Date**: 2026-04-29
 **Deciders**: Project owner
 **Depends on**: ADR-0041 (Event Bus — Redis Streams), ADR-0042 (Knowledge Graph Freshness via Access Tracking), ADR-0043 (Three-Layer Architectural Separation), ADR-0053 (Gate Feedback-Loop Monitoring Framework — template), ADR-0054 (Feedback Stream Bus Convention), ADR-0057 (Insights & Pattern Analysis — establishes anomaly→proposal pattern)
@@ -77,7 +77,7 @@ The existing direct `CaptainLogManager.save_entry()` calls in `freshness_review.
 
 ### D2: Severity contract
 
-The `Anomaly.severity` field retains its free-string type ("high" / "medium") for backward compatibility. ADR-0060 formalises the meaning:
+The `Anomaly.severity` field is narrowed to `Literal["high", "medium"]` in `quality_monitor.py`. Both existing call-sites already use only those two values, so this is a zero-risk type-safety upgrade. ADR-0060 formalises the meaning:
 
 | Severity | Captain's Log | Phase 2 governance |
 |---|---|---|
@@ -429,7 +429,7 @@ Out of scope:
 - Backfill of historical anomalies to JSONL — orthogonal; the rolling window provides context.
 - Direct Neo4j tier lookup in reranking — freshness-float-derived tier is accurate enough for v1.
 - Per-relationship-type tier penalties in reranking — entity-level tier signal first, relationship level in follow-on.
-- ADR-0060 amendment to `Anomaly.severity` typing — free-string retained; a future ADR may formalize as `Literal`.
+- Per-relationship-type tier penalties in reranking — entity-level tier signal first, relationship level in follow-on ADR.
 
 ---
 
@@ -504,17 +504,18 @@ Out of scope:
 
 | Order | Work | Tier |
 |-------|------|------|
-| 1 | `STREAM_GRAPH_QUALITY_ANOMALY`, `STREAM_MEMORY_STALENESS_REVIEWED`, `CG_GRAPH_MONITOR` constants + `GraphQualityAnomalyEvent` + `MemoryStalenessReviewedEvent` + parse arms in `events/models.py` | Tier-3: Haiku |
-| 2 | `staleness_tier_from_freshness_score()` helper in `memory/freshness.py` | Tier-3: Haiku |
-| 3 | Config flags: `graph_quality_stream_enabled`, `freshness_tier_reranking_enabled`, `freshness_tier_factors`, `graph_quality_governance_enabled` | Tier-3: Haiku |
-| 4 | `GraphQualityAnomaly` + `GraphStalenessReviewSummary` dataclasses + `_dominant_tier()` helper | Tier-3: Haiku |
-| 5 | Durable JSONL write + bus publish in `BrainstemScheduler._run_quality_monitoring()` | Tier-2: Sonnet |
-| 6 | Durable JSONL write + bus publish in `run_freshness_review()` (after existing direct-write calls) | Tier-2: Sonnet |
-| 7 | `build_graph_quality_captain_log_handler()` in `events/pipeline_handlers.py` (handles both streams) | Tier-2: Sonnet |
-| 8 | Wire `cg:graph-monitor` subscription in `service/app.py` lifespan behind `graph_quality_stream_enabled` flag | Tier-3: Haiku |
-| 9 | Tier multiplier block in `memory/service.py:_calculate_relevance_scores()` | Tier-2: Sonnet |
-| 10 | `FEEDBACK_STREAM_ARCHITECTURE.md` Stream 6 + Stream 8 row updates | Tier-3: Haiku |
-| 11 | Unit tests: fingerprint determinism, durable-before-bus ordering, CL entry shape, tier threshold boundaries, zero-access entity guard | Tier-2: Sonnet |
+| 1 | `Anomaly.severity: Literal["high", "medium"]` in `quality_monitor.py` (D2 type enforcement) | Tier-3: Haiku |
+| 2 | `STREAM_GRAPH_QUALITY_ANOMALY`, `STREAM_MEMORY_STALENESS_REVIEWED`, `CG_GRAPH_MONITOR` constants + `GraphQualityAnomalyEvent` + `MemoryStalenessReviewedEvent` + parse arms in `events/models.py` | Tier-3: Haiku |
+| 3 | `staleness_tier_from_freshness_score()` helper in `memory/freshness.py` | Tier-3: Haiku |
+| 4 | Config flags: `graph_quality_stream_enabled`, `freshness_tier_reranking_enabled`, `freshness_tier_factors`, `graph_quality_governance_enabled` | Tier-3: Haiku |
+| 5 | `GraphQualityAnomaly` + `GraphStalenessReviewSummary` dataclasses + `_dominant_tier()` helper | Tier-3: Haiku |
+| 6 | Durable JSONL write + bus publish in `BrainstemScheduler._run_quality_monitoring()` | Tier-2: Sonnet |
+| 7 | Durable JSONL write + bus publish in `run_freshness_review()` (after existing direct-write calls) | Tier-2: Sonnet |
+| 8 | `build_graph_quality_captain_log_handler()` in `events/pipeline_handlers.py` (handles both streams) | Tier-2: Sonnet |
+| 9 | Wire `cg:graph-monitor` subscription in `service/app.py` lifespan behind `graph_quality_stream_enabled` flag | Tier-3: Haiku |
+| 10 | Tier multiplier block in `memory/service.py:_calculate_relevance_scores()` | Tier-2: Sonnet |
+| 11 | `FEEDBACK_STREAM_ARCHITECTURE.md` Stream 6 + Stream 8 row updates | Tier-3: Haiku |
+| 12 | Unit tests: `Anomaly.severity` Literal exhaustiveness, fingerprint determinism, durable-before-bus ordering, CL entry shape, tier threshold boundaries, zero-access entity guard | Tier-2: Sonnet |
 
 ### Phase 2 — Governance response (flag default `False`)
 
@@ -549,7 +550,7 @@ The Execution Layer touches are minimal: both are one-call additions at existing
 
 ## Open Questions
 
-1. **Anomaly severity Literal.** The `Anomaly.severity` field is a free string today. A follow-on change could narrow it to `Literal["info", "medium", "high"]` for static safety. Out of scope here — this ADR's `cg:graph-monitor` handler defensively checks `event.severity == "high"` and falls through to KNOWLEDGE_QUALITY for any other value.
+1. **`GraphQualityAnomalyEvent.severity` Literal width.** The `Anomaly` class is narrowed to `Literal["high", "medium"]` in Phase 1. The bus event field uses the same Literal. If a future check introduces a third severity value, bump `schema_version` on the event and extend the handler match.
 2. **Tier factor calibration.** The default 0.3 factor for DORMANT is conservative. If promoted-recall quality metrics (available after 30 days of Phase 1 data) show over-suppression, adjust `freshness_tier_factors.dormant` in `.env`. No code change needed.
 3. **`staleness_tier_from_freshness_score` threshold drift.** The thresholds (0.50 / 0.25 / 0.10) are calibrated for `half_life_days=30`. If the operator changes `half_life_days`, the tier derivation will drift. Long-term fix: expose configurable tier-score thresholds. Low priority until there is evidence of miscalibration.
 4. **Multiple anomalies per day — proposal volume.** On a degraded day the daily run may produce 4-6 anomalies, each becoming a Captain's Log entry. ADR-0030 dedup (`seen_count` increment) keeps the file count bounded across days. If entry density becomes noisy in Linear, the promotion gate (`seen_count ≥ 3`, `age ≥ 7 d`) acts as a natural throttle.

@@ -168,7 +168,7 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 | ADR | Title | Status |
 |-----|-------|--------|
 | 0061 | Within-Session Progressive Context Compression | Approved (FRE-251 — blocked by 0059) |
-| 0060 | Knowledge Graph Quality Stream | Proposed — In Review (FRE-250 — ADR drafted 2026-04-29) |
+| 0060 | Knowledge Graph Quality Stream | Accepted (FRE-250 — ADR accepted 2026-04-29) |
 | 0059 | Context Quality Monitoring Stream | Accepted (Implemented — FRE-249 done 2026-04-27) |
 | 0058 | Self-Improvement Pipeline Stream | Accepted (Implemented — FRE-248 done 2026-04-25) |
 | 0057 | Insights & Pattern Analysis Stream | Accepted (Implemented — FRE-247 2026-04-24) |

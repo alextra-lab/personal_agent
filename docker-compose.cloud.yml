@@ -276,6 +276,7 @@ services:
       AGENT_CF_ACCESS_CLIENT_SECRET: ${CF_ACCESS_CLIENT_SECRET}
       # Use cloud model config (embedding/reranker point to Docker service hostnames)
       AGENT_MODEL_CONFIG_PATH: "${AGENT_MODEL_CONFIG_PATH:-/app/config/models.cloud.yaml}"
+      AGENT_CLOUD_WEEKLY_BUDGET_USD: "${AGENT_CLOUD_WEEKLY_BUDGET_USD:-10.0}"
       # Cloud LLM API keys (injected from VPS .env)
       AGENT_ANTHROPIC_API_KEY: ${AGENT_ANTHROPIC_API_KEY}
       AGENT_OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY}

@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-28 (FULL PIVOT-4 verdict — FRE-283/FRE-284 fixed bash contract; G3 eval 19/20 quality 1.39× cost; all 8 tools deprecated)
+> **Last updated**: 2026-04-29 (FRE-249 marked Done — ADR-0059 implemented 2026-04-27; FRE-264 marked Done — implemented 2026-04-26; ADR-0060 draft in review FRE-250)
 > **Implementation sequence**: `docs/superpowers/specs/2026-04-22-implementation-sequence-wave-plan-design.md`
 
 ---
@@ -20,7 +20,7 @@ Root cause of PARTIAL PIVOT-4 identified and fixed:
 
 **FRE-263 scope expanded to all 8 tools.** See updated issue.
 **FRE-277** (eval cleanup script) is open/approved — optional housekeeping.
-**Normal sequencing resumes** at FRE-263 (PIVOT-4, full scope), then Wave 3 (FRE-249, FRE-250).
+**Normal sequencing resumes** at FRE-263 (PIVOT-4, full scope), then Wave 3 (FRE-249 ✅ done 2026-04-27, FRE-250 in review).
 
 Eval: `telemetry/evaluation/EVAL-primitive-tools/run-g3-full-sonnet-2026-04-28T1930/EVAL_RESULT.md`
 ---
@@ -51,9 +51,9 @@ Ordered by recommended implementation sequence. All items Approved in Linear. De
 | ~~5~~ | ~~Self-Improvement Pipeline — formalize Streams 1-3~~ | ~~[FRE-248](https://linear.app/frenchforest/issue/FRE-248)~~ | ~~ADR-0058~~ | ~~Done 2026-04-25~~ |
 | ~~2.5-P1~~ | ~~ADR-0063 — Sever TaskType→tool-filter wire~~ | ~~[FRE-260](https://linear.app/frenchforest/issue/FRE-260)~~ | ~~ADR-0063 §D1~~ | ~~Done 2026-04-25 — verified in prod; 48h gate active~~ |
 | ~~2.5-P2~~ | ~~ADR-0063 — Four primitives + sandbox + action-boundary~~ | ~~[FRE-261](https://linear.app/frenchforest/issue/FRE-261)~~ | ~~ADR-0063 §D2-D3~~ | ~~Done 2026-04-27~~ |
-| 2.5-P5 | ADR-0063 — Loop gate signal split + model_config fix *(parallel to P2/P3/P4)* | [FRE-264](https://linear.app/frenchforest/issue/FRE-264) | ADR-0063 §D5-D6 | FRE-260 |
-| 6 | Context Quality — compaction full loop | [FRE-249](https://linear.app/frenchforest/issue/FRE-249) | ADR-0059 | ~~FRE-245~~, ~~FRE-244~~ |
-| 7 | Knowledge Graph Quality — consolidation + decay→reranking | [FRE-250](https://linear.app/frenchforest/issue/FRE-250) | ADR-0060 | ~~FRE-245~~, ~~FRE-247~~ |
+| ~~2.5-P5~~ | ~~ADR-0063 — Loop gate signal split + model_config fix *(parallel to P2/P3/P4)*~~ | ~~[FRE-264](https://linear.app/frenchforest/issue/FRE-264)~~ | ~~ADR-0063 §D5-D6~~ | ~~Done 2026-04-26~~ |
+| ~~6~~ | ~~Context Quality — compaction full loop~~ | ~~[FRE-249](https://linear.app/frenchforest/issue/FRE-249)~~ | ~~ADR-0059~~ | ~~Done 2026-04-27 — ADR accepted + implemented~~ |
+| **7** | **Knowledge Graph Quality — consolidation + decay→reranking** | [FRE-250](https://linear.app/frenchforest/issue/FRE-250) | ADR-0060 | ~~FRE-245~~, ~~FRE-247~~ |
 | ~~2.5-P3~~ | ~~ADR-0063 — Skill docs + model evaluation~~ | ~~[FRE-262](https://linear.app/frenchforest/issue/FRE-262)~~ | ~~ADR-0063 §D7~~ | ~~Done 2026-04-28 — FULL PIVOT-4 after FRE-283/FRE-284 fixes~~ |
 | 8 | Within-Session Progressive Context Compression | [FRE-251](https://linear.app/frenchforest/issue/FRE-251) | ADR-0061 | FRE-249 |
 | ~~2.5-P4~~ | ~~ADR-0063 — Flag-gated deprecation of all 8 legacy tools~~ | ~~[FRE-263](https://linear.app/frenchforest/issue/FRE-263)~~ | ~~ADR-0063 §D4~~ | ~~Done 2026-04-28 — 2-week stability window until 2026-05-12~~ |
@@ -168,8 +168,8 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 | ADR | Title | Status |
 |-----|-------|--------|
 | 0061 | Within-Session Progressive Context Compression | Approved (FRE-251 — blocked by 0059) |
-| 0060 | Knowledge Graph Quality Stream | Approved (FRE-250 — blocked by 0054, 0057) |
-| 0059 | Context Quality Monitoring Stream | Approved (FRE-249 — blocked by 0054, 0056) |
+| 0060 | Knowledge Graph Quality Stream | Proposed — In Review (FRE-250 — ADR drafted 2026-04-29) |
+| 0059 | Context Quality Monitoring Stream | Accepted (Implemented — FRE-249 done 2026-04-27) |
 | 0058 | Self-Improvement Pipeline Stream | Accepted (Implemented — FRE-248 done 2026-04-25) |
 | 0057 | Insights & Pattern Analysis Stream | Accepted (Implemented — FRE-247 2026-04-24) |
 | 0056 | Error Pattern Monitoring Stream | Approved (FRE-244 — blocked by 0054) |

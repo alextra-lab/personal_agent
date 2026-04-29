@@ -1,6 +1,6 @@
 # Feedback Stream Architecture
 
-> **Status**: Living document — updated 2026-04-27 (ADR-0059 implemented 2026-04-27 via FRE-249; ADR-0055 drafted, In Review; ADR-0056 implemented 2026-04-24, ADR-0057 implemented 2026-04-24)
+> **Status**: Living document — updated 2026-04-29 (ADR-0060 drafted In Review via FRE-250; ADR-0059 implemented 2026-04-27; ADR-0056/0057 implemented 2026-04-24)
 > **Context**: Surfaced during FRE-233 (ADR-0053) development
 > **Owner**: Project owner
 
@@ -106,14 +106,14 @@ All nine feedback streams, their current state, and their target state after ADR
 ### Stream 6: Memory Access Freshness
 - **Source:** Every Neo4j read in `MemoryService`
 - **Collection:** `MemoryAccessedEvent` on `stream:memory.accessed`
-- **Processing:** `FreshnessConsumer` batches → Neo4j `last_accessed_at`, `access_count` writes
-- **Signal:** `StalenessTier` per entity (WARM/COOLING/COLD/DORMANT)
-- **Action:** Weekly freshness review → `CaptainLogEntry` for dormant entities → Linear
+- **Processing:** `FreshnessConsumer` batches → Neo4j `last_accessed_at`, `access_count` writes; `compute_freshness()` scalar feeds `_calculate_relevance_scores()` (ADR-0042 Step 5 ✅)
+- **Signal:** `StalenessTier` per entity (WARM/COOLING/COLD/DORMANT); decay float already in reranking; `stream:memory.staleness_reviewed` weekly summary (ADR-0060)
+- **Action:** Weekly freshness review → `CaptainLogEntry` for dormant entities → Linear (existing direct-write); `MemoryStalenessReviewedEvent` → `cg:graph-monitor` → trend CL entry (ADR-0060 Phase 1); `StalenessTier` multiplier in recall reranking (ADR-0060 D5, default-on)
 - **Human loop:** Yes (via Captain's Log promotion)
-- **Bus?** ✅ Yes (consumer)
-- **ADR:** ADR-0042
+- **Bus?** ✅ Yes (consumer + producer — ADR-0060 adds `stream:memory.staleness_reviewed` publish)
+- **ADR:** ADR-0042 (all 8 steps complete) + **ADR-0060 (tier reranking + review bus event, FRE-250)**
 - **Project:** Knowledge Graph Quality
-- **Gap:** Decay scores computed but not used in recall reranking
+- **Gap:** Closed by FRE-250 (tier multiplier default-on; review bus event default-on)
 
 ### Stream 7: Compaction Quality Detection
 - **Source:** Stage 7 (Budget) fires `log_compaction()` when context overflows; Stage 4b (Recall Controller) detects substring overlap with dropped entities
@@ -129,15 +129,15 @@ All nine feedback streams, their current state, and their target state after ADR
 
 ### Stream 8: Consolidation Quality Monitor
 - **Source:** `BrainstemScheduler._run_quality_monitoring()` — daily at 5 AM UTC
-- **Collection:** Neo4j entity/relationship metrics + ES extraction failure counts
-- **Processing:** `detect_anomalies()` against hardcoded targets
-- **Signal:** `quality_monitor_anomaly_detected` log to ES; `Anomaly` objects in memory
-- **Action:** Nothing — anomaly objects not forwarded anywhere
-- **Human loop:** No
-- **Bus?** ❌ No
-- **ADR:** None (FRE-23, FRE-32)
+- **Collection:** Neo4j entity/relationship metrics + ES extraction failure counts; 6 anomaly types (entity ratio, relationship density, duplicate rate, extraction failure rate, extraction spike, no-relationships)
+- **Processing:** `detect_anomalies()` against hardcoded targets → `GraphQualityAnomaly` per result
+- **Signal:** `quality_monitor_run_completed` log + `stream:graph.quality_anomaly` typed event (one per anomaly) + `telemetry/graph_quality/GQ-<YYYY-MM-DD>.jsonl` (ADR-0060)
+- **Action:** `cg:graph-monitor` → `CaptainLogEntry(RELIABILITY if severity=high, else KNOWLEDGE_QUALITY, SECOND_BRAIN)` (Phase 1); ALERT-severity → `ModeAdvisoryEvent` (Phase 2, flag-gated `False`)
+- **Human loop:** Yes (via Captain's Log promotion)
+- **Bus?** ✅ Yes (producer + consumer — ADR-0060)
+- **ADR:** **ADR-0060 (consumer path + governance, FRE-250)**
 - **Project:** Knowledge Graph Quality
-- **Gap:** Detection only — no response path
+- **Gap:** Closed by FRE-250 (Phase 1 default-on; Phase 2 flag-gated off pending 14 days of telemetry)
 
 ### Stream 9: Cost Anomaly Detection
 - **Source:** `InsightsEngine.detect_cost_anomalies()` — triggered by consolidation
@@ -207,9 +207,10 @@ PHASE 3 — COMPLETE PARTIAL STREAMS (depend on Phase 2)
 │   Depends on: ADR-0047, ADR-0054, ADR-0056 (error monitoring pattern)
 │   Project: Context Quality Monitoring
 │
-└── ADR-0060: Knowledge Graph Quality Stream [FRE-250]
-    Consolidation quality + cost anomaly → full feedback loop
-    Decay scores → recall reranking
+└── ADR-0060: Knowledge Graph Quality Stream [FRE-250 — Proposed, In Review 2026-04-29]
+    Consolidation quality anomalies → full feedback loop (stream:graph.quality_anomaly + cg:graph-monitor)
+    Freshness review → bus event (stream:memory.staleness_reviewed)
+    StalenessTier multiplier in recall reranking (default-on)
     Depends on: ADR-0042, ADR-0054, ADR-0057
     Project: Knowledge Graph Quality
 ```
@@ -239,9 +240,9 @@ PHASE 3 — COMPLETE PARTIAL STREAMS (depend on Phase 2)
 | 3. Promotion pipeline | Threshold | ✅ | ✅ | ADR-0030/0040 | Self-Improvement Pipeline |
 | 4. Insights engine | Patterns | ✅ | ✅ | ADR-0057 (Accepted, Implemented 2026-04-24) | Insights & Pattern Analysis |
 | 5. Mode manager | System metrics | ❌ → ✅ | ❌ → ✅ | ADR-0055 (Drafted, In Review) | System Health & Homeostasis |
-| 6. Memory freshness | Access patterns | ✅ | ⚠️ partial | ADR-0042 | Knowledge Graph Quality |
+| 6. Memory freshness | Access patterns | ✅ | ⚠️ → ✅ | ADR-0042 + ADR-0060 (In Review, FRE-250) | Knowledge Graph Quality |
 | 7. Compaction quality | Context loss | ✅ | ✅ | ADR-0047 D3 + ADR-0059 (Accepted, Implemented 2026-04-27) | Context Quality Monitoring |
-| 8. Consolidation quality | Graph health | ❌ | ❌ | None | Knowledge Graph Quality |
+| 8. Consolidation quality | Graph health | ❌ → ✅ | ❌ → ✅ | ADR-0060 (In Review, FRE-250) | Knowledge Graph Quality |
 | 9. Cost anomaly | Spend spikes | ✅ | ✅ | ADR-0057 (Accepted, Implemented 2026-04-24) | Insights & Pattern Analysis |
 | NEW. Gate monitoring | Pipeline decisions | ❌ → ✅ | ❌ → ✅ | ADR-0053 | Gate Health Monitoring |
 | 10. Error patterns | Error logs | ✅ | ✅ | ADR-0056 (Done 2026-04-24, FRE-244) | Error Pattern Monitoring |
@@ -270,7 +271,7 @@ PHASE 3 — COMPLETE PARTIAL STREAMS (depend on Phase 2)
 - FRE-247: ADR-0057 — Insights & Pattern Analysis (✅ Accepted, Implemented 2026-04-24)
 - FRE-248: ADR-0058 — Self-Improvement Pipeline Stream (✅ Accepted, Implemented 2026-04-25)
 - FRE-249: ADR-0059 — Context Quality Monitoring (✅ Accepted, Implemented 2026-04-27)
-- FRE-250: ADR-0060 — Knowledge Graph Quality (Needs Approval, blocked by FRE-245 + FRE-247)
+- FRE-250: ADR-0060 — Knowledge Graph Quality (Proposed — In Review 2026-04-29)
 - FRE-251: ADR-0061 — Within-Session Compression (Needs Approval, blocked by FRE-249)
 - FRE-252: Governance — Per-TaskType tool allowlist (Needs Approval, independent)
 - FRE-226: Agent self-updating skills / agentskills.io format (Approved, blocked by FRE-248)

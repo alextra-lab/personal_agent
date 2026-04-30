@@ -53,7 +53,7 @@ Ordered by recommended implementation sequence. All items Approved in Linear. De
 | ~~2.5-P2~~ | ~~ADR-0063 — Four primitives + sandbox + action-boundary~~ | ~~[FRE-261](https://linear.app/frenchforest/issue/FRE-261)~~ | ~~ADR-0063 §D2-D3~~ | ~~Done 2026-04-27~~ |
 | ~~2.5-P5~~ | ~~ADR-0063 — Loop gate signal split + model_config fix *(parallel to P2/P3/P4)*~~ | ~~[FRE-264](https://linear.app/frenchforest/issue/FRE-264)~~ | ~~ADR-0063 §D5-D6~~ | ~~Done 2026-04-26~~ |
 | ~~6~~ | ~~Context Quality — compaction full loop~~ | ~~[FRE-249](https://linear.app/frenchforest/issue/FRE-249)~~ | ~~ADR-0059~~ | ~~Done 2026-04-27 — ADR accepted + implemented~~ |
-| **7** | **Knowledge Graph Quality — consolidation + decay→reranking** | [FRE-250](https://linear.app/frenchforest/issue/FRE-250) | ADR-0060 | ~~FRE-245~~, ~~FRE-247~~ |
+| ~~7~~ | ~~Knowledge Graph Quality — consolidation + decay→reranking~~ | ~~[FRE-250](https://linear.app/frenchforest/issue/FRE-250)~~ | ~~ADR-0060~~ | ~~Done 2026-04-30 — ADR accepted + implemented (Streams 6 + 8 closed, tier reranking, Phase 2 governance flag-gated)~~ |
 | ~~2.5-P3~~ | ~~ADR-0063 — Skill docs + model evaluation~~ | ~~[FRE-262](https://linear.app/frenchforest/issue/FRE-262)~~ | ~~ADR-0063 §D7~~ | ~~Done 2026-04-28 — FULL PIVOT-4 after FRE-283/FRE-284 fixes~~ |
 | 8 | Within-Session Progressive Context Compression | [FRE-251](https://linear.app/frenchforest/issue/FRE-251) | ADR-0061 | FRE-249 |
 | ~~2.5-P4~~ | ~~ADR-0063 — Flag-gated deprecation of all 8 legacy tools~~ | ~~[FRE-263](https://linear.app/frenchforest/issue/FRE-263)~~ | ~~ADR-0063 §D4~~ | ~~Done 2026-04-28 — 2-week stability window until 2026-05-12~~ |
@@ -169,7 +169,7 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 | ADR | Title | Status |
 |-----|-------|--------|
 | 0061 | Within-Session Progressive Context Compression | Approved (FRE-251 — blocked by 0059) |
-| 0060 | Knowledge Graph Quality Stream | Accepted (FRE-250 — ADR accepted 2026-04-29) |
+| 0060 | Knowledge Graph Quality Stream | Accepted (Implemented — FRE-250 done 2026-04-30) |
 | 0059 | Context Quality Monitoring Stream | Accepted (Implemented — FRE-249 done 2026-04-27) |
 | 0058 | Self-Improvement Pipeline Stream | Accepted (Implemented — FRE-248 done 2026-04-25) |
 | 0057 | Insights & Pattern Analysis Stream | Accepted (Implemented — FRE-247 2026-04-24) |

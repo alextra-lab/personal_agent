@@ -1051,6 +1051,60 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # ADR-0060 — Knowledge Graph Quality Stream (Wave 3 — FRE-250)
+    graph_quality_stream_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable ADR-0060 knowledge graph quality stream. When True, "
+            "BrainstemScheduler._run_quality_monitoring() dual-writes detected "
+            "anomalies to telemetry/graph_quality/GQ-*.jsonl and publishes "
+            "GraphQualityAnomalyEvent on stream:graph.quality_anomaly; "
+            "run_freshness_review() publishes MemoryStalenessReviewedEvent on "
+            "stream:memory.staleness_reviewed. Both are consumed by cg:graph-monitor "
+            "to write Captain's Log entries. "
+            "Env var: AGENT_GRAPH_QUALITY_STREAM_ENABLED"
+        ),
+    )
+    freshness_tier_reranking_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable ADR-0060 §D5 StalenessTier multiplier in recall reranking. "
+            "When True, _calculate_relevance_scores() applies a tier factor to "
+            "the freshness score: DORMANT entities contribute 30%% of their raw "
+            "freshness weight. Default True — additive refinement of an existing "
+            "signal, no observable side effects other than improved recall quality. "
+            "Env var: AGENT_FRESHNESS_TIER_RERANKING_ENABLED"
+        ),
+    )
+    freshness_tier_factors: dict[str, float] = Field(
+        default_factory=lambda: {
+            "warm": 1.0,
+            "cooling": 0.85,
+            "cold": 0.60,
+            "dormant": 0.30,
+        },
+        description=(
+            "Per-tier multiplier applied to the freshness score during recall "
+            "reranking (ADR-0060 §D5). Keys are StalenessTier.value strings. "
+            "Defaults: warm=1.0, cooling=0.85, cold=0.60, dormant=0.30. "
+            "Adjust dormant upward if DORMANT entities are over-suppressed after "
+            "30+ days of Phase 1 data. No code change needed — set via env as "
+            "JSON: AGENT_FRESHNESS_TIER_FACTORS='{\"warm\":1.0,...}'. "
+            "Env var: AGENT_FRESHNESS_TIER_FACTORS"
+        ),
+    )
+    graph_quality_governance_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable ADR-0060 §D7 Phase 2 governance response for high-severity "
+            "graph quality anomalies. When True, cg:graph-monitor publishes a "
+            "ModeAdvisoryEvent(DEGRADED, 'consolidation') to stream:mode.transition "
+            "for each high-severity GraphQualityAnomalyEvent. Default False — flip "
+            "after 14 days of Phase 1 telemetry confirms false-positive rate < 20%%. "
+            "Env var: AGENT_GRAPH_QUALITY_GOVERNANCE_ENABLED"
+        ),
+    )
+
 
 _settings: AppConfig | None = None
 

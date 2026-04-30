@@ -158,3 +158,36 @@ def classify_staleness(
     if days_since_access <= cold_threshold:
         return StalenessTier.COLD
     return StalenessTier.DORMANT
+
+
+def staleness_tier_from_freshness_score(score: float) -> StalenessTier:
+    """Derive a staleness tier from a pre-computed freshness score (ADR-0060 §D5).
+
+    Avoids a second Neo4j round-trip in the reranking hot path by deriving the
+    tier from the already-fetched freshness float.  Uses approximate thresholds
+    calibrated for ``half_life_days=30`` (ADR-0042 default):
+
+    - WARM     ≥ 0.50  (accessed within ~30 days)
+    - COOLING  ≥ 0.25  (accessed within ~30–60 days)
+    - COLD     ≥ 0.10  (accessed within ~60–90 days)
+    - DORMANT  <  0.10  (last access >90 days ago or never accessed)
+
+    If ``half_life_days`` is changed from its default, the tier boundaries
+    will drift; adjust ``freshness_tier_factors`` in config instead of this
+    function to compensate.
+
+    Args:
+        score: Freshness score in [0.0, 1.0] from ``compute_freshness()``.
+            Callers must only invoke this for entities where ``score > 0.0``
+            (zero-access entities are excluded upstream at the call site).
+
+    Returns:
+        The ``StalenessTier`` corresponding to the score range.
+    """
+    if score >= 0.50:
+        return StalenessTier.WARM
+    if score >= 0.25:
+        return StalenessTier.COOLING
+    if score >= 0.10:
+        return StalenessTier.COLD
+    return StalenessTier.DORMANT

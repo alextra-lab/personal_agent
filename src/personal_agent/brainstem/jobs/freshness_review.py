@@ -321,3 +321,104 @@ async def run_freshness_review(memory_service: MemoryService | None, trace_id: s
                     error=str(exc),
                     exc_info=True,
                 )
+
+    # ADR-0060 §D8 Stream 6: new bus path (additive — direct CL writes above are retained)
+    if cfg.graph_quality_stream_enabled:
+        await _emit_staleness_reviewed_event(summary, iso, trace_id)
+
+
+async def _emit_staleness_reviewed_event(
+    summary: GraphStalenessSummary,
+    iso_week: str,
+    trace_id: str,
+) -> None:
+    """Dual-write staleness review summary to JSONL and publish bus event (ADR-0060 §D8).
+
+    Follows ADR-0054 D4 ordering: durable append first, bus publish second.
+    Bus failures are logged and swallowed (ADR-0054 D6).
+
+    Args:
+        summary: Aggregated staleness tier counts from Neo4j.
+        iso_week: ISO week string, e.g. ``"2026-W18"``.
+        trace_id: Correlation ID for structured logs.
+    """
+    import dataclasses
+    import json
+    from pathlib import Path
+
+    from personal_agent.events.bus import get_event_bus
+    from personal_agent.events.models import (
+        STREAM_MEMORY_STALENESS_REVIEWED,
+        MemoryStalenessReviewedEvent,
+    )
+    from personal_agent.insights.fingerprints import cost_fingerprint
+    from personal_agent.second_brain.quality_monitor import (
+        GraphStalenessReviewSummary,
+        _dominant_tier,
+    )
+
+    tier = _dominant_tier(
+        entities_dormant=summary.entities.dormant,
+        entities_cold=summary.entities.cold,
+        entities_cooling=summary.entities.cooling,
+    )
+    fp = cost_fingerprint(f"staleness_review_{tier}", iso_week)
+
+    gsr = GraphStalenessReviewSummary(
+        fingerprint=fp,
+        trace_id=trace_id,
+        iso_week=iso_week,
+        entities_warm=summary.entities.warm,
+        entities_cooling=summary.entities.cooling,
+        entities_cold=summary.entities.cold,
+        entities_dormant=summary.entities.dormant,
+        relationships_dormant=summary.relationships.dormant,
+        never_accessed_old_entity_count=summary.never_accessed_old_entity_count,
+        dominant_tier=tier,
+    )
+
+    # Durable write first (ADR-0054 D4)
+    output_dir = Path("telemetry/freshness_review")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    jsonl_path = output_dir / f"FR-{iso_week}.jsonl"
+    try:
+        line = json.dumps(dataclasses.asdict(gsr)) + "\n"
+        with jsonl_path.open("a", encoding="utf-8") as fh:
+            fh.write(line)
+    except Exception as exc:
+        log.warning(
+            "staleness_review_jsonl_failed",
+            iso_week=iso_week,
+            fingerprint=fp,
+            error=str(exc),
+        )
+        return  # Skip bus publish if durable write failed
+
+    # Bus publish second (ADR-0054 D4)
+    try:
+        event = MemoryStalenessReviewedEvent(
+            fingerprint=fp,
+            iso_week=iso_week,
+            entities_warm=gsr.entities_warm,
+            entities_cooling=gsr.entities_cooling,
+            entities_cold=gsr.entities_cold,
+            entities_dormant=gsr.entities_dormant,
+            relationships_dormant=gsr.relationships_dormant,
+            never_accessed_old_entity_count=gsr.never_accessed_old_entity_count,
+            dominant_tier=tier,
+            source_component="brainstem.jobs.freshness_review",
+        )
+        await get_event_bus().publish(STREAM_MEMORY_STALENESS_REVIEWED, event)
+        log.debug(
+            "staleness_review_event_published",
+            iso_week=iso_week,
+            fingerprint=fp,
+            dominant_tier=tier,
+        )
+    except Exception as exc:
+        log.warning(
+            "staleness_review_bus_failed",
+            iso_week=iso_week,
+            fingerprint=fp,
+            error=str(exc),
+        )

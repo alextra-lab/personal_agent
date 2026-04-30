@@ -109,6 +109,27 @@ do not fire.  Ordering rule: durable file write must succeed before publish
 
 # Wave 3 — ADR-0059 (Context Quality Stream)
 STREAM_CONTEXT_COMPACTION_QUALITY_POOR = "stream:context.compaction_quality_poor"
+
+# Wave 3 — ADR-0060 (Knowledge Graph Quality Stream)
+STREAM_GRAPH_QUALITY_ANOMALY = "stream:graph.quality_anomaly"
+"""Stream for graph-quality-anomaly events (Wave 3 — ADR-0060 Stream 8).
+
+Producer: ``BrainstemScheduler._run_quality_monitoring()``.  One event per
+detected anomaly per daily run.  Consumer ``cg:graph-monitor`` writes
+``CaptainLogEntry(category=RELIABILITY|KNOWLEDGE_QUALITY, scope=SECOND_BRAIN)``.
+Ordering rule: durable JSONL append before publish (ADR-0054 D4).
+"""
+
+STREAM_MEMORY_STALENESS_REVIEWED = "stream:memory.staleness_reviewed"
+"""Stream for memory-staleness-reviewed events (Wave 3 — ADR-0060 Stream 6).
+
+Producer: ``brainstem.jobs.freshness_review.run_freshness_review()``.  One event
+per weekly review run.  Consumer ``cg:graph-monitor`` writes a trend-summary
+``CaptainLogEntry`` when dormant entity count exceeds threshold.
+"""
+
+CG_GRAPH_MONITOR = "cg:graph-monitor"
+"""Consumer group: knowledge graph quality monitor (Wave 3 — ADR-0060)."""
 """Stream for compaction-quality-poor incidents (Wave 3 — ADR-0059).
 
 Producer: ``request_gateway.recall_controller`` via
@@ -671,6 +692,113 @@ class CompactionQualityIncidentEvent(EventBase):
     detected_at: datetime
 
 
+# ---------------------------------------------------------------------------
+# Wave 3 — ADR-0060 (Knowledge Graph Quality Stream)
+# ---------------------------------------------------------------------------
+
+
+class GraphQualityAnomalyEvent(EventBase):
+    """Published per anomaly when the daily quality monitor fires (ADR-0060 Stream 8).
+
+    One event per detected anomaly.  ``trace_id`` and ``session_id`` are
+    ``None`` — scheduled event, not request-correlated.
+    ``source_component`` must be set to ``"brainstem.scheduler"``.
+
+    Consumers:
+      - ``cg:graph-monitor`` → ``CaptainLogEntry(severity-gated category, SECOND_BRAIN)``
+      - Phase 2 (flag-gated): high-severity → ``ModeAdvisoryEvent`` on
+        ``stream:mode.transition``
+
+    Attributes:
+        fingerprint: sha256(graph_quality:anomaly_type:normalised_message)[:16].
+        anomaly_type: One of the six quality-monitor anomaly types.
+        severity: ``"high"`` or ``"medium"``.
+        message: Human-readable anomaly description.
+        observed_value: Numeric value that triggered the anomaly.
+        expected_range: (low, high) target range, or ``None`` for spike detection.
+        metadata: Optional extra context from the detector.
+        observation_date: ISO yyyy-mm-dd of the day the monitor ran.
+    """
+
+    event_type: Literal["graph.quality_anomaly"] = "graph.quality_anomaly"
+    source_component: str = "brainstem.scheduler"
+    trace_id: str | None = None
+    session_id: str | None = None
+
+    fingerprint: str
+    anomaly_type: str
+    severity: Literal["high", "medium"]
+    message: str
+    observed_value: float
+    expected_range: tuple[float, float] | None = None
+    metadata: dict[str, Any] | None = None
+    observation_date: str
+
+
+class MemoryStalenessReviewedEvent(EventBase):
+    """Published once per weekly freshness review run (ADR-0060 Stream 6).
+
+    ``trace_id`` and ``session_id`` are ``None`` — scheduled event.
+    ``source_component`` must be ``"brainstem.jobs.freshness_review"``.
+
+    Consumers:
+      - ``cg:graph-monitor`` → trend-summary ``CaptainLogEntry`` when
+        ``entities_dormant ≥ settings.freshness_dormant_entity_proposal_threshold``.
+
+    Attributes:
+        fingerprint: sha256(staleness_review_<dominant_tier>:<iso_week>)[:16].
+        iso_week: ISO week string, e.g. ``"2026-W18"``.
+        entities_warm: Count of entities in WARM tier.
+        entities_cooling: Count of entities in COOLING tier.
+        entities_cold: Count of entities in COLD tier.
+        entities_dormant: Count of entities in DORMANT tier.
+        relationships_dormant: Count of dormant relationships.
+        never_accessed_old_entity_count: Entities never accessed and older than
+            ``cold_threshold_days``.
+        dominant_tier: ``"dormant"`` | ``"cold"`` | ``"cooling"`` | ``"warm"``.
+    """
+
+    event_type: Literal["memory.staleness_reviewed"] = "memory.staleness_reviewed"
+    source_component: str = "brainstem.jobs.freshness_review"
+    trace_id: str | None = None
+    session_id: str | None = None
+
+    fingerprint: str
+    iso_week: str
+    entities_warm: int
+    entities_cooling: int
+    entities_cold: int
+    entities_dormant: int
+    relationships_dormant: int
+    never_accessed_old_entity_count: int
+    dominant_tier: str
+
+
+class ModeAdvisoryEvent(EventBase):
+    """Published by quality monitors to advise the brainstem of a suggested mode (ADR-0060 §D7).
+
+    Published to ``stream:mode.transition`` so the mode controller can observe
+    the advisory in its rolling window. Phase 2 of ADR-0060 — default flag off
+    (``graph_quality_governance_enabled=False``).
+
+    ``trace_id`` and ``session_id`` are ``None`` — system-scoped event.
+
+    Attributes:
+        target_mode: Suggested mode (e.g. ``"degraded"``).
+        surface_tag: Subsystem tag to scope the advisory (e.g. ``"consolidation"``).
+        reason: Human-readable reason (e.g. ``"graph_quality_anomaly:entity_extraction_spike"``).
+    """
+
+    event_type: Literal["mode.advisory"] = "mode.advisory"
+    source_component: str = "events.pipeline_handlers"
+    trace_id: str | None = None
+    session_id: str | None = None
+
+    target_mode: str
+    surface_tag: str
+    reason: str
+
+
 def parse_stream_event(payload: dict[str, Any]) -> EventBase:
     """Deserialize a stream JSON payload into the correct event subclass.
 
@@ -717,4 +845,10 @@ def parse_stream_event(payload: dict[str, Any]) -> EventBase:
         return CaptainLogEntryCreatedEvent.model_validate(payload)
     if raw_type == "context.compaction_quality_poor":
         return CompactionQualityIncidentEvent.model_validate(payload)
+    if raw_type == "graph.quality_anomaly":
+        return GraphQualityAnomalyEvent.model_validate(payload)
+    if raw_type == "memory.staleness_reviewed":
+        return MemoryStalenessReviewedEvent.model_validate(payload)
+    if raw_type == "mode.advisory":
+        return ModeAdvisoryEvent.model_validate(payload)
     raise ValueError(f"unknown event_type: {raw_type!r}")

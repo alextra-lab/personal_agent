@@ -16,6 +16,8 @@ from personal_agent.events.models import (
     ErrorPatternDetectedEvent,
     EventBase,
     FeedbackReceivedEvent,
+    GraphQualityAnomalyEvent,
+    MemoryStalenessReviewedEvent,
     PromotionIssueCreatedEvent,
 )
 from personal_agent.telemetry import get_logger
@@ -628,3 +630,247 @@ def build_compaction_quality_captain_log_handler(manager: Any | None = None) -> 
         )
 
     return handler
+
+
+# ---------------------------------------------------------------------------
+# Wave 3 — ADR-0060 (Knowledge Graph Quality Stream)
+# ---------------------------------------------------------------------------
+
+
+def build_graph_quality_captain_log_handler(manager: Any | None = None) -> Any:
+    """Build handler that writes Captain's Log entries on graph-quality signals.
+
+    Subscribes ``cg:graph-monitor`` to both ``stream:graph.quality_anomaly``
+    (Stream 8 — daily anomaly scan) and ``stream:memory.staleness_reviewed``
+    (Stream 6 — weekly freshness review).
+
+    - ``GraphQualityAnomalyEvent``: one ``CONFIG_PROPOSAL`` per anomaly;
+      severity ``"high"`` → ``category=RELIABILITY``; else ``KNOWLEDGE_QUALITY``.
+      Phase 2 (flag-gated): also publishes ``ModeAdvisoryEvent`` for high-severity
+      anomalies when ``graph_quality_governance_enabled=True``.
+
+    - ``MemoryStalenessReviewedEvent``: trend-summary ``CONFIG_PROPOSAL`` only when
+      ``entities_dormant ≥ settings.freshness_dormant_entity_proposal_threshold``.
+
+    Dedup and suppression are handled by ``CaptainLogManager`` (ADR-0030).
+
+    Args:
+        manager: Optional ``CaptainLogManager`` instance.  When ``None``, a
+            fresh instance is created lazily inside the handler.
+
+    Returns:
+        Async handler for ``cg:graph-monitor`` on both graph-quality streams.
+    """
+
+    async def handler(event: EventBase) -> None:
+        if isinstance(event, GraphQualityAnomalyEvent):
+            await _handle_graph_quality_anomaly(event, manager)
+        elif isinstance(event, MemoryStalenessReviewedEvent):
+            await _handle_staleness_reviewed(event, manager)
+
+    return handler
+
+
+async def _handle_graph_quality_anomaly(
+    event: GraphQualityAnomalyEvent,
+    manager: Any | None,
+) -> None:
+    """Write a Captain's Log entry for one graph-quality anomaly (ADR-0060 §D6)."""
+    from datetime import datetime, timezone
+
+    from personal_agent.captains_log.manager import CaptainLogManager
+    from personal_agent.captains_log.models import (
+        CaptainLogEntry,
+        CaptainLogEntryType,
+        ChangeCategory,
+        Metric,
+        ProposedChange,
+        TelemetryRef,
+    )
+    from personal_agent.config.settings import get_settings
+
+    _manager = manager or CaptainLogManager()
+    cfg = get_settings()
+    now = datetime.now(timezone.utc)
+    category = (
+        ChangeCategory.RELIABILITY
+        if event.severity == "high"
+        else ChangeCategory.KNOWLEDGE_QUALITY
+    )
+
+    entry = CaptainLogEntry(
+        entry_id=f"CL-{now.strftime('%Y%m%d-%H%M%S')}-gq-{event.fingerprint[:6]}",
+        type=CaptainLogEntryType.CONFIG_PROPOSAL,
+        title=f"[Graph quality] {event.anomaly_type}: {event.message}",
+        rationale=(
+            f'Consolidation quality monitor detected anomaly type "{event.anomaly_type}" '
+            f"(severity: {event.severity}). Observed value {event.observed_value:.4f}; "
+            f"expected range {event.expected_range}."
+        ),
+        proposed_change=ProposedChange(
+            what=f"Investigate {event.anomaly_type} anomaly in knowledge graph",
+            why=(
+                f'Daily anomaly scan ({event.observation_date}) found "{event.message}". '
+                f"Observed: {event.observed_value:.4f}. Range: {event.expected_range}."
+            ),
+            how=(
+                "1) Check the telemetry/graph_quality/GQ-*.jsonl entry for this fingerprint.\n"
+                "2) Run the quality monitor interactively via brainstem diagnostics to inspect "
+                "raw metrics.\n"
+                "3) For extraction failures, check the ES agent-logs-* index for "
+                "entity_extraction_failed events around the observation date.\n"
+                "4) For structural anomalies (no_relationships_created), inspect Neo4j directly."
+            ),
+            category=category,
+            scope=ChangeScope.SECOND_BRAIN,
+            fingerprint=event.fingerprint,
+            first_seen=None,
+        ),
+        supporting_metrics=[
+            f"anomaly_type: {event.anomaly_type}",
+            f"severity: {event.severity}",
+            f"observed_value: {event.observed_value:.4f}",
+            f"observation_date: {event.observation_date}",
+        ],
+        metrics_structured=[
+            Metric(name="observed_value", value=event.observed_value, unit=None),
+        ],
+        telemetry_refs=[TelemetryRef(trace_id=event.trace_id, metric_name=None, value=None)],
+        impact_assessment=None,
+        reviewer_notes=None,
+        linear_issue_id=None,
+        experiment_design=None,
+        expected_outcome=None,
+        potential_implementation=None,
+    )
+
+    _manager.save_entry(entry)
+    log.info(
+        "graph_quality_anomaly_captain_log_saved",
+        fingerprint=event.fingerprint,
+        anomaly_type=event.anomaly_type,
+        severity=event.severity,
+        observation_date=event.observation_date,
+    )
+
+    # Phase 2 governance: high-severity → ModeAdvisoryEvent (flag-gated, default off)
+    if event.severity == "high" and cfg.graph_quality_governance_enabled:
+        await _publish_mode_advisory(event)
+
+
+async def _publish_mode_advisory(event: GraphQualityAnomalyEvent) -> None:
+    """Publish a mode advisory for high-severity graph-quality anomalies (ADR-0060 §D7)."""
+    from personal_agent.events.bus import get_event_bus
+    from personal_agent.events.models import STREAM_MODE_TRANSITION, ModeAdvisoryEvent
+
+    try:
+        advisory = ModeAdvisoryEvent(
+            target_mode="degraded",
+            surface_tag="consolidation",
+            reason=f"graph_quality_anomaly:{event.anomaly_type}",
+            source_component="events.pipeline_handlers",
+        )
+        await get_event_bus().publish(STREAM_MODE_TRANSITION, advisory)
+        log.info(
+            "mode_advisory_published",
+            target_mode="degraded",
+            surface_tag="consolidation",
+            reason=advisory.reason,
+            anomaly_fingerprint=event.fingerprint,
+        )
+    except Exception as exc:
+        log.warning(
+            "mode_advisory_publish_failed",
+            anomaly_type=event.anomaly_type,
+            error=str(exc),
+        )
+
+
+async def _handle_staleness_reviewed(
+    event: MemoryStalenessReviewedEvent,
+    manager: Any | None,
+) -> None:
+    """Write a trend-summary Captain's Log entry for a freshness review (ADR-0060 §D6)."""
+    from datetime import datetime, timezone
+
+    from personal_agent.captains_log.manager import CaptainLogManager
+    from personal_agent.captains_log.models import (
+        CaptainLogEntry,
+        CaptainLogEntryType,
+        ChangeCategory,
+        ProposedChange,
+        TelemetryRef,
+    )
+    from personal_agent.config.settings import get_settings
+
+    cfg = get_settings()
+    threshold = cfg.freshness_dormant_entity_proposal_threshold
+    if event.entities_dormant < threshold:
+        log.debug(
+            "staleness_review_below_threshold",
+            entities_dormant=event.entities_dormant,
+            threshold=threshold,
+            iso_week=event.iso_week,
+        )
+        return
+
+    _manager = manager or CaptainLogManager()
+    now = datetime.now(timezone.utc)
+
+    entry = CaptainLogEntry(
+        entry_id=f"CL-{now.strftime('%Y%m%d-%H%M%S')}-fr-{event.fingerprint[:6]}",
+        type=CaptainLogEntryType.CONFIG_PROPOSAL,
+        title=f"KG freshness review {event.iso_week}: {event.entities_dormant} dormant entities",
+        rationale=(
+            f"Weekly freshness review ({event.iso_week}) found {event.entities_dormant} "
+            f"DORMANT entities (threshold: {threshold}). "
+            f"Tier breakdown — warm: {event.entities_warm}, cooling: {event.entities_cooling}, "
+            f"cold: {event.entities_cold}, dormant: {event.entities_dormant}. "
+            f"Dominant tier: {event.dominant_tier}."
+        ),
+        proposed_change=ProposedChange(
+            what=(
+                f"Review {event.entities_dormant} dormant entities from KG "
+                f"freshness report {event.iso_week}"
+            ),
+            why=(
+                f"Dormant entity count ({event.entities_dormant}) exceeds the "
+                f"proposal threshold ({threshold}). These entities have not been "
+                f"accessed in over 90 days and may be candidates for archival."
+            ),
+            how=(
+                f"1) Check telemetry/freshness_review/FR-{event.iso_week}.jsonl for details.\n"
+                "2) Run brainstem diagnostics to identify the top dormant entities by name.\n"
+                "3) Decide whether to archive, retain, or force-revalidate these entities.\n"
+                "4) If archival is appropriate, run the freshness backfill migration script."
+            ),
+            category=ChangeCategory.KNOWLEDGE_QUALITY,
+            scope=ChangeScope.SECOND_BRAIN,
+            fingerprint=event.fingerprint,
+            first_seen=None,
+        ),
+        supporting_metrics=[
+            f"iso_week: {event.iso_week}",
+            f"entities_dormant: {event.entities_dormant}",
+            f"relationships_dormant: {event.relationships_dormant}",
+            f"dominant_tier: {event.dominant_tier}",
+            f"never_accessed_old: {event.never_accessed_old_entity_count}",
+        ],
+        metrics_structured=[],
+        telemetry_refs=[TelemetryRef(trace_id=event.trace_id, metric_name=None, value=None)],
+        impact_assessment=None,
+        reviewer_notes=None,
+        linear_issue_id=None,
+        experiment_design=None,
+        expected_outcome=None,
+        potential_implementation=None,
+    )
+
+    _manager.save_entry(entry)
+    log.info(
+        "staleness_review_captain_log_saved",
+        fingerprint=event.fingerprint,
+        iso_week=event.iso_week,
+        entities_dormant=event.entities_dormant,
+        dominant_tier=event.dominant_tier,
+    )

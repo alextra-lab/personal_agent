@@ -612,6 +612,8 @@ class BrainstemScheduler:
                 days=self.quality_monitor_anomaly_window_days
             )
             anomalies_count = len(anomalies)
+            if anomalies and settings.graph_quality_stream_enabled:
+                await self._emit_graph_quality_anomalies(anomalies)
         except Exception as e:
             log.warning("quality_monitor_anomaly_check_failed", error=str(e), exc_info=True)
 
@@ -620,3 +622,86 @@ class BrainstemScheduler:
             anomalies_count=anomalies_count,
             days=self.quality_monitor_anomaly_window_days,
         )
+
+    async def _emit_graph_quality_anomalies(self, anomalies: list[Any]) -> None:
+        """Dual-write each anomaly to JSONL and publish a bus event (ADR-0060 §D8 Stream 8).
+
+        Follows ADR-0054 D4 ordering: durable append first, bus publish second.
+        Bus failures are logged and swallowed.
+
+        Args:
+            anomalies: List of ``Anomaly`` objects from ``detect_anomalies()``.
+        """
+        import dataclasses
+        import json
+        from pathlib import Path
+
+        from personal_agent.events.bus import get_event_bus
+        from personal_agent.events.models import (
+            STREAM_GRAPH_QUALITY_ANOMALY,
+            GraphQualityAnomalyEvent,
+        )
+        from personal_agent.insights.fingerprints import pattern_fingerprint
+        from personal_agent.second_brain.quality_monitor import GraphQualityAnomaly
+
+        today = date.today().isoformat()
+        trace_id = f"quality-monitor-{today}"
+        output_dir = Path("telemetry/graph_quality")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        jsonl_path = output_dir / f"GQ-{today}.jsonl"
+        bus = get_event_bus()
+
+        for anomaly in anomalies:
+            fp = pattern_fingerprint("graph_quality", anomaly.anomaly_type, anomaly.message)
+            gqa = GraphQualityAnomaly(
+                fingerprint=fp,
+                trace_id=trace_id,
+                anomaly_type=anomaly.anomaly_type,
+                severity=anomaly.severity,
+                message=anomaly.message,
+                observed_value=anomaly.observed_value,
+                expected_range=anomaly.expected_range,
+                metadata=anomaly.metadata,
+                observation_date=today,
+            )
+            # Durable write first (ADR-0054 D4)
+            try:
+                line = json.dumps(dataclasses.asdict(gqa)) + "\n"
+                with jsonl_path.open("a", encoding="utf-8") as fh:
+                    fh.write(line)
+            except Exception as exc:
+                log.warning(
+                    "graph_quality_anomaly_jsonl_failed",
+                    fingerprint=fp,
+                    anomaly_type=anomaly.anomaly_type,
+                    error=str(exc),
+                )
+                continue  # Skip bus publish if durable write failed
+
+            # Bus publish second (ADR-0054 D4)
+            try:
+                event = GraphQualityAnomalyEvent(
+                    fingerprint=fp,
+                    anomaly_type=gqa.anomaly_type,
+                    severity=gqa.severity,
+                    message=gqa.message,
+                    observed_value=gqa.observed_value,
+                    expected_range=gqa.expected_range,
+                    metadata=gqa.metadata,
+                    observation_date=gqa.observation_date,
+                    source_component="brainstem.scheduler",
+                )
+                await bus.publish(STREAM_GRAPH_QUALITY_ANOMALY, event)
+                log.debug(
+                    "graph_quality_anomaly_published",
+                    fingerprint=fp,
+                    anomaly_type=gqa.anomaly_type,
+                    severity=gqa.severity,
+                )
+            except Exception as exc:
+                log.warning(
+                    "graph_quality_anomaly_bus_failed",
+                    fingerprint=fp,
+                    anomaly_type=anomaly.anomaly_type,
+                    error=str(exc),
+                )

@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from statistics import mean, pstdev
-from typing import Any
+from typing import Any, Literal
 
 from personal_agent.memory.service import MemoryService
 from personal_agent.telemetry import TelemetryQueries, get_logger
@@ -51,11 +51,95 @@ class Anomaly:
     """Detected quality anomaly with threshold context."""
 
     anomaly_type: str
-    severity: str
+    severity: Literal["high", "medium"]
     message: str
     observed_value: float
     expected_range: tuple[float, float] | None = None
     metadata: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class GraphQualityAnomaly:
+    """Enriched anomaly record for durable write and bus publication (ADR-0060 §D3 Layer A).
+
+    Wraps ``Anomaly`` with a fingerprint and observation metadata ready for
+    JSONL serialisation and ``GraphQualityAnomalyEvent`` construction.
+
+    Attributes:
+        fingerprint: sha256(graph_quality:anomaly_type:normalised_message)[:16].
+        trace_id: Correlation identifier for structured logs.
+        anomaly_type: One of the six quality-monitor anomaly types.
+        severity: ``"high"`` or ``"medium"``.
+        message: Human-readable anomaly description.
+        observed_value: Numeric value that triggered the anomaly.
+        expected_range: (low, high) target range, or ``None`` for spike detection.
+        metadata: Optional extra context from the detector.
+        observation_date: ISO yyyy-mm-dd of the day the monitor ran.
+    """
+
+    fingerprint: str
+    trace_id: str
+    anomaly_type: str
+    severity: Literal["high", "medium"]
+    message: str
+    observed_value: float
+    expected_range: tuple[float, float] | None = None
+    metadata: dict[str, Any] | None = None
+    observation_date: str = ""
+
+
+@dataclass(frozen=True)
+class GraphStalenessReviewSummary:
+    """Weekly review summary for durable write and bus publication (ADR-0060 §D3 Layer A).
+
+    Attributes:
+        fingerprint: sha256(staleness_review_<dominant_tier>:<iso_week>)[:16].
+        trace_id: Correlation identifier (e.g. ``"freshness-review-2026-W18"``).
+        iso_week: ISO week string, e.g. ``"2026-W18"``.
+        entities_warm: Count of entities in WARM tier.
+        entities_cooling: Count of entities in COOLING tier.
+        entities_cold: Count of entities in COLD tier.
+        entities_dormant: Count of entities in DORMANT tier.
+        relationships_dormant: Count of dormant relationships.
+        never_accessed_old_entity_count: Entities never accessed and old.
+        dominant_tier: Worst-state tier: ``"dormant"`` | ``"cold"`` |
+            ``"cooling"`` | ``"warm"``.
+    """
+
+    fingerprint: str
+    trace_id: str
+    iso_week: str
+    entities_warm: int
+    entities_cooling: int
+    entities_cold: int
+    entities_dormant: int
+    relationships_dormant: int
+    never_accessed_old_entity_count: int
+    dominant_tier: str
+
+
+def _dominant_tier(
+    entities_dormant: int,
+    entities_cold: int,
+    entities_cooling: int,
+) -> str:
+    """Derive the dominant staleness tier for fingerprinting (ADR-0060 §D4).
+
+    Args:
+        entities_dormant: Count of DORMANT entities.
+        entities_cold: Count of COLD entities.
+        entities_cooling: Count of COOLING entities.
+
+    Returns:
+        ``"dormant"`` | ``"cold"`` | ``"cooling"`` | ``"warm"``.
+    """
+    if entities_dormant > 0:
+        return "dormant"
+    if entities_cold > 0:
+        return "cold"
+    if entities_cooling > 0:
+        return "cooling"
+    return "warm"
 
 
 class ConsolidationQualityMonitor:
@@ -371,7 +455,9 @@ def _range_anomaly(
     low, high = target
     if low <= observed <= high:
         return []
-    severity = "high" if observed < low * 0.5 or observed > high * 1.5 else "medium"
+    severity: Literal["high", "medium"] = (
+        "high" if observed < low * 0.5 or observed > high * 1.5 else "medium"
+    )
     return [
         Anomaly(
             anomaly_type=anomaly_type,

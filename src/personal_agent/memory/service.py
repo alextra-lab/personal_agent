@@ -1579,6 +1579,7 @@ class MemoryService:
                 score += conv_reranker_score * cw_reranker
 
             # 6. Freshness score (access recency × frequency, ADR-0042)
+            #    + StalenessTier multiplier (ADR-0060 §D5)
             # Uses max freshness score across matched query entities for this conversation.
             # When no freshness data is available for any of this conversation's entities,
             # the factor is skipped and the redistributed weight stays with the other signals.
@@ -1589,7 +1590,18 @@ class MemoryService:
                     if e in freshness_scores and freshness_scores[e] > 0.0
                 ]
                 if conv_freshness_scores:
-                    score += max(conv_freshness_scores) * w_freshness_cfg
+                    best_freshness = max(conv_freshness_scores)
+                    if current_settings.freshness_tier_reranking_enabled:
+                        from personal_agent.memory.freshness import (  # noqa: PLC0415
+                            staleness_tier_from_freshness_score,
+                        )
+
+                        tier = staleness_tier_from_freshness_score(best_freshness)
+                        tier_factor = current_settings.freshness_tier_factors.get(
+                            tier.value, 1.0
+                        )
+                        best_freshness *= tier_factor
+                    score += best_freshness * w_freshness_cfg
 
             scores[conv.turn_id] = min(score, 1.0)  # Cap at 1.0
 

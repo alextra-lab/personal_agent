@@ -736,6 +736,42 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 governance_threshold=settings.context_quality_governance_threshold,
             )
 
+        # ADR-0060 — Knowledge Graph Quality Stream (FRE-250).
+        # cg:graph-monitor subscribes to stream:graph.quality_anomaly (daily anomaly
+        # scan, Stream 8) and stream:memory.staleness_reviewed (weekly freshness
+        # review, Stream 6). Both become CaptainLogEntry(KNOWLEDGE_QUALITY|RELIABILITY,
+        # SECOND_BRAIN). Phase 2 governance (ModeAdvisoryEvent) is flag-gated off.
+        if settings.graph_quality_stream_enabled:
+            from personal_agent.events.models import (
+                CG_GRAPH_MONITOR,
+                STREAM_GRAPH_QUALITY_ANOMALY,
+                STREAM_MEMORY_STALENESS_REVIEWED,
+            )
+            from personal_agent.events.pipeline_handlers import (
+                build_graph_quality_captain_log_handler,
+            )
+
+            _gq_cl_handler = build_graph_quality_captain_log_handler()
+            await active_bus.subscribe(
+                stream=STREAM_GRAPH_QUALITY_ANOMALY,
+                group=CG_GRAPH_MONITOR,
+                consumer_name="graph-monitor-0",
+                handler=_gq_cl_handler,
+            )
+            await active_bus.subscribe(
+                stream=STREAM_MEMORY_STALENESS_REVIEWED,
+                group=CG_GRAPH_MONITOR,
+                consumer_name="graph-monitor-staleness-0",
+                handler=_gq_cl_handler,
+            )
+            log.info(
+                "graph_quality_stream_registered",
+                consumer_group=CG_GRAPH_MONITOR,
+                stream_anomaly=STREAM_GRAPH_QUALITY_ANOMALY,
+                stream_staleness=STREAM_MEMORY_STALENESS_REVIEWED,
+                governance_enabled=settings.graph_quality_governance_enabled,
+            )
+
         consumer_runner = ConsumerRunner(active_bus)
         await consumer_runner.start()
         registered = [f"{s.stream}→{s.group}" for s in active_bus.subscriptions]

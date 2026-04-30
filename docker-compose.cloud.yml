@@ -245,50 +245,34 @@ services:
       context: .
       dockerfile: Dockerfile.gateway
     container_name: cloud-sim-seshat-gateway
+    # env_file passes ALL vars from .env into the container.
+    # New feature flags and secrets only need to be set in .env — no compose change required.
+    # The environment: block below overrides only vars that must differ inside Docker
+    # (internal hostnames, Docker-specific paths, hardcoded production values).
+    # Docker Compose precedence: environment: > env_file: — so overrides always win.
+    env_file:
+      - /opt/seshat/.env
     environment:
-      # All settings use AGENT_ prefix (see config/settings.py env_prefix)
+      # ── Docker-internal service URLs (override .env localhost values) ──────────
       AGENT_DATABASE_URL: postgresql+asyncpg://agent:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required — set in .env}@postgres:5432/personal_agent
       AGENT_NEO4J_URI: bolt://neo4j:7687
-      AGENT_NEO4J_USER: neo4j
       AGENT_NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD required — set in .env}
       AGENT_ELASTICSEARCH_URL: http://elasticsearch:9200
       AGENT_EVENT_BUS_REDIS_URL: redis://redis:6379/0
-      AGENT_ENABLE_MEMORY_GRAPH: "${AGENT_ENABLE_MEMORY_GRAPH:-true}"
-      AGENT_EVENT_BUS_ENABLED: "${AGENT_EVENT_BUS_ENABLED:-true}"
-      AGENT_ENABLE_SECOND_BRAIN: "${AGENT_ENABLE_SECOND_BRAIN:-true}"
-      AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED: "${AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED:-false}"
-      AGENT_PROACTIVE_MEMORY_ENABLED: "${AGENT_PROACTIVE_MEMORY_ENABLED:-true}"
-      AGENT_FRESHNESS_ENABLED: "${AGENT_FRESHNESS_ENABLED:-true}"
-      AGENT_MCP_GATEWAY_ENABLED: "true"
+      AGENT_SEARXNG_BASE_URL: http://searxng:8080
+      # ── Docker-specific paths and hardcoded production values ─────────────────
       AGENT_MCP_GATEWAY_COMMAND: '["/app/docker/mcp/run-gateway.sh"]'
-      AGENT_MCP_GATEWAY_ENABLED_SERVERS: "${AGENT_MCP_GATEWAY_ENABLED_SERVERS:-[\"sequentialthinking\", \"context7\"]}"
-      AGENT_MCP_GATEWAY_TIMEOUT_SECONDS: "${AGENT_MCP_GATEWAY_TIMEOUT_SECONDS:-90}"
-      # Host path of MCP secrets .env — must exist on VPS before first deploy.
-      # See docker/mcp/mcp-secrets.env.example → copy to /opt/seshat/mcp-secrets.env on host.
-      MCP_SECRETS_FILE: "${MCP_SECRETS_FILE:-/opt/seshat/mcp-secrets.env}"
+      AGENT_MODEL_CONFIG_PATH: /app/config/models.cloud.yaml
+      MCP_SECRETS_FILE: /opt/seshat/mcp-secrets.env
       AGENT_GATEWAY_AUTH_ENABLED: "true"
-      # Gateway bearer tokens — must match config/gateway_access.yaml secrets
-      GATEWAY_TOKEN_PWA: ${GATEWAY_TOKEN_PWA}
-      GATEWAY_TOKEN_EXTERNAL_AGENT: ${GATEWAY_TOKEN_EXTERNAL_AGENT}
-      # Cloudflare Access service token for Mac SLM tunnel (local inference profile)
-      # env_prefix="AGENT_" is applied by pydantic-settings, so container var must have prefix
-      AGENT_CF_ACCESS_CLIENT_ID: ${CF_ACCESS_CLIENT_ID}
-      AGENT_CF_ACCESS_CLIENT_SECRET: ${CF_ACCESS_CLIENT_SECRET}
-      # Use cloud model config (embedding/reranker point to Docker service hostnames)
-      AGENT_MODEL_CONFIG_PATH: "${AGENT_MODEL_CONFIG_PATH:-/app/config/models.cloud.yaml}"
-      AGENT_CLOUD_WEEKLY_BUDGET_USD: "${AGENT_CLOUD_WEEKLY_BUDGET_USD:-10.0}"
-      # Cloud LLM API keys (injected from VPS .env)
-      AGENT_ANTHROPIC_API_KEY: ${AGENT_ANTHROPIC_API_KEY}
-      AGENT_OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY}
-      AGENT_PERPLEXITY_API_KEY: ${AGENT_PERPLEXITY_API_KEY}
-      AGENT_LINEAR_API_KEY: ${AGENT_LINEAR_API_KEY}
-      # API configuration
       API_HOST: 0.0.0.0
       API_PORT: "9001"
       APP_ENV: production
-      # Logging
-      AGENT_LOG_LEVEL: "${AGENT_LOG_LEVEL:-info}"
-      AGENT_SEARXNG_BASE_URL: http://searxng:8080
+      # ── Cloudflare Access: rename host var → AGENT_ prefixed container var ────
+      # CF_ACCESS_CLIENT_ID/SECRET have no AGENT_ prefix in .env (used by cloudflared too)
+      # so we remap them here. Everything else flows through env_file above.
+      AGENT_CF_ACCESS_CLIENT_ID: ${CF_ACCESS_CLIENT_ID}
+      AGENT_CF_ACCESS_CLIENT_SECRET: ${CF_ACCESS_CLIENT_SECRET}
     ports:
       # Localhost only — Caddy proxies to this port internally
       - "127.0.0.1:9001:9001"

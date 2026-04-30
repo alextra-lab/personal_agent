@@ -43,7 +43,7 @@ _CODING_PATTERNS: re.Pattern[str] = re.compile(
     r"|(?:(?:def|class|import)\s+\w+|from\s+\w+\s+import)"
     r"|(?:(?:debug|refactor|implement|fix|write|add)\s+(?:the\s+|this\s+|a\s+|an\s+|my\s+|new\s+)?"
     r"(?:code|function|class|module|test|endpoint|route|api|bug|CI|pipeline|failure))"
-    r"|(?:traceback|stack\s*trace|error\s*log)"
+    r"|(?:traceback|stack\s*trace)"
     r"|(?:(?:unit|integration)\s*test)"
     r"|(?:pull\s*request|PR\s+review|code\s+review)"
     r"|(?:use\s+(?:claude\s+code|codex|copilot|cursor)\s+to\s+)",
@@ -99,7 +99,10 @@ _TOOL_INTENT_PATTERNS: re.Pattern[str] = re.compile(
     r"(?:health(?:y|iness)?|status|errors?|logs?|infra(?:structure)?|performance|services?|reachable|up))"
     r"|(?:(?:check|inspect|monitor|diagnose|report\s+on)\s+"
     r"(?:the\s+|my\s+|your\s+)?(?:health|status|errors?|logs?|infra(?:structure)?|performance|services?))"
-    r"|(?:(?:run|do|perform)\s+(?:a\s+)?(?:health|status|diagnostic|infra)\s*(?:check|report|scan)?)",
+    r"|(?:(?:run|do|perform)\s+(?:a\s+)?(?:health|status|diagnostic|infra)\s*(?:check|report|scan)?)"
+    # Bare-noun error/log observation — no leading verb (e.g. "errors in elasticsearch")
+    r"|(?:\berrors?\s+(?:in|from|within)\s+(?:elasticsearch|kibana|the\s+logs?|telemetry|traces?))"
+    r"|(?:what\s+errors?\s+(?:are\s+)?(?:in|from)\s+(?:the\s+)?(?:logs?|elasticsearch|telemetry))",
 )
 
 _SELF_IMPROVE_PATTERNS: re.Pattern[str] = re.compile(

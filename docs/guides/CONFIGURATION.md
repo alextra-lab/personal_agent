@@ -211,6 +211,25 @@ log_level = settings.log_level
 
 `AGENT_FAILURE_PATH_REFLECTION_ENABLED` controls Phase 2 of ADR-0056, which extends Captain's Log reflection with GEPA-inspired failure-path analysis. It is off by default (`false`). To activate it: set the flag to `true` in `.env` after at least one week of Phase 1 data has accumulated — this gives the pattern monitor enough signal to validate that the surgical fix suggestions are useful before they begin appearing in every reflection. If Phase 2 suggestions are too broad or noisy after another week, flip the flag back to `false`.
 
+## Context Quality Stream (ADR-0059)
+
+`AGENT_CONTEXT_QUALITY_STREAM_ENABLED` (default `true`) enables Stream 7 — per-incident detection when Stage 7 compaction drops an entity that the user then references in the same session. Each incident dual-writes a `CQ-*.jsonl` line and publishes a `CompactionQualityIncidentEvent` → Captain's Log entry (`category=KNOWLEDGE_QUALITY, scope=ORCHESTRATOR`).
+
+`AGENT_CONTEXT_QUALITY_GOVERNANCE_ENABLED` (default `false`) enables Phase 2 budget tightening. Flip after 14 days of Phase 1 telemetry validates signal quality.
+
+## Knowledge Graph Quality Stream (ADR-0060)
+
+Four flags ship with Phase 1 (all enabled by default except governance):
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `AGENT_GRAPH_QUALITY_STREAM_ENABLED` | `true` | Enable daily anomaly events (Stream 8) and weekly freshness review events (Stream 6). Each anomaly dual-writes `telemetry/graph_quality/GQ-*.jsonl` + publishes `GraphQualityAnomalyEvent` → `cg:graph-monitor` → Captain's Log. |
+| `AGENT_FRESHNESS_TIER_RERANKING_ENABLED` | `true` | Apply `StalenessTier` multiplier in recall reranking (`_calculate_relevance_scores`). DORMANT entities contribute 30 % of their freshness weight; WARM unchanged. |
+| `AGENT_FRESHNESS_TIER_FACTORS` | `{"warm":1.0,"cooling":0.85,"cold":0.60,"dormant":0.30}` | JSON dict of per-tier multipliers. Adjust `dormant` upward if DORMANT entities are over-suppressed after 30 days of data. |
+| `AGENT_GRAPH_QUALITY_GOVERNANCE_ENABLED` | `false` | **Phase 2 flip gate.** Enable only after 14 days of Phase 1 data confirms false-positive rate < 20 % in Linear "Knowledge Graph Quality" project. When enabled, high-severity anomalies publish `ModeAdvisoryEvent(DEGRADED, "consolidation")` to the mode controller. |
+
+**Flip procedure for governance:** verify `XLEN stream:graph.quality_anomaly ≥ 1` in Redis, confirm `telemetry/graph_quality/GQ-*.jsonl` files are growing daily, and check the Linear project false-positive rate before setting `AGENT_GRAPH_QUALITY_GOVERNANCE_ENABLED=true` and restarting `seshat-gateway`.
+
 ## Architecture
 
 Configuration management follows **ADR-0007: Unified Configuration Management**.

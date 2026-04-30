@@ -69,7 +69,7 @@ can be made in microseconds.
 
 **2. One Brain, Many Hands**
 
-A single capable model (Qwen3.5-35-A3B) is the reasoning center. It doesn't
+A single capable model (Qwen3.6-35B-A3B) is the reasoning center. It doesn't
 share this role. When it needs to expand, it spawns ephemeral sub-agents for
 parallel work or delegates to external agents. Sub-agents are task-scoped
 processes, not persistent specialist identities. They expand and contract with
@@ -145,7 +145,7 @@ are new.
                                  |              |
               +------------------v--------+     |
               |      PRIMARY AGENT        |     |
-              |   Qwen3.5-35-A3B         |     |
+              |   Qwen3.6-35B-A3B        |     |
               |                           |     |
               |   . Conversational core   |     |
               |   . Tool calling (MCP +   |     |

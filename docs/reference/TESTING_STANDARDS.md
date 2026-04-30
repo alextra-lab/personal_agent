@@ -37,7 +37,7 @@ Mark a test `@pytest.mark.integration` whenever it directly or indirectly calls 
 
 | Pattern | Why it's live |
 |---------|---------------|
-| `extract_entities_and_relationships()` | `entity_extraction_role: reasoning` in `models.yaml` → hits qwen3.5-35b |
+| `extract_entities_and_relationships()` | `entity_extraction_role: reasoning` in `models.yaml` → hits qwen3.6-35b |
 | `Orchestrator().handle_user_request()` | Calls LLM for routing + task + triggers reflection (see below) |
 | `SecondBrainConsolidator._process_capture()` | Calls entity extraction internally |
 | `generate_reflection_entry()` | Creates own `LocalLLMClient` → DSPy → reasoning model |
@@ -67,7 +67,7 @@ Orchestrator.handle_user_request()
       → generate_reflection_dspy()         # reflection_dspy.py
         → llm_client.get_dspy_lm(role=ModelRole.REASONING)
           → dspy.configure(lm=...)
-            → predictor(...)               # LIVE CALL to qwen3.5-35b
+            → predictor(...)               # LIVE CALL to qwen3.6-35b
 ```
 
 **Solution**: `tests/test_orchestrator/conftest.py` has an `autouse` fixture that patches `generate_reflection_entry` as an `AsyncMock` for all non-integration tests in that directory.
@@ -103,7 +103,7 @@ def mock_reflection_for_unit_tests(request):
 
 ## Model Routing in Tests
 
-`config/models.yaml` `entity_extraction_role: reasoning` routes entity extraction to the `reasoning` role, which is currently `qwen3.5-35b-a3b`. This is the large thinking model with `max_concurrency: 1`.
+`config/models.yaml` `entity_extraction_role: reasoning` routes entity extraction to the `reasoning` role, which is currently `qwen3.6-35b-a3b`. This is the large thinking model with `max_concurrency: 1`.
 
 Tests that hit entity extraction are therefore:
 1. Slow (90-180s per call)

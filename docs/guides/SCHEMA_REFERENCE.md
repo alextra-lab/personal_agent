@@ -460,8 +460,8 @@ delegation:
 
 ```yaml
 name: local
-description: "Local inference via SLM Server (Qwen3.5-35B)"
-primary_model: qwen3.5-35b-a3b
+description: "Local inference via SLM Server (Qwen3.6-35B)"
+primary_model: qwen3.6-35b-a3b
 sub_agent_model: qwen3-8b
 provider_type: local
 cost_limit_per_session: null

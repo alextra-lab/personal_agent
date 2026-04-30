@@ -433,7 +433,7 @@ Is it purely mechanical (copy/paste/run)?
                                  |
               +------------------v--------+
               |      PRIMARY AGENT        |
-              |   Qwen3.5-35-A3B         |
+              |   Qwen3.6-35B-A3B        |
               |                           |
               |   Conversational core     |
               |   Tool calling (MCP +     |

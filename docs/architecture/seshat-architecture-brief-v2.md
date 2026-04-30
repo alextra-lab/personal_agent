@@ -238,7 +238,7 @@ Security requirements:
 ## 8. Models Under Evaluation
 
 **Local (GGUF on llama.cpp):**
-- Qwen3.5-35B-A3B (current best for orchestration)
+- Qwen3.6-35B-A3B (current best for orchestration)
 - Qwen3-Coder-30B-A3B (code tasks)
 - GLM-4.7-Flash (alternative)
 - Gemma 4 31B dense, 26B-A4B MoE (new candidates)

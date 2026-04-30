@@ -145,7 +145,7 @@ Phase 2.2 supports multiple models for entity extraction from conversations. Thi
 
 The model is selected by the top-level key **`entity_extraction_role`** in `config/models.yaml` (no env var). It accepts:
 
-- A **role name** that exists under `models:` in the same file (e.g. `reasoning`, `router`, `standard`, `coding`). The actual model id and endpoint come from that role's block. Example: `entity_extraction_role: reasoning` uses the **reasoning** model (e.g. `qwen3.5-9b-mlx-mxfp8`); `entity_extraction_role: router` uses the **router** model (e.g. `lfm2.5-1.2b-instruct-mlx`). So the log line `[lfm2.5-1.2b-instruct-mlx] Generated prediction` appears when `entity_extraction_role: router`.
+- A **role name** that exists under `models:` in the same file (e.g. `reasoning`, `router`, `standard`, `coding`). The actual model id and endpoint come from that role's block. Example: `entity_extraction_role: reasoning` uses the **reasoning** model (e.g. `qwen3.6-35b-a3b`); `entity_extraction_role: router` uses the **router** model (e.g. `lfm2.5-1.2b-instruct-mlx`). So the log line `[lfm2.5-1.2b-instruct-mlx] Generated prediction` appears when `entity_extraction_role: router`.
 - **`claude`** — use Claude API instead of a local model (no role block; requires Claude client and API key).
 
 To use the fast LFM model for entity extraction, set `entity_extraction_role: router` in `config/models.yaml`. To use the higher-quality reasoning model, set `entity_extraction_role: reasoning`.
@@ -170,9 +170,9 @@ else:
     # ... call LocalLLMClient.respond(role=model_role, ...)
 ```
 
-## Current Configuration (2026-03-06)
+## Current Configuration (2026-04-30)
 
-`entity_extraction_role: reasoning` — `qwen3.5-35b-a3b` (8bit, 35B MoE)
+`entity_extraction_role: reasoning` — `qwen3.6-35b-a3b` (8bit, 35B MoE)
 
 This replaced the original `qwen3.5-9b-mlx-mxfp8` which crashed on LM Studio
 due to an mxfp8 quantization issue at the 9B size. The 4B standard model was

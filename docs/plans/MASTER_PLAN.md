@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-29 (FRE-249 marked Done — ADR-0059 implemented 2026-04-27; FRE-264 marked Done — implemented 2026-04-26; ADR-0060 draft in review FRE-250)
+> **Last updated**: 2026-04-30 (Linear drift fix: FRE-267 moved to Approved; ADR-0055/0056 index corrected to Accepted; 5 completed projects marked Done in Linear)
 > **Implementation sequence**: `docs/superpowers/specs/2026-04-22-implementation-sequence-wave-plan-design.md`
 
 ---
@@ -58,15 +58,16 @@ Ordered by recommended implementation sequence. All items Approved in Linear. De
 | 8 | Within-Session Progressive Context Compression | [FRE-251](https://linear.app/frenchforest/issue/FRE-251) | ADR-0061 | FRE-249 |
 | ~~2.5-P4~~ | ~~ADR-0063 — Flag-gated deprecation of all 8 legacy tools~~ | ~~[FRE-263](https://linear.app/frenchforest/issue/FRE-263)~~ | ~~ADR-0063 §D4~~ | ~~Done 2026-04-28 — 2-week stability window until 2026-05-12~~ |
 | 9 | Agent self-updating skills — phase 2 *(phase 1 absorbed into FRE-262)* | [FRE-226](https://linear.app/frenchforest/issue/FRE-226) | ADR-0058 | FRE-248 |
-| 2.5-P6 | ADR-0063 — Delete legacy tool code | [FRE-265](https://linear.app/frenchforest/issue/FRE-265) | ADR-0063 | FRE-263 (2-week window) |
-| 10 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |
-| 11 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2 | Proactive Memory MVP done (FRE-176) |
+| 10 | PWA: per-session thumbs feedback → Captain's Log + Insights consumer | [FRE-267](https://linear.app/frenchforest/issue/FRE-267) | — | FRE-235 (done) |
+| 2.5-P6 | ADR-0063 — Delete legacy tool code | [FRE-265](https://linear.app/frenchforest/issue/FRE-265) | ADR-0063 | FRE-263 (2-week window until 2026-05-12) |
+| 11 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |
+| 12 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2 | Proactive Memory MVP done (FRE-176) |
 
 ## Needs Approval
 
 | Work Item | ADR / Plan | Notes |
 |-----------|------------|-------|
-| PWA: per-session thumbs feedback → Captain's Log + Insights consumer | — | [FRE-267](https://linear.app/frenchforest/issue/FRE-267) — deferred from FRE-235; design groundwork complete in `plans/let-s-analyze-and-wisely-stateless-tome.md` |
+| *(none)* | — | — |
 
 ### Dependency graph (project-level)
 
@@ -172,8 +173,8 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 | 0059 | Context Quality Monitoring Stream | Accepted (Implemented — FRE-249 done 2026-04-27) |
 | 0058 | Self-Improvement Pipeline Stream | Accepted (Implemented — FRE-248 done 2026-04-25) |
 | 0057 | Insights & Pattern Analysis Stream | Accepted (Implemented — FRE-247 2026-04-24) |
-| 0056 | Error Pattern Monitoring Stream | Approved (FRE-244 — blocked by 0054) |
-| 0055 | System Health & Homeostasis Stream | Approved (FRE-246 — blocked by 0054) |
+| 0056 | Error Pattern Monitoring Stream | Accepted (Implemented — FRE-244 done 2026-04-24) |
+| 0055 | System Health & Homeostasis Stream | Accepted (Implemented — FRE-246 done 2026-04-24) |
 | 0054 | Feedback Stream Bus Convention | Accepted (Implemented — FRE-245 done 2026-04-23) |
 | 0063 | Primitive Tools & Action-Boundary Governance | Approved (2026-04-24 — Wave 2.5; epic [FRE-259](https://linear.app/frenchforest/issue/FRE-259), PIVOT-1..6 = FRE-260..265) |
 | 0062 | Tool Loop Gate — Per-Tool FSM-Based Loop Detection | Accepted (Implemented — 2026-04-22) |

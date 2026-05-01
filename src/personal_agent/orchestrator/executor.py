@@ -1234,6 +1234,50 @@ async def step_llm_call(
     timer = ctx.request_timer
     llm_span_name: str | None = None  # set once span is started; used to close span on exception
 
+    # ADR-0061 — within-session hard trigger.  Fires synchronously when the
+    # working messages list crosses the hard threshold (default 0.85 of the
+    # context window).  Layers above Stage 7 (which runs at request entry);
+    # this catches in-flight overflow caused by large tool responses.
+    from personal_agent.orchestrator.within_session_compression import (
+        compress_in_place,
+        needs_hard_compression,
+    )
+
+    if ctx.session_id and needs_hard_compression(
+        ctx.messages, settings.context_window_max_tokens
+    ):
+        try:
+            from personal_agent.events.bus import get_event_bus
+
+            _bus = get_event_bus()
+        except Exception:  # event-bus init failure must not block the loop
+            _bus = None
+        log.info(
+            "within_session_compression_hard_trigger",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            messages=len(ctx.messages),
+            max_tokens=settings.context_window_max_tokens,
+        )
+        try:
+            ctx.messages, _ = await compress_in_place(
+                ctx.messages,
+                trace_id=ctx.trace_id,
+                session_id=ctx.session_id,
+                trigger="hard",
+                bus=_bus,
+            )
+        except Exception as exc:
+            # Pre-LLM compression must never crash the orchestrator: Stage 7
+            # at the next request boundary remains the safety net.
+            log.warning(
+                "within_session_compression_hard_failed",
+                trace_id=ctx.trace_id,
+                session_id=ctx.session_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
     # Determine which model to call
     if ctx.gateway_output is not None and ctx.selected_model_role is None:
         # Gateway-driven path: always use PRIMARY role (ADR-0033)
@@ -2294,12 +2338,22 @@ async def execute_task_safe(
                 }
             )
 
-        # Trigger async context compression if threshold crossed (ADR-0038).
+        # Trigger async context compression if threshold crossed (ADR-0038
+        # + ADR-0061 §D1 soft trigger).  Bus threaded through so the
+        # within-session compression event lands on
+        # ``stream:context.within_session_compressed``.
         if ctx.session_id:
+            try:
+                from personal_agent.events.bus import get_event_bus
+
+                _soft_bus = get_event_bus()
+            except Exception:
+                _soft_bus = None
             compression_manager.maybe_trigger_compression(
                 session_id=ctx.session_id,
                 messages=ctx.messages,
                 trace_id=ctx.trace_id,
+                bus=_soft_bus,
             )
 
         log.info(

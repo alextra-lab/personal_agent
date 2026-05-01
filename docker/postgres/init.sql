@@ -114,7 +114,11 @@ CREATE TABLE IF NOT EXISTS budget_policies (
     cap_usd DECIMAL(10, 6) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (user_id, time_window, provider, role)
+    -- NULLS NOT DISTINCT (PG 15+) — v1 always has user_id=NULL and
+    -- provider=NULL; without this, concurrent INSERTs would produce
+    -- duplicate "unique" rows because Postgres treats NULL != NULL in
+    -- unique constraints by default.
+    UNIQUE NULLS NOT DISTINCT (user_id, time_window, provider, role)
 );
 CREATE INDEX IF NOT EXISTS idx_budget_policies_lookup
     ON budget_policies(time_window, role)
@@ -133,7 +137,7 @@ CREATE TABLE IF NOT EXISTS budget_counters (
     window_start TIMESTAMPTZ NOT NULL,
     running_total DECIMAL(10, 6) NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (user_id, time_window, provider, role, window_start)
+    UNIQUE NULLS NOT DISTINCT (user_id, time_window, provider, role, window_start)
 );
 CREATE INDEX IF NOT EXISTS idx_budget_counters_lookup
     ON budget_counters(time_window, role, window_start);

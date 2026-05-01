@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from uuid import UUID
 
 import orjson
 
 from personal_agent.config import load_model_config, settings
+from personal_agent.cost_gate import BudgetDenied
 from personal_agent.llm_client import InferenceSlotTimeout, LLMTimeout, LocalLLMClient, ModelRole
 from personal_agent.telemetry import get_logger
 
@@ -152,6 +154,9 @@ def _supplement_person_entities_from_user_message(
 async def extract_entities_and_relationships(
     user_message: str,
     assistant_response: str,
+    *,
+    trace_id: UUID | str | None = None,
+    attempt_number: int | None = None,
 ) -> dict[str, Any]:
     """Extract entities and relationships from conversation.
 
@@ -162,9 +167,21 @@ async def extract_entities_and_relationships(
     Args:
         user_message: User's message.
         assistant_response: Assistant's response.
+        trace_id: Originating capture's trace_id, threaded through to
+            structured logs for join-with-chat-request (FRE-307 D6).
+        attempt_number: Sequential retry counter per trace_id (FRE-307);
+            the consolidator computes this and passes it through so log
+            lines are aggregable in Kibana ("median attempts to success").
 
     Returns:
         Dict with entities, relationships, entity_names, and summary.
+
+    Raises:
+        BudgetDenied: Re-raised so the consolidator can write a
+            ``consolidation_attempts`` row with ``outcome=budget_denied``
+            and let the next scheduled tick re-pick the trace once the
+            budget window rolls. Generic exceptions are still swallowed
+            and surfaced as a fallback result.
     """
     model_config = load_model_config()
     entity_extraction_role = model_config.entity_extraction_role
@@ -323,10 +340,32 @@ async def extract_entities_and_relationships(
             "entity_names": entity_names,
         }
 
+    except BudgetDenied as e:
+        # FRE-307: surface budget pressure as a distinct, structured signal so
+        # the auto-tuning monitor (FRE-311) and the Extraction Retry Health
+        # Kibana panel can aggregate denial counts. Re-raise so the
+        # consolidator records the attempt as outcome="budget_denied" rather
+        # than the generic "extraction_returned_fallback" path below.
+        log.warning(
+            "entity_extraction_failed",
+            error=str(e),
+            error_type="BudgetDenied",
+            trace_id=str(trace_id) if trace_id else None,
+            attempt_number=attempt_number,
+            denial_reason=e.denial_reason,
+            role=e.role,
+            cap=str(e.cap),
+            spend=str(e.current_spend),
+        )
+        raise
     except Exception as e:
         log.error(
             "entity_extraction_failed",
             error=str(e),
+            error_type=type(e).__name__,
+            trace_id=str(trace_id) if trace_id else None,
+            attempt_number=attempt_number,
+            denial_reason=None,
             exc_info=True,
         )
         return _default_extraction_result(user_message)

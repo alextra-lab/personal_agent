@@ -84,14 +84,14 @@ After import you should see data views: `agent-captains-captures-*`, `agent-capt
 #### Dashboards import (UI)
 
 1. **Stack Management** → **Saved Objects** → **Import**.
-2. Select one or more of: `task_analytics.ndjson`, `reflection_insights.ndjson`, `system_health.ndjson`, `insights_engine.ndjson`, `request_latency.ndjson`.
+2. Select one or more of: `task_analytics.ndjson`, `reflection_insights.ndjson`, `system_health.ndjson`, `insights_engine.ndjson`, `request_latency.ndjson`, `extraction_retry_health.ndjson`.
 3. Complete the import (overwrite if updating).
 
 #### Dashboards import (API)
 
 ```bash
 # Example: import all three
-for f in task_analytics reflection_insights system_health insights_engine request_latency; do
+for f in task_analytics reflection_insights system_health insights_engine request_latency extraction_retry_health; do
   curl -X POST "http://localhost:5601/api/saved_objects/_import?overwrite=true" \
     -H "kbn-xsrf: true" \
     --form file=@config/kibana/dashboards/${f}.ndjson
@@ -259,6 +259,34 @@ Two panels ship with the **Agent Reliability** dashboard. If you need to build t
 - Error events by component: `level: ERROR AND source_component: "tools.*"`, data view `agent-logs-*`
 - Error pattern detections: `event_type: error_pattern_detected`, data view `agent-logs-*`
 - Specific fingerprint: `event_type: error_pattern_detected AND fingerprint: "<fp>"`, data view `agent-logs-*`
+
+---
+
+## Extraction Retry Health (ADR-0065 / FRE-307)
+
+Three panels make consolidation-pipeline retry health visible. The data
+source is the `consolidation_attempt_recorded` log event emitted by
+`personal_agent.second_brain.attempts.record_consolidation_attempt`,
+which writes one log line per `consolidation_attempts` DB row. Both
+sources carry the same fields, joinable on `trace_id`.
+
+| Panel | Type | KQL filter | Aggregation |
+|---|---|---|---|
+| Median attempts to success (per role) | Line | `event:consolidation_attempt_recorded AND outcome:success` | median(`attempt_number`) over `@timestamp`, split by `role` |
+| Dead-letter rate (per role) | Bar | `event:consolidation_attempt_recorded AND outcome:dead_letter` | count() by terms on `role` |
+| Top denial_reason (donut) | Donut | `event:consolidation_attempt_recorded AND outcome:budget_denied` | terms on `denial_reason` |
+
+**Data view:** `agent-logs-*`
+
+**Operator interpretation:**
+- *Median attempts climbing* → extraction is increasingly costly per success. Check whether a model degraded or a budget cap is biting.
+- *Non-zero dead-letter rate* → an attempt class is exhausting retries; combine with `event_type:consumer_handler_error` for the error message.
+- *`denial_reason: cap_exceeded` dominating* → the auto-tuning monitor (FRE-311) should propose a cap raise; in the meantime `config/governance/budget.yaml` is the human knob.
+
+**Useful KQL queries:**
+- Per-trace timeline: `event:consolidation_attempt_recorded AND trace_id:"<uuid>"`, sorted by `attempt_number`
+- Retry-storm density during a budget-exhaustion window: `event:consolidation_attempt_recorded AND outcome:budget_denied`, time-bucketed
+- Cross-system join: `event:entity_extraction_failed` shares `trace_id` with the rows in this panel
 
 ---
 

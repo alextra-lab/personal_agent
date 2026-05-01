@@ -14,6 +14,7 @@ from typing import Any
 from personal_agent.captains_log.capture import TaskCapture, read_captures
 from personal_agent.config import load_model_config
 from personal_agent.config.settings import get_settings
+from personal_agent.cost_gate import BudgetDenied
 from personal_agent.events import (
     STREAM_MEMORY_ACCESSED,
     STREAM_MEMORY_ENTITIES_UPDATED,
@@ -25,6 +26,10 @@ from personal_agent.events import (
 from personal_agent.memory.models import Entity, Relationship, SessionNode, TurnNode
 from personal_agent.memory.promote import run_promotion_pipeline
 from personal_agent.memory.service import MemoryService
+from personal_agent.second_brain.attempts import (
+    previous_attempt_count,
+    record_consolidation_attempt,
+)
 from personal_agent.second_brain.entity_extraction import extract_entities_and_relationships
 from personal_agent.telemetry import get_logger
 
@@ -364,11 +369,50 @@ class SecondBrainConsolidator:
             r"<think>.*?</think>", "", raw_response, flags=re.DOTALL
         ).strip()
 
-        # Extract entities and relationships using configured model (local SLM or Claude)
-        extraction_result = await extract_entities_and_relationships(
-            capture.user_message,
-            extraction_response,
+        # FRE-307: per-attempt telemetry. attempt_number is 1-based from the
+        # count of prior consolidation_attempts rows for this (trace_id, role).
+        attempt_started_at = datetime.now(timezone.utc)
+        previous_failures = await previous_attempt_count(
+            trace_id=capture.trace_id, role="entity_extraction"
         )
+        attempt_number = previous_failures + 1
+
+        # Extract entities and relationships using configured model (local SLM or Claude).
+        # BudgetDenied bubbles up as a distinct outcome ('budget_denied') so the
+        # auto-tuning monitor (FRE-311) and the Extraction Retry Health panel can
+        # distinguish cap pressure from actual extraction errors.
+        try:
+            extraction_result = await extract_entities_and_relationships(
+                capture.user_message,
+                extraction_response,
+                trace_id=capture.trace_id,
+                attempt_number=attempt_number,
+            )
+        except BudgetDenied as budget_exc:
+            await record_consolidation_attempt(
+                trace_id=capture.trace_id,
+                role="entity_extraction",
+                started_at=attempt_started_at,
+                outcome="budget_denied",
+                denial_reason=budget_exc.denial_reason,
+            )
+            log.warning(
+                "consolidation_extraction_budget_denied",
+                trace_id=capture.trace_id,
+                attempt_number=attempt_number,
+                previous_failure_count=previous_failures,
+                denial_reason=budget_exc.denial_reason,
+                role=budget_exc.role,
+                cap=str(budget_exc.cap),
+                spend=str(budget_exc.current_spend),
+            )
+            return {
+                "turns_created": 0,
+                "entities_created": 0,
+                "relationships_created": 0,
+                "entity_ids": [],
+                "relationship_element_ids": [],
+            }
 
         # If extraction fell back (LLM error/crash), skip writing to Neo4j entirely.
         # A fallback result has summary == user_message and empty entities. Writing a
@@ -380,9 +424,22 @@ class SecondBrainConsolidator:
             and summary.strip() == capture.user_message.strip()[:200]
         )
         if is_fallback:
+            time_since_first = (
+                datetime.now(timezone.utc) - attempt_started_at
+            ).total_seconds()
+            await record_consolidation_attempt(
+                trace_id=capture.trace_id,
+                role="entity_extraction",
+                started_at=attempt_started_at,
+                outcome="extraction_returned_fallback",
+            )
             log.warning(
                 "consolidation_extraction_fallback_skip",
                 trace_id=capture.trace_id,
+                attempt_number=attempt_number,
+                previous_failure_count=previous_failures,
+                time_since_first_attempt_seconds=time_since_first,
+                denial_reason=None,
                 reason="extraction returned fallback result; will retry next run",
             )
             return {
@@ -458,6 +515,14 @@ class SecondBrainConsolidator:
             if rel_eid:
                 relationships_created += 1
                 relationship_element_ids.append(rel_eid)
+
+        # FRE-307: terminal success row.
+        await record_consolidation_attempt(
+            trace_id=capture.trace_id,
+            role="entity_extraction",
+            started_at=attempt_started_at,
+            outcome="success",
+        )
 
         return {
             "turns_created": turns_created,

@@ -130,14 +130,18 @@ per weekly review run.  Consumer ``cg:graph-monitor`` writes a trend-summary
 
 CG_GRAPH_MONITOR = "cg:graph-monitor"
 """Consumer group: knowledge graph quality monitor (Wave 3 — ADR-0060)."""
-"""Stream for compaction-quality-poor incidents (Wave 3 — ADR-0059).
 
-Producer: ``request_gateway.recall_controller`` via
-``telemetry.context_quality.record_incident``. One event per detected overlap
-between a recalled noun phrase and a previously dropped entity in the same
-session. Consumer ``cg:captain-log`` writes ``CaptainLogEntry(category=
-KNOWLEDGE_QUALITY, scope=ORCHESTRATOR)``. Ordering rule: durable JSONL append
-must succeed before publish (ADR-0054 D4).
+# Wave 4 — ADR-0061 (Within-Session Progressive Context Compression)
+STREAM_CONTEXT_WITHIN_SESSION_COMPRESSED = "stream:context.within_session_compressed"
+"""Stream for within-session compression events (Wave 4 — ADR-0061).
+
+Producer: ``orchestrator.within_session_compression.compress_in_place`` via
+``telemetry.within_session_compression.record_compression``.  One event per
+within-session compression pass (soft async or hard synchronous).  No consumer
+in Phase 1 — observability only.  Phase 2 will subscribe a tuning consumer
+that adapts ``min_tail_tokens`` / ``pre_pass_threshold_tokens`` from the
+ADR-0059 per-session signal.  Ordering rule: durable JSONL append before
+publish (ADR-0054 D4).
 """
 
 
@@ -774,6 +778,57 @@ class MemoryStalenessReviewedEvent(EventBase):
     dominant_tier: str
 
 
+class WithinSessionCompressionEvent(EventBase):
+    """Published per within-session compression pass (Wave 4 — ADR-0061).
+
+    One event per compression pass — either the soft async path
+    (``maybe_trigger_compression``) or the hard synchronous path inside the
+    orchestrator loop.  Phase 1 has no consumer; the bus publish is
+    observability + a composability hook for Phase 2's adaptive tuning
+    consumer.
+
+    ``trace_id`` and ``session_id`` are required — every compression is
+    request-correlated.  ``source_component`` defaults to
+    ``"orchestrator.within_session_compression"``.
+
+    Attributes:
+        trigger: ``"soft"`` (async, between turns) or ``"hard"``
+            (synchronous, mid-orchestration).
+        head_tokens: Tokens preserved in the head (system + first user msg).
+        middle_tokens_in: Tokens in the middle band before pre-pass and LLM.
+        middle_tokens_out: Tokens in the middle after pre-pass + LLM
+            summariser.  Equals the summary token count when summariser ran;
+            equals the pre-pass-only middle when summariser was skipped or
+            failed.
+        tail_tokens: Tokens preserved in the tail (last K messages).
+        pre_pass_replacements: Number of large tool messages replaced with
+            descriptors during the pre-pass step.
+        summariser_called: Whether the LLM compressor was invoked.  ``False``
+            when pre-pass alone reduced the middle below threshold or when
+            the compressor role was missing.
+        summariser_duration_ms: Wall time of the compressor call when
+            invoked; ``0`` otherwise.
+        tokens_saved: ``middle_tokens_in - middle_tokens_out`` (always ≥ 0).
+    """
+
+    event_type: Literal[
+        "context.within_session_compressed"
+    ] = "context.within_session_compressed"
+    source_component: str = "orchestrator.within_session_compression"
+
+    trace_id: str
+    session_id: str
+    trigger: Literal["soft", "hard"]
+    head_tokens: int
+    middle_tokens_in: int
+    middle_tokens_out: int
+    tail_tokens: int
+    pre_pass_replacements: int
+    summariser_called: bool
+    summariser_duration_ms: int
+    tokens_saved: int
+
+
 class ModeAdvisoryEvent(EventBase):
     """Published by quality monitors to advise the brainstem of a suggested mode (ADR-0060 §D7).
 
@@ -851,4 +906,6 @@ def parse_stream_event(payload: dict[str, Any]) -> EventBase:
         return MemoryStalenessReviewedEvent.model_validate(payload)
     if raw_type == "mode.advisory":
         return ModeAdvisoryEvent.model_validate(payload)
+    if raw_type == "context.within_session_compressed":
+        return WithinSessionCompressionEvent.model_validate(payload)
     raise ValueError(f"unknown event_type: {raw_type!r}")

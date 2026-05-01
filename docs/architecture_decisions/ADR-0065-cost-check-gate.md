@@ -1,10 +1,12 @@
 # ADR-0065: Cost Check Gate — Atomic Reservation, Layered Budgets, Retry Telemetry
 
-**Status**: Proposed
+**Status**: Accepted
 **Date**: 2026-04-30
+**Accepted**: 2026-05-01
 **Deciders**: Project owner
-**Related**: ADR-0064 (inbound user identity — provides `user_id` for future per-user scoping), FRE-244 (error pattern monitoring — consumes the new retry telemetry), FRE-300 (extend pattern monitor to scan warnings — complementary signal), FRE-301 (Captain's Log iteration-limit reflection — same pattern of "agent was constrained, surface it")
-**Implementation Plan**: TBD (linked Linear ticket)
+**Related**: ADR-0064 (inbound user identity — provides `user_id` for future per-user scoping), FRE-244 (error pattern monitoring — consumes the new retry telemetry), FRE-300 (extend pattern monitor to scan warnings — complementary signal), FRE-301 (Captain's Log iteration-limit reflection — same pattern of "agent was constrained, surface it"), FRE-311 (auto-tuning monitor that proposes cap adjustments via Linear tickets — consumes this gate's telemetry)
+**Implementation Plan**: `docs/superpowers/plans/2026-05-01-fre-302-cost-check-gate.md`
+**Linear**: FRE-302 (parent) · FRE-303 / FRE-304 / FRE-305 / FRE-306 / FRE-307 (sub-tasks)
 
 ---
 
@@ -179,12 +181,19 @@ Each sub-task is independently testable. Sub-tasks 1–3 are the critical path f
 
 ## Status Tracking
 
-| Sub-task | Linear | Status |
-|---|---|---|
-| Schema + migration | TBD | Pending |
-| Gate primitive | TBD | Pending |
-| Caller integration | TBD | Pending |
-| Failure semantics + PWA error card | TBD | Pending |
-| Retry telemetry + Kibana panel | TBD | Pending |
+| Sub-task | Linear | Commit | Status |
+|---|---|---|---|
+| Schema + migration | FRE-303 | `550e77a` | ✅ Done |
+| Schema NULL hotfix (NULLS NOT DISTINCT) | inline (FRE-303 follow-up) | `73ab4cf` | ✅ Done |
+| Gate primitive | FRE-304 | `2a9241f` | ✅ Done |
+| Caller integration + cost_estimator | FRE-305 | `8834a9a` | ✅ Done |
+| Failure semantics + PWA error card | FRE-306 | `9e3d94b` | ✅ Done |
+| Retry telemetry + Kibana panel | FRE-307 | `1aa2151` | ✅ Done |
 
-ADR will move to `Accepted` when the parent Linear ticket is approved.
+### Implementation deltas from the ADR text
+
+- **Alembic skipped** — the ADR's "schema + migration" implementation note assumed Alembic was a working migration tool; it isn't and never has been in this repo. Migrations live as standalone SQL files under `docker/postgres/migrations/` (matching every other schema change in the project) plus the `init.sql` append for fresh installs. Bootstrapping Alembic was scoped to a separate decision.
+- **Schema NULL bug surfaced + fixed mid-flight** — `UNIQUE (user_id, time_window, provider, role, …)` doesn't enforce uniqueness when those NULL columns are NULL (Postgres default). 50-racer concurrent test caught it: 8 wins on a 5-cap. Fixed via `NULLS NOT DISTINCT` (PG 15+; we run PG 17). Migration `0002_cost_gate_null_uniqueness.sql` cleans up duplicate rows on already-migrated DBs.
+- **Background consumer NACK semantics** — the ADR text describes "Redis Streams redelivers after AGENT_EVENT_BUS_ACK_TIMEOUT_SECONDS=300" but the codebase doesn't yet implement XCLAIM-based pending-entry reclamation. Pragmatic implementation: catch BudgetDenied in the consumer runner, ACK + log a structured `consumer_budget_denied`, no dead-letter. Recovery happens via the next scheduled consolidation tick re-picking the trace. XCLAIM-based reclamation is a separate follow-up.
+- **Auto-tuning monitor (FRE-311)** filed as a follow-up — the user surfaced the need for a Captain's-Log-style monitor that reads the gate's telemetry and proposes Linear tickets to raise/lower caps. Out of FRE-302 scope; depends on this ADR and FRE-307 landing first.
+- **Stale-test sweep (FRE-312)** filed — the FRE-302 work uncovered 74 pre-existing test failures + 1 collection error from earlier refactors (FRE-261 / FRE-262 / FRE-282) that didn't update their tests. Tracked separately so `make test` can be made meaningful again.

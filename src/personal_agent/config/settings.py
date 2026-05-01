@@ -497,6 +497,14 @@ class AppConfig(BaseSettings):
         ge=1,
         description="Max agent-filed Linear issues per 24h (across all projects combined)",
     )
+    linear_personal_agent_label_id: str | None = Field(
+        default="25004aac-3b32-4fa4-bdc2-55ff348ea842",
+        description=(
+            "Linear label ID for the 'PersonalAgent' label (FRE-309). "
+            "Using the ID directly bypasses fragile runtime name lookup. "
+            "Defaults to the known production UUID."
+        ),
+    )
 
     # Perplexity AI (native tool — ADR-0028 Phase 2)
     perplexity_api_key: str | None = Field(default=None, description="Perplexity API key")

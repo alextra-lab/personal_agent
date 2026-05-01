@@ -342,6 +342,28 @@ async def _get_project_id(team_id: str, project_name: str) -> str | None:
     return None
 
 
+# ── Config-backed ID resolution (FRE-309) ─────────────────────────────────
+
+
+def _require_personal_agent_label_id() -> str:
+    """Return the PersonalAgent label ID from config, never from name lookup.
+
+    Returns:
+        UUID string for the PersonalAgent Linear label.
+
+    Raises:
+        ToolExecutionError: When AGENT_LINEAR_PERSONAL_AGENT_LABEL_ID is not set.
+    """
+    label_id = settings.linear_personal_agent_label_id
+    if not isinstance(label_id, str) or not label_id.strip():
+        raise ToolExecutionError(
+            "PersonalAgent label ID not configured. "
+            "Set AGENT_LINEAR_PERSONAL_AGENT_LABEL_ID in .env "
+            "(expected value: 25004aac-3b32-4fa4-bdc2-55ff348ea842)."
+        )
+    return label_id.strip()
+
+
 # ── Rate limiting ─────────────────────────────────────────────────────────
 
 
@@ -417,7 +439,7 @@ async def create_linear_issue_executor(
 
     team_id = await _get_team_id(_TEAM_NAME)
     state_id = await _get_state_id(team_id, _NEEDS_APPROVAL_STATE)
-    personal_agent_label_id = await _get_label_id(team_id, _PERSONAL_AGENT_LABEL)
+    personal_agent_label_id = _require_personal_agent_label_id()
     agent_filed_label_id = await _get_label_id(
         team_id, _AGENT_FILED_LABEL, auto_create_color=_AGENT_FILED_COLOR
     )

@@ -220,6 +220,7 @@ async def test_create_dry_run_returns_payload_without_creating() -> None:
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 10
+        ms.linear_personal_agent_label_id = "25004aac-3b32-4fa4-bdc2-55ff348ea842"
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client(responses)
             result = await create_linear_issue_executor(
@@ -250,6 +251,7 @@ async def test_create_issue_success() -> None:
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 10
+        ms.linear_personal_agent_label_id = "25004aac-3b32-4fa4-bdc2-55ff348ea842"
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client(responses)
             result = await create_linear_issue_executor(
@@ -296,6 +298,7 @@ async def test_create_issue_uses_cached_ids_on_second_call() -> None:
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 10
+        ms.linear_personal_agent_label_id = "25004aac-3b32-4fa4-bdc2-55ff348ea842"
         with patch("personal_agent.tools.linear.httpx.AsyncClient", return_value=client):
             await create_linear_issue_executor(title="First", description="body")
             first_count = call_count
@@ -373,6 +376,7 @@ async def test_rate_limit_does_not_apply_to_dry_run() -> None:
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 5
+        ms.linear_personal_agent_label_id = "25004aac-3b32-4fa4-bdc2-55ff348ea842"
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client(responses)
             result = await create_linear_issue_executor(
@@ -484,3 +488,58 @@ def test_get_project_id_query_uses_id_type() -> None:
     source = inspect.getsource(lm._get_project_id)
     assert "$teamId: ID!" in source
     assert "$teamId: String!" not in source
+
+
+# ── FRE-309: config-backed label ID tests ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_create_issue_uses_configured_label_id_not_name_lookup() -> None:
+    """FRE-309: PersonalAgent label ID from config is used directly; GQL label fetch skipped.
+
+    Verifies the template-first flow: when linear_personal_agent_label_id is configured,
+    the executor places that UUID in labelIds without any name-based resolution call.
+    """
+    _clear_caches()
+    configured_id = "25004aac-3b32-4fa4-bdc2-55ff348ea842"
+    # dry_run skips issueCreate; agent-filed still needs: labels fetch + create.
+    responses = [
+        _teams_response(),
+        _states_response(),
+        _labels_response(),           # fetched once for agent-filed resolution
+        _label_create_response("agent-filed"),
+    ]
+    with patch("personal_agent.tools.linear.settings") as ms:
+        ms.linear_api_key = "lin_api_test"
+        ms.linear_agent_rate_limit_per_day = 10
+        ms.linear_personal_agent_label_id = configured_id
+        with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value = _mock_http_client(responses)
+            result = await create_linear_issue_executor(
+                title="Template-first test",
+                description="Uses config label ID, not name lookup.",
+                dry_run=True,
+            )
+
+    assert result["dry_run"] is True
+    # Configured UUID is in the payload — not the "lbl-pa" ID from the mock GQL response.
+    assert configured_id in result["payload"]["labelIds"]
+    assert "lbl-pa" not in result["payload"]["labelIds"]
+
+
+@pytest.mark.asyncio
+async def test_create_issue_raises_when_personal_agent_label_id_not_configured() -> None:
+    """FRE-309: clear error when AGENT_LINEAR_PERSONAL_AGENT_LABEL_ID is not set."""
+    _clear_caches()
+    responses = [
+        _teams_response(),
+        _states_response(),
+    ]
+    with patch("personal_agent.tools.linear.settings") as ms:
+        ms.linear_api_key = "lin_api_test"
+        ms.linear_agent_rate_limit_per_day = 10
+        ms.linear_personal_agent_label_id = None
+        with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value = _mock_http_client(responses)
+            with pytest.raises(ToolExecutionError, match="PersonalAgent label ID not configured"):
+                await create_linear_issue_executor(title="T", description="D")

@@ -70,6 +70,14 @@ telemetry/evaluation/EVAL-primitive-tools/retest-*/
 # Empty or incomplete run directories
 telemetry/evaluation/EVAL-primitive-tools/run-2026-04-27-1716/
 
+# Superseded interim G1/G3 runs from 2026-04-28 — canonical results are
+# run-g1-smoke-fre283-* and run-g3-full-sonnet-*T1930 (committed in 9235f9a).
+# The budget50 dir is incomplete (missing report.md).
+telemetry/evaluation/EVAL-primitive-tools/run-g1-smoke-2026-04-28/
+telemetry/evaluation/EVAL-primitive-tools/run-g3-full-fre283-2026-04-28/
+telemetry/evaluation/EVAL-primitive-tools/run-g3-full-fre283-budget50-2026-04-28/
+telemetry/evaluation/EVAL-primitive-tools/run-g3-full-sonnet-2026-04-28/
+
 # Evaluation research results ARE tracked — they back architectural decisions
 # EVAL-NN-*/ directories (named baselines) are committed
 

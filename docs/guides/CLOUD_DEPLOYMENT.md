@@ -1,7 +1,7 @@
 # Seshat Cloud Deployment Guide
 
 > **Last updated**: 2026-04-16  
-> **Target**: OVH VPS-3 (24 GB RAM, 8 vCPU, 160 GB SSD)  
+> **Target**: your VPS  
 > **Access**: Cloudflare WARP private network → `172.25.0.10`
 
 This guide covers the complete Seshat cloud stack: infrastructure provisioning, Docker Compose services, reverse proxy configuration, Cloudflare tunnel, Terraform firewall, and deployment operations.
@@ -62,7 +62,7 @@ Cloudflare: WARP Zero Trust + cloudflared tunnel (HTTP/2)
 - SSH key registered on VPS: `~/.ssh/id_ed25519`
 - SSH alias configured in `~/.ssh/config`:
   ```
-  Host vps-5a0f676b
+  Host <your-vps-ssh-alias>
       HostName <VPS_IP>
       Port <SSH_PORT>
       User debian
@@ -88,7 +88,7 @@ Cloudflare: WARP Zero Trust + cloudflared tunnel (HTTP/2)
 ### 3.1 Clone the repository
 
 ```bash
-ssh vps-5a0f676b
+ssh <your-vps-ssh-alias>
 sudo mkdir -p /opt/seshat && sudo chown debian:debian /opt/seshat
 cd /opt/seshat
 git clone https://github.com/alextra-lab/personal_agent.git .
@@ -221,7 +221,7 @@ All services share the `cloud-sim` bridge network (`172.25.0.0/16`). Static IPs 
 
 Debug ports are bound to `127.0.0.1` only (SSH tunnel to access):
 ```bash
-ssh -L 5432:localhost:5432 -L 9200:localhost:9200 vps-5a0f676b
+ssh -L 5432:localhost:5432 -L 9200:localhost:9200 <your-vps-ssh-alias>
 ```
 
 ### Startup order
@@ -455,7 +455,7 @@ bash infrastructure/scripts/deploy.sh --build
 git push origin main
 bash infrastructure/scripts/deploy.sh --build
 # deploy.sh rebuilds seshat-gateway; for PWA changes, rebuild that too:
-ssh vps-5a0f676b "cd /opt/seshat && docker compose -f docker-compose.cloud.yml up --build seshat-pwa -d"
+ssh <your-vps-ssh-alias> "cd /opt/seshat && docker compose -f docker-compose.cloud.yml up --build seshat-pwa -d"
 ```
 
 ### Dependency change (`pyproject.toml` / `uv.lock`)
@@ -469,13 +469,13 @@ bash infrastructure/scripts/deploy.sh --full
 
 ```bash
 git push origin main
-ssh vps-5a0f676b "cd /opt/seshat && git pull && docker compose -f docker-compose.cloud.yml restart caddy"
+ssh <your-vps-ssh-alias> "cd /opt/seshat && git pull && docker compose -f docker-compose.cloud.yml restart caddy"
 ```
 
 ### Rollback
 
 ```bash
-ssh vps-5a0f676b "cd /opt/seshat && git checkout <previous-commit>"
+ssh <your-vps-ssh-alias> "cd /opt/seshat && git checkout <previous-commit>"
 bash infrastructure/scripts/deploy.sh --build
 ```
 
@@ -507,7 +507,7 @@ Common causes:
 
 This is fixed by `seshat-pwa/src/lib/uuid.ts` polyfill. If you see this, the PWA container has old code — rebuild:
 ```bash
-ssh vps-5a0f676b "cd /opt/seshat && docker compose -f docker-compose.cloud.yml up --build seshat-pwa -d"
+ssh <your-vps-ssh-alias> "cd /opt/seshat && docker compose -f docker-compose.cloud.yml up --build seshat-pwa -d"
 ```
 
 ### Cloudflare tunnel not connecting (QUIC errors)
@@ -528,14 +528,14 @@ bash infrastructure/scripts/transfer-models.sh
 
 Docker services set `restart: unless-stopped` and should auto-restart. If they don't:
 ```bash
-ssh vps-5a0f676b "cd /opt/seshat && docker compose -f docker-compose.cloud.yml up -d"
+ssh <your-vps-ssh-alias> "cd /opt/seshat && docker compose -f docker-compose.cloud.yml up -d"
 ```
 
 ### Port conflicts
 
 All debug ports are bound to `127.0.0.1` only. To access PostgreSQL locally:
 ```bash
-ssh -L 5432:localhost:5432 vps-5a0f676b
+ssh -L 5432:localhost:5432 <your-vps-ssh-alias>
 # Then connect to localhost:5432
 ```
 
@@ -543,7 +543,7 @@ ssh -L 5432:localhost:5432 vps-5a0f676b
 
 On first deploy the vector index may need explicit initialization:
 ```bash
-ssh vps-5a0f676b "curl -s http://localhost:9001/health | python3 -m json.tool"
+ssh <your-vps-ssh-alias> "curl -s http://localhost:9001/health | python3 -m json.tool"
 # neo4j: "connected" means the service started but index creation runs in lifespan
 # Check logs for "neo4j_vector_index_ensured"
 ```

@@ -16,7 +16,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-SSH_HOST="${VPS_SSH_HOST:-vps-5a0f676b}"
+SSH_HOST="${VPS_SSH_HOST:?VPS_SSH_HOST is required — set it to your VPS SSH alias (e.g. export VPS_SSH_HOST=my-vps)}"
 VPS_MODELS_PATH="/opt/seshat/models"
 
 EMBEDDING_SRC="/Volumes/EnvoyUltra/lm-studio/models/Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-f16.gguf"

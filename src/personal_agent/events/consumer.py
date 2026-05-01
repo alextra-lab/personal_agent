@@ -4,6 +4,14 @@ Manages one ``asyncio.Task`` per subscription.  Each task runs an
 ``XREADGROUP`` loop that dispatches events to the registered handler,
 acknowledges on success, and routes to the dead-letter stream after
 ``max_retries`` failed attempts.
+
+BudgetDenied (ADR-0065 / FRE-306) is handled specially: it's not a poison
+pill, just transient cost pressure. The runner ACKs the message (so it
+doesn't accumulate in the dead-letter queue) and emits a structured
+``consumer_budget_denied`` log event. Recovery happens via the next
+scheduled consolidation tick — background work is idempotent against
+re-attempt and the next pass naturally re-picks the trace once the
+budget window rolls.
 """
 
 from __future__ import annotations
@@ -14,6 +22,7 @@ from typing import TYPE_CHECKING
 import orjson
 
 from personal_agent.config.settings import get_settings
+from personal_agent.cost_gate import BudgetDenied
 from personal_agent.events.models import (
     CG_SESSION_WRITER,
     RequestCompletedEvent,
@@ -167,6 +176,27 @@ class ConsumerRunner:
                     event_id=event.event_id,
                     message_id=message_id,
                 )
+                return
+            except BudgetDenied as exc:
+                # ADR-0065 D5: budget pressure is not a poison pill. ACK to
+                # avoid dead-letter accumulation; the next scheduled
+                # consolidation pass will re-pick the trace once the window
+                # rolls. The structured log feeds the FRE-307 retry-health
+                # telemetry surface.
+                log.warning(
+                    "consumer_budget_denied",
+                    stream=sub.stream,
+                    group=sub.group,
+                    event_type=event.event_type,
+                    event_id=event.event_id,
+                    message_id=message_id,
+                    role=exc.role,
+                    time_window=exc.time_window,
+                    denial_reason=exc.denial_reason,
+                    cap=str(exc.cap),
+                    spend=str(exc.current_spend),
+                )
+                await self._bus.ack(sub.stream, sub.group, message_id)
                 return
             except Exception as exc:
                 log.warning(

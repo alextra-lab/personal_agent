@@ -9,6 +9,7 @@ import type { ExecutionProfile } from '@/lib/types';
 import { useSSEStream } from '@/hooks/useSSEStream';
 
 import { ApprovalModal } from './ApprovalModal';
+import { BudgetDeniedCard } from './BudgetDeniedCard';
 import { ChatInput } from './ChatInput';
 import { ChatMessage } from './ChatMessage';
 import { ContextBudgetMeter } from './ContextBudgetMeter';
@@ -72,6 +73,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     contextBudget,
     pendingInterrupt,
     pendingApproval,
+    budgetDenied,
     sendMessage,
     resolveInterrupt,
     handleApprovalDecision,
@@ -242,6 +244,11 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
                   <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:150ms]" />
                   <span className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce [animation-delay:300ms]" />
                 </div>
+              </div>
+            )}
+            {budgetDenied !== null && (
+              <div className="px-4 py-3">
+                <BudgetDeniedCard error={budgetDenied} />
               </div>
             )}
           </>

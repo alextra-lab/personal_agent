@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef } from 'react';
 
 import {
+  BudgetDeniedError,
   connectToStream,
   postApprovalDecision,
   sendChatMessage,
@@ -30,6 +31,13 @@ export interface UseSSEStreamReturn {
   pendingInterrupt: PendingInterrupt | null;
   /** Pending tool-approval request; non-null while agent is waiting for a decision. */
   pendingApproval: ToolApprovalRequestData | null;
+  /**
+   * Structured Cost-Gate denial from the most recent send (FRE-306). Non-null
+   * means the backend returned a 503 with `error="budget_denied"`; the chat
+   * UI renders <BudgetDeniedCard> instead of an empty assistant turn.
+   * Cleared on the next sendMessage().
+   */
+  budgetDenied: BudgetDeniedError | null;
   sendMessage: (text: string, sessionId: string, profile?: string) => Promise<void>;
   resolveInterrupt: (choice: string) => void;
   /** Post an approve/deny decision for the current pendingApproval. */
@@ -63,6 +71,7 @@ export function useSSEStream(): UseSSEStreamReturn {
   const [contextBudget, setContextBudget] = useState<number | null>(null);
   const [pendingInterrupt, setPendingInterrupt] = useState<PendingInterrupt | null>(null);
   const [pendingApproval, setPendingApproval] = useState<ToolApprovalRequestData | null>(null);
+  const [budgetDenied, setBudgetDenied] = useState<BudgetDeniedError | null>(null);
 
   // Refs that survive re-renders without causing them.
   const streamRef = useRef<StreamConnection | null>(null);
@@ -193,6 +202,7 @@ export function useSSEStream(): UseSSEStreamReturn {
       setIsStreaming(true);
       setPendingInterrupt(null);
       setPendingApproval(null);
+      setBudgetDenied(null);
       setActiveTools([]);
 
       // 1. Send the message (triggers backend processing).
@@ -200,6 +210,12 @@ export function useSSEStream(): UseSSEStreamReturn {
         await sendChatMessage({ message: text, sessionId, profile });
       } catch (err) {
         setIsStreaming(false);
+        if (err instanceof BudgetDeniedError) {
+          // ADR-0065 / FRE-306: render an explicit error card, not an empty
+          // assistant turn. The card consumes `budgetDenied` from the hook.
+          setBudgetDenied(err);
+          return;
+        }
         // Append an error pseudo-message so the user can see what happened.
         setMessages((prev) => [
           ...prev,
@@ -284,6 +300,7 @@ export function useSSEStream(): UseSSEStreamReturn {
     contextBudget,
     pendingInterrupt,
     pendingApproval,
+    budgetDenied,
     sendMessage,
     resolveInterrupt,
     handleApprovalDecision,

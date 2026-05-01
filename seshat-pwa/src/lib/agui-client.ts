@@ -43,12 +43,49 @@ export interface SendMessageOptions {
 }
 
 /**
+ * Structured Cost-Gate denial (ADR-0065 / FRE-306).
+ *
+ * Thrown by sendChatMessage when the backend returns 503 with the
+ * documented `error: "budget_denied"` body — the PWA renders an explicit
+ * error card showing cap / spend / reset_time rather than the empty
+ * assistant turn that motivated the whole ADR.
+ */
+export class BudgetDeniedError extends Error {
+  readonly role: string;
+  readonly timeWindow: string;
+  readonly cap: string;
+  readonly spend: string;
+  readonly resetTime: string;
+  readonly denialReason: string;
+
+  constructor(payload: {
+    role: string;
+    time_window: string;
+    cap: string;
+    spend: string;
+    reset_time: string;
+    denial_reason: string;
+  }) {
+    super(`Budget denied for ${payload.role} (${payload.time_window})`);
+    this.name = 'BudgetDeniedError';
+    this.role = payload.role;
+    this.timeWindow = payload.time_window;
+    this.cap = payload.cap;
+    this.spend = payload.spend;
+    this.resetTime = payload.reset_time;
+    this.denialReason = payload.denial_reason;
+  }
+}
+
+/**
  * Send a chat message to the Seshat backend.
  *
  * Uses form-encoded body to match the existing FastAPI /chat endpoint.
  * The backend emits events to the SSE stream identified by sessionId.
  *
- * @throws Error when the backend returns a non-2xx status.
+ * @throws BudgetDeniedError when the backend returns 503 with a
+ *   `error: "budget_denied"` payload (rendered as the budget error card).
+ * @throws Error for any other non-2xx response.
  */
 export async function sendChatMessage(opts: SendMessageOptions): Promise<void> {
   const { message, sessionId, profile = 'local' } = opts;
@@ -67,6 +104,19 @@ export async function sendChatMessage(opts: SendMessageOptions): Promise<void> {
   });
 
   if (!resp.ok) {
+    if (resp.status === 503) {
+      // Try to parse the BudgetDenied envelope. If parsing fails we fall
+      // through to the generic Error below.
+      try {
+        const body = await resp.json();
+        if (body && body.error === 'budget_denied') {
+          throw new BudgetDeniedError(body);
+        }
+      } catch (e) {
+        if (e instanceof BudgetDeniedError) throw e;
+        // JSON parse error or unexpected shape — fall through.
+      }
+    }
     throw new Error(`Seshat /chat/stream returned ${resp.status}: ${resp.statusText}`);
   }
 }

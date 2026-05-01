@@ -936,6 +936,52 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+# ── BudgetDenied → structured 503 (ADR-0065 D5 / FRE-306) ───────────────────
+# Catches ``BudgetDenied`` raised by ``CostGate.reserve`` anywhere downstream
+# (LiteLLMClient or the streaming /chat path) and renders it as an explicit
+# error response with cap, current spend, and reset-time so the PWA can show
+# the user *why* the call failed instead of an empty assistant turn.
+from fastapi import Request as _Request  # noqa: E402
+from fastapi.responses import JSONResponse as _JSONResponse  # noqa: E402
+
+from personal_agent.cost_gate import BudgetDenied as _BudgetDenied  # noqa: E402
+
+
+@app.exception_handler(_BudgetDenied)
+async def _budget_denied_handler(  # type: ignore[misc]
+    _request: _Request, exc: _BudgetDenied
+) -> _JSONResponse:
+    """Render :class:`BudgetDenied` as a structured HTTP 503.
+
+    The PWA error card consumes ``error="budget_denied"`` and renders the
+    cap / spend / reset_time fields explicitly. This was the regression
+    fixed by ADR-0065: previously the cap-exceeded ValueError was swallowed
+    and rendered as an empty assistant turn.
+    """
+    log.warning(
+        "http_budget_denied",
+        role=exc.role,
+        time_window=exc.time_window,
+        current_spend=str(exc.current_spend),
+        cap=str(exc.cap),
+        denial_reason=exc.denial_reason,
+    )
+    return _JSONResponse(
+        status_code=503,
+        content={
+            "error": "budget_denied",
+            "role": exc.role,
+            "time_window": exc.time_window,
+            "cap": str(exc.cap),
+            "spend": str(exc.current_spend),
+            "reset_time": exc.window_resets_at.isoformat(),
+            "denial_reason": exc.denial_reason,
+            "status": 503,
+        },
+    )
+
+
 # CORS — allows the Next.js dev server (localhost:3000) to reach the backend (localhost:9000).
 # In production Caddy proxies both through the same origin so this middleware is a no-op there.
 app.add_middleware(

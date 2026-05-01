@@ -52,6 +52,7 @@ async def _stream_to_queue(
     session_uuid: UUID,
     anthropic_messages: list[Any],
     api_key: str,
+    reservation_id: UUID | None = None,
 ) -> None:
     """Stream an Anthropic response into the AG-UI per-session event queue.
 
@@ -71,12 +72,16 @@ async def _stream_to_queue(
         anthropic_messages: Full conversation history (prior + new user turn)
             in Anthropic wire format (``role`` + ``content`` only).
         api_key: Anthropic API key.
+        reservation_id: Cost-gate reservation token from ``chat()``; the
+            stream's success path commits it with the actual cost, the
+            failure path refunds it.
     """
     session_id_str = str(session_uuid)
     queue = get_event_queue(session_id_str)
 
     # --- Stream from Anthropic --------------------------------------------
     full_text = ""
+    final_message: Any = None
     try:
         client = anthropic.AsyncAnthropic(api_key=api_key)
         async with client.messages.stream(
@@ -88,6 +93,12 @@ async def _stream_to_queue(
             async for text in stream.text_stream:
                 full_text += text
                 await queue.put(TextDeltaEvent(text=text, session_id=session_id_str))
+            # Capture the final message so we can settle the reservation
+            # against actual input/output token counts (not the estimate).
+            try:
+                final_message = await stream.get_final_message()
+            except Exception:
+                final_message = None
 
         # --- Persist assistant message: bus consumer or direct write ------
         try:
@@ -149,6 +160,8 @@ async def _stream_to_queue(
             error=str(exc),
         )
         await queue.put(TextDeltaEvent(text=f"\n\n[API error: {exc}]", session_id=session_id_str))
+        if reservation_id is not None:
+            await _refund_reservation_safe(reservation_id, trace_id)
     except Exception as exc:
         log.error(
             "chat.stream_failed",
@@ -157,9 +170,82 @@ async def _stream_to_queue(
             error=str(exc),
         )
         await queue.put(TextDeltaEvent(text=f"\n\n[Error: {exc}]", session_id=session_id_str))
+        if reservation_id is not None:
+            await _refund_reservation_safe(reservation_id, trace_id)
+    else:
+        # Successful stream — commit the reservation with the actual cost.
+        if reservation_id is not None:
+            await _commit_reservation_safe(
+                reservation_id=reservation_id,
+                trace_id=trace_id,
+                final_message=final_message,
+            )
     finally:
         # Signal stream end regardless of success/failure.
         await queue.put(None)
+
+
+async def _refund_reservation_safe(reservation_id: UUID, trace_id: str) -> None:
+    """Refund a chat reservation; swallow + log any error rather than crash the task."""
+    try:
+        from personal_agent.cost_gate import get_default_gate_or_none
+
+        gate = get_default_gate_or_none()
+        if gate is not None:
+            await gate.refund(reservation_id)
+    except Exception as exc:
+        log.error(
+            "chat.refund_failed",
+            trace_id=trace_id,
+            reservation_id=str(reservation_id),
+            error=str(exc),
+        )
+
+
+async def _commit_reservation_safe(
+    *, reservation_id: UUID, trace_id: str, final_message: Any
+) -> None:
+    """Commit the reservation against the actual cost from the streamed response.
+
+    Pricing comes from ``litellm.model_cost`` keyed on
+    ``anthropic/<model>``. If usage data is missing or pricing isn't
+    available, fall back to committing the original estimate (no settle) —
+    the reaper would otherwise sweep the reservation and refund it
+    incorrectly.
+    """
+    from decimal import Decimal as _Decimal
+
+    try:
+        import litellm  # noqa: PLC0415
+
+        from personal_agent.cost_gate import get_default_gate_or_none
+
+        gate = get_default_gate_or_none()
+        if gate is None:
+            return
+
+        actual_cost = _Decimal("0")
+        if final_message is not None and getattr(final_message, "usage", None) is not None:
+            usage = final_message.usage
+            pricing = getattr(litellm, "model_cost", {}).get(
+                f"anthropic/{_CLOUD_MODEL}", {}
+            )
+            input_price = _Decimal(str(pricing.get("input_cost_per_token", "0")))
+            output_price = _Decimal(str(pricing.get("output_cost_per_token", "0")))
+            input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+            output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+            actual_cost = (
+                _Decimal(input_tokens) * input_price + _Decimal(output_tokens) * output_price
+            ).quantize(_Decimal("0.000001"))
+
+        await gate.commit(reservation_id, actual_cost)
+    except Exception as exc:
+        log.error(
+            "chat.commit_failed",
+            trace_id=trace_id,
+            reservation_id=str(reservation_id),
+            error=str(exc),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -266,12 +352,52 @@ async def chat(
             error=str(exc),
         )
 
+    # ── Cost Check Gate reservation (ADR-0065 / FRE-306) ────────────────
+    # The streaming chat path bypasses LiteLLMClient (it talks to the
+    # Anthropic SDK directly), so the gate must be invoked here. Reserve
+    # before launching the background task; on BudgetDenied the FastAPI
+    # exception handler in service/app.py renders a structured 503 (the
+    # PWA's "budget denied" card) instead of an empty assistant turn —
+    # which was the regression that motivated this whole ADR.
+    reservation_id: UUID | None = None
+    try:
+        from decimal import Decimal as _Decimal
+
+        from personal_agent.cost_gate import get_default_gate_or_none, load_budget_config
+        from personal_agent.llm_client.cost_estimator import estimate_reservation_for_call
+
+        gate = get_default_gate_or_none()
+        if gate is not None:
+            reservation_amount = estimate_reservation_for_call(
+                role="main_inference",
+                model=f"anthropic/{_CLOUD_MODEL}",
+                messages=anthropic_messages,
+                max_tokens=_MAX_TOKENS,
+                config=load_budget_config(),
+            )
+            reservation_id = await gate.reserve(
+                role="main_inference",
+                amount=_Decimal(reservation_amount),
+                trace_id=UUID(trace_id),
+            )
+        else:
+            log.warning(
+                "chat.cost_gate_not_initialized",
+                trace_id=trace_id,
+                note="streaming call proceeding without gate; check lifespan startup",
+            )
+    except Exception:
+        # BudgetDenied (preferred) and other cost-gate errors propagate up
+        # to the FastAPI exception handler that renders the 503.
+        raise
+
     asyncio.create_task(
         _stream_to_queue(
             trace_id=trace_id,
             session_uuid=session_uuid,
             anthropic_messages=anthropic_messages,
             api_key=api_key,
+            reservation_id=reservation_id,
         )
     )
 
@@ -281,5 +407,6 @@ async def chat(
         session_id=session_id,
         profile=profile,
         prior_message_count=len(prior_messages),
+        reservation_id=str(reservation_id) if reservation_id else None,
     )
     return {"session_id": session_id, "trace_id": trace_id, "status": "streaming"}

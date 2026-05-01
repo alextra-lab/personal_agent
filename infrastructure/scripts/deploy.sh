@@ -10,13 +10,13 @@
 #   --full   Pull + rebuild ALL images + restart (after dependency changes)
 #
 # Prerequisites:
-#   - VPS_SSH_HOST set in environment, or defaults to vps-5a0f676b
+#   - VPS_SSH_HOST set in environment (required — your SSH alias for the VPS)
 #   - Repo already cloned on VPS at $DEPLOY_PATH
 #   - .env file already present on VPS at $DEPLOY_PATH/.env
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-SSH_HOST="${VPS_SSH_HOST:-vps-5a0f676b}"
+SSH_HOST="${VPS_SSH_HOST:?VPS_SSH_HOST is required — set it to your VPS SSH alias (e.g. export VPS_SSH_HOST=my-vps)}"
 DEPLOY_PATH="${VPS_DEPLOY_PATH:-/opt/seshat}"
 COMPOSE_FILE="docker-compose.cloud.yml"
 BUILD=false

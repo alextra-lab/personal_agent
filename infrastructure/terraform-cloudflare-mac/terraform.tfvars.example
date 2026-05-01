@@ -1,8 +1,0 @@
-# Copy to terraform.tfvars and fill in real values.
-# terraform.tfvars is gitignored — never commit real secrets.
-
-cloudflare_api_token  = "YOUR_CLOUDFLARE_API_TOKEN"
-cloudflare_zone_id    = "YOUR_ZONE_ID"
-cloudflare_account_id = "YOUR_ACCOUNT_ID"
-tunnel_name           = "seshat-mac"
-domain                = "frenchforet.com"

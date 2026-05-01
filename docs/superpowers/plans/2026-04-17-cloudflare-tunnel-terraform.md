@@ -608,7 +608,7 @@ This prints the tunnel token. Copy it — you'll need it in the next step.
 SSH into the VPS and update `.env`:
 
 ```bash
-ssh vps-5a0f676b
+ssh <your-vps-ssh-alias>
 cd /opt/seshat
 # Edit .env and set:
 # CLOUDFLARE_TUNNEL_TOKEN=<token-from-step-2>

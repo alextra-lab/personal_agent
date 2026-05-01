@@ -333,7 +333,7 @@ Change to:
 SSH into the VPS:
 
 ```bash
-ssh vps-5a0f676b
+ssh <your-vps-ssh-alias>
 cd /opt/seshat
 ```
 

@@ -1,0 +1,45 @@
+# Cost Check Gate — per-role budgets and denial behaviour (ADR-0065).
+#
+# Caps user-confirmed 2026-05-01 (FRE-302 implementation session).
+# entity_extraction and captains_log dailies were bumped from the ADR
+# placeholders ($1.50 / $0.50) to $2.50 each — "for the days I have a lot
+# of interaction".
+#
+# The auto-tuning monitor (FRE-311) will eventually propose Linear tickets
+# to raise/lower these caps based on observed utilisation. Until then, edit
+# this file by hand and ask the user before deviating from confirmed values.
+version: 1
+
+roles:
+  main_inference:
+    default_output_tokens: 1024
+    safety_factor: 1.2
+    on_denial: raise        # FastAPI 503 → PWA error card
+  entity_extraction:
+    default_output_tokens: 256
+    safety_factor: 1.2
+    on_denial: nack         # background consumer NACK → Redis Streams redeliver
+  captains_log:
+    default_output_tokens: 512
+    safety_factor: 1.2
+    on_denial: nack
+  insights:
+    default_output_tokens: 512
+    safety_factor: 1.2
+    on_denial: nack
+  promotion:
+    default_output_tokens: 256
+    safety_factor: 1.2
+    on_denial: nack
+  freshness:
+    default_output_tokens: 128
+    safety_factor: 1.2
+    on_denial: nack
+
+caps:
+  - {time_window: daily,  role: entity_extraction, cap_usd: 2.50}   # user-confirmed 2026-05-01
+  - {time_window: daily,  role: captains_log,      cap_usd: 2.50}   # user-confirmed 2026-05-01
+  - {time_window: daily,  role: main_inference,    cap_usd: 5.00}
+  - {time_window: weekly, role: entity_extraction, cap_usd: 7.00}
+  - {time_window: weekly, role: main_inference,    cap_usd: 18.00}
+  - {time_window: weekly, role: _total,            cap_usd: 25.00}

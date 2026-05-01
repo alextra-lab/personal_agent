@@ -465,6 +465,50 @@ class AppConfig(BaseSettings):
         description="Fire compression when estimated tokens exceed this fraction of context_window_max_tokens.",
     )
 
+    # Within-Session Progressive Context Compression (ADR-0061)
+    within_session_compression_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable head-middle-tail within-session compression (ADR-0061). "
+            "Master kill switch — when False, hard-trigger is a no-op and "
+            "soft-trigger reverts to pre-FRE-251 behaviour."
+        ),
+    )
+    within_session_hard_threshold_ratio: float = Field(
+        default=0.85,
+        gt=0.0,
+        le=1.0,
+        description=(
+            "Fire synchronous mid-orchestration compression when estimated "
+            "tokens reach this fraction of context_window_max_tokens "
+            "(ADR-0061 §D1)."
+        ),
+    )
+    within_session_min_tail_tokens: int = Field(
+        default=2000,
+        ge=0,
+        description=(
+            "Token floor for the preserved tail in head-middle-tail "
+            "compression (ADR-0061 §D3)."
+        ),
+    )
+    within_session_pre_pass_threshold_tokens: int = Field(
+        default=800,
+        ge=0,
+        description=(
+            "Per-tool-message token threshold for the deterministic pre-pass "
+            "replacement (ADR-0061 §D4)."
+        ),
+    )
+    within_session_compression_refire_after_messages: int = Field(
+        default=4,
+        ge=1,
+        description=(
+            "Minimum number of new messages between consecutive soft "
+            "compressions for the same session (ADR-0061 §D1)."
+        ),
+    )
+
     # Database (Postgres)
     database_url: str = Field(
         default="postgresql+asyncpg://agent:agent_dev_password@localhost:5432/personal_agent",

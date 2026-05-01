@@ -537,3 +537,80 @@ class TestCompactionQualityIncidentEvent:
         assert isinstance(parsed, CompactionQualityIncidentEvent)
         assert parsed.fingerprint == event.fingerprint
         assert parsed.noun_phrase == "cache"
+
+
+class TestWithinSessionCompressionEvent:
+    """Wave 4 — ADR-0061 within-session compression event."""
+
+    def test_event_type_literal(self) -> None:
+        from personal_agent.events.models import WithinSessionCompressionEvent
+
+        event = WithinSessionCompressionEvent(
+            trace_id="t",
+            session_id="s",
+            trigger="hard",
+            head_tokens=100,
+            middle_tokens_in=5000,
+            middle_tokens_out=300,
+            tail_tokens=400,
+            pre_pass_replacements=2,
+            summariser_called=True,
+            summariser_duration_ms=900,
+            tokens_saved=4700,
+        )
+        assert event.event_type == "context.within_session_compressed"
+        assert event.source_component == "orchestrator.within_session_compression"
+        assert event.trigger == "hard"
+
+    def test_parse_stream_event_dispatch(self) -> None:
+        from personal_agent.events.models import WithinSessionCompressionEvent
+
+        event = WithinSessionCompressionEvent(
+            trace_id="t",
+            session_id="s",
+            trigger="soft",
+            head_tokens=10,
+            middle_tokens_in=4000,
+            middle_tokens_out=250,
+            tail_tokens=200,
+            pre_pass_replacements=1,
+            summariser_called=True,
+            summariser_duration_ms=750,
+            tokens_saved=3750,
+        )
+        parsed = parse_stream_event(event.model_dump(mode="json"))
+        assert isinstance(parsed, WithinSessionCompressionEvent)
+        assert parsed.trigger == "soft"
+        assert parsed.tokens_saved == 3750
+
+    def test_required_fields_enforced(self) -> None:
+        from pydantic import ValidationError
+
+        from personal_agent.events.models import WithinSessionCompressionEvent
+
+        with pytest.raises(ValidationError):
+            # Missing trigger / token fields should fail validation.
+            WithinSessionCompressionEvent(  # type: ignore[call-arg]
+                trace_id="t",
+                session_id="s",
+            )
+
+    def test_invalid_trigger_value_rejected(self) -> None:
+        from pydantic import ValidationError
+
+        from personal_agent.events.models import WithinSessionCompressionEvent
+
+        with pytest.raises(ValidationError):
+            WithinSessionCompressionEvent(
+                trace_id="t",
+                session_id="s",
+                trigger="medium",  # type: ignore[arg-type]
+                head_tokens=10,
+                middle_tokens_in=100,
+                middle_tokens_out=10,
+                tail_tokens=10,
+                pre_pass_replacements=0,
+                summariser_called=False,
+                summariser_duration_ms=0,
+                tokens_saved=90,
+            )

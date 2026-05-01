@@ -5,16 +5,24 @@ summary of evicted messages, preserving key decisions, entities, and facts.
 
 Uses a lightweight compressor model (ADR-0038) to generate concise summaries
 that fit within a bounded token budget.
+
+ADR-0061 layers a deterministic ``_pre_pass_tool_outputs`` helper *before*
+the LLM call: large ``role="tool"`` payloads are replaced with 1-line JSON
+descriptors (preserving ``tool_call_id`` for assistant↔tool pair sanity).
+``summarize_middle`` returns the post-pre-pass summary together with the
+stats the within-session caller needs.
 """
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
 from personal_agent.config import load_model_config
 from personal_agent.llm_client.factory import get_llm_client
 from personal_agent.llm_client.types import LLMClientError, ModelRole
+from personal_agent.orchestrator.context_window import estimate_message_tokens
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
@@ -158,3 +166,130 @@ def _format_messages_for_compression(
         else:
             parts.append(f"[{role}]: {content!s}")
     return "\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# ADR-0061 — Pre-pass + summariser used by within-session compression
+# ---------------------------------------------------------------------------
+
+
+_ERROR_MARKERS = ('"error"', '"status": "error"', '"status":"error"')
+
+
+def _content_is_error_payload(content: str) -> bool:
+    """Return True when *content* looks like a tool error JSON.
+
+    Tool errors are kept verbatim through the pre-pass so the compressor LLM
+    can incorporate the failure into Decisions/Open Items.  Heuristic only —
+    matches the JSON-shaped error markers used elsewhere in the codebase
+    (see ``orchestrator/context_window.py:_is_tool_error_message``).
+    """
+    lowered = content.lower()
+    return any(marker in lowered for marker in _ERROR_MARKERS)
+
+
+def _shape_descriptor(content: str) -> str:
+    """Return a short shape descriptor for a tool ``content`` payload.
+
+    Tries JSON parse; on success returns sorted top-level keys (dict) or
+    ``list[N]`` (list).  On failure, returns the first 120 chars of
+    ``repr(content)`` with newlines collapsed.
+    """
+    try:
+        parsed = json.loads(content)
+    except (TypeError, ValueError):
+        compact = " ".join(content.split())
+        return compact[:120]
+    if isinstance(parsed, dict):
+        keys = sorted(str(k) for k in parsed.keys())
+        return "keys=" + ",".join(keys[:10]) + ("…" if len(keys) > 10 else "")
+    if isinstance(parsed, list):
+        return f"list[{len(parsed)}]"
+    return repr(parsed)[:120]
+
+
+def _pre_pass_tool_outputs(
+    middle: list[dict[str, Any]],
+    *,
+    threshold_tokens: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """Replace large tool messages in *middle* with 1-line descriptors.
+
+    Per ADR-0061 §D4 — runs before the LLM summariser so the compressor
+    pays for conversational content, not raw tool bodies.  Assistant
+    messages, system markers, user messages, and small / error tool
+    messages pass through unchanged.
+
+    The replacement preserves ``tool_call_id`` so
+    ``orchestrator.context_window._sanitize_tool_pairs`` does not later
+    drop the matching assistant ``tool_calls`` block.
+
+    Args:
+        middle: Middle-band messages between head and tail.  Not mutated;
+            a new list is returned.
+        threshold_tokens: Per-message size threshold.  Tool messages with
+            an estimated token count below this are kept verbatim.
+
+    Returns:
+        ``(rewritten_middle, replacement_count)``.
+    """
+    rewritten: list[dict[str, Any]] = []
+    replacements = 0
+    for msg in middle:
+        if msg.get("role") != "tool":
+            rewritten.append(msg)
+            continue
+        content = msg.get("content", "")
+        if not isinstance(content, str) or not content:
+            rewritten.append(msg)
+            continue
+        if estimate_message_tokens(msg) < threshold_tokens:
+            rewritten.append(msg)
+            continue
+        if _content_is_error_payload(content):
+            rewritten.append(msg)
+            continue
+
+        descriptor_payload = {
+            "_replaced": True,
+            "tool_call_id": msg.get("tool_call_id", ""),
+            "size_chars": len(content),
+            "shape": _shape_descriptor(content),
+        }
+        replaced = dict(msg)
+        replaced["content"] = json.dumps(descriptor_payload, sort_keys=True)
+        rewritten.append(replaced)
+        replacements += 1
+
+    return rewritten, replacements
+
+
+async def summarize_middle(
+    middle: list[dict[str, Any]],
+    *,
+    trace_id: str = "",
+) -> tuple[str, int]:
+    """Run the LLM compressor on *middle* and return ``(summary, duration_ms)``.
+
+    Thin wrapper around :func:`compress_turns` that exposes the wall time
+    used by the compressor call so the within-session record can include
+    ``summariser_duration_ms``.  On compressor failure the wrapper returns
+    the same fallback marker ``compress_turns`` would and a duration of 0.
+
+    Args:
+        middle: Middle-band messages (already pre-passed) to summarise.
+        trace_id: Request trace identifier for telemetry.
+
+    Returns:
+        Tuple of ``(summary, duration_ms)``.  ``duration_ms`` is 0 when the
+        summariser was skipped (empty input or compressor role missing) or
+        when the call failed before producing a summary.
+    """
+    if not middle:
+        return FALLBACK_MARKER, 0
+    started = time.monotonic()
+    summary = await compress_turns(middle, trace_id=trace_id)
+    duration_ms = int(round((time.monotonic() - started) * 1000))
+    if summary == FALLBACK_MARKER:
+        return summary, 0
+    return summary, duration_ms

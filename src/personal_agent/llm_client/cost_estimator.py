@@ -117,7 +117,14 @@ def estimate_reservation_for_call(
         # guards against runaway estimates.
         input_tokens = 4096
 
-    pricing: dict[str, Any] = getattr(litellm, "model_cost", {}).get(model, {})
+    # litellm.model_cost indexes some models by the prefixed form
+    # (``anthropic/claude-…``) and others by the bare id (``gpt-5.4-nano``).
+    # Try both rather than silently fall back to $0 — every miss here means
+    # the gate cannot deny on cost for that model.
+    model_cost_table: dict[str, Any] = getattr(litellm, "model_cost", {})
+    pricing: dict[str, Any] = model_cost_table.get(model) or model_cost_table.get(
+        model.rsplit("/", 1)[-1], {}
+    )
     input_price = Decimal(str(pricing.get("input_cost_per_token", "0")))
     output_price = Decimal(str(pricing.get("output_cost_per_token", "0")))
 

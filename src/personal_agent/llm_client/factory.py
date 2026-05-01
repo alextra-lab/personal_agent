@@ -96,12 +96,14 @@ def get_llm_client(role_name: str = "primary") -> Any:
     model_def = config.models.get(resolved_key)
 
     if model_def and model_def.provider_type != "local":
+        from personal_agent.cost_gate import budget_role_for
         from personal_agent.llm_client.litellm_client import LiteLLMClient
 
         return LiteLLMClient(
             model_id=model_def.id,
             provider=model_def.provider or "anthropic",
             max_tokens=model_def.max_tokens or 8192,
+            budget_role=budget_role_for(role_name),
         )
 
     from personal_agent.llm_client.client import LocalLLMClient

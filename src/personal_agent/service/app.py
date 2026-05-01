@@ -50,6 +50,8 @@ metrics_daemon: MetricsDaemon | None = None
 mcp_adapter: "MCPGatewayAdapter | None" = None  # type: ignore  # noqa: F821
 consumer_runner: "ConsumerRunner | None" = None  # type: ignore  # noqa: F821
 freshness_consumer: "FreshnessConsumer | None" = None  # type: ignore  # noqa: F821
+cost_gate: "CostGate | None" = None  # type: ignore  # noqa: F821
+cost_gate_reaper_task: asyncio.Task[None] | None = None
 
 # Fire-and-forget assistant message appends: session_id -> task (FRE-51).
 # Next request for same session awaits this so history is consistent before hydration.
@@ -357,7 +359,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         metrics_daemon, \
         mcp_adapter, \
         consumer_runner, \
-        freshness_consumer
+        freshness_consumer, \
+        cost_gate, \
+        cost_gate_reaper_task
 
     # Startup
     log.info("service_starting")
@@ -369,6 +373,38 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize database
     await init_db()
     log.info("database_initialized")
+
+    # Cost Check Gate (ADR-0065 / FRE-305): atomic Postgres-backed reservation
+    # primitive in front of every paid LLM call. Loaded here so the
+    # subsequent service-init code can already issue paid calls if needed.
+    try:
+        from personal_agent.cost_gate import (
+            CostGate,
+            load_budget_config,
+            run_reaper,
+            set_default_gate,
+        )
+
+        budget_config = load_budget_config()
+        cost_gate = CostGate(config=budget_config, db_url=settings.database_url)
+        await cost_gate.connect()
+        set_default_gate(cost_gate)
+        cost_gate_reaper_task = asyncio.create_task(run_reaper(cost_gate))
+        log.info(
+            "cost_gate_initialized",
+            roles=len(budget_config.roles),
+            caps=len(budget_config.caps),
+        )
+    except Exception as e:
+        # Failing to initialise the gate is fatal — without it, paid calls
+        # would fall back to the unprotected advisory check the gate replaces.
+        log.error(
+            "cost_gate_init_failed",
+            error=str(e),
+            remedy="Verify config/governance/budget.yaml and DB connectivity.",
+            exc_info=True,
+        )
+        raise
 
     # Connect to Elasticsearch and integrate with logging
     es_handler = ElasticsearchHandler(settings.elasticsearch_url)
@@ -874,6 +910,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     if memory_service:
         await memory_service.disconnect()
+
+    # Cost Check Gate teardown (FRE-305)
+    if cost_gate_reaper_task is not None:
+        cost_gate_reaper_task.cancel()
+        try:
+            await cost_gate_reaper_task
+        except asyncio.CancelledError:
+            pass
+        cost_gate_reaper_task = None
+    if cost_gate is not None:
+        from personal_agent.cost_gate import set_default_gate as _set_default_gate
+
+        _set_default_gate(None)
+        await cost_gate.disconnect()
+        cost_gate = None
 
     log.info("service_stopped")
 

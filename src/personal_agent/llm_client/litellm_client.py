@@ -95,11 +95,24 @@ class LiteLLMClient:
         model_id: str,
         provider: str = "anthropic",
         max_tokens: int = 8192,
+        budget_role: str = "main_inference",
     ) -> None:
-        """Initialize LiteLLMClient with model and provider configuration."""
+        """Initialize LiteLLMClient with model and provider configuration.
+
+        Args:
+            model_id: Provider model identifier (e.g., ``claude-sonnet-4-6``).
+            provider: Provider name for LiteLLM dispatch.
+            max_tokens: Default maximum output tokens.
+            budget_role: Cost-gate role this client reserves against
+                (``main_inference``, ``entity_extraction``, etc.). Set by
+                ``get_llm_client`` from the factory's ``role_name`` via
+                ``budget_role_for``; defaults to ``main_inference`` so
+                direct instantiation hits the user-facing cap.
+        """
         self.model_id = model_id
         self.provider = provider
         self.max_tokens = max_tokens
+        self.budget_role = budget_role
         # LiteLLM model string: "provider/model_id"
         self._litellm_model = f"{provider}/{model_id}"
 
@@ -166,24 +179,13 @@ class LiteLLMClient:
         effective_max_tokens = max_tokens or self.max_tokens
         trace_id = str(trace_ctx.trace_id) if trace_ctx else str(uuid4())
 
-        # Budget enforcement — mirror ClaudeClient._check_weekly_budget pattern
+        # ── Settings + cost tracking ──────────────────────────────────────
         from personal_agent.config.settings import get_settings
         from personal_agent.llm_client.cost_tracker import CostTrackerService
 
         _settings = get_settings()
         cost_tracker = CostTrackerService()
         await cost_tracker.connect()
-        try:
-            weekly_cost = await cost_tracker.get_weekly_cost(provider=None)
-            if weekly_cost >= _settings.cloud_weekly_budget_usd:
-                raise ValueError(
-                    f"Weekly cloud API budget exceeded: "
-                    f"${weekly_cost:.2f} >= ${_settings.cloud_weekly_budget_usd:.2f}"
-                )
-        except ValueError:
-            raise
-        except Exception:
-            pass  # DB unavailable — allow call, cost tracking degraded
 
         # Prepend system prompt as a system message if provided
         api_messages = list(messages)
@@ -235,18 +237,72 @@ class LiteLLMClient:
             # Reflect updated messages (cache_control blocks mutated in-place)
             litellm_kwargs["messages"] = api_messages
 
+        # ── Cost Check Gate (ADR-0065 D1) ─────────────────────────────────
+        # Atomic reservation in front of every paid call. Replaces the
+        # advisory weekly check that produced the 2026-04-30 cap-overshoot
+        # incident: the gate's SELECT … FOR UPDATE serialises concurrent
+        # reservers, raises BudgetDenied with a structured payload when any
+        # cap would be exceeded, and is reconciled to the actual cost via
+        # commit/refund below.
+        from personal_agent.cost_gate import (  # noqa: PLC0415 — lazy to avoid cycle
+            BudgetDenied,
+            get_default_gate,
+            load_budget_config,
+        )
+        from personal_agent.llm_client.cost_estimator import (  # noqa: PLC0415
+            estimate_reservation_for_call,
+        )
+
+        gate = get_default_gate()
+        budget_config = load_budget_config()
+        reservation_amount = estimate_reservation_for_call(
+            role=self.budget_role,
+            model=self._litellm_model,
+            messages=api_messages,
+            max_tokens=effective_max_tokens,
+            config=budget_config,
+        )
+        try:
+            reservation_id = await gate.reserve(
+                role=self.budget_role,
+                amount=reservation_amount,
+                trace_id=trace_ctx.trace_id if trace_ctx else None,
+            )
+        except BudgetDenied:
+            log.warning(
+                "litellm_request_budget_denied",
+                model=self._litellm_model,
+                trace_id=trace_id,
+                role=role.value,
+                budget_role=self.budget_role,
+                reservation_amount=str(reservation_amount),
+            )
+            raise
+
         start_time = time.monotonic()
         log.info(
             "litellm_request_start",
             model=self._litellm_model,
             trace_id=trace_id,
             role=role.value,
+            budget_role=self.budget_role,
+            reservation_amount=str(reservation_amount),
             max_tokens=effective_max_tokens,
         )
 
         try:
             response = await litellm.acompletion(**litellm_kwargs)
         except Exception as e:
+            # Refund the reservation so the counter doesn't leak headroom.
+            try:
+                await gate.refund(reservation_id)
+            except Exception as refund_exc:  # noqa: BLE001
+                log.error(
+                    "litellm_refund_after_failure_failed",
+                    trace_id=trace_id,
+                    reservation_id=str(reservation_id),
+                    error=str(refund_exc),
+                )
             log.error(
                 "litellm_request_failed",
                 model=self._litellm_model,
@@ -309,6 +365,25 @@ class LiteLLMClient:
             cost = litellm.completion_cost(completion_response=response)
         except Exception:
             cost = 0.0
+
+        # Settle the reservation against the actual cost. Always commit (even
+        # at $0) so the reservation row transitions out of `active` and the
+        # reaper doesn't refund it.
+        from decimal import Decimal as _Decimal  # noqa: PLC0415 — local alias
+
+        try:
+            await gate.commit(reservation_id, _Decimal(str(cost)))
+        except Exception as commit_exc:  # noqa: BLE001
+            # If the commit fails (DB hiccup), we'd rather log loudly than
+            # silently lose the actual-cost adjustment. The reaper will sweep
+            # the reservation when its TTL expires.
+            log.error(
+                "litellm_commit_failed",
+                trace_id=trace_id,
+                reservation_id=str(reservation_id),
+                cost=cost,
+                error=str(commit_exc),
+            )
 
         if cost > 0:
             try:

@@ -61,6 +61,33 @@ agent.frenchforet.com:80 {
 	import routing
 }
 
+# Cloudflare Tunnel — Neo4j Browser UI + Bolt WebSocket
+# graph.frenchforet.com → http://caddy:80 (configured in Cloudflare Tunnel Terraform)
+# TLS is terminated at the Cloudflare edge; traffic arrives here as plain HTTP.
+#
+# Bolt-over-WebSocket uses a WebSocket upgrade on the same HTTPS port (443).
+# The Browser JS driver (running in the user's browser) connects to:
+#   wss://graph.frenchforet.com  →  Cloudflare  →  caddy:80
+# Caddy then splits:
+#   WebSocket upgrade  →  neo4j:7687  (Bolt)
+#   Regular HTTP       →  neo4j:7474  (Browser UI + REST API)
+graph.frenchforet.com:80 {
+	@websocket {
+		header Connection *Upgrade*
+		header Upgrade websocket
+	}
+	handle @websocket {
+		reverse_proxy neo4j:7687
+	}
+	handle {
+		reverse_proxy neo4j:7474
+	}
+	log {
+		output stdout
+		format json
+	}
+}
+
 # Cloudflare Tunnel — external agent API access
 # All paths route directly to the gateway.
 # TLS is terminated at the Cloudflare edge; traffic arrives here as plain HTTP.

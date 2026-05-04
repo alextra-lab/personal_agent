@@ -59,6 +59,10 @@ services:
       # Memory configuration for cloud footprint
       NEO4J_server_memory_heap_max__size: 1G
       NEO4J_server_memory_pagecache_size: 256m
+      # Bolt advertised address — tells the Browser to connect via the public hostname
+      # so Bolt-over-WebSocket routes through Cloudflare Tunnel (port 443 → neo4j:7474)
+      # instead of trying localhost:7687 from the user's browser.
+      NEO4J_server_bolt_advertised__address: graph.frenchforet.com:443
     volumes:
       - neo4j_data_cloud:/data
     ports:

@@ -15,15 +15,22 @@ Task analytics, reflection insights, and system health visibility in Kibana. Thi
 
 ## Overview
 
-| Dashboard              | Data view (index pattern)       | Purpose                                                                 |
-| ---------------------- | ------------------------------- | ----------------------------------------------------------------------- |
-| Task Analytics         | `agent-captains-captures-*`     | Task outcomes, duration by tool, tool frequency, memory usage          |
-| Reflection Insights   | `agent-captains-reflections-*`  | Proposed changes over time, improvement categories, impact, metrics      |
-| System Health         | `agent-logs-*`                  | CPU/memory over time, mode transitions, consolidation, thresholds, memory quality signals |
-| Insights Engine       | `agent-insights-*`              | Insight count by type, confidence trend, anomalies, weekly proposals created |
-| Request Latency       | `agent-logs-*`                  | Request-to-reply latency by phase, total/P95 over time, trace table     |
+| Dashboard | File | Data view | Purpose |
+| --------- | ---- | --------- | ------- |
+| System Health | `system_health.ndjson` | `agent-logs-*` | CPU/memory timeline, state transitions, consolidation, errors |
+| Task Analytics | `task_analytics.ndjson` | `agent-captains-captures-*` | Task outcomes, duration by tool, tool frequency, entity/memory enrichment |
+| Request Latency | `request_latency.ndjson` | `agent-logs-*` | Request-to-reply latency by phase, P95 over time, trace table |
+| Request Timing (E2E) | `request_timing.ndjson` | `agent-logs-*` | Per-phase breakdown, phase waterfall, duration over time |
+| Request Traces | `request_traces.ndjson` | `agent-logs*` | Single-trace drilldown, phase averages, trace selector |
+| Reflection Insights | `reflection_insights.ndjson` | `agent-captains-reflections-*` | Proposed changes over time, improvement categories, impact, metrics |
+| Insights Engine | `insights_engine.ndjson` | `agent-insights-*` | Insight count by type, confidence trend, anomalies, weekly proposals |
+| Extraction Retry Health | `extraction_retry_health.ndjson` | `agent-logs-*` | Median attempts to success, dead-letter rate, denial_reason breakdown |
+| LLM Performance | `llm_performance.ndjson` | `agent-logs-*` | Call count by model, latency, token usage, errors over time |
+| Delegation Outcomes | `delegation_outcomes.ndjson` | `agent-logs-*` | Delegation volume by agent, success rate, rounds needed, satisfaction |
+| Expansion & Decomposition | `expansion_decomposition.ndjson` | `agent-logs-*` | Strategy distribution, sub-agent spawn/success rate, context budget |
+| Intent Classification | `intent_classification.ndjson` | `agent-logs-*` | Task type distribution, confidence scores, signal frequency |
 
-Dashboard JSON lives in **`config/kibana/dashboards/`**. Import the data views first, then import the dashboards to get complete pre-built visualizations.
+Dashboard JSON lives in **`config/kibana/dashboards/`**. Each file is self-contained (dashboard + visualizations + index-patterns). Use `import_dashboards.sh` to import everything in one step.
 
 ---
 
@@ -77,25 +84,33 @@ curl -X POST "http://localhost:5601/api/saved_objects/_import?overwrite=true" \
   --form file=@config/kibana/dashboards/data_views.ndjson
 ```
 
-After import you should see data views: `agent-captains-captures-*`, `agent-captains-reflections-*`, `agent-logs-*`, `agent-insights-*`.
+After import you should see data views: `agent-captains-captures-*`, `agent-captains-reflections-*`, `agent-logs-*`, `agent-logs*`, `agent-insights-*`.
 
 ### 2. Import dashboards
+
+#### Quickest: use the import script
+
+```bash
+# Imports all 12 dashboards in dependency order (local Kibana)
+./config/kibana/import_dashboards.sh
+
+# Against VPS Kibana via SSH tunnel:
+# ssh -L 5601:localhost:5601 <your-vps-ssh-alias>
+# KIBANA_URL=http://localhost:5601 ./config/kibana/import_dashboards.sh
+```
 
 #### Dashboards import (UI)
 
 1. **Stack Management** → **Saved Objects** → **Import**.
-2. Select one or more of: `task_analytics.ndjson`, `reflection_insights.ndjson`, `system_health.ndjson`, `insights_engine.ndjson`, `request_latency.ndjson`, `extraction_retry_health.ndjson`.
-3. Complete the import (overwrite if updating).
+2. Select one or more files from `config/kibana/dashboards/` (see Overview table for filenames).
+3. Complete the import (enable "Overwrite" if updating existing dashboards).
 
-#### Dashboards import (API)
+#### Dashboards import (API — individual file)
 
 ```bash
-# Example: import all three
-for f in task_analytics reflection_insights system_health insights_engine request_latency extraction_retry_health; do
-  curl -X POST "http://localhost:5601/api/saved_objects/_import?overwrite=true" \
-    -H "kbn-xsrf: true" \
-    --form file=@config/kibana/dashboards/${f}.ndjson
-done
+curl -X POST "http://localhost:5601/api/saved_objects/_import?overwrite=true" \
+  -H "kbn-xsrf: true" \
+  --form file=@config/kibana/dashboards/system_health.ndjson
 ```
 
 Imported dashboards are **fully populated** with visualization panels. Use the panel specs below to customize or extend them.

@@ -19,14 +19,21 @@ if [ ! -d "$DASHBOARD_DIR" ]; then
 fi
 
 # Ordered so that index patterns load before visualizations before dashboards.
+# data_views first (shared index-patterns + searches), then one file per dashboard.
 FILES=(
   "data_views.ndjson"
   "system_health.ndjson"
   "task_analytics.ndjson"
   "request_latency.ndjson"
   "request_timing.ndjson"
+  "request_traces.ndjson"
   "reflection_insights.ndjson"
   "insights_engine.ndjson"
+  "extraction_retry_health.ndjson"
+  "llm_performance.ndjson"
+  "delegation_outcomes.ndjson"
+  "expansion_decomposition.ndjson"
+  "intent_classification.ndjson"
 )
 
 echo "Importing dashboards into Kibana at ${KIBANA_URL} ..."

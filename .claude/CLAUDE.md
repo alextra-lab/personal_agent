@@ -656,7 +656,8 @@ uv run ruff check src/
 | API Docs | <http://localhost:9000/docs> | Swagger UI |
 | SLM Server | <http://localhost:8000> | LLM inference |
 | Kibana | <http://localhost:5601> | Log visualization |
-| Neo4j Browser | <http://localhost:7474> | Knowledge graph |
+| Neo4j Browser (local) | <http://localhost:7474> | Knowledge graph |
+| Neo4j Browser (cloud) | <https://graph.frenchforet.com> | Knowledge graph (Cloudflare Access + Caddy WebSocket split) |
 
 ---
 

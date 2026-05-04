@@ -163,7 +163,7 @@ Key settings:
 | PostgreSQL 17 + pgvector | 5432 | Sessions, messages, cost tracking |
 | Elasticsearch 8.19 | 9200 | Logs, traces, insights |
 | Kibana 8.19 | 5601 | Log visualization |
-| Neo4j 5.26 LTS | 7474/7687 | Knowledge graph |
+| Neo4j 5.26 LTS | 7474/7687 | Knowledge graph (cloud: graph.frenchforet.com via Caddy WebSocket split) |
 | SearXNG | 8888 | Self-hosted web search |
 | Redis | 6379 | Event bus (Redis Streams) |
 

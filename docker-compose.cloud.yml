@@ -7,6 +7,7 @@
 # - PostgreSQL (pgvector): 512MB RAM, 0.5 CPU
 # - Neo4j Community: 1536MB RAM, 1.0 CPU
 # - Elasticsearch: 2048MB RAM, 1.0 CPU
+# - Kibana: 1024MB RAM, 0.5 CPU
 # - Redis: 128MB RAM, 0.25 CPU
 # - Seshat API Gateway: 256MB RAM, 0.5 CPU
 # - Caddy reverse proxy: 64MB RAM, 0.25 CPU
@@ -106,6 +107,37 @@ services:
       start_period: 20s
     mem_limit: 2048m
     cpus: 1.0
+    networks:
+      - cloud-sim
+    restart: unless-stopped
+
+  # Kibana 8.19 — log/trace dashboards behind monitoring.frenchforet.com
+  # Purpose: Dashboard UI for Elasticsearch telemetry (agent logs, Captain's Log, insights)
+  # Access: CF Zero Trust backend_admin policy (lextra@gmail.com only, 1h session)
+  # Tunnel: monitoring.frenchforet.com → http://kibana:5601 (bypasses Caddy)
+  # Resource limit: 1024MB RAM, 0.5 CPU
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.19.0
+    container_name: cloud-sim-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - TELEMETRY_OPTIN=false
+    volumes:
+      - ./docker/kibana/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
+    ports:
+      # Localhost only — use SSH tunnel: ssh -L 5601:localhost:5601 <your-vps-ssh-alias>
+      - "127.0.0.1:5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:5601/api/status | grep -q '\"level\":\"available\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    mem_limit: 1024m
+    cpus: 0.5
     networks:
       - cloud-sim
     restart: unless-stopped

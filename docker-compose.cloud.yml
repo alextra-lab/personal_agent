@@ -311,6 +311,21 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+    # Wait for ES and Neo4j to accept connections before starting uvicorn.
+    # depends_on health checks only run on `docker compose up`, not on
+    # restart: unless-stopped triggered restarts (e.g. after a dep bounces).
+    # This loop re-checks on every container start so the gap cannot recur.
+    command:
+      - sh
+      - -c
+      - |
+        until curl -sf http://elasticsearch:9200/_cluster/health -o /dev/null; do
+          echo 'waiting for elasticsearch...' && sleep 3
+        done
+        until curl -sf http://neo4j:7474 -o /dev/null; do
+          echo 'waiting for neo4j...' && sleep 3
+        done
+        exec uv run uvicorn personal_agent.service.app:app --host 0.0.0.0 --port 9001
     mem_limit: 768m
     cpus: 1.0
     networks:

@@ -46,7 +46,9 @@ def _project_root() -> pathlib.Path:
 
 def poller_state_path() -> pathlib.Path:
     """Path to JSON file storing processed feedback labels per Linear issue."""
-    return _project_root() / "telemetry" / "feedback_poller_state.json"
+    from personal_agent.captains_log.suppression import feedback_history_dir
+
+    return feedback_history_dir() / "feedback_poller_state.json"
 
 
 class FeedbackRecord(BaseModel):

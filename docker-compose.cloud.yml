@@ -302,6 +302,10 @@ services:
       # Without this, every deploy wipes the capture history and the consolidation
       # pipeline has nothing to process until new captures accumulate.
       - seshat_captures_cloud:/app/telemetry/captains_log/captures
+      # ADR-0054: feedback_history/ and poller state must survive container restarts.
+      # feedback_history_dir() → /app/telemetry/feedback_history (disk-durable records)
+      # poller_state_path()   → /app/telemetry/feedback_poller_state.json (at-most-once dedup)
+      - seshat_feedback_history_cloud:/app/telemetry/feedback_history
       # Shared workspace volume for run_python sandbox scratch dirs.
       # Mounted at the same path used by AGENT_SANDBOX_SCRATCH_ROOT.
       - seshat_workspace_cloud:/app/agent_workspace
@@ -438,6 +442,11 @@ volumes:
 
   # Captain's Log captures (persisted across container restarts)
   seshat_captures_cloud:
+    driver: local
+
+  # Feedback history + poller state (ADR-0054 disk-durable records, persisted)
+  # poller_state_path() now lives inside feedback_history/ so one volume covers both.
+  seshat_feedback_history_cloud:
     driver: local
 
   # Shared workspace for run_python sandbox scratch dirs (FRE-261 Step 5)

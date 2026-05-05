@@ -50,16 +50,18 @@ prompts:
   - id: memory_canary_recall
     description: >
       Two-turn canary. Turn 1 plants a unique fact tagged with a UUID.
-      Turn 2 asks for it back in a new session — tests whether memory
-      writes + retrieval round-trip succeeds.
+      Turn 2 opens a fresh session (new_session: true) and asks for it
+      back — tests whether memory writes + retrieval round-trip succeeds
+      via the memory graph (not session history).
     tags: [canary, memory, multi-turn]
     turns:
       - message: |
           Memory canary 11111111-1111-1111-1111-111111111111: the diagnostic
           color for Recovery Plan 2026-05-05 is ultramarine. Acknowledge.
-      - message: |
-          New session. What is the diagnostic color for the recovery plan
-          with UUID 11111111-1111-1111-1111-111111111111?
+      - new_session: true
+        message: |
+          What is the diagnostic color for the recovery plan with UUID
+          11111111-1111-1111-1111-111111111111?
 
   - id: long_diagnostic_session
     description: >

@@ -22,6 +22,7 @@ This plan executes the source doc's evidence-first discipline: freeze risky move
 | Recovery profile (deferred to Wave 4) | Will ship as `AGENT_RECOVERY_PROFILE=true` flag bundle, then promote to brainstem `MODE=diagnostic` after validation | Trivially revertible during the most fragile window; brainstem mode is the right long-term home but not the right place to first land an unproven config. |
 | Plan scope | Wave 0–2 only | Smallest reversible commitment; matches the source doc's evidence-first principle. |
 | Master Plan freeze ownership | In-effect on plan landing; no separate Linear gate | Meta-level operating rule, not a feature. |
+| Wave 2 rescope (added 2026-05-05 post-baseline) | Drop the planned canary_infra / canary_memory / canary_cleanup scripts; treat the Wave 1.2 baseline as fulfilling Wave 2's detection role; point Wave 2 work at FRE-323 (consolidator skip) and FRE-324 (synthesis stub) | The harness baseline (`baseline-2026-05-05-v2/`) localized the failure to a single line in `consolidator.py:138` in 16 minutes. Building the planned 9-stage canary script would discover the same line; that is duplicate work in an active recovery window. |
 
 ---
 
@@ -118,41 +119,50 @@ This wave does **not** touch loop gates, role caps, skill injection, memory pipe
 
 ---
 
-## Wave 2 — Infrastructure and memory canaries
+## Wave 2 — Superseded by the Wave 1.2 baseline
 
-Run only after the Wave 1 survey is read and any narrowing decisions are documented.
+> **Status (2026-05-05):** the Wave 1.2 harness baseline (`baseline-2026-05-05-v2/`) already produced what the original Wave 2 was designed to discover. Both planned canaries are redundant; the work shifts to fixing what the baseline localized.
 
-### 2.1 Infrastructure readiness canary
-- **Script**: `scripts/eval/canary_infra.py` (or `recovery_harness.py --canary infra`).
-- **Steps** (per source-doc Workstream B):
-  1. Tail the most recent service startup log; assert all of `elasticsearch_logging_enabled`, `captains_log_es_indexing_enabled`, `memory_service_initialized`, `event_bus_ready`, scheduler+consumer startup are present.
-  2. `GET /health`; assert ready for db, ES, Neo4j, second brain, event bus, MCP. If any optional service is intentionally degraded, the report must say so explicitly.
-  3. Synthetic ES write: emit a structlog event with a unique marker; query ES for it within 5 s.
-  4. Synthetic Redis stream: publish to `request.captured` (or whichever stream the consumer group subscribes to — confirm by reading `src/personal_agent/events/`); read it back from the consumer group.
-  5. Synthetic Neo4j read+write: using the same credentials `MemoryService` uses, `MERGE (:Canary {uuid: $uuid})`, query, then `DETACH DELETE`.
-- **Output**: `telemetry/evaluation/EVAL-agent-self-diagnosis/canary-infra-<id>/report.md`.
-- **Gate**: must return all PASS before 2.2 runs. Failures at this layer block the memory canary — the source doc's "TCP-reachable ≠ ready" warning applies here.
+### Why the original Wave 2 is moot
 
-### 2.2 Memory write pipeline canary
-- **Script**: `scripts/eval/canary_memory.py`.
-- **Conversation**:
-  1. Start a fresh session; send: `Memory canary <UUID>: the diagnostic color for Recovery Plan 2026-05-05 is ultramarine.`
-  2. Capture `trace_id`.
-  3. Trigger consolidation: prefer the in-process scheduler entry point (read `src/personal_agent/brainstem/` to find it); fall back to polling for ≤ 60 s if only async triggering is exposed.
-  4. Query ES: trace exists, capture exists, `request.captured` event published, scheduler received it, extraction started, extraction completed (not timed out, not `BudgetDenied`, not JSON parse error).
-  5. Query Neo4j: `Turn` for the trace, `Entity` containing the UUID, `DISCUSSES` edge, any inter-entity relationships.
-  5.1 **Semantic correctness of extraction**: assert the extracted entities include both `Recovery Plan 2026-05-05` (substring match acceptable) AND `ultramarine` (case-insensitive), AND at least one relationship connects them. Without this, the canary would pass against degenerate gpt-5.4-nano output (e.g., empty entity list, only generic "color" entity, or Recovery Plan extracted without the color). Failure here identifies the extraction-model output as the breakage point even though all infrastructure ran cleanly.
-  5.2 **Embedding presence**: assert the canary `Entity` nodes have non-null, non-all-zero `embedding` properties of the configured dimensionality. Then run `generate_embedding(canary_recall_query, mode="query")` and compute cosine similarity to the canary entity embedding — assert ≥ 0.5. Without this, retrieval has zero chance even with correct extraction. Failure here identifies the embedding model as the breakage point.
-  6. Open a new session (no shared state); send: `What is the diagnostic color for the recovery plan with UUID <UUID>?`
-  7. Verify the response contains `ultramarine` AND the second trace shows `memory_context.injected_size > 0` AND retrieved memory references the canary `Entity`.
-- **Cleanup**: every canary entity is tagged with a `:Canary` label and a `created_at` field. A companion `scripts/eval/canary_cleanup.py` runs `MATCH (n:Canary) WHERE n.created_at < datetime() - duration('P7D') DETACH DELETE n`. This must exist before the first run.
-- **Output**: `telemetry/evaluation/EVAL-agent-self-diagnosis/canary-memory-<id>/report.md` with one section per stage (capture / ES indexing / event publish / scheduler receipt / extraction-success / Neo4j writes / extraction-correctness / embedding-presence / recall).
-- **Gate**: a single canary must survive **all nine** stages before any retrieval-tuning discussion is allowed. Partial success is failure.
+| Original Wave 2 step | What the baseline already showed |
+|---|---|
+| 2.1 Infrastructure readiness canary | `service_startup_health_inspection` prompt called `GET /health` and confirmed db / ES / Neo4j / second_brain / event_bus / MCP all connected. ES write path fired (`capture_written` events landed). Redis consumer received the event (`event_request_captured_received`). Neo4j read/write worked (the post-run survey query returned 1566 Turn nodes from prior activity). |
+| 2.2 Memory write pipeline canary | `memory_canary_recall` (with `new_session: true` on turn 2) localized the failure precisely: `consolidation_processing_capture` fires once, then `consolidation_skipped_already_consolidated` fires 5 times, and **no** Turn or Entity is ever written. The 9-stage canary script would have discovered the same single line — `consolidator.py:138` — by running the same prompt. |
 
-### 2.3 Decision gate for Waves 3–5
-- After both canaries pass, write the follow-up plan covering Waves 3–5 (baseline runs, recovery-profile flag bundle, permanent design changes).
-- If 2.1 fails: file an infrastructure-readiness fix as a separate Linear issue under Needs Approval, with `Tier-2:Sonnet` label. Pause 2.2 until the fix lands.
-- If 2.2 fails at a specific stage: file the corresponding pipeline fix per the source doc's "Likely fixes if this fails" list (Workstream C). One fix per PR. No bundling.
+The baseline produced this evidence in 16 minutes against the live system. Building canary scripts to confirm what the baseline already proved would not change the next action.
+
+### What the baseline did NOT cover (carry-overs)
+
+- **Sustained regression detection.** The baseline is a one-shot snapshot. The harness is the right tool for ongoing detection — wire it into a recurring schedule once Wave 2.A and 2.B (below) land.
+- **Embedding correctness on freshly-written entities.** Stored embeddings are non-degenerate per the survey, but no entity from the baseline's traces actually exists in Neo4j to verify. Re-check after FRE-323 lands.
+
+### Wave 2.A — Fix `consolidator.turn_exists` skip (FRE-323)
+
+- **Linear**: [FRE-323](https://linear.app/frenchforest/issue/FRE-323) (Tier-2:Sonnet, Needs Approval).
+- **Scope**: read `src/personal_agent/second_brain/consolidator.py:138` and `src/personal_agent/memory/service.py::turn_exists`. Identify why `turn_exists(trace_id)` returns True for captures whose Turn was never written. Three hypotheses listed in the issue. Fix one cause; ship it.
+- **Acceptance**: re-run `make eval-recovery RUN=consolidator-fix-verify --prompt memory_canary_recall`; turn 1's trace_id appears as a Turn node in Neo4j within 5 minutes; canary entities (`ultramarine`, the UUID) are extracted and present.
+
+### Wave 2.B — Fix synthesis stub after one tool call (FRE-324)
+
+- **Linear**: [FRE-324](https://linear.app/frenchforet/issue/FRE-324) (Tier-2:Sonnet, Needs Approval, **blocked on FRE-323**).
+- **Scope**: orchestrator returns "I reached my tool-use limit before completing a synthesis" after a single `search_memory` call returning success. Find the cap or one-shot synthesis path that fires and let the model produce a real answer.
+- **Acceptance**: with FRE-323 fixed, `make eval-recovery RUN=synthesis-fix-verify --prompt memory_canary_recall` turn 2 contains the canary's distinctive content (`ultramarine`) in the response.
+
+### Wave 2.C — Sweep follow-ups (lower priority, parallelizable)
+
+- [FRE-319](https://linear.app/frenchforest/issue/FRE-319) — model_config drift audit (Tier-3).
+- [FRE-320](https://linear.app/frenchforest/issue/FRE-320) — skill-injection test rot (Tier-3).
+- [FRE-321](https://linear.app/frenchforest/issue/FRE-321) — primitive-flag default drift (Tier-3).
+- [FRE-322](https://linear.app/frenchforest/issue/FRE-322) — Conversation→Turn schema drift in QualityMonitor (Tier-3).
+
+These can land in any order; none block 2.A or 2.B.
+
+### Decision gate for Waves 3–5
+
+- 2.A and 2.B both pass acceptance → write the Wave 3–5 follow-up plan.
+- 2.A fails to land → escalate to Tier-1 with the FRE-323 evidence; the recovery freeze remains in effect.
+- The recurring-harness scheduler design (sustained regression detection) belongs to the follow-up plan, not Wave 2.
 
 ---
 
@@ -186,7 +196,7 @@ Run only after the Wave 1 survey is read and any narrowing decisions are documen
 
 **Modified**:
 - `docs/plans/MASTER_PLAN.md` — pause banner.
-- `Makefile` — `eval-recovery-survey`, `eval-recovery`, `canary-infra`, `canary-memory`, `canary-cleanup` targets.
+- `Makefile` — `eval-recovery-survey`, `eval-recovery RUN=<id>` targets. (The previously planned `canary-infra`, `canary-memory`, `canary-cleanup` targets are out of scope per the 2026-05-05 rescope.)
 - `src/personal_agent/config/settings.py` — geometry fix and validator.
 - `tests/personal_agent/config/test_settings.py` (or equivalent) — new tests covering the geometry constraints.
 
@@ -204,10 +214,10 @@ Run only after the Wave 1 survey is read and any narrowing decisions are documen
 - `make eval-recovery-survey` produces `telemetry/evaluation/EVAL-agent-self-diagnosis/survey-2026-05-05/report.md` with non-empty counts (or loud failure on missing index).
 - `make eval-recovery RUN=test-dryrun PROMPT=primitive_tool_with_implied_skill` writes a single per-prompt report and exits 0.
 
-**Wave 2**:
-- `make canary-infra` returns 0 with all five steps marked PASS.
-- `make canary-memory UUID=$(uuidgen)` returns 0 with all seven stages marked PASS, and the recall response contains `ultramarine`.
-- `make canary-cleanup` deletes only `:Canary`-labelled nodes older than 7 days (verify by Neo4j query before and after).
+**Wave 2** (rescoped — see "Wave 2 — Superseded by the Wave 1.2 baseline"):
+- 2.A: after FRE-323 lands, `make eval-recovery RUN=consolidator-fix-verify --prompt memory_canary_recall` produces a Turn node in Neo4j matching turn 1's `trace_id`, and the canary's distinctive content (`ultramarine`, the UUID) appears as Entity nodes.
+- 2.B: after FRE-324 lands, the same prompt's turn 2 response contains the word `ultramarine`.
+- The previously planned `canary_infra.py`, `canary_memory.py`, `canary_cleanup.py` scripts and their Make targets are no longer in scope; the harness covers their detection role.
 
 ---
 

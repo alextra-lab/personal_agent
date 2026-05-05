@@ -68,10 +68,17 @@ DEFAULT_OUT_BASE = Path("telemetry/evaluation/EVAL-agent-self-diagnosis")
 
 @dataclass
 class PromptTurn:
-    """One turn of a prompt: a message + an optional 'expect' shape."""
+    """One turn of a prompt: a message + optional 'expect' + new_session flag.
+
+    Set ``new_session=True`` on a turn to force the harness to drop the prior
+    ``session_id`` and start a fresh session. Required for memory-recall
+    canaries — without it, the agent answers from session history and never
+    exercises the memory-graph retrieval path.
+    """
 
     message: str
     expect: dict[str, Any] = field(default_factory=dict)
+    new_session: bool = False
 
 
 @dataclass
@@ -90,7 +97,11 @@ def load_prompts(path: Path) -> list[PromptDef]:
     out: list[PromptDef] = []
     for entry in raw.get("prompts", []):
         turns = [
-            PromptTurn(message=t["message"], expect=t.get("expect", {}))
+            PromptTurn(
+                message=t["message"],
+                expect=t.get("expect", {}),
+                new_session=bool(t.get("new_session", False)),
+            )
             for t in entry.get("turns", [])
         ]
         out.append(
@@ -145,7 +156,7 @@ async def call_chat(
     headers: dict[str, str] = {}
     if auth_email:
         headers["Cf-Access-Authenticated-User-Email"] = auth_email
-    resp = await client.post(chat_url, params=params, headers=headers, timeout=300.0)
+    resp = await client.post(chat_url, params=params, headers=headers, timeout=600.0)
     resp.raise_for_status()
     data = resp.json()
     return (
@@ -224,7 +235,19 @@ async def fetch_neo4j_for_trace(
 
 
 def summarize_logs(es_hits: list[dict[str, Any]]) -> dict[str, Any]:
-    """Distill the per-trace ES log slice into a small summary block."""
+    """Distill the per-trace ES log slice into a small summary block.
+
+    Event-name notes (verified against a real run on 2026-05-05):
+    - Tool calls fire as ``tool_call_started`` / ``tool_call_completed``,
+      not ``_requested`` / ``_executed``.
+    - Loop gates are ``tool_loop_gate``, with ``decision`` field.
+    - Within-session compression fires ``within_session_compression_completed``.
+    - Skill-block injection currently logs only at DEBUG (``skill_route_matched``)
+      and isn't reliably in ES — surfaced size remains None until Workstream D
+      adds an INFO-level event.
+    - Entity extraction runs in a separate trace_id (consolidation pipeline);
+      the canary inspects it directly, this summarizer stays None.
+    """
     by_event: dict[str, int] = {}
     skill_block_size: int | None = None
     memory_context_size: int | None = None
@@ -234,6 +257,7 @@ def summarize_logs(es_hits: list[dict[str, Any]]) -> dict[str, Any]:
     extraction_outcome: str | None = None
     tool_calls_requested = 0
     tool_calls_executed = 0
+    bash_calls = 0
     loop_gate_decisions: list[str] = []
 
     for hit in es_hits:
@@ -267,11 +291,13 @@ def summarize_logs(es_hits: list[dict[str, Any]]) -> dict[str, Any]:
             extraction_outcome = f"failed:{hit.get('error_type', 'unknown')}"
         elif event == "entity_extraction_timeout":
             extraction_outcome = "timeout"
-        elif event in {"tool_call_requested", "tool_invocation_requested"}:
+        elif event in {"tool_call_started", "tool_invocation_started"}:
             tool_calls_requested += 1
-        elif event in {"tool_call_executed", "tool_invocation_completed"}:
+        elif event in {"tool_call_completed", "tool_invocation_completed"}:
             tool_calls_executed += 1
-        elif event in {"loop_gate_decision", "loop_gate_blocked"}:
+        elif event == "bash_completed":
+            bash_calls += 1
+        elif event in {"tool_loop_gate", "loop_gate_decision", "loop_gate_blocked"}:
             decision = str(hit.get("decision") or hit.get("outcome") or event)
             loop_gate_decisions.append(decision)
 
@@ -286,6 +312,7 @@ def summarize_logs(es_hits: list[dict[str, Any]]) -> dict[str, Any]:
         "extraction_outcome": extraction_outcome,
         "tool_calls_requested": tool_calls_requested,
         "tool_calls_executed": tool_calls_executed,
+        "bash_calls": bash_calls,
         "loop_gate_decisions": loop_gate_decisions,
     }
 
@@ -338,7 +365,7 @@ def render_turn_report(prompt: PromptDef, results: list[TurnResult]) -> str:
         lines.append(f"- extraction_outcome: {s['extraction_outcome']}")
         lines.append(
             f"- tool_calls: {s['tool_calls_requested']} requested / "
-            f"{s['tool_calls_executed']} executed"
+            f"{s['tool_calls_executed']} executed (bash: {s['bash_calls']})"
         )
         if s["loop_gate_decisions"]:
             lines.append(f"- loop_gate_decisions: {s['loop_gate_decisions']}")
@@ -406,6 +433,8 @@ async def run_prompt(
     session_id: str | None = None
     async with httpx.AsyncClient() as client:
         for turn in prompt.turns:
+            if turn.new_session:
+                session_id = None
             started_at = datetime.now(timezone.utc)
             response_text, session_id, trace_id = await call_chat(
                 client, chat_url, turn.message, session_id, auth_email
@@ -490,18 +519,31 @@ async def run_harness(
     try:
         await memory_service.connect()
         prompt_results: dict[str, list[TurnResult]] = {}
+        prompt_errors: dict[str, str] = {}
         for prompt in all_prompts:
             log.info("harness_prompt_start", prompt=prompt.id)
-            results = await run_prompt(
-                prompt,
-                chat_url=chat_url,
-                auth_email=auth_email,
-                es_wait_seconds=es_wait_seconds,
-                queries=queries,
-                memory_service=memory_service,
-                out_dir=out_dir,
-            )
-            prompt_results[prompt.id] = results
+            try:
+                results = await run_prompt(
+                    prompt,
+                    chat_url=chat_url,
+                    auth_email=auth_email,
+                    es_wait_seconds=es_wait_seconds,
+                    queries=queries,
+                    memory_service=memory_service,
+                    out_dir=out_dir,
+                )
+                prompt_results[prompt.id] = results
+            except Exception as exc:  # noqa: BLE001 — per-prompt isolation
+                err = f"{type(exc).__name__}: {exc}"
+                log.error("harness_prompt_failed", prompt=prompt.id, error=err)
+                prompt_errors[prompt.id] = err
+                prompt_results[prompt.id] = []
+                # Write a stub report so reviewers see the failure inline.
+                prompt_dir = out_dir / prompt.id
+                prompt_dir.mkdir(parents=True, exist_ok=True)
+                (prompt_dir / "report.md").write_text(
+                    f"# Prompt: `{prompt.id}` — FAILED\n\n{err}\n"
+                )
         summary_path = out_dir / "summary.md"
         summary_path.write_text(
             render_summary(run_id=run_id, profile=profile, prompt_results=prompt_results)

@@ -1,0 +1,116 @@
+# Recovery Harness — canary prompts (Wave 1.2 seed)
+#
+# Each prompt's `id` is used as the output directory name under
+# telemetry/evaluation/EVAL-agent-self-diagnosis/<run-id>/<id>/.
+# `turns` runs sequentially; the second turn re-uses the session_id from
+# the first to test multi-turn flows (memory recall, compression).
+#
+# `tags` are advisory metadata — the harness does not branch on them today,
+# but Wave 4 may use them to select the recovery profile.
+#
+# Wave 1 ships these 8 seeds; refine after the first scored baseline.
+
+prompts:
+  - id: self_diagnosis_recent_regression
+    description: >
+      Ask the agent to investigate a known recent regression in its own
+      pipeline. Tests whether self-diagnosis prompts route to source/log
+      inspection rather than premature synthesis.
+    tags: [diagnostic, self-inspection]
+    turns:
+      - message: |
+          A recent change to skill injection (FRE-282) may have affected your
+          ability to use bash and other primitive tools effectively. Inspect
+          your own source under src/personal_agent/orchestrator/skills.py and
+          report what skill injection currently does and which docs it
+          surfaces. Use read_file or bash if those tools are available.
+
+  - id: es_log_investigation
+    description: >
+      Ask the agent to investigate Elasticsearch logs for a specific error
+      condition. Tests ES query fluency through skill docs.
+    tags: [diagnostic, telemetry]
+    turns:
+      - message: |
+          Query the personal-agent ES indices for any entity_extraction_failed
+          events from the last 7 days, group by error_type, and report the
+          top three failure modes. Use the elasticsearch query primitive.
+
+  - id: neo4j_memory_inspection
+    description: >
+      Ask the agent to read the knowledge graph directly and report on
+      its current state. Tests Cypher fluency through skill docs.
+    tags: [diagnostic, memory]
+    turns:
+      - message: |
+          Connect to Neo4j (bolt://localhost:7687) and report (a) the total
+          number of Entity nodes, (b) the number of DISCUSSES relationships,
+          and (c) the five most recently created Entity nodes by name.
+
+  - id: memory_canary_recall
+    description: >
+      Two-turn canary. Turn 1 plants a unique fact tagged with a UUID.
+      Turn 2 asks for it back in a new session — tests whether memory
+      writes + retrieval round-trip succeeds.
+    tags: [canary, memory, multi-turn]
+    turns:
+      - message: |
+          Memory canary 11111111-1111-1111-1111-111111111111: the diagnostic
+          color for Recovery Plan 2026-05-05 is ultramarine. Acknowledge.
+      - message: |
+          New session. What is the diagnostic color for the recovery plan
+          with UUID 11111111-1111-1111-1111-111111111111?
+
+  - id: long_diagnostic_session
+    description: >
+      A single longer-running task that is expected to require multiple
+      tool calls and span enough context to trigger compression. Tests
+      whether compression preserves the original objective.
+    tags: [diagnostic, compression]
+    turns:
+      - message: |
+          Investigate why the agent's recent self-diagnosis attempts have
+          failed. Walk through the following systematically: (1) inspect the
+          orchestrator's executor, (2) sample recent traces from ES, (3)
+          query the cost-gate role caps, (4) verify the consolidation
+          scheduler is firing, (5) check Neo4j Entity counts have been
+          growing. Report what you found at each step and what the most
+          likely root cause is.
+
+  - id: primitive_tool_with_implied_skill
+    description: >
+      Task that needs a non-obvious skill (e.g., bash piping) but does not
+      name the skill in the prompt. Tests whether the current keyword
+      router surfaces the right skill block.
+    tags: [skills, primitive-tools]
+    turns:
+      - message: |
+          Find every function in src/personal_agent/orchestrator/ that
+          mentions context_window_max_tokens, sorted by file. Show me the
+          line where each match occurs.
+
+  - id: service_startup_health_inspection
+    description: >
+      Ask the agent to query its own /health endpoint and report on
+      degraded subsystems. Tests whether health reporting is reachable
+      via the configured tool surface.
+    tags: [diagnostic, infra]
+    turns:
+      - message: |
+          Call GET /health on your own service (http://localhost:9000/health)
+          and report which subsystems (db, ES, Neo4j, second_brain, event_bus,
+          MCP) are healthy vs degraded. If any are degraded, suggest the
+          likely root cause.
+
+  - id: loop_prone_query_refinement
+    description: >
+      A query that historically led the agent to repeat a tool call with
+      slightly different parameters until the loop gate fired. Tests
+      whether the gate hard-stops legitimate exploration.
+    tags: [loop-gate, exploration]
+    turns:
+      - message: |
+          Search the codebase for the canonical implementation of context
+          compression. There may be more than one candidate (manager-level,
+          within-session, and async). Find each and tell me which one fires
+          first when the token budget is exceeded mid-orchestration.

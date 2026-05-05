@@ -55,7 +55,8 @@ endif
         tunnel-up tunnel-down tunnel-status _tunnel-guard \
         sandbox-build \
         test test-integration test-all test-file test-verbose test-k test-cov eval \
-        mypy ruff-check ruff-format
+        mypy ruff-check ruff-format \
+        eval-recovery-survey eval-recovery
 
 help:
 	@echo "Run from project root so uv uses .venv (e.g. cd /path/to/personal_agent)."
@@ -205,6 +206,20 @@ test-all:
 # Do NOT run from an AI agent session without explicit user instruction.
 eval:
 	@PERSONAL_AGENT_EVAL=1 uv run python -m tests.evaluation.harness.run $(EVAL_ARGS)
+
+# ─── Agent self-diagnosis recovery ───────────────────────────────────────────
+# Wave 1.1 — survey ES + Neo4j; reuses ConsolidationQualityMonitor.
+eval-recovery-survey:  ## Run the recovery survey (no /chat traffic). DAYS=7 default.
+	@uv run python scripts/eval/recovery_survey.py --days $(or $(DAYS),7)
+
+# Wave 1.2 — drive prompts through /chat and capture per-trace artifacts.
+# Args: RUN=<id> required. PROFILE=baseline|recovery (metadata only). PROMPT=<id> for single-prompt.
+eval-recovery:  ## Run the recovery harness. RUN=<id> required.
+	@if [ -z "$(RUN)" ]; then echo "RUN=<id> is required"; exit 2; fi
+	@uv run python scripts/eval/recovery_harness.py \
+		--run-id $(RUN) \
+		--profile $(or $(PROFILE),baseline) \
+		$(if $(PROMPT),--prompt $(PROMPT))
 
 # Flexible test targets (run from project root so uv uses project env)
 test-file:

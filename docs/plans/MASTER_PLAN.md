@@ -1,5 +1,11 @@
 # Master Plan — Personal Agent
 
+> **⏸ PAUSED 2026-05-05** — agent self-diagnosis recovery in effect.
+> See `docs/plans/2026-05-05-agent-self-diagnosis-recovery-execution-waves-0-2.md` (execution scope: Waves 0–2)
+> and `docs/plans/2026-05-05-agent-self-diagnosis-recovery-plan.md` (full source doc, Waves 0–5).
+> **Do not start new Master Plan items until Wave 2 canaries pass.**
+> Operating rules in effect: no further loop-gate tightening, no further context-budget tuning beyond the Wave 0 geometry fix, no memory-pipeline tuning, no multi-subsystem PRs, no legacy-tool deletion (FRE-265 blocked). Read-only diagnostic capability is preferred over cost reduction during the window.
+
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
 > **Last updated**: 2026-04-30 (Linear drift fix: FRE-267 moved to Approved; ADR-0055/0056 index corrected to Accepted; 5 completed projects marked Done in Linear)

@@ -6,7 +6,7 @@ This module provides the AppConfig class and settings singleton.
 from pathlib import Path
 
 import structlog
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from personal_agent.config.env_loader import Environment, get_environment, load_env_files
@@ -444,9 +444,14 @@ class AppConfig(BaseSettings):
         description="Maximum number of historical session messages to hydrate into orchestrator memory.",
     )
     context_window_max_tokens: int = Field(
-        default=2048,
+        default=49152,
         ge=500,
-        description="Maximum context token budget for conversation messages before each LLM call.",
+        description=(
+            "Maximum context token budget for conversation messages before each LLM call. "
+            "Default leaves ~16k tokens of headroom against the primary model's 64k context "
+            "for system prompt, tool definitions, skill blocks, memory slab, and response "
+            "generation. Calibrate per model profile via env override."
+        ),
     )
     conversation_context_strategy: str = Field(
         default="truncate",
@@ -484,12 +489,17 @@ class AppConfig(BaseSettings):
             "(ADR-0061 §D1)."
         ),
     )
-    within_session_min_tail_tokens: int = Field(
-        default=2000,
-        ge=0,
+    within_session_min_tail_ratio: float = Field(
+        default=0.25,
+        ge=0.0,
+        lt=1.0,
         description=(
-            "Token floor for the preserved tail in head-middle-tail "
-            "compression (ADR-0061 §D3)."
+            "Fraction of context_window_max_tokens reserved as the preserved "
+            "tail in head-middle-tail compression (ADR-0061 §D3). The absolute "
+            "tail floor is computed at runtime as int(ratio * "
+            "context_window_max_tokens). Replaces the prior fixed "
+            "within_session_min_tail_tokens=2000 which left almost no room "
+            "for head and middle when context_window_max_tokens was 2048."
         ),
     )
     within_session_pre_pass_threshold_tokens: int = Field(
@@ -1156,6 +1166,27 @@ class AppConfig(BaseSettings):
             "Env var: AGENT_GRAPH_QUALITY_GOVERNANCE_ENABLED"
         ),
     )
+
+    @model_validator(mode="after")
+    def _validate_compression_geometry(self) -> "AppConfig":
+        """Reject configurations that leave too little budget for head + middle.
+
+        Recovery plan 2026-05-05 (Wave 0.2): the prior defaults of
+        context_window_max_tokens=2048 and within_session_min_tail_tokens=2000
+        left ~48 tokens for system prompt, skills, memory, and middle. Catch
+        any future drift back into that pathology at config load time.
+        """
+        absolute_tail = int(self.context_window_max_tokens * self.within_session_min_tail_ratio)
+        head_middle_budget = self.context_window_max_tokens - absolute_tail
+        if head_middle_budget < 1024:
+            raise ValueError(
+                "Compression geometry leaves less than 1024 tokens for head+middle: "
+                f"context_window_max_tokens={self.context_window_max_tokens}, "
+                f"within_session_min_tail_ratio={self.within_session_min_tail_ratio}, "
+                f"absolute_tail={absolute_tail}, head_middle_budget={head_middle_budget}. "
+                "Lower the ratio, raise the window, or both."
+            )
+        return self
 
 
 _settings: AppConfig | None = None

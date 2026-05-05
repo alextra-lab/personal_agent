@@ -200,7 +200,9 @@ class TestQueryMemoryVisibility:
         mock_session.run = AsyncMock(return_value=turns_result)
 
         with patch("personal_agent.memory.service.generate_embedding", new_callable=AsyncMock):
-            query = MemoryQuery(entity_names=["Berlin"], limit=5, user_id=USER_A, authenticated=True)
+            query = MemoryQuery(
+                entity_names=["Berlin"], limit=5, user_id=USER_A, authenticated=True
+            )
             await service.query_memory(query, user_id=USER_A, authenticated=True)
 
         first_call = mock_session.run.call_args_list[0]
@@ -330,6 +332,58 @@ class TestWriteVisibility:
         assert captured_kwargs[0].get("visibility") == "group"
 
     @pytest.mark.asyncio
+    async def test_create_conversation_entity_loop_cypher_order(self) -> None:
+        """create_conversation's per-entity DISCUSSES Cypher must place ON CREATE SET right after MERGE.
+
+        FRE-323 regression: ``MERGE ... SET ... ON CREATE SET`` is invalid Cypher.
+        Before the fix this raised CypherSyntaxError, the entity loop silently failed,
+        and the consolidator stamped the trace as ``success`` even though no
+        ``DISCUSSES`` edges were written.
+        """
+        service, mock_session = _make_service_with_mock()
+
+        captured_cypher: list[str] = []
+
+        async def capture_run(cypher: str, **kwargs: object) -> AsyncMock:
+            captured_cypher.append(cypher)
+            return AsyncMock()
+
+        mock_session.run = AsyncMock(side_effect=capture_run)
+
+        from personal_agent.memory.models import TurnNode
+
+        turn = TurnNode(
+            turn_id="turn-fre-323",
+            timestamp=datetime.now(timezone.utc),
+            user_message="ping",
+            key_entities=["Berlin", "Paris"],
+        )
+        await service.create_conversation(turn, visibility="group")
+
+        # The entity-loop statement is the one that does DISCUSSES.
+        entity_cyphers = [c for c in captured_cypher if "DISCUSSES" in c]
+        assert entity_cyphers, "expected at least one entity-loop Cypher run"
+        for cypher in entity_cyphers:
+            merge_idx = cypher.find("MERGE (e:Entity")
+            on_create_idx = cypher.find("ON CREATE SET", merge_idx)
+            # Find the first unconditional SET clause: a SET that is NOT preceded by ON CREATE.
+            search_from = merge_idx
+            set_idx = -1
+            while True:
+                cand = cypher.find("SET ", search_from)
+                if cand == -1:
+                    break
+                if cypher[max(0, cand - 10) : cand].rstrip().endswith("ON CREATE"):
+                    search_from = cand + 4
+                    continue
+                set_idx = cand
+                break
+            assert merge_idx >= 0 and on_create_idx >= 0 and set_idx >= 0, cypher
+            assert merge_idx < on_create_idx < set_idx, (
+                "ON CREATE SET must precede the unconditional SET clause; FRE-323."
+            )
+
+    @pytest.mark.asyncio
     async def test_create_conversation_default_public(self) -> None:
         """create_conversation defaults to visibility='public'."""
         service, mock_session = _make_service_with_mock()
@@ -355,7 +409,12 @@ class TestWriteVisibility:
 
     @pytest.mark.asyncio
     async def test_create_entity_on_create_set_semantics(self) -> None:
-        """create_entity uses ON CREATE SET so existing visibility is preserved."""
+        """create_entity uses ON CREATE SET so existing visibility is preserved.
+
+        FRE-323 regression: ``ON CREATE SET`` must come immediately after
+        ``MERGE``, before any unconditional ``SET`` clause. Cypher rejects
+        ``MERGE ... SET ... ON CREATE SET`` with a syntax error.
+        """
         service, mock_session = _make_service_with_mock()
 
         captured_cypher: list[str] = []
@@ -374,10 +433,20 @@ class TestWriteVisibility:
         entity = Entity(name="Berlin", entity_type="Place")
         await service.create_entity(entity, visibility="group")
 
-        # The merged Cypher must contain ON CREATE SET ... visibility
         merged = " ".join(captured_cypher)
         assert "ON CREATE SET" in merged
         assert "visibility" in merged
+
+        # Structural ordering: ON CREATE SET must precede the first unconditional SET.
+        merge_idx = merged.find("MERGE (e:Entity")
+        on_create_idx = merged.find("ON CREATE SET", merge_idx)
+        set_idx = merged.find("\nSET ", merge_idx)
+        if set_idx == -1:
+            set_idx = merged.find(" SET ", merge_idx)
+        assert merge_idx >= 0 and on_create_idx >= 0 and set_idx >= 0
+        assert merge_idx < on_create_idx < set_idx, (
+            "ON CREATE SET must appear after MERGE and before SET in Cypher; see FRE-323."
+        )
 
     @pytest.mark.asyncio
     async def test_create_relationship_includes_visibility(self) -> None:

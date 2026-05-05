@@ -369,12 +369,12 @@ class MemoryService:
                     await session.run(
                         """
                         MERGE (e:Entity {name: $name})
+                        ON CREATE SET e.visibility = $visibility
                         SET e.last_seen = $timestamp,
                             e.mention_count = COALESCE(e.mention_count, 0) + 1,
                             e.first_seen = COALESCE(e.first_seen, $timestamp),
                             e.entity_type = CASE WHEN $entity_type <> '' THEN $entity_type
                                                  ELSE COALESCE(e.entity_type, '') END
-                        ON CREATE SET e.visibility = $visibility
                         WITH e
                         MATCH (t:Turn {turn_id: $turn_id})
                         MERGE (t)-[:DISCUSSES]->(e)
@@ -603,8 +603,8 @@ class MemoryService:
                 params["visibility"] = visibility
                 query = (
                     "MERGE (e:Entity {name: $name})\n"
-                    "SET " + ",\n    ".join(set_clauses) + "\n"
                     "ON CREATE SET e.visibility = $visibility\n"
+                    "SET " + ",\n    ".join(set_clauses) + "\n"
                     "RETURN e.name as entity_id"
                 )
 
@@ -1597,9 +1597,7 @@ class MemoryService:
                         )
 
                         tier = staleness_tier_from_freshness_score(best_freshness)
-                        tier_factor = current_settings.freshness_tier_factors.get(
-                            tier.value, 1.0
-                        )
+                        tier_factor = current_settings.freshness_tier_factors.get(tier.value, 1.0)
                         best_freshness *= tier_factor
                     score += best_freshness * w_freshness_cfg
 

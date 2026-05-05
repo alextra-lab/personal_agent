@@ -130,12 +130,22 @@ async def call_chat(
     chat_url: str,
     message: str,
     session_id: str | None,
+    auth_email: str | None,
 ) -> tuple[str, str, str]:
-    """POST /chat. Return (response_text, session_id, trace_id)."""
+    """POST /chat. Return (response_text, session_id, trace_id).
+
+    When ``auth_email`` is set, sends the CF Access header that
+    ``service/auth.py`` reads. This impersonates an authenticated user for
+    local-loopback diagnostic calls — the same trust model as production
+    where CF Access stamps the header in front of the service.
+    """
     params = {"message": message}
     if session_id is not None:
         params["session_id"] = session_id
-    resp = await client.post(chat_url, params=params, timeout=300.0)
+    headers: dict[str, str] = {}
+    if auth_email:
+        headers["Cf-Access-Authenticated-User-Email"] = auth_email
+    resp = await client.post(chat_url, params=params, headers=headers, timeout=300.0)
     resp.raise_for_status()
     data = resp.json()
     return (
@@ -151,12 +161,14 @@ async def fetch_trace_logs(
     """Pull all ES log documents tagged with this trace_id in the window."""
     settings = get_settings()
     client = await queries._get_client()  # noqa: SLF001 — internal reuse
+    # Note: `trace_id` is mapped as text in agent-logs-*; use the
+    # keyword sub-field for an exact match. (term against text fails silently.)
     response = await client.search(
         index=f"{settings.elasticsearch_index_prefix}-*",
         query={
             "bool": {
                 "filter": [
-                    {"term": {"trace_id": trace_id}},
+                    {"term": {"trace_id.keyword": trace_id}},
                     {
                         "range": {
                             "@timestamp": {
@@ -383,6 +395,7 @@ async def run_prompt(
     prompt: PromptDef,
     *,
     chat_url: str,
+    auth_email: str | None,
     es_wait_seconds: int,
     queries: TelemetryQueries,
     memory_service: MemoryService,
@@ -395,7 +408,7 @@ async def run_prompt(
         for turn in prompt.turns:
             started_at = datetime.now(timezone.utc)
             response_text, session_id, trace_id = await call_chat(
-                client, chat_url, turn.message, session_id
+                client, chat_url, turn.message, session_id, auth_email
             )
             finished_at = datetime.now(timezone.utc)
             log.info(
@@ -459,6 +472,7 @@ async def run_harness(
     profile: str,
     prompts_path: Path,
     chat_url: str,
+    auth_email: str | None,
     es_wait_seconds: int,
     only_prompt: str | None,
     out_dir: Path,
@@ -481,6 +495,7 @@ async def run_harness(
             results = await run_prompt(
                 prompt,
                 chat_url=chat_url,
+                auth_email=auth_email,
                 es_wait_seconds=es_wait_seconds,
                 queries=queries,
                 memory_service=memory_service,
@@ -529,6 +544,16 @@ def parse_args() -> argparse.Namespace:
         help="POST endpoint for /chat (default: http://localhost:9000/chat).",
     )
     parser.add_argument(
+        "--auth-email",
+        default=None,
+        help=(
+            "Email to send as Cf-Access-Authenticated-User-Email when calling "
+            "/chat. Required when gateway_auth_enabled=true and there is no "
+            "CF Access proxy in front of the service. Defaults to "
+            "settings.agent_owner_email when omitted."
+        ),
+    )
+    parser.add_argument(
         "--es-wait-seconds",
         type=int,
         default=5,
@@ -547,6 +572,7 @@ def main() -> int:
     """CLI entry point. Returns exit code."""
     args = parse_args()
     out_dir = args.out or DEFAULT_OUT_BASE / args.run_id
+    auth_email = args.auth_email or get_settings().agent_owner_email
     try:
         summary_path = asyncio.run(
             run_harness(
@@ -554,6 +580,7 @@ def main() -> int:
                 profile=args.profile,
                 prompts_path=args.prompts,
                 chat_url=args.chat_url,
+                auth_email=auth_email,
                 es_wait_seconds=args.es_wait_seconds,
                 only_prompt=args.prompt,
                 out_dir=out_dir,

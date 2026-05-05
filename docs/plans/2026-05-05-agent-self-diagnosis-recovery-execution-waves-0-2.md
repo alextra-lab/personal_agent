@@ -137,11 +137,12 @@ The baseline produced this evidence in 16 minutes against the live system. Build
 - **Sustained regression detection.** The baseline is a one-shot snapshot. The harness is the right tool for ongoing detection — wire it into a recurring schedule once Wave 2.A and 2.B (below) land.
 - **Embedding correctness on freshly-written entities.** Stored embeddings are non-degenerate per the survey, but no entity from the baseline's traces actually exists in Neo4j to verify. Re-check after FRE-323 lands.
 
-### Wave 2.A — Fix `consolidator.turn_exists` skip (FRE-323)
+### Wave 2.A — Fix `consolidator.turn_exists` skip (FRE-323) ✅ Done 2026-05-05
 
-- **Linear**: [FRE-323](https://linear.app/frenchforest/issue/FRE-323) (Tier-2:Sonnet, Needs Approval).
-- **Scope**: read `src/personal_agent/second_brain/consolidator.py:138` and `src/personal_agent/memory/service.py::turn_exists`. Identify why `turn_exists(trace_id)` returns True for captures whose Turn was never written. Three hypotheses listed in the issue. Fix one cause; ship it.
-- **Acceptance**: re-run `make eval-recovery RUN=consolidator-fix-verify --prompt memory_canary_recall`; turn 1's trace_id appears as a Turn node in Neo4j within 5 minutes; canary entities (`ultramarine`, the UUID) are extracted and present.
+- **Linear**: [FRE-323](https://linear.app/frenchforest/issue/FRE-323) — PR #16.
+- **Root cause**: `ON CREATE SET e.visibility = $visibility` was placed *after* an unconditional `SET` clause in the entity-loop Cypher inside `create_conversation` and in `create_entity`. Cypher's grammar requires `ON CREATE SET` to follow `MERGE` before any `SET`; every Entity write was rejected with `CypherSyntaxError`. The Turn `MERGE` (a separate `session.run`, auto-committed) still landed, so `turn_exists(trace_id)` correctly returned True and subsequent consolidation passes skipped the trace — leaving no Entity nodes or `DISCUSSES` edges. Introduced by FRE-229 commit `9f04114`.
+- **Fix**: reordered `ON CREATE SET` ahead of `SET` in both query sites. Two structural-ordering regression tests added.
+- **Acceptance verified**: `fre323-postfix-v2` run — Turn `6a836724` has `Ultramarine` + `Recovery Plan` Entity nodes with `DISCUSSES` edges; `Ultramarine.description = "The diagnostic color specified for the recovery plan in the conversation."`
 
 ### Wave 2.B — Fix synthesis stub after one tool call (FRE-324)
 

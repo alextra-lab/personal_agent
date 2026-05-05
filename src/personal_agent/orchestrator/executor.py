@@ -1567,7 +1567,14 @@ async def step_llm_call(
         request_messages = ctx.messages
 
         if tools:
-            request_messages = _append_no_think_to_last_user_message(request_messages)
+            # Post-tool synthesis pass: last message is a tool result. Inject a synthesis nudge
+            # ("Return the final answer now. /no_think") so thinking models like Qwen3 emit actual
+            # text instead of empty thinking-only responses that trigger the fallback stub.
+            # FRE-324: _append_no_think_synthesis_nudge was defined but never wired until this fix.
+            if request_messages and request_messages[-1].get("role") == "tool":
+                request_messages = _append_no_think_synthesis_nudge(request_messages)
+            else:
+                request_messages = _append_no_think_to_last_user_message(request_messages)
 
         # Validate and fix conversation role alternation for strict models (e.g., Mistral).
         request_messages = _validate_and_fix_conversation_roles(request_messages)

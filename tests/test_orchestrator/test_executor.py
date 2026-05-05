@@ -692,6 +692,103 @@ class TestToolUsingFlow:
         content = tool_messages[0].get("content", "")
         assert "matched_turns" in content or "entity_match" in content
 
+    @patch("personal_agent.llm_client.factory.get_llm_client")
+    @pytest.mark.asyncio
+    async def test_synthesis_nudge_injected_after_search_memory_result(self, mock_client_class):
+        """Post-tool synthesis call gets a synthesis nudge when last message is a tool result.
+
+        FRE-324: Qwen3 models emit only <think>…</think> (empty text) when the conversation
+        ends with a tool result and no synthesis signal is present at the tail. The fix calls
+        _append_no_think_synthesis_nudge instead of _append_no_think_to_last_user_message when
+        ctx.messages[-1].role == "tool", appending:
+            {"role": "user", "content": "Return the final answer now. /no_think"}
+
+        Before the fix: messages passed to the synthesis LLM call end with the tool result
+        (role "tool"). After the fix: they end with the synthesis nudge (role "user").
+        """
+        mock_client = AsyncMock()
+        configure_mock_llm_client_model_configs(mock_client)
+        mock_client.model_configs["primary"] = MagicMock(
+            id="primary-model",
+            effective_tool_strategy=ToolCallingStrategy.NATIVE,
+        )
+        mock_client_class.return_value = mock_client
+
+        # First LLM call: requests search_memory
+        llm_calls_search_memory = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_mem_fre324",
+                    "name": "search_memory",
+                    "arguments": json.dumps(
+                        {"query_text": "ultramarine recovery plan", "entity_names": ["Recovery Plan"]}
+                    ),
+                }
+            ],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 50},
+            "raw": {},
+        }
+        # Second LLM call: synthesis after the tool result
+        synthesis_response = {
+            "role": "assistant",
+            "content": "The diagnostic color is ultramarine.",
+            "tool_calls": [],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 60},
+            "raw": {},
+        }
+        mock_client.respond.side_effect = [llm_calls_search_memory, synthesis_response]
+
+        turn = TurnNode(
+            turn_id="turn-canary",
+            timestamp=datetime.now(timezone.utc),
+            user_message="Memory canary: diagnostic color is ultramarine",
+            summary="Recovery Plan 2026-05-05 diagnostic color: ultramarine",
+            key_entities=["ultramarine", "Recovery Plan"],
+        )
+        mock_memory = MagicMock()
+        mock_memory.connected = True
+        mock_memory.query_memory = AsyncMock(
+            return_value=MemoryQueryResult(conversations=[turn], entities=[])
+        )
+        fake_app = MagicMock()
+        fake_app.memory_service = mock_memory
+
+        with patch.dict(sys.modules, {"personal_agent.service.app": fake_app}):
+            orchestrator = Orchestrator()
+            result = await orchestrator.handle_user_request(
+                session_id="test-session-fre324",
+                user_message="What is the diagnostic color for recovery plan UUID 11111111-1111-1111-1111-111111111111?",
+                mode=Mode.NORMAL,
+                channel=Channel.SYSTEM_HEALTH,
+            )
+
+        assert mock_client.respond.call_count >= 2, "Expected at least 2 LLM calls (tool request + synthesis)"
+
+        # The synthesis call is the second LLM call
+        synthesis_call = mock_client.respond.call_args_list[1]
+        messages = synthesis_call.kwargs.get("messages", [])
+
+        # After the fix: synthesis nudge is the last message (role "user", not "tool")
+        last_msg = messages[-1]
+        assert last_msg["role"] == "user", (
+            f"FRE-324: synthesis LLM call must end with a user synthesis nudge, "
+            f"not role={last_msg['role']!r}. Without the nudge, Qwen3 emits only "
+            f"thinking tags → empty response → fallback stub fires."
+        )
+        content = last_msg.get("content", "")
+        assert "final answer" in content.lower() or "/no_think" in content, (
+            f"Synthesis nudge message should contain 'final answer' or '/no_think', got: {content!r}"
+        )
+
+        # And the overall result should contain the canary answer, not the fallback stub
+        assert "tool-use limit" not in result["reply"], (
+            f"Fallback stub must not appear when search_memory succeeds. reply={result['reply']!r}"
+        )
+
 
 @patch("personal_agent.llm_client.factory.get_llm_client")
 @pytest.mark.asyncio

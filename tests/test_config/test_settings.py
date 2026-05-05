@@ -162,6 +162,60 @@ class TestAppConfig:
         assert config.model_config_path.is_absolute()
 
 
+class TestCompressionGeometry:
+    """Recovery plan 2026-05-05 Wave 0.2 — guard against pathological geometry."""
+
+    def test_defaults_pass_validator(self) -> None:
+        """Default compression geometry must reserve ≥1024 tokens for head+middle."""
+        config = AppConfig()
+        assert config.context_window_max_tokens == 49152
+        assert config.within_session_min_tail_ratio == 0.25
+        absolute_tail = int(config.context_window_max_tokens * config.within_session_min_tail_ratio)
+        head_middle_budget = config.context_window_max_tokens - absolute_tail
+        assert head_middle_budget >= 1024
+
+    def test_validator_rejects_pathological_ratio(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A 0.99 tail ratio against a 2048 window must fail validation."""
+        from pydantic import ValidationError
+
+        monkeypatch.setenv("AGENT_CONTEXT_WINDOW_MAX_TOKENS", "2048")
+        monkeypatch.setenv("AGENT_WITHIN_SESSION_MIN_TAIL_RATIO", "0.99")
+        with pytest.raises(ValidationError) as exc_info:
+            AppConfig()
+        assert "head+middle" in str(exc_info.value)
+
+    def test_validator_rejects_old_default_geometry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The pre-recovery defaults (2048 window, ~2000 tail) must not be re-introduced."""
+        from pydantic import ValidationError
+
+        monkeypatch.setenv("AGENT_CONTEXT_WINDOW_MAX_TOKENS", "2048")
+        monkeypatch.setenv("AGENT_WITHIN_SESSION_MIN_TAIL_RATIO", "0.9766")
+        with pytest.raises(ValidationError):
+            AppConfig()
+
+    def test_validator_accepts_small_window_with_low_ratio(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """4096 window + 0.25 ratio → 3072 head+middle, comfortably above the 1024 floor."""
+        monkeypatch.setenv("AGENT_CONTEXT_WINDOW_MAX_TOKENS", "4096")
+        monkeypatch.setenv("AGENT_WITHIN_SESSION_MIN_TAIL_RATIO", "0.25")
+        config = AppConfig()
+        assert config.context_window_max_tokens == 4096
+        assert config.within_session_min_tail_ratio == 0.25
+
+    def test_ratio_field_constraints(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Ratio must be in [0.0, 1.0)."""
+        from pydantic import ValidationError
+
+        monkeypatch.setenv("AGENT_WITHIN_SESSION_MIN_TAIL_RATIO", "1.0")
+        with pytest.raises(ValidationError):
+            AppConfig()
+
+        monkeypatch.setenv("AGENT_WITHIN_SESSION_MIN_TAIL_RATIO", "-0.1")
+        with pytest.raises(ValidationError):
+            AppConfig()
+
+
 class TestSingleton:
     """Test singleton pattern."""
 

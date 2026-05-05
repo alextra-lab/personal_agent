@@ -176,9 +176,7 @@ def _assemble_compressed(
     return out
 
 
-def needs_hard_compression(
-    messages: list[dict[str, Any]], max_tokens: int
-) -> bool:
+def needs_hard_compression(messages: list[dict[str, Any]], max_tokens: int) -> bool:
     """Return True when the working messages list exceeds the hard threshold.
 
     Per ADR-0061 §D1 — fires synchronous compression mid-orchestration.
@@ -238,8 +236,10 @@ async def compress_in_place(
             Pass ``None`` in unit tests; the durable JSONL still writes.
         pre_pass_threshold_tokens: Override for
             ``settings.within_session_pre_pass_threshold_tokens``.
-        min_tail_tokens: Override for
-            ``settings.within_session_min_tail_tokens``.
+        min_tail_tokens: Absolute override for the tail floor. When ``None``,
+            the floor is computed as
+            ``int(settings.within_session_min_tail_ratio *
+            settings.context_window_max_tokens)``.
         min_tail_turns: Hard floor on the number of trailing messages
             kept in the tail.
 
@@ -254,7 +254,7 @@ async def compress_in_place(
     tail_token_floor = (
         min_tail_tokens
         if min_tail_tokens is not None
-        else settings.within_session_min_tail_tokens
+        else int(settings.within_session_min_tail_ratio * settings.context_window_max_tokens)
     )
 
     head = _extract_head(messages)
@@ -269,9 +269,7 @@ async def compress_in_place(
     middle = messages[head_len:tail_idx_start]
 
     middle_tokens_in = estimate_messages_tokens(middle)
-    pre_passed, replacements = _pre_pass_tool_outputs(
-        middle, threshold_tokens=threshold
-    )
+    pre_passed, replacements = _pre_pass_tool_outputs(middle, threshold_tokens=threshold)
 
     summariser_called = False
     summariser_duration_ms = 0
@@ -279,9 +277,7 @@ async def compress_in_place(
     if pre_passed:
         from personal_agent.orchestrator.context_compressor import FALLBACK_MARKER
 
-        summary_text, duration_ms = await summarize_middle(
-            pre_passed, trace_id=trace_id
-        )
+        summary_text, duration_ms = await summarize_middle(pre_passed, trace_id=trace_id)
         summariser_duration_ms = duration_ms
         if summary_text and summary_text != FALLBACK_MARKER:
             summary = summary_text
@@ -292,9 +288,7 @@ async def compress_in_place(
     head_tokens = estimate_messages_tokens(head)
     tail_tokens = estimate_messages_tokens(tail)
     if summary is not None:
-        middle_tokens_out = estimate_message_tokens(
-            {"role": SUMMARY_ROLE, "content": summary}
-        )
+        middle_tokens_out = estimate_message_tokens({"role": SUMMARY_ROLE, "content": summary})
     else:
         middle_tokens_out = estimate_messages_tokens(pre_passed)
 

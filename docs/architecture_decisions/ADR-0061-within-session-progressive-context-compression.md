@@ -201,7 +201,7 @@ Four new settings under the existing `context_*` block:
 |-------|---------|---------|
 | `within_session_compression_enabled` | `True` | Master kill switch. When `False`, hard trigger is a no-op; soft trigger reverts to pre-FRE-251 behaviour. |
 | `within_session_hard_threshold_ratio` | `0.85` | Hard-trigger ratio against `context_window_max_tokens`. |
-| `within_session_min_tail_tokens` | `2000` | Tail floor in tokens. |
+| `within_session_min_tail_ratio` | `0.25` | Tail floor as fraction of `context_window_max_tokens`. Absolute floor computed at runtime as `int(ratio * window)`. Replaces the prior fixed `within_session_min_tail_tokens=2000` per recovery plan 2026-05-05 Wave 0.2. |
 | `within_session_pre_pass_threshold_tokens` | `800` | Per-message size threshold for pre-pass replacement. |
 | `within_session_compression_refire_after_messages` | `4` | Soft re-fire cursor — minimum new messages between consecutive compressions for the same session. |
 

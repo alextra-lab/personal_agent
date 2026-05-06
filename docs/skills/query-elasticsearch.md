@@ -41,12 +41,12 @@ canonical_patterns:
   - "agent-captains-captures-*"
   - "agent-captains-reflections-*"
 known_bad_patterns:
-  - pattern: "logs-*"
+  - pattern: "/logs-*"
     applies_to:
       tool: bash
       fields: [command]
-    reason: "Generic 'logs-*' index does not exist in Seshat telemetry."
-    suggestion: "Use 'agent-logs-*' for structured agent telemetry."
+    reason: "Generic '/logs-*' index does not exist in Seshat telemetry."
+    suggestion: "Use '/agent-logs-*' — the correct index family starts with 'agent-'."
   - pattern: "agent-events-*"
     applies_to:
       tool: bash

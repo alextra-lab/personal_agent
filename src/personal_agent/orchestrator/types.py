@@ -206,6 +206,13 @@ class ExecutionContext:
     # Tracks which skill bodies have been read_skill'd this conversation for dedup.
     loaded_skills: set[str] = field(default_factory=set)
 
+    # --- Phase C skill routing (FRE-skill-routing) ---
+    # Set True after the routing model has been queried for this request.
+    # Prevents the routing call from re-firing on every step_llm_call iteration.
+    skill_routing_done: bool = False
+    # Model ID returned by the routing call (for telemetry breakdown across cells).
+    skill_routing_model_id: str = ""
+
 
 class OrchestratorStep(TypedDict):
     """Step metadata for observability.

@@ -233,13 +233,15 @@ eval-skill-routing:  ## Run one skill routing eval cell. CELL=<id> RUN=<id> requ
 	@if [ -z "$(CELL)" ] || [ -z "$(RUN)" ]; then echo "CELL=<id> RUN=<id> required"; exit 2; fi
 	@CELL=$(CELL); \
 	 PROFILE=$$(uv run python -c "import yaml; m=yaml.safe_load(open('$(SKILL_EVAL_DIR)/matrix.yaml')); c=next(x for x in m['cells'] if x['id']=='$$CELL'); print(c['profile'])"); \
-	 echo "Running cell $$CELL (profile=$$PROFILE, run=$(RUN))"; \
+	 SRM=$$(uv run python -c "import yaml; m=yaml.safe_load(open('$(SKILL_EVAL_DIR)/matrix.yaml')); c=next(x for x in m['cells'] if x['id']=='$$CELL'); print(c.get('env',{}).get('AGENT_SKILL_ROUTING_MODE',''))"); \
+	 echo "Running cell $$CELL (profile=$$PROFILE, skill_routing_mode=$$SRM, run=$(RUN))"; \
 	 uv run python scripts/eval/recovery_harness.py \
 		--run-id $(CELL)-$(RUN) \
 		--profile $$PROFILE \
 		--prompts $(SKILL_EVAL_PROMPTS) \
 		--out $(SKILL_EVAL_DIR)/$(CELL)-$(RUN) \
 		--chat-url http://localhost:$(SERVICE_PORT)/chat \
+		$(if $$SRM,--skill-routing-mode $$SRM) \
 		$(if $(PROMPT),--prompt $(PROMPT))
 
 eval-skill-routing-analyse:  ## Analyse a skill routing eval run. CELL=<id> RUN=<id> required.

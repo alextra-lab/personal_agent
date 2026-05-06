@@ -1333,7 +1333,13 @@ async def step_llm_call(
                 _user_message = _content if isinstance(_content, str) else str(_content)
                 break
 
-        _routing_mode = settings.skill_routing_mode
+        # Priority: per-request override > global setting (profile binding comes in Phase C)
+        from personal_agent.config.profile import (  # noqa: PLC0415
+            get_skill_routing_mode_override as _get_srm_override,
+        )
+
+        _routing_mode = _get_srm_override() or settings.skill_routing_mode
+
 
         # Phase C: separate routing call (model_decided + non-empty model key, once per request)
         if (

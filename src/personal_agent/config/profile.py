@@ -48,6 +48,30 @@ def get_current_profile() -> ExecutionProfile | None:
     return _current_profile.get()
 
 
+# Per-request skill routing mode override (Phase D eval disentanglement).
+# When set, overrides settings.skill_routing_mode for this async context only.
+_skill_routing_mode_override: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "skill_routing_mode_override", default=None
+)
+
+
+def set_skill_routing_mode(mode: str) -> contextvars.Token[str | None]:
+    """Override skill_routing_mode for the current async context.
+
+    Args:
+        mode: One of ``"keyword"``, ``"hybrid"``, ``"model_decided"``.
+
+    Returns:
+        Token to restore the previous value (useful in tests).
+    """
+    return _skill_routing_mode_override.set(mode)
+
+
+def get_skill_routing_mode_override() -> str | None:
+    """Return the per-request skill routing mode override, or None if not set."""
+    return _skill_routing_mode_override.get()
+
+
 def resolve_model_key(role_name: str) -> str:
     """Resolve a model role name to its config key, accounting for the active ExecutionProfile.
 

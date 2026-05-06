@@ -143,6 +143,7 @@ async def call_chat(
     session_id: str | None,
     auth_email: str | None,
     profile: str = "local",
+    skill_routing_mode: str | None = None,
 ) -> tuple[str, str, str]:
     """POST /chat. Return (response_text, session_id, trace_id).
 
@@ -154,6 +155,8 @@ async def call_chat(
     params = {"message": message, "profile": profile}
     if session_id is not None:
         params["session_id"] = session_id
+    if skill_routing_mode:
+        params["skill_routing_mode"] = skill_routing_mode
     headers: dict[str, str] = {}
     if auth_email:
         headers["Cf-Access-Authenticated-User-Email"] = auth_email
@@ -425,6 +428,7 @@ async def run_prompt(
     chat_url: str,
     auth_email: str | None,
     profile: str = "local",
+    skill_routing_mode: str | None = None,
     es_wait_seconds: int,
     queries: TelemetryQueries,
     memory_service: MemoryService,
@@ -439,7 +443,8 @@ async def run_prompt(
                 session_id = None
             started_at = datetime.now(timezone.utc)
             response_text, session_id, trace_id = await call_chat(
-                client, chat_url, turn.message, session_id, auth_email, profile=profile
+                client, chat_url, turn.message, session_id, auth_email,
+                profile=profile, skill_routing_mode=skill_routing_mode,
             )
             finished_at = datetime.now(timezone.utc)
             log.info(
@@ -501,6 +506,7 @@ async def run_harness(
     *,
     run_id: str,
     profile: str,
+    skill_routing_mode: str | None = None,
     prompts_path: Path,
     chat_url: str,
     auth_email: str | None,
@@ -530,6 +536,7 @@ async def run_harness(
                     chat_url=chat_url,
                     auth_email=auth_email,
                     profile=profile,
+                    skill_routing_mode=skill_routing_mode,
                     es_wait_seconds=es_wait_seconds,
                     queries=queries,
                     memory_service=memory_service,
@@ -599,6 +606,12 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--skill-routing-mode",
+        default=None,
+        help="Override skill_routing_mode per-request (keyword|hybrid|model_decided). "
+             "Allows running different eval cells without gateway restarts.",
+    )
+    parser.add_argument(
         "--es-wait-seconds",
         type=int,
         default=5,
@@ -623,6 +636,7 @@ def main() -> int:
             run_harness(
                 run_id=args.run_id,
                 profile=args.profile,
+                skill_routing_mode=args.skill_routing_mode,
                 prompts_path=args.prompts,
                 chat_url=args.chat_url,
                 auth_email=auth_email,

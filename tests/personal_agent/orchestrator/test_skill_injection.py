@@ -41,9 +41,9 @@ class TestSkillInjectionStructure:
         assert "from personal_agent.orchestrator.skills import get_skill_block" in source
 
     def test_skill_block_used_to_build_system_prompt(self) -> None:
-        """executor.py must assign get_skill_block() and splice it into system_prompt."""
+        """executor.py must assign get_skill_block(message=...) and splice into system_prompt."""
         source = _EXECUTOR_SRC.read_text(encoding="utf-8")
-        assert "skill_block = get_skill_block()" in source
+        assert "skill_block = get_skill_block(message=" in source
         assert "if skill_block:" in source
 
     def test_skill_block_injected_when_flag_enabled(self) -> None:
@@ -60,7 +60,7 @@ class TestSkillInjectionStructure:
     def test_injection_before_llm_call(self) -> None:
         """Skill block injection must appear before the llm_client.respond() call in source order."""
         source = _EXECUTOR_SRC.read_text(encoding="utf-8")
-        inject_pos = source.find("skill_block = get_skill_block()")
+        inject_pos = source.find("skill_block = get_skill_block(message=")
         respond_pos = source.find("response = await llm_client.respond(")
         assert inject_pos != -1, "Injection line not found"
         assert respond_pos != -1, "llm_client.respond call not found"

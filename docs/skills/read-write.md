@@ -1,3 +1,25 @@
+---
+name: read-write
+description: Primitive filesystem I/O using read and write tools with path governance and size caps.
+when_to_use: When reading or writing files on the filesystem using the read or write primitives.
+tools: [read, write]
+keywords:
+  - list files
+  - files in /
+  - "what's in /"
+  - yaml files
+  - python files
+  - how many files
+  - under /app
+  - in /app/
+  - /app/config
+  - /app/src
+  - directory
+  - "folder /"
+  - how many yaml
+  - how many python
+---
+
 # Skill: read / write (primitive filesystem I/O)
 
 **Status:** Primary path (FRE-263, 2026-04-28). Legacy `read_file` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).

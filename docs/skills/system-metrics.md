@@ -1,3 +1,20 @@
+---
+name: system-metrics
+description: CPU, memory, and disk utilisation snapshot for the agent process and host.
+when_to_use: When you need to check CPU usage, memory consumption, disk space, or system load.
+tools: [bash]
+keywords:
+  - cpu load
+  - cpu usage
+  - memory is the agent
+  - disk space
+  - disk usage
+  - load average
+  - how much memory
+  - current cpu
+  - is disk
+---
+
 # system-metrics — CPU, memory, and disk utilisation snapshot
 
 **Status:** Primary path (FRE-263, 2026-04-28). Legacy `system_metrics_snapshot` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).

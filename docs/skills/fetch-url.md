@@ -1,3 +1,20 @@
+---
+name: fetch-url
+description: Fetch a URL and return its content as plain text using bash curl.
+when_to_use: When you need to fetch web pages, REST APIs, or check HTTP endpoints.
+tools: [bash]
+keywords:
+  - "fetch "
+  - "https://"
+  - "http://"
+  - readme on
+  - github.com
+  - anthropic.com
+  - current pricing
+  - "what's on the page"
+  - check the url
+---
+
 # fetch-url — Fetch a URL and return its content as plain text
 
 **Status:** Primary path (FRE-263, 2026-04-28). Legacy `fetch_url` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).

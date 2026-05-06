@@ -1,3 +1,10 @@
+---
+name: bash
+description: Shell command executor for diagnostics, log inspection, and local service queries inside the agent container.
+when_to_use: When you need to run shell commands, inspect container state, query local services via curl/psql/redis-cli, or perform operations not covered by specialized tools.
+tools: [bash]
+---
+
 # bash — Shell Command Executor
 
 **Status:** Primary path (FRE-263, 2026-04-28). Replaces 8 deprecated curated tools via `AGENT_LEGACY_TOOLS_ENABLED=false`. Use `bash`, `read`, `run_python` primitives for all shell operations.

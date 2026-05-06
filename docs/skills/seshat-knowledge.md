@@ -1,3 +1,9 @@
+---
+name: seshat-knowledge
+description: Query and manage the persistent knowledge graph via CLI or Gateway API.
+when_to_use: When you need to search memory, list entities, or inspect the knowledge graph from an external agent context.
+---
+
 # SKILL: Seshat Knowledge Graph
 
 > **Tier:** 2 — CLI tool + HTTP API

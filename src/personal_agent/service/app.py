@@ -565,7 +565,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         STREAM_PROMOTION_ISSUE_CREATED,
         STREAM_REQUEST_CAPTURED,
         STREAM_REQUEST_COMPLETED,
-        STREAM_SYSTEM_IDLE,
         EventBase,
     )
     from personal_agent.events.pipeline_handlers import (
@@ -595,22 +594,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                         session_id=getattr(event, "session_id", "unknown"),
                     )
 
-            async def _on_system_idle(event: EventBase) -> None:
-                """Route system.idle events to the scheduler (Phase 3)."""
-                if scheduler is not None:
-                    await scheduler.on_system_idle()
-
             await active_bus.subscribe(
                 stream=STREAM_REQUEST_CAPTURED,
                 group=CG_CONSOLIDATOR,
                 consumer_name="consolidator-0",
                 handler=_on_request_captured,
-            )
-            await active_bus.subscribe(
-                stream=STREAM_SYSTEM_IDLE,
-                group=CG_CONSOLIDATOR,
-                consumer_name="consolidator-idle-0",
-                handler=_on_system_idle,
             )
 
         # Phase 2 — request.completed consumers

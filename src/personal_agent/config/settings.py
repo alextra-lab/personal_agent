@@ -635,9 +635,6 @@ class AppConfig(BaseSettings):
     second_brain_memory_threshold: float = Field(
         default=70.0, description="Maximum memory usage for consolidation (70%)"
     )
-    second_brain_check_interval_seconds: float = Field(
-        default=60.0, description="How often to check consolidation conditions (1 minute)"
-    )
     second_brain_min_interval_seconds: float = Field(
         default=3600.0, description="Minimum time between consolidations (1 hour)"
     )

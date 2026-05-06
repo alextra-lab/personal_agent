@@ -38,9 +38,6 @@ STREAM_PROMOTION_ISSUE_CREATED = "stream:promotion.issue_created"
 STREAM_FEEDBACK_RECEIVED = "stream:feedback.received"
 """Stream for feedback-received events (Phase 3)."""
 
-STREAM_SYSTEM_IDLE = "stream:system.idle"
-"""Stream for system-idle events (Phase 3)."""
-
 STREAM_MEMORY_ACCESSED = "stream:memory.accessed"
 """Stream for memory-accessed events (Phase 4)."""
 
@@ -290,22 +287,6 @@ class FeedbackReceivedEvent(EventBase):
     issue_identifier: str
     label: str
     fingerprint: str | None = None
-
-
-class SystemIdleEvent(EventBase):
-    """Published by the brainstem scheduler when the system is idle.
-
-    Consumed by ``cg:consolidator`` to trigger consolidation and by any
-    future deferred-work consumers.
-
-    Attributes:
-        idle_seconds: Seconds since the last completed request.
-        trigger: Source that determined idleness (default ``monitoring_loop``).
-    """
-
-    event_type: Literal["system.idle"] = "system.idle"
-    idle_seconds: float
-    trigger: str = "monitoring_loop"
 
 
 # ---------------------------------------------------------------------------
@@ -811,9 +792,7 @@ class WithinSessionCompressionEvent(EventBase):
         tokens_saved: ``middle_tokens_in - middle_tokens_out`` (always ≥ 0).
     """
 
-    event_type: Literal[
-        "context.within_session_compressed"
-    ] = "context.within_session_compressed"
+    event_type: Literal["context.within_session_compressed"] = "context.within_session_compressed"
     source_component: str = "orchestrator.within_session_compression"
 
     trace_id: str
@@ -880,8 +859,6 @@ def parse_stream_event(payload: dict[str, Any]) -> EventBase:
         return PromotionIssueCreatedEvent.model_validate(payload)
     if raw_type == "feedback.received":
         return FeedbackReceivedEvent.model_validate(payload)
-    if raw_type == "system.idle":
-        return SystemIdleEvent.model_validate(payload)
     if raw_type == "memory.accessed":
         return MemoryAccessedEvent.model_validate(payload)
     if raw_type == "memory.entities_updated":

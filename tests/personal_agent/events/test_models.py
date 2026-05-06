@@ -22,7 +22,6 @@ from personal_agent.events.models import (
     STREAM_PROMOTION_ISSUE_CREATED,
     STREAM_REQUEST_CAPTURED,
     STREAM_REQUEST_COMPLETED,
-    STREAM_SYSTEM_IDLE,
     AccessContext,
     ConsolidationCompletedEvent,
     FeedbackReceivedEvent,
@@ -32,7 +31,6 @@ from personal_agent.events.models import (
     PromotionIssueCreatedEvent,
     RequestCapturedEvent,
     RequestCompletedEvent,
-    SystemIdleEvent,
     parse_stream_event,
 )
 
@@ -269,23 +267,6 @@ class TestPhase3Events:
         assert parsed.label == "Approved"
         assert parsed.fingerprint == "fp42"
 
-    def test_system_idle_event_type(self) -> None:
-        event = SystemIdleEvent(idle_seconds=300.0, source_component="test")
-        assert event.event_type == "system.idle"
-        assert event.trigger == "monitoring_loop"
-
-    def test_system_idle_roundtrip(self) -> None:
-        event = SystemIdleEvent(
-            idle_seconds=120.5,
-            trigger="lifecycle_loop",
-            source_component="test",
-        )
-        payload = event.model_dump(mode="json")
-        parsed = parse_stream_event(payload)
-        assert isinstance(parsed, SystemIdleEvent)
-        assert parsed.idle_seconds == 120.5
-        assert parsed.trigger == "lifecycle_loop"
-
 
 class TestAccessContext:
     """AccessContext enum (ADR-0042)."""
@@ -401,7 +382,6 @@ class TestConstants:
         assert STREAM_CONSOLIDATION_COMPLETED == "stream:consolidation.completed"
         assert STREAM_PROMOTION_ISSUE_CREATED == "stream:promotion.issue_created"
         assert STREAM_FEEDBACK_RECEIVED == "stream:feedback.received"
-        assert STREAM_SYSTEM_IDLE == "stream:system.idle"
 
     def test_phase3_consumer_groups(self) -> None:
         assert CG_INSIGHTS == "cg:insights"

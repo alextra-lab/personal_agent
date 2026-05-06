@@ -382,14 +382,16 @@ def test_compute_calibration_fingerprint_different_edges() -> None:
 @pytest.mark.asyncio
 async def test_handle_ignores_unknown_event_type() -> None:
     """Non-MetricsSampled, non-ModeTransition events should be silently ignored."""
-    from personal_agent.events.models import SystemIdleEvent
+    from personal_agent.events.models import ConsolidationCompletedEvent
 
     consumer, mock_mm = _make_consumer()
-    idle_event = SystemIdleEvent(
+    unrelated_event = ConsolidationCompletedEvent(
+        captures_processed=0,
+        entities_created=0,
+        entities_promoted=0,
         source_component="brainstem.scheduler",
-        idle_seconds=300.0,
     )
     # Should not raise and should not call evaluate_transitions.
-    await consumer.handle(idle_event)
+    await consumer.handle(unrelated_event)
     mock_mm.evaluate_transitions.assert_not_called()
     assert len(consumer._window) == 0

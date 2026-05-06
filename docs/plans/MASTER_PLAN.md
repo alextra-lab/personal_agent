@@ -6,11 +6,12 @@
 > Canary verified: `fre324-canary-v4` — Turn 1 wrote 1 Turn node + 3 Entity nodes + 9 Relationships; Turn 2 (fresh session) retrieved **ultramarine** correctly via `search_memory`. Full memory round-trip passing.
 > Side-effect fix: `AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED=false` + `AGENT_SECOND_BRAIN_MIN_INTERVAL_SECONDS=60` set in `.env` — consolidation now fires promptly after each conversation (remote model, no local resource constraint).
 > FRE-325 ✅ done 2026-05-06 — PR #18. Removed `_monitoring_loop` / `system.idle` polling path from `BrainstemScheduler`; `SystemIdleEvent` / `STREAM_SYSTEM_IDLE` deleted; `second_brain_check_interval_seconds` setting removed; ADR-0041 + ADR-0054 amended. Consumer count 18 → 17. Deployed.
-> FRE-326 filed (Needs Approval): re-assess `_should_consolidate` resource gates post-FRE-325 after ≥7 days of Wave-2 telemetry.
+> FRE-326 Approved: re-assess `_should_consolidate` resource gates post-FRE-325 — scheduled for ≥ 2026-05-13 (needs ≥7 days Wave-2 telemetry).
+> FRE-327 ✅ done 2026-05-06 — PR #19. New `docs/skills/neo4j-direct.md` skill doc + keyword route in `skills.py`; agent can now self-diagnose Neo4j graph state in ≤6 tool calls. Deployed.
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-06 (FRE-325 done — polling loop removed, deployed; FRE-326 filed)
+> **Last updated**: 2026-05-06 (FRE-327 done — Neo4j skill doc deployed; full backlog triage → 9-wave sequence; mermaid dupes FRE-316/317/318 closed)
 > **Implementation sequence**: `docs/superpowers/specs/2026-04-22-implementation-sequence-wave-plan-design.md`
 
 ---
@@ -63,19 +64,28 @@ Ordered by recommended implementation sequence. All items Approved in Linear. De
 | ~~6~~ | ~~Context Quality — compaction full loop~~ | ~~[FRE-249](https://linear.app/frenchforest/issue/FRE-249)~~ | ~~ADR-0059~~ | ~~Done 2026-04-27 — ADR accepted + implemented~~ |
 | ~~7~~ | ~~Knowledge Graph Quality — consolidation + decay→reranking~~ | ~~[FRE-250](https://linear.app/frenchforest/issue/FRE-250)~~ | ~~ADR-0060~~ | ~~Done 2026-04-30 — ADR accepted + implemented (Streams 6 + 8 closed, tier reranking, Phase 2 governance flag-gated)~~ |
 | ~~2.5-P3~~ | ~~ADR-0063 — Skill docs + model evaluation~~ | ~~[FRE-262](https://linear.app/frenchforest/issue/FRE-262)~~ | ~~ADR-0063 §D7~~ | ~~Done 2026-04-28 — FULL PIVOT-4 after FRE-283/FRE-284 fixes~~ |
-| 8 | Within-Session Progressive Context Compression | [FRE-251](https://linear.app/frenchforest/issue/FRE-251) | ADR-0061 | FRE-249 |
+| ~~8~~ | ~~Within-Session Progressive Context Compression~~ | ~~[FRE-251](https://linear.app/frenchforest/issue/FRE-251)~~ | ~~ADR-0061~~ | ~~Done 2026-05-01 — PR #10~~ |
 | ~~2.5-P4~~ | ~~ADR-0063 — Flag-gated deprecation of all 8 legacy tools~~ | ~~[FRE-263](https://linear.app/frenchforest/issue/FRE-263)~~ | ~~ADR-0063 §D4~~ | ~~Done 2026-04-28 — 2-week stability window until 2026-05-12~~ |
-| 9 | Agent self-updating skills — phase 2 *(phase 1 absorbed into FRE-262)* | [FRE-226](https://linear.app/frenchforest/issue/FRE-226) | ADR-0058 | FRE-248 |
-| 10 | PWA: per-session thumbs feedback → Captain's Log + Insights consumer | [FRE-267](https://linear.app/frenchforest/issue/FRE-267) | — | FRE-235 (done) |
-| 2.5-P6 | ADR-0063 — Delete legacy tool code | [FRE-265](https://linear.app/frenchforest/issue/FRE-265) | ADR-0063 | FRE-263 (2-week window until 2026-05-12) |
-| 11 | Linear Feedback Channel — Phase 3 meta-learning | [Project](https://linear.app/frenchforest/project/linear-async-feedback-channel-4517a7698be1) | ADR-0040 | Phases 1–2 done; FRE-183 needs feedback data |
-| 12 | Context Intelligence — Stretch Goals | [Project](https://linear.app/frenchforest/project/context-intelligence-stretch-goals-315c8caa9cc9) | `specs/CONTEXT_INTELLIGENCE_SPEC.md` §4.7/4.S1/4.S2 | Proactive Memory MVP done (FRE-176) |
+
+**9-wave sequence (triage 2026-05-06) — full detail: `plans/complete-next-task-in-iterative-leaf.md`**
+
+| Wave | Work Items | Key Linear Issues | Notes |
+|------|-----------|-------------------|-------|
+| **A — Dev loop & hygiene** ⬅ *next* | Fix Linear label lookup; mcp import error; flaky Neo4j test; skill-injection tests; primitive_tools default drift; stale 74-failure sweep; consolidate plan storage | [FRE-309](https://linear.app/frenchforest/issue/FRE-309) · [FRE-185](https://linear.app/frenchforest/issue/FRE-185) · [FRE-189](https://linear.app/frenchforest/issue/FRE-189) · [FRE-320](https://linear.app/frenchforest/issue/FRE-320) · [FRE-321](https://linear.app/frenchforest/issue/FRE-321) · [FRE-312](https://linear.app/frenchforest/issue/FRE-312) · [FRE-308](https://linear.app/frenchforest/issue/FRE-308) | **Start here. FRE-309 first** — broken label lookup poisons agent self-filing loop |
+| **B — Self-observation** | hit_iteration_limit signal; error monitor scans warnings; model_config audit; env.example audit; consolidation gate re-eval | [FRE-301](https://linear.app/frenchforest/issue/FRE-301) · [FRE-300](https://linear.app/frenchforest/issue/FRE-300) · [FRE-319](https://linear.app/frenchforest/issue/FRE-319) · [FRE-269](https://linear.app/frenchforest/issue/FRE-269) · [FRE-326](https://linear.app/frenchforest/issue/FRE-326) | FRE-326 scheduled ≥ 2026-05-13 |
+| **C — Security** | Domain guard — block known malicious sites | [FRE-225](https://linear.app/frenchforest/issue/FRE-225) | — |
+| **D — Architecture** | VPS+CF+local topology review (gates D2-D5); containerization decision; SLM circuit breaker; reranker fallback; slm_server supervisor; PWA iOS SSE | [FRE-214](https://linear.app/frenchforest/issue/FRE-214) · [FRE-217](https://linear.app/frenchforest/issue/FRE-217) · [FRE-238](https://linear.app/frenchforest/issue/FRE-238) · [FRE-240](https://linear.app/frenchforest/issue/FRE-240) · [FRE-241](https://linear.app/frenchforest/issue/FRE-241) · [FRE-236](https://linear.app/frenchforest/issue/FRE-236) | FRE-214 verdict gates D2-D6 |
+| **E — Identity & write surface** | Seshat owner identity (ADR-0052); protected agent write dir | [FRE-213](https://linear.app/frenchforest/issue/FRE-213) · [FRE-227](https://linear.app/frenchforest/issue/FRE-227) | FRE-227 prereq for FRE-226 |
+| **F — Self-improvement** | Self-updating skills phase 2 (ADR + impl); adaptive self-query arch; trigger effectiveness analysis | [FRE-226](https://linear.app/frenchforest/issue/FRE-226) · [FRE-258](https://linear.app/frenchforest/issue/FRE-258) · [FRE-234](https://linear.app/frenchforest/issue/FRE-234) | FRE-226 needs FRE-227; FRE-258 is Tier-1 Opus |
+| **G — Cleanups & gates** | Delete legacy tool code; flip graph_quality gate; feedback_history retention; budget auto-tuning (parked) | [FRE-265](https://linear.app/frenchforest/issue/FRE-265) · [FRE-299](https://linear.app/frenchforest/issue/FRE-299) · [FRE-314](https://linear.app/frenchforest/issue/FRE-314) · [FRE-311](https://linear.app/frenchforest/issue/FRE-311) | FRE-265 calendar gate ≥ 2026-05-12; FRE-311 parked on FRE-302 |
+| **H — Memory / context value** | Recall L2; Recall L3 LLM-judge; Context Gap Score; geolocation memory | [FRE-178](https://linear.app/frenchforest/issue/FRE-178) · [FRE-179](https://linear.app/frenchforest/issue/FRE-179) · [FRE-180](https://linear.app/frenchforest/issue/FRE-180) · [FRE-230](https://linear.app/frenchforest/issue/FRE-230) | FRE-178 → FRE-179 → FRE-180 chain |
+| **I — User feedback + meta-learning** | PWA thumbs feedback; Feedback Channel Phase 3; Phase 4 eval | [FRE-267](https://linear.app/frenchforest/issue/FRE-267) · [FRE-183](https://linear.app/frenchforest/issue/FRE-183) · [FRE-184](https://linear.app/frenchforest/issue/FRE-184) | — |
 
 ## Needs Approval
 
 | Work Item | ADR / Plan | Notes |
 |-----------|------------|-------|
-| *(none)* | — | — |
+| Mermaid chart rendering in chat UI | — | [FRE-315](https://linear.app/frenchforest/issue/FRE-315) canonical (FRE-316/317/318 closed as duplicates 2026-05-06) |
 
 ### Dependency graph (project-level)
 
@@ -128,6 +138,8 @@ Linear Feedback Channel Phase 3 (ADR-0040)  ← needs real feedback data (Phase 
 
 | Phase | Completed | Summary |
 |-------|-----------|---------|
+| FRE-327: Neo4j direct Cypher query skill doc | 2026-05-06 | New `docs/skills/neo4j-direct.md` teaches correct `AGENT_NEO4J_{URI,USER,PASSWORD}` env vars + `bash python3` inline driver pattern. Keyword route added in `skills.py` before infra-health catch-all. Eval target: `neo4j_memory_inspection` prompt ≤6 tool calls. PR #19. |
+| FRE-251: Within-Session Progressive Context Compression (ADR-0061) | 2026-05-01 | Head-middle-tail invariant: system prompt + first user message always preserved (head), last N turns preserved (tail), middle compressed by LLM summarizer with tool-output pre-pass. Triggered by token budget threshold mid-orchestration. Complements Stage 7 budget trimming. PR #10. |
 | FRE-261: PIVOT-2 — Four primitive tools + sandbox + action-boundary governance | 2026-04-27 | `bash` primitive (hard-deny regex, shlex parse, auto-approve allowlist, 50 KB cap with scratch overflow), `read`/`write` primitives (path allowlist + unattended scratch paths), `run_python` Docker sandbox (`python:3.12-slim`, non-root uid 1000, `--read-only`, `--network=none`, `--memory-swap` pinned, per-trace scratch bind-mount), AG-UI approval round-trip (`ToolApprovalRequestEvent` + `approval_waiter.py` asyncio.Future registry + `POST /agui/approval/{id}` endpoint), PWA `ApprovalModal` (countdown, risk chip, auto-deny on timeout). Feature-flagged off (`AGENT_PRIMITIVE_TOOLS_ENABLED`, `AGENT_APPROVAL_UI_ENABLED`). 15-case pentest suite (11 unit + 6 integration). Workspace volume `seshat_workspace_cloud` at `/app/agent_workspace/` (FRE-227 forward-compat). pgvector `notes_search` dropped from FRE-227 scope — `bash grep` covers retrieval. Gate: pentest integration run + E2E approval flow on cloud-sim before enabling flags. |
 | FRE-229: Memory visibility layer — public / group / private (ADR-0064 §D6/D7) | 2026-04-26 | Three-level Neo4j visibility scoping. `Visibility` enum + `visibility` string property on `:Turn`, `:Entity`, `:Relationship`, `:Session` nodes. Single chokepoint `_build_visibility_filter()` in `memory/service.py` — injected into all 7 read methods. `create_conversation` / `create_entity` (ON CREATE SET semantics) / `create_relationship` accept `visibility=` param. `user_id` + `authenticated` flow from `/chat` endpoint → `run_gateway_pipeline` → `assemble_context` → `MemoryRecallQuery` → adapter → service. `TaskCapture.user_id` + `ExecutionContext.user_id` plumbed for consolidator write path — produces `"group"` nodes from authenticated sessions, `"public"` from CLI/unauthenticated. Backfill: `scripts/migrate_fre229_visibility_backfill.py`. 23 new unit tests. ADR-0064 status updated to Accepted. |
 | FRE-268: Session ownership scoping via CF Access identity (ADR-0064) | 2026-04-26 | Reads `Cf-Access-Authenticated-User-Email` on inbound requests; maps to stable `user_id` UUID in new Postgres `users` table. `GET /sessions`, `GET/PATCH /sessions/{id}`, `POST /chat`, `POST /chat/stream`, SSE `/stream/{session_id}` all scoped to the authenticated user — mismatch returns 404. Dev-mode fallback via `AGENT_OWNER_EMAIL`. Migration script in `scripts/migrate_fre268_add_user_identity.py`. Memory graph remains global (shared knowledge for trusted group). ADR-0064 redirects FRE-229 to simplified three-level `public`/`group`/`private` model (single unnamed group = CF Access policy). 15 new unit tests. |

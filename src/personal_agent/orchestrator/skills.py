@@ -29,6 +29,7 @@ _SKILL_FILES = [
     "system-metrics.md",
     "system-diagnostics.md",
     "infrastructure-health.md",
+    "neo4j-direct.md",
 ]
 _SKILLS_DIR = Path(__file__).resolve().parents[3] / "docs" / "skills"
 _SEPARATOR = "\n\n---\n\n"
@@ -140,6 +141,28 @@ _KEYWORD_ROUTES: list[tuple[list[str], list[str]]] = [
             "iostat",
         ],
         ["system-diagnostics.md"],
+    ),
+    # Neo4j direct Cypher queries — must come before infra-health (which also matches "neo4j")
+    (
+        [
+            "cypher",
+            "bolt://",
+            "entity nodes",
+            "entity count",
+            "turn nodes",
+            "knowledge graph state",
+            "graph state",
+            "query the graph",
+            "graph query",
+            "graph directly",
+            "connect to neo4j",
+            "neo4j query",
+            "query neo4j",
+            "entity nodes",
+            "discusses relationship",
+            "most recently created",
+        ],
+        ["neo4j-direct.md"],
     ),
     # Infrastructure health
     (

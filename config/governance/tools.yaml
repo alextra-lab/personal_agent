@@ -74,6 +74,12 @@ tools:
     loop_max_consecutive: 2
 
   # FRE-261 Step 3: primitive read tool (supersedes read_file)
+  # Phase B skill routing (FRE-skill-routing): load skill doc body on demand
+  read_skill:
+    category: "read_only"
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"]
+    risk_level: "low"
+
   read:
     category: "read_only"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"]

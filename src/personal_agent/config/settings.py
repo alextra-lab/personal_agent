@@ -1011,6 +1011,29 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # Phase B skill routing (FRE-skill-routing)
+    skill_routing_mode: str = Field(
+        default="hybrid",
+        alias="AGENT_SKILL_ROUTING_MODE",
+        description=(
+            "Skill routing strategy when prefer_primitives_enabled is True. "
+            "'keyword' — inject keyword-matched skill bodies only (Phase A legacy). "
+            "'model_decided' — inject compact skill index; model calls read_skill on demand. "
+            "'hybrid' — inject both index and keyword-matched bodies; suppress keyword body "
+            "for any skill already read_skill'd this conversation. "
+            "Env var: AGENT_SKILL_ROUTING_MODE"
+        ),
+    )
+    skill_index_max_tokens: int = Field(
+        default=2048,
+        alias="AGENT_SKILL_INDEX_MAX_TOKENS",
+        description=(
+            "Token cap for the compact skill index injected in model_decided and hybrid modes. "
+            "Index is truncated to this many tokens if it exceeds the limit. "
+            "Env var: AGENT_SKILL_INDEX_MAX_TOKENS"
+        ),
+    )
+
     # FRE-263 PIVOT-4: Flag-gated deprecation of legacy tools (ADR-0063 Phase 4)
     legacy_tools_enabled: bool = Field(
         default=False,

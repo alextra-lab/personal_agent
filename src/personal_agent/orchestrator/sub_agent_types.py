@@ -46,6 +46,10 @@ class SubAgentSpec:
     background: str = ""
     model_role: ModelRole = ModelRole.SUB_AGENT
     mode: SubAgentMode = SubAgentMode.PARALLEL_INFERENCE
+    # Phase B skill routing: compact index injected into sub-agent system prompt
+    skill_index_block: str = ""
+    # Skills already loaded by parent — sub-agent inherits to avoid re-emitting bodies
+    loaded_skills: frozenset[str] = field(default_factory=frozenset)
 
 
 @dataclass(frozen=True)

@@ -1033,6 +1033,21 @@ class AppConfig(BaseSettings):
             "Env var: AGENT_SKILL_INDEX_MAX_TOKENS"
         ),
     )
+    skill_routing_model_key: str = Field(
+        default="claude_haiku",
+        alias="AGENT_SKILL_ROUTING_MODEL_KEY",
+        description=(
+            "Model key from models.yaml used for skill routing decisions when "
+            "skill_routing_mode=model_decided. Independent of the primary agent's "
+            "model path (local vs cloud). The local SLM server is currently "
+            "single-threaded and cannot run routing concurrently with the primary "
+            "agent, so the default is a remote model (claude_haiku). When local "
+            "concurrency improves OR for a fully-cloud deployment, point this at "
+            "any models.yaml entry. Empty string disables the separate routing "
+            "call (primary agent does its own routing via read_skill). "
+            "Env var: AGENT_SKILL_ROUTING_MODEL_KEY"
+        ),
+    )
 
     # FRE-263 PIVOT-4: Flag-gated deprecation of legacy tools (ADR-0063 Phase 4)
     legacy_tools_enabled: bool = Field(

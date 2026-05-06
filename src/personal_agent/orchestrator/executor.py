@@ -1334,12 +1334,69 @@ async def step_llm_call(
                 break
 
         _routing_mode = settings.skill_routing_mode
+
+        # Phase C: separate routing call (model_decided + non-empty model key, once per request)
+        if (
+            _routing_mode == "model_decided"
+            and settings.skill_routing_model_key
+            and not ctx.skill_routing_done
+            and _user_message
+        ):
+            ctx.skill_routing_done = True
+            ctx.skill_routing_model_id = settings.skill_routing_model_key
+            try:
+                from personal_agent.llm_client.factory import (  # noqa: PLC0415
+                    get_llm_client_for_key,
+                )
+                from personal_agent.orchestrator.skills import route_skills  # noqa: PLC0415
+
+                _routing_client = get_llm_client_for_key(settings.skill_routing_model_key)
+                _routing_start = time.time()
+                _relevant = await route_skills(
+                    user_message=_user_message,
+                    routing_client=_routing_client,
+                    cap_tokens=settings.skill_index_max_tokens,
+                )
+                _routing_latency_ms = int((time.time() - _routing_start) * 1000)
+                # Pre-load returned skill bodies — primary agent sees them already in scope
+                from personal_agent.orchestrator.skills import get_all_skills  # noqa: PLC0415
+
+                _all = get_all_skills()
+                for _name in _relevant:
+                    if _name in _all:
+                        ctx.loaded_skills.add(_name)
+
+                log.info(
+                    "skill_routing_call_completed",
+                    routing_model_key=settings.skill_routing_model_key,
+                    latency_ms=_routing_latency_ms,
+                    skills_returned=_relevant,
+                    trace_id=ctx.trace_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "skill_routing_call_skipped",
+                    error=str(exc),
+                    routing_model_key=settings.skill_routing_model_key,
+                    trace_id=ctx.trace_id,
+                )
+
         _skill_injection: str = ""
 
         if _routing_mode == "model_decided":
+            # Build: skill index + bodies of any pre-loaded (router-selected) skills
             _skill_index = assemble_skill_index(cap_tokens=settings.skill_index_max_tokens)
-            if _skill_index:
-                _skill_injection = _skill_index
+            _preloaded_bodies: list[str] = []
+            if ctx.loaded_skills:
+                from personal_agent.orchestrator.skills import get_all_skills  # noqa: PLC0415
+
+                _all = get_all_skills()
+                for _name in sorted(ctx.loaded_skills):
+                    _doc = _all.get(_name)
+                    if _doc and _doc.body:
+                        _preloaded_bodies.append(_doc.body)
+            parts = [p for p in [_skill_index, *_preloaded_bodies] if p]
+            _skill_injection = "\n\n".join(parts)
         elif _routing_mode == "hybrid":
             _skill_index = assemble_skill_index(cap_tokens=settings.skill_index_max_tokens)
             _keyword_block = get_skill_block(
@@ -1362,6 +1419,7 @@ async def step_llm_call(
             routing_mode=_routing_mode,
             injected_chars=len(_skill_injection),
             loaded_skills_count=len(ctx.loaded_skills),
+            skill_routing_model_key=ctx.skill_routing_model_id or None,
             trace_id=ctx.trace_id,
         )
 

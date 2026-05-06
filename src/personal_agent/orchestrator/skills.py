@@ -293,3 +293,103 @@ def get_all_skills() -> dict[str, SkillDoc]:
         Mapping of skill name to SkillDoc.
     """
     return dict(_get_cache().docs)
+
+
+# ---------------------------------------------------------------------------
+# Phase C — model-decided routing via separate routing call
+# ---------------------------------------------------------------------------
+
+
+_ROUTING_SYSTEM_PROMPT = (
+    "You are a skill router. Given a user message and a list of available skills "
+    "(name + description), return ONLY the skill names that are directly relevant "
+    "to answering the user's message. Output a JSON array of skill name strings. "
+    "Empty array if no skill applies. Do not include any other text or explanation."
+)
+
+
+async def route_skills(
+    user_message: str,
+    routing_client: Any,
+    cap_tokens: int = 2048,
+) -> list[str]:
+    """Ask the routing model which skills are relevant to *user_message*.
+
+    Issues a single structured LLM call to the routing model with:
+      - System prompt: instructions to return a JSON array of skill names
+      - User content: ``[user_message]\\n\\n[skill index]``
+
+    The response is parsed as JSON; any name not in the loaded skill set is
+    silently dropped. Parse failures or empty/None responses return ``[]``.
+
+    Args:
+        user_message: The user's original message that the primary agent will
+            see. The router sees this same text.
+        routing_client: An LLM client (e.g. from
+            :func:`get_llm_client_for_key`) that has a ``respond()`` method.
+        cap_tokens: Max tokens for the skill index passed to the router.
+
+    Returns:
+        List of skill names from the loaded skill set that the router judged
+        relevant. Bounded by the size of the skill registry (≤ 20 today).
+    """
+    import json
+    from personal_agent.llm_client.types import ModelRole  # noqa: PLC0415
+
+    cache = _get_cache()
+    if not cache.docs:
+        return []
+
+    skill_index = assemble_skill_index(cap_tokens=cap_tokens)
+    if not skill_index:
+        return []
+
+    user_content = f"User message:\n{user_message}\n\n{skill_index}"
+    messages = [
+        {"role": "system", "content": _ROUTING_SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
+
+    try:
+        response = await routing_client.respond(
+            role=ModelRole.PRIMARY,
+            messages=messages,
+            max_tokens=256,
+            temperature=0.0,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("skill_routing_call_failed", error=str(exc))
+        return []
+
+    raw = ""
+    if isinstance(response, dict):
+        raw = str(response.get("content") or "").strip()
+    elif hasattr(response, "content"):
+        raw = str(response.content or "").strip()
+    else:
+        raw = str(response).strip()
+
+    if not raw:
+        return []
+
+    # Strip code fences if the model wrapped its JSON output
+    if raw.startswith("```"):
+        raw = raw.strip("`").lstrip("json").strip()
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        log.warning("skill_routing_parse_failed", raw_preview=raw[:200])
+        return []
+
+    if not isinstance(parsed, list):
+        return []
+
+    valid = [str(name) for name in parsed if isinstance(name, str) and name in cache.docs]
+    log.info(
+        "skill_routing_call_completed",
+        candidates=len(parsed),
+        valid=len(valid),
+        skills=valid,
+    )
+    return valid

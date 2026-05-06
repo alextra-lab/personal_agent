@@ -109,3 +109,47 @@ def get_llm_client(role_name: str = "primary") -> Any:
     from personal_agent.llm_client.client import LocalLLMClient
 
     return LocalLLMClient()
+
+
+def get_llm_client_for_key(model_key: str, budget_role: str = "skill_routing") -> Any:
+    """Return an LLM client for a specific model key, bypassing profile resolution.
+
+    Used for components that need a *specific* model regardless of the active
+    ExecutionProfile — e.g. the Phase C skill router, which must use a remote
+    model even when the primary agent runs locally (the local SLM server is
+    currently single-threaded; running routing on it would serialize calls).
+
+    Args:
+        model_key: Key in ``models.yaml`` (e.g. ``"claude_haiku"``,
+            ``"qwen3.5-35b-a3b"``).
+        budget_role: Cost-gate budget role for this client (default
+            ``"skill_routing"``). Distinct budget category isolates routing
+            spend from primary inference.
+
+    Returns:
+        LiteLLMClient for cloud provider models; LocalLLMClient for local.
+
+    Raises:
+        ValueError: If ``model_key`` is not registered in ``models.yaml``.
+    """
+    config = load_model_config()
+    model_def = config.models.get(model_key)
+    if model_def is None:
+        raise ValueError(
+            f"Unknown model key '{model_key}'. "
+            f"Available: {sorted(config.models.keys())}"
+        )
+
+    if model_def.provider_type != "local":
+        from personal_agent.llm_client.litellm_client import LiteLLMClient
+
+        return LiteLLMClient(
+            model_id=model_def.id,
+            provider=model_def.provider or "anthropic",
+            max_tokens=model_def.max_tokens or 8192,
+            budget_role=budget_role,
+        )
+
+    from personal_agent.llm_client.client import LocalLLMClient
+
+    return LocalLLMClient()

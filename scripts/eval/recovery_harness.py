@@ -142,6 +142,7 @@ async def call_chat(
     message: str,
     session_id: str | None,
     auth_email: str | None,
+    profile: str = "local",
 ) -> tuple[str, str, str]:
     """POST /chat. Return (response_text, session_id, trace_id).
 
@@ -150,7 +151,7 @@ async def call_chat(
     local-loopback diagnostic calls — the same trust model as production
     where CF Access stamps the header in front of the service.
     """
-    params = {"message": message}
+    params = {"message": message, "profile": profile}
     if session_id is not None:
         params["session_id"] = session_id
     headers: dict[str, str] = {}
@@ -423,6 +424,7 @@ async def run_prompt(
     *,
     chat_url: str,
     auth_email: str | None,
+    profile: str = "local",
     es_wait_seconds: int,
     queries: TelemetryQueries,
     memory_service: MemoryService,
@@ -437,7 +439,7 @@ async def run_prompt(
                 session_id = None
             started_at = datetime.now(timezone.utc)
             response_text, session_id, trace_id = await call_chat(
-                client, chat_url, turn.message, session_id, auth_email
+                client, chat_url, turn.message, session_id, auth_email, profile=profile
             )
             finished_at = datetime.now(timezone.utc)
             log.info(
@@ -527,6 +529,7 @@ async def run_harness(
                     prompt,
                     chat_url=chat_url,
                     auth_email=auth_email,
+                    profile=profile,
                     es_wait_seconds=es_wait_seconds,
                     queries=queries,
                     memory_service=memory_service,

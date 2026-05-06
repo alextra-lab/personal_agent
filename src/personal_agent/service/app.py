@@ -1101,6 +1101,7 @@ async def list_sessions(
 async def chat(
     message: str,
     session_id: str | None = None,
+    profile: str = "local",
     request_user: RequestUser = Depends(get_request_user),  # noqa: B008
     db: AsyncSession = Depends(get_db_session),  # noqa: B008
 ) -> dict[str, str]:
@@ -1221,6 +1222,15 @@ async def chat(
         )
         gateway_output = None
 
+    # Activate execution profile (same as /chat/stream; selects LLM path + skill routing mode).
+    from personal_agent.config.profile import load_profile, set_current_profile  # noqa: PLC0415
+
+    try:
+        _chat_profile = load_profile(profile)
+        set_current_profile(_chat_profile)
+    except Exception:
+        log.warning("chat.unknown_profile", profile=profile, trace_id=trace_id)
+
     # --- Phase: orchestrator ---
     result: Any = {}
     response_content = ""
@@ -1336,6 +1346,7 @@ async def chat(
         "session_id": str(session.session_id),
         "response": response_content,
         "trace_id": trace_id,
+        "profile": profile,
     }
 
 

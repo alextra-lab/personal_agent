@@ -1,0 +1,87 @@
+# Phase D Eval Matrix — Skill Routing
+# Goal: empirically verify hybrid+B.5 reduces tool_iteration_limit_reached to floor.
+# Decide which routing mode to default per profile.
+#
+# Pass criteria:
+#   B.5 guard: ES prompt's first bash call uses agent-logs-* (or guard fires) >= 95% across all cells
+#   Primary:   tool_iteration_limit_reached rate dropped in hybrid vs keyword for same profile
+#
+# Run: make eval-skill-routing CELL=<id>
+# Run all cloud cells: make eval-skill-routing-cloud
+
+cells:
+  # --- Cloud cells (run now) ---
+  - id: cloud-keyword
+    profile: cloud
+    env:
+      AGENT_SKILL_ROUTING_MODE: keyword
+      AGENT_SKILL_ROUTING_MODEL_KEY: ""   # no separate routing call
+    description: "Cloud primary (Sonnet) + keyword-only skill injection (Phase A legacy)"
+    status: pending
+
+  - id: cloud-hybrid
+    profile: cloud
+    env:
+      AGENT_SKILL_ROUTING_MODE: hybrid
+      AGENT_SKILL_ROUTING_MODEL_KEY: ""   # no separate routing call
+    description: "Cloud primary (Sonnet) + hybrid (index + keyword bodies)"
+    status: pending
+
+  - id: cloud-model-decided
+    profile: cloud
+    env:
+      AGENT_SKILL_ROUTING_MODE: model_decided
+      AGENT_SKILL_ROUTING_MODEL_KEY: claude_haiku
+    description: "Cloud primary (Sonnet) + model_decided; Haiku routing pre-flight"
+    status: pending
+
+  # --- Local cells (run when SLM server is available) ---
+  - id: local-keyword
+    profile: local
+    env:
+      AGENT_SKILL_ROUTING_MODE: keyword
+      AGENT_SKILL_ROUTING_MODEL_KEY: ""
+    description: "Local primary (Qwen) + keyword-only (baseline)"
+    status: blocked  # SLM offline
+
+  - id: local-hybrid
+    profile: local
+    env:
+      AGENT_SKILL_ROUTING_MODE: hybrid
+      AGENT_SKILL_ROUTING_MODEL_KEY: ""
+    description: "Local primary (Qwen) + hybrid — expected best for local"
+    status: blocked  # SLM offline
+
+  - id: local-model-decided
+    profile: local
+    env:
+      AGENT_SKILL_ROUTING_MODE: model_decided
+      AGENT_SKILL_ROUTING_MODEL_KEY: claude_haiku
+    description: "Local primary (Qwen) + model_decided; Haiku routing pre-flight"
+    status: blocked  # SLM offline
+
+metrics:
+  primary:
+    - name: tool_iteration_limit_reached_rate
+      es_event: tool_iteration_limit_reached
+      description: "Fraction of prompts that exhausted the tool iteration budget"
+
+  skill_routing:
+    - name: skill_routing_call_completed_rate
+      es_event: skill_routing_call_completed
+      description: "Phase C routing pre-flight: how often it fires and what it returns"
+    - name: read_skill_invoked_rate
+      es_event: read_skill_invoked
+      description: "Phase B: how often the model calls read_skill autonomously"
+    - name: tool_call_blocked_known_bad_pattern_rate
+      es_event: tool_call_blocked_known_bad_pattern
+      description: "Phase B.5 guard: how often a bad ES pattern was intercepted"
+
+  incident_class:
+    - name: es_first_call_correct_rate
+      description: "ES prompt: first bash call uses agent-logs-* (or guard fires) — pass >= 95%"
+
+  cost:
+    - name: p95_wall_time_ms
+    - name: total_tokens
+    - name: usd_cost  # cloud cells only

@@ -1,0 +1,115 @@
+# Phase D — Skill Routing Eval Prompts
+# 10 prompts covering the main skill surfaces.
+# Each prompt is run once per cell (6 cells × 10 prompts = 60 total runs).
+#
+# Prompt design goals:
+#   - Cover all skill docs that have keywords (ES, Neo4j, bash, metrics, etc.)
+#   - Include the original triggering incident prompt (#1)
+#   - Include prompts that should NOT need any skill (to measure false injection)
+#   - Vary complexity: single-tool, multi-tool, multi-step
+
+prompts:
+  # --- Incident-class prompt (the triggering failure) ---
+  - id: es_incident_class
+    description: >
+      The exact class of request that triggered the original agent diagnosis incident.
+      The agent must query ES logs without hallucinating a wrong index name.
+      Pass: first bash call uses agent-logs-* or guard fires (tool_call_blocked_known_bad_pattern).
+    tags: [incident, telemetry, b5-guard]
+    turns:
+      - message: |
+          Check the logs and show me any errors or warnings from the last 12 hours.
+          I want to understand what has been going wrong with the agent recently.
+
+  # --- ES telemetry queries ---
+  - id: es_tool_error_analysis
+    description: >
+      Ask for a structured analysis of tool errors. Should route to ES skill.
+    tags: [telemetry, es]
+    turns:
+      - message: |
+          Look at the recent traces and tell me: which tools have been failing most
+          often in the last 24 hours? Show me the top 3 by error count.
+
+  - id: es_skill_routing_telemetry
+    description: >
+      Query the skill routing telemetry itself. Validates skill_index_assembled and
+      skill_routing_call_completed events are visible in ES.
+    tags: [telemetry, es, meta]
+    turns:
+      - message: |
+          Show me the skill_index_assembled events from the last hour.
+          What routing mode has been used and how many chars were injected per turn?
+
+  # --- Neo4j knowledge graph ---
+  - id: neo4j_entity_count
+    description: >
+      Direct Cypher query for entity counts. Should route to neo4j-direct skill.
+      Tests whether the skill doc prevents wrong connection patterns.
+    tags: [neo4j, memory]
+    turns:
+      - message: |
+          Connect directly to the knowledge graph and tell me how many Entity nodes
+          exist, and how many DISCUSSES relationships. Show me the 5 most recently
+          created entities.
+
+  # --- System diagnostics ---
+  - id: system_metrics_snapshot
+    description: >
+      Ask for current resource utilization. Should route to system-metrics skill.
+    tags: [diagnostics, metrics]
+    turns:
+      - message: |
+          How much memory is the agent currently using? What is the CPU load
+          and how much disk space is left?
+
+  - id: process_and_ports
+    description: >
+      Ask for process and port information. Should route to system-diagnostics skill.
+    tags: [diagnostics]
+    turns:
+      - message: |
+          What processes are consuming the most memory right now?
+          Which ports is the agent listening on?
+
+  # --- Infrastructure health ---
+  - id: infra_health_check
+    description: >
+      Probe all backend services. Should route to infrastructure-health skill.
+    tags: [infra, health]
+    turns:
+      - message: |
+          Run a health check on all backend services — Postgres, Elasticsearch,
+          Neo4j, Redis. Which ones are reachable and which are not?
+
+  # --- Filesystem / codebase ---
+  - id: codebase_search
+    description: >
+      Search the codebase for a specific symbol. Should route to bash + list-directory skills.
+    tags: [codebase, bash]
+    turns:
+      - message: |
+          Find every Python file in src/personal_agent/orchestrator/ that defines
+          an async function. How many are there and what are the file names?
+
+  # --- Python computation ---
+  - id: python_calculation
+    description: >
+      Computation task. Should route to run-python skill.
+    tags: [computation, run-python]
+    turns:
+      - message: |
+          Calculate the 95th percentile of the following response times in milliseconds:
+          [120, 340, 89, 2100, 450, 210, 178, 990, 67, 3400, 230, 560, 44, 780, 155].
+          Show your work.
+
+  # --- No-skill baseline ---
+  - id: no_skill_needed
+    description: >
+      A factual question that requires no tool use and no skill injection.
+      Baseline: measures false positives (skill injection when none needed).
+    tags: [baseline, no-tool]
+    turns:
+      - message: |
+          What is the Fibonacci sequence and can you give me the first 10 numbers?
+          No need to use any tools — just answer from memory.

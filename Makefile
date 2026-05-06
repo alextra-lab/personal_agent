@@ -221,6 +221,39 @@ eval-recovery:  ## Run the recovery harness. RUN=<id> required.
 		--profile $(or $(PROFILE),baseline) \
 		$(if $(PROMPT),--prompt $(PROMPT))
 
+# ─── Phase D — Skill Routing Eval ────────────────────────────────────────────
+# Run a single cell: make eval-skill-routing CELL=cloud-keyword RUN=run1
+# Analyse: make eval-skill-routing-analyse CELL=cloud-keyword RUN=run1
+# Run all available cloud cells: make eval-skill-routing-cloud RUN=<id>
+
+SKILL_EVAL_DIR := telemetry/evaluation/EVAL-skill-routing-2026-05
+SKILL_EVAL_PROMPTS := $(SKILL_EVAL_DIR)/prompts.yaml
+
+eval-skill-routing:  ## Run one skill routing eval cell. CELL=<id> RUN=<id> required.
+	@if [ -z "$(CELL)" ] || [ -z "$(RUN)" ]; then echo "CELL=<id> RUN=<id> required"; exit 2; fi
+	@CELL=$(CELL); \
+	 PROFILE=$$(uv run python -c "import yaml; m=yaml.safe_load(open('$(SKILL_EVAL_DIR)/matrix.yaml')); c=next(x for x in m['cells'] if x['id']=='$$CELL'); print(c['profile'])"); \
+	 echo "Running cell $$CELL (profile=$$PROFILE, run=$(RUN))"; \
+	 uv run python scripts/eval/recovery_harness.py \
+		--run-id $(CELL)-$(RUN) \
+		--profile $$PROFILE \
+		--prompts $(SKILL_EVAL_PROMPTS) \
+		--out $(SKILL_EVAL_DIR)/$(CELL)-$(RUN) \
+		$(if $(PROMPT),--prompt $(PROMPT))
+
+eval-skill-routing-analyse:  ## Analyse a skill routing eval run. CELL=<id> RUN=<id> required.
+	@if [ -z "$(CELL)" ] || [ -z "$(RUN)" ]; then echo "CELL=<id> RUN=<id> required"; exit 2; fi
+	@uv run python scripts/eval/skill_routing_analysis.py \
+		--run-dir $(SKILL_EVAL_DIR)/$(CELL)-$(RUN)
+
+eval-skill-routing-cloud:  ## Run all 3 cloud cells sequentially. RUN=<id> required.
+	@if [ -z "$(RUN)" ]; then echo "RUN=<id> is required"; exit 2; fi
+	@for CELL in cloud-keyword cloud-hybrid cloud-model-decided; do \
+		echo "=== Cell: $$CELL ==="; \
+		$(MAKE) eval-skill-routing CELL=$$CELL RUN=$(RUN); \
+		$(MAKE) eval-skill-routing-analyse CELL=$$CELL RUN=$(RUN); \
+	done
+
 # Flexible test targets (run from project root so uv uses project env)
 test-file:
 	@uv run pytest $(or $(FILE),tests/test_tools/test_self_telemetry.py)

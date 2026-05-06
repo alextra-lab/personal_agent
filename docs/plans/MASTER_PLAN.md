@@ -5,11 +5,12 @@
 > Wave 2.B (FRE-324) ✅ done 2026-05-05 — PR #17. Synthesis nudge wired after tool results; "tool-use limit" fallback stub eliminated.
 > Canary verified: `fre324-canary-v4` — Turn 1 wrote 1 Turn node + 3 Entity nodes + 9 Relationships; Turn 2 (fresh session) retrieved **ultramarine** correctly via `search_memory`. Full memory round-trip passing.
 > Side-effect fix: `AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED=false` + `AGENT_SECOND_BRAIN_MIN_INTERVAL_SECONDS=60` set in `.env` — consolidation now fires promptly after each conversation (remote model, no local resource constraint).
-> FRE-325 filed (Needs Approval): remove redundant `_monitoring_loop` / `system.idle` polling path from `BrainstemScheduler` — event bus already drives consolidation via `on_request_captured`.
+> FRE-325 ✅ done 2026-05-06 — PR #18. Removed `_monitoring_loop` / `system.idle` polling path from `BrainstemScheduler`; `SystemIdleEvent` / `STREAM_SYSTEM_IDLE` deleted; `second_brain_check_interval_seconds` setting removed; ADR-0041 + ADR-0054 amended. Consumer count 18 → 17. Deployed.
+> FRE-326 filed (Needs Approval): re-assess `_should_consolidate` resource gates post-FRE-325 after ≥7 days of Wave-2 telemetry.
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-06 (Wave 2 complete — FRE-323 + FRE-324 done, canary passing, FRE-325 filed)
+> **Last updated**: 2026-05-06 (FRE-325 done — polling loop removed, deployed; FRE-326 filed)
 > **Implementation sequence**: `docs/superpowers/specs/2026-04-22-implementation-sequence-wave-plan-design.md`
 
 ---

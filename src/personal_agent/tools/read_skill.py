@@ -11,7 +11,6 @@ in ``_dispatch_tool_call`` in the executor, not here.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import structlog
@@ -58,8 +57,8 @@ read_skill_tool = ToolDefinition(
 
 
 async def read_skill_executor(
-    name: str,
-    trace_ctx: TraceContext,
+    name: str = "",
+    ctx: TraceContext | None = None,
     session_id: str | None = None,
     **_kwargs: Any,
 ) -> dict[str, Any]:
@@ -67,20 +66,28 @@ async def read_skill_executor(
 
     Args:
         name: Skill name to look up (must match a name in the skill index).
-        trace_ctx: Telemetry trace context.
+            If empty, returns the list of available skill names instead of crashing.
+        ctx: Telemetry trace context (passed as 'ctx' by the tool executor layer).
         session_id: Optional session identifier for logging.
 
     Returns:
         Dict with ``skill_name``, ``body``, and ``status``.
-        On unknown name, returns ``status: "error"`` with an explanatory ``hint``.
+        On unknown or empty name, returns ``status: "error"`` with an explanatory ``hint``.
     """
     from personal_agent.orchestrator.skills import get_all_skills  # noqa: PLC0415
 
     all_skills = get_all_skills()
+    known = sorted(all_skills.keys())
+
+    if not name:
+        return {
+            "status": "error",
+            "hint": f"name is required. Available skills: {', '.join(known)}",
+        }
+
     skill = all_skills.get(name)
 
     if skill is None:
-        known = sorted(all_skills.keys())
         hint = f"Unknown skill '{name}'. Available skills: {', '.join(known)}"
         log.warning(
             "read_skill_unknown_name",

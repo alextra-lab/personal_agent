@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-06 (backlog triage → 9-wave sequence; FRE-327 done; history pruned)
+> **Last updated**: 2026-05-06 (skill routing Phase A + B.5 shipped; PRs #20 #21)
 
 ---
 
@@ -57,6 +57,8 @@ FRE-311 (budget auto-tuning) — parked until FRE-302 (ADR-0065) lands
 
 | Item | Date | Summary |
 |------|------|---------|
+| Skill routing Phase B.5: reactive guards | 2026-05-06 | Pre-execution guard in `_dispatch_tool_call` checks `known_bad_patterns` from skill frontmatter before tool runs. Blocks `logs-*`/`agent-events-*`/etc with correction hint. Mode-independent. PR #21. |
+| Skill routing Phase A: frontmatter auto-discovery | 2026-05-06 | Replaced hardcoded `_SKILL_FILES`/`_KEYWORD_ROUTES` with glob + YAML frontmatter. 14 skill docs self-describing. Natural-language ES keywords ("show me logs", "check your logs"). Contract tests. PR #20. |
 | FRE-327: Neo4j direct Cypher skill doc | 2026-05-06 | `docs/skills/neo4j-direct.md` + keyword route in `skills.py`. Agent self-diagnoses Neo4j in ≤6 calls. PR #19. |
 | FRE-325: Remove brainstem polling loop | 2026-05-06 | Deleted `_monitoring_loop` / `system.idle` path; consolidation now purely event-driven. PR #18. |
 | FRE-323 + FRE-324: Memory recovery | 2026-05-05 | Cypher `ON CREATE SET` fix (PR #16); synthesis nudge after tool results (PR #17). Memory round-trip passing. |

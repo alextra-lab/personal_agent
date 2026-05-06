@@ -51,7 +51,7 @@ def _count_event(trace_id: str, event_name: str) -> int:
             "bool": {
                 "must": [
                     {"term": {"trace_id": trace_id}},
-                    {"term": {"event": event_name}},
+                    {"term": {"event_type": event_name}},
                 ]
             }
         },
@@ -67,7 +67,7 @@ def _get_events(trace_id: str, event_name: str, size: int = 10) -> list[dict[str
             "bool": {
                 "must": [
                     {"term": {"trace_id": trace_id}},
-                    {"term": {"event": event_name}},
+                    {"term": {"event_type": event_name}},
                 ]
             }
         },
@@ -167,7 +167,9 @@ def analyse_run(run_dir: Path) -> dict[str, Any]:
             log.warning("raw_json_missing", path=str(raw_path))
             continue
         raw = json.loads(raw_path.read_text(encoding="utf-8"))
-        trace_id = raw.get("trace_id")
+        # raw.json is a list of turn dicts or a single dict
+        first = raw[0] if isinstance(raw, list) and raw else raw
+        trace_id = first.get("trace_id") if isinstance(first, dict) else None
         if not trace_id:
             log.warning("no_trace_id", path=str(raw_path))
             continue

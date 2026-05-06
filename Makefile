@@ -239,6 +239,7 @@ eval-skill-routing:  ## Run one skill routing eval cell. CELL=<id> RUN=<id> requ
 		--profile $$PROFILE \
 		--prompts $(SKILL_EVAL_PROMPTS) \
 		--out $(SKILL_EVAL_DIR)/$(CELL)-$(RUN) \
+		--chat-url http://localhost:$(SERVICE_PORT)/chat \
 		$(if $(PROMPT),--prompt $(PROMPT))
 
 eval-skill-routing-analyse:  ## Analyse a skill routing eval run. CELL=<id> RUN=<id> required.

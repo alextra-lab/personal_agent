@@ -238,6 +238,20 @@ When `event_bus.enabled` is `False`, the `EventBus` protocol routes to a no-op i
 
 ---
 
+## Update — 2026-05-06 (FRE-325)
+
+The `stream:system.idle` stream and its entire polling path were removed. Key changes:
+
+- `BrainstemScheduler._monitoring_loop` (the publisher of `system.idle`) was deleted — it was the original pre-ADR-0041 consolidation driver.
+- `on_system_idle()` handler and the `cg:consolidator` subscription for `stream:system.idle` in `service/app.py` were removed.
+- `SystemIdleEvent` class and `STREAM_SYSTEM_IDLE` constant removed from `events/models.py`.
+
+Consolidation is now driven **exclusively** by the event-driven path: `stream:request.captured` → `cg:consolidator` → `on_request_captured()` → `_should_consolidate()` → `_trigger_consolidation()`. The system-events row in the streams table above ("`system.idle`") is no longer active.
+
+The Phase 3 note "Scheduler lifecycle loop becomes a thin event publisher (`system.idle`, …)" is superseded: the lifecycle loop continues to run disk housekeeping, archive, purge, and quality monitoring, but no longer publishes `system.idle`.
+
+---
+
 ## References
 
 - [Redis Streams documentation](https://redis.io/docs/data-types/streams/)

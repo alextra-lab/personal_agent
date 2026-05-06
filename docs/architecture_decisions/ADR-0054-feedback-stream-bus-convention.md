@@ -94,7 +94,7 @@ Current streams re-read through this rule:
 | `stream:consolidation.completed` | consolidation | completed | ✅ |
 | `stream:promotion.issue_created` | promotion | issue_created | ✅ |
 | `stream:feedback.received` | feedback | received | ✅ |
-| `stream:system.idle` | system | idle | ✅ |
+| ~~`stream:system.idle`~~ | ~~system~~ | ~~idle~~ | ~~✅~~ (removed — FRE-325; stream had no active producer or consumer after consolidation became event-driven on `request.captured`) |
 | `stream:memory.accessed` | memory | accessed | ✅ |
 | `stream:memory.entities_updated` | memory | entities_updated | ✅ |
 

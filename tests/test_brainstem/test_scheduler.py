@@ -43,7 +43,6 @@ class TestSchedulerInitialization:
         assert scheduler.idle_time_seconds == 300  # 5 minutes
         assert scheduler.cpu_threshold == 50.0
         assert scheduler.memory_threshold == 70.0
-        assert scheduler.check_interval_seconds == 60
         assert scheduler.min_consolidation_interval_seconds == 3600  # 1 hour
 
     async def test_initialization_with_custom_settings(self):
@@ -53,7 +52,6 @@ class TestSchedulerInitialization:
         mock_obj.second_brain_idle_time_seconds = 600
         mock_obj.second_brain_cpu_threshold = 30.0
         mock_obj.second_brain_memory_threshold = 60.0
-        mock_obj.second_brain_check_interval_seconds = 120
         mock_obj.second_brain_min_interval_seconds = 7200
 
         with patch("personal_agent.brainstem.scheduler.settings", mock_obj):
@@ -62,7 +60,6 @@ class TestSchedulerInitialization:
             assert sched.idle_time_seconds == 600
             assert sched.cpu_threshold == 30.0
             assert sched.memory_threshold == 60.0
-            assert sched.check_interval_seconds == 120
             assert sched.min_consolidation_interval_seconds == 7200
 
             if sched.running:
@@ -331,66 +328,6 @@ class TestConsolidationExecution:
 
             # Consolidator should still be set
             assert scheduler.consolidator is not None
-
-
-@pytest.mark.asyncio
-class TestMonitoringLoop:
-    """Test monitoring loop behavior."""
-
-    async def test_monitoring_loop_stops_when_running_false(self, scheduler):
-        """Test that monitoring loop exits when running is False."""
-        scheduler.check_interval_seconds = 0.1  # Fast checking
-
-        with patch("personal_agent.brainstem.scheduler.settings") as mock_settings:
-            mock_settings.enable_second_brain = False
-
-            await scheduler.start()
-            await asyncio.sleep(0.2)  # Let it run a bit
-
-            await scheduler.stop()
-
-            # Should exit cleanly
-            assert not scheduler.running
-
-    async def test_monitoring_loop_skips_when_disabled(self, scheduler):
-        """Test monitoring loop skips consolidation when second brain disabled."""
-        scheduler.check_interval_seconds = 0.1
-
-        with patch("personal_agent.brainstem.scheduler.settings") as mock_settings:
-            mock_settings.enable_second_brain = False
-
-            with patch.object(scheduler, "_trigger_consolidation") as mock_trigger:
-                await scheduler.start()
-                await asyncio.sleep(0.3)  # Let it run a few cycles
-                await scheduler.stop()
-
-                # Should never trigger consolidation
-                mock_trigger.assert_not_called()
-
-    async def test_monitoring_loop_triggers_when_conditions_met(self, scheduler):
-        """Test monitoring loop triggers consolidation when conditions met."""
-        scheduler.check_interval_seconds = 0.1
-        scheduler.last_request_time = datetime.now(timezone.utc) - timedelta(minutes=10)
-
-        with patch("personal_agent.brainstem.scheduler.settings") as mock_settings:
-            mock_settings.enable_second_brain = True
-
-            with patch("personal_agent.brainstem.scheduler.poll_system_metrics") as mock_metrics:
-                mock_metrics.return_value = {
-                    "perf_system_cpu_load": 20.0,
-                    "perf_system_mem_used": 40.0,
-                }
-
-                with patch.object(scheduler, "_emit_system_idle") as mock_emit:
-                    mock_emit.return_value = None
-
-                    await scheduler.start()
-                    await asyncio.sleep(0.3)  # Let it check a few times
-                    await scheduler.stop()
-
-                    # Monitoring loop now emits system.idle (ADR-0041 Phase 3);
-                    # on_system_idle() → _trigger_consolidation() via event bus.
-                    assert mock_emit.call_count >= 1
 
 
 @pytest.mark.asyncio

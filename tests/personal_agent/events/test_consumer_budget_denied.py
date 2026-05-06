@@ -60,7 +60,7 @@ async def test_handler_raising_budget_denied_acks_and_skips_dead_letter() -> Non
 
     # Construct a parseable event payload — the runner deserializes from
     # the ``data`` field in the XREADGROUP fields dict.
-    payload = _idle_event_payload()
+    payload = _consolidation_event_payload()
     fields = {"data": orjson.dumps(payload).decode("utf-8")}
 
     await runner._process_message(  # type: ignore[reportPrivateUsage]
@@ -90,7 +90,7 @@ async def test_handler_raising_other_exception_still_dead_letters() -> None:
 
     runner = ConsumerRunner(bus)
 
-    payload = _idle_event_payload()
+    payload = _consolidation_event_payload()
     fields = {"data": orjson.dumps(payload).decode("utf-8")}
 
     await runner._process_message(  # type: ignore[reportPrivateUsage]
@@ -106,15 +106,15 @@ async def test_handler_raising_other_exception_still_dead_letters() -> None:
     bus.ack.assert_called_once()
 
 
-def _idle_event_payload() -> dict[str, object]:
-    """Build a minimal ``system.idle`` event payload accepted by parse_stream_event."""
-    from datetime import datetime, timezone
-
+def _consolidation_event_payload() -> dict[str, object]:
+    """Build a minimal ``consolidation.completed`` event payload accepted by parse_stream_event."""
     return {
-        "event_type": "system.idle",
+        "event_type": "consolidation.completed",
         "event_id": str(uuid4()),
         "trace_id": str(uuid4()),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "source_component": "test",
-        "idle_seconds": 5.0,
+        "captures_processed": 0,
+        "entities_created": 0,
+        "entities_promoted": 0,
     }

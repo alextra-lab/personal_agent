@@ -476,12 +476,17 @@ class TestGraphQualityHandlerAnomalyEvent:
     async def test_non_graph_quality_event_ignored(self) -> None:
         """Handler silently ignores unrelated event types."""
         manager = MagicMock()
-        from personal_agent.events.models import SystemIdleEvent
+        from personal_agent.events.models import ConsolidationCompletedEvent
         from personal_agent.events.pipeline_handlers import build_graph_quality_captain_log_handler
 
         handler = build_graph_quality_captain_log_handler(manager=manager)
-        idle_event = SystemIdleEvent(idle_seconds=10.0, source_component="brainstem.scheduler")
-        await handler(idle_event)
+        unrelated_event = ConsolidationCompletedEvent(
+            captures_processed=0,
+            entities_created=0,
+            entities_promoted=0,
+            source_component="brainstem.scheduler",
+        )
+        await handler(unrelated_event)
         manager.save_entry.assert_not_called()
 
 

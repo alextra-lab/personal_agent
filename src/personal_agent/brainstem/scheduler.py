@@ -69,7 +69,6 @@ class BrainstemScheduler:
         self.last_consolidation: datetime | None = None
         self.last_request_time: datetime | None = None
         self._active_request_count = 0
-        self._monitoring_task: asyncio.Task[None] | None = None
         self._lifecycle_task: asyncio.Task[None] | None = None
         self.metrics_daemon = metrics_daemon
 
@@ -105,9 +104,6 @@ class BrainstemScheduler:
         )  # 5 minutes
         self.cpu_threshold = getattr(settings, "second_brain_cpu_threshold", 50.0)  # 50%
         self.memory_threshold = getattr(settings, "second_brain_memory_threshold", 70.0)  # 70%
-        self.check_interval_seconds = getattr(
-            settings, "second_brain_check_interval_seconds", 60
-        )  # 1 minute
         self.min_consolidation_interval_seconds = getattr(
             settings, "second_brain_min_interval_seconds", 3600
         )  # 1 hour
@@ -128,8 +124,6 @@ class BrainstemScheduler:
         self.running = True
         log.info("brainstem_scheduler_started")
 
-        # Start background monitoring loop
-        self._monitoring_task = asyncio.create_task(self._monitoring_loop())
         # Data lifecycle loop (hourly disk check, daily archive, weekly purge)
         self._lifecycle_task = asyncio.create_task(self._lifecycle_loop())
 
@@ -137,15 +131,12 @@ class BrainstemScheduler:
         """Stop the scheduler."""
         self.running = False
         pending_tasks = [
-            task
-            for task in (self._monitoring_task, self._lifecycle_task)
-            if task is not None and not task.done()
+            task for task in (self._lifecycle_task,) if task is not None and not task.done()
         ]
         for task in pending_tasks:
             task.cancel()
         if pending_tasks:
             await asyncio.gather(*pending_tasks, return_exceptions=True)
-        self._monitoring_task = None
         self._lifecycle_task = None
 
         queries = getattr(self.quality_monitor, "_queries", None)
@@ -200,45 +191,6 @@ class BrainstemScheduler:
 
         if await self._should_consolidate():
             await self._trigger_consolidation()
-
-    async def on_system_idle(self) -> None:
-        """Event-driven handler for ``system.idle`` events (ADR-0041 Phase 3).
-
-        Called by the event bus consumer when a ``system.idle`` event is
-        received.  Converges on ``_trigger_consolidation`` so the
-        min-interval gate still applies.
-        """
-        if not settings.enable_second_brain:
-            return
-        log.info("event_system_idle_received")
-        await self._trigger_consolidation()
-
-    async def _monitoring_loop(self) -> None:
-        """Background monitoring loop that emits system.idle when idle conditions are met.
-
-        Phase 3 (ADR-0041): emits ``system.idle`` via the event bus instead of
-        calling ``_trigger_consolidation`` directly.  The ``cg:consolidator``
-        consumer receives the event and calls ``on_system_idle()``.
-        """
-        while self.running:
-            try:
-                await asyncio.sleep(self.check_interval_seconds)
-
-                if not settings.enable_second_brain:
-                    continue
-
-                # Check if conditions are met, then publish system.idle
-                if await self._should_consolidate():
-                    await self._emit_system_idle()
-
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                log.error(
-                    "scheduler_monitoring_loop_error",
-                    error=str(e),
-                    exc_info=True,
-                )
 
     async def _should_consolidate(self) -> bool:
         """Check if consolidation should be triggered.
@@ -321,29 +273,6 @@ class BrainstemScheduler:
                 error=str(e),
             )
             return False
-
-    async def _emit_system_idle(self) -> None:
-        """Publish a ``system.idle`` event when idle conditions are satisfied.
-
-        The ``cg:consolidator`` consumer receives this event and calls
-        ``on_system_idle()``, which triggers consolidation.
-        """
-        from personal_agent.events.bus import get_event_bus
-        from personal_agent.events.models import STREAM_SYSTEM_IDLE, SystemIdleEvent
-
-        idle_seconds = 0.0
-        if self.last_request_time:
-            idle_seconds = (datetime.now(timezone.utc) - self.last_request_time).total_seconds()
-
-        event = SystemIdleEvent(
-            idle_seconds=idle_seconds,
-            source_component="brainstem.scheduler",
-        )
-        try:
-            await get_event_bus().publish(STREAM_SYSTEM_IDLE, event)
-            log.debug("system_idle_event_emitted", idle_seconds=idle_seconds)
-        except Exception as exc:
-            log.warning("system_idle_event_publish_failed", error=str(exc))
 
     async def _trigger_consolidation(self) -> None:
         """Trigger second brain consolidation and publish consolidation.completed."""

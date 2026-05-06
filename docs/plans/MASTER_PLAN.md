@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-06 (skill routing Phase C shipped; PR #23)
+> **Last updated**: 2026-05-06 (skill routing Phase D eval harness ready; cloud cells runnable)
 
 ---
 
@@ -57,6 +57,7 @@ FRE-311 (budget auto-tuning) — parked until FRE-302 (ADR-0065) lands
 
 | Item | Date | Summary |
 |------|------|---------|
+| Skill routing Phase D: eval harness + per-request override | 2026-05-06 | 6-cell matrix (3 cloud runnable now), 10 prompts, analysis script; per-request skill_routing_mode override added to /chat + harness — no restarts between cells. Run: `ENV=cloud make eval-skill-routing-cloud RUN=<id>` |
 | Skill routing Phase C: separate routing model | 2026-05-06 | `skill_routing_model_key` (default: claude_haiku); `get_llm_client_for_key()`; `route_skills()` pre-flight call; independent of primary agent path; `ctx.skill_routing_done` prevents re-fire. PR #23. |
 | Skill routing Phase B: skill index + read_skill + hybrid | 2026-05-06 | `read_skill` tool (model pulls full doc on demand); compact 280-tok index; hybrid routing mode; dedup via `ctx.loaded_skills`; sub-agent inheritance; post-exec hint. PR #22 (also includes B.5 guards). |
 | Skill routing Phase A: frontmatter auto-discovery | 2026-05-06 | Replaced hardcoded `_SKILL_FILES`/`_KEYWORD_ROUTES` with glob + YAML frontmatter. 14 skill docs self-describing. Natural-language ES keywords ("show me logs", "check your logs"). Contract tests. PR #20. |

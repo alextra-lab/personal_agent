@@ -221,23 +221,21 @@ def get_skill_block(message: str | None = None) -> str:
     return SKILL_BLOCK_HEADER + _SEPARATOR.join(chunks)
 
 
-def find_skill_for_tool(tool_name: str) -> SkillDoc | None:
-    """Return the first skill that lists *tool_name* in its ``tools`` field.
+def find_skills_for_tool(tool_name: str) -> list[SkillDoc]:
+    """Return all skills that list *tool_name* in their ``tools`` field.
 
-    Used by Phase B.5 reactive guards to look up linked skill metadata
-    (known_bad_patterns, canonical_patterns) before a tool call executes.
+    Multiple skills can declare the same tool (e.g. bash.md, query-elasticsearch.md,
+    and fetch-url.md all list ``bash``).  The Phase B.5 reactive guard must check
+    ``known_bad_patterns`` across ALL of them, not just the first match.
 
     Args:
         tool_name: Registered tool name (e.g. ``"bash"``).
 
     Returns:
-        The matching SkillDoc, or None if no skill claims this tool.
+        List of matching SkillDocs, empty if no skill claims this tool.
     """
     cache = _get_cache()
-    for skill in cache.docs.values():
-        if tool_name in skill.tools:
-            return skill
-    return None
+    return [skill for skill in cache.docs.values() if tool_name in skill.tools]
 
 
 def get_all_skills() -> dict[str, SkillDoc]:

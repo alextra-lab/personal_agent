@@ -1837,6 +1837,64 @@ async def _dispatch_tool_call(
                 "tool_layer_error": "missing_required_params",
             }
 
+    # Phase B.5: pre-execution guard — check known_bad_patterns across all linked skills.
+    # Data-driven from docs/skills/*.md frontmatter; new failure modes require only a
+    # frontmatter edit, no code changes here.  Multiple skills can declare the same tool,
+    # so we check all of them.
+    from personal_agent.orchestrator.skills import find_skills_for_tool  # noqa: PLC0415
+
+    for linked_skill in find_skills_for_tool(tool_name):
+        for bad in linked_skill.known_bad_patterns:
+            pattern = str(bad.get("pattern", ""))
+            if not pattern:
+                continue
+            applies_to: dict[str, Any] = bad.get("applies_to") or {}
+            applies_tool: str | None = applies_to.get("tool") or None
+            applies_fields: list[str] = list(applies_to.get("fields") or [])
+
+            # Only fire for the declared applies_to.tool (defaults to all tools in skill.tools)
+            if applies_tool is not None and applies_tool != tool_name:
+                continue
+
+            # Search declared fields; fall back to all string-valued arguments
+            search_fields = applies_fields or [
+                k for k, v in arguments.items() if isinstance(v, str)
+            ]
+
+            matched_field: str | None = None
+            for fname in search_fields:
+                val = arguments.get(fname)
+                if isinstance(val, str) and pattern in val:
+                    matched_field = fname
+                    break
+
+            if matched_field is not None:
+                reason = str(bad.get("reason", "Known bad pattern."))
+                suggestion = str(bad.get("suggestion", ""))
+                error_msg = f"{reason} {suggestion}".strip()
+                log.warning(
+                    "tool_call_blocked_known_bad_pattern",
+                    trace_id=ctx.trace_id,
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                    pattern=pattern,
+                    field=matched_field,
+                    linked_skill=linked_skill.name,
+                )
+                return {
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "content": json.dumps({"status": "error", "hint": error_msg}),
+                    "success": False,
+                    "latency_ms": 0,
+                    "output_hash": None,
+                    "gate_result": gate_result,
+                    "args_hash": args_hash,
+                    "loop_policy": loop_policy,
+                    "tool_layer_output": None,
+                    "tool_layer_error": "known_bad_pattern",
+                }
+
     # Execute tool
     try:
         result = await tool_layer.execute_tool(

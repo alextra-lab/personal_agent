@@ -4,7 +4,7 @@ Phase A: frontmatter-driven auto-discovery replaces hardcoded _SKILL_FILES
 and _KEYWORD_ROUTES.  Tests validate the new API surface:
   - _load_all_skills() / _get_cache()
   - get_skill_block(message=...)
-  - find_skill_for_tool()
+  - find_skills_for_tool()
   - get_all_skills()
 """
 
@@ -19,7 +19,7 @@ import personal_agent.orchestrator.skills as skills_module
 from personal_agent.config import settings
 from personal_agent.orchestrator.skills import (
     _load_all_skills,
-    find_skill_for_tool,
+    find_skills_for_tool,
     get_all_skills,
     get_skill_block,
 )
@@ -192,31 +192,31 @@ class TestKeywordRouting:
         assert first == second
 
 
-class TestFindSkillForTool:
-    """Test 5: find_skill_for_tool() returns the linked skill by tool name."""
+class TestFindSkillsForTool:
+    """Test 5: find_skills_for_tool() returns all skills linked to a tool name."""
 
-    def test_bash_tool_links_to_some_skill(self) -> None:
-        """find_skill_for_tool('bash') returns a SkillDoc listing bash."""
-        skill = find_skill_for_tool("bash")
-        assert skill is not None
-        assert "bash" in skill.tools
+    def test_bash_tool_links_to_multiple_skills(self) -> None:
+        """find_skills_for_tool('bash') returns all SkillDocs listing bash."""
+        skills = find_skills_for_tool("bash")
+        assert len(skills) > 0
+        assert all("bash" in s.tools for s in skills)
 
-    def test_unknown_tool_returns_none(self) -> None:
-        """find_skill_for_tool with an unregistered name returns None."""
-        result = find_skill_for_tool("nonexistent_tool_xyz")
-        assert result is None
+    def test_unknown_tool_returns_empty_list(self) -> None:
+        """find_skills_for_tool with an unregistered name returns []."""
+        result = find_skills_for_tool("nonexistent_tool_xyz")
+        assert result == []
 
     def test_run_python_tool_links_to_run_python_skill(self) -> None:
-        """find_skill_for_tool('run_python') returns the run-python skill."""
-        skill = find_skill_for_tool("run_python")
-        assert skill is not None
-        assert skill.name == "run-python"
+        """find_skills_for_tool('run_python') includes the run-python skill."""
+        skills = find_skills_for_tool("run_python")
+        names = [s.name for s in skills]
+        assert "run-python" in names
 
     def test_read_tool_links_to_read_write_skill(self) -> None:
-        """find_skill_for_tool('read') returns the read-write skill."""
-        skill = find_skill_for_tool("read")
-        assert skill is not None
-        assert skill.name == "read-write"
+        """find_skills_for_tool('read') includes the read-write skill."""
+        skills = find_skills_for_tool("read")
+        names = [s.name for s in skills]
+        assert "read-write" in names
 
 
 class TestMtimeCache:

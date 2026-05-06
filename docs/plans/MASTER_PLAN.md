@@ -1,15 +1,15 @@
 # Master Plan — Personal Agent
 
-> **⏸ PAUSED 2026-05-05** — agent self-diagnosis recovery in effect.
-> See `docs/plans/2026-05-05-agent-self-diagnosis-recovery-execution-waves-0-2.md` (execution scope: Waves 0–2)
-> and `docs/plans/2026-05-05-agent-self-diagnosis-recovery-plan.md` (full source doc, Waves 0–5).
-> **Do not start new Master Plan items until Wave 2.A (FRE-323) and 2.B (FRE-324) pass.**
-> Wave 2 was rescoped on 2026-05-05 after the harness baseline (`baseline-2026-05-05-v2/`) localized the memory-write failure to `consolidator.py:138`. The planned canary scripts are out of scope; FRE-323 and FRE-324 are the action items.
-> Operating rules in effect: no further loop-gate tightening, no further context-budget tuning beyond the Wave 0 geometry fix, no memory-pipeline tuning *outside FRE-323/324 scope*, no multi-subsystem PRs, no legacy-tool deletion (FRE-265 blocked). Read-only diagnostic capability is preferred over cost reduction during the window.
+> **✅ RECOVERY COMPLETE 2026-05-06** — Wave 2 closed. Normal Master Plan sequencing resumes.
+> Wave 2.A (FRE-323) ✅ done 2026-05-05 — PR #16. Cypher `ON CREATE SET` ordering fix; Turn/Entity/Relationship writes restored.
+> Wave 2.B (FRE-324) ✅ done 2026-05-05 — PR #17. Synthesis nudge wired after tool results; "tool-use limit" fallback stub eliminated.
+> Canary verified: `fre324-canary-v4` — Turn 1 wrote 1 Turn node + 3 Entity nodes + 9 Relationships; Turn 2 (fresh session) retrieved **ultramarine** correctly via `search_memory`. Full memory round-trip passing.
+> Side-effect fix: `AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED=false` + `AGENT_SECOND_BRAIN_MIN_INTERVAL_SECONDS=60` set in `.env` — consolidation now fires promptly after each conversation (remote model, no local resource constraint).
+> FRE-325 filed (Needs Approval): remove redundant `_monitoring_loop` / `system.idle` polling path from `BrainstemScheduler` — event bus already drives consolidation via `on_request_captured`.
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-04-30 (Linear drift fix: FRE-267 moved to Approved; ADR-0055/0056 index corrected to Accepted; 5 completed projects marked Done in Linear)
+> **Last updated**: 2026-05-06 (Wave 2 complete — FRE-323 + FRE-324 done, canary passing, FRE-325 filed)
 > **Implementation sequence**: `docs/superpowers/specs/2026-04-22-implementation-sequence-wave-plan-design.md`
 
 ---

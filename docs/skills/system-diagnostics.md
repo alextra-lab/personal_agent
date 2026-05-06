@@ -1,3 +1,23 @@
+---
+name: system-diagnostics
+description: Run system diagnostic commands (ps, ss, vmstat, lsof) for process and network analysis.
+when_to_use: When you need to inspect processes, listening ports, I/O activity, or network connections.
+tools: [bash]
+keywords:
+  - top 10 process
+  - processes by memory
+  - listening ports
+  - ports are listening
+  - which ports
+  - container ports
+  - vmstat
+  - system has been doing
+  - load swap
+  - io activity
+  - network connections
+  - iostat
+---
+
 # system-diagnostics — Run system diagnostic commands (ps, ss, vmstat, lsof, …)
 
 **Status:** Primary path (FRE-263, 2026-04-28). Legacy `run_sysdiag` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).

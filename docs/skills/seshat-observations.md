@@ -1,3 +1,9 @@
+---
+name: seshat-observations
+description: Query execution traces, telemetry data, cost metrics, and performance observations via Kibana or API.
+when_to_use: When you need to inspect performance metrics, cost data, or execution telemetry from an external agent context.
+---
+
 # SKILL: Seshat Observations & Performance Metrics
 
 > **Auth:** `SESHAT_API_TOKEN` (Gateway API)

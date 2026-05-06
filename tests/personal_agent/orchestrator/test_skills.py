@@ -1,88 +1,118 @@
-"""Tests for the skills.py skill-doc loader and get_skill_block gate."""
+"""Tests for the skills.py skill-doc loader and get_skill_block gate.
+
+Phase A: frontmatter-driven auto-discovery replaces hardcoded _SKILL_FILES
+and _KEYWORD_ROUTES.  Tests validate the new API surface:
+  - _load_all_skills() / _get_cache()
+  - get_skill_block(message=...)
+  - find_skill_for_tool()
+  - get_all_skills()
+"""
 
 from __future__ import annotations
 
-import unittest.mock
+import time
 from pathlib import Path
 
 import pytest
 
-import personal_agent.orchestrator.skills
 import personal_agent.orchestrator.skills as skills_module
 from personal_agent.config import settings
-from personal_agent.orchestrator.skills import _load_skill_block, get_skill_block
+from personal_agent.orchestrator.skills import (
+    _load_all_skills,
+    find_skill_for_tool,
+    get_all_skills,
+    get_skill_block,
+)
 
 
-class TestLoadSkillBlockReturnsNonempty:
-    """Test 1: _CACHED_BLOCK is non-empty and contains expected content."""
+class TestSkillDiscovery:
+    """Test 1: Auto-discovery loads skill docs from docs/skills/."""
 
-    def test_cached_block_nonempty(self) -> None:
-        """_CACHED_BLOCK must be non-empty (all 9 skill files exist)."""
-        assert skills_module._CACHED_BLOCK != ""
+    def test_all_skills_nonempty(self) -> None:
+        """get_all_skills() returns at least one skill (production docs present)."""
+        skills = get_all_skills()
+        assert len(skills) > 0, "No skills discovered — frontmatter parse failed?"
 
-    def test_cached_block_starts_with_header(self) -> None:
-        """_CACHED_BLOCK must start with the expected library header."""
-        expected_header = "## Skill Library — How to Drive Primitive Tools"
-        assert skills_module._CACHED_BLOCK.startswith(expected_header)
+    def test_bash_skill_present(self) -> None:
+        """The 'bash' skill is always discovered and has a body."""
+        skills = get_all_skills()
+        assert "bash" in skills, "'bash' skill not found"
+        assert skills["bash"].body, "'bash' skill body is empty"
 
-    def test_cached_block_contains_bash_anchor(self) -> None:
-        """_CACHED_BLOCK must contain content from bash.md."""
-        # bash.md starts with "# bash — Shell Command Executor"
-        assert "bash" in skills_module._CACHED_BLOCK.lower()
-        # Check for the actual title present in bash.md
-        assert "bash — Shell Command Executor" in skills_module._CACHED_BLOCK
+    def test_bash_skill_contains_expected_content(self) -> None:
+        """The 'bash' skill body contains the canonical anchor text."""
+        skills = get_all_skills()
+        assert "bash" in skills["bash"].body.lower()
+        assert "bash — Shell Command Executor" in skills["bash"].body
+
+    def test_skills_have_required_fields(self) -> None:
+        """Every loaded skill has non-empty name, description, and when_to_use."""
+        for name, skill in get_all_skills().items():
+            assert skill.name, f"skill '{name}' has empty name"
+            assert skill.description, f"skill '{name}' has empty description"
+            assert skill.when_to_use, f"skill '{name}' has empty when_to_use"
 
 
 class TestMissingFileDegradation:
-    """Test 2: _load_skill_block() degrades gracefully when files are missing."""
+    """Test 2: _load_all_skills() degrades gracefully for missing/bad files."""
 
     def test_partial_load_returns_nonempty(self, tmp_path: Path) -> None:
-        """With only 1 valid file, block is non-empty."""
-        # Create one minimal markdown file
+        """With one valid skill file, cache is non-empty."""
         skill_file = tmp_path / "bash.md"
-        skill_file.write_text("# bash — Shell Command Executor\nMinimal content.", encoding="utf-8")
+        skill_file.write_text(
+            "---\nname: bash\ndescription: test\nwhen_to_use: always\n---\n\n# bash content\nMinimal content.",
+            encoding="utf-8",
+        )
+        cache = _load_all_skills(tmp_path)
+        assert len(cache.docs) == 1
+        assert "bash" in cache.docs
+        assert "Minimal content." in cache.docs["bash"].body
 
-        original_dir = skills_module._SKILLS_DIR
-        skills_module._SKILLS_DIR = tmp_path
-        try:
-            result = _load_skill_block()
-        finally:
-            skills_module._SKILLS_DIR = original_dir
+    def test_files_without_frontmatter_are_skipped(self, tmp_path: Path) -> None:
+        """Markdown files without YAML frontmatter are excluded from the cache."""
+        no_fm = tmp_path / "EMPIRICAL_TEST_RESULTS.md"
+        no_fm.write_text("# Just a heading\nNo frontmatter here.", encoding="utf-8")
+        cache = _load_all_skills(tmp_path)
+        assert len(cache.docs) == 0
 
-        assert result != ""
-        assert "Minimal content." in result
+    def test_all_missing_returns_empty_cache(self, tmp_path: Path) -> None:
+        """When the skills directory is empty, the cache has no docs."""
+        cache = _load_all_skills(tmp_path)
+        assert cache.docs == {}
 
-    def test_missing_files_emit_warnings(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Missing skill doc files emit structlog warnings via the module logger."""
-        # Give the loader a dir with one file — the other 8 will be "missing"
-        skill_file = tmp_path / "bash.md"
-        skill_file.write_text("# bash content", encoding="utf-8")
+    def test_missing_name_key_skips_file(self, tmp_path: Path) -> None:
+        """Files with frontmatter but no 'name' key are skipped."""
+        no_name = tmp_path / "nameless.md"
+        no_name.write_text(
+            "---\ndescription: something\nwhen_to_use: never\n---\n\nbody",
+            encoding="utf-8",
+        )
+        cache = _load_all_skills(tmp_path)
+        assert len(cache.docs) == 0
 
-        with unittest.mock.patch.object(
-            personal_agent.orchestrator.skills, "log"
-        ) as mock_log:
-            monkeypatch.setattr(personal_agent.orchestrator.skills, "_SKILLS_DIR", tmp_path)
-            block = personal_agent.orchestrator.skills._load_skill_block()
+    def test_unreadable_file_emits_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unreadable skill file logs a warning and does not crash."""
+        import unittest.mock
 
-        assert mock_log.warning.call_count >= 1, "Expected at least 1 warning for missing files"
-        # Each call should have file= keyword
-        called_files = [
-            call.kwargs.get("file") or (call.args[1] if len(call.args) > 1 else None)
-            for call in mock_log.warning.call_args_list
-        ]
-        assert any(f is not None for f in called_files), "warning calls should include file=name"
-        assert block, "Partial load should still return non-empty block"
+        bad = tmp_path / "bad.md"
+        bad.write_text(
+            "---\nname: bad\ndescription: x\nwhen_to_use: x\n---\nbody", encoding="utf-8"
+        )
 
-    def test_all_missing_returns_empty(self, tmp_path: Path) -> None:
-        """When no files exist at all, _load_skill_block() returns empty string."""
-        original_dir = skills_module._SKILLS_DIR
-        skills_module._SKILLS_DIR = tmp_path
-        try:
-            result = _load_skill_block()
-        finally:
-            skills_module._SKILLS_DIR = original_dir
+        original_read_text = Path.read_text
 
-        assert result == ""
+        def failing_read(self: Path, **kwargs: object) -> str:
+            if self.name == "bad.md":
+                raise OSError("permission denied")
+            return original_read_text(self, **kwargs)
+
+        with unittest.mock.patch.object(skills_module, "log") as mock_log:
+            monkeypatch.setattr(Path, "read_text", failing_read)
+            _load_all_skills(tmp_path)
+
+        assert mock_log.warning.called
 
 
 class TestFlagGating:
@@ -101,22 +131,124 @@ class TestFlagGating:
         assert result != ""
         assert result.startswith("## Skill Library — How to Drive Primitive Tools")
 
+    def test_returns_empty_with_message_when_flag_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """get_skill_block() returns '' even with a message when flag is False."""
+        monkeypatch.setattr(settings, "prefer_primitives_enabled", False)
+        result = get_skill_block(message="show me logs")
+        assert result == ""
 
-class TestCacheStability:
-    """Test 4: get_skill_block() returns the same object on repeated calls."""
 
-    def test_two_calls_return_identical_result(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Two consecutive calls to get_skill_block() return the same string value."""
+class TestKeywordRouting:
+    """Test 4: Keyword-based routing injects the correct skill doc."""
+
+    @pytest.mark.parametrize("msg", [
+        "show me logs",
+        "check your logs",
+        "check the logs",
+        "app logs",
+        "agent logs",
+        "any recent errors",
+        "show me traces",
+        "what happened last hour",
+        "show me agent-logs from last 24 hour",
+    ])
+    def test_es_keywords_inject_es_skill(self, msg: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Natural user phrasing triggers the query-elasticsearch skill."""
         monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
-        first = get_skill_block()
-        second = get_skill_block()
+        result = get_skill_block(message=msg)
+        assert "agent-logs-" in result, (
+            f"ES skill not injected for message: {msg!r}\n"
+            "query-elasticsearch.md keywords are too restrictive."
+        )
+
+    def test_no_keyword_match_returns_bash_only(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A message with no matching keywords returns only the bash skill body."""
+        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
+        result = get_skill_block(message="what is the meaning of life")
+        assert "bash — Shell Command Executor" in result
+        # ES-specific content should NOT be present
+        assert "agent-logs-YYYY.MM.DD" not in result
+
+    def test_none_message_returns_bash_only(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Passing message=None returns only the bash skill block."""
+        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
+        result = get_skill_block(message=None)
+        assert result.startswith("## Skill Library — How to Drive Primitive Tools")
+        assert "bash — Shell Command Executor" in result
+
+    def test_two_calls_return_identical_result(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Repeated calls with the same message return the same value."""
+        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
+        first = get_skill_block(message="show me logs")
+        second = get_skill_block(message="show me logs")
         assert first == second
 
-    def test_cached_block_unchanged_across_calls(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """_CACHED_BLOCK is the same object across calls (no per-call I/O)."""
+
+class TestFindSkillForTool:
+    """Test 5: find_skill_for_tool() returns the linked skill by tool name."""
+
+    def test_bash_tool_links_to_some_skill(self) -> None:
+        """find_skill_for_tool('bash') returns a SkillDoc listing bash."""
+        skill = find_skill_for_tool("bash")
+        assert skill is not None
+        assert "bash" in skill.tools
+
+    def test_unknown_tool_returns_none(self) -> None:
+        """find_skill_for_tool with an unregistered name returns None."""
+        result = find_skill_for_tool("nonexistent_tool_xyz")
+        assert result is None
+
+    def test_run_python_tool_links_to_run_python_skill(self) -> None:
+        """find_skill_for_tool('run_python') returns the run-python skill."""
+        skill = find_skill_for_tool("run_python")
+        assert skill is not None
+        assert skill.name == "run-python"
+
+    def test_read_tool_links_to_read_write_skill(self) -> None:
+        """find_skill_for_tool('read') returns the read-write skill."""
+        skill = find_skill_for_tool("read")
+        assert skill is not None
+        assert skill.name == "read-write"
+
+
+class TestMtimeCache:
+    """Test 6: Cache invalidates when skill files change."""
+
+    def test_cache_reloads_after_file_change(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Modifying a skill file triggers a cache reload on next access."""
+        monkeypatch.setattr(skills_module, "_SKILLS_DIR", tmp_path)
+        monkeypatch.setattr(skills_module, "_cache", None)
+
+        skill_file = tmp_path / "bash.md"
+        skill_file.write_text(
+            "---\nname: bash\ndescription: d\nwhen_to_use: w\n---\n\nv1 content",
+            encoding="utf-8",
+        )
         monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
-        # Both calls return _CACHED_BLOCK directly — verify they are the same identity
-        block_before = skills_module._CACHED_BLOCK
-        get_skill_block()
-        get_skill_block()
-        assert skills_module._CACHED_BLOCK is block_before
+
+        first = get_skill_block()
+        assert "v1 content" in first
+
+        # Ensure mtime changes (some filesystems have 1-second resolution)
+        time.sleep(0.05)
+        skill_file.write_text(
+            "---\nname: bash\ndescription: d\nwhen_to_use: w\n---\n\nv2 content",
+            encoding="utf-8",
+        )
+        # Force mtime to differ (touch with offset to be safe on fast filesystems)
+        import os
+        stat = skill_file.stat()
+        os.utime(skill_file, (stat.st_atime, stat.st_mtime + 1.0))
+
+        second = get_skill_block()
+        assert "v2 content" in second

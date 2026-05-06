@@ -1,3 +1,9 @@
+---
+name: seshat-sessions
+description: Query conversation history and session context via CLI or Gateway API.
+when_to_use: When you need to inspect conversation history, session data, or past interactions from an external agent context.
+---
+
 # SKILL: Seshat Sessions & Conversation History
 
 > **Auth:** `SESHAT_API_TOKEN` (Gateway API)

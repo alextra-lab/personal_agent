@@ -1,3 +1,15 @@
+---
+name: run-python
+description: Python Docker sandbox for computation, data transformation, and library-dependent tasks.
+when_to_use: When you need Python computation, data analysis, or scripts using pre-installed libraries. Do not use for host filesystem writes outside /sandbox.
+tools: [run_python]
+keywords:
+  - run python
+  - python script
+  - calculate using python
+  - write a python
+---
+
 # run_python — Python Docker Sandbox
 
 > **Sandbox isolation:** runs in a **separate Docker container** (`seshat-sandbox-python:0.1`), not the agent service container. Consequences:

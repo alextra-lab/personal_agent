@@ -1,3 +1,72 @@
+---
+name: query-elasticsearch
+description: Query Elasticsearch indices via ES|QL for log analysis, telemetry, errors, and self-diagnosis. Primary path uses bash curl.
+when_to_use: When you need to inspect agent telemetry, logs, errors, traces, or query ES directly. Always use agent-logs-* — never logs-*.
+tools: [bash]
+keywords:
+  # Natural user phrasing — what a person actually types
+  - logs
+  - " log"
+  - traces
+  - telemetry
+  - what happened
+  - recent errors
+  - app errors
+  - check your logs
+  - show me what
+  # Technical / operator phrasing
+  - agent-log
+  - trace_id
+  - kibana
+  - query_elasticsearch
+  - loop gate
+  - litellm
+  - tool_call
+  - last hour
+  - last day
+  - 24 hour
+  - p95
+  - latency
+  - errors in the
+  - event_type
+  - esql
+  - agent-logs
+  - loop trace
+  - warn_consecutive
+  - block_consecutive
+  - query elasticsearch
+  - search elasticsearch
+canonical_patterns:
+  - "agent-logs-*"
+  - "agent-captains-captures-*"
+  - "agent-captains-reflections-*"
+known_bad_patterns:
+  - pattern: "logs-*"
+    applies_to:
+      tool: bash
+      fields: [command]
+    reason: "Generic 'logs-*' index does not exist in Seshat telemetry."
+    suggestion: "Use 'agent-logs-*' for structured agent telemetry."
+  - pattern: "agent-events-*"
+    applies_to:
+      tool: bash
+      fields: [command]
+    reason: "Index 'agent-events-*' does not exist."
+    suggestion: "Use 'agent-logs-*' for events; filter by 'event_type' field."
+  - pattern: "agent-traces-*"
+    applies_to:
+      tool: bash
+      fields: [command]
+    reason: "Index 'agent-traces-*' does not exist."
+    suggestion: "Use 'agent-logs-*'; traces are logged events filtered by fields."
+  - pattern: "agent-telemetry-*"
+    applies_to:
+      tool: bash
+      fields: [command]
+    reason: "Index 'agent-telemetry-*' does not exist."
+    suggestion: "Use 'agent-logs-*' for all structured telemetry."
+---
+
 # query-elasticsearch — Query ES indices, inspect schema, read self-telemetry
 
 **Status:** Primary path (FRE-263, 2026-04-28). Legacy `query_elasticsearch` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).

@@ -1,3 +1,9 @@
+---
+name: seshat-delegate
+description: Reverse delegation from external agents (Claude Code, Codex) back to Seshat via Linear or chat API.
+when_to_use: When an external agent needs to hand tasks back to Seshat for Linear issue creation, decomposition, or knowledge queries.
+---
+
 # SKILL: Seshat Reverse Delegation
 
 > **ADR:** `docs/architecture_decisions/ADR-0050-remote-agent-harness-integration.md` (D5)

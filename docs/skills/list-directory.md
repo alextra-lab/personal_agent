@@ -1,3 +1,25 @@
+---
+name: list-directory
+description: List directory contents and count files using bash find. Use find | wc -l for accurate file counts, not ls -R.
+when_to_use: When you need to list, count, or search files in directories.
+tools: [bash]
+keywords:
+  - list files
+  - files in /
+  - "what's in /"
+  - yaml files
+  - python files
+  - how many files
+  - under /app
+  - in /app/
+  - /app/config
+  - /app/src
+  - directory
+  - "folder /"
+  - how many yaml
+  - how many python
+---
+
 # list-directory — List directory contents with type and size
 
 **Status:** Primary path (FRE-263, 2026-04-28). Legacy `list_directory` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).

@@ -1,3 +1,23 @@
+---
+name: infrastructure-health
+description: Probe all infrastructure services (Postgres, Elasticsearch, Neo4j, Redis) for reachability.
+when_to_use: When you need to check if backend services are healthy or reachable.
+tools: [bash]
+keywords:
+  - infrastructure health
+  - services healthy
+  - postgres reachable
+  - neo4j
+  - backend services
+  - health check
+  - all services
+  - is postgres
+  - are neo4j
+  - infra health
+  - reachable
+  - check infrastructure
+---
+
 # infrastructure-health — Probe all infrastructure services for reachability
 
 **Status:** Primary path (FRE-263, 2026-04-28). Legacy `infra_health` tool is no longer registered in production (`AGENT_LEGACY_TOOLS_ENABLED=false`).

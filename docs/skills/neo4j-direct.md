@@ -1,3 +1,26 @@
+---
+name: neo4j-direct
+description: Run Cypher queries against the live Neo4j knowledge graph via bash python3. Do not use run_python (no neo4j driver in sandbox).
+when_to_use: When you need to inspect Neo4j graph state, entity counts, relationships, or run Cypher queries directly.
+tools: [bash]
+keywords:
+  - cypher
+  - "bolt://"
+  - entity nodes
+  - entity count
+  - turn nodes
+  - knowledge graph state
+  - graph state
+  - query the graph
+  - graph query
+  - graph directly
+  - connect to neo4j
+  - neo4j query
+  - query neo4j
+  - discusses relationship
+  - most recently created
+---
+
 # neo4j-direct — Run Cypher queries against the live knowledge graph
 
 **Status:** Primary path (FRE-327). Use when the task requires reading or inspecting

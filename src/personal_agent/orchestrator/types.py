@@ -202,6 +202,10 @@ class ExecutionContext:
     expansion_plan: "ExpansionPlan | None" = None
     expansion_phase_results: list["PhaseResult"] = field(default_factory=list)
 
+    # --- Phase B skill routing (FRE-skill-routing) ---
+    # Tracks which skill bodies have been read_skill'd this conversation for dedup.
+    loaded_skills: set[str] = field(default_factory=set)
+
 
 class OrchestratorStep(TypedDict):
     """Step metadata for observability.

@@ -172,7 +172,12 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
         registry.register(write_tool, write_executor)
         registry.register(bash_tool, bash_executor)
         registry.register(run_python_tool, run_python_executor)
-        log.info("primitive_tools_registered", count=4)
+
+        # Phase B skill routing: read_skill tool (always registered with primitives)
+        from personal_agent.tools.read_skill import read_skill_executor, read_skill_tool  # noqa: PLC0415
+
+        registry.register(read_skill_tool, read_skill_executor)
+        log.info("primitive_tools_registered", count=5)
 
 
 # Global singleton registry

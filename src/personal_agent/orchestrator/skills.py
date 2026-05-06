@@ -175,16 +175,61 @@ def _get_cache() -> _SkillCache:
 # ---------------------------------------------------------------------------
 
 
-def get_skill_block(message: str | None = None) -> str:
-    """Return a skill library block for injection into the system prompt.
+_SKILL_INDEX_HEADER = "## Available Skills\n\nCall `read_skill(name)` to load the full guidance for any skill below.\n\n"
+_CHARS_PER_TOKEN = 4  # conservative estimate for token counting
+
+
+def assemble_skill_index(cap_tokens: int = 2048) -> str:
+    """Emit a compact skill index for model_decided and hybrid routing modes.
+
+    Each line is ``- <name>: <description>``.  The index is capped at *cap_tokens*
+    (estimated at 4 chars/token) to stay within prompt budgets.
+
+    Args:
+        cap_tokens: Maximum token budget for the index block. Defaults to 2048.
+
+    Returns:
+        Formatted skill index string, or empty string if no skills are loaded.
+    """
+    cache = _get_cache()
+    if not cache.docs:
+        return ""
+
+    cap_chars = cap_tokens * _CHARS_PER_TOKEN
+    lines: list[str] = []
+    total = len(_SKILL_INDEX_HEADER)
+
+    for skill in cache.docs.values():
+        line = f"- {skill.name}: {skill.description}\n"
+        if total + len(line) > cap_chars:
+            log.debug("skill_index_truncated", cap_tokens=cap_tokens, truncated_at=skill.name)
+            break
+        lines.append(line)
+        total += len(line)
+
+    if not lines:
+        return ""
+    return _SKILL_INDEX_HEADER + "".join(lines)
+
+
+def get_skill_block(
+    message: str | None = None,
+    loaded_skills: frozenset[str] | set[str] | None = None,
+) -> str:
+    """Return a skill library block for keyword-based injection into the system prompt.
 
     Always includes the ``bash`` skill body (base tool reference). When
     *message* is provided, additionally injects any skills whose ``keywords``
     match a substring of the lowercased message.
 
+    In ``hybrid`` routing mode, pass *loaded_skills* to suppress injecting bodies
+    for skills the model has already read via ``read_skill`` this conversation.
+
     Args:
         message: The original user message used for keyword-based routing.
             Pass ``None`` to get the bash-only block.
+        loaded_skills: Skill names already loaded this conversation. Bodies for
+            these skills are suppressed to avoid duplication. Ignored when None.
 
     Returns:
         Skill library block prefixed with a header, or an empty string when
@@ -193,19 +238,20 @@ def get_skill_block(message: str | None = None) -> str:
     if not settings.prefer_primitives_enabled:
         return ""
 
+    _already_loaded = loaded_skills or set()
     cache = _get_cache()
     chunks: list[str] = []
     seen: set[str] = set()
 
     bash_doc = cache.docs.get("bash")
-    if bash_doc and bash_doc.body:
+    if bash_doc and bash_doc.body and "bash" not in _already_loaded:
         chunks.append(bash_doc.body)
         seen.add("bash")
 
     if message:
         msg_lower = message.lower()
         for skill in cache.docs.values():
-            if skill.name in seen:
+            if skill.name in seen or skill.name in _already_loaded:
                 continue
             if skill.keywords and any(kw.lower() in msg_lower for kw in skill.keywords):
                 chunks.append(skill.body)

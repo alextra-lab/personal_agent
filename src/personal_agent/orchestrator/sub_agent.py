@@ -64,8 +64,13 @@ async def run_sub_agent(
     )
 
     try:
+        # Build system prompt: base + optional skill index inherited from parent (Phase B)
+        _system_content = _SUB_AGENT_SYSTEM_PROMPT
+        if spec.skill_index_block:
+            _system_content = f"{_system_content}\n\n{spec.skill_index_block}"
+
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": _SUB_AGENT_SYSTEM_PROMPT},
+            {"role": "system", "content": _system_content},
         ]
         messages.extend(spec.context)
         messages.append(

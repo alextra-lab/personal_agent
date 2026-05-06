@@ -1313,25 +1313,57 @@ async def step_llm_call(
             "    redis:6379  |  embeddings:8503  |  reranker:8504"
         )
 
-    # Inject skill library docs when prefer_primitives_enabled is set (ADR-0063 §D7).
-    # FRE-282: pass the user message for keyword-based routing — injects bash.md
-    # plus one relevant skill doc (~2-3K tokens) rather than all 9 (~8.7K tokens).
+    # Phase B skill routing (FRE-skill-routing, ADR-0063 §D7).
+    # Routing mode controls what gets injected:
+    #   keyword       — keyword-matched skill bodies only (Phase A legacy behavior)
+    #   model_decided — compact skill index only; model calls read_skill on demand
+    #   hybrid        — both index AND keyword bodies; bodies suppressed for skills
+    #                   already loaded via read_skill this conversation
     # Placed before dynamic content (memory/decomposition) to stay in the cached prefix.
-    from personal_agent.orchestrator.skills import get_skill_block
+    from personal_agent.orchestrator.skills import (  # noqa: PLC0415
+        assemble_skill_index,
+        get_skill_block,
+    )
 
-    _user_message: str | None = None
-    for _msg in reversed(ctx.messages):
-        if isinstance(_msg, dict) and _msg.get("role") == "user":
-            _content = _msg.get("content", "")
-            _user_message = _content if isinstance(_content, str) else str(_content)
-            break
+    if settings.prefer_primitives_enabled:
+        _user_message: str | None = None
+        for _msg in reversed(ctx.messages):
+            if isinstance(_msg, dict) and _msg.get("role") == "user":
+                _content = _msg.get("content", "")
+                _user_message = _content if isinstance(_content, str) else str(_content)
+                break
 
-    skill_block = get_skill_block(message=_user_message)
-    if skill_block:
-        if system_prompt:
-            system_prompt = f"{system_prompt}\n\n{skill_block}"
-        else:
-            system_prompt = skill_block
+        _routing_mode = settings.skill_routing_mode
+        _skill_injection: str = ""
+
+        if _routing_mode == "model_decided":
+            _skill_index = assemble_skill_index(cap_tokens=settings.skill_index_max_tokens)
+            if _skill_index:
+                _skill_injection = _skill_index
+        elif _routing_mode == "hybrid":
+            _skill_index = assemble_skill_index(cap_tokens=settings.skill_index_max_tokens)
+            _keyword_block = get_skill_block(
+                message=_user_message,
+                loaded_skills=ctx.loaded_skills,
+            )
+            parts = [p for p in [_skill_index, _keyword_block] if p]
+            _skill_injection = "\n\n".join(parts)
+        else:  # keyword (default / legacy)
+            _skill_injection = get_skill_block(message=_user_message)
+
+        if _skill_injection:
+            if system_prompt:
+                system_prompt = f"{system_prompt}\n\n{_skill_injection}"
+            else:
+                system_prompt = _skill_injection
+
+        log.info(
+            "skill_index_assembled",
+            routing_mode=_routing_mode,
+            injected_chars=len(_skill_injection),
+            loaded_skills_count=len(ctx.loaded_skills),
+            trace_id=ctx.trace_id,
+        )
 
     # Create span for LLM call
     span_ctx, span_id = trace_ctx.new_span()
@@ -1676,6 +1708,18 @@ async def step_llm_call(
                 max_sub_agents=max_sub,
             )
 
+            # Phase B: inherit skill index + loaded_skills from parent context
+            if specs and settings.prefer_primitives_enabled:
+                from personal_agent.orchestrator.skills import assemble_skill_index  # noqa: PLC0415
+                from dataclasses import replace  # noqa: PLC0415
+
+                _sub_index = assemble_skill_index(cap_tokens=settings.skill_index_max_tokens)
+                _parent_loaded = frozenset(ctx.loaded_skills)
+                specs = [
+                    replace(spec, skill_index_block=_sub_index, loaded_skills=_parent_loaded)
+                    for spec in specs
+                ]
+
             if specs:
                 results = await execute_hybrid(
                     specs=specs,
@@ -1895,6 +1939,31 @@ async def _dispatch_tool_call(
                     "tool_layer_error": "known_bad_pattern",
                 }
 
+    # Phase B dedup: if read_skill has already loaded this skill, return marker.
+    if tool_name == "read_skill":
+        _skill_name_arg = str(arguments.get("name", ""))
+        if _skill_name_arg and _skill_name_arg in ctx.loaded_skills:
+            log.debug(
+                "read_skill_dedup",
+                skill_name=_skill_name_arg,
+                trace_id=ctx.trace_id,
+            )
+            return {
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "content": json.dumps(
+                    {"status": "ok", "body": f"<skill: {_skill_name_arg} already loaded earlier this conversation>"}
+                ),
+                "success": True,
+                "latency_ms": 0,
+                "output_hash": None,
+                "gate_result": gate_result,
+                "args_hash": args_hash,
+                "loop_policy": loop_policy,
+                "tool_layer_output": None,
+                "tool_layer_error": None,
+            }
+
     # Execute tool
     try:
         result = await tool_layer.execute_tool(
@@ -1906,6 +1975,36 @@ async def _dispatch_tool_call(
                 json.dumps(result.output) if isinstance(result.output, dict) else str(result.output)
             )
             output_hash: str | None = stable_hash(result.output)
+
+            # Phase B: track loaded skills + post-execution hint for hybrid mode
+            if tool_name == "read_skill" and isinstance(result.output, dict):
+                _loaded_name = str(result.output.get("skill_name", ""))
+                if _loaded_name:
+                    ctx.loaded_skills.add(_loaded_name)
+                    log.info(
+                        "read_skill_invoked",
+                        skill_name=_loaded_name,
+                        trace_id=ctx.trace_id,
+                    )
+            elif result.success and settings.skill_routing_mode == "hybrid":
+                # For non-read_skill tools in hybrid mode: hint if linked skill not loaded
+                from personal_agent.orchestrator.skills import find_skills_for_tool  # noqa: PLC0415
+
+                _hint_skill = next(
+                    (s for s in find_skills_for_tool(tool_name) if s.name not in ctx.loaded_skills),
+                    None,
+                )
+                if _hint_skill:
+                    content = (
+                        content
+                        + f"\n\n[hint: skill {_hint_skill.name!r} is available — call read_skill to load full guidance]"
+                    )
+                    log.debug(
+                        "tool_result_skill_hint_appended",
+                        tool_name=tool_name,
+                        linked_skill=_hint_skill.name,
+                        trace_id=ctx.trace_id,
+                    )
         else:
             short_error = (result.error or "execution failed")[:150]
             content = json.dumps({"status": "error", "hint": f"{tool_name}: {short_error}"})

@@ -80,23 +80,39 @@ def _get_events(trace_id: str, event_name: str, size: int = 10) -> list[dict[str
 # ---------------------------------------------------------------------------
 
 
-def analyse_trace(trace_id: str) -> dict[str, Any]:
-    """Extract Phase B/C metrics for a single trace from ES.
+def analyse_trace(trace_id: str, es_hits: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Extract Phase B/C metrics for a single trace.
+
+    Reads from *es_hits* (events already fetched by the harness and stored in
+    raw.json) when available, falling back to a direct ES query otherwise.
 
     Args:
-        trace_id: The trace identifier to query.
+        trace_id: The trace identifier.
+        es_hits: Pre-fetched ES events from raw.json (preferred; avoids re-query).
 
     Returns:
         Dict with metric counts and sampled event data.
     """
     result: dict[str, Any] = {"trace_id": trace_id}
 
+    def _events(name: str) -> list[dict[str, Any]]:
+        if es_hits is not None:
+            return [h for h in es_hits if h.get("event_type") == name]
+        # Fallback: re-query ES with keyword sub-field for exact match
+        return _search({
+            "size": 50,
+            "query": {"bool": {"must": [
+                {"term": {"trace_id.keyword": trace_id}},
+                {"term": {"event_type": name}},
+            ]}},
+            "sort": [{"@timestamp": "asc"}],
+        })
+
     # --- Primary metric ---
-    limit_events = _get_events(trace_id, "tool_iteration_limit_reached")
-    result["tool_iteration_limit_reached"] = len(limit_events) > 0
+    result["tool_iteration_limit_reached"] = len(_events("tool_iteration_limit_reached")) > 0
 
     # --- Phase B: skill_index_assembled ---
-    index_events = _get_events(trace_id, "skill_index_assembled", size=20)
+    index_events = _events("skill_index_assembled")
     if index_events:
         first = index_events[0]
         result["skill_routing_mode"] = first.get("routing_mode", "unknown")
@@ -108,17 +124,17 @@ def analyse_trace(trace_id: str) -> dict[str, Any]:
         result["skill_index_turns"] = 0
 
     # --- Phase B: read_skill invocations ---
-    read_events = _get_events(trace_id, "read_skill_invoked", size=20)
+    read_events = _events("read_skill_invoked")
     result["read_skill_count"] = len(read_events)
     result["read_skill_names"] = [e.get("skill_name") for e in read_events]
 
     # --- Phase B.5: guard blocks ---
-    guard_events = _get_events(trace_id, "tool_call_blocked_known_bad_pattern", size=10)
+    guard_events = _events("tool_call_blocked_known_bad_pattern")
     result["guard_blocks"] = len(guard_events)
     result["guard_patterns"] = [e.get("pattern") for e in guard_events]
 
     # --- Phase C: routing call ---
-    routing_events = _get_events(trace_id, "skill_routing_call_completed", size=5)
+    routing_events = _events("skill_routing_call_completed")
     if routing_events:
         r = routing_events[0]
         result["routing_call_fired"] = True
@@ -129,10 +145,11 @@ def analyse_trace(trace_id: str) -> dict[str, Any]:
         result["routing_call_fired"] = False
 
     # --- Incident-class: first bash command ---
-    bash_events = _get_events(trace_id, "bash_started", size=1)
+    bash_events = _events("bash_started")
     if bash_events:
         cmd = bash_events[0].get("command", "")
         result["first_bash_command"] = cmd[:200]
+        # Correct: uses agent-logs-* (not /logs-* which is the hallucinated pattern)
         result["first_bash_uses_correct_index"] = (
             "agent-logs-" in cmd or "/logs-*" not in cmd
         )
@@ -173,7 +190,11 @@ def analyse_run(run_dir: Path) -> dict[str, Any]:
         if not trace_id:
             log.warning("no_trace_id", path=str(raw_path))
             continue
-        trace_metrics = analyse_trace(trace_id)
+        # Re-use es_hits already fetched by the harness (avoids re-query + keyword issue)
+        es_hits: list[dict[str, Any]] = []
+        for turn in (raw if isinstance(raw, list) else [raw]):
+            es_hits.extend(turn.get("es_hits", []))
+        trace_metrics = analyse_trace(trace_id, es_hits=es_hits or None)
         trace_metrics["prompt_id"] = p.name
         traces.append(trace_metrics)
 

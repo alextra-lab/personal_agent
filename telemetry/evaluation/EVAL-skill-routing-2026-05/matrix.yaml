@@ -42,7 +42,7 @@ cells:
       AGENT_SKILL_ROUTING_MODE: keyword
       AGENT_SKILL_ROUTING_MODEL_KEY: ""
     description: "Local primary (Qwen) + keyword-only (baseline)"
-    status: blocked  # SLM offline
+    status: pending
 
   - id: local-hybrid
     profile: local
@@ -50,7 +50,7 @@ cells:
       AGENT_SKILL_ROUTING_MODE: hybrid
       AGENT_SKILL_ROUTING_MODEL_KEY: ""
     description: "Local primary (Qwen) + hybrid — expected best for local"
-    status: blocked  # SLM offline
+    status: pending
 
   - id: local-model-decided
     profile: local
@@ -58,7 +58,7 @@ cells:
       AGENT_SKILL_ROUTING_MODE: model_decided
       AGENT_SKILL_ROUTING_MODEL_KEY: claude_haiku
     description: "Local primary (Qwen) + model_decided; Haiku routing pre-flight"
-    status: blocked  # SLM offline
+    status: pending
 
 metrics:
   primary:

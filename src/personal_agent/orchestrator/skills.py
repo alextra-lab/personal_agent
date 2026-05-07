@@ -357,8 +357,23 @@ async def route_skills(
             max_tokens=256,
             temperature=0.0,
         )
+    except KeyError as exc:
+        # Misconfiguration (e.g. missing budget_role in budget.yaml) — surface
+        # loudly so it does not silently degrade routing to no-op behaviour.
+        log.error(
+            "skill_routing_call_misconfigured",
+            error=repr(exc),
+            error_type=type(exc).__name__,
+        )
+        raise
     except Exception as exc:  # noqa: BLE001
-        log.warning("skill_routing_call_failed", error=str(exc))
+        # LLM call failures (network, model error, timeout) — fall back to []
+        # so the primary agent can still proceed via read_skill on demand.
+        log.warning(
+            "skill_routing_call_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
         return []
 
     raw = ""

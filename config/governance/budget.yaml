@@ -35,11 +35,17 @@ roles:
     default_output_tokens: 128
     safety_factor: 1.2
     on_denial: nack
+  skill_routing:
+    default_output_tokens: 64       # returns a small JSON array of skill names
+    safety_factor: 1.2
+    on_denial: raise                # surface failures instead of silently returning []
 
 caps:
   - {time_window: daily,  role: entity_extraction, cap_usd: 2.50}   # user-confirmed 2026-05-01
   - {time_window: daily,  role: captains_log,      cap_usd: 2.50}   # user-confirmed 2026-05-01
   - {time_window: daily,  role: main_inference,    cap_usd: 5.00}
+  - {time_window: daily,  role: skill_routing,     cap_usd: 0.10}   # user-confirmed 2026-05-07
   - {time_window: weekly, role: entity_extraction, cap_usd: 7.00}
   - {time_window: weekly, role: main_inference,    cap_usd: 18.00}
+  - {time_window: weekly, role: skill_routing,     cap_usd: 0.50}   # user-confirmed 2026-05-07
   - {time_window: weekly, role: _total,            cap_usd: 25.00}

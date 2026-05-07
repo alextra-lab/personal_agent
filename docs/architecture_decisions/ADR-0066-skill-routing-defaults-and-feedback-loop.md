@@ -92,15 +92,23 @@ This is "schema-ready, policy-deferred" — same shape as ADR-0065's per-user po
 
 **Why this loop is in scope of this ADR**: the threshold in D2 is meaningful only if the skill library grows. The growth mechanism is the feedback loop. Without D3, the library is frozen at 14 skills and D2 never trips.
 
-### D4 — Latent routing-pre-flight bug: investigate, do not block on
+### D4 — Routing pre-flight bug: ROOT-CAUSED AND FIXED at commit `178f664` (2026-05-07)
 
-Every `model_decided` trace in the eval shows `routing_skills_returned: []` from the Haiku pre-flight. The primary model still routes correctly via `read_skill`, so end-to-end correctness is unaffected, but the pre-flight is currently doing zero useful work — a 50ms tax with no return. Three plausible causes:
+> **Amendment 2026-05-07** — the original D4 text below described this as "investigate later". An investigation in the same session as the ADR pinned the root cause and shipped a fix. Original text retained for the record; status update follows.
 
-1. **Prompt template too compressed** for Haiku to produce a reliable JSON array. The `route_skills()` helper in `src/personal_agent/orchestrator/skills.py` formats a one-shot prompt; Haiku may be returning prose that fails strict JSON parsing.
-2. **Parser too strict** — any partial response fails closed (returns `[]`). This was the explicit design choice in Phase C ("on any failure return empty"), but combined with cause 1 it's silent.
-3. **Index format ambiguous** — the compact index is frontmatter-only; Haiku may not infer "select skills relevant to this user message" from it.
+**Root cause (none of the three suspected):** `factory.get_llm_client_for_key()` defaulted `budget_role="skill_routing"`, but `config/governance/budget.yaml` never declared that role. The Cost Check Gate (ADR-0065) raised `KeyError('skill_routing')` on every reservation. The exception propagated into `route_skills()`, where a catch-all `except Exception` silently swallowed it and returned `[]`. The 50ms latency was the round-trip to the cost gate's role lookup, not the LLM — confirming the call never reached Haiku.
 
-This ADR does not pick a cause; it files an investigation as a Wave-F follow-up to be opened *after* D2 trips (because today the bug doesn't change correctness — see Finding 3). When `model_decided` becomes the live path, the bug becomes load-bearing and has to be fixed; until then it's a latent improvement, not a blocker.
+**Fix:**
+- `config/governance/budget.yaml` — declared `skill_routing` role (default_output_tokens=64, safety_factor=1.2, on_denial=raise) + caps ($0.10/day, $0.50/week, user-confirmed 2026-05-07).
+- `src/personal_agent/orchestrator/skills.py` — split the exception handler. `KeyError` now re-raises as `skill_routing_call_misconfigured` (logged at `error` level) so future budget-config gaps surface loudly. LLM-call failures (network, model error) still fall back to `[]` so the primary agent's `read_skill` path keeps working.
+
+**Verification:** post-fix, a single ES prompt against Haiku returned `['bash', 'query-elasticsearch', 'seshat-observations']` in 1,177ms (was 50ms cached KeyError). Saved at `telemetry/evaluation/EVAL-skill-routing-2026-05/cloud-model-decided-2026-05-07-fixed/`.
+
+**Implication for the eval data in this ADR:** every `model_decided` row in the results table was produced under the broken pre-flight. End-to-end correctness was preserved only because the primary model's `read_skill` fallback compensated. **The reported `model_decided` metrics measure primary-model recovery, not router quality.** A clean baseline must be re-captured (FRE-330) before any quantitative claim about `model_decided` performance is made.
+
+#### Original D4 text (superseded — kept for posterity)
+
+> Every `model_decided` trace in the eval shows `routing_skills_returned: []` from the Haiku pre-flight. The primary model still routes correctly via `read_skill`, so end-to-end correctness is unaffected, but the pre-flight is currently doing zero useful work — a 50ms tax with no return. Three plausible causes: prompt template too compressed; parser too strict; index format ambiguous. This ADR does not pick a cause; it files an investigation as a Wave-F follow-up to be opened *after* D2 trips. When `model_decided` becomes the live path, the bug becomes load-bearing and has to be fixed; until then it's a latent improvement, not a blocker.
 
 ### D5 — Local vs cloud asymmetries observed but not actioned
 
@@ -161,8 +169,14 @@ D2 and D4 will be filed as separate Linear tickets during the next planning loop
 | Phase B — skill index + read_skill + hybrid | (pre-ADR work) | #22 | ✅ Merged 2026-05-06 |
 | Phase B.5 — known_bad_patterns guards | (pre-ADR work) | #22 | ✅ Merged 2026-05-06 |
 | Phase C — separate routing model | (pre-ADR work) | #23 | ✅ Merged 2026-05-06 |
-| Phase D — eval harness + 6-cell matrix | (pre-ADR work) | (commit `08dc14b`) | ✅ Run completed 2026-05-07 |
-| D3 Phase 1 — `missing_skill_requested` event | FRE-328 | (pending) | 📋 Needs Approval |
-| D3 Phase 2 — Captain's Log filing | FRE-328 (same) | (pending) | 📋 Needs Approval |
-| D2 — threshold monitor | (to file) | — | 📋 Future |
-| D4 — routing-pre-flight investigation | (to file) | — | 📋 Future, deferred until D2 trips |
+| Phase D — eval harness + 6-cell matrix | (pre-ADR work) | commit `08dc14b` | ✅ Run completed 2026-05-07 (note: `model_decided` cells captured under D4 bug — see FRE-330 for clean baseline) |
+| D3 Phase 1 — `missing_skill_requested` event | FRE-328 | (pending) | ✅ Approved 2026-05-07 |
+| D3 Phase 2 — Captain's Log filing | FRE-328 (same) | (pending) | ✅ Approved 2026-05-07 |
+| D2 — threshold monitor | FRE-335 | (pending) | ✅ Approved 2026-05-07 |
+| **D4 — routing pre-flight `KeyError('skill_routing')` fix** | inline | commit `178f664` | ✅ **Shipped 2026-05-07 (mid-ADR session)** |
+| Eval methodology — `es_first_call_correct_rate` `or`/`and` bug fix | FRE-329 | (pending) | ✅ Approved 2026-05-07 |
+| Eval methodology — re-run model_decided cells post-router-fix | FRE-330 | (pending; blocked on FRE-329) | ✅ Approved 2026-05-07 |
+| Eval methodology — split router-only vs end-to-end metrics | FRE-331 | (pending) | ✅ Approved 2026-05-07 |
+| Eval methodology — ES polling instead of fixed sleep | FRE-332 | (pending) | ✅ Approved 2026-05-07 |
+| Eval methodology — ES pagination past size=500 | FRE-333 | (pending) | ✅ Approved 2026-05-07 |
+| Eval methodology — expand prompt set (ambiguous + neg-control + adversarial) | FRE-334 | (pending) | ✅ Approved 2026-05-07 |

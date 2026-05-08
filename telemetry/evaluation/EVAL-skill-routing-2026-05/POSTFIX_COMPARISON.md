@@ -87,12 +87,42 @@ injection size slightly. Router precision 78% vs recall 94% shows the router is 
 biased (prefers adding an extra skill over missing a required one). This is the safer
 failure mode.
 
-### `local-model-decided` status
+### `local-model-decided` results (2026-05-08-postfix)
 
-Not re-run in FRE-330: local SLM server (Qwen 35B) was offline at re-run time.
-The 2026-05-07 `local-model-decided` row (50% read_skill) carries the same broken-router
-caveat as the cloud cell. A future re-run can use the same `RUN=<date>-postfix` naming
-convention.
+Run via Mac SLM tunnel (`https://slm.frenchforet.com/v1`, Qwen 35B-A3B). 9/10 prompts
+analysed — `es_incident_class` timed out (ReadTimeout after 600s).
+
+| Metric | 2026-05-07 (broken) | 2026-05-08-postfix (fixed) |
+|--------|--------------------|-----------------------------|
+| `read_skill_invoked_rate` | **50%** | **0%** |
+| `router_recall_mean` | ~0% | **94%** |
+| `router_precision_mean` | n/a | **83%** |
+| `router_empty_rate` | 100% | **11%** (no_skill_needed — correct) |
+| `clean_success_rate` | n/a | **89%** (8/9) |
+
+Per-prompt (9 prompts):
+
+| Prompt | recall | precision | skills_returned | success_class |
+|--------|--------|-----------|----------------|---------------|
+| `es_incident_class` | — | — | — | **timeout** |
+| `es_tool_error_analysis` | 1.00 | 0.50 | seshat-observations, query-elasticsearch | clean_success |
+| `es_skill_routing_telemetry` | 1.00 | 1.00 | query-elasticsearch | clean_success |
+| `neo4j_entity_count` | 1.00 | 1.00 | neo4j-direct | clean_success |
+| `system_metrics_snapshot` | 1.00 | 1.00 | system-metrics | clean_success |
+| `process_and_ports` | 1.00 | 0.50 | system-diagnostics, system-metrics | clean_success |
+| `infra_health_check` | 1.00 | 1.00 | infrastructure-health | clean_success |
+| `codebase_search` | 0.50 | 0.50 | bash, read-write | **failed** † |
+| `python_calculation` | 1.00 | 1.00 | run-python | clean_success |
+| `no_skill_needed` | null | 1.00 | [] | clean_success |
+
+**`es_incident_class` timeout**: The 25-iteration ES diagnostic loop exceeds Qwen's
+throughput at the 600s harness limit. Cloud Sonnet completes it in ~10 min. Finding:
+this prompt is at the edge of local model capacity and needs a timeout-handling strategy
+in the harness (FRE-332 scope) or a complexity cap in the prompt set (FRE-334 scope).
+
+**Routing is primary-model-independent**: Haiku returns identical skills for cloud and
+local cells (`query-elasticsearch` for ES prompts, `neo4j-direct` for Neo4j, etc.).
+The router quality depends only on Haiku + the skill index, not the downstream model.
 
 ---
 

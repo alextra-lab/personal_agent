@@ -85,3 +85,58 @@ def test_normalize_replaces_uppercase_uuid_team() -> None:
         default_team="FrenchForest",
     )
     assert out["team"] == "FrenchForest"
+
+
+# ── Label normalization (FRE-309) ─────────────────────────────────────────────
+
+_PA_LABEL_ID = "25004aac-3b32-4fa4-bdc2-55ff348ea842"
+_KNOWN_LABELS = {"PersonalAgent": _PA_LABEL_ID}
+
+
+def test_normalize_replaces_personalagent_label_with_uuid() -> None:
+    """Known label name is replaced with its UUID so MCP server skips name lookup."""
+    out = normalize_save_issue_arguments(
+        {"title": "T", "team": "FrenchForest", "labels": ["PersonalAgent", "Bug"]},
+        default_team="FrenchForest",
+        known_label_ids=_KNOWN_LABELS,
+    )
+    assert out["labels"] == [_PA_LABEL_ID, "Bug"]
+
+
+def test_normalize_label_lookup_is_case_insensitive() -> None:
+    """Label name match ignores case."""
+    out = normalize_save_issue_arguments(
+        {"title": "T", "team": "FrenchForest", "labels": ["personalagent"]},
+        default_team="FrenchForest",
+        known_label_ids=_KNOWN_LABELS,
+    )
+    assert out["labels"] == [_PA_LABEL_ID]
+
+
+def test_normalize_unknown_labels_pass_through() -> None:
+    """Labels not in the map are left unchanged for the MCP server to handle."""
+    out = normalize_save_issue_arguments(
+        {"title": "T", "team": "FrenchForest", "labels": ["Bug", "Tier-1:Opus"]},
+        default_team="FrenchForest",
+        known_label_ids=_KNOWN_LABELS,
+    )
+    assert out["labels"] == ["Bug", "Tier-1:Opus"]
+
+
+def test_normalize_no_known_label_ids_leaves_labels_unchanged() -> None:
+    """Omitting known_label_ids leaves labels untouched (backward compatibility)."""
+    out = normalize_save_issue_arguments(
+        {"title": "T", "team": "FrenchForest", "labels": ["PersonalAgent"]},
+        default_team="FrenchForest",
+    )
+    assert out["labels"] == ["PersonalAgent"]
+
+
+def test_normalize_labels_absent_is_a_noop() -> None:
+    """No ``labels`` key in arguments → no error, no new key added."""
+    out = normalize_save_issue_arguments(
+        {"title": "T", "team": "FrenchForest"},
+        default_team="FrenchForest",
+        known_label_ids=_KNOWN_LABELS,
+    )
+    assert "labels" not in out

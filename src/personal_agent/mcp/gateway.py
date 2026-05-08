@@ -15,6 +15,15 @@ from personal_agent.tools.registry import ToolRegistry
 
 log = get_logger(__name__)
 
+
+def _known_label_ids() -> dict[str, str]:
+    """Return a name→UUID map for labels the agent commonly applies to new issues."""
+    ids: dict[str, str] = {}
+    pa_id = settings.linear_personal_agent_label_id
+    if isinstance(pa_id, str) and pa_id.strip():
+        ids["PersonalAgent"] = pa_id.strip()
+    return ids
+
 # Service lifespan may initialize MCP before the orchestrator runs. A second
 # MCPGatewayAdapter would spawn another gateway subprocess and hit
 # ``ValueError: Tool 'mcp_*' is already registered`` for every tool, so the
@@ -226,7 +235,9 @@ class MCPGatewayAdapter:
                 call_args = kwargs
                 if mcp_tool_name == "save_issue":
                     call_args = normalize_save_issue_arguments(
-                        kwargs, default_team=settings.linear_team_name
+                        kwargs,
+                        default_team=settings.linear_team_name,
+                        known_label_ids=_known_label_ids(),
                     )
                     if call_args.get("team") != kwargs.get("team"):
                         log.info(
@@ -275,7 +286,9 @@ class MCPGatewayAdapter:
             call_args = arguments
             if name == "save_issue":
                 call_args = normalize_save_issue_arguments(
-                    arguments, default_team=settings.linear_team_name
+                    arguments,
+                    default_team=settings.linear_team_name,
+                    known_label_ids=_known_label_ids(),
                 )
                 if call_args.get("team") != arguments.get("team"):
                     log.info(

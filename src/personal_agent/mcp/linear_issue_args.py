@@ -44,15 +44,20 @@ def normalize_save_issue_arguments(
     arguments: dict[str, Any],
     *,
     default_team: str,
+    known_label_ids: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Return a copy of ``arguments`` with common ``save_issue`` mistakes fixed.
 
     Args:
         arguments: Raw keyword arguments (tool executor or ``LinearClient``).
         default_team: Configured Linear team name (``settings.linear_team_name``).
+        known_label_ids: Optional mapping of label display name → UUID. When
+            provided, matching entries in ``labels`` are replaced with their UUID
+            so the Linear MCP server never performs a fragile name lookup.
 
     Returns:
-        Shallow copy with ``team`` / ``state`` / ``priority`` normalized where needed.
+        Shallow copy with ``team`` / ``state`` / ``priority`` / ``labels``
+        normalized where needed.
     """
     out = dict(arguments)
 
@@ -75,4 +80,24 @@ def normalize_save_issue_arguments(
     if isinstance(pri, str) and pri.strip().isdigit():
         out["priority"] = int(pri.strip())
 
+    if known_label_ids:
+        _normalize_labels(out, known_label_ids)
+
     return out
+
+
+def _normalize_labels(out: dict[str, Any], known_label_ids: dict[str, str]) -> None:
+    """Replace label display names with UUIDs in-place where a mapping is known.
+
+    The ``save_issue`` MCP tool accepts both names and IDs in the ``labels``
+    field.  Passing a UUID bypasses the server-side name lookup that is fragile
+    (case sensitivity, token expiry, stale cache).  Unknown labels are left
+    unchanged — the MCP server handles them as usual.
+    """
+    labels = out.get("labels")
+    if not isinstance(labels, list):
+        return
+    lowered = {k.casefold(): v for k, v in known_label_ids.items()}
+    out["labels"] = [
+        lowered.get(lbl.casefold(), lbl) if isinstance(lbl, str) else lbl for lbl in labels
+    ]

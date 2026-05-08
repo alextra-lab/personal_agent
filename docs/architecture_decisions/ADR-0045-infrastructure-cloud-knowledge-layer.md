@@ -271,7 +271,9 @@ The deployed shape is the new target. Specifically:
 
 ### Local-model availability — load-bearing since inception
 
-Local models are the original primary mode of the system. The Mac SLM Server has been the inference host for `primary` and `sub_agent` since before this ADR was accepted; making those models available to a VPS-resident harness has always required a reverse Cloudflare tunnel (`slm.frenchforet.com`). That tunnel is **not** a temporary bridge — it is permanent infrastructure for the load-bearing requirement that local models be reachable from non-laptop hosts. This amendment does not change that; it documents it.
+Local models are the original primary mode of the system. The Mac SLM Server has been the inference host for all four model roles — `primary`, `sub_agent`, `embedding`, `reranker` — since before this ADR was accepted; making those models available to a VPS-resident harness has always required a reverse Cloudflare tunnel (`slm.frenchforet.com`). That tunnel is **not** a temporary bridge — it is permanent infrastructure for the load-bearing requirement that local models be reachable from non-laptop hosts. This amendment does not change that; it documents it.
+
+Embedding and reranker get a second layer: the VPS runs its own llama.cpp containers for these two roles 24/7. They exist not as a replacement for the laptop's MLX serving but as the **always-on availability guarantee** — if the laptop is offline, the knowledge-graph consolidation, recall scoring, and other embedding-dependent paths must still function. Both instances run the same model weights; runtime parity is verified by the cosine-similarity test in the Track 3 plan.
 
 What this amendment *does* change is **how the laptop reaches its own local models when it runs the same containerized shape as the VPS**. Naïvely sharing one model config across both shapes would route the laptop's containerized harness out to Cloudflare and back to itself — wrong. The endpoint abstraction described in audit §8 (one model registry with ordered candidate endpoints + first-reachable resolution) prevents that round-trip structurally: localhost candidates always resolve first when reachable; the tunnel candidate is only used when localhost is unreachable (i.e., on the VPS).
 
@@ -297,9 +299,10 @@ Superseding ADR-0045 would discard the still-valid decisions about VPS sizing, s
 
 The original ADR specified that embeddings must be "the same model and dimension across all environments". That requirement is unchanged. What is now true:
 
-* The same model file (`Qwen3-Embedding-0.6B`) is deployed to both shapes.
-* The **runtime differs**: laptop uses MLX via `slm_server` (when running native dev); the VPS (and the laptop's containerized mirror) uses llama.cpp. Same weights, different inference engines.
-* A parity test (cosine ≥ 0.999 on a fixed input set) is required before this is considered safe. That test is in the Track 3 implementation plan referenced from the audit.
+* The same model file (`Qwen3-Embedding-0.6B`) is deployed to multiple endpoints — laptop MLX, laptop llama.cpp container (when mirroring), VPS llama.cpp container. Multi-instance is intentional (see "Local-model availability" above): the VPS instance is the always-on availability guarantee.
+* The **runtime differs**: laptop native dev uses MLX via `slm_server`; the VPS and the laptop's containerized mirror use llama.cpp. Same weights, different inference engines.
+* A parity test (cosine ≥ 0.999 on a fixed input set, across runtimes) is required before this is considered safe. The test is specified in the Track 3 implementation plan referenced from the audit.
+* Endpoint resolution (audit §8.3) handles candidate selection — first reachable wins, and the natural ordering puts the closest/fastest endpoint first on each deployment.
 
 ### Service split — revised
 

@@ -427,10 +427,22 @@ embedding:
   id: "qwen3-embedding-0.6b"
   endpoints:
     - http://localhost:8503/v1                   # laptop native (slm_server / MLX)
-    - http://embeddings:8503/v1                  # in-compose container DNS
     - http://host.docker.internal:8503/v1        # laptop containerized → host MLX
+    - http://embeddings:8503/v1                  # in-compose llama.cpp container (laptop mirror or VPS)
+    - https://slm.frenchforet.com/embedding/v1   # remote tunnel (laptop MLX from VPS, when laptop online)
+  resolve: first_reachable
+
+reranker:
+  id: "qwen3-reranker-0.6b"
+  endpoints:
+    - http://localhost:8504/v1
+    - http://host.docker.internal:8504/v1
+    - http://reranker:8504/v1                    # in-compose llama.cpp container
+    - https://slm.frenchforet.com/reranker/v1    # remote tunnel
   resolve: first_reachable
 ```
+
+**Note on always-on availability**: embedding and reranker are deployed in **two places by design** — the laptop's `slm_server` (MLX, fast, available when laptop is online) and the VPS's `llama.cpp` containers (CPU, always-on, the always-available fallback). The candidate ordering above captures the "prefer local, then in-compose, then remote tunnel" preference. On the VPS, `localhost` and `host.docker.internal` candidates are unreachable; the in-compose `embeddings` candidate resolves first, which is correct — VPS uses its own llama.cpp container even when the laptop is online (no point paying tunnel round-trip latency when an equivalent endpoint is one container hop away).
 
 Properties this gives us:
 

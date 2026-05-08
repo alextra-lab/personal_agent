@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 
+from personal_agent.security import get_domain_guard
 from personal_agent.telemetry import TraceContext, get_logger
 from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.types import ToolDefinition, ToolParameter
@@ -130,6 +131,23 @@ async def fetch_url_executor(
 
     cap = max(1, min(int(max_chars or _DEFAULT_MAX_CHARS), 50_000))
     trace_id = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
+
+    # Egress URL guard (FRE-225) — check before any network call.
+    guard = get_domain_guard()
+    await guard.ensure_loaded()
+    guard_result = guard.check_url(url)
+    if not guard_result.allowed:
+        log.warning(
+            "blocked_url",
+            trace_id=trace_id,
+            url=url,
+            reason=guard_result.reason,
+            matched_entry=guard_result.matched_entry,
+        )
+        detail = f" (matched: {guard_result.matched_entry})" if guard_result.matched_entry else ""
+        raise ToolExecutionError(
+            f"URL blocked by domain guard: {url} [{guard_result.reason}{detail}]"
+        )
 
     log.info("fetch_url_started", trace_id=trace_id, url=url)
 

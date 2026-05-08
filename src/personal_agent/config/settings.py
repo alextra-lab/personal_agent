@@ -1049,6 +1049,43 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # FRE-225: Egress URL guard (domain blocklist)
+    url_guard_enabled: bool = Field(
+        default=True,
+        alias="AGENT_URL_GUARD_ENABLED",
+        description=(
+            "Enable egress URL guard. When True, fetch_url calls are checked against "
+            "a domain blocklist (URLhaus feed + bundled fallback). "
+            "Env var: AGENT_URL_GUARD_ENABLED"
+        ),
+    )
+    url_guard_mode: str = Field(
+        default="blocklist",
+        alias="AGENT_URL_GUARD_MODE",
+        description=(
+            "URL guard mode: 'off' (no checks), 'blocklist' (block known-malicious domains), "
+            "or 'allowlist' (block all except explicitly listed domains). "
+            "Env var: AGENT_URL_GUARD_MODE"
+        ),
+    )
+    url_guard_cache_ttl_seconds: int = Field(
+        default=3600,
+        ge=60,
+        alias="AGENT_URL_GUARD_CACHE_TTL_SECONDS",
+        description=(
+            "Seconds before the domain blocklist cache is refreshed from URLhaus. "
+            "Env var: AGENT_URL_GUARD_CACHE_TTL_SECONDS"
+        ),
+    )
+    url_guard_allowlist: list[str] = Field(
+        default_factory=list,
+        alias="AGENT_URL_GUARD_ALLOWLIST",
+        description=(
+            "Comma-separated domain allowlist used when url_guard_mode=allowlist. "
+            "Env var: AGENT_URL_GUARD_ALLOWLIST"
+        ),
+    )
+
     # FRE-335 / ADR-0066 D2: skill routing threshold monitor
     skill_index_p95_token_threshold: int = Field(
         default=6000,

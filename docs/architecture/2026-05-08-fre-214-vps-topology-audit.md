@@ -1,6 +1,6 @@
 # VPS + Cloudflare + Local Topology Audit (FRE-214)
 
-> **Status**: Draft — pending owner verdict on §5 open question
+> **Status**: Verdict received 2026-05-08 — **RATIFY** (VPS is canonical; laptop must mirror). See §7 forward plan.
 > **Date**: 2026-05-08
 > **Author**: Wave D kickoff (Tier-1:Opus)
 > **Tracks**: [FRE-214](https://linear.app/frenchforest/issue/FRE-214)
@@ -260,4 +260,133 @@ This audit produces concrete handles for the issues that FRE-214 was already lin
 
 ---
 
-*End of audit. Awaiting §5 verdict before writing ADR-0045 amendment or rollback plan.*
+---
+
+## 7. Forward plan — convenience, testability, consistency
+
+### 7.1 Verdict (recorded)
+
+**The VPS is the canonical execution host.** The laptop should mirror it (same shape, smaller scale) rather than diverge. Day-to-day development happens on the VPS via Claude Code remote control; the laptop's role narrows to *peer deployment* + *local-profile inference target*.
+
+This was the right call. It also means the audit's §5 recommendation now becomes the implementation brief, weighted by three axes the owner named explicitly:
+
+* **Convenience** — dev loop must stay fast. Code change → restart < 10 s. Claude-Code-on-VPS is the canonical IDE.
+* **Testability** — the same tests must run on both deployments without environment-specific skips, and ideally without environment-specific assertions.
+* **Consistency** — one compose file, one model config, one bring-up procedure. Code does not branch on "where am I".
+
+Each track below is scored against those three axes so trade-offs are explicit.
+
+### 7.2 Tracks
+
+#### Track 1 — Ratify in ADR-0045 (Tier-1, ~30 min)
+
+Amend (do not supersede) ADR-0045. The Knowledge Layer + thin gateway sketch becomes the *historical* target; the ratified target is **canonical full harness on VPS, laptop is a mirror, profiles select inference path**. Move the relevant audit text into the ADR's "Update — 2026-05-08" section so the ADR remains the source of truth.
+
+| Axis | Why this matters |
+|------|------------------|
+| Consistency | Future readers must not be misled by the original sketch. |
+| Convenience | One-time work, unblocks everything downstream. |
+| Testability | Indirect — sets the contract that tests are then written against. |
+
+**Output**: ADR-0045 update + master plan note.
+
+#### Track 2 — Compose unification (Tier-2, ~1 day)
+
+Merge `docker-compose.yml` and `docker-compose.cloud.yml` into a single file driven by **compose profiles** (Docker's native feature, not our `config/profiles/`). Bring-up:
+
+```bash
+make up                    # laptop mirror — gateway, pwa, caddy, embeddings, reranker, datastores
+make up ENV=cloud          # VPS — adds cloudflared, larger resource caps
+make dev                   # gateway with bind-mount + uvicorn --reload (laptop only)
+```
+
+Concrete changes:
+* One `docker-compose.yml` with `profiles: [cloud]` markers on `cloudflared` and any other VPS-only service.
+* Resource caps moved into `docker-compose.cloud.override.yml` (Docker's standard override pattern).
+* Gateway service in laptop mode uses `develop.watch` for hot reload — no rebuild on Python edits.
+* `make dev` becomes a wrapper that runs `compose up --watch` for the gateway service.
+* Embeddings/reranker llama.cpp containers run on laptop too (slower than MLX, but parity > speed for dev).
+
+| Axis | Why |
+|------|-----|
+| Consistency | One compose file, one bring-up. The biggest single payoff. |
+| Convenience | `make dev` still gives < 5 s reload. PWA + Caddy locally means UI dev mirrors prod. |
+| Testability | Same services in same shape on both hosts → integration tests run identically. |
+
+**Cost**: laptop resource footprint goes up — adds ~3 GB RAM (embeddings + reranker + gateway container + PWA + Caddy). Mac Studios and recent MBPs absorb this; older hardware may not. Worth confirming before committing.
+
+**Decision needed (not blocking, but flag)**: keep MLX embeddings/reranker as a separate "fast laptop" mode? Or accept the llama.cpp slowdown for parity? Recommendation: **parity by default, MLX as opt-in via `MAKE_TARGET=dev-mlx`** if measured slowdown is painful.
+
+#### Track 3 — Test parity (Tier-1, ~1-2 days; covers FRE-336 + D-4 + D-7)
+
+Today, integration tests skip silently on the VPS because `requires_llm_server` probes `localhost:8000`. The fix has two layers:
+
+1. **Reachability-driven probe**: rename to `requires_llm`. The fixture probes (in order) the active profile's primary model: cloud profile → check `AGENT_ANTHROPIC_API_KEY` + a 1-call ping; local profile → check Qwen on local SLM Server. If any reachable → run. If none → skip *with a loud error* (not silent).
+2. **Parity test for embedding/reranker** (D-4): a small fixture that hashes the embedding output for ~10 fixed inputs across MLX (laptop dev mode) and llama.cpp (cloud mode + laptop mirror mode). Cosine ≥ 0.999 → pass. Below → fail with the offending input. Runs in CI on both shapes.
+
+| Axis | Why |
+|------|-----|
+| Testability | Direct — this *is* the testability fix. |
+| Consistency | A test that passes locally but skips on VPS is a consistency hole; closing it is structural. |
+| Convenience | Removes "why did this test skip?" from every cross-machine debugging session. |
+
+**Output**: rename `requires_llm_server` → `requires_llm`; new `tests/test_parity/test_embedding_runtime.py`; CI workflow runs both shapes.
+
+This is FRE-336 in disguise. File the parity test as a sub-task of FRE-336 once the fixture lands.
+
+#### Track 4 — Surface fixes (Tier-2/3, cumulative ~half day)
+
+Small cleanups, parallelizable across sessions:
+
+| ID | What | Where | Estimated |
+|----|------|-------|-----------|
+| D-1 | MCP enabled-server list driven by `AGENT_MCP_GATEWAY_ENABLED_SERVERS` | `docker/mcp/run-gateway.sh` | 30 min — likely closes [FRE-223](https://linear.app/frenchforest/issue/FRE-223) |
+| D-3 | PWA fetches `/runtime-config.json` instead of build-time bake | `Dockerfile.pwa`, PWA bootstrap, Caddy route | 2-3 hrs — feeds [FRE-216](https://linear.app/frenchforest/issue/FRE-216) |
+| D-5 | `transfer-models.sh` reads `EMBEDDING_SRC` / `RERANKER_SRC` env, with default | `infrastructure/scripts/transfer-models.sh` | 15 min |
+| D-6 | Prune `execution-service` gateway token + scope | `config/gateway_access.yaml` | 15 min — defer until Track 2 lands so we're sure it's truly dead |
+
+#### Track 5 — Existing Wave D issues, unblocked under ratified pattern
+
+The original Wave D backlog can now proceed. Re-cast under the ratified shape:
+
+* [**FRE-217**](https://linear.app/frenchforest/issue/FRE-217) — "Containerization review" largely consumed by this audit. **Recommendation: close as duplicate of FRE-214** once the ADR-0045 amendment lands. The remaining "should `make dev` containerize too?" thread is now Track 2.
+* [**FRE-238**](https://linear.app/frenchforest/issue/FRE-238) — SLM circuit breaker. Scope unchanged; relevant to Mac SLM tunnel reliability.
+* [**FRE-240**](https://linear.app/frenchforest/issue/FRE-240) — Reranker fallback. Now applies to the llama.cpp container too, not just MLX.
+* [**FRE-241**](https://linear.app/frenchforest/issue/FRE-241) — slm_server supervisor. Stays Mac-side (the VPS's llama.cpp containers are already supervised by Docker).
+* [**FRE-236**](https://linear.app/frenchforest/issue/FRE-236) — PWA iOS SSE. Independent of this audit.
+* [**FRE-218**](https://linear.app/frenchforest/issue/FRE-218) — Brainstem broken on VPS. Re-test after Track 2 — likely surfaces from one of the deviations.
+
+### 7.3 Recommended sequencing
+
+```
+Track 1 (ADR amendment)   ───▶  Track 4 (D-1, D-5)             ───▶  …
+                                Track 2 (compose unification)  ───▶  Track 3 (test parity)  ───▶  Track 5
+                                Track 4 (D-3, D-6 deferred)
+```
+
+Notes on the order:
+* **Track 1 first** — locks direction so subsequent work doesn't waste effort.
+* **Track 4 D-1/D-5 in parallel** — they're tiny and each closes a known bug surface.
+* **Track 2 before Track 3** — test parity is much easier when the two deployments have the same shape; doing Track 3 against today's divergent shape is the painful path.
+* **Track 5 last** — the existing Wave D items get cleaner ground to land on after Tracks 1–3.
+
+### 7.4 What this means for the master plan
+
+* Wave D's stated scope ("containerization decision; SLM circuit breaker; reranker fallback; slm_server supervisor; PWA iOS SSE") absorbs Tracks 1–4 above and FRE-217 closes.
+* FRE-336 stays a Tier-1 ticket; Track 3 is its execution plan.
+* New tickets to file (small): one each for D-1, D-3, D-5, plus the embedding-parity test under FRE-336.
+* No budget impact on the cost-gate side; Track 2 may bump laptop RAM consumption ~3 GB (one-time check before committing).
+
+### 7.5 What I need from you
+
+A pick on what comes next. Three reasonable orderings:
+
+1. **"Land Track 1 now, then start Track 2"** — the recommended order. ADR amendment is small, then we tackle the structural payoff.
+2. **"Land Track 1 + Track 4 quick fixes first, defer Track 2"** — if you want momentum on small wins before the bigger refactor.
+3. **"Skip ahead to Track 3 (test parity)"** — if FRE-336 is the pain you feel most. Doable but harder before Track 2.
+
+I'd recommend (1). If you confirm, I'll write the ADR-0045 amendment in the next session and then plan Track 2 properly (it deserves its own implementation plan in `docs/superpowers/plans/`).
+
+---
+
+*End of audit. §5 verdict received; §7 forward plan recorded. Next action gated on §7.5 pick.*

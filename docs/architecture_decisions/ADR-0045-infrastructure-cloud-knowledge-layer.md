@@ -275,6 +275,8 @@ Local models are the original primary mode of the system. The Mac SLM Server has
 
 Embedding and reranker get a second layer: the VPS runs its own llama.cpp containers for these two roles 24/7. They exist not as a replacement for the laptop's MLX serving but as the **always-on availability guarantee** — if the laptop is offline, the knowledge-graph consolidation, recall scoring, and other embedding-dependent paths must still function. Both instances run the same model weights; runtime parity is verified by the cosine-similarity test in the Track 3 plan.
 
+**Apple Silicon constraint**: any inference running on an Apple Silicon system runs natively on the host, not in a container. Docker on macOS does not expose Metal/MPS to its Linux VM, so MLX is not containerizable. This means the laptop mirror of the VPS is structurally asymmetric: gateway, PWA, Caddy, and datastores run as Docker containers; `primary` / `sub_agent` / `embedding` / `reranker` continue to run as the native `slm_server` on the host. The gateway container reaches them via `host.docker.internal`. The VPS, running on x86 Linux, has no such constraint and runs `llama.cpp` for embedding/reranker as Docker services.
+
 What this amendment *does* change is **how the laptop reaches its own local models when it runs the same containerized shape as the VPS**. Naïvely sharing one model config across both shapes would route the laptop's containerized harness out to Cloudflare and back to itself — wrong. The endpoint abstraction described in audit §8 (one model registry with ordered candidate endpoints + first-reachable resolution) prevents that round-trip structurally: localhost candidates always resolve first when reachable; the tunnel candidate is only used when localhost is unreachable (i.e., on the VPS).
 
 The forward-looking corollary, when the stationary home server arrives, is the same: a third "local" deployment shape is a new endpoint candidate, not a new config file or a new code path.
@@ -299,8 +301,8 @@ Superseding ADR-0045 would discard the still-valid decisions about VPS sizing, s
 
 The original ADR specified that embeddings must be "the same model and dimension across all environments". That requirement is unchanged. What is now true:
 
-* The same model file (`Qwen3-Embedding-0.6B`) is deployed to multiple endpoints — laptop MLX, laptop llama.cpp container (when mirroring), VPS llama.cpp container. Multi-instance is intentional (see "Local-model availability" above): the VPS instance is the always-on availability guarantee.
-* The **runtime differs**: laptop native dev uses MLX via `slm_server`; the VPS and the laptop's containerized mirror use llama.cpp. Same weights, different inference engines.
+* The same model file (`Qwen3-Embedding-0.6B`) is deployed in two places: laptop MLX (host-native, Apple Silicon) and VPS llama.cpp (containerized, x86). Multi-instance is intentional (see "Local-model availability" above): the VPS instance is the always-on availability guarantee. The laptop's containerized mirror does not run a third instance — its gateway container reaches the host's MLX via `host.docker.internal`.
+* The **runtime differs**: laptop uses MLX via `slm_server`; the VPS uses llama.cpp. Same weights, different inference engines.
 * A parity test (cosine ≥ 0.999 on a fixed input set, across runtimes) is required before this is considered safe. The test is specified in the Track 3 implementation plan referenced from the audit.
 * Endpoint resolution (audit §8.3) handles candidate selection — first reachable wins, and the natural ordering puts the closest/fastest endpoint first on each deployment.
 
@@ -331,7 +333,7 @@ The dead `execution-service` token in `config/gateway_access.yaml` (audit §3 D-
 
 **Negative (newly true):**
 
-* Laptop resource footprint increases when running the full mirror (additional ~3 GB RAM for embeddings + reranker + gateway container + PWA + Caddy). MLX-as-opt-in is preserved for laptop dev speed when needed.
+* Laptop resource footprint increases modestly when running the full mirror (~500 MB – 1 GB for the gateway container + PWA + Caddy). MLX inference continues to run natively on the host, so no change there.
 
 **Neutral:**
 

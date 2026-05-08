@@ -305,17 +305,16 @@ Concrete changes:
 * Resource caps moved into `docker-compose.cloud.override.yml` (Docker's standard override pattern).
 * Gateway service in laptop mode uses `develop.watch` for hot reload — no rebuild on Python edits.
 * `make dev` becomes a wrapper that runs `compose up --watch` for the gateway service.
-* Embeddings/reranker llama.cpp containers run on laptop too (slower than MLX, but parity > speed for dev).
+* Embeddings/reranker/primary/sub_agent **stay native on the host as MLX `slm_server`** on laptop — Apple Silicon GPU is not accessible to Docker, so containerizing them on Mac would force CPU-only llama.cpp (slow, pointless when MLX is right there). Containerized services on laptop are limited to gateway + PWA + Caddy + datastores + SearXNG. The gateway container reaches MLX via `host.docker.internal`.
+* On VPS the `embeddings` / `reranker` services tag with `profiles: [cloud]` in the unified compose so they only spin up there.
 
 | Axis | Why |
 |------|-----|
-| Consistency | One compose file, one bring-up. The biggest single payoff. |
+| Consistency | One compose file, one bring-up. The biggest single payoff. The asymmetry around MLX is forced by hardware, not by config drift. |
 | Convenience | `make dev` still gives < 5 s reload. PWA + Caddy locally means UI dev mirrors prod. |
-| Testability | Same services in same shape on both hosts → integration tests run identically. |
+| Testability | Same services in same shape on both hosts → integration tests run identically. Inference parity comes from the runtime-parity test in Track 3. |
 
-**Cost**: laptop resource footprint goes up — adds ~3 GB RAM (embeddings + reranker + gateway container + PWA + Caddy). Mac Studios and recent MBPs absorb this; older hardware may not. Worth confirming before committing.
-
-**Decision needed (not blocking, but flag)**: keep MLX embeddings/reranker as a separate "fast laptop" mode? Or accept the llama.cpp slowdown for parity? Recommendation: **parity by default, MLX as opt-in via `MAKE_TARGET=dev-mlx`** if measured slowdown is painful.
+**Cost**: laptop resource footprint goes up modestly — gateway container + PWA + Caddy ≈ ~500 MB – 1 GB extra. (MLX inference stays native on host as it does today, so no change there.) Trivial on any modern Mac.
 
 #### Track 3 — Test parity (Tier-1, ~1-2 days; covers FRE-336 + D-4 + D-7)
 
@@ -426,10 +425,10 @@ primary:
 embedding:
   id: "qwen3-embedding-0.6b"
   endpoints:
-    - http://localhost:8503/v1                   # laptop native (slm_server / MLX)
-    - http://host.docker.internal:8503/v1        # laptop containerized → host MLX
-    - http://embeddings:8503/v1                  # in-compose llama.cpp container (laptop mirror or VPS)
-    - https://slm.frenchforet.com/embedding/v1   # remote tunnel (laptop MLX from VPS, when laptop online)
+    - http://localhost:8503/v1                   # laptop native dev (slm_server / MLX on host)
+    - http://host.docker.internal:8503/v1        # laptop containerized → MLX on host
+    - http://embeddings:8503/v1                  # VPS in-compose llama.cpp container
+    - https://slm.frenchforet.com/embedding/v1   # remote tunnel (last resort)
   resolve: first_reachable
 
 reranker:
@@ -437,12 +436,21 @@ reranker:
   endpoints:
     - http://localhost:8504/v1
     - http://host.docker.internal:8504/v1
-    - http://reranker:8504/v1                    # in-compose llama.cpp container
-    - https://slm.frenchforet.com/reranker/v1    # remote tunnel
+    - http://reranker:8504/v1                    # VPS in-compose llama.cpp container
+    - https://slm.frenchforet.com/reranker/v1
   resolve: first_reachable
 ```
 
-**Note on always-on availability**: embedding and reranker are deployed in **two places by design** — the laptop's `slm_server` (MLX, fast, available when laptop is online) and the VPS's `llama.cpp` containers (CPU, always-on, the always-available fallback). The candidate ordering above captures the "prefer local, then in-compose, then remote tunnel" preference. On the VPS, `localhost` and `host.docker.internal` candidates are unreachable; the in-compose `embeddings` candidate resolves first, which is correct — VPS uses its own llama.cpp container even when the laptop is online (no point paying tunnel round-trip latency when an equivalent endpoint is one container hop away).
+**Note on always-on availability**: embedding and reranker run in two places by design — the **Mac as native MLX `slm_server` on the host** (when laptop is online; fast) and the **VPS as `llama.cpp` containers** (CPU, always-on, the availability guarantee). On the VPS, `localhost` and `host.docker.internal` candidates are unreachable, so the in-compose `embeddings` / `reranker` candidate resolves first — VPS uses its own llama.cpp container even when the laptop is online (no point paying tunnel round-trip latency when an equivalent endpoint is one container hop away).
+
+**Important — Apple Silicon GPU constraint**: MLX inference cannot be containerized on Mac. Docker on macOS runs a Linux VM that does not have Metal/MPS passthrough; a containerized embedding service on Mac would fall back to CPU llama.cpp (slow, competing for resources with native MLX). Therefore the laptop mirror is **structurally asymmetric** to the VPS:
+
+| Service | Laptop (native dev *and* containerized mirror) | VPS |
+|---------|-----------------------------------------------|-----|
+| `primary`, `sub_agent`, `embedding`, `reranker` | **Native MLX `slm_server` on the host**. Always native; never inside docker. | `llama.cpp` Docker containers (embedding + reranker). `primary`/`sub_agent` not deployed; cloud profile uses LiteLLM, local profile uses tunnel. |
+| Gateway, PWA, Caddy, datastores, SearXNG | Docker | Docker |
+
+The gateway container on laptop reaches the host's MLX servers via `host.docker.internal:{8000,8503,8504}`. In the unified compose (Track 2b), the `embeddings` and `reranker` Docker services are tagged `profiles: [cloud]` so they only spin up on the VPS — the laptop mirror has nothing to gain from running CPU llama.cpp alongside MLX.
 
 Properties this gives us:
 

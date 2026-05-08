@@ -499,6 +499,69 @@ Same metrics for `cloud-hybrid`: 0% iter_limit, 100% es_correct, **0%** read_ski
 
 ---
 
+## Section C Addendum — FRE-331 Metrics (Router-Only + Success Class)
+
+Added 2026-05-08. These metrics require `expected_router_skills` /
+`forbidden_router_skills` ground-truth labels in `prompts.yaml` (now present
+for all 10 prompts).
+
+### Router-only metrics (meaningful for `model_decided` mode)
+
+| Metric | Definition | Blind spot |
+|--------|-----------|-----------|
+| `router_recall_mean` | `mean(|returned ∩ expected| / max(1,|expected|))` | Undefined (None) for `no_skill_needed` prompts where expected=[] |
+| `router_precision_mean` | `mean(|returned ∩ expected| / max(1,|returned|))` | Returns 0 for the expected=[] case when router returns anything (false positive signal) |
+| `router_empty_rate` | Fraction of traces where `routing_skills_returned == []` | Only meaningful for `model_decided` (keyword/hybrid never fire the routing call) |
+| `router_wrong_skill_rate` | Fraction where router returned ≥1 forbidden skill | Only catches skills explicitly listed in `forbidden_router_skills` |
+
+**Note:** `router_recall` and `router_precision` are `None` (excluded from the
+mean) for prompts where `expected_router_skills: []` and `router_recall` is
+undefined. For those prompts, the false-positive signal lives in
+`router_precision` (0.0 when router returns something it shouldn't) and
+`router_wrong_skill_rate`.
+
+### 4-way success class
+
+Replaces the binary pass/fail with a 4-way per-trace classification, aggregated
+as rates:
+
+| Class | Definition | Key signal |
+|-------|-----------|-----------|
+| `clean_success` | No iteration limit + router pre-loaded expected skills (or none needed) | The "true success" metric |
+| `recovered_success` | No iteration limit + router missed; primary fetched via `read_skill` | System survived but router failed |
+| `guard_saved` | B.5 guard intercepted ≥1 bad tool call; trace completed without limit | Guard is load-bearing |
+| `failed` | Iteration limit reached | Structural failure; LLM-judge correctness not yet implemented |
+
+**Known limitation**: "correctness" within `clean_success` and
+`recovered_success` is structural (no tool iteration limit) not semantic (no
+LLM judge). A trace that answers with plausible-sounding but wrong data still
+scores `clean_success`. Semantic correctness is out of scope until FRE-330+.
+
+### read_skill 3-bucket
+
+Decomposes `read_skill_invoked_rate` into three explanatory buckets:
+
+| Bucket | Definition | What it means |
+|--------|-----------|--------------|
+| `needed_and_invoked` | Expected skill ∈ `read_skill_names` | Router missed; primary recovered (good fallback) |
+| `needed_but_not_invoked` | Expected skill ∉ (`returned` ∪ `read_skill_names`) | Silent failure: skill never loaded |
+| `not_needed_but_invoked` | `read_skill_names` − `expected_router_skills` is non-empty | Over-fetching; unnecessary latency |
+
+**Interpretation**:
+- High `needed_and_invoked` + low `router_recall` → `recovered_success` pattern; primary model compensates well
+- High `needed_but_not_invoked` → silent failure; router AND primary both missed the skill
+- High `not_needed_but_invoked` → primary model over-fetches; increases p95 latency unnecessarily
+
+### Impact on ADR-0066 D2 threshold
+
+ADR-0066 recommends switching from `hybrid` to `model_decided` when `p95 > 6000 tokens`.
+That decision requires trustworthy `router_recall_mean` data showing `model_decided`
+actually routes correctly (`clean_success` ≥ 80%). The 2026-05-07 data showed
+`recovered_success` for all `model_decided` traces (budget bug). FRE-330 re-run
+data is required before the D2 threshold can be meaningfully set.
+
+---
+
 ## What's NOT in scope
 
 - I'm not asking for code review of the implementation files — only the eval design.

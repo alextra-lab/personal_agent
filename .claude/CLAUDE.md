@@ -532,8 +532,13 @@ cd <path-to-primary-repo-clone> && git merge <branch> --no-edit && git push orig
 
 ### Implementation Plan Naming Convention
 
-Plans live at `docs/superpowers/plans/YYYY-MM-DD-slice-N-theme.md`
-Example: `docs/superpowers/plans/2026-03-18-slice-2-expansion.md`
+**One canonical location:** `docs/superpowers/plans/YYYY-MM-DD-fre-XXX-<slug>.md`
+
+Examples:
+- `docs/superpowers/plans/2026-05-08-fre-309-label-lookup.md`
+- `docs/superpowers/plans/2026-03-18-slice-2-expansion.md`
+
+**Never write implementation plans to `/plans/`** (Claude Code scratch dir, gitignored) or `docs/plans/` (project-level docs only — MASTER_PLAN, DEV_TRACKER, etc.).
 
 ### Before Starting Work
 

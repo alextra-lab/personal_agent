@@ -1,6 +1,9 @@
 # Plans Directory
 
-Active project plans, tracking, and session history.
+Project-level tracking documents and session history.
+
+**Implementation plans live in [`docs/superpowers/plans/`](../superpowers/plans/) — not here.**
+Name them `YYYY-MM-DD-fre-XXX-<slug>.md`. Do not write implementation plans into this directory.
 
 ## Key Files
 
@@ -18,6 +21,16 @@ Active project plans, tracking, and session history.
 | [`sessions/`](sessions/) | Development session logs |
 | [`completed/`](completed/) | Archived plans, summaries, and completed phase docs |
 
+## What belongs here vs. elsewhere
+
+| Content | Location |
+|---------|----------|
+| Implementation plans (`YYYY-MM-DD-fre-XXX-*.md`) | `docs/superpowers/plans/` |
+| Project priorities and status | `docs/plans/MASTER_PLAN.md` |
+| Architecture decisions | `docs/architecture_decisions/ADR-*.md` |
+| Technical specifications | `docs/specs/` |
+| Session scratch (plan-mode output) | `/plans/` (gitignored, never commit) |
+
 ## Workflow
 
 1. **Check priorities**: Read `MASTER_PLAN.md`
@@ -27,4 +40,3 @@ Active project plans, tracking, and session history.
 5. **Log the session**: Use `sessions/SESSION_TEMPLATE.md`
 
 Specs live in `docs/specs/`. ADRs live in `docs/architecture_decisions/`.
-Plans here track *what* and *when*; specs and ADRs track *how* and *why*.

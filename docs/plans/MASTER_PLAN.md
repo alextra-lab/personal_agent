@@ -2,15 +2,15 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-08 (Wave J started: FRE-329 shipped)
+> **Last updated**: 2026-05-08 (Wave J: FRE-329 ✅, FRE-331 ✅, FRE-330 ✅ cloud cell)
 
 ---
 
 ## Current State
 
-Wave A shipped: FRE-309, FRE-185/320/321/312 (`make test` green, 0 failures), FRE-308 (plan storage). FRE-189 blocked on live Neo4j. Wave J started: FRE-329 (OR→AND analysis bug fixed, `make test-eval` target added, eval tests now integral/maintained infrastructure).
+Wave A shipped: FRE-309, FRE-185/320/321/312 (`make test` green, 0 failures), FRE-308 (plan storage). FRE-189 blocked on live Neo4j. Wave J in progress: FRE-329 (OR→AND analysis bug fixed), FRE-331 (router-only metrics + ground-truth labels), FRE-330 (cloud-model-decided re-run — router_recall=94%, read_skill=0%, clean_success=90%).
 
-**Next task: FRE-331** — router-only vs end-to-end metric split + ground-truth labels (needs FRE-329's fixed analysis script).
+**Next task: FRE-334** — expand prompt set (ambiguous + negative-control + adversarial). Can run parallel with FRE-332/FRE-333.
 
 ---
 

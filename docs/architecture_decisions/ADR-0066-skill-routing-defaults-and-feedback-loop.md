@@ -28,7 +28,7 @@ A four-phase implementation landed across PRs #20–#23 (2026-05-04..2026-05-06)
 
 Implementation defaults are already in `src/personal_agent/config/settings.py`: `skill_routing_mode: str = "hybrid"`, `skill_routing_model_key: str = "claude_haiku"`. This ADR documents *why* those values, what the eval data showed, and what to do as the skill library grows.
 
-### What the eval showed (run id `2026-05-07`)
+### What the eval showed (run id `2026-05-07`) — original data †
 
 | Cell | iter_limit | es_correct | read_skill | guard_blocks | routing_call | skill_chars/req |
 |------|-----------|------------|------------|--------------|--------------|-----------------|
@@ -39,13 +39,36 @@ Implementation defaults are already in `src/personal_agent/config/settings.py`: 
 | local-hybrid | 0% | **100%** | 0% | 0% | 0% | 6,856–15,759 |
 | local-model-decided | 0% | **100%** | 50% | 0% | 100% | **1,661** |
 
+† **All `model_decided` rows above captured under two concurrent bugs** (D4 budget `KeyError` + duplicate event name). `model_decided` metrics reflect primary-model `read_skill` recovery, not router quality. See FRE-330 postfix data below.
+
+### Postfix data — `cloud-model-decided` with both bugs fixed (run id `2026-05-08-postfix`) ‡
+
+| Metric | 2026-05-07 (broken) | 2026-05-08-postfix (fixed) | Delta |
+|--------|--------------------|-----------------------------|-------|
+| `iter_limit_rate` | 0% | 0% | — |
+| `routing_call_rate` | 100% | 100% | — |
+| `read_skill_invoked_rate` | **40%** | **0%** | −40 pp (router now does the work) |
+| `router_recall_mean` | ~0% (router returned []) | **94%** | +94 pp |
+| `router_precision_mean` | n/a | **78%** | new metric |
+| `router_empty_rate` | 100% | **10%** ¹ | −90 pp |
+| `clean_success_rate` | n/a | **90%** ² | new metric |
+| `routing_latency_p50` | ~50ms (fake; cached KeyError) | **~750ms** | real Haiku call |
+| `skill_chars/req` (no-skill prompt) | 1,661 | **1,661** | unchanged |
+| `skill_chars/req` (skill prompts) | 1,661 | **4,367–18,344** | router now injects skill bodies |
+
+¹ The 10% router_empty is the `no_skill_needed` prompt (Fibonacci question) — **correct behaviour**; the router correctly identified no skills were needed.
+
+² The 10% `failed` is `codebase_search` — a ground-truth calibration issue: the router returned `[bash, read-write]` vs expected `[bash, list-directory]`. The primary model completed the task correctly using `bash` alone. This is a false negative in the classification; the ground-truth label will be refined in FRE-334 (ambiguous/negative-control prompt expansion).
+
+‡ `local-model-decided` not re-run: local SLM server offline at time of re-run. Previous 50% `read_skill` row retains the same caveat as cloud.
+
 Three findings drive the rest of this ADR:
 
 **Finding 1 — `hybrid` and `keyword` reach the same correctness target with no extra LLM calls.** Both produce 100% `es_first_call_correct` and 0% iteration-limit hits. `hybrid` injects ~10% more characters per request (the compact index is appended to the keyword bodies), but no skill needed lazy-loading because the keyword match was always sufficient.
 
-**Finding 2 — `model_decided` reaches the same correctness with a 9× smaller injection but pays for it.** The compact index is a flat 1,661 chars regardless of prompt. Correctness is preserved because the primary model calls `read_skill` on the 4–5 prompts that actually need a skill body. The cost is a 50ms routing pre-flight on 100% of requests plus an additional `read_skill` LLM round-trip on 40–50% of requests.
+**Finding 2 — `model_decided` with a working router reaches 90%+ clean_success with 0% `read_skill` fallback.** The router (Haiku) pre-loads the right skills in ~750ms, eliminating the 40% `read_skill` overhead observed when the router was broken. The injection cost adapts to the prompt (1,661 chars for no-skill requests, up to 18,344 for complex ES queries), making it the most token-efficient mode when the router is healthy.
 
-**Finding 3 — the routing pre-flight is currently doing zero useful work.** Every `routing_call_completed` event in `cloud-model-decided` and `local-model-decided` shows `routing_skills_returned: []`. Haiku is consistently producing an empty list. The primary model still picks the right skill via `read_skill`, but it does so *despite* the pre-flight, not *because* of it. The 50ms routing latency on every request is currently a tax with no offsetting benefit.
+**Finding 3 (amended) — the routing pre-flight now works.** Post-fix, `router_recall_mean = 0.94` and `read_skill_invoked_rate = 0%`. The broken-router finding from 2026-05-07 (Finding 3 in the original draft: "pre-flight doing zero useful work") is superseded. The 750ms Haiku latency is the new cost baseline for `model_decided`.
 
 ### Why this matters
 
@@ -175,8 +198,8 @@ D2 and D4 will be filed as separate Linear tickets during the next planning loop
 | D2 — threshold monitor | FRE-335 | (pending) | ✅ Approved 2026-05-07 |
 | **D4 — routing pre-flight `KeyError('skill_routing')` fix** | inline | commit `178f664` | ✅ **Shipped 2026-05-07 (mid-ADR session)** |
 | Eval methodology — `es_first_call_correct_rate` `or`/`and` bug fix | FRE-329 | (pending) | ✅ Approved 2026-05-07 |
-| Eval methodology — re-run model_decided cells post-router-fix | FRE-330 | (pending; blocked on FRE-329) | ✅ Approved 2026-05-07 |
-| Eval methodology — split router-only vs end-to-end metrics | FRE-331 | (pending) | ✅ Approved 2026-05-07 |
+| Eval methodology — re-run model_decided cells post-router-fix | FRE-330 | PR pending | ✅ **cloud-model-decided re-run complete 2026-05-08** (local-model-decided skipped: SLM offline) |
+| Eval methodology — split router-only vs end-to-end metrics | FRE-331 | PR pending | ✅ **Shipped 2026-05-08** — ground-truth labels + 7 new metrics |
 | Eval methodology — ES polling instead of fixed sleep | FRE-332 | (pending) | ✅ Approved 2026-05-07 |
 | Eval methodology — ES pagination past size=500 | FRE-333 | (pending) | ✅ Approved 2026-05-07 |
 | Eval methodology — expand prompt set (ambiguous + neg-control + adversarial) | FRE-334 | (pending) | ✅ Approved 2026-05-07 |

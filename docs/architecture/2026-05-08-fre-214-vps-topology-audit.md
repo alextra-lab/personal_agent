@@ -389,4 +389,89 @@ I'd recommend (1). If you confirm, I'll write the ADR-0045 amendment in the next
 
 ---
 
-*End of audit. §5 verdict received; §7 forward plan recorded. Next action gated on §7.5 pick.*
+---
+
+## 8. Constraint added 2026-05-08 — model-endpoint abstraction
+
+### 8.1 What the owner asked for
+
+Two coupled requirements:
+
+1. **Hide cloud-vs-local model access from callers.** Tests, eval harness, agent code — none of them should know whether a given model role is served by a local SLM Server, a Cloudflare-tunnel reverse hop, or a LiteLLM cloud provider. They ask for "primary" or "embedding" and the system resolves the right endpoint.
+2. **The laptop harness must remain self-contained.** When the harness runs on the laptop (or, soon, on the stationary home server), it must reach local models via direct localhost / host-network paths — *never* through `slm.frenchforet.com` (the reverse Cloudflare tunnel that exists for the VPS to call back to the Mac). Stronger phrasing the owner used: if all cloud models were removed, the laptop must still work end-to-end.
+
+### 8.2 Why this matters for Track 2
+
+Today's laptop config is already self-contained: `config/models.yaml:61` points `primary` at `http://localhost:8000/v1`. The risk is that **Track 2's compose unification, done naively, breaks this**. If the gateway containerizes and the merged model config keeps `slm.frenchforet.com` as the canonical endpoint, the containerized laptop gateway would tunnel out to Cloudflare just to reach a model running 3 inches away. That is exactly the topology the owner is asking us to prevent.
+
+The same problem arrives for embeddings/reranker: a containerized laptop gateway has to reach the laptop's MLX embeddings (if we preserve MLX as an opt-in) without leaving the host.
+
+### 8.3 The mechanism — endpoint resolution
+
+Replace the current "one endpoint per model per env file" pattern with **one model registry + ordered candidate endpoints + first-reachable resolution**:
+
+```yaml
+# config/models.yaml  (single source of truth — config/models.cloud.yaml deleted)
+primary:
+  id: "qwen3.6-35b-a3b"
+  provider_type: local
+  endpoints:
+    # Order = preference. First reachable wins. Probed at client init + cached.
+    - http://localhost:8000/v1            # laptop native (uvicorn outside docker)
+    - http://host.docker.internal:8000/v1 # laptop containerized (Docker Desktop)
+    - https://slm.frenchforet.com/v1      # remote (VPS → Mac reverse tunnel)
+  resolve: first_reachable
+  probe_timeout_ms: 250
+
+embedding:
+  id: "qwen3-embedding-0.6b"
+  endpoints:
+    - http://localhost:8503/v1                   # laptop native (slm_server / MLX)
+    - http://embeddings:8503/v1                  # in-compose container DNS
+    - http://host.docker.internal:8503/v1        # laptop containerized → host MLX
+  resolve: first_reachable
+```
+
+Properties this gives us:
+
+| Property | How |
+|----------|-----|
+| **Topology-agnostic call sites** | Code calls `get_llm_client("primary")`. The factory resolves at startup. No env-specific branches. |
+| **Self-contained laptop** | First candidate is always localhost. The Cloudflare tunnel candidate is last and only relevant on the VPS, where the localhost candidates are unreachable. |
+| **No `models.cloud.yaml`** | One file. Eliminates D-2/D-7-style drift between env-specific configs. |
+| **Stationary-server ready** | Adding the home server is a new endpoint candidate, not a new config file. |
+| **Cloud-fallback is policy, not topology** | If `primary` resolves to no reachable local endpoint AND the active profile permits cloud fallback (per `config/profiles/*.yaml`), the factory escalates. Otherwise it raises — which is what the owner wants when cloud models are intentionally absent. |
+
+The probe is cheap: a 250 ms TCP connect to each candidate at process start, cached for the process lifetime. A `force_reprobe()` API for tests. Failures during a session degrade to the next candidate at the cost of one timeout — acceptable.
+
+### 8.4 Honest discussion of what this *doesn't* solve
+
+* **macOS Docker host networking.** `host.docker.internal` works on Docker Desktop for Mac out of the box. On the upcoming stationary server (likely Linux), the equivalent is `--add-host=host.docker.internal:host-gateway` in compose, which is a one-line change but worth being explicit about.
+* **Cloud profile is unaffected.** When a conversation runs on the cloud profile, primary = Claude Sonnet via LiteLLM regardless of host. Endpoint resolution doesn't change anything there.
+* **Local-profile-on-VPS still goes through the tunnel.** That's correct behavior — the VPS has no local model, so the only "local" candidate that resolves is the remote one via the tunnel. The owner's constraint applies to the *laptop*, not to "anywhere we configured a local profile".
+
+### 8.5 Track plan — split Track 2 to honor this constraint
+
+Track 2 in §7.2 was a single block. Split it:
+
+| Track | What | Why this order |
+|-------|------|----------------|
+| **2a — Model endpoint abstraction** | Add `endpoints[]` + first-reachable resolution to `config/models.yaml`. Delete `config/models.cloud.yaml`. Update `llm_client/factory.py`. | **Must land before 2b**, otherwise containerizing the laptop gateway breaks self-containment. Independently shippable on its own. |
+| **2b — Compose unification** | Merge `docker-compose.yml` + `docker-compose.cloud.yml` via compose profiles. Containerize laptop gateway with `develop.watch`. | Lands on top of 2a. Confidence that endpoints resolve correctly inside containers comes from 2a's probe logic. |
+
+Track 3 (test parity) becomes much simpler after 2a — `requires_llm` is just "does any candidate resolve?" plus a profile check.
+
+### 8.6 What this does to §7.5
+
+The recommended sequence becomes:
+
+```
+Track 1 (ADR amendment) ──▶ Track 2a (endpoint abstraction) ──▶ Track 2b (compose unification) ──▶ Track 3 (test parity) ──▶ Track 5
+                            Track 4 (D-1, D-5) in parallel anywhere after Track 1
+```
+
+2a is a small, self-contained code change (~half day). It also resolves D-7 for the model-registry side and unblocks FRE-336 partially.
+
+---
+
+*End of audit. §5 verdict received; §7 forward plan recorded; §8 endpoint-abstraction constraint added. Next action gated on §7.5 pick — recommendation now: Track 1 → Track 2a → Track 2b.*

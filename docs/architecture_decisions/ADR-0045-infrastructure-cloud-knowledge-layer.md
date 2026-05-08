@@ -347,5 +347,6 @@ The dead `execution-service` token in `config/gateway_access.yaml` (audit §3 D-
 Wave D items previously gated on the FRE-214 verdict can now proceed:
 
 * [FRE-217](https://linear.app/frenchforest/issue/FRE-217) — closes as duplicate of FRE-214 (audit subsumes the containerization review).
-* [FRE-238](https://linear.app/frenchforest/issue/FRE-238), [FRE-240](https://linear.app/frenchforest/issue/FRE-240), [FRE-241](https://linear.app/frenchforest/issue/FRE-241), [FRE-236](https://linear.app/frenchforest/issue/FRE-236) — proceed under the ratified pattern.
+* [FRE-238](https://linear.app/frenchforest/issue/FRE-238), [FRE-240](https://linear.app/frenchforest/issue/FRE-240), [FRE-241](https://linear.app/frenchforest/issue/FRE-241) — proceed under the ratified pattern.
+* [FRE-236](https://linear.app/frenchforest/issue/FRE-236) — PWA iOS SSE resilience is **a quality criterion for this ratified topology, not an independent ticket**. Always-on harness + PWA over CF Tunnel only delivers the verdict's claim if the SSE stream survives iOS backgrounding; today it doesn't. Phase 1 (client-side reconcile) is independently shippable; Phase 2 (backend resume-from-offset) is a separate follow-up.
 * Implementation plans for Tracks 2a, 2b, 3 — written but **not** executed until owner triggers post-backlog-reduction.

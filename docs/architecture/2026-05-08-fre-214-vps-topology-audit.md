@@ -352,7 +352,7 @@ The original Wave D backlog can now proceed. Re-cast under the ratified shape:
 * [**FRE-238**](https://linear.app/frenchforest/issue/FRE-238) — SLM circuit breaker. Scope unchanged; relevant to Mac SLM tunnel reliability.
 * [**FRE-240**](https://linear.app/frenchforest/issue/FRE-240) — Reranker fallback. Now applies to the llama.cpp container too, not just MLX.
 * [**FRE-241**](https://linear.app/frenchforest/issue/FRE-241) — slm_server supervisor. Stays Mac-side (the VPS's llama.cpp containers are already supervised by Docker).
-* [**FRE-236**](https://linear.app/frenchforest/issue/FRE-236) — PWA iOS SSE. Independent of this audit.
+* [**FRE-236**](https://linear.app/frenchforest/issue/FRE-236) — PWA iOS SSE resilience. **Quality criterion for the ratified topology, not independent of it.** "Always-on harness on VPS + PWA on phone over CF Tunnel" only delivers what the verdict claims if the SSE stream survives iOS backgrounding. Today it doesn't — `visibilitychange` is unhandled and silent stream death leaves stuck assistant turns. Phase 1 (client-side reconcile via `GET /sessions/{id}/messages`) is independently shippable. Phase 2 (backend resume-from-offset on `/stream/{session_id}`) is its own follow-up; should not be folded into Track 2b's compose work.
 * [**FRE-218**](https://linear.app/frenchforest/issue/FRE-218) — Brainstem broken on VPS. Re-test after Track 2 — likely surfaces from one of the deviations.
 
 ### 7.3 Recommended sequencing

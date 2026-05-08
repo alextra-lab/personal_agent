@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-08 (Wave J complete: FRE-329 ✅, FRE-331 ✅, FRE-330 ✅, FRE-334 ✅, FRE-332 ✅, FRE-333 ✅, FRE-335 ✅)
+> **Last updated**: 2026-05-08 (Wave J complete ✅; Wave A: FRE-309 ✅)
 
 ---
 
@@ -88,6 +88,7 @@ ADR-0066 D2 trigger (auto switch hybrid → model_decided) blocked on FRE-335
 
 | Item | Date | Summary |
 |------|------|---------|
+| **FRE-309: Linear label lookup workspace fallback** | 2026-05-08 | `_label_id()` now falls back to workspace-scope `issueLabels` query when team-scoped filter misses the label (e.g. workspace-level "PersonalAgent"). One extra round-trip per process lifetime, cached. Clear error message includes "workspace scope". 4 new tests. |
 | **FRE-335: Skill routing threshold monitor (ADR-0066 D2)** | 2026-05-08 | `insights/skill_routing_threshold_monitor.py` — daily ES p95 query on `skill_index_assembled.injected_chars`, rolling state file, idempotent Linear `Needs Approval` ticket after 2 consecutive days over 6,000-token threshold. `AGENT_SKILL_INDEX_P95_TOKEN_THRESHOLD` env var. 14 unit tests. Wired into `BrainstemScheduler` lifecycle loop. |
 | **FRE-332 + FRE-333: ES polling + pagination in eval harness** | 2026-05-08 | Replaced fixed `asyncio.sleep(5)` with `_wait_for_trace_complete()` terminal-event poller (30s hard-timeout, 0.5s interval). Replaced `size=500` single-shot fetch with `search_after` pagination (hard cap 10,000). `--es-wait-seconds` deprecated (honoured as hard-timeout). 12 unit tests. |
 | **ADR-0066: Skill Routing Defaults + Threshold + Feedback Loop** | 2026-05-07 | Locks `hybrid` as default for both profiles. Defines p95 threshold (6,000 tokens) for switching to `model_decided`. Documents `missing_skill_requested` feedback loop (→ FRE-328). 5 decisions D1–D5. Eval data: 6 cells × 10 prompts; 100% es_first_call_correct, 0% iter_limit (caveat: see FRE-329 — analysis bug means numbers may be partly inflated). |

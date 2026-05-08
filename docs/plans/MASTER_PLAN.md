@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-08 (Wave J complete ✅; Wave A complete ✅)
+> **Last updated**: 2026-05-08 (Wave J ✅; Wave A ✅; Wave B ✅ except FRE-326 calendar-gated)
 
 ---
 
@@ -10,7 +10,7 @@
 
 Wave J complete. All 7 items shipped: FRE-329, FRE-331, FRE-330, FRE-334, FRE-332, FRE-333, FRE-335. Key findings: keyword/hybrid `es_first_call_correct_rate` drops 100%→45% with realistic prompts; model_decided maintains 100% ES routing + recall=0.95; ADR-0066 D2 threshold monitor now live — will auto-file a Linear ticket when skill index p95 exceeds 6,000 tokens for 2 consecutive days.
 
-**Next wave: Wave B** (self-observation — FRE-301 first, FRE-326 scheduled ≥ 2026-05-13).
+**Next wave: Wave C** (security — FRE-225 domain guard). FRE-326 calendar-gated ≥ 2026-05-13.
 
 ---
 
@@ -88,6 +88,7 @@ ADR-0066 D2 trigger (auto switch hybrid → model_decided) blocked on FRE-335
 
 | Item | Date | Summary |
 |------|------|---------|
+| **Wave B (FRE-300, FRE-301, FRE-319, FRE-269)** | 2026-05-08 | FRE-300: warning allowlist (tool_iteration_limit_reached) wired into error monitor ES query. FRE-301: hit_iteration_limit signal in Captain's Log reflection + DSPy nudge for cap-raise proposal. FRE-319: cloud model config drift fixed (sub_agent context_length 16384→32768, reasoning_heavy ID). FRE-269: 19 wrong-prefix vars fixed in .env.example; SKILL ROUTING section added. |
 | **Wave A complete (FRE-309, FRE-185, FRE-189, FRE-320, FRE-321, FRE-312, FRE-308)** | 2026-05-08 | FRE-309: workspace-scope label fallback in LinearClient. FRE-185/189/320/321/312/308: all no-ops — already resolved by prior work. |
 | **FRE-309: Linear label lookup workspace fallback** | 2026-05-08 | `_label_id()` now falls back to workspace-scope `issueLabels` query when team-scoped filter misses the label (e.g. workspace-level "PersonalAgent"). One extra round-trip per process lifetime, cached. Clear error message includes "workspace scope". 4 new tests. |
 | **FRE-335: Skill routing threshold monitor (ADR-0066 D2)** | 2026-05-08 | `insights/skill_routing_threshold_monitor.py` — daily ES p95 query on `skill_index_assembled.injected_chars`, rolling state file, idempotent Linear `Needs Approval` ticket after 2 consecutive days over 6,000-token threshold. `AGENT_SKILL_INDEX_P95_TOKEN_THRESHOLD` env var. 14 unit tests. Wired into `BrainstemScheduler` lifecycle loop. |

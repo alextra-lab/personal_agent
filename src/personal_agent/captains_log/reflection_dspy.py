@@ -187,6 +187,10 @@ def generate_reflection_dspy(
     captains_log_role: str | None = None,
     failure_excerpt_json: str = "",
     had_errors: bool = False,
+    hit_iteration_limit: bool = False,
+    task_type: str = "",
+    iteration_count: int = 0,
+    max_iterations: int = 0,
 ) -> CaptainLogEntry:
     """Generate reflection using DSPy ChainOfThought with deterministic metrics extraction.
 
@@ -217,6 +221,11 @@ def generate_reflection_dspy(
             disabled or no failures were found (ADR-0056 §D6).
         had_errors: ``True`` when the trace contained at least one failure
             event. Controls whether failure-path output fields are populated.
+        hit_iteration_limit: True when agent was forced to stop by the iteration cap.
+            Prepended to telemetry_summary to nudge a cap-raise proposal.
+        task_type: TaskType value for the capped request (e.g. "analysis").
+        iteration_count: Tool iterations consumed before the cap fired.
+        max_iterations: Effective iteration cap that was applied.
 
     Returns:
         CaptainLogEntry with DSPy-generated reflection and deterministic metrics.
@@ -251,6 +260,17 @@ def generate_reflection_dspy(
     # Extract metrics deterministically (ADR-0014) - NO LLM INVOLVED
     string_metrics, structured_metrics = extract_metrics_from_summary(metrics_summary)
     metrics_string = format_metrics_string(string_metrics)
+
+    # Prepend iteration-limit signal to telemetry_summary so the reflection
+    # model is nudged to propose a cap-raise for the exhausted TaskType.
+    if hit_iteration_limit:
+        limit_note = (
+            f"[ITERATION LIMIT HIT] task_type={task_type or 'unknown'} "
+            f"used {iteration_count}/{max_iterations} iterations. "
+            "Agent was forced to stop before completing analysis. "
+            "Consider proposing a cap-raise for this TaskType."
+        )
+        telemetry_summary = f"{limit_note}\n{telemetry_summary}"
 
     # Log DSPy reflection attempt
     log.info(

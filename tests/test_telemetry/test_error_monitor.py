@@ -119,8 +119,10 @@ async def test_scan_returns_clusters_from_queries(tmp_path: Path) -> None:
 
     assert len(result) == 1
     assert result[0].fingerprint == cluster.fingerprint
+    from personal_agent.telemetry.error_monitor import WARNING_EVENT_ALLOWLIST
+
     mock_queries.get_error_patterns.assert_awaited_once_with(
-        window_hours=24, min_occurrences=5
+        window_hours=24, min_occurrences=5, warning_allowlist=WARNING_EVENT_ALLOWLIST
     )
 
 

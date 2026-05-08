@@ -574,6 +574,7 @@ class TelemetryQueries:
         self,
         window_hours: int,
         min_occurrences: int,
+        warning_allowlist: frozenset[str] = frozenset(),
     ) -> list[ErrorPatternCluster]:
         """Aggregate error events into clusters via ES composite aggregation.
 
@@ -586,6 +587,9 @@ class TelemetryQueries:
         Args:
             window_hours: Rolling look-back window size in hours.
             min_occurrences: Minimum event count for a cluster to qualify.
+            warning_allowlist: Warning event names to include alongside errors.
+                Only events in this set with ``level=WARNING`` are aggregated.
+                Defaults to empty (errors only).
 
         Returns:
             List of ``ErrorPatternCluster`` records, one per qualifying group.
@@ -593,6 +597,19 @@ class TelemetryQueries:
         client = await self._get_client()
         now = datetime.now(timezone.utc)
         start = now - timedelta(hours=window_hours)
+
+        should_clauses: list[dict[str, Any]] = [{"term": {"level": "ERROR"}}]
+        if warning_allowlist:
+            should_clauses.append(
+                {
+                    "bool": {
+                        "must": [
+                            {"term": {"level": "WARNING"}},
+                            {"terms": {"event.keyword": sorted(warning_allowlist)}},
+                        ]
+                    }
+                }
+            )
 
         response = await client.search(
             index=f"{self._logs_index_prefix}-*",
@@ -608,9 +625,7 @@ class TelemetryQueries:
                             }
                         },
                     ],
-                    "should": [
-                        {"term": {"level": "ERROR"}},
-                    ],
+                    "should": should_clauses,
                     "minimum_should_match": 1,
                 }
             },

@@ -556,6 +556,23 @@ async def _trigger_captains_log_reflection(ctx: ExecutionContext) -> None:
 
         manager = CaptainLogManager()
 
+        effective_max = _resolve_max_iterations(ctx)
+        hit_iteration_limit = ctx.tool_iteration_count > effective_max
+        task_type = (
+            ctx.gateway_output.intent.task_type.value
+            if ctx.gateway_output is not None
+            else ""
+        )
+
+        if hit_iteration_limit:
+            log.warning(
+                "captains_log_iteration_limit_reflected",
+                trace_id=ctx.trace_id,
+                task_type=task_type,
+                iteration_count=ctx.tool_iteration_count,
+                max_iterations=effective_max,
+            )
+
         # Generate LLM-based reflection (with metrics summary from ADR-0012)
         entry = await generate_reflection_entry(
             user_message=ctx.user_message,
@@ -564,6 +581,10 @@ async def _trigger_captains_log_reflection(ctx: ExecutionContext) -> None:
             final_state="COMPLETED",  # Task completed successfully if we're here
             reply_length=len(ctx.final_reply or ""),
             metrics_summary=ctx.metrics_summary,  # Request-scoped metrics (ADR-0012)
+            hit_iteration_limit=hit_iteration_limit,
+            task_type=task_type,
+            iteration_count=ctx.tool_iteration_count,
+            max_iterations=effective_max,
         )
 
         # Write entry to file
@@ -1243,9 +1264,7 @@ async def step_llm_call(
         needs_hard_compression,
     )
 
-    if ctx.session_id and needs_hard_compression(
-        ctx.messages, settings.context_window_max_tokens
-    ):
+    if ctx.session_id and needs_hard_compression(ctx.messages, settings.context_window_max_tokens):
         try:
             from personal_agent.events.bus import get_event_bus
 
@@ -1339,7 +1358,6 @@ async def step_llm_call(
         )
 
         _routing_mode = _get_srm_override() or settings.skill_routing_mode
-
 
         # Phase C: separate routing call (model_decided + non-empty model key, once per request)
         if (
@@ -2017,7 +2035,10 @@ async def _dispatch_tool_call(
                 "tool_call_id": tool_call_id,
                 "tool_name": tool_name,
                 "content": json.dumps(
-                    {"status": "ok", "body": f"<skill: {_skill_name_arg} already loaded earlier this conversation>"}
+                    {
+                        "status": "ok",
+                        "body": f"<skill: {_skill_name_arg} already loaded earlier this conversation>",
+                    }
                 ),
                 "success": True,
                 "latency_ms": 0,

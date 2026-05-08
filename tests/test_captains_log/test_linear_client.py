@@ -56,11 +56,13 @@ def reset_lc_caches() -> Generator[None, None, None]:
         "Re-evaluated": "label-re-evaluated",
     }
     lc_mod._lc_label_team_fetched = "team-id-test"
+    lc_mod._lc_workspace_labels_fetched = False
     yield
     lc_mod._lc_team_id = None
     lc_mod._lc_state_ids = {}
     lc_mod._lc_label_ids = {}
     lc_mod._lc_label_team_fetched = None
+    lc_mod._lc_workspace_labels_fetched = False
 
 
 def _make_httpx_patch(responses: list[MagicMock]) -> Any:
@@ -224,6 +226,123 @@ class TestCreateIssue:
                 "T", "FrenchForest", "", 3, [], "Needs Approval", "My Project"
             )
         assert ident == "FF-7"
+
+
+# ── _label_id workspace fallback (FRE-309) ───────────────────────────────────
+
+
+class TestLabelIdWorkspaceFallback:
+    """Tests for the workspace-scope fallback in _label_id (FRE-309).
+
+    The team-scoped ``issueLabels`` filter does not return workspace-level labels
+    (e.g. 'PersonalAgent'). The fallback queries the full workspace label list.
+    """
+
+    @pytest.mark.asyncio
+    async def test_workspace_fallback_resolves_missing_label(self) -> None:
+        """Label absent from team-scoped cache is resolved via workspace fetch."""
+        import personal_agent.captains_log.linear_client as lc_mod2
+
+        # Start with empty caches so the team-scoped fetch runs but misses the label.
+        lc_mod2._lc_label_ids = {}
+        lc_mod2._lc_label_team_fetched = None
+        lc_mod2._lc_workspace_labels_fetched = False
+
+        client = LinearClient()
+        # Call 1: team-scoped labels query → returns only "OtherLabel" (not PersonalAgent)
+        team_resp = _mock_resp(
+            {"issueLabels": {"nodes": [{"id": "other-id", "name": "OtherLabel"}]}}
+        )
+        # Call 2: workspace-level labels query → returns PersonalAgent
+        workspace_resp = _mock_resp(
+            {
+                "issueLabels": {
+                    "nodes": [
+                        {"id": "other-id", "name": "OtherLabel"},
+                        {"id": "pa-id-123", "name": "PersonalAgent"},
+                    ]
+                }
+            }
+        )
+        with _make_httpx_patch([team_resp, workspace_resp]):
+            label_id = await client._label_id("team-id-test", "PersonalAgent")
+
+        assert label_id == "pa-id-123"
+        # Workspace fetch flag set — no repeated round-trip
+        assert lc_mod2._lc_workspace_labels_fetched is True
+
+    @pytest.mark.asyncio
+    async def test_workspace_fallback_not_repeated(self) -> None:
+        """Workspace fetch runs at most once per process lifetime."""
+        import personal_agent.captains_log.linear_client as lc_mod2
+
+        lc_mod2._lc_label_ids = {"PersonalAgent": "pa-id-already"}
+        lc_mod2._lc_label_team_fetched = "team-id-test"
+        lc_mod2._lc_workspace_labels_fetched = False
+
+        client = LinearClient()
+        # No API calls should be made — label is already cached
+        team_resp = _mock_resp({"issueLabels": {"nodes": []}})
+        with _make_httpx_patch([team_resp]):
+            label_id = await client._label_id("team-id-test", "PersonalAgent")
+
+        assert label_id == "pa-id-already"
+        # Workspace flag not set because the cache hit short-circuited
+        assert lc_mod2._lc_workspace_labels_fetched is False
+
+    @pytest.mark.asyncio
+    async def test_raises_clear_error_when_label_not_in_workspace(self) -> None:
+        """Clear RuntimeError is raised when label is absent from both scopes."""
+        import personal_agent.captains_log.linear_client as lc_mod2
+
+        lc_mod2._lc_label_ids = {}
+        lc_mod2._lc_label_team_fetched = None
+        lc_mod2._lc_workspace_labels_fetched = False
+
+        client = LinearClient()
+        team_resp = _mock_resp({"issueLabels": {"nodes": []}})
+        workspace_resp = _mock_resp({"issueLabels": {"nodes": []}})
+        with _make_httpx_patch([team_resp, workspace_resp]):
+            with pytest.raises(RuntimeError, match="workspace scope"):
+                await client._label_id("team-id-test", "NonExistentLabel")
+
+    @pytest.mark.asyncio
+    async def test_create_issue_uses_workspace_fallback_for_unknown_label(self) -> None:
+        """create_issue resolves workspace-level labels without raising (FRE-309 golden path)."""
+        import personal_agent.captains_log.linear_client as lc_mod2
+
+        # Only "Improvement" is team-scoped; "PersonalAgent" is workspace-level.
+        lc_mod2._lc_label_ids = {"Improvement": "label-improvement"}
+        lc_mod2._lc_label_team_fetched = "team-id-test"
+        lc_mod2._lc_workspace_labels_fetched = False
+
+        client = LinearClient()
+        # workspace fetch resolves PersonalAgent; then create mutation runs
+        workspace_resp = _mock_resp(
+            {
+                "issueLabels": {
+                    "nodes": [
+                        {"id": "label-improvement", "name": "Improvement"},
+                        {"id": "pa-id-123", "name": "PersonalAgent"},
+                    ]
+                }
+            }
+        )
+        create_resp = _mock_resp(
+            {"issueCreate": {"issue": {"id": "uuid-1", "identifier": "FF-77", "title": "T"}}}
+        )
+        with _make_httpx_patch([workspace_resp, create_resp]):
+            ident = await client.create_issue(
+                title="Trigger ticket",
+                team="FrenchForest",
+                description="body",
+                priority=2,
+                labels=["PersonalAgent", "Improvement"],
+                state="Needs Approval",
+                project="",
+            )
+
+        assert ident == "FF-77"
 
 
 # ── get_issue ─────────────────────────────────────────────────────────────────

@@ -474,4 +474,16 @@ Track 1 (ADR amendment) ──▶ Track 2a (endpoint abstraction) ──▶ Trac
 
 ---
 
-*End of audit. §5 verdict received; §7 forward plan recorded; §8 endpoint-abstraction constraint added. Next action gated on §7.5 pick — recommendation now: Track 1 → Track 2a → Track 2b.*
+### 8.7 Session scope and execution timing
+
+Recorded 2026-05-08 alongside the verdict:
+
+* **This planning work is docs-only.** No implementation in this session. Deliverables are: ADR-0045 amendment (in-place), implementation plans for Tracks 2a / 2b / 3 (under `docs/superpowers/plans/`), Linear tickets filed for Track 4 items, master plan update. Nothing under `src/`, `config/`, `docker-compose*.yml`, or any `Dockerfile` will be touched.
+* **The "big conversion" — Tracks 2a, 2b, 3 — is deferred.** The owner intends to reduce the existing backlog before triggering structural change. Plans get written now so they are ready to execute on demand; execution timing is the owner's call.
+* **Track 4 (D-1, D-3, D-5, D-6) ships as Linear tickets, not plan docs.** Each is small enough to fit in one Linear issue. Filing them in `Needs Approval` puts them in the visible backlog the owner is working to reduce.
+* **Review cadence: one deliverable at a time.** The ADR amendment lands and gets reviewed before Track 2a's plan starts, and so on. Avoids a single huge diff and keeps each artifact independently reviewable.
+* **Branch continuity**: all of the above lands on `fre-214-vps-topology-audit`. The PR (when opened) carries audit + verdict + ADR amendment + plans + ticket links as one cohesive change set.
+
+---
+
+*End of audit. §5 verdict received; §7 forward plan recorded; §8 endpoint-abstraction constraint added; §8.7 scope and timing locked. Next action: ADR-0045 amendment.*

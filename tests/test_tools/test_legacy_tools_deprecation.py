@@ -70,11 +70,23 @@ class TestLegacyToolsRegisteredWhenFlagEnabled:
             assert tool in names, f"{tool} should be present when legacy_tools_enabled=True"
 
     def test_tool_deprecated_warning_emitted(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        with structlog.testing.capture_logs() as captured:
+        # structlog.testing.capture_logs() fails when cache_logger_on_first_use=True
+        # is in effect (the logger proxy caches its processors on first call and
+        # later calls to configure() / capture_logs() don't affect cached proxies).
+        # Mock the module-level log directly to capture the warning without relying
+        # on structlog capture.
+        import personal_agent.tools as tools_module
+        from unittest.mock import patch as _patch
+
+        with _patch.object(tools_module.log, "warning") as mock_warn:
             _fresh_registry(monkeypatch, legacy=True)
-        warnings = [e for e in captured if e.get("log_level") == "warning" and e.get("event") == "tool_deprecated"]
-        assert len(warnings) == 1, f"Expected exactly one tool_deprecated warning, got: {warnings}"
-        warned_tools = warnings[0]["tools"]
+
+        assert mock_warn.called, "log.warning was never called"
+        events = [call.args[0] for call in mock_warn.call_args_list if call.args]
+        assert "tool_deprecated" in events, f"'tool_deprecated' not in log events: {events}"
+        warned_tools = mock_warn.call_args_list[
+            events.index("tool_deprecated")
+        ].kwargs.get("tools", [])
         for tool in _LEGACY_TOOLS:
             assert tool in warned_tools, f"{tool} missing from tool_deprecated warning"
 

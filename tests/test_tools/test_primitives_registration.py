@@ -18,18 +18,23 @@ from personal_agent.config import settings
 class TestPrimitivesNotRegisteredByDefault:
     """Primitives must NOT appear in the registry when the flag is off."""
 
-    def test_primitives_not_registered_by_default(self) -> None:
-        """When AGENT_PRIMITIVE_TOOLS_ENABLED=false (default), primitives are absent."""
-        # The default singleton is created with primitive_tools_enabled=False,
-        # so the four primitive tools must not have been registered.
-        from personal_agent.tools import get_default_registry
+    def test_primitives_not_registered_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When AGENT_PRIMITIVE_TOOLS_ENABLED=false (field default), primitives are absent.
 
-        registry = get_default_registry()
+        The dev .env may enable primitives; reset the singleton and force the flag
+        off to test the out-of-box default.
+        """
+        import personal_agent.config as config_module
+        import personal_agent.tools as tools_module
+
+        monkeypatch.setattr(tools_module, "_default_registry", None)
+        monkeypatch.setattr(config_module.settings, "primitive_tools_enabled", False)
+
+        registry = tools_module.get_default_registry()
         tool_names = registry.list_tool_names()
 
         assert "bash" not in tool_names
         assert "run_python" not in tool_names
-        # read and write primitives are also gated by the flag
         assert "read" not in tool_names
         assert "write" not in tool_names
 

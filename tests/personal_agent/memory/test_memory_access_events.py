@@ -477,7 +477,7 @@ class TestConsolidatorAccessContext:
         mock_service.driver.session = MagicMock(return_value=mock_db_session)
 
         capture = TaskCapture(
-            trace_id="trace-consolidation-1",
+            trace_id="00000000-0000-0000-0000-000000000001",
             session_id="session-con-1",
             timestamp=datetime.now(timezone.utc),
             user_message="Tell me about FastAPI",
@@ -528,6 +528,10 @@ class TestConsolidatorAccessContext:
             patch(
                 "personal_agent.second_brain.consolidator.get_settings",
             ) as mock_get_settings,
+            patch(
+                "personal_agent.second_brain.consolidator.previous_attempt_count",
+                AsyncMock(return_value=0),
+            ),
         ):
             mock_settings = MagicMock()
             mock_settings.freshness_enabled = True

@@ -226,4 +226,4 @@ async def test_kg_adapter_store_fact_calls_create_entity() -> None:
 
     result = await adapter.store_fact(fact, ctx)
     assert result == "Madrid"
-    mock_service.create_entity.assert_awaited_once_with(fact)
+    mock_service.create_entity.assert_awaited_once_with(fact, visibility="public")

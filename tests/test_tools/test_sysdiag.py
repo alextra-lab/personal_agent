@@ -51,10 +51,10 @@ def test_tool_definition() -> None:
 
 
 def test_allow_list_not_empty() -> None:
-    """Allow-list contains the expected commands."""
-    expected = {"ps", "lsof", "find", "df", "du", "iostat", "vm_stat",
-                "ifconfig", "netstat", "pgrep", "top", "uptime", "sysctl",
-                "who", "last", "sw_vers", "diskutil"}
+    """Allow-list contains at least the core Linux commands always present on the VPS."""
+    # Tests run on Linux; the Darwin candidates (sw_vers, vm_stat, diskutil…) are
+    # intentionally absent. Assert only commands guaranteed on any Linux host.
+    expected = {"ps", "find", "df", "du", "pgrep", "top", "uptime", "who", "last"}
     assert expected <= set(_ALLOW_LIST)
 
 
@@ -206,14 +206,13 @@ async def test_args_parsed_as_list() -> None:
     ) as mock_exec:
         with patch("personal_agent.tools.sysdiag.asyncio.wait_for", new_callable=AsyncMock) as mock_wf:
             mock_wf.return_value = (b"result\n", b"")
-            await run_sysdiag_executor(command="lsof", args="-i :9000 -n")
+            await run_sysdiag_executor(command="ps", args="aux --no-header")
 
     call_args = mock_exec.call_args.args
     # First positional arg is the binary; rest are the parsed argv
-    assert "/usr/sbin/lsof" in call_args
-    assert "-i" in call_args
-    assert ":9000" in call_args
-    assert "-n" in call_args
+    assert "ps" in call_args[0]
+    assert "aux" in call_args
+    assert "--no-header" in call_args
 
 
 # ── Integration tests (real commands, require host) ────────────────────────
@@ -239,6 +238,7 @@ async def test_df_real() -> None:
 
 
 @pytest.mark.integration
+@pytest.mark.skipif(not __import__("sys").platform.startswith("darwin"), reason="macOS only")
 @pytest.mark.asyncio
 async def test_sw_vers_real() -> None:
     """sw_vers returns macOS version info."""

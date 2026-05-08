@@ -1,73 +1,17 @@
 """Tests for skill block injection into the executor system prompt.
 
-These tests verify that ``step_llm_call`` in executor.py correctly wires
-the skill block (from ``get_skill_block``) into the system prompt passed to
-the LLM client.
-
-Two complementary approaches are used:
-1. Source-level structural test — asserts the injection pattern is present
-   in executor.py (fast, zero dependencies, always correct).
-2. Functional mock test — patches ``get_skill_block`` and ``get_llm_client``
-   and drives ``step_llm_call``, then inspects the system_prompt argument.
+Functional mock tests: patches ``get_skill_block`` and ``get_llm_client``
+and drives ``step_llm_call``, then inspects the system_prompt argument.
+Source-level structural tests were removed (FRE-320) — they coupled to
+internal variable names that change on refactor; the functional tests below
+cover the same behaviour more robustly.
 """
 
 from __future__ import annotations
 
-import inspect
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# Structural tests (no executor import side-effects)
-# ---------------------------------------------------------------------------
-
-_EXECUTOR_SRC = (
-    Path(__file__).resolve().parents[3]
-    / "src"
-    / "personal_agent"
-    / "orchestrator"
-    / "executor.py"
-)
-
-
-class TestSkillInjectionStructure:
-    """Structural tests that verify the injection code exists in executor.py."""
-
-    def test_get_skill_block_import_present(self) -> None:
-        """executor.py must import get_skill_block inside step_llm_call."""
-        source = _EXECUTOR_SRC.read_text(encoding="utf-8")
-        assert "from personal_agent.orchestrator.skills import get_skill_block" in source
-
-    def test_skill_block_used_to_build_system_prompt(self) -> None:
-        """executor.py must assign get_skill_block(message=...) and splice into system_prompt."""
-        source = _EXECUTOR_SRC.read_text(encoding="utf-8")
-        assert "skill_block = get_skill_block(message=" in source
-        assert "if skill_block:" in source
-
-    def test_skill_block_injected_when_flag_enabled(self) -> None:
-        """executor.py must contain the branch that appends skill_block to system_prompt."""
-        source = _EXECUTOR_SRC.read_text(encoding="utf-8")
-        # When a system_prompt already exists, it is extended with the skill block
-        assert "system_prompt = f\"{system_prompt}\\n\\n{skill_block}\"" in source
-
-    def test_skill_block_becomes_system_prompt_when_no_prior_prompt(self) -> None:
-        """executor.py must handle the case where system_prompt is None by setting it to skill_block."""
-        source = _EXECUTOR_SRC.read_text(encoding="utf-8")
-        assert "system_prompt = skill_block" in source
-
-    def test_injection_before_llm_call(self) -> None:
-        """Skill block injection must appear before the llm_client.respond() call in source order."""
-        source = _EXECUTOR_SRC.read_text(encoding="utf-8")
-        inject_pos = source.find("skill_block = get_skill_block(message=")
-        respond_pos = source.find("response = await llm_client.respond(")
-        assert inject_pos != -1, "Injection line not found"
-        assert respond_pos != -1, "llm_client.respond call not found"
-        assert inject_pos < respond_pos, (
-            "Skill block injection must happen before the LLM respond() call"
-        )
-
 
 # ---------------------------------------------------------------------------
 # Functional mock tests — drive step_llm_call with mocked LLM

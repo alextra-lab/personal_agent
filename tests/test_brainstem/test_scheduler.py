@@ -16,11 +16,17 @@ from personal_agent.brainstem.sensors.metrics_daemon import MetricsSample
 async def scheduler():
     """Create scheduler instance for testing.
 
-    Force resource gating on so consolidation preconditions (idle/CPU/memory)
-    are evaluated; local .env may disable gating and would otherwise make
-    `_should_consolidate` return True early.
+    Patch env-sensitive settings to canonical test values so that tests are
+    independent of whatever the local .env has set:
+    - resource_gating_enabled=True  → preconditions (idle/CPU/memory) are evaluated
+    - idle_time_seconds=300         → 5-minute idle window the tests assume
+    - min_interval_seconds=3600     → 1-hour minimum consolidation interval
     """
-    with patch.object(scheduler_module.settings, "second_brain_resource_gating_enabled", True):
+    with (
+        patch.object(scheduler_module.settings, "second_brain_resource_gating_enabled", True),
+        patch.object(scheduler_module.settings, "second_brain_idle_time_seconds", 300.0),
+        patch.object(scheduler_module.settings, "second_brain_min_interval_seconds", 3600),
+    ):
         sched = BrainstemScheduler()
         yield sched
         if sched.running:

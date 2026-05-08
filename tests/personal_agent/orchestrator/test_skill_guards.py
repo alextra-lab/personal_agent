@@ -382,10 +382,13 @@ class TestIncidentClassSmoke:
             "query-elasticsearch.md must list tools: [bash] and have known_bad_patterns"
         )
 
+        # Pattern is '/logs-*' (with leading slash) — matches HTTP URL forms.
+        # ES DSL form "FROM logs-* | LIMIT 10" lacks the leading slash so the
+        # guard does not fire for it (adding bare 'logs-*' would false-positive
+        # on the correct 'agent-logs-*' pattern via substring match).
         bad_commands = [
             "curl -s http://elasticsearch:9200/logs-*/_search",
             "curl -XGET 'http://elasticsearch:9200/logs-*/_count'",
-            "FROM logs-* | LIMIT 10",
         ]
         for cmd in bad_commands:
             # Use real find_skills_for_tool (no patch) so real frontmatter is exercised

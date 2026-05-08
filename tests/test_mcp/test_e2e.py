@@ -61,4 +61,4 @@ async def test_graceful_degradation_no_docker():
             # Built-in tools still work
             tools = registry.list_tools()
             assert len(tools) > 0
-            assert any(t.name == "read_file" for t in tools)
+            assert any(t.name == "search_memory" for t in tools)

@@ -11,9 +11,11 @@ from personal_agent.config import AppConfig, settings
 class TestPrimitiveToolsFlag:
     """primitive_tools_enabled is off by default."""
 
-    def test_primitive_tools_disabled_by_default(self) -> None:
-        """AGENT_PRIMITIVE_TOOLS_ENABLED defaults to False."""
-        assert settings.primitive_tools_enabled is False
+    def test_primitive_tools_disabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """AGENT_PRIMITIVE_TOOLS_ENABLED field default is False (dev .env may enable it)."""
+        monkeypatch.delenv("AGENT_PRIMITIVE_TOOLS_ENABLED", raising=False)
+        config = AppConfig()
+        assert config.primitive_tools_enabled is False
 
     def test_primitive_tools_flag_reads_from_env(
         self, monkeypatch: pytest.MonkeyPatch
@@ -35,9 +37,11 @@ class TestPrimitiveToolsFlag:
 class TestApprovalUIFlag:
     """approval_ui_enabled is off by default."""
 
-    def test_approval_ui_disabled_by_default(self) -> None:
-        """AGENT_APPROVAL_UI_ENABLED defaults to False."""
-        assert settings.approval_ui_enabled is False
+    def test_approval_ui_disabled_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """AGENT_APPROVAL_UI_ENABLED field default is False (dev .env may enable it)."""
+        monkeypatch.delenv("AGENT_APPROVAL_UI_ENABLED", raising=False)
+        config = AppConfig()
+        assert config.approval_ui_enabled is False
 
     def test_approval_ui_reads_from_env(
         self, monkeypatch: pytest.MonkeyPatch

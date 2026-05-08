@@ -2,15 +2,15 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-08 (Wave J: FRE-329 ✅, FRE-331 ✅, FRE-330 ✅, FRE-334 ✅, FRE-332 ✅, FRE-333 ✅)
+> **Last updated**: 2026-05-08 (Wave J complete: FRE-329 ✅, FRE-331 ✅, FRE-330 ✅, FRE-334 ✅, FRE-332 ✅, FRE-333 ✅, FRE-335 ✅)
 
 ---
 
 ## Current State
 
-Wave A shipped. Wave J in progress: FRE-329, FRE-331, FRE-330, FRE-334, FRE-332, FRE-333 all shipped. Key finding: keyword/hybrid `es_first_call_correct_rate` drops 100%→45% with realistic prompts (prompt leakage confirmed). model_decided maintains 100% correct ES routing + recall=0.95. Primary model answers ambiguous prompts from context without tool execution (new gap identified). Eval harness now polls ES for terminal events (no more fixed 5s sleep) and paginates past 500-event limit.
+Wave J complete. All 7 items shipped: FRE-329, FRE-331, FRE-330, FRE-334, FRE-332, FRE-333, FRE-335. Key findings: keyword/hybrid `es_first_call_correct_rate` drops 100%→45% with realistic prompts; model_decided maintains 100% ES routing + recall=0.95; ADR-0066 D2 threshold monitor now live — will auto-file a Linear ticket when skill index p95 exceeds 6,000 tokens for 2 consecutive days.
 
-**Next task: FRE-335** (Captain's Log p95 monitor — ADR-0066 D2 trigger).
+**Next wave: Wave A** (dev loop & hygiene — FRE-309 first).
 
 ---
 
@@ -88,6 +88,7 @@ ADR-0066 D2 trigger (auto switch hybrid → model_decided) blocked on FRE-335
 
 | Item | Date | Summary |
 |------|------|---------|
+| **FRE-335: Skill routing threshold monitor (ADR-0066 D2)** | 2026-05-08 | `insights/skill_routing_threshold_monitor.py` — daily ES p95 query on `skill_index_assembled.injected_chars`, rolling state file, idempotent Linear `Needs Approval` ticket after 2 consecutive days over 6,000-token threshold. `AGENT_SKILL_INDEX_P95_TOKEN_THRESHOLD` env var. 14 unit tests. Wired into `BrainstemScheduler` lifecycle loop. |
 | **FRE-332 + FRE-333: ES polling + pagination in eval harness** | 2026-05-08 | Replaced fixed `asyncio.sleep(5)` with `_wait_for_trace_complete()` terminal-event poller (30s hard-timeout, 0.5s interval). Replaced `size=500` single-shot fetch with `search_after` pagination (hard cap 10,000). `--es-wait-seconds` deprecated (honoured as hard-timeout). 12 unit tests. |
 | **ADR-0066: Skill Routing Defaults + Threshold + Feedback Loop** | 2026-05-07 | Locks `hybrid` as default for both profiles. Defines p95 threshold (6,000 tokens) for switching to `model_decided`. Documents `missing_skill_requested` feedback loop (→ FRE-328). 5 decisions D1–D5. Eval data: 6 cells × 10 prompts; 100% es_first_call_correct, 0% iter_limit (caveat: see FRE-329 — analysis bug means numbers may be partly inflated). |
 | **fix(skills): skill_routing budget role + narrow exception** | 2026-05-07 | Phase D eval revealed every routing call returned `[]` silently — root cause: `factory.get_llm_client_for_key()` defaulted `budget_role="skill_routing"` but `budget.yaml` never declared it. Cost gate raised KeyError on every reservation, swallowed by `route_skills()`. Fix: declared `skill_routing` role + caps ($0.10/d, $0.50/w user-confirmed), narrowed `except` to re-raise misconfiguration. Verified: routing returns 3 skills in 1.2s post-fix. Commit `178f664`. |

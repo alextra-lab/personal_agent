@@ -2,15 +2,15 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-08 (Wave J: FRE-329 ✅, FRE-331 ✅, FRE-330 ✅ cloud cell)
+> **Last updated**: 2026-05-08 (Wave J: FRE-329 ✅, FRE-331 ✅, FRE-330 ✅, FRE-334 ✅)
 
 ---
 
 ## Current State
 
-Wave A shipped: FRE-309, FRE-185/320/321/312 (`make test` green, 0 failures), FRE-308 (plan storage). FRE-189 blocked on live Neo4j. Wave J in progress: FRE-329 (OR→AND analysis bug fixed), FRE-331 (router-only metrics + ground-truth labels), FRE-330 (cloud-model-decided re-run — router_recall=94%, read_skill=0%, clean_success=90%).
+Wave A shipped. Wave J in progress: FRE-329, FRE-331, FRE-330, FRE-334 all shipped. Key finding: keyword/hybrid `es_first_call_correct_rate` drops 100%→45% with realistic prompts (prompt leakage confirmed). model_decided maintains 100% correct ES routing + recall=0.95. Primary model answers ambiguous prompts from context without tool execution (new gap identified).
 
-**Next task: FRE-334** — expand prompt set (ambiguous + negative-control + adversarial). Can run parallel with FRE-332/FRE-333.
+**Next tasks: FRE-332 + FRE-333** (ES polling + pagination) — can run in parallel.
 
 ---
 

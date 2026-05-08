@@ -312,6 +312,7 @@ async def route_skills(
     user_message: str,
     routing_client: Any,
     cap_tokens: int = 2048,
+    trace_id: str | None = None,
 ) -> list[str]:
     """Ask the routing model which skills are relevant to *user_message*.
 
@@ -328,6 +329,11 @@ async def route_skills(
         routing_client: An LLM client (e.g. from
             :func:`get_llm_client_for_key`) that has a ``respond()`` method.
         cap_tokens: Max tokens for the skill index passed to the router.
+        trace_id: Optional trace_id stamped on parser-diagnostic log events
+            (``skill_routing_response_parsed``, ``skill_routing_parse_failed``,
+            ``skill_routing_call_misconfigured``, ``skill_routing_call_failed``)
+            so they can be correlated with the dispatch event the executor
+            emits. Pass ``ctx.trace_id`` from the calling step.
 
     Returns:
         List of skill names from the loaded skill set that the router judged
@@ -364,6 +370,7 @@ async def route_skills(
             "skill_routing_call_misconfigured",
             error=repr(exc),
             error_type=type(exc).__name__,
+            trace_id=trace_id,
         )
         raise
     except Exception as exc:  # noqa: BLE001
@@ -373,6 +380,7 @@ async def route_skills(
             "skill_routing_call_failed",
             error=str(exc),
             error_type=type(exc).__name__,
+            trace_id=trace_id,
         )
         return []
 
@@ -394,17 +402,27 @@ async def route_skills(
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
-        log.warning("skill_routing_parse_failed", raw_preview=raw[:200])
+        log.warning(
+            "skill_routing_parse_failed",
+            raw_preview=raw[:200],
+            trace_id=trace_id,
+        )
         return []
 
     if not isinstance(parsed, list):
         return []
 
     valid = [str(name) for name in parsed if isinstance(name, str) and name in cache.docs]
+    # Distinct event from the executor's `skill_routing_call_completed`
+    # so analysis tools can read either without the two colliding on a
+    # shared name. This event captures parser-level diagnostics
+    # (raw vs validated count); the executor event captures dispatch
+    # metadata (latency_ms, routing_model_key).
     log.info(
-        "skill_routing_call_completed",
+        "skill_routing_response_parsed",
         candidates=len(parsed),
         valid=len(valid),
         skills=valid,
+        trace_id=trace_id,
     )
     return valid

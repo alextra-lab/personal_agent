@@ -1362,6 +1362,7 @@ async def step_llm_call(
                     user_message=_user_message,
                     routing_client=_routing_client,
                     cap_tokens=settings.skill_index_max_tokens,
+                    trace_id=ctx.trace_id,
                 )
                 _routing_latency_ms = int((time.time() - _routing_start) * 1000)
                 # Pre-load returned skill bodies — primary agent sees them already in scope

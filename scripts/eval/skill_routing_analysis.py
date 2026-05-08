@@ -149,10 +149,13 @@ def analyse_trace(trace_id: str, es_hits: list[dict[str, Any]] | None = None) ->
     if bash_events:
         cmd = bash_events[0].get("command", "")
         result["first_bash_command"] = cmd[:200]
-        # Correct: uses agent-logs-* (not /logs-* which is the hallucinated pattern)
-        result["first_bash_uses_correct_index"] = (
-            "agent-logs-" in cmd or "/logs-*" not in cmd
-        )
+        # True only when the command explicitly targets agent-logs-* AND avoids
+        # the hallucinated /logs-* pattern.  The previous `or not` logic was a
+        # bug: any command that simply didn't contain `/logs-*` (e.g. `ls`,
+        # `curl localhost:9200/_cat/indices`) incorrectly scored True.
+        uses_target_index = "agent-logs-" in cmd
+        uses_bad_pattern = "/logs-*" in cmd
+        result["first_bash_uses_correct_index"] = uses_target_index and not uses_bad_pattern
     else:
         result["first_bash_command"] = ""
         result["first_bash_uses_correct_index"] = None

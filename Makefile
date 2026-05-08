@@ -202,6 +202,11 @@ test-integration:
 test-all:
 	@uv run python -m pytest -m "not integration" -q
 
+# Eval harness script tests — pure unit tests of analysis/reporting scripts.
+# No live infrastructure required. Always green, run on demand.
+test-eval:
+	@uv run python -m pytest tests/evaluation/ -m "not integration" -q
+
 # REQUIRES PERSONAL_AGENT_EVAL=1 — fires 100+ LLM calls (~60-90 min, GPU-intensive).
 # Do NOT run from an AI agent session without explicit user instruction.
 eval:

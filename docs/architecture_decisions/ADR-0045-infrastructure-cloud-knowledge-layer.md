@@ -1,6 +1,6 @@
 # ADR-0045: Infrastructure — Cloud Knowledge Layer with Flexible Execution
 
-**Status**: Accepted
+**Status**: Accepted 2026-04-13; **Amended 2026-05-08** — full-harness topology ratified (see Update section).
 **Date**: 2026-04-13
 **Deciders**: Project owner
 **Depends on**: ADR-0043 (Three-Layer Separation)
@@ -247,3 +247,90 @@ Each phase is independently testable. The local Docker setup remains available a
 | **Kubernetes on cloud** | Massive over-engineering for a single-user system. K8s operational complexity is justified at scale; this is one user with four containers. |
 | **Fly.io / Railway / Render** | Convenient but less control over data residency, more expensive at the resource levels needed (especially for persistent storage), and potential cold-start issues for always-on services. |
 | **Raspberry Pi / home server** | Avoids cloud costs but introduces home network reliability issues (dynamic IP, ISP outages, power). Not practical for reliable mobile access. |
+
+---
+
+## Update — 2026-05-08 — Full-harness topology ratified
+
+> **Driver**: [FRE-214](https://linear.app/frenchforest/issue/FRE-214) audit
+> **Audit**: [`docs/architecture/2026-05-08-fre-214-vps-topology-audit.md`](../architecture/2026-05-08-fre-214-vps-topology-audit.md)
+> **Companion change**: model-endpoint abstraction (audit §8) and the Track 2a / 2b / 3 implementation plans under `docs/superpowers/plans/` (linked from the audit).
+
+### What changed in reality
+
+Six weeks after this ADR was accepted, the deployed VPS runs **the full execution layer** — orchestrator, primary agent loop, MCP gateway, brainstem, AG-UI endpoints — alongside the Knowledge Layer datastores, two llama.cpp inference services (embeddings + reranker), the Next.js PWA, Caddy, and a Cloudflare Tunnel. This is not the thin Knowledge-Layer gateway this ADR sketched. The deviation is documented in `Dockerfile.gateway:58–62` and acknowledged in `docker-compose.cloud.yml:276`. The full parity matrix and deviation log live in the FRE-214 audit referenced above.
+
+### What this amendment ratifies
+
+The deployed shape is the new target. Specifically:
+
+* **The VPS is the canonical execution host.** It runs the complete Personal Agent service (`personal_agent.service.app:app`), not just a knowledge gateway.
+* **The laptop is a peer deployment**, intended to mirror the VPS shape (same compose, smaller resource caps), plus serve as a *local-profile inference target* via the existing reverse Cloudflare tunnel (`slm.frenchforet.com`).
+* **Day-to-day development happens on the VPS** via Claude-Code remote control, rather than on the laptop. The laptop's role narrows to (a) developer workstation when offline, (b) inference host when local profile is selected from any harness, (c) CI / pre-deploy validation environment.
+* **Profile selection (per ADR-0044) determines provider, not deployment**. Both `local` and `cloud` profiles run inside the same service instance on whichever host is executing. The historical implication that "cloud profile → run on cloud, local profile → run on laptop" is dropped; that distinction was never in ADR-0044 itself.
+
+### What this amendment does *not* change
+
+The underlying drivers of this ADR all still hold:
+
+* **Always-on knowledge** — datastores remain on the VPS. EU residency preserved.
+* **Cost envelope** — VPS sizing (~24 GB / 8 vCPU) absorbs the full harness within the original $20–40/month bracket. No upgrade required.
+* **Security posture** — TLS termination at Caddy, CF Access on admin surfaces, secrets via env files, no public datastore exposure. Unchanged.
+* **Data sovereignty** — user owns all data, exportable, deletable. Unchanged.
+* **Three-layer separation (ADR-0043)** — preserved logically; this amendment is about *deployment topology*, not layer ownership. Knowledge / Execution / Observation remain distinct in code.
+
+### Why amend rather than supersede
+
+The original decision (Option B: cloud knowledge with flexible execution) is correct and remains accepted. What was missing from the original ADR was an account of **ADR-0048 (Mobile & Multi-Device UI)**, which this ADR claimed to enable but which actually requires more than a thin gateway: a 24/7 PWA endpoint requires a 24/7 *execution* endpoint, since the PWA's primary surface is interactive chat, not knowledge retrieval. Once ADR-0048 was implemented, the thin-gateway shape became infeasible, and the deployed harness drifted to fill the gap.
+
+Superseding ADR-0045 would discard the still-valid decisions about VPS sizing, security, sovereignty, and migration path. Amending it captures the topology change (which layers run where) without losing the substance.
+
+### Embedding consistency — revised
+
+The original ADR specified that embeddings must be "the same model and dimension across all environments". That requirement is unchanged. What is now true:
+
+* The same model file (`Qwen3-Embedding-0.6B`) is deployed to both shapes.
+* The **runtime differs**: laptop uses MLX via `slm_server` (when running native dev); the VPS (and the laptop's containerized mirror) uses llama.cpp. Same weights, different inference engines.
+* A parity test (cosine ≥ 0.999 on a fixed input set) is required before this is considered safe. That test is in the Track 3 implementation plan referenced from the audit.
+
+### Service split — revised
+
+The original ADR said `service/app.py` would be split: knowledge/observation endpoints to a VPS gateway, execution endpoints to a separate execution service. **This split is no longer planned.** The full service runs on each host that executes a harness; profiles select provider; endpoint resolution (audit §8) handles topology-specific endpoint differences without env-specific config files.
+
+The dead `execution-service` token in `config/gateway_access.yaml` (audit §3 D-6) will be pruned as part of the Track 2 work.
+
+### Migration path — actual state vs. original phases
+
+| Original phase | Status as of 2026-05-08 |
+|----------------|--------------------------|
+| Phase 0 — Local simulation | ✅ Done (`docker-compose.cloud.yml` was the simulation; it became the deployment) |
+| Phase 1 — Provision VPS via Terraform | ✅ Done. Terraform lives in private repo `personal_agent_secrets`. |
+| Phase 2 — Data migration | ✅ Done (datastores live on VPS; pgvector + Neo4j + ES + Redis all operational) |
+| Phase 3 — Build Seshat API Gateway | **Replaced by full-harness deployment.** No thin gateway shipped; full service runs in its place. |
+| Phase 4 — Reconfigure local execution | **Inverted.** Laptop now mirrors the VPS shape rather than connecting to it as a remote. Endpoint abstraction (audit §8) handles the local-vs-tunnel routing transparently. |
+| Phase 5 — Mobile access | ✅ Done. PWA reachable at `agent.frenchforet.com` 24/7. |
+
+### Consequences — additions
+
+**Positive (newly true):**
+
+* A single deployment shape simplifies the developer mental model and the test surface (Track 3 / FRE-336).
+* The same compose file runs on laptop and VPS — drift between dev and prod is prevented structurally rather than by discipline.
+* No need to stand up a separate execution worker anywhere always-on.
+
+**Negative (newly true):**
+
+* Laptop resource footprint increases when running the full mirror (additional ~3 GB RAM for embeddings + reranker + gateway container + PWA + Caddy). MLX-as-opt-in is preserved for laptop dev speed when needed.
+* The Mac SLM reverse tunnel (`slm.frenchforet.com`) is now part of the canonical architecture rather than a temporary bridge. Its reliability becomes load-bearing whenever local profile is selected from a non-laptop client.
+
+**Neutral:**
+
+* Original cost projections, security posture, and data sovereignty all carry forward unchanged.
+
+### What this amendment unblocks
+
+Wave D items previously gated on the FRE-214 verdict can now proceed:
+
+* [FRE-217](https://linear.app/frenchforest/issue/FRE-217) — closes as duplicate of FRE-214 (audit subsumes the containerization review).
+* [FRE-238](https://linear.app/frenchforest/issue/FRE-238), [FRE-240](https://linear.app/frenchforest/issue/FRE-240), [FRE-241](https://linear.app/frenchforest/issue/FRE-241), [FRE-236](https://linear.app/frenchforest/issue/FRE-236) — proceed under the ratified pattern.
+* Implementation plans for Tracks 2a, 2b, 3 — written but **not** executed until owner triggers post-backlog-reduction.

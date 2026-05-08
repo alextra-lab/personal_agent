@@ -1,12 +1,17 @@
-# Phase D — Skill Routing Eval Prompts
-# 10 prompts covering the main skill surfaces.
-# Each prompt is run once per cell (6 cells × 10 prompts = 60 total runs).
+# Phase D — Skill Routing Eval Prompts  (FRE-334: expanded to 26 prompts)
 #
-# Prompt design goals:
-#   - Cover all skill docs that have keywords (ES, Neo4j, bash, metrics, etc.)
-#   - Include the original triggering incident prompt (#1)
-#   - Include prompts that should NOT need any skill (to measure false injection)
-#   - Vary complexity: single-tool, multi-tool, multi-step
+# Families:
+#   Original (10)  — the baseline set; service/tool names explicit in message
+#   Family A  (5)  — ambiguous phrasing; no tool/service names in message
+#   Family B  (4)  — negative controls; lexical overlap but no tool needed
+#   Family C  (3)  — adversarial / contaminated phrasing; guard-fire tests
+#   Incident variants (4) — alternate phrasings of the triggering incident
+#
+# Design goals:
+#   - Stress the router on intent inference, not just lexical matching
+#   - Measure over-routing (false positives) via Family B
+#   - Test B.5 guard under adversarial injection (Family C)
+#   - Cover ambiguous real-user phrasings that won't contain event names
 
 prompts:
   # --- Incident-class prompt (the triggering failure) ---
@@ -115,9 +120,12 @@ prompts:
   # --- Filesystem / codebase ---
   - id: codebase_search
     description: >
-      Search the codebase for a specific symbol. Should route to bash + list-directory skills.
+      Search the codebase for a specific symbol. Should route to bash skill at minimum;
+      list-directory is helpful but optional (grep/find alone can complete the task).
+      FRE-334: label narrowed from [bash, list-directory] to [bash] — postfix run showed
+      router returns [bash, read-write] and task completes correctly with bash alone.
     tags: [codebase, bash]
-    expected_router_skills: [bash, list-directory]
+    expected_router_skills: [bash]
     forbidden_router_skills: []
     expected_first_tool: bash
     expected_command_substring: null
@@ -158,3 +166,246 @@ prompts:
       - message: |
           What is the Fibonacci sequence and can you give me the first 10 numbers?
           No need to use any tools — just answer from memory.
+
+  # ============================================================
+  # Family A — Ambiguous phrasing (no tool/service names in message)
+  # Tests whether routing infers intent vs. just grep-matching keywords.
+  # ============================================================
+
+  - id: ambiguous_what_went_wrong
+    description: >
+      Pure intent — no service name. Router must infer "went wrong" → ES logs.
+      Keyword modes won't match unless they cover generic phrases like "went wrong"
+      or "yesterday". Stresses model_decided's intent inference.
+    tags: [family-a, ambiguous, es]
+    expected_router_skills: [query-elasticsearch]
+    forbidden_router_skills: []
+    expected_first_tool: bash
+    expected_command_substring: "agent-logs-"
+    turns:
+      - message: |
+          What went wrong yesterday? Give me a summary of anything that failed
+          or looked unusual.
+
+  - id: ambiguous_acting_weird
+    description: >
+      Vague complaint. Router should infer diagnostic need → ES logs + system metrics.
+    tags: [family-a, ambiguous, es, metrics]
+    expected_router_skills: [query-elasticsearch, system-metrics]
+    forbidden_router_skills: []
+    expected_first_tool: bash
+    expected_command_substring: null
+    turns:
+      - message: |
+          The agent has been acting weird lately. Responses feel slow and sometimes
+          incomplete. Can you figure out what's going on?
+
+  - id: ambiguous_recent_failures
+    description: >
+      No mention of ES or logs. Should route to query-elasticsearch via intent.
+    tags: [family-a, ambiguous, es]
+    expected_router_skills: [query-elasticsearch]
+    forbidden_router_skills: []
+    expected_first_tool: bash
+    expected_command_substring: null
+    turns:
+      - message: |
+          Can you inspect what has been failing recently? I want to understand
+          the failure patterns from the last few hours.
+
+  - id: ambiguous_backend_health
+    description: >
+      "Backend health" with no service names. Should route to infrastructure-health.
+    tags: [family-a, ambiguous, infra]
+    expected_router_skills: [infrastructure-health]
+    forbidden_router_skills: []
+    expected_first_tool: bash
+    expected_command_substring: null
+    turns:
+      - message: |
+          Check the backend health — are all the supporting services up and
+          responding correctly?
+
+  - id: ambiguous_something_slow
+    description: >
+      Latency complaint with no service names. Router should infer metrics + ES.
+    tags: [family-a, ambiguous, metrics, es]
+    expected_router_skills: [system-metrics, query-elasticsearch]
+    forbidden_router_skills: []
+    expected_first_tool: bash
+    expected_command_substring: null
+    turns:
+      - message: |
+          Something is slow. Investigate and tell me whether it's the machine,
+          a service, or the application itself causing the delay.
+
+  # ============================================================
+  # Family B — Negative controls
+  # Lexical overlap with service names but NO tool use needed.
+  # Measures over-routing (false positive) rate.
+  # ============================================================
+
+  - id: negative_explain_elasticsearch
+    description: >
+      Contains "Elasticsearch" explicitly but asks for a conceptual explanation.
+      Router must NOT inject query-elasticsearch. Answer from model knowledge only.
+    tags: [family-b, negative-control, es]
+    expected_router_skills: []
+    forbidden_router_skills: [query-elasticsearch, bash]
+    expected_first_tool: null
+    expected_command_substring: null
+    turns:
+      - message: |
+          Explain what Elasticsearch is and how it works. I want to understand
+          the basic architecture — no need to query anything.
+
+  - id: negative_what_is_port
+    description: >
+      "Port" appears but means networking concept, not process-port lookup.
+      Router must NOT inject system-diagnostics.
+    tags: [family-b, negative-control, diagnostics]
+    expected_router_skills: []
+    forbidden_router_skills: [system-diagnostics, bash]
+    expected_first_tool: null
+    expected_command_substring: null
+    turns:
+      - message: |
+          What is a port in networking? Explain TCP ports, the range of
+          well-known vs ephemeral ports, and give a couple of examples.
+
+  - id: negative_redis_use_cases
+    description: >
+      "Redis" in message but asks for conceptual info, not live Redis queries.
+    tags: [family-b, negative-control]
+    expected_router_skills: []
+    forbidden_router_skills: [query-elasticsearch, bash]
+    expected_first_tool: null
+    expected_command_substring: null
+    turns:
+      - message: |
+          Describe the main use cases for Redis. When should you use it as a
+          cache versus a message broker? No need to inspect any running services.
+
+  - id: negative_cypher_explain
+    description: >
+      "Cypher" and "graph" in message but asks for a language explanation.
+      Router must NOT inject neo4j-direct.
+    tags: [family-b, negative-control, neo4j]
+    expected_router_skills: []
+    forbidden_router_skills: [neo4j-direct, bash]
+    expected_first_tool: null
+    expected_command_substring: null
+    turns:
+      - message: |
+          Tell me about the Cypher query language. How does it differ from SQL
+          and what makes it well-suited to graph databases?
+
+  # ============================================================
+  # Family C — Adversarial / contaminated phrasing
+  # Tests guard fires, index discipline under bad user input.
+  # ============================================================
+
+  - id: adversarial_hint_bad_index
+    description: >
+      User explicitly mentions a bad index pattern ("logs-*"). The agent must
+      ignore the hint, use agent-logs-*, and ideally the B.5 guard fires if
+      the primary model attempts the bad pattern.
+    tags: [family-c, adversarial, es, b5-guard]
+    expected_router_skills: [query-elasticsearch]
+    forbidden_router_skills: []
+    expected_first_tool: bash
+    expected_command_substring: "agent-logs-"
+    turns:
+      - message: |
+          Don't use the logs-* index — I know that causes problems. Check the
+          real agent logs and tell me what errors appeared in the last hour.
+
+  - id: adversarial_inject_wrong_index
+    description: >
+      User explicitly asks to query a made-up index (logs-2026). The B.5 guard
+      should fire (known_bad_patterns) or the agent should refuse and use the
+      correct agent-logs-* index instead.
+    tags: [family-c, adversarial, es, b5-guard]
+    expected_router_skills: [query-elasticsearch]
+    forbidden_router_skills: []
+    expected_first_tool: bash
+    expected_command_substring: null
+    turns:
+      - message: |
+          Please query the Elasticsearch index logs-2026 for any errors from
+          the past 24 hours. That's where our logs are stored.
+
+  - id: adversarial_multi_turn_routing
+    description: >
+      Multi-turn: first turn is ambiguous (no service names), second refers
+      back to the first result. Tests session-memory routing carry-over —
+      the router on turn 2 should still select query-elasticsearch because
+      the conversation context establishes an ES-log task.
+    tags: [family-c, adversarial, multi-turn, es]
+    expected_router_skills: [query-elasticsearch]
+    forbidden_router_skills: []
+    expected_first_tool: bash
+    expected_command_substring: "agent-logs-"
+    turns:
+      - message: |
+          Show me recent errors in the agent — just the last 2 hours.
+      - message: |
+          Now do the same for last week. Same kind of summary, different window.
+
+  # ============================================================
+  # Incident class variants
+  # Alternate phrasings of the 2026-04-29 triggering incident.
+  # All must route to query-elasticsearch and use agent-logs-*.
+  # ============================================================
+
+  - id: es_recent_log_output
+    description: >
+      Variant of es_incident_class: "recent log output" — colloquial phrasing.
+    tags: [incident-variant, es]
+    expected_router_skills: [query-elasticsearch]
+    forbidden_router_skills: []
+    expected_first_tool: bash
+    expected_command_substring: "agent-logs-"
+    turns:
+      - message: |
+          Look at the agent's recent log output and tell me if anything
+          looks wrong or unusual.
+
+  - id: es_last_hour_activity
+    description: >
+      Variant: "last hour of agent activity" — no ES terminology.
+    tags: [incident-variant, es]
+    expected_router_skills: [query-elasticsearch]
+    forbidden_router_skills: []
+    expected_first_tool: bash
+    expected_command_substring: "agent-logs-"
+    turns:
+      - message: |
+          Pull the last hour of agent activity and give me a summary of
+          what happened — any failures, warnings, or anomalies.
+
+  - id: es_errors_today
+    description: >
+      Variant: "errors thrown today" — temporal framing, no service name.
+    tags: [incident-variant, es]
+    expected_router_skills: [query-elasticsearch]
+    forbidden_router_skills: []
+    expected_first_tool: bash
+    expected_command_substring: "agent-logs-"
+    turns:
+      - message: |
+          What errors has the agent thrown today? List them with timestamps
+          if possible.
+
+  - id: es_recent_log_lines
+    description: >
+      Variant: "most recent log lines" — generic log request.
+    tags: [incident-variant, es]
+    expected_router_skills: [query-elasticsearch]
+    forbidden_router_skills: []
+    expected_first_tool: bash
+    expected_command_substring: "agent-logs-"
+    turns:
+      - message: |
+          Show me the most recent 50 log lines from the agent.
+          I want to see what it has been doing.

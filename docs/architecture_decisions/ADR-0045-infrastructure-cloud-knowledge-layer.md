@@ -301,7 +301,7 @@ Superseding ADR-0045 would discard the still-valid decisions about VPS sizing, s
 
 The original ADR specified that embeddings must be "the same model and dimension across all environments". That requirement is unchanged. What is now true:
 
-* The same model file (`Qwen3-Embedding-0.6B`) is deployed in two places: laptop MLX (host-native, Apple Silicon) and VPS llama.cpp (containerized, x86). Multi-instance is intentional (see "Local-model availability" above): the VPS instance is the always-on availability guarantee. The laptop's containerized mirror does not run a third instance — its gateway container reaches the host's MLX via `host.docker.internal`.
+* The same model weights (`Qwen3-Embedding-0.6B`) are deployed in two places: laptop on Apple Silicon (host-native, MLX-format weights) and VPS on x86 (containerized, GGUF-format weights). Multi-instance is intentional (see "Local-model availability" above): the VPS instance is the always-on availability guarantee. The laptop's containerized mirror does not run a third instance — its gateway container reaches the host's MLX via `host.docker.internal`. (On-disk format differs by platform; the cosine-parity test in Track 3 verifies the resulting vectors agree.)
 * The **runtime differs**: laptop uses MLX via `slm_server`; the VPS uses llama.cpp. Same weights, different inference engines.
 * A parity test (cosine ≥ 0.999 on a fixed input set, across runtimes) is required before this is considered safe. The test is specified in the Track 3 implementation plan referenced from the audit.
 * Endpoint resolution (audit §8.3) handles candidate selection — first reachable wins, and the natural ordering puts the closest/fastest endpoint first on each deployment.

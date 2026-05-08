@@ -269,6 +269,14 @@ The deployed shape is the new target. Specifically:
 * **Day-to-day development happens on the VPS** via Claude-Code remote control, rather than on the laptop. The laptop's role narrows to (a) developer workstation when offline, (b) inference host when local profile is selected from any harness, (c) CI / pre-deploy validation environment.
 * **Profile selection (per ADR-0044) determines provider, not deployment**. Both `local` and `cloud` profiles run inside the same service instance on whichever host is executing. The historical implication that "cloud profile → run on cloud, local profile → run on laptop" is dropped; that distinction was never in ADR-0044 itself.
 
+### Local-model availability — load-bearing since inception
+
+Local models are the original primary mode of the system. The Mac SLM Server has been the inference host for `primary` and `sub_agent` since before this ADR was accepted; making those models available to a VPS-resident harness has always required a reverse Cloudflare tunnel (`slm.frenchforet.com`). That tunnel is **not** a temporary bridge — it is permanent infrastructure for the load-bearing requirement that local models be reachable from non-laptop hosts. This amendment does not change that; it documents it.
+
+What this amendment *does* change is **how the laptop reaches its own local models when it runs the same containerized shape as the VPS**. Naïvely sharing one model config across both shapes would route the laptop's containerized harness out to Cloudflare and back to itself — wrong. The endpoint abstraction described in audit §8 (one model registry with ordered candidate endpoints + first-reachable resolution) prevents that round-trip structurally: localhost candidates always resolve first when reachable; the tunnel candidate is only used when localhost is unreachable (i.e., on the VPS).
+
+The forward-looking corollary, when the stationary home server arrives, is the same: a third "local" deployment shape is a new endpoint candidate, not a new config file or a new code path.
+
 ### What this amendment does *not* change
 
 The underlying drivers of this ADR all still hold:
@@ -321,11 +329,11 @@ The dead `execution-service` token in `config/gateway_access.yaml` (audit §3 D-
 **Negative (newly true):**
 
 * Laptop resource footprint increases when running the full mirror (additional ~3 GB RAM for embeddings + reranker + gateway container + PWA + Caddy). MLX-as-opt-in is preserved for laptop dev speed when needed.
-* The Mac SLM reverse tunnel (`slm.frenchforet.com`) is now part of the canonical architecture rather than a temporary bridge. Its reliability becomes load-bearing whenever local profile is selected from a non-laptop client.
 
 **Neutral:**
 
 * Original cost projections, security posture, and data sovereignty all carry forward unchanged.
+* The Mac SLM reverse tunnel's load-bearing role is unchanged — see "Local-model availability" above. What changes is that endpoint abstraction prevents the laptop from accidentally using the tunnel to reach its own local models.
 
 ### What this amendment unblocks
 

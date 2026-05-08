@@ -2,15 +2,15 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-08 (Wave A complete except FRE-189; 0 unit test failures)
+> **Last updated**: 2026-05-08 (Wave J started: FRE-329 shipped)
 
 ---
 
 ## Current State
 
-Wave A shipped: FRE-309 (Linear label lookup via UUID), FRE-185/320/321/312 (test suite cleaned — 50 failures → 0, `make test` fully green), FRE-308 (plan storage consolidated to `docs/superpowers/plans/`). FRE-189 (flaky Neo4j integration test) blocked on live Neo4j availability. Wave J (eval methodology hardening) is next in parallel with Wave B.
+Wave A shipped: FRE-309, FRE-185/320/321/312 (`make test` green, 0 failures), FRE-308 (plan storage). FRE-189 blocked on live Neo4j. Wave J started: FRE-329 (OR→AND analysis bug fixed, `make test-eval` target added, eval tests now integral/maintained infrastructure).
 
-**Next task: Wave B or Wave J** — Wave B = self-observation improvements; Wave J = eval methodology hardening (sequence: FRE-329 → 331 → 330 → 334 → 332/333 → 335).
+**Next task: FRE-331** — router-only vs end-to-end metric split + ground-truth labels (needs FRE-329's fixed analysis script).
 
 ---
 

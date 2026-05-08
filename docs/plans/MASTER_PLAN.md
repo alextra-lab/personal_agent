@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-08 (Wave J ✅; Wave A ✅; Wave B ✅ except FRE-326; Wave C ✅)
+> **Last updated**: 2026-05-08 (Wave J ✅; Wave A ✅; Wave B ✅ except FRE-326; Wave C ✅; Wave D — FRE-214 audit delivered, owner verdict pending)
 
 ---
 
@@ -10,7 +10,7 @@
 
 Wave J complete. All 7 items shipped: FRE-329, FRE-331, FRE-330, FRE-334, FRE-332, FRE-333, FRE-335. Key findings: keyword/hybrid `es_first_call_correct_rate` drops 100%→45% with realistic prompts; model_decided maintains 100% ES routing + recall=0.95; ADR-0066 D2 threshold monitor now live — will auto-file a Linear ticket when skill index p95 exceeds 6,000 tokens for 2 consecutive days.
 
-**Next wave: Wave D** (architecture — FRE-214 verdict gates D2–D6). FRE-326 calendar-gated ≥ 2026-05-13.
+**Wave D started 2026-05-08.** FRE-214 audit delivered: `docs/architecture/2026-05-08-fre-214-vps-topology-audit.md` (branch `fre-214-vps-topology-audit`). 30-row parity matrix, 7 deviations logged, recommendation = **ratify full-harness-on-VPS** by amending ADR-0045 (driver is ADR-0048, not ADR-0044). Owner verdict on §5 question gates D2–D6. FRE-326 calendar-gated ≥ 2026-05-13.
 
 ---
 

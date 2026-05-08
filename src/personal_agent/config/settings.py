@@ -1049,6 +1049,39 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # FRE-335 / ADR-0066 D2: skill routing threshold monitor
+    skill_index_p95_token_threshold: int = Field(
+        default=6000,
+        alias="AGENT_SKILL_INDEX_P95_TOKEN_THRESHOLD",
+        ge=100,
+        description=(
+            "Token threshold for skill index p95 injection size. When the rolling "
+            "7-day p95 of injected_chars (divided by 4) exceeds this value for two "
+            "consecutive days, the threshold monitor files a Linear issue recommending "
+            "AGENT_SKILL_ROUTING_MODE=model_decided. "
+            "Env var: AGENT_SKILL_INDEX_P95_TOKEN_THRESHOLD"
+        ),
+    )
+    skill_routing_threshold_monitor_enabled: bool = Field(
+        default=True,
+        alias="AGENT_SKILL_ROUTING_THRESHOLD_MONITOR_ENABLED",
+        description=(
+            "Enable the ADR-0066 D2 daily job that monitors skill index injection size "
+            "and files a Linear ticket when the threshold is exceeded. "
+            "Env var: AGENT_SKILL_ROUTING_THRESHOLD_MONITOR_ENABLED"
+        ),
+    )
+    skill_routing_threshold_monitor_hour_utc: int = Field(
+        default=5,
+        alias="AGENT_SKILL_ROUTING_THRESHOLD_MONITOR_HOUR_UTC",
+        ge=0,
+        le=23,
+        description=(
+            "UTC hour at which the skill routing threshold monitor runs daily. "
+            "Env var: AGENT_SKILL_ROUTING_THRESHOLD_MONITOR_HOUR_UTC"
+        ),
+    )
+
     # FRE-263 PIVOT-4: Flag-gated deprecation of legacy tools (ADR-0063 Phase 4)
     legacy_tools_enabled: bool = Field(
         default=False,

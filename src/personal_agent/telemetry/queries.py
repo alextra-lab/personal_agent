@@ -523,6 +523,53 @@ class TelemetryQueries:
         )
         return [hit["_source"] for hit in response.get("hits", {}).get("hits", [])]
 
+    async def get_skill_index_p95_chars(self, days: int = 7) -> float:
+        """Compute the p95 of ``injected_chars`` across ``skill_index_assembled`` events.
+
+        Used by the ADR-0066 D2 threshold monitor to detect when the skill index
+        is growing large enough to justify switching to ``model_decided`` routing.
+
+        Args:
+            days: Rolling look-back window in days.
+
+        Returns:
+            p95 of ``injected_chars`` over the window; ``0.0`` if no events found.
+        """
+        client = await self._get_client()
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(days=days)
+
+        response = await client.search(
+            index=f"{self._logs_index_prefix}-*",
+            query={
+                "bool": {
+                    "filter": [
+                        {"term": {"event_type": "skill_index_assembled"}},
+                        {
+                            "range": {
+                                "@timestamp": {
+                                    "gte": start.isoformat(),
+                                    "lte": now.isoformat(),
+                                }
+                            }
+                        },
+                        {"exists": {"field": "injected_chars"}},
+                    ]
+                }
+            },
+            size=0,
+            aggs={
+                "p95_chars": {
+                    "percentiles": {
+                        "field": "injected_chars",
+                        "percents": [95],
+                    }
+                }
+            },
+        )
+        values = response.get("aggregations", {}).get("p95_chars", {}).get("values", {})
+        return float(values.get("95.0", 0.0) or 0.0)
+
     async def get_error_patterns(
         self,
         window_hours: int,

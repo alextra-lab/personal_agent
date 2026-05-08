@@ -15,6 +15,9 @@ from personal_agent.brainstem.sensors.sensors import poll_system_metrics
 from personal_agent.captains_log.feedback import FeedbackPoller
 from personal_agent.captains_log.linear_client import LinearClient
 from personal_agent.config.settings import get_settings
+from personal_agent.insights.skill_routing_threshold_monitor import (
+    SkillRoutingThresholdMonitor,
+)
 from personal_agent.memory.service import MemoryService
 from personal_agent.second_brain.consolidator import SecondBrainConsolidator
 from personal_agent.second_brain.quality_monitor import ConsolidationQualityMonitor
@@ -93,6 +96,14 @@ class BrainstemScheduler:
             telemetry_queries=TelemetryQueries(
                 es_client=cast("AsyncElasticsearch | None", lifecycle_es_client)
             ),
+        )
+        self._last_skill_routing_threshold_date: date | None = None
+        self.skill_routing_threshold_monitor = SkillRoutingThresholdMonitor(
+            queries=TelemetryQueries(
+                es_client=cast("AsyncElasticsearch | None", lifecycle_es_client)
+            ),
+            linear_client=linear_client,
+            threshold_tokens=getattr(settings, "skill_index_p95_token_threshold", 6000),
         )
 
         # Configuration from settings
@@ -471,6 +482,25 @@ class BrainstemScheduler:
                 ):
                     await self._run_quality_monitoring()
                     self._last_quality_check_date = today
+
+                # Daily skill routing threshold monitor (FRE-335 / ADR-0066 D2)
+                if (
+                    getattr(settings, "skill_routing_threshold_monitor_enabled", True)
+                    and now.hour == getattr(settings, "skill_routing_threshold_monitor_hour_utc", 5)
+                    and (
+                        self._last_skill_routing_threshold_date is None
+                        or self._last_skill_routing_threshold_date != today
+                    )
+                ):
+                    try:
+                        await self.skill_routing_threshold_monitor.run()
+                    except Exception as exc:
+                        log.warning(
+                            "skill_routing_threshold_monitor_failed",
+                            error=str(exc),
+                            exc_info=True,
+                        )
+                    self._last_skill_routing_threshold_date = today
 
             except asyncio.CancelledError:
                 raise

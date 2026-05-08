@@ -2,17 +2,15 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-07 (skill routing Phase D shipped + ADR-0066 + eval methodology hardening wave filed)
+> **Last updated**: 2026-05-08 (Wave A complete except FRE-189; 0 unit test failures)
 
 ---
 
 ## Current State
 
-System is healthy post-recovery. Memory round-trip passing. Skill routing Phases A–D shipped end-to-end with ADR-0066 locking `hybrid` as the default mode for both profiles. The Phase D eval surfaced a silent budget-config bug (skill_routing role missing → KeyError swallowed → router returned `[]` 100% of the time); fix shipped at `178f664` with verification post-fix. External SOTA-LLM review of the eval methodology produced 8 follow-up tickets (FRE-328 through FRE-335), all approved 2026-05-07. Legacy tools deprecated behind flag (`AGENT_LEGACY_TOOLS_ENABLED=false`) — deletion window opens 2026-05-12 (FRE-265).
+Wave A shipped: FRE-309 (Linear label lookup via UUID), FRE-185/320/321/312 (test suite cleaned — 50 failures → 0, `make test` fully green), FRE-308 (plan storage consolidated to `docs/superpowers/plans/`). FRE-189 (flaky Neo4j integration test) blocked on live Neo4j availability. Wave J (eval methodology hardening) is next in parallel with Wave B.
 
-**Next task: Wave A → [FRE-309](https://linear.app/frenchforest/issue/FRE-309)** — fix Linear label lookup so the agent can file issues reliably.
-
-The new Wave J (eval methodology) does NOT block Wave A. They run in parallel: Wave A = unblock dev hygiene; Wave J = restore trust in eval data before any future routing-mode decision (ADR-0066's D2 trigger depends on Wave J landing).
+**Next task: Wave B or Wave J** — Wave B = self-observation improvements; Wave J = eval methodology hardening (sequence: FRE-329 → 331 → 330 → 334 → 332/333 → 335).
 
 ---
 

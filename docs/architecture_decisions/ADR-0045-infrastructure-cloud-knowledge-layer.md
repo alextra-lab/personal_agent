@@ -264,7 +264,7 @@ Six weeks after this ADR was accepted, the deployed VPS runs **the full executio
 
 The deployed shape is the new target. Specifically:
 
-* **The VPS is the canonical execution host.** It runs the complete Personal Agent service (`personal_agent.service.app:app`), not just a knowledge gateway.
+* **The VPS is the canonical execution host.** It runs the complete Personal Agent service (`personal_agent.service.app:app`), not just a knowledge gateway. The driver is accessibility (ADR-0048): a 24/7 PWA reachable from phone/iPad requires a 24/7 execution endpoint, which the laptop cannot provide.
 * **The laptop is a peer deployment**, intended to mirror the VPS shape (same compose, smaller resource caps), plus serve as a *local-profile inference target* via the existing reverse Cloudflare tunnel (`slm.frenchforet.com`).
 * **Day-to-day development happens on the VPS** via Claude-Code remote control, rather than on the laptop. The laptop's role narrows to (a) developer workstation when offline, (b) inference host when local profile is selected from any harness, (c) CI / pre-deploy validation environment.
 * **Profile selection (per ADR-0044) determines provider, not deployment**. Both `local` and `cloud` profiles run inside the same service instance on whichever host is executing. The historical implication that "cloud profile → run on cloud, local profile → run on laptop" is dropped; that distinction was never in ADR-0044 itself.
@@ -320,7 +320,7 @@ The dead `execution-service` token in `config/gateway_access.yaml` (audit §3 D-
 | Phase 1 — Provision VPS via Terraform | ✅ Done. Terraform lives in private repo `personal_agent_secrets`. |
 | Phase 2 — Data migration | ✅ Done (datastores live on VPS; pgvector + Neo4j + ES + Redis all operational) |
 | Phase 3 — Build Seshat API Gateway | **Replaced by full-harness deployment.** No thin gateway shipped; full service runs in its place. |
-| Phase 4 — Reconfigure local execution | **Inverted.** Laptop now mirrors the VPS shape rather than connecting to it as a remote. Endpoint abstraction (audit §8) handles the local-vs-tunnel routing transparently. |
+| Phase 4 — Reconfigure local execution | **Not pursued as written.** Each location runs its own self-contained stack (datastores included), rather than the laptop being a thin client of cloud datastores. VPS is canonical/primary because of accessibility (ADR-0048); laptop is a secondary peer used rarely now that day-to-day dev moved to the VPS. The schema/index/dashboard sync cost this introduces is acknowledged in Negative consequences below. |
 | Phase 5 — Mobile access | ✅ Done. PWA reachable at `agent.frenchforet.com` 24/7. |
 
 ### Consequences — additions
@@ -334,6 +334,7 @@ The dead `execution-service` token in `config/gateway_access.yaml` (audit §3 D-
 **Negative (newly true):**
 
 * Laptop resource footprint increases modestly when running the full mirror (~500 MB – 1 GB for the gateway container + PWA + Caddy). MLX inference continues to run natively on the host, so no change there.
+* **Stack synchronization debt.** With each location running a full self-contained stack (datastores included), Alembic migrations, Elasticsearch index templates, and Kibana saved objects must be kept in sync between deployments. The original Phase 4 design (one shared cloud Knowledge Layer accessed by multiple execution clients) would have avoided this. Today the cost is small because the laptop stack is rarely used; if laptop usage grows, the operational pain will too. The Track 2b implementation plan (referenced from the audit) must include — at minimum — a documented sync procedure for migrations, index templates, and saved objects; ideally an automated check that flags drift.
 
 **Neutral:**
 

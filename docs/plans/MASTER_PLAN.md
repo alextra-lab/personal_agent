@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-08 (Wave J ✅; Wave A ✅; Wave B ✅ except FRE-326; Wave C ✅; Wave D — FRE-214 audit delivered, owner verdict pending)
+> **Last updated**: 2026-05-09 (Wave J ✅; Wave A ✅; Wave B ✅ except FRE-326; Wave C ✅; Wave D planning ✅ — FRE-214 audit + ADR-0045 amendment + 3 implementation plans + 4 follow-up tickets shipped; implementation deferred per §8.7)
 
 ---
 
@@ -10,7 +10,14 @@
 
 Wave J complete. All 7 items shipped: FRE-329, FRE-331, FRE-330, FRE-334, FRE-332, FRE-333, FRE-335. Key findings: keyword/hybrid `es_first_call_correct_rate` drops 100%→45% with realistic prompts; model_decided maintains 100% ES routing + recall=0.95; ADR-0066 D2 threshold monitor now live — will auto-file a Linear ticket when skill index p95 exceeds 6,000 tokens for 2 consecutive days.
 
-**Wave D started 2026-05-08.** FRE-214 audit delivered: `docs/architecture/2026-05-08-fre-214-vps-topology-audit.md` (branch `fre-214-vps-topology-audit`). 30-row parity matrix, 7 deviations logged, recommendation = **ratify full-harness-on-VPS** by amending ADR-0045 (driver is ADR-0048, not ADR-0044). Owner verdict on §5 question gates D2–D6. FRE-326 calendar-gated ≥ 2026-05-13.
+**Wave D planning complete (2026-05-08 / 2026-05-09).** FRE-214 verdict received: **ratify full-harness-on-VPS** (driven by ADR-0048, not ADR-0044). Deliverables on branch `fre-214-vps-topology-audit`:
+* Audit: `docs/architecture/2026-05-08-fre-214-vps-topology-audit.md` (30-row parity matrix, 7 deviations, peer-deployment + endpoint-abstraction + opt-in-tunnel-mode design)
+* ADR-0045 amendment landed in-place
+* Implementation plans (Sonnet-ready, execution deferred per §8.7): Track 2a endpoint abstraction, Track 2b compose unification, Track 3 test parity (closes FRE-336)
+* Follow-up tickets filed Needs Approval: FRE-338 (D-1 MCP env), FRE-339 (D-3 PWA runtime config), FRE-340 (D-5 transfer-models portability), FRE-341 (D-6 gateway token prune)
+* FRE-217 closed as duplicate of FRE-214
+
+**Wave D implementation pending** — Tracks 2a/2b/3 + the four FRE-338..341 + the original FRE-238 / FRE-240 / FRE-241 / FRE-236 are unblocked but not started. Implementation begins after backlog reduction (owner direction). FRE-326 calendar-gated ≥ 2026-05-13.
 
 ---
 
@@ -23,7 +30,7 @@ Wave J complete. All 7 items shipped: FRE-329, FRE-331, FRE-330, FRE-334, FRE-33
 | **A** ✅ | Dev loop & hygiene | Fix Linear label lookup; mcp import error; flaky Neo4j test; skill-injection tests; primitive_tools default drift; stale 74-failure sweep; consolidate plan storage | [FRE-309](https://linear.app/frenchforest/issue/FRE-309) · [FRE-185](https://linear.app/frenchforest/issue/FRE-185) · [FRE-189](https://linear.app/frenchforest/issue/FRE-189) · [FRE-320](https://linear.app/frenchforest/issue/FRE-320) · [FRE-321](https://linear.app/frenchforest/issue/FRE-321) · [FRE-312](https://linear.app/frenchforest/issue/FRE-312) · [FRE-308](https://linear.app/frenchforest/issue/FRE-308) | **FRE-309 first** — broken label lookup poisons agent self-filing |
 | **B** | Self-observation | `hit_iteration_limit` in reflection; error monitor scans warnings; model_config audit; env.example audit; consolidation gate re-eval | [FRE-301](https://linear.app/frenchforest/issue/FRE-301) · [FRE-300](https://linear.app/frenchforest/issue/FRE-300) · [FRE-319](https://linear.app/frenchforest/issue/FRE-319) · [FRE-269](https://linear.app/frenchforest/issue/FRE-269) · [FRE-326](https://linear.app/frenchforest/issue/FRE-326) | FRE-326 scheduled ≥ 2026-05-13 |
 | **C** | Security | Domain guard — block known malicious sites | [FRE-225](https://linear.app/frenchforest/issue/FRE-225) | — |
-| **D** ⬅ *next* | Architecture | VPS+CF+local topology review (gates D2-D6); containerization decision; SLM circuit breaker; reranker fallback; slm_server supervisor; PWA iOS SSE | [FRE-214](https://linear.app/frenchforest/issue/FRE-214) · [FRE-217](https://linear.app/frenchforest/issue/FRE-217) · [FRE-238](https://linear.app/frenchforest/issue/FRE-238) · [FRE-240](https://linear.app/frenchforest/issue/FRE-240) · [FRE-241](https://linear.app/frenchforest/issue/FRE-241) · [FRE-236](https://linear.app/frenchforest/issue/FRE-236) | FRE-214 verdict gates D2-D6 |
+| **D** | Architecture | Planning ✅ — VPS topology ratified (FRE-214). Implementation pending: endpoint abstraction (Track 2a), compose unification + tunnel mode (Track 2b), test parity (Track 3 / FRE-336), small follow-ups (FRE-338/339/340/341), SLM circuit breaker (FRE-238), reranker fallback (FRE-240), slm_server supervisor (FRE-241), PWA iOS SSE (FRE-236) | [FRE-214](https://linear.app/frenchforest/issue/FRE-214) ✅ verdict · ~~FRE-217~~ closed dup · [FRE-238](https://linear.app/frenchforest/issue/FRE-238) · [FRE-240](https://linear.app/frenchforest/issue/FRE-240) · [FRE-241](https://linear.app/frenchforest/issue/FRE-241) · [FRE-236](https://linear.app/frenchforest/issue/FRE-236) · [FRE-336](https://linear.app/frenchforest/issue/FRE-336) · [FRE-338](https://linear.app/frenchforest/issue/FRE-338) · [FRE-339](https://linear.app/frenchforest/issue/FRE-339) · [FRE-340](https://linear.app/frenchforest/issue/FRE-340) · [FRE-341](https://linear.app/frenchforest/issue/FRE-341) | FRE-214 ratified 2026-05-08; implementation deferred per audit §8.7 |
 | **E** | Identity & write surface | Seshat owner identity (ADR-0052); protected agent write dir | [FRE-213](https://linear.app/frenchforest/issue/FRE-213) · [FRE-227](https://linear.app/frenchforest/issue/FRE-227) | FRE-227 prereq for FRE-226 + FRE-328-Phase-3 |
 | **F** | Self-improvement | Self-updating skills phase 2 (ADR + impl); adaptive self-query arch; trigger effectiveness analysis; **missing-skill feedback loop (FRE-328)** | [FRE-226](https://linear.app/frenchforest/issue/FRE-226) · [FRE-258](https://linear.app/frenchforest/issue/FRE-258) · [FRE-234](https://linear.app/frenchforest/issue/FRE-234) · [FRE-328](https://linear.app/frenchforest/issue/FRE-328) | FRE-226 needs FRE-227; FRE-258 Tier-1 Opus; **FRE-328 Phase 1 unblocked, Phase 3 needs FRE-227** |
 | **G** | Cleanups & gates | Delete legacy tool code; flip graph_quality gate; feedback_history retention; budget auto-tuning (parked) | [FRE-265](https://linear.app/frenchforest/issue/FRE-265) · [FRE-299](https://linear.app/frenchforest/issue/FRE-299) · [FRE-314](https://linear.app/frenchforest/issue/FRE-314) · [FRE-311](https://linear.app/frenchforest/issue/FRE-311) | FRE-265 gate ≥ 2026-05-12; FRE-311 parked on FRE-302 |
@@ -74,7 +81,8 @@ FRE-335  (Captain's Log p95 monitor — ADR-0066 D2 trigger)               ← n
 ```
 FRE-213 (owner identity) → FRE-227 (write dir) → FRE-226 (self-updating skills) + FRE-328-Phase-3 (auto-author skill)
 FRE-178 (Recall L2) → FRE-179 (L3 judge) → FRE-180 (context gap score)
-FRE-214 (arch review) → FRE-217 / FRE-238 / FRE-240 / FRE-241 / FRE-236
+FRE-214 (arch review) ✅ ratified 2026-05-08 → FRE-238 / FRE-240 / FRE-241 / FRE-236 + FRE-336 + FRE-338-341 unblocked (FRE-217 closed dup)
+  Track 2a (endpoint abstraction) → Track 2b (compose unification + tunnel mode) → Track 3 (test parity / FRE-336)
 FRE-265 (legacy delete) — calendar gate ≥ 2026-05-12
 FRE-326 (consolidation gates) — telemetry gate ≥ 2026-05-13
 FRE-311 (budget auto-tuning) — parked until FRE-302 (ADR-0065) lands
@@ -88,6 +96,7 @@ ADR-0066 D2 trigger (auto switch hybrid → model_decided) blocked on FRE-335
 
 | Item | Date | Summary |
 |------|------|---------|
+| **FRE-214: VPS topology audit + ADR-0045 amendment + Wave D plans** | 2026-05-09 | Architecture review of full-harness-on-VPS deployment. Verdict: **ratify** (driver = ADR-0048 mobile UI, not ADR-0044 profiles). Deliverables on branch `fre-214-vps-topology-audit`: 30-row parity matrix, 7 deviations logged, ADR-0045 amended in-place, three Sonnet-ready implementation plans (Track 2a endpoint abstraction; Track 2b compose unification + opt-in tunnel mode + sync runbook; Track 3 test parity / FRE-336 closure with fixture-based MLX↔llama.cpp parity). Filed 4 follow-up tickets (FRE-338/339/340/341). FRE-217 closed as duplicate. **Implementation deferred** until backlog reduction per audit §8.7. |
 | **FRE-225: Egress domain guard** | 2026-05-08 | DomainGuard in security.py: URLhaus feed, disk cache (TTL 1h), bundled fallback. GuardMode off/blocklist/allowlist. Wired into fetch_url_executor; blocked_url WARNING event emitted. AGENT_URL_GUARD_MODE + AGENT_URL_GUARD_ALLOWLIST settings. 19 unit tests. |
 | **Wave B (FRE-300, FRE-301, FRE-319, FRE-269)** | 2026-05-08 | FRE-300: warning allowlist (tool_iteration_limit_reached) wired into error monitor ES query. FRE-301: hit_iteration_limit signal in Captain's Log reflection + DSPy nudge for cap-raise proposal. FRE-319: cloud model config drift fixed (sub_agent context_length 16384→32768, reasoning_heavy ID). FRE-269: 19 wrong-prefix vars fixed in .env.example; SKILL ROUTING section added. |
 | **Wave A complete (FRE-309, FRE-185, FRE-189, FRE-320, FRE-321, FRE-312, FRE-308)** | 2026-05-08 | FRE-309: workspace-scope label fallback in LinearClient. FRE-185/189/320/321/312/308: all no-ops — already resolved by prior work. |

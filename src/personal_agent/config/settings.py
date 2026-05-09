@@ -1140,6 +1140,18 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # FRE-347 / FRE-346 G1: session-level narrative summariser
+    session_summary_enabled: bool = Field(
+        default=True,
+        alias="AGENT_SESSION_SUMMARY_ENABLED",
+        description=(
+            "Generate prose summaries for sessions during consolidation so cross-session "
+            "recall surfaces narrative context, not just entity facts. Uses the "
+            "captains_log model role and the captains_log budget cap. "
+            "Env var: AGENT_SESSION_SUMMARY_ENABLED"
+        ),
+    )
+
     # FRE-263 PIVOT-4: Flag-gated deprecation of legacy tools (ADR-0063 Phase 4)
     legacy_tools_enabled: bool = Field(
         default=False,

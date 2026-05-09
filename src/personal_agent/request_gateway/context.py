@@ -299,6 +299,27 @@ async def assemble_context(
             authenticated=authenticated,
         )
 
+    # FRE-348 / ADR-0067: surface relevant past reflections from Captain's Log.
+    # Selection is recency- + relevance-bounded; failures return [] silently so
+    # context assembly never blocks. Anti-thrash framing is in the rendered prose.
+    if settings.reflection_recall_enabled:
+        try:
+            from personal_agent.captains_log.recall import (
+                format_reflections_section,
+                query_relevant_reflections,
+            )
+
+            reflections = await query_relevant_reflections(
+                user_message,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            section = format_reflections_section(reflections)
+            if section:
+                messages.append({"role": "system", "content": section})
+        except Exception:
+            logger.exception("reflection_recall_unexpected_error", trace_id=trace_id)
+
     # Inject session fact candidates from recall controller (as system message
     # in the main message list, not memory_context, to avoid schema mismatch
     # and budget-trimming that silently drops memory_context items).

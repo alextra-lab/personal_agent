@@ -29,7 +29,7 @@ This is the test-side of the convenience/testability/consistency triad the owner
 2. **Profile-awareness via existing `resolve_model_key`**: the active profile's primary model key is resolved using `personal_agent.config.profile.resolve_model_key("primary")` — the same call site `factory.py` uses. No new API.
 3. **Endpoint reachability uses Track 2a's resolver**: for local models, `endpoint_resolver.resolve_endpoint(...)` returns first-reachable; if it raises `EndpointResolutionError`, the marker reports a loud skip. For cloud models, the probe is "is the API key set?" (current behavior, unchanged).
 4. **Loud skip semantics**: when `requires_llm` causes a skip, the reason is printed to stderr at collection time (not just buried in the per-test skip message). This is the "no silent skips on VPS" behavior FRE-336 demands.
-5. **Embedding parity as a pytest test with a dedicated marker**: `@pytest.mark.requires_dual_embedding_endpoints`. Reads `PARITY_EMBEDDING_ENDPOINT_A` and `PARITY_EMBEDDING_ENDPOINT_B` from env; auto-skips (loud) if either is missing or unreachable. Invoked manually for now: `PARITY_EMBEDDING_ENDPOINT_A=http://localhost:8503/v1 PARITY_EMBEDDING_ENDPOINT_B=http://localhost:18503/v1 uv run pytest tests/test_parity/`.
+5. **Embedding parity uses committed fixtures, not simultaneous live endpoints.** The original design required both runtimes reachable at test time (laptop SSH-tunneling to VPS), which forces a "laptop always on during verification" dependency that we can't guarantee. Replaced by: each runtime's vectors are captured once via a one-shot script (`scripts/capture_embedding_fixture.py`), committed to `tests/test_parity/fixtures/` as JSON, and the cross-runtime parity test compares the two committed fixtures with no live-endpoint dependency. Drift detection per runtime is a separate, opt-in test that needs only its own endpoint.
 6. **CI on both shapes is out of scope for this track**. Adding a CI workflow that runs integration tests on both laptop and VPS is a separate concern — file as a follow-up ticket once the marker rewrite has settled. Track 3 closes FRE-336; the CI extension is FRE-336-followup.
 7. **Caching, race conditions**: marker probe runs once per pytest collection phase, cached. `pytest --cache-clear` re-probes. Same model as today's `_LLM_SERVER_RESULT` — no architectural change.
 8. **Backward compat**: keep `@pytest.mark.requires_llm_server` working for one release as an alias of `requires_llm` (collection-time deprecation warning). Removed in the release after.
@@ -186,7 +186,7 @@ markers = [
     "requires_llm: test needs any reachable LLM via the active profile",
     "requires_local_llm: test needs the local Qwen primary specifically",
     "requires_llm_server: DEPRECATED — alias of requires_llm; remove after one release",
-    "requires_dual_embedding_endpoints: test needs both MLX and llama.cpp embedding runtimes (manual run only)",
+    "requires_local_embedding_endpoint: drift-detection test needs the host's local embedding endpoint reachable",
     "evaluation: large eval (100+ LLM calls)",
 ]
 ```
@@ -232,40 +232,27 @@ grep -rn "requires_llm_server" tests/ --include="*.py"
 
 ---
 
-## Phase 3 — Embedding-runtime parity test
+## Phase 3 — Embedding-runtime parity via committed fixtures
 
-### 3.1 Test module
+### Why fixtures, not live endpoints
 
-**File** (new): `tests/test_parity/test_embedding_runtime_parity.py`
+The two embedding runtimes — MLX on Apple Silicon, llama.cpp on x86 — serve the same model weights from different on-disk formats (`.mlx` vs `.gguf`). The audit §8.3 + ADR-0045 amendment "Embedding consistency — revised" requires their resulting vectors to agree to cosine ≥ 0.999 on a fixed input set.
+
+A live-endpoint comparison test would require both runtimes reachable simultaneously, which forces a "laptop always on during verification" dependency the project cannot guarantee. Instead: each runtime's vectors are captured **once** via a one-shot script, committed as JSON fixtures under `tests/test_parity/fixtures/`, and the parity test compares the two committed files with no live-endpoint dependency. Re-capture is a deliberate operation triggered by runtime/version/weights changes, with the resulting JSON diff visible in PR review.
+
+This also gives us a side-benefit — *drift detection per runtime*: a separate opt-in test that, when run on a host with a local embedding endpoint, hashes fresh vectors against the stored fixture for that runtime and fails if the runtime has shifted.
+
+### 3.1 Fixed input set + helpers
+
+**File** (new): `tests/test_parity/__init__.py` (empty marker)
+**File** (new): `tests/test_parity/inputs.py`
 
 ```python
-"""Cosine-similarity parity verification: MLX vs llama.cpp.
-
-The two embedding runtimes serve the same model weights but on different
-inference engines (MLX on Apple Silicon, llama.cpp elsewhere). The audit
-§8.3 + ADR-0045 amendment "Embedding consistency — revised" requires
-that the resulting vectors agree to cosine ≥ 0.999 on a fixed input set
-before the multi-instance topology is considered safe.
-
-This test runs only when both endpoints are explicitly provided via env:
-    PARITY_EMBEDDING_ENDPOINT_A=http://localhost:8503/v1
-    PARITY_EMBEDDING_ENDPOINT_B=http://localhost:18503/v1
-
-Typical setup (laptop with SSH tunnel to VPS):
-    ssh -L 18503:embeddings:8503 vps
-    PARITY_EMBEDDING_ENDPOINT_A=http://localhost:8503/v1 \
-    PARITY_EMBEDDING_ENDPOINT_B=http://localhost:18503/v1 \
-        uv run pytest tests/test_parity/test_embedding_runtime_parity.py -v
+"""Fixed input set for embedding parity. Stable across captures —
+adding/removing entries requires regenerating both runtime fixtures.
 """
 
-from __future__ import annotations
-
-import os
-
-import pytest
-
-# Fixed input set — broad enough to surface format/quantization drift,
-# small enough to run quickly. Mix English + code + emoji + long-tail.
+# Mix English + code + emoji + multilingual + edge cases.
 PARITY_INPUTS = [
     "the quick brown fox jumps over the lazy dog",
     "Personal Agent uses Qwen3-Embedding-0.6B for semantic search",
@@ -279,7 +266,7 @@ PARITY_INPUTS = [
 COSINE_THRESHOLD = 0.999
 
 
-def _cosine(a: list[float], b: list[float]) -> float:
+def cosine(a: list[float], b: list[float]) -> float:
     import math
     dot = sum(x * y for x, y in zip(a, b))
     na = math.sqrt(sum(x * x for x in a))
@@ -287,71 +274,239 @@ def _cosine(a: list[float], b: list[float]) -> float:
     if na == 0 or nb == 0:
         return 1.0 if na == nb else 0.0
     return dot / (na * nb)
-
-
-@pytest.mark.requires_dual_embedding_endpoints
-@pytest.mark.parametrize("text", PARITY_INPUTS, ids=lambda s: f"len={len(s)}")
-def test_mlx_vs_llamacpp_cosine(text: str) -> None:
-    import httpx
-
-    endpoint_a = os.environ["PARITY_EMBEDDING_ENDPOINT_A"]
-    endpoint_b = os.environ["PARITY_EMBEDDING_ENDPOINT_B"]
-    model_id = os.environ.get("PARITY_EMBEDDING_MODEL_ID", "qwen3-embedding-0.6b")
-
-    payload = {"model": model_id, "input": text}
-
-    with httpx.Client(timeout=30.0) as client:
-        resp_a = client.post(f"{endpoint_a}/embeddings", json=payload)
-        resp_a.raise_for_status()
-        vec_a = resp_a.json()["data"][0]["embedding"]
-
-        resp_b = client.post(f"{endpoint_b}/embeddings", json=payload)
-        resp_b.raise_for_status()
-        vec_b = resp_b.json()["data"][0]["embedding"]
-
-    assert len(vec_a) == len(vec_b), (
-        f"dimension mismatch: A={len(vec_a)} B={len(vec_b)} for input len={len(text)}"
-    )
-    cos = _cosine(vec_a, vec_b)
-    assert cos >= COSINE_THRESHOLD, (
-        f"parity drift on input len={len(text)}: cosine={cos:.6f} (threshold={COSINE_THRESHOLD})"
-    )
 ```
 
-### 3.2 Marker probe
+### 3.2 Capture script
 
-Extend `tests/conftest.py` (`pytest_collection_modifyitems` from Phase 1) to handle `requires_dual_embedding_endpoints`:
+**File** (new): `scripts/capture_embedding_fixture.py`
 
 ```python
-needs_dual = any(item.get_closest_marker("requires_dual_embedding_endpoints") for item in items)
-if needs_dual:
-    a = os.environ.get("PARITY_EMBEDDING_ENDPOINT_A")
-    b = os.environ.get("PARITY_EMBEDDING_ENDPOINT_B")
+"""One-shot capture: hit a live embedding endpoint, write fixture JSON.
+
+Usage:
+    uv run python scripts/capture_embedding_fixture.py \
+        --endpoint http://localhost:8503/v1 \
+        --runtime mlx \
+        --output tests/test_parity/fixtures/mlx_embeddings.json
+
+Run from the host where the runtime lives:
+    - mlx fixture       → run on the laptop (MLX slm_server)
+    - llamacpp fixture  → run on the VPS (or laptop with VPS port-forwarded)
+
+The output JSON maps each input string to its embedding vector. Diff
+the fixture in PR review when re-capturing — large changes signal
+runtime / weights / quantization drift.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+import httpx
+
+from tests.test_parity.inputs import PARITY_INPUTS
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--endpoint", required=True, help="e.g. http://localhost:8503/v1")
+    ap.add_argument("--runtime", required=True, choices=["mlx", "llamacpp"])
+    ap.add_argument("--output", required=True, type=Path)
+    ap.add_argument("--model-id", default="qwen3-embedding-0.6b")
+    args = ap.parse_args()
+
+    fixture: dict[str, object] = {
+        "runtime": args.runtime,
+        "endpoint": args.endpoint,
+        "model_id": args.model_id,
+        "vectors": {},
+    }
+    with httpx.Client(timeout=60.0) as client:
+        for text in PARITY_INPUTS:
+            resp = client.post(
+                f"{args.endpoint.rstrip('/')}/embeddings",
+                json={"model": args.model_id, "input": text},
+            )
+            resp.raise_for_status()
+            fixture["vectors"][text] = resp.json()["data"][0]["embedding"]
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(fixture, indent=2, ensure_ascii=False) + "\n")
+    print(f"wrote {len(fixture['vectors'])} vectors → {args.output}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+### 3.3 Cross-runtime parity test (always runs)
+
+**File** (new): `tests/test_parity/test_runtime_parity.py`
+
+```python
+"""Cross-runtime embedding parity: MLX vs llama.cpp.
+
+Compares two committed fixtures. No live-endpoint dependency — runs
+in CI, on laptop, on VPS, anywhere pytest can execute.
+"""
+
+import json
+from pathlib import Path
+
+import pytest
+
+from tests.test_parity.inputs import COSINE_THRESHOLD, PARITY_INPUTS, cosine
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+def _load_vectors(name: str) -> dict[str, list[float]]:
+    path = FIXTURES_DIR / name
+    if not path.exists():
+        pytest.skip(
+            f"missing fixture {name}; run "
+            f"`make capture-{'mlx' if 'mlx' in name else 'llamacpp'}-fixture` "
+            f"on the appropriate host and commit the result."
+        )
+    return json.loads(path.read_text())["vectors"]
+
+
+@pytest.mark.parametrize("text", PARITY_INPUTS, ids=lambda s: f"len={len(s)}")
+def test_cross_runtime_cosine(text: str) -> None:
+    """For each fixed input, MLX and llama.cpp embeddings must agree to
+    cosine ≥ 0.999. Both fixtures must have been captured against the
+    same model weights — see scripts/capture_embedding_fixture.py."""
+    mlx = _load_vectors("mlx_embeddings.json")
+    llamacpp = _load_vectors("llamacpp_embeddings.json")
+
+    if text not in mlx or text not in llamacpp:
+        pytest.fail(
+            f"input not present in both fixtures (re-capture both after "
+            f"editing tests/test_parity/inputs.py)"
+        )
+
+    if len(mlx[text]) != len(llamacpp[text]):
+        pytest.fail(
+            f"dimension mismatch on input len={len(text)}: "
+            f"mlx={len(mlx[text])} llamacpp={len(llamacpp[text])}"
+        )
+
+    cos = cosine(mlx[text], llamacpp[text])
+    assert cos >= COSINE_THRESHOLD, (
+        f"parity drift on input len={len(text)}: cosine={cos:.6f} "
+        f"(threshold={COSINE_THRESHOLD}). Re-capture both fixtures after "
+        f"verifying neither runtime regressed; investigate if drift persists."
+    )
+```
+
+### 3.4 Drift-detection test (per-runtime, opt-in)
+
+**File** (additional content in `tests/test_parity/test_runtime_parity.py`):
+
+```python
+@pytest.mark.requires_local_embedding_endpoint
+@pytest.mark.parametrize("text", PARITY_INPUTS, ids=lambda s: f"len={len(s)}")
+def test_local_runtime_matches_fixture(text: str) -> None:
+    """Generates fresh vectors from the local embedding endpoint and
+    compares against the stored fixture for the *same runtime*. Catches
+    runtime/binary/weights drift that a cross-runtime comparison wouldn't
+    (because both runtimes might shift in the same direction).
+
+    Requires:
+        PARITY_LOCAL_EMBEDDING_ENDPOINT  e.g. http://localhost:8503/v1
+        PARITY_LOCAL_RUNTIME             "mlx" or "llamacpp"
+    """
+    import os
+    import httpx
+
+    endpoint = os.environ["PARITY_LOCAL_EMBEDDING_ENDPOINT"].rstrip("/")
+    runtime = os.environ["PARITY_LOCAL_RUNTIME"]
+    fixture = _load_vectors(f"{runtime}_embeddings.json")
+
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.post(
+            f"{endpoint}/embeddings",
+            json={"model": fixture.get("model_id", "qwen3-embedding-0.6b"), "input": text},
+        )
+        resp.raise_for_status()
+        fresh = resp.json()["data"][0]["embedding"]
+
+    cos = cosine(fresh, fixture[text])
+    assert cos >= COSINE_THRESHOLD, (
+        f"runtime drift on input len={len(text)}: cosine={cos:.6f} "
+        f"vs stored {runtime} fixture. Re-capture if drift is intentional."
+    )
+```
+
+### 3.5 Marker probe — replace `requires_dual_embedding_endpoints`
+
+In `tests/conftest.py` (Phase 1's `pytest_collection_modifyitems`):
+
+```python
+needs_local_embed = any(
+    item.get_closest_marker("requires_local_embedding_endpoint") for item in items
+)
+if needs_local_embed:
+    endpoint = os.environ.get("PARITY_LOCAL_EMBEDDING_ENDPOINT")
+    runtime = os.environ.get("PARITY_LOCAL_RUNTIME")
     missing = []
-    if not a: missing.append("PARITY_EMBEDDING_ENDPOINT_A")
-    if not b: missing.append("PARITY_EMBEDDING_ENDPOINT_B")
+    if not endpoint: missing.append("PARITY_LOCAL_EMBEDDING_ENDPOINT")
+    if not runtime: missing.append("PARITY_LOCAL_RUNTIME")
 
     if missing:
-        msg = f"set {' and '.join(missing)} to enable embedding-runtime parity tests"
-        print(f"\n[requires_dual_embedding_endpoints] SKIP — {msg}\n", file=sys.stderr)
+        msg = f"set {' and '.join(missing)} to enable per-runtime drift detection"
+        print(f"\n[requires_local_embedding_endpoint] SKIP — {msg}\n", file=sys.stderr)
         skip_mark = pytest.mark.skip(reason=msg)
         for item in items:
-            if item.get_closest_marker("requires_dual_embedding_endpoints"):
+            if item.get_closest_marker("requires_local_embedding_endpoint"):
                 item.add_marker(skip_mark)
-    # If both vars are set, let the test run; httpx errors will surface as test failures.
 ```
 
-### 3.3 Make target for convenience
+### 3.6 Make targets
 
 ```makefile
-# Verify embedding-runtime parity (MLX on host vs llama.cpp container).
-# Requires both endpoints reachable; typical setup is a laptop with an SSH
-# tunnel forwarding the VPS embedding container to localhost:18503.
+# Capture MLX embedding fixture from the laptop's slm_server.
+# Run on laptop with slm_server up and embedding endpoint reachable on :8503.
+capture-mlx-fixture:
+	uv run python scripts/capture_embedding_fixture.py \
+	  --endpoint http://localhost:8503/v1 \
+	  --runtime mlx \
+	  --output tests/test_parity/fixtures/mlx_embeddings.json
+
+# Capture llama.cpp embedding fixture from the VPS's in-compose container.
+# Run on VPS (or laptop with VPS embedding port-forwarded to :8503).
+capture-llamacpp-fixture:
+	uv run python scripts/capture_embedding_fixture.py \
+	  --endpoint http://localhost:8503/v1 \
+	  --runtime llamacpp \
+	  --output tests/test_parity/fixtures/llamacpp_embeddings.json
+
+# Run the cross-runtime parity test (no live endpoints needed).
 verify-embedding-parity:
-	@[ -n "$$PARITY_EMBEDDING_ENDPOINT_A" ] || { echo "set PARITY_EMBEDDING_ENDPOINT_A"; exit 1; }
-	@[ -n "$$PARITY_EMBEDDING_ENDPOINT_B" ] || { echo "set PARITY_EMBEDDING_ENDPOINT_B"; exit 1; }
-	@uv run pytest tests/test_parity/test_embedding_runtime_parity.py -v
+	uv run pytest tests/test_parity/test_runtime_parity.py::test_cross_runtime_cosine -v
+
+# Run drift-detection against the local embedding endpoint.
+# Caller sets PARITY_LOCAL_EMBEDDING_ENDPOINT and PARITY_LOCAL_RUNTIME.
+verify-embedding-drift:
+	@[ -n "$$PARITY_LOCAL_EMBEDDING_ENDPOINT" ] || { echo "set PARITY_LOCAL_EMBEDDING_ENDPOINT"; exit 1; }
+	@[ -n "$$PARITY_LOCAL_RUNTIME" ] || { echo "set PARITY_LOCAL_RUNTIME (mlx or llamacpp)"; exit 1; }
+	uv run pytest tests/test_parity/test_runtime_parity.py::test_local_runtime_matches_fixture -v
 ```
+
+### 3.7 Initial capture — when this plan executes
+
+The first execution of Track 3 captures both fixtures as the very last step before commit:
+
+1. Run `make capture-mlx-fixture` on the laptop (MLX `slm_server` up).
+2. Run `make capture-llamacpp-fixture` on the VPS (in-compose llama.cpp up).
+3. Inspect both JSON files in the diff (sanity: shape, no NaNs, dimensions consistent).
+4. Run `make verify-embedding-parity` — expect 7 passed.
+5. Commit both fixtures alongside the rest of Track 3's changes.
+
+If step 4 fails (cosine < 0.999 on any input), do NOT commit the fixtures — investigate first. Likely causes: model file mismatch (different quantization), runtime version skew (regenerate one and re-test), or a real numerical bug worth filing.
 
 ---
 
@@ -428,15 +583,33 @@ make test-integration
 # Expected: [requires_llm] SKIP — AGENT_ANTHROPIC_API_KEY not set
 ```
 
-### 5.5 Embedding parity (manual)
+### 5.5 Embedding parity — cross-runtime (always runnable)
 
 ```bash
-# On laptop, with VPS embedding port forwarded:
-ssh -L 18503:embeddings:8503 -N -f $VPS_SSH_HOST
-PARITY_EMBEDDING_ENDPOINT_A=http://localhost:8503/v1 \
-PARITY_EMBEDDING_ENDPOINT_B=http://localhost:18503/v1 \
-    make verify-embedding-parity
+make verify-embedding-parity
 # Expected: 7 passed (one per PARITY_INPUTS row); each cosine ≥ 0.999.
+# No live endpoints needed — compares the two committed fixtures.
+```
+
+### 5.6 Embedding drift detection (per-runtime, opt-in)
+
+```bash
+# On laptop:
+PARITY_LOCAL_EMBEDDING_ENDPOINT=http://localhost:8503/v1 \
+PARITY_LOCAL_RUNTIME=mlx \
+    make verify-embedding-drift
+# Expected: 7 passed; current MLX vectors match the stored mlx_embeddings.json.
+
+# On VPS:
+PARITY_LOCAL_EMBEDDING_ENDPOINT=http://localhost:8503/v1 \
+PARITY_LOCAL_RUNTIME=llamacpp \
+    make verify-embedding-drift
+# Expected: 7 passed; current llama.cpp vectors match the stored llamacpp_embeddings.json.
+
+# If drift detected (cosine below threshold): re-run the corresponding
+# capture target, inspect the fixture diff, decide whether to commit
+# the new fixture (intentional runtime/weights upgrade) or investigate
+# (unintentional regression).
 ```
 
 ### 5.6 Test suite
@@ -479,11 +652,14 @@ clean improvement); revert just `tests/test_parity/`.
 3. `@pytest.mark.requires_llm_server` still works (deprecated alias) with collection-time deprecation warning.
 4. All existing `requires_llm_server` usages in `tests/test_*` are migrated to one of the two new markers.
 5. Skips are loud — stderr gets a clear `[marker] SKIP — reason` line at collection time.
-6. `tests/test_parity/test_embedding_runtime_parity.py` exists; auto-skips when env vars absent; verifies cosine ≥ 0.999 across 7 fixed inputs when env vars set.
-7. `make verify-embedding-parity` works.
-8. `tests/AGENTS.md` and `docs/guides/test-parity.md` document the new markers + parity verification.
-9. `make test` + `make ruff-check` + `make mypy` clean.
-10. **The original FRE-336 symptom is gone**: running `make test-integration` on the VPS no longer skips silently; it either runs against Anthropic (loud), runs against local Qwen via tunnel (loud), or skips with a clear stderr message naming the missing prerequisite.
+6. `tests/test_parity/fixtures/mlx_embeddings.json` and `tests/test_parity/fixtures/llamacpp_embeddings.json` exist (captured during execution from the appropriate hosts) and are committed.
+7. `tests/test_parity/test_runtime_parity.py::test_cross_runtime_cosine` always runs and passes (no endpoint dependency); 7 parametrized cases at cosine ≥ 0.999.
+8. `tests/test_parity/test_runtime_parity.py::test_local_runtime_matches_fixture` runs on either deployment when its two env vars are set; loud skip otherwise.
+9. `make verify-embedding-parity` works without any env vars (cross-runtime check); `make verify-embedding-drift` works when its env vars are set (per-runtime drift).
+10. `make capture-mlx-fixture` and `make capture-llamacpp-fixture` regenerate fixtures from the appropriate host's local endpoint.
+11. `tests/AGENTS.md` and `docs/guides/test-parity.md` document the new markers + the capture-vs-compare model + when to re-capture.
+12. `make test` + `make ruff-check` + `make mypy` clean.
+13. **The original FRE-336 symptom is gone**: running `make test-integration` on the VPS no longer skips silently; it either runs against Anthropic (loud), runs against local Qwen via tunnel (loud), or skips with a clear stderr message naming the missing prerequisite.
 
 ---
 

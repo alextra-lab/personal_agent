@@ -235,6 +235,36 @@ AGENT_MCP_GATEWAY_ENABLED=false
 AGENT_MCP_GATEWAY_COMMAND='["docker", "mcp", "gateway", "run"]'
 ```
 
+### Owner Identity Setup (FRE-213 / ADR-0052)
+
+Set your display name so the agent greets you by name and never burns tool calls trying to infer who you are:
+
+```bash
+# Add to /opt/seshat/.env (VPS) or .env (local dev)
+AGENT_OWNER_NAME=Alex
+AGENT_AGENT_ID=seshat-local   # default — only change for multiple deployments
+```
+
+On the next restart (`make restart SERVICE=seshat-gateway`), the service will:
+
+1. Resolve your `user_id` from the `users` table (keyed on `AGENT_OWNER_EMAIL`)
+2. `MERGE` a `:Person {is_owner: true, name: "Alex", user_id: …}` node in Neo4j
+3. Inject `## Operator\nYou are assisting Alex.` into every system prompt
+
+All other CF Access users are provisioned automatically on their first authenticated request — their `:Person` node is created with their email local-part as a temporary display name until `users.display_name` is populated.
+
+**Verification** after restart:
+
+```bash
+# Ask the agent
+uv run agent "who am I?" --new
+# Expect: "You're Alex" — zero tool iterations in the trace
+
+# Check the graph
+docker compose exec neo4j cypher-shell -u neo4j -p "$AGENT_NEO4J_PASSWORD" \
+  'MATCH (a:Agent {id: "seshat-local"})-[:OPERATED_BY]->(p) RETURN p.name, p.is_owner, p.user_id'
+```
+
 ### Identity Setup — Cloudflare Access (multi-user / FRE-268)
 
 If the service runs behind Cloudflare Access (recommended for any shared deployment), add the following to `.env`:

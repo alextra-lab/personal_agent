@@ -1,9 +1,10 @@
 # ADR-0052: Seshat Owner Identity Primitive
 
-**Status**: Proposed (Needs Approval)
+**Status**: Accepted (amended 2026-05-09)
 **Date**: 2026-04-17
+**Amendment date**: 2026-05-09
 **Deciders**: Project owner
-**Related**: ADR-0026 (Search Memory Native Tool), ADR-0035 (Seshat Embeddings + Reranker), ADR-0039 (Proactive Memory), ADR-0041 (Event Bus Promotion), ADR-0042 (Knowledge Graph Freshness)
+**Related**: ADR-0026 (Search Memory Native Tool), ADR-0035 (Seshat Embeddings + Reranker), ADR-0039 (Proactive Memory), ADR-0041 (Event Bus Promotion), ADR-0042 (Knowledge Graph Freshness), ADR-0064 (Inbound User Identity)
 
 ---
 
@@ -213,3 +214,52 @@ Allow N persons to have `is_owner = true` to support shared family/team usage.
 6. **Rollout**
    - Ship behind no flag; the feature is inert when `owner_name == ""`.
    - Document in `docs/guides/USAGE_GUIDE.md`: "First-time setup — set `AGENT_OWNER_NAME` in `.env`."
+
+---
+
+## Amendment — 2026-05-09 (FRE-213 implementation)
+
+### Reframing: single-owner over a multi-user CF Access deployment
+
+ADR-0052 was originally written assuming a single operator per deployment. In practice, the harness is already **multi-user via Cloudflare Access** (4 connected users as of 2026-05-09). The amendment reframes "single-operator" as **"single owner / admin, multiple authenticated users"**:
+
+- **Owner** (`is_owner=true`) — one person; the deployment admin; identified by `AGENT_OWNER_NAME` + `AGENT_OWNER_EMAIL`.
+- **Connected users** — all CF Access authenticated users; each gets a `:Person {user_id}` node, provisioned lazily on first request.
+- **Memory is shared** by default (`visibility=PUBLIC`). Per-user retrieval (e.g. "what did *we* talk about last week") is a separate mechanism (personal-time-window query, tracked in Wave E follow-up ticket).
+
+### Schema clarification
+
+```cypher
+# Admin owner — cardinality 1
+(:Agent {id})-[:OPERATED_BY]->(:Person {is_owner: true, user_id, email, name, …})
+
+# Every authenticated user — cardinality N, anchored by user_id
+(:Person {user_id, email, name, …})
+
+# Extracted entities (third parties) — no user_id
+(:Person {name, …})   ← never has user_id; never has is_owner
+```
+
+### Dropped: case-insensitive name-match adoption heuristic
+
+The original "if a :Person with the same name exists, adopt it" heuristic is **removed**. Bootstrap and per-request provision always anchor by `user_id` (Postgres UUID), never by name. Reason: same-named third-party entities extracted from conversation (e.g. a friend named "Alex") must never be merged into the harness-user's Person node. Two `:Person {name: "Alex"}` nodes with and without `user_id` are distinct by design.
+
+### New: auto-provision for non-owner users
+
+`MemoryService.get_or_provision_user_person()` is called on every authenticated request to ensure a `:Person {user_id}` exists. The `name` field is seeded from `users.display_name` (nullable) falling back to the email local-part. Properties are additive — extraction enrichment overwrites nothing.
+
+### Stanza is per-connected-user, not per-owner
+
+`get_owner_stanza()` in `orchestrator/prompts.py` accepts `user_id`, `email`, `display_name` and calls `get_or_provision_user_person()` each turn. This means every authenticated user is greeted by their own name — not just the admin owner. Falls back to empty string when `user_id` is None (CLI/unauthenticated paths).
+
+### Research grounding
+
+Patterns validated against: Mem0g (anchors user identity by `speaker_id`, explicitly documents "do not confuse character names with users"), Letta (shared blocks vs. per-user blocks), Neo4j multi-tenant provenance-edge pattern, W3C PROV. See `docs/research/2026-05-09-graph-identity-multi-user-patterns.md`.
+
+### `:Person(user_id)` uniqueness constraint
+
+A `CREATE CONSTRAINT person_user_id_unique` is ensured at startup to guarantee one `:Person` per `user_id`.
+
+### Known follow-up: dedup hardening (HIGH)
+
+`memory/dedup.py:_find_similar_entities` currently matches on exact lowercase name across all `:Person` nodes regardless of `user_id`. A same-named extracted third party could collide into the owner Person on a future extraction turn. Fix: add `WHERE node.user_id IS NULL` to the similarity search candidates. Tracked as a Wave E follow-up ticket.

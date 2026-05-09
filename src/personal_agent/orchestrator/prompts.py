@@ -1,14 +1,21 @@
-"""Router prompts for intelligent model selection and parameter estimation.
+"""Prompts and prompt helpers for the orchestrator.
 
-This module contains system and user prompts for the router model to:
-1. Classify query complexity
-2. Select appropriate target model (STANDARD, REASONING, CODING)
-3. Support tool-aware delegation for STANDARD and REASONING paths
+Includes router prompts, tool-use guidance, and per-turn dynamic helpers
+such as the operator identity stanza (FRE-213 / ADR-0052).
 
 Related:
 - Research: ../../docs/research/router_prompt_patterns_best_practices_2025-12-31.md
 - Prompt efficiency: ../../docs/research/PROMPT_EFFICIENCY.md
 """
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from uuid import UUID
+
+    from personal_agent.memory.service import MemoryService
 
 # Router system prompt: delegate-only, no HANDLE path, no tool guidance.
 ROUTER_SYSTEM_PROMPT = """You are a routing classifier.
@@ -188,3 +195,70 @@ def get_router_prompt() -> str:
         Router system prompt string.
     """
     return ROUTER_SYSTEM_PROMPT
+
+
+# ============================================================================
+# Operator Identity Stanza (FRE-213 / ADR-0052)
+# ============================================================================
+
+_OWNER_STANZA_FIELDS = ("name", "location", "pronouns", "role", "languages")
+_OWNER_FIELD_MAX_CHARS = 120
+
+
+async def get_owner_stanza(
+    memory_service: "MemoryService | None",
+    user_id: "UUID | None",
+    email: str | None,
+    display_name: str | None,
+) -> str:
+    """Render the operator stanza for the connected user.
+
+    Ensures a :Person {user_id} node exists in Neo4j (lazy provisioning) and
+    returns a compact Markdown stanza with known facts. Queried every turn;
+    the underlying Neo4j MERGE on a unique-property index is sub-millisecond.
+
+    Only whitelisted fields (name, location, pronouns, role, languages) are
+    rendered — unknown properties on the node are ignored. Each field is
+    capped at 120 characters to prevent prompt bloat.
+
+    Args:
+        memory_service: Active MemoryService instance (None → empty string).
+        user_id: Authenticated user's UUID (None → empty string).
+        email: CF Access email of the connected user.
+        display_name: Display name from the users table (nullable).
+
+    Returns:
+        Markdown stanza string, or empty string when unavailable.
+    """
+    if memory_service is None or user_id is None or email is None:
+        return ""
+
+    facts = await memory_service.get_or_provision_user_person(
+        user_id=user_id,
+        email=email,
+        display_name=display_name,
+    )
+    if not facts:
+        return ""
+
+    name = facts.get("name", "")
+    if not name:
+        return ""
+
+    lines = [f"## Operator\nYou are assisting {name}."]
+    detail_lines = []
+    for field in _OWNER_STANZA_FIELDS:
+        if field == "name":
+            continue
+        value = facts.get(field, "")
+        if value:
+            value = str(value)[:_OWNER_FIELD_MAX_CHARS]
+            label = field.capitalize()
+            detail_lines.append(f"- {label}: {value}")
+
+    if detail_lines:
+        lines.append("Known facts (from memory):")
+        lines.extend(detail_lines)
+
+    lines.append("Reference these naturally. Do not tool-call to look up who the user is.")
+    return "\n".join(lines)

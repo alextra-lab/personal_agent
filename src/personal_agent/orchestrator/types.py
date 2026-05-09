@@ -194,6 +194,11 @@ class ExecutionContext:
 
     # FRE-229: owning user UUID — passed from the authenticated request for TaskCapture
     user_id: UUID | None = None
+    # FRE-213: user email + display name for the operator stanza (ADR-0052)
+    user_email: str | None = None
+    user_display_name: str | None = None
+    # Rendered operator stanza populated in step_init; injected into system prompt in step_llm_call.
+    operator_stanza: str = ""
 
     # --- Expansion controller state (Slice 3, ADR-0036) ---
     expansion_strategy: str | None = None

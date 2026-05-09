@@ -45,7 +45,11 @@ RELATIONSHIP TYPES — use EXACTLY one of these UPPER_SNAKE_CASE values, no othe
   LOCATED_IN    — entity is geographically within another
 
 EXTRACTION RULES (follow strictly):
-1. NEVER extract "User" or "Assistant" as entities — they are conversation participants, not knowledge
+1. NEVER extract the protocol role labels "User" / "Assistant" / "System" / "Reasoning" as Person
+   entities — these are chat-template role slots, not people.
+   This does NOT preclude extracting the human operator (the person who speaks through the User
+   slot) when they are named. If a turn contains "my name is Alex" or similar self-reference,
+   extract Alex as a normal Person entity.
 2. NEVER extract generic message artifacts: "Test message", "Another message", "Original message",
    "Quick test", "Test query", or any placeholder/test text
 3. NEVER extract internal tool binding names that start with "mcp_" (e.g. mcp_perplexity_ask,

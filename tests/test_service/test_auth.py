@@ -93,10 +93,10 @@ async def test_extracts_user_from_cf_access_header() -> None:
 
     with (
         patch(
-            "personal_agent.service.auth.get_or_create_user_by_email",
+            "personal_agent.service.auth._get_user_with_display_name",
             new_callable=AsyncMock,
-            return_value=uid,
-        ) as mock_create,
+            return_value=(uid, None),
+        ),
         patch("personal_agent.service.auth._get_db_session") as mock_db,
     ):
         mock_db.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
@@ -106,6 +106,7 @@ async def test_extracts_user_from_cf_access_header() -> None:
 
     assert user.email == "alice@example.com"
     assert user.user_id == uid
+    assert user.display_name is None
 
 
 @pytest.mark.asyncio
@@ -121,9 +122,9 @@ async def test_dev_mode_fallback_when_no_cf_header(monkeypatch: pytest.MonkeyPat
 
     with (
         patch(
-            "personal_agent.service.auth.get_or_create_user_by_email",
+            "personal_agent.service.auth._get_user_with_display_name",
             new_callable=AsyncMock,
-            return_value=owner_id,
+            return_value=(owner_id, "Owner"),
         ),
         patch("personal_agent.service.auth._get_db_session") as mock_db,
     ):
@@ -134,6 +135,7 @@ async def test_dev_mode_fallback_when_no_cf_header(monkeypatch: pytest.MonkeyPat
 
     assert user.email == "owner@example.com"
     assert user.user_id == owner_id
+    assert user.display_name == "Owner"
 
 
 @pytest.mark.asyncio

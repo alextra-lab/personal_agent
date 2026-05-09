@@ -45,6 +45,8 @@ class Orchestrator:
         request_timer: RequestTimer | None = None,
         gateway_output: GatewayOutput | None = None,
         user_id: UUID | None = None,
+        user_email: str | None = None,
+        user_display_name: str | None = None,
     ) -> OrchestratorResult:
         """Top-level entrypoint for a single user turn.
 
@@ -65,6 +67,8 @@ class Orchestrator:
                 When present, executor skips inline routing and uses pre-assembled context.
             user_id: Authenticated user UUID — passed through to TaskCapture for
                 visibility scoping of written memory nodes (FRE-229).
+            user_email: CF Access email of the connected user (FRE-213).
+            user_display_name: Display name from the users table, if set (FRE-213).
 
         Returns:
             OrchestratorResult with reply, steps, and trace_id.
@@ -101,6 +105,8 @@ class Orchestrator:
             request_timer=request_timer,
             gateway_output=gateway_output,
             user_id=user_id,
+            user_email=user_email,
+            user_display_name=user_display_name,
         )
 
         # Execute task

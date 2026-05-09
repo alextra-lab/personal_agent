@@ -29,7 +29,7 @@ from personal_agent.memory.protocol_adapter import MemoryServiceAdapter
 from personal_agent.memory.service import MemoryService
 from personal_agent.request_gateway import run_gateway_pipeline
 from personal_agent.security import sanitize_error_message
-from personal_agent.service.auth import RequestUser, get_request_user
+from personal_agent.service.auth import RequestUser, get_or_create_user_by_email, get_request_user
 from personal_agent.service.database import AsyncSessionLocal, get_db_session, init_db
 from personal_agent.service.models import SessionCreate, SessionResponse, SessionUpdate
 from personal_agent.service.repositories.session_repository import SessionRepository
@@ -100,6 +100,8 @@ async def _process_chat_stream_background(
     message: str,
     profile_name: str,
     user_id: UUID,
+    user_email: str | None = None,
+    user_display_name: str | None = None,
 ) -> None:
     """Run the full orchestrator pipeline and push the result to the SSE queue.
 
@@ -111,6 +113,8 @@ async def _process_chat_stream_background(
         message: User's message text.
         profile_name: Execution profile name (e.g. ``"local"``, ``"cloud"``).
         user_id: Authenticated user UUID — used for session ownership scoping.
+        user_email: CF Access email of the connected user (FRE-213).
+        user_display_name: Display name from the users table, if set (FRE-213).
     """
     from personal_agent.config.profile import load_profile, set_current_profile
 
@@ -240,6 +244,8 @@ async def _process_chat_stream_background(
                 request_timer=RequestTimer(trace_id=trace_id),
                 gateway_output=gateway_output,
                 user_id=user_id,
+                user_email=user_email,
+                user_display_name=user_display_name,
             )
             response_content = result.get("reply", "No response generated")
 
@@ -443,6 +449,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 log.info("neo4j_vector_index_ensured")
             except Exception as idx_e:
                 log.warning("neo4j_vector_index_setup_failed", error=str(idx_e))
+            # Bootstrap owner identity (FRE-213 / ADR-0052) — idempotent, no-op when empty
+            if settings.owner_name and settings.agent_owner_email:
+                try:
+                    async with AsyncSessionLocal() as db:
+                        owner_user_id = await get_or_create_user_by_email(
+                            db, settings.agent_owner_email
+                        )
+                    await memory_service.bootstrap_owner_identity(
+                        agent_id=settings.agent_id,
+                        user_id=owner_user_id,
+                        email=settings.agent_owner_email,
+                        name=settings.owner_name,
+                    )
+                except Exception as boot_e:
+                    log.warning("owner_bootstrap_failed", error=str(boot_e))
         except Exception as e:
             log.warning(
                 "memory_service_connect_failed",
@@ -1274,6 +1295,8 @@ async def chat(
             request_timer=timer,
             gateway_output=gateway_output,
             user_id=request_user.user_id,
+            user_email=request_user.email,
+            user_display_name=request_user.display_name,
         )
 
         response_content = result.get("reply", "No response generated")
@@ -1404,6 +1427,8 @@ async def chat_stream_endpoint(
             message=message,
             profile_name=profile,
             user_id=request_user.user_id,
+            user_email=request_user.email,
+            user_display_name=request_user.display_name,
         )
     )
 

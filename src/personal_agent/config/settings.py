@@ -988,6 +988,27 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # ── Operator Identity (FRE-213 / ADR-0052) ───────────────────────────────
+    owner_name: str = Field(
+        default="",
+        alias="AGENT_OWNER_NAME",
+        description=(
+            "Display name of the deployment owner (e.g. 'Alex'). When set, a "
+            "':Person {is_owner: true}' node is bootstrapped in Neo4j on startup "
+            "and injected into the system prompt as '## Operator'. "
+            "No-op when empty. Never logged in plain text."
+        ),
+    )
+    agent_id: str = Field(
+        default="seshat-local",
+        alias="AGENT_AGENT_ID",
+        description=(
+            "Stable identifier for this agent deployment. Used to anchor the "
+            "':Agent' node in Neo4j and bind it to the owner ':Person' via "
+            "':OPERATED_BY'. Should be unique per deployment."
+        ),
+    )
+
     # FRE-261 PIVOT-2: Primitive tools feature flags (ADR-0063 Phase 2)
     # All flags default OFF — enable after pentest gate clears.
     # Env vars are resolved via the AGENT_ prefix (SettingsConfigDict env_prefix).

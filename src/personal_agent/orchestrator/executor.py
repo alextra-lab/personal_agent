@@ -1161,6 +1161,19 @@ async def step_init(
                             conversations_found=conversations_found,
                         )
 
+                # Populate operator stanza (FRE-213 / ADR-0052) while service is connected.
+                if ctx.user_id and ctx.user_email:
+                    from personal_agent.orchestrator.prompts import (
+                        get_owner_stanza,  # noqa: PLC0415
+                    )
+
+                    ctx.operator_stanza = await get_owner_stanza(
+                        memory_service=memory_service,
+                        user_id=ctx.user_id,
+                        email=ctx.user_email,
+                        display_name=ctx.user_display_name,
+                    )
+
                 if memory_service != global_memory_service:
                     await memory_service.disconnect()
 
@@ -1331,6 +1344,14 @@ async def step_llm_call(
             "    postgres:5432  |  neo4j:7687 (bolt) / neo4j:7474 (HTTP)  |  elasticsearch:9200\n"
             "    redis:6379  |  embeddings:8503  |  reranker:8504"
         )
+
+    # Operator identity stanza (FRE-213 / ADR-0052) — populated in step_init.
+    # Placed before skill routing and memory sections to sit inside the cached prompt prefix.
+    if ctx.operator_stanza:
+        if system_prompt:
+            system_prompt = f"{system_prompt}\n\n{ctx.operator_stanza}"
+        else:
+            system_prompt = ctx.operator_stanza
 
     # Phase B skill routing (FRE-skill-routing, ADR-0063 §D7).
     # Routing mode controls what gets injected:
@@ -1793,8 +1814,9 @@ async def step_llm_call(
 
             # Phase B: inherit skill index + loaded_skills from parent context
             if specs and settings.prefer_primitives_enabled:
-                from personal_agent.orchestrator.skills import assemble_skill_index  # noqa: PLC0415
                 from dataclasses import replace  # noqa: PLC0415
+
+                from personal_agent.orchestrator.skills import assemble_skill_index  # noqa: PLC0415
 
                 _sub_index = assemble_skill_index(cap_tokens=settings.skill_index_max_tokens)
                 _parent_loaded = frozenset(ctx.loaded_skills)

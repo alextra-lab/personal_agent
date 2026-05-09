@@ -682,6 +682,123 @@ class MemoryService:
             log.error("vector_index_creation_failed", error=str(e), exc_info=True)
             return False
 
+    async def bootstrap_owner_identity(
+        self,
+        agent_id: str,
+        user_id: UUID,
+        email: str,
+        name: str,
+    ) -> bool:
+        """Create or update the owner :Person and :Agent nodes in Neo4j.
+
+        Idempotent — safe to call on every startup. Anchors identity by
+        ``user_id`` only (never by name) to prevent collision with
+        same-named third-party entities extracted from conversations.
+
+        Args:
+            agent_id: Stable deployment identifier (e.g. "seshat-local").
+            user_id: Owner's UUID from the Postgres users table.
+            email: Owner's email (sourced from AGENT_OWNER_EMAIL).
+            name: Owner's display name (sourced from AGENT_OWNER_NAME).
+
+        Returns:
+            True on success, False on failure.
+        """
+        if not self.connected or not self.driver:
+            log.warning("owner_bootstrap_skipped", reason="neo4j_not_connected")
+            return False
+        if not name:
+            log.info("owner_bootstrap_skipped", reason="owner_name_empty")
+            return False
+
+        user_id_str = str(user_id)
+        try:
+            async with self.driver.session() as session:
+                # Ensure uniqueness constraint exists (idempotent).
+                await session.run(
+                    "CREATE CONSTRAINT person_user_id_unique IF NOT EXISTS "
+                    "FOR (p:Person) REQUIRE p.user_id IS UNIQUE"
+                )
+                # Bootstrap :Agent and owner :Person, anchored on user_id.
+                await session.run(
+                    """
+                    MERGE (agent:Agent {id: $agent_id})
+                    MERGE (person:Person {user_id: $user_id})
+                      ON CREATE SET person.is_owner   = true,
+                                    person.name       = $name,
+                                    person.email      = $email,
+                                    person.created_at = datetime(),
+                                    person.source     = "config_bootstrap"
+                      ON MATCH  SET person.is_owner   = true,
+                                    person.email      = coalesce(person.email, $email),
+                                    person.name       = coalesce(person.name,  $name)
+                    MERGE (agent)-[:OPERATED_BY]->(person)
+                    """,
+                    agent_id=agent_id,
+                    user_id=user_id_str,
+                    name=name,
+                    email=email,
+                )
+            log.info("owner_bootstrap_ran", agent_id=agent_id)
+            return True
+        except Exception as e:
+            log.error("owner_bootstrap_failed", error=str(e), exc_info=True)
+            return False
+
+    async def get_or_provision_user_person(
+        self,
+        user_id: UUID,
+        email: str,
+        display_name: str | None,
+    ) -> dict[str, str]:
+        """Ensure a :Person node exists for an authenticated user and return its facts.
+
+        Creates the node on first call (lazy provisioning); subsequent calls
+        return existing properties without overwriting them — enrichment from
+        entity extraction survives intact. Anchored by ``user_id`` (never by name).
+
+        Args:
+            user_id: Authenticated user's UUID from the Postgres users table.
+            email: User's CF Access email.
+            display_name: User's display_name from the users table (nullable);
+                falls back to the local-part of their email.
+
+        Returns:
+            Dict of known facts (name, location, pronouns, role, languages)
+            for the whitelist fields. Missing fields are absent from the dict.
+        """
+        if not self.connected or not self.driver:
+            return {}
+
+        user_id_str = str(user_id)
+        email_localpart = email.split("@")[0] if "@" in email else email
+        resolved_name = display_name or email_localpart
+
+        try:
+            async with self.driver.session() as session:
+                result = await session.run(
+                    """
+                    MERGE (p:Person {user_id: $user_id})
+                      ON CREATE SET p.email      = $email,
+                                    p.name       = $name,
+                                    p.created_at = datetime(),
+                                    p.source     = "auto_provision"
+                      ON MATCH  SET p.email      = coalesce(p.email, $email)
+                    RETURN p { .name, .location, .pronouns, .role, .languages } AS facts
+                    """,
+                    user_id=user_id_str,
+                    email=email,
+                    name=resolved_name,
+                )
+                record = await result.single()
+                if record is None:
+                    return {}
+                raw: dict[str, Any] = record["facts"] or {}
+                return {k: v for k, v in raw.items() if v is not None}
+        except Exception as e:
+            log.warning("user_person_provision_failed", error=str(e))
+            return {}
+
     async def create_relationship(
         self, relationship: Relationship, visibility: str = "public"
     ) -> str | None:

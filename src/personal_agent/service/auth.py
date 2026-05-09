@@ -35,10 +35,13 @@ class RequestUser:
         user_id: Stable UUID from the users table. Use this as the FK
             for ownership checks — emails may change.
         email: Verified CF Access email for logging/display only.
+        display_name: Human-readable name from the users table (nullable).
+            Falls back to None when the users row has no display_name set.
     """
 
     user_id: UUID
     email: str
+    display_name: str | None = None
 
 
 @asynccontextmanager
@@ -81,6 +84,39 @@ async def get_or_create_user_by_email(db: AsyncSession, email: str) -> UUID:
     return user_id
 
 
+async def _get_user_with_display_name(db: AsyncSession, email: str) -> tuple[UUID, str | None]:
+    """Resolve (user_id, display_name) for email, creating the row if needed.
+
+    Args:
+        db: Active async SQLAlchemy session.
+        email: Verified CF Access email (lowercase).
+
+    Returns:
+        Tuple of (stable user_id UUID, display_name or None).
+    """
+    result = await db.execute(
+        select(UserModel.user_id, UserModel.display_name).where(
+            UserModel.email == email.lower()
+        )
+    )
+    row = result.one_or_none()
+    if row is not None:
+        return row.user_id, row.display_name
+
+    insert_result = await db.execute(
+        text(
+            "INSERT INTO users (user_id, email, created_at) "
+            "VALUES (gen_random_uuid(), :email, :now) "
+            "ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email "
+            "RETURNING user_id"
+        ),
+        {"email": email.lower(), "now": datetime.now(timezone.utc)},
+    )
+    user_id: UUID = insert_result.scalar_one()
+    await db.commit()
+    return user_id, None
+
+
 async def get_request_user(request: Request) -> RequestUser:
     """FastAPI dependency — resolve the authenticated user for a request.
 
@@ -94,7 +130,7 @@ async def get_request_user(request: Request) -> RequestUser:
         request: The incoming FastAPI request.
 
     Returns:
-        RequestUser with stable user_id and verified email.
+        RequestUser with stable user_id, verified email, and optional display_name.
 
     Raises:
         HTTPException: 401 when no identity can be resolved.
@@ -113,7 +149,7 @@ async def get_request_user(request: Request) -> RequestUser:
             raise HTTPException(status_code=401, detail="Authentication required")
 
     async with _get_db_session() as db:
-        user_id = await get_or_create_user_by_email(db, email)
+        user_id, display_name = await _get_user_with_display_name(db, email)
 
     log.debug("request_user_resolved", email=email, user_id=str(user_id))
-    return RequestUser(user_id=user_id, email=email)
+    return RequestUser(user_id=user_id, email=email, display_name=display_name)

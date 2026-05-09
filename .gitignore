@@ -64,10 +64,11 @@ telemetry/evaluation/EVAL-cat-*/
 # Short-lived harness iteration dirs (regeneratable; keep named EVAL-NN-* baselines tracked)
 telemetry/evaluation/EVAL-harness-iter*/
 
-# Recovery harness raw per-prompt artifacts (full prompt + response text);
-# keep markdown reports tracked, drop the heavy raw payloads.
-telemetry/evaluation/EVAL-agent-self-diagnosis/*/*/raw.json
-telemetry/evaluation/EVAL-skill-routing-*/*/*/raw.json
+# Agent self-diagnosis evaluation runs — entire run directories (regeneratable)
+telemetry/evaluation/EVAL-agent-self-diagnosis/*/
+
+# Skill routing evaluation runs — entire run directories (regeneratable)
+telemetry/evaluation/EVAL-skill-routing-*/
 
 # Single-prompt retest runs (debugging artifacts from eval iteration — not baselines)
 telemetry/evaluation/EVAL-primitive-tools/retest-*/
@@ -109,11 +110,17 @@ experiments/*/results/
 
 current_session
 
+# Runtime telemetry outputs (regeneratable on next service run)
+telemetry/security/
+telemetry/graph_quality/
+telemetry/within_session_compression/
+
 # Claude Code
 .claude/worktrees/
 .claude/todos/
 .claude/.cache/
 .claude/settings.json
+.claude/scheduled_tasks.lock
 
 # SearXNG generated files (ADR-0034)
 docker/searxng/uwsgi.ini

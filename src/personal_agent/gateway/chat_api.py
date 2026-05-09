@@ -227,9 +227,7 @@ async def _commit_reservation_safe(
         actual_cost = _Decimal("0")
         if final_message is not None and getattr(final_message, "usage", None) is not None:
             usage = final_message.usage
-            pricing = getattr(litellm, "model_cost", {}).get(
-                f"anthropic/{_CLOUD_MODEL}", {}
-            )
+            pricing = getattr(litellm, "model_cost", {}).get(f"anthropic/{_CLOUD_MODEL}", {})
             input_price = _Decimal(str(pricing.get("input_cost_per_token", "0")))
             output_price = _Decimal(str(pricing.get("output_cost_per_token", "0")))
             input_tokens = int(getattr(usage, "input_tokens", 0) or 0)

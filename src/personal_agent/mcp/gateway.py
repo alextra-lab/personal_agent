@@ -24,6 +24,7 @@ def _known_label_ids() -> dict[str, str]:
         ids["PersonalAgent"] = pa_id.strip()
     return ids
 
+
 # Service lifespan may initialize MCP before the orchestrator runs. A second
 # MCPGatewayAdapter would spawn another gateway subprocess and hit
 # ``ValueError: Tool 'mcp_*' is already registered`` for every tool, so the

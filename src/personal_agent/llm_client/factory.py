@@ -136,8 +136,7 @@ def get_llm_client_for_key(model_key: str, budget_role: str = "skill_routing") -
     model_def = config.models.get(model_key)
     if model_def is None:
         raise ValueError(
-            f"Unknown model key '{model_key}'. "
-            f"Available: {sorted(config.models.keys())}"
+            f"Unknown model key '{model_key}'. Available: {sorted(config.models.keys())}"
         )
 
     if model_def.provider_type != "local":

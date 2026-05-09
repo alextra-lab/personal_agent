@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-09 (Wave J ✅; Wave A ✅; Wave B ✅ except FRE-326; Wave C ✅; Wave D planning ✅; Wave E FRE-213 ✅ — owner identity primitive + research note + 4 Wave E follow-up tickets filed FRE-342/343/344/345)
+> **Last updated**: 2026-05-09 (Wave J ✅; Wave A ✅; Wave B ✅ except FRE-326; Wave C ✅; Wave D planning ✅; Wave E FRE-213 ✅ — owner identity primitive + research note + 4 Wave E follow-up tickets filed FRE-342/343/344/345; FRE-227 paused → Backlog pending cross-session continuity audit FRE-346)
 
 ---
 
@@ -31,7 +31,7 @@ Wave J complete. All 7 items shipped: FRE-329, FRE-331, FRE-330, FRE-334, FRE-33
 | **B** | Self-observation | `hit_iteration_limit` in reflection; error monitor scans warnings; model_config audit; env.example audit; consolidation gate re-eval | [FRE-301](https://linear.app/frenchforest/issue/FRE-301) · [FRE-300](https://linear.app/frenchforest/issue/FRE-300) · [FRE-319](https://linear.app/frenchforest/issue/FRE-319) · [FRE-269](https://linear.app/frenchforest/issue/FRE-269) · [FRE-326](https://linear.app/frenchforest/issue/FRE-326) | FRE-326 scheduled ≥ 2026-05-13 |
 | **C** | Security | Domain guard — block known malicious sites | [FRE-225](https://linear.app/frenchforest/issue/FRE-225) | — |
 | **D** | Architecture | Planning ✅ — VPS topology ratified (FRE-214). Implementation pending: endpoint abstraction (Track 2a), compose unification + tunnel mode (Track 2b), test parity (Track 3 / FRE-336), small follow-ups (FRE-338/339/340/341), SLM circuit breaker (FRE-238), reranker fallback (FRE-240), slm_server supervisor (FRE-241), PWA iOS SSE (FRE-236) | [FRE-214](https://linear.app/frenchforest/issue/FRE-214) ✅ verdict · ~~FRE-217~~ closed dup · [FRE-238](https://linear.app/frenchforest/issue/FRE-238) · [FRE-240](https://linear.app/frenchforest/issue/FRE-240) · [FRE-241](https://linear.app/frenchforest/issue/FRE-241) · [FRE-236](https://linear.app/frenchforest/issue/FRE-236) · [FRE-336](https://linear.app/frenchforest/issue/FRE-336) · [FRE-338](https://linear.app/frenchforest/issue/FRE-338) · [FRE-339](https://linear.app/frenchforest/issue/FRE-339) · [FRE-340](https://linear.app/frenchforest/issue/FRE-340) · [FRE-341](https://linear.app/frenchforest/issue/FRE-341) | FRE-214 ratified 2026-05-08; implementation deferred per audit §8.7 |
-| **E** ✅ FRE-213 | Identity & write surface | Seshat owner identity (ADR-0052 ✅ amended); protected agent write dir; Wave E follow-ups | [FRE-213](https://linear.app/frenchforest/issue/FRE-213) ✅ · [FRE-227](https://linear.app/frenchforest/issue/FRE-227) · [FRE-342](https://linear.app/frenchforest/issue/FRE-342) · [FRE-343](https://linear.app/frenchforest/issue/FRE-343) · [FRE-344](https://linear.app/frenchforest/issue/FRE-344) · [FRE-345](https://linear.app/frenchforest/issue/FRE-345) | FRE-227 prereq for FRE-226 + FRE-328-Phase-3; FRE-342 HIGH unblocked |
+| **E** ✅ FRE-213 | Identity & write surface | Seshat owner identity (ADR-0052 ✅ amended); protected agent write dir; Wave E follow-ups | [FRE-213](https://linear.app/frenchforest/issue/FRE-213) ✅ · [FRE-227](https://linear.app/frenchforest/issue/FRE-227) ⏸ · [FRE-342](https://linear.app/frenchforest/issue/FRE-342) · [FRE-343](https://linear.app/frenchforest/issue/FRE-343) · [FRE-344](https://linear.app/frenchforest/issue/FRE-344) · [FRE-345](https://linear.app/frenchforest/issue/FRE-345) | FRE-227 paused → Backlog 2026-05-09 (conflates Need 1 wiki + Need 2 continuity; see research note + FRE-346 audit); FRE-342 HIGH needs approval |
 | **F** | Self-improvement | Self-updating skills phase 2 (ADR + impl); adaptive self-query arch; trigger effectiveness analysis; **missing-skill feedback loop (FRE-328)** | [FRE-226](https://linear.app/frenchforest/issue/FRE-226) · [FRE-258](https://linear.app/frenchforest/issue/FRE-258) · [FRE-234](https://linear.app/frenchforest/issue/FRE-234) · [FRE-328](https://linear.app/frenchforest/issue/FRE-328) | FRE-226 needs FRE-227; FRE-258 Tier-1 Opus; **FRE-328 Phase 1 unblocked, Phase 3 needs FRE-227** |
 | **G** | Cleanups & gates | Delete legacy tool code; flip graph_quality gate; feedback_history retention; budget auto-tuning (parked) | [FRE-265](https://linear.app/frenchforest/issue/FRE-265) · [FRE-299](https://linear.app/frenchforest/issue/FRE-299) · [FRE-314](https://linear.app/frenchforest/issue/FRE-314) · [FRE-311](https://linear.app/frenchforest/issue/FRE-311) | FRE-265 gate ≥ 2026-05-12; FRE-311 parked on FRE-302 |
 | **H** | Memory / context value | Recall L2; Recall L3 LLM-judge; Context Gap Score; geolocation memory | [FRE-178](https://linear.app/frenchforest/issue/FRE-178) · [FRE-179](https://linear.app/frenchforest/issue/FRE-179) · [FRE-180](https://linear.app/frenchforest/issue/FRE-180) · [FRE-230](https://linear.app/frenchforest/issue/FRE-230) | FRE-178 → 179 → 180 chain |
@@ -72,6 +72,7 @@ FRE-335  (Captain's Log p95 monitor — ADR-0066 D2 trigger)               ← n
 
 | Work Item | Notes |
 |-----------|-------|
+| **FRE-346: Cross-session continuity audit** | [FRE-346](https://linear.app/frenchforest/issue/FRE-346) — Tier-1:Opus; audit whether memory+Captain's Log+Insights cover agent cross-session continuity (Need 2); no code changes; output: research note + 0–N gap tickets |
 | Mermaid chart rendering in chat UI | [FRE-315](https://linear.app/frenchforest/issue/FRE-315) canonical — FRE-316/317/318 closed as duplicates 2026-05-06 |
 
 ---
@@ -79,7 +80,7 @@ FRE-335  (Captain's Log p95 monitor — ADR-0066 D2 trigger)               ← n
 ## Key Dependencies
 
 ```
-FRE-213 (owner identity) → FRE-227 (write dir) → FRE-226 (self-updating skills) + FRE-328-Phase-3 (auto-author skill)
+FRE-213 (owner identity) → FRE-227 (write dir, paused) ← FRE-346 (continuity audit unblocks re-scope) → FRE-226 (self-updating skills) + FRE-328-Phase-3 (auto-author skill)
 FRE-178 (Recall L2) → FRE-179 (L3 judge) → FRE-180 (context gap score)
 FRE-214 (arch review) ✅ ratified 2026-05-08 → FRE-238 / FRE-240 / FRE-241 / FRE-236 + FRE-336 + FRE-338-341 unblocked (FRE-217 closed dup)
   Track 2a (endpoint abstraction) → Track 2b (compose unification + tunnel mode) → Track 3 (test parity / FRE-336)

@@ -1152,6 +1152,51 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # FRE-348 / FRE-346 G2 / ADR-0067: surface past Captain's Log reflections in context
+    reflection_recall_enabled: bool = Field(
+        default=True,
+        alias="AGENT_REFLECTION_RECALL_ENABLED",
+        description=(
+            "Surface up to N past Captain's Log reflections in the assembled context "
+            "for the next turn so cross-session use cases (resumable refactor state, "
+            "abstract idea recovery, evolving hypothesis) have a retrieval path. "
+            "Env var: AGENT_REFLECTION_RECALL_ENABLED"
+        ),
+    )
+    reflection_recall_recency_days: int = Field(
+        default=14,
+        alias="AGENT_REFLECTION_RECALL_RECENCY_DAYS",
+        ge=1,
+        le=365,
+        description=(
+            "Look-back window for reflection recall. "
+            "Env var: AGENT_REFLECTION_RECALL_RECENCY_DAYS"
+        ),
+    )
+    reflection_recall_max_results: int = Field(
+        default=3,
+        alias="AGENT_REFLECTION_RECALL_MAX_RESULTS",
+        ge=1,
+        le=10,
+        description=(
+            "Maximum reflections surfaced per turn. Hard-capped by the prompt budget "
+            "anyway; raising this above ~5 risks crowding out memory_context. "
+            "Env var: AGENT_REFLECTION_RECALL_MAX_RESULTS"
+        ),
+    )
+    reflection_recall_min_seen_count: int = Field(
+        default=2,
+        alias="AGENT_REFLECTION_RECALL_MIN_SEEN_COUNT",
+        ge=1,
+        le=20,
+        description=(
+            "Minimum seen_count for a proposal-shaped reflection to qualify. Recurring "
+            "patterns are signal; one-offs are noise. Failure-path-fix-only entries are "
+            "exempt from this filter. "
+            "Env var: AGENT_REFLECTION_RECALL_MIN_SEEN_COUNT"
+        ),
+    )
+
     # FRE-263 PIVOT-4: Flag-gated deprecation of legacy tools (ADR-0063 Phase 4)
     legacy_tools_enabled: bool = Field(
         default=False,

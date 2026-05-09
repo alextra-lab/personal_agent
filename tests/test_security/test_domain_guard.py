@@ -230,7 +230,7 @@ class TestFeedUnavailableFallback:
             await g._refresh()
 
         fetch_mock.assert_not_called()
-        assert "evil.com" in g._blocklist
+        assert g._blocklist == frozenset(cached_domains)
 
     @pytest.mark.asyncio
     async def test_stale_cache_triggers_refresh(self, tmp_path: Path) -> None:
@@ -246,7 +246,8 @@ class TestFeedUnavailableFallback:
         with patch.object(g, "_fetch_urlhaus", new=AsyncMock(return_value=fresh_domains)):
             await g._refresh()
 
-        assert "freshly-fetched-evil.net" in g._blocklist
+        # Superset (not equality) — _refresh() merges fetched domains with _BUNDLED_BLOCKLIST.
+        assert g._blocklist >= frozenset(fresh_domains)
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +266,8 @@ class TestEnsureLoaded:
             await g.ensure_loaded()
 
         assert g._last_loaded is not None
-        assert "new.evil" in g._blocklist
+        # Superset (not equality) — _refresh() merges fetched domains with _BUNDLED_BLOCKLIST.
+        assert g._blocklist >= frozenset({"new.evil"})
 
     @pytest.mark.asyncio
     async def test_ensure_loaded_skips_when_fresh(self, tmp_path: Path) -> None:

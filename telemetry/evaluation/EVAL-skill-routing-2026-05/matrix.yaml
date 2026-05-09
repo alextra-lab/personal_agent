@@ -2,12 +2,21 @@
 # Goal: empirically verify hybrid+B.5 reduces tool_iteration_limit_reached to floor.
 # Decide which routing mode to default per profile.
 #
-# Pass criteria:
-#   B.5 guard: ES prompt's first bash call uses agent-logs-* (or guard fires) >= 95% across all cells
-#   Primary:   tool_iteration_limit_reached rate dropped in hybrid vs keyword for same profile
+# Prompt set: 26 prompts as of FRE-334 (was 10)
+#   - Original (10): explicit service/tool names
+#   - Family A (5): ambiguous phrasing — intent inference test
+#   - Family B (4): negative controls — over-routing (false positive) measurement
+#   - Family C (3): adversarial — guard-fire + contaminated input
+#   - Incident variants (4): alternate phrasings of the 2026-04-29 incident
 #
-# Run: make eval-skill-routing CELL=<id>
-# Run all cloud cells: make eval-skill-routing-cloud
+# Pass criteria:
+#   B.5 guard: ES incident-class prompts use agent-logs-* (or guard fires) >= 95%
+#   Family A:  router correctly selects skill without lexical hints >= 70%
+#   Family B:  router returns [] (no false positives) >= 80%
+#   Primary:   tool_iteration_limit_reached rate == 0% across all cells
+#
+# Run: make eval-skill-routing CELL=<id> RUN=<id>
+# Run all cloud cells: make eval-skill-routing-cloud RUN=<id>
 
 cells:
   # --- Cloud cells (run now) ---

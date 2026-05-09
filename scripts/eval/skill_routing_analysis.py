@@ -172,6 +172,14 @@ def _classify_success(trace: dict[str, Any], gt: dict[str, Any] | None) -> str:
     if trace.get("guard_blocks", 0) > 0:
         return "guard_saved"
 
+    # For keyword/hybrid modes the routing LLM never fires — skills are injected
+    # via keyword matching, not via routing_skills_returned.  We cannot assess
+    # router quality without knowing which specific skills were keyword-injected,
+    # so any non-failed, non-guard trace is clean_success for these modes.
+    if not trace.get("routing_call_fired", False):
+        return "clean_success"
+
+    # model_decided: assess router quality against ground truth
     if gt:
         expected = set(gt.get("expected_router_skills") or [])
         returned = set(trace.get("routing_skills_returned") or [])
@@ -276,7 +284,12 @@ def analyse_trace(
         result["first_bash_uses_correct_index"] = None
 
     # --- Router-only metrics (FRE-331) ---
-    if ground_truth is not None:
+    # Only meaningful when the routing call actually fired (model_decided mode).
+    # For keyword/hybrid, routing_call_fired=False and routing_skills_returned=[]
+    # because there is no pre-flight LLM call — skills are injected via keyword
+    # matching.  Setting metrics to None prevents misleading 0-recall / 100%-empty
+    # rates appearing in keyword/hybrid cell summaries.
+    if result.get("routing_call_fired") and ground_truth is not None:
         expected = set(ground_truth.get("expected_router_skills") or [])
         forbidden = set(ground_truth.get("forbidden_router_skills") or [])
         returned = set(result["routing_skills_returned"])

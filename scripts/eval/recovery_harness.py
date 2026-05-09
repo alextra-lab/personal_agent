@@ -30,8 +30,10 @@ Notes:
 - The ``--profile`` flag is forwarded only as a metadata tag in the report.
   Wave 1 does not introduce a recovery profile yet; that is Wave 4 work.
 - This script does *not* fail if ES indexing has not caught up; it logs a
-  warning and writes the partial report. Use the ``--es-wait-seconds``
-  flag if your environment indexes more slowly than the default 5s.
+  warning and writes the partial report.
+- ``--es-wait-seconds`` is deprecated. The harness now polls ES for terminal
+  events instead of sleeping. If passed, the value becomes the polling
+  hard-timeout (default: 30s).
 """
 
 from __future__ import annotations
@@ -59,6 +61,12 @@ log = structlog.get_logger(__name__)
 DEFAULT_CHAT_URL = "http://localhost:9000/chat"
 DEFAULT_PROMPTS_PATH = Path("telemetry/evaluation/EVAL-agent-self-diagnosis/prompts.yaml")
 DEFAULT_OUT_BASE = Path("telemetry/evaluation/EVAL-agent-self-diagnosis")
+
+_TERMINAL_EVENTS: frozenset[str] = frozenset(
+    {"reply_ready", "orchestrator_fatal_error", "task_failed"}
+)
+_DEFAULT_POLL_INTERVAL: float = 0.5
+_DEFAULT_HARD_TIMEOUT: float = 30.0
 
 
 # ---------------------------------------------------------------------------
@@ -171,34 +179,155 @@ async def call_chat(
 
 
 async def fetch_trace_logs(
-    queries: TelemetryQueries, trace_id: str, since: datetime, until: datetime
+    queries: TelemetryQueries,
+    trace_id: str,
+    since: datetime,
+    until: datetime,
+    *,
+    page_size: int = 500,
+    hard_cap: int = 10_000,
 ) -> list[dict[str, Any]]:
-    """Pull all ES log documents tagged with this trace_id in the window."""
+    """Pull all ES log documents tagged with this trace_id in the window.
+
+    Uses ``search_after`` pagination so traces with more than 500 events are
+    fetched completely. Stops at ``hard_cap`` events and emits
+    ``harness_es_pagination_capped`` if hit.
+
+    Args:
+        queries: TelemetryQueries instance for ES access.
+        trace_id: Trace ID to filter on (keyword sub-field exact match).
+        since: Lower bound of the ``@timestamp`` range.
+        until: Upper bound of the ``@timestamp`` range.
+        page_size: Number of documents per ES page.
+        hard_cap: Maximum total documents before aborting pagination.
+
+    Returns:
+        List of ``_source`` dicts in ascending timestamp order.
+    """
     settings = get_settings()
     client = await queries._get_client()  # noqa: SLF001 — internal reuse
-    # Note: `trace_id` is mapped as text in agent-logs-*; use the
-    # keyword sub-field for an exact match. (term against text fails silently.)
-    response = await client.search(
-        index=f"{settings.elasticsearch_index_prefix}-*",
-        query={
-            "bool": {
-                "filter": [
-                    {"term": {"trace_id.keyword": trace_id}},
-                    {
-                        "range": {
-                            "@timestamp": {
-                                "gte": since.isoformat(),
-                                "lte": until.isoformat(),
+    all_hits: list[dict[str, Any]] = []
+    sort_key: list[Any] | None = None
+
+    while True:
+        body: dict[str, Any] = {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"trace_id.keyword": trace_id}},
+                        {
+                            "range": {
+                                "@timestamp": {
+                                    "gte": since.isoformat(),
+                                    "lte": until.isoformat(),
+                                }
                             }
-                        }
-                    },
-                ]
-            }
-        },
-        size=500,
-        sort=[{"@timestamp": {"order": "asc"}}],
+                        },
+                    ]
+                }
+            },
+            "size": page_size,
+            # _id tiebreaker ensures deterministic search_after across pages.
+            "sort": [{"@timestamp": {"order": "asc"}}, {"_id": "asc"}],
+        }
+        if sort_key is not None:
+            body["search_after"] = sort_key
+
+        response = await client.search(
+            index=f"{settings.elasticsearch_index_prefix}-*",
+            **body,
+        )
+        hits = response.get("hits", {}).get("hits", [])
+        if not hits:
+            break
+
+        all_hits.extend(hit.get("_source", {}) for hit in hits)
+
+        if len(all_hits) >= hard_cap:
+            log.warning(
+                "harness_es_pagination_capped",
+                trace_id=trace_id,
+                hard_cap=hard_cap,
+                fetched=len(all_hits),
+            )
+            break
+
+        if len(hits) < page_size:
+            break
+
+        sort_key = hits[-1]["sort"]
+
+    return all_hits
+
+
+async def _wait_for_trace_complete(
+    queries: TelemetryQueries,
+    trace_id: str,
+    started_at: datetime,
+    *,
+    poll_interval: float = _DEFAULT_POLL_INTERVAL,
+    hard_timeout: float = _DEFAULT_HARD_TIMEOUT,
+) -> None:
+    """Poll ES until a terminal event appears, event count stabilises, or hard_timeout elapses.
+
+    Terminal events (``reply_ready``, ``orchestrator_fatal_error``, ``task_failed``)
+    mark definitive completion. Stability (count unchanged across two consecutive
+    polls) is a fallback for traces that finish without a recognised terminal event.
+
+    Args:
+        queries: TelemetryQueries instance for ES access.
+        trace_id: The trace ID to poll for.
+        started_at: Request start time used as the lower-bound on ``@timestamp``.
+        poll_interval: Seconds between polls.
+        hard_timeout: Maximum seconds to wait before giving up; logs
+            ``harness_es_wait_timeout`` and returns so the caller can proceed
+            with whatever partial data is available.
+    """
+    settings = get_settings()
+    client = await queries._get_client()  # noqa: SLF001 — internal reuse
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + hard_timeout
+    prev_count = -1
+    stable_polls = 0
+
+    while loop.time() < deadline:
+        response = await client.search(
+            index=f"{settings.elasticsearch_index_prefix}-*",
+            query={
+                "bool": {
+                    "filter": [
+                        {"term": {"trace_id.keyword": trace_id}},
+                        {"range": {"@timestamp": {"gte": started_at.isoformat()}}},
+                    ]
+                }
+            },
+            size=500,
+            sort=[{"@timestamp": {"order": "asc"}}],
+        )
+        hits = response.get("hits", {}).get("hits", [])
+        count = len(hits)
+
+        for hit in hits:
+            src = hit.get("_source", {})
+            event = str(src.get("event_type") or src.get("event") or "")
+            if event in _TERMINAL_EVENTS:
+                return
+
+        if count > 0 and count == prev_count:
+            stable_polls += 1
+            if stable_polls >= 2:
+                return
+        else:
+            stable_polls = 0
+        prev_count = count
+
+        await asyncio.sleep(poll_interval)
+
+    log.warning(
+        "harness_es_wait_timeout",
+        trace_id=trace_id,
+        hard_timeout=hard_timeout,
     )
-    return [hit.get("_source", {}) for hit in response.get("hits", {}).get("hits", [])]
 
 
 async def fetch_neo4j_for_trace(
@@ -429,7 +558,7 @@ async def run_prompt(
     auth_email: str | None,
     profile: str = "local",
     skill_routing_mode: str | None = None,
-    es_wait_seconds: int,
+    hard_timeout: float = _DEFAULT_HARD_TIMEOUT,
     queries: TelemetryQueries,
     memory_service: MemoryService,
     out_dir: Path,
@@ -453,12 +582,15 @@ async def run_prompt(
                 session_id=session_id,
                 trace_id=trace_id,
             )
-            await asyncio.sleep(es_wait_seconds)
+            await _wait_for_trace_complete(
+                queries, trace_id, started_at, hard_timeout=hard_timeout
+            )
+            polled_at = datetime.now(timezone.utc)
             es_hits = await fetch_trace_logs(
                 queries,
                 trace_id,
                 started_at - timedelta(seconds=2),
-                finished_at + timedelta(seconds=es_wait_seconds + 5),
+                polled_at + timedelta(seconds=5),
             )
             n4_turn, n4_ent, n4_rel = await fetch_neo4j_for_trace(memory_service, trace_id)
             results.append(
@@ -510,7 +642,7 @@ async def run_harness(
     prompts_path: Path,
     chat_url: str,
     auth_email: str | None,
-    es_wait_seconds: int,
+    hard_timeout: float = _DEFAULT_HARD_TIMEOUT,
     only_prompt: str | None,
     out_dir: Path,
 ) -> Path:
@@ -537,7 +669,7 @@ async def run_harness(
                     auth_email=auth_email,
                     profile=profile,
                     skill_routing_mode=skill_routing_mode,
-                    es_wait_seconds=es_wait_seconds,
+                    hard_timeout=hard_timeout,
                     queries=queries,
                     memory_service=memory_service,
                     out_dir=out_dir,
@@ -614,8 +746,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--es-wait-seconds",
         type=int,
-        default=5,
-        help="Seconds to wait for ES indexing before fetching the trace.",
+        default=None,
+        help=(
+            "[DEPRECATED] Previously a fixed sleep before fetching trace logs. "
+            "Now sets the polling hard-timeout (default: 30s). "
+            "Omit to use the new polling default."
+        ),
     )
     parser.add_argument(
         "--out",
@@ -631,6 +767,19 @@ def main() -> int:
     args = parse_args()
     out_dir = args.out or DEFAULT_OUT_BASE / args.run_id
     auth_email = args.auth_email or get_settings().agent_owner_email
+
+    hard_timeout = _DEFAULT_HARD_TIMEOUT
+    if args.es_wait_seconds is not None:
+        log.warning(
+            "es_wait_seconds_deprecated",
+            message=(
+                "--es-wait-seconds is deprecated; it now sets the polling hard-timeout. "
+                "Remove the flag to use the default of 30s."
+            ),
+            value=args.es_wait_seconds,
+        )
+        hard_timeout = float(args.es_wait_seconds)
+
     try:
         summary_path = asyncio.run(
             run_harness(
@@ -640,7 +789,7 @@ def main() -> int:
                 prompts_path=args.prompts,
                 chat_url=args.chat_url,
                 auth_email=auth_email,
-                es_wait_seconds=args.es_wait_seconds,
+                hard_timeout=hard_timeout,
                 only_prompt=args.prompt,
                 out_dir=out_dir,
             )

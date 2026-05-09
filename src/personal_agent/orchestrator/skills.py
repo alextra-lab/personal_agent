@@ -90,7 +90,7 @@ def _parse_frontmatter(path: Path) -> tuple[dict[str, Any], str]:
     if end == -1:
         return {}, content.strip()
     fm: dict[str, Any] = yaml.safe_load(content[4:end]) or {}
-    body = content[end + 5:].strip()
+    body = content[end + 5 :].strip()
     return fm, body
 
 
@@ -156,8 +156,7 @@ def _needs_reload(skills_dir: Path) -> bool:
     if current_files != cached_files:
         return True
     return any(
-        not path.exists() or path.stat().st_mtime != mtime
-        for path, mtime in _cache.mtimes.items()
+        not path.exists() or path.stat().st_mtime != mtime for path, mtime in _cache.mtimes.items()
     )
 
 

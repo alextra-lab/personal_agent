@@ -1049,6 +1049,76 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # FRE-225: Egress URL guard (domain blocklist)
+    url_guard_enabled: bool = Field(
+        default=True,
+        alias="AGENT_URL_GUARD_ENABLED",
+        description=(
+            "Enable egress URL guard. When True, fetch_url calls are checked against "
+            "a domain blocklist (URLhaus feed + bundled fallback). "
+            "Env var: AGENT_URL_GUARD_ENABLED"
+        ),
+    )
+    url_guard_mode: str = Field(
+        default="blocklist",
+        alias="AGENT_URL_GUARD_MODE",
+        description=(
+            "URL guard mode: 'off' (no checks), 'blocklist' (block known-malicious domains), "
+            "or 'allowlist' (block all except explicitly listed domains). "
+            "Env var: AGENT_URL_GUARD_MODE"
+        ),
+    )
+    url_guard_cache_ttl_seconds: int = Field(
+        default=3600,
+        ge=60,
+        alias="AGENT_URL_GUARD_CACHE_TTL_SECONDS",
+        description=(
+            "Seconds before the domain blocklist cache is refreshed from URLhaus. "
+            "Env var: AGENT_URL_GUARD_CACHE_TTL_SECONDS"
+        ),
+    )
+    url_guard_allowlist: list[str] = Field(
+        default_factory=list,
+        alias="AGENT_URL_GUARD_ALLOWLIST",
+        description=(
+            "Comma-separated domain allowlist used when url_guard_mode=allowlist. "
+            "Env var: AGENT_URL_GUARD_ALLOWLIST"
+        ),
+    )
+
+    # FRE-335 / ADR-0066 D2: skill routing threshold monitor
+    skill_index_p95_token_threshold: int = Field(
+        default=6000,
+        alias="AGENT_SKILL_INDEX_P95_TOKEN_THRESHOLD",
+        ge=100,
+        description=(
+            "Token threshold for skill index p95 injection size. When the rolling "
+            "7-day p95 of injected_chars (divided by 4) exceeds this value for two "
+            "consecutive days, the threshold monitor files a Linear issue recommending "
+            "AGENT_SKILL_ROUTING_MODE=model_decided. "
+            "Env var: AGENT_SKILL_INDEX_P95_TOKEN_THRESHOLD"
+        ),
+    )
+    skill_routing_threshold_monitor_enabled: bool = Field(
+        default=True,
+        alias="AGENT_SKILL_ROUTING_THRESHOLD_MONITOR_ENABLED",
+        description=(
+            "Enable the ADR-0066 D2 daily job that monitors skill index injection size "
+            "and files a Linear ticket when the threshold is exceeded. "
+            "Env var: AGENT_SKILL_ROUTING_THRESHOLD_MONITOR_ENABLED"
+        ),
+    )
+    skill_routing_threshold_monitor_hour_utc: int = Field(
+        default=5,
+        alias="AGENT_SKILL_ROUTING_THRESHOLD_MONITOR_HOUR_UTC",
+        ge=0,
+        le=23,
+        description=(
+            "UTC hour at which the skill routing threshold monitor runs daily. "
+            "Env var: AGENT_SKILL_ROUTING_THRESHOLD_MONITOR_HOUR_UTC"
+        ),
+    )
+
     # FRE-263 PIVOT-4: Flag-gated deprecation of legacy tools (ADR-0063 Phase 4)
     legacy_tools_enabled: bool = Field(
         default=False,

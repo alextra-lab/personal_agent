@@ -245,6 +245,7 @@ class TestSuccessClass:
         trace = {
             "tool_iteration_limit_reached": False,
             "guard_blocks": 0,
+            "routing_call_fired": True,
             "routing_skills_returned": [],
             "read_skill_names": ["query-elasticsearch"],
         }
@@ -256,6 +257,7 @@ class TestSuccessClass:
         trace = {
             "tool_iteration_limit_reached": False,
             "guard_blocks": 0,
+            "routing_call_fired": True,
             "routing_skills_returned": [],
             "read_skill_names": [],
         }
@@ -282,6 +284,33 @@ class TestSuccessClass:
             "read_skill_names": [],
         }
         assert _classify_success(trace, None) == "clean_success"
+
+    def test_keyword_mode_no_routing_call_is_clean(self) -> None:
+        """keyword/hybrid: routing_call_fired=False → clean_success regardless of expected skills.
+
+        Skills are keyword-injected; we cannot assess router quality from
+        routing_skills_returned (which is always []).
+        """
+        trace = {
+            "tool_iteration_limit_reached": False,
+            "guard_blocks": 0,
+            "routing_call_fired": False,
+            "routing_skills_returned": [],
+            "read_skill_names": [],
+        }
+        gt = {"expected_router_skills": ["query-elasticsearch"], "forbidden_router_skills": []}
+        assert _classify_success(trace, gt) == "clean_success"
+
+    def test_keyword_mode_with_iteration_limit_is_failed(self) -> None:
+        """keyword mode hitting iteration limit is still failed."""
+        trace = {
+            "tool_iteration_limit_reached": True,
+            "guard_blocks": 0,
+            "routing_call_fired": False,
+            "routing_skills_returned": [],
+            "read_skill_names": [],
+        }
+        assert _classify_success(trace, None) == "failed"
 
     def test_guard_takes_priority_over_router_miss(self) -> None:
         """Guard fired + router missed: guard_saved wins over failed."""
@@ -325,10 +354,21 @@ class TestReadSkill3Bucket:
             })
         return events
 
+    def _routing_fired_event(self, skills: list[str]) -> dict:
+        return {
+            "event_type": "skill_routing_call_completed",
+            "skills_returned": skills,
+            "latency_ms": 100,
+        }
+
     def test_needed_and_invoked(self) -> None:
         """Expected skill fetched via read_skill → needed_and_invoked=True."""
         gt = {"expected_router_skills": ["query-elasticsearch"], "forbidden_router_skills": []}
-        r = _trace_with_events(self._events(["query-elasticsearch"]), ground_truth=gt)
+        # routing call fired but returned nothing; primary read_skill'd the expected skill
+        r = _trace_with_events(
+            [self._routing_fired_event([]), *self._events(["query-elasticsearch"])],
+            ground_truth=gt,
+        )
         assert r["read_skill_needed_and_invoked"] is True
         assert r["read_skill_needed_but_not_invoked"] is False
         assert r["read_skill_not_needed_but_invoked"] is False
@@ -336,7 +376,7 @@ class TestReadSkill3Bucket:
     def test_needed_but_not_invoked(self) -> None:
         """Expected skill never fetched, router also missed → needed_but_not_invoked=True."""
         gt = {"expected_router_skills": ["neo4j-direct"], "forbidden_router_skills": []}
-        r = _trace_with_events(self._events([]), ground_truth=gt)
+        r = _trace_with_events([self._routing_fired_event([])], ground_truth=gt)
         assert r["read_skill_needed_and_invoked"] is False
         assert r["read_skill_needed_but_not_invoked"] is True
 

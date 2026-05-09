@@ -30,6 +30,9 @@ log = get_logger(__name__)
 # indicates a broken loop, not a benign degradation."
 WARNING_EVENT_ALLOWLIST: frozenset[str] = frozenset(
     {
+        # Iteration cap exhaustion — agent was forced to stop before completing analysis.
+        # Recurrence for a given TaskType signals the per-type cap should be raised.
+        "tool_iteration_limit_reached",
         "compaction_quality.poor",
         "history_sanitised_orphans_removed",
         "chat.stream_failed",
@@ -105,6 +108,7 @@ class ErrorMonitor:
             clusters = await self._queries.get_error_patterns(
                 window_hours=self._window_hours,
                 min_occurrences=self._min_occurrences,
+                warning_allowlist=WARNING_EVENT_ALLOWLIST,
             )
         except Exception as exc:
             log.warning(

@@ -24,6 +24,10 @@ _lc_team_id: str | None = None
 _lc_state_ids: dict[str, str] = {}
 _lc_label_ids: dict[str, str] = {}
 _lc_label_team_fetched: str | None = None
+# Set to True once we've done a workspace-level label fetch (the authoritative fallback).
+# Workspace labels are not always returned by the team-scoped filter — this flag
+# prevents a second workspace round-trip on the same process lifetime.
+_lc_workspace_labels_fetched: bool = False
 
 # Human feedback labels (AgentFeedback group children)
 FEEDBACK_LABEL_NAMES: frozenset[str] = frozenset(
@@ -245,9 +249,11 @@ class LinearClient:
     async def _label_id(
         self, team_id: str, label_name: str, *, auto_create_color: str | None = None
     ) -> str:
-        global _lc_label_team_fetched
+        global _lc_label_team_fetched, _lc_workspace_labels_fetched
         if label_name in _lc_label_ids:
             return _lc_label_ids[label_name]
+
+        # Step 1: team-scoped label fetch (fast path for team-specific labels).
         if _lc_label_team_fetched != team_id:
             data = await self._call(
                 """
@@ -263,9 +269,26 @@ class LinearClient:
             for lbl in labels:
                 _lc_label_ids[str(lbl["name"])] = str(lbl["id"])
             _lc_label_team_fetched = team_id
+
+        # Step 2: workspace-level fallback — workspace labels are not always
+        # returned by the team-scoped filter (e.g. "PersonalAgent" is workspace-level).
+        # One extra round-trip per process lifetime; prevents silent label-not-found errors.
+        if label_name not in _lc_label_ids and not _lc_workspace_labels_fetched:
+            data = await self._call(
+                "{ issueLabels(first: 250) { nodes { id name } } }",
+                {},
+            )
+            labels = (data.get("issueLabels") or {}).get("nodes") or []
+            for lbl in labels:
+                _lc_label_ids[str(lbl["name"])] = str(lbl["id"])
+            _lc_workspace_labels_fetched = True
+
         if label_name not in _lc_label_ids:
             if auto_create_color is None:
-                raise RuntimeError(f"Linear label '{label_name}' not found.")
+                raise RuntimeError(
+                    f"Linear label '{label_name}' not found "
+                    f"(checked team scope and workspace scope)."
+                )
             mut = await self._call(
                 """
                 mutation($input: IssueLabelCreateInput!) {

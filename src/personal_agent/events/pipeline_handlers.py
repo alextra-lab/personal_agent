@@ -693,9 +693,7 @@ async def _handle_graph_quality_anomaly(
     cfg = get_settings()
     now = datetime.now(timezone.utc)
     category = (
-        ChangeCategory.RELIABILITY
-        if event.severity == "high"
-        else ChangeCategory.KNOWLEDGE_QUALITY
+        ChangeCategory.RELIABILITY if event.severity == "high" else ChangeCategory.KNOWLEDGE_QUALITY
     )
 
     entry = CaptainLogEntry(

@@ -214,6 +214,10 @@ async def generate_reflection_entry(
     final_state: str | None,
     reply_length: int,
     metrics_summary: dict[str, Any] | None = None,
+    hit_iteration_limit: bool = False,
+    task_type: str = "",
+    iteration_count: int = 0,
+    max_iterations: int = 0,
 ) -> CaptainLogEntry:
     """Generate an LLM-based reflection entry analyzing task execution.
 
@@ -229,6 +233,11 @@ async def generate_reflection_entry(
         final_state: Final task state (e.g., "COMPLETED", "FAILED"), or None if not available.
         reply_length: Length of the agent's reply.
         metrics_summary: Optional request-scoped metrics summary from RequestMonitor (ADR-0012).
+        hit_iteration_limit: True when the agent was forced to stop by the tool iteration cap.
+            When True, the reflection model is nudged to propose raising the per-TaskType cap.
+        task_type: TaskType value string (e.g. "analysis") for cap-raise proposals.
+        iteration_count: Actual tool iterations consumed this request.
+        max_iterations: Effective cap that was applied.
 
     Returns:
         A rich CaptainLogEntry with LLM-generated insights.
@@ -307,6 +316,10 @@ async def generate_reflection_entry(
                 captains_log_role=_captains_log_role,
                 failure_excerpt_json=failure_excerpt_json,
                 had_errors=had_errors,
+                hit_iteration_limit=hit_iteration_limit,
+                task_type=task_type,
+                iteration_count=iteration_count,
+                max_iterations=max_iterations,
             )
             log.info(
                 "dspy_reflection_succeeded",

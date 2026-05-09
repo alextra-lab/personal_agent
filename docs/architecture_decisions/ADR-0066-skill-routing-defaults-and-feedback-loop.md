@@ -28,7 +28,7 @@ A four-phase implementation landed across PRs #20–#23 (2026-05-04..2026-05-06)
 
 Implementation defaults are already in `src/personal_agent/config/settings.py`: `skill_routing_mode: str = "hybrid"`, `skill_routing_model_key: str = "claude_haiku"`. This ADR documents *why* those values, what the eval data showed, and what to do as the skill library grows.
 
-### What the eval showed (run id `2026-05-07`)
+### What the eval showed (run id `2026-05-07`) — original data †
 
 | Cell | iter_limit | es_correct | read_skill | guard_blocks | routing_call | skill_chars/req |
 |------|-----------|------------|------------|--------------|--------------|-----------------|
@@ -39,13 +39,39 @@ Implementation defaults are already in `src/personal_agent/config/settings.py`: 
 | local-hybrid | 0% | **100%** | 0% | 0% | 0% | 6,856–15,759 |
 | local-model-decided | 0% | **100%** | 50% | 0% | 100% | **1,661** |
 
+† **All `model_decided` rows above captured under two concurrent bugs** (D4 budget `KeyError` + duplicate event name). `model_decided` metrics reflect primary-model `read_skill` recovery, not router quality. See FRE-330 postfix data below.
+
+### Postfix data — both `model_decided` cells with both bugs fixed (run id `2026-05-08-postfix`) ‡
+
+| Metric | 2026-05-07 cloud (broken) | cloud postfix (fixed) | local postfix (fixed) |
+|--------|--------------------------|----------------------|----------------------|
+| `iter_limit_rate` | 0% | 0% | 0% |
+| `routing_call_rate` | 100% | 100% | 100% |
+| `read_skill_invoked_rate` | **40%** | **0%** | **0%** |
+| `router_recall_mean` | ~0% | **94%** | **94%** |
+| `router_precision_mean` | n/a | **78%** | **83%** |
+| `router_empty_rate` | 100% | **10%** ¹ | **11%** ¹ |
+| `clean_success_rate` | n/a | **90%** ² | **89%** ² |
+| `routing_latency_p50` | ~50ms (fake) | **~750ms** | **~750ms** |
+| prompts analysed | 10 | 10 | 9 ³ |
+
+¹ router_empty is the `no_skill_needed` prompt — **correct behaviour** (Fibonacci needs no skill).
+
+² The `failed` case is `codebase_search` in both cells — a ground-truth calibration issue: router returned `[bash, read-write]` vs expected `[bash, list-directory]`. Task completed correctly. Label to be refined in FRE-334.
+
+³ `es_incident_class` timed out (ReadTimeout) on local/Qwen — the longest ES-heavy prompt exceeds the 600s harness limit for the slower local model. Finding: the incident-class prompt is at the edge of Qwen's throughput budget.
+
+‡ Haiku routing skills are identical between cloud and local cells (same routing model, same routing call), confirming router quality is independent of the primary model.
+
 Three findings drive the rest of this ADR:
 
 **Finding 1 — `hybrid` and `keyword` reach the same correctness target with no extra LLM calls.** Both produce 100% `es_first_call_correct` and 0% iteration-limit hits. `hybrid` injects ~10% more characters per request (the compact index is appended to the keyword bodies), but no skill needed lazy-loading because the keyword match was always sufficient.
 
-**Finding 2 — `model_decided` reaches the same correctness with a 9× smaller injection but pays for it.** The compact index is a flat 1,661 chars regardless of prompt. Correctness is preserved because the primary model calls `read_skill` on the 4–5 prompts that actually need a skill body. The cost is a 50ms routing pre-flight on 100% of requests plus an additional `read_skill` LLM round-trip on 40–50% of requests.
+**Finding 2 — `model_decided` with a working router reaches 89–90% clean_success with 0% `read_skill` fallback across both profiles.** The router (Haiku) pre-loads the right skills in ~750ms, eliminating the 40–50% `read_skill` overhead observed when the router was broken. Injection cost adapts per prompt (1,661 chars for no-skill requests, up to 18,344 for complex ES queries).
 
-**Finding 3 — the routing pre-flight is currently doing zero useful work.** Every `routing_call_completed` event in `cloud-model-decided` and `local-model-decided` shows `routing_skills_returned: []`. Haiku is consistently producing an empty list. The primary model still picks the right skill via `read_skill`, but it does so *despite* the pre-flight, not *because* of it. The 50ms routing latency on every request is currently a tax with no offsetting benefit.
+**Finding 3 (amended) — the routing pre-flight now works, and its quality is independent of the primary model.** Post-fix, both `cloud-model-decided` and `local-model-decided` achieve `router_recall_mean = 0.94`. Haiku returns identical skill selections for both profiles because routing runs before the primary model is invoked. The 750ms Haiku call is the new cost baseline for `model_decided`.
+
+**Finding 4 (new) — `es_incident_class` times out on local/Qwen.** The most complex prompt (25-iteration ES diagnostic) exceeds the 600s harness limit for Qwen 35B. Cloud Sonnet handles it in ~10 minutes. This marks the incident-class prompt as at the edge of Qwen's throughput budget — a signal for FRE-334's timeout handling and prompt complexity design.
 
 ### Why this matters
 
@@ -175,8 +201,8 @@ D2 and D4 will be filed as separate Linear tickets during the next planning loop
 | D2 — threshold monitor | FRE-335 | (pending) | ✅ Approved 2026-05-07 |
 | **D4 — routing pre-flight `KeyError('skill_routing')` fix** | inline | commit `178f664` | ✅ **Shipped 2026-05-07 (mid-ADR session)** |
 | Eval methodology — `es_first_call_correct_rate` `or`/`and` bug fix | FRE-329 | (pending) | ✅ Approved 2026-05-07 |
-| Eval methodology — re-run model_decided cells post-router-fix | FRE-330 | (pending; blocked on FRE-329) | ✅ Approved 2026-05-07 |
-| Eval methodology — split router-only vs end-to-end metrics | FRE-331 | (pending) | ✅ Approved 2026-05-07 |
+| Eval methodology — re-run model_decided cells post-router-fix | FRE-330 | PR pending | ✅ **Both cells re-run 2026-05-08** (cloud: 10/10 prompts; local: 9/10 — es_incident_class timeout) |
+| Eval methodology — split router-only vs end-to-end metrics | FRE-331 | PR pending | ✅ **Shipped 2026-05-08** — ground-truth labels + 7 new metrics |
 | Eval methodology — ES polling instead of fixed sleep | FRE-332 | (pending) | ✅ Approved 2026-05-07 |
 | Eval methodology — ES pagination past size=500 | FRE-333 | (pending) | ✅ Approved 2026-05-07 |
 | Eval methodology — expand prompt set (ambiguous + neg-control + adversarial) | FRE-334 | (pending) | ✅ Approved 2026-05-07 |

@@ -424,9 +424,7 @@ class SecondBrainConsolidator:
             and summary.strip() == capture.user_message.strip()[:200]
         )
         if is_fallback:
-            time_since_first = (
-                datetime.now(timezone.utc) - attempt_started_at
-            ).total_seconds()
+            time_since_first = (datetime.now(timezone.utc) - attempt_started_at).total_seconds()
             await record_consolidation_attempt(
                 trace_id=capture.trace_id,
                 role="entity_extraction",

@@ -81,9 +81,7 @@ def _jsonl_line(record: WithinSessionCompressionRecord) -> str:
     return json.dumps(payload, sort_keys=True)
 
 
-def _append_durable(
-    record: WithinSessionCompressionRecord, output_dir: Path
-) -> Path:
+def _append_durable(record: WithinSessionCompressionRecord, output_dir: Path) -> Path:
     """Append the record to the per-day JSONL file (ADR-0054 §D4).
 
     Returns:

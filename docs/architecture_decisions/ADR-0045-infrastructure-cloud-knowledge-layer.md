@@ -1,6 +1,6 @@
 # ADR-0045: Infrastructure — Cloud Knowledge Layer with Flexible Execution
 
-**Status**: Accepted
+**Status**: Accepted 2026-04-13; **Amended 2026-05-08** — full-harness topology ratified (see Update section).
 **Date**: 2026-04-13
 **Deciders**: Project owner
 **Depends on**: ADR-0043 (Three-Layer Separation)
@@ -247,3 +247,106 @@ Each phase is independently testable. The local Docker setup remains available a
 | **Kubernetes on cloud** | Massive over-engineering for a single-user system. K8s operational complexity is justified at scale; this is one user with four containers. |
 | **Fly.io / Railway / Render** | Convenient but less control over data residency, more expensive at the resource levels needed (especially for persistent storage), and potential cold-start issues for always-on services. |
 | **Raspberry Pi / home server** | Avoids cloud costs but introduces home network reliability issues (dynamic IP, ISP outages, power). Not practical for reliable mobile access. |
+
+---
+
+## Update — 2026-05-08 — Full-harness topology ratified
+
+> **Driver**: [FRE-214](https://linear.app/frenchforest/issue/FRE-214) audit
+> **Audit**: [`docs/architecture/2026-05-08-fre-214-vps-topology-audit.md`](../architecture/2026-05-08-fre-214-vps-topology-audit.md)
+> **Companion change**: model-endpoint abstraction (audit §8) and the Track 2a / 2b / 3 implementation plans under `docs/superpowers/plans/` (linked from the audit).
+
+### What changed in reality
+
+Six weeks after this ADR was accepted, the deployed VPS runs **the full execution layer** — orchestrator, primary agent loop, MCP gateway, brainstem, AG-UI endpoints — alongside the Knowledge Layer datastores, two llama.cpp inference services (embeddings + reranker), the Next.js PWA, Caddy, and a Cloudflare Tunnel. This is not the thin Knowledge-Layer gateway this ADR sketched. The deviation is documented in `Dockerfile.gateway:58–62` and acknowledged in `docker-compose.cloud.yml:276`. The full parity matrix and deviation log live in the FRE-214 audit referenced above.
+
+### What this amendment ratifies
+
+The deployed shape is the new target. Specifically:
+
+* **The VPS is the canonical execution host.** It runs the complete Personal Agent service (`personal_agent.service.app:app`), not just a knowledge gateway. The driver is accessibility (ADR-0048): a 24/7 PWA reachable from phone/iPad requires a 24/7 execution endpoint, which the laptop cannot provide.
+* **The laptop is a peer deployment**, intended to mirror the VPS shape (same compose, smaller resource caps), plus serve as a *local-profile inference target* via the existing reverse Cloudflare tunnel (`slm.frenchforet.com`).
+* **Day-to-day development happens on the VPS** via Claude-Code remote control, rather than on the laptop. The laptop's role narrows to (a) developer workstation when offline, (b) inference host when local profile is selected from any harness, (c) CI / pre-deploy validation environment.
+* **Profile selection (per ADR-0044) determines provider, not deployment**. Both `local` and `cloud` profiles run inside the same service instance on whichever host is executing. The historical implication that "cloud profile → run on cloud, local profile → run on laptop" is dropped; that distinction was never in ADR-0044 itself.
+
+### Local-model availability — load-bearing since inception
+
+Local models are the original primary mode of the system. The Mac SLM Server has been the inference host for all four model roles — `primary`, `sub_agent`, `embedding`, `reranker` — since before this ADR was accepted; making those models available to a VPS-resident harness has always required a reverse Cloudflare tunnel (`slm.frenchforet.com`). That tunnel is **not** a temporary bridge — it is permanent infrastructure for the load-bearing requirement that local models be reachable from non-laptop hosts. This amendment does not change that; it documents it.
+
+Embedding and reranker get a second layer: the VPS runs its own llama.cpp containers for these two roles 24/7. They exist not as a replacement for the laptop's MLX serving but as the **always-on availability guarantee** — if the laptop is offline, the knowledge-graph consolidation, recall scoring, and other embedding-dependent paths must still function. Both instances run the same model weights; runtime parity is verified by the cosine-similarity test in the Track 3 plan.
+
+**Apple Silicon constraint**: any inference running on an Apple Silicon system runs natively on the host, not in a container. Docker on macOS does not expose Metal/MPS to its Linux VM, so MLX is not containerizable. This means the laptop mirror of the VPS is structurally asymmetric: gateway, PWA, Caddy, and datastores run as Docker containers; `primary` / `sub_agent` / `embedding` / `reranker` continue to run as the native `slm_server` on the host. The gateway container reaches them via `host.docker.internal`. The VPS, running on x86 Linux, has no such constraint and runs `llama.cpp` for embedding/reranker as Docker services.
+
+What this amendment *does* change is **how the laptop reaches its own local models when it runs the same containerized shape as the VPS**. Naïvely sharing one model config across both shapes would route the laptop's containerized harness out to Cloudflare and back to itself — wrong. The endpoint abstraction described in audit §8 (one model registry with ordered candidate endpoints + first-reachable resolution) prevents that round-trip structurally: localhost candidates always resolve first when reachable; the tunnel candidate is only used when localhost is unreachable (i.e., on the VPS).
+
+The forward-looking corollary, when the stationary home server arrives, is the same: a third "local" deployment shape is a new endpoint candidate, not a new config file or a new code path.
+
+### What this amendment does *not* change
+
+The underlying drivers of this ADR all still hold:
+
+* **Always-on knowledge** — datastores remain on the VPS. EU residency preserved.
+* **Cost envelope** — VPS sizing (~24 GB / 8 vCPU) absorbs the full harness within the original $20–40/month bracket. No upgrade required.
+* **Security posture** — TLS termination at Caddy, CF Access on admin surfaces, secrets via env files, no public datastore exposure. Unchanged.
+* **Data sovereignty** — user owns all data, exportable, deletable. Unchanged.
+* **Three-layer separation (ADR-0043)** — preserved logically; this amendment is about *deployment topology*, not layer ownership. Knowledge / Execution / Observation remain distinct in code.
+
+### Why amend rather than supersede
+
+The original decision (Option B: cloud knowledge with flexible execution) is correct and remains accepted. What was missing from the original ADR was an account of **ADR-0048 (Mobile & Multi-Device UI)**, which this ADR claimed to enable but which actually requires more than a thin gateway: a 24/7 PWA endpoint requires a 24/7 *execution* endpoint, since the PWA's primary surface is interactive chat, not knowledge retrieval. Once ADR-0048 was implemented, the thin-gateway shape became infeasible, and the deployed harness drifted to fill the gap.
+
+Superseding ADR-0045 would discard the still-valid decisions about VPS sizing, security, sovereignty, and migration path. Amending it captures the topology change (which layers run where) without losing the substance.
+
+### Embedding consistency — revised
+
+The original ADR specified that embeddings must be "the same model and dimension across all environments". That requirement is unchanged. What is now true:
+
+* The same model weights (`Qwen3-Embedding-0.6B`) are deployed in two places: laptop on Apple Silicon (host-native, MLX-format weights) and VPS on x86 (containerized, GGUF-format weights). Multi-instance is intentional (see "Local-model availability" above): the VPS instance is the always-on availability guarantee. The laptop's containerized mirror does not run a third instance — its gateway container reaches the host's MLX via `host.docker.internal`. (On-disk format differs by platform; the cosine-parity test in Track 3 verifies the resulting vectors agree.)
+* The **runtime differs**: laptop uses MLX via `slm_server`; the VPS uses llama.cpp. Same weights, different inference engines.
+* A parity test (cosine ≥ 0.999 on a fixed input set, across runtimes) is required before this is considered safe. The test is specified in the Track 3 implementation plan referenced from the audit.
+* Endpoint resolution (audit §8.3) handles candidate selection — first reachable wins, and the natural ordering puts the closest/fastest endpoint first on each deployment.
+
+### Service split — revised
+
+The original ADR said `service/app.py` would be split: knowledge/observation endpoints to a VPS gateway, execution endpoints to a separate execution service. **This split is no longer planned.** The full service runs on each host that executes a harness; profiles select provider; endpoint resolution (audit §8) handles topology-specific endpoint differences without env-specific config files.
+
+The dead `execution-service` token in `config/gateway_access.yaml` (audit §3 D-6) will be pruned as part of the Track 2 work.
+
+### Migration path — actual state vs. original phases
+
+| Original phase | Status as of 2026-05-08 |
+|----------------|--------------------------|
+| Phase 0 — Local simulation | ✅ Done (`docker-compose.cloud.yml` was the simulation; it became the deployment) |
+| Phase 1 — Provision VPS via Terraform | ✅ Done. Terraform lives in private repo `personal_agent_secrets`. |
+| Phase 2 — Data migration | ✅ Done (datastores live on VPS; pgvector + Neo4j + ES + Redis all operational) |
+| Phase 3 — Build Seshat API Gateway | **Replaced by full-harness deployment.** No thin gateway shipped; full service runs in its place. |
+| Phase 4 — Reconfigure local execution | **Not pursued as written.** Each location runs its own self-contained stack (datastores included), rather than the laptop being a thin client of cloud datastores. VPS is canonical/primary because of accessibility (ADR-0048); laptop is a secondary peer used rarely now that day-to-day dev moved to the VPS. The schema/index/dashboard sync cost this introduces is acknowledged in Negative consequences below. |
+| Phase 5 — Mobile access | ✅ Done. PWA reachable at `agent.frenchforet.com` 24/7. |
+
+### Consequences — additions
+
+**Positive (newly true):**
+
+* A single deployment shape simplifies the developer mental model and the test surface (Track 3 / FRE-336).
+* The same compose file runs on laptop and VPS — drift between dev and prod is prevented structurally rather than by discipline.
+* No need to stand up a separate execution worker anywhere always-on.
+
+**Negative (newly true):**
+
+* Laptop resource footprint increases modestly when running the full mirror (~500 MB – 1 GB for the gateway container + PWA + Caddy). MLX inference continues to run natively on the host, so no change there.
+* **Stack synchronization debt.** With each location running a full self-contained stack (datastores included), Postgres schema migrations (ordered SQL files under `docker/postgres/migrations/`), Elasticsearch index templates, and Kibana saved objects must be kept in sync between deployments. The original Phase 4 design (one shared cloud Knowledge Layer accessed by multiple execution clients) would have avoided this. Today the cost is small because the laptop stack is rarely used; if laptop usage grows, the operational pain will too. The Track 2b implementation plan (referenced from the audit) must include — at minimum — a documented sync procedure for migrations, index templates, and saved objects; ideally an automated check that flags drift.
+  * **Mitigation: opt-in tunnel mode.** Laptop dev sessions can override the default self-contained mode and point at the VPS datastores via SSH tunnel + an `.env.local-to-vps` env file. In tunnel mode there is no sync need for that session — laptop's harness reads/writes the same datastores the VPS does. Implemented as a Track 2b deliverable: `make tunnel-data` opens `ssh -L` for postgres/neo4j/es/redis; the override env file flips the relevant `AGENT_*_URL` vars to `localhost`. **Safety guard required**: gateway startup detects tunnel mode + write-capable role and refuses to start without `FORCE_LIVE_DATA=1` (prevents accidentally replaying a migration SQL file against prod).
+
+**Neutral:**
+
+* Original cost projections, security posture, and data sovereignty all carry forward unchanged.
+* The Mac SLM reverse tunnel's load-bearing role is unchanged — see "Local-model availability" above. What changes is that endpoint abstraction prevents the laptop from accidentally using the tunnel to reach its own local models.
+
+### What this amendment unblocks
+
+Wave D items previously gated on the FRE-214 verdict can now proceed:
+
+* [FRE-217](https://linear.app/frenchforest/issue/FRE-217) — closes as duplicate of FRE-214 (audit subsumes the containerization review).
+* [FRE-238](https://linear.app/frenchforest/issue/FRE-238), [FRE-240](https://linear.app/frenchforest/issue/FRE-240), [FRE-241](https://linear.app/frenchforest/issue/FRE-241) — proceed under the ratified pattern.
+* [FRE-236](https://linear.app/frenchforest/issue/FRE-236) — PWA iOS SSE resilience is **a quality criterion for this ratified topology, not an independent ticket**. Always-on harness + PWA over CF Tunnel only delivers the verdict's claim if the SSE stream survives iOS backgrounding; today it doesn't. Phase 1 (client-side reconcile) is independently shippable; Phase 2 (backend resume-from-offset) is a separate follow-up.
+* Implementation plans for Tracks 2a, 2b, 3 — written but **not** executed until owner triggers post-backlog-reduction.

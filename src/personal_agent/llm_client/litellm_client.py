@@ -405,13 +405,18 @@ class LiteLLMClient:
             model=self._litellm_model,
             trace_id=trace_id,
             role=role.value,
-            elapsed_s=round(elapsed, 2),
-            tokens=usage.get("total_tokens"),
+            endpoint=self.provider,
+            latency_ms=latency_ms,
+            elapsed_s=round(elapsed, 2),  # backward-compat double-write
+            completion_tokens=usage.get("completion_tokens"),
             prompt_tokens=usage.get("prompt_tokens"),
+            total_tokens=usage.get("total_tokens"),
+            tokens=usage.get("total_tokens"),  # backward-compat double-write
             cost_usd=round(cost, 6) if cost else None,
             tool_calls=len(tool_calls),
             cache_read_tokens=usage.get("cache_read_input_tokens"),
-            cache_write_tokens=usage.get("cache_creation_input_tokens"),
+            cache_creation_input_tokens=usage.get("cache_creation_input_tokens"),
+            cache_write_tokens=usage.get("cache_creation_input_tokens"),  # backward-compat
         )
 
         await cost_tracker.disconnect()

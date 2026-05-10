@@ -199,28 +199,44 @@ curl -s 'http://elasticsearch:9200/_cluster/health' | jq '{status, active_shards
 
 ## Self-telemetry (agent logs + Captain's Log captures)
 
-Use `run_python` to call the Python telemetry API directly — these are not REST endpoints.
+Use `bash` + `curl` to query ES. **Do NOT use `run_python` for project-module imports** — the
+sandbox container does not have project source installed (`from personal_agent import ...` will
+`ImportError`). Use the REST API instead.
 
-```python
-from personal_agent.telemetry.metrics import query_events, get_trace_events, get_request_latency_breakdown
-from personal_agent.captains_log.capture import read_captures
-import json
+```bash
+# Recent agent log events (last 20, any type)
+curl -s 'http://elasticsearch:9200/agent-logs-*/_query' \
+  -H 'Content-Type: application/json' \
+  -d 'FROM `agent-logs-*` | SORT @timestamp DESC | LIMIT 20' | jq .
 
-# Recent events (last N events across all event types)
-events = query_events(limit=50)
-print(json.dumps(events, default=str, indent=2))
+# Recent Captain's Log captures (last 10, newest first)
+curl -s 'http://elasticsearch:9200/agent-captains-captures-*/_search' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 10,
+    "sort": [{"timestamp": "desc"}],
+    "_source": ["trace_id","user_message","outcome","total_tokens","duration_ms","timestamp"]
+  }' | jq '.hits.hits[]._source'
 
-# Full event trace for a specific request
-trace_events = get_trace_events(trace_id="<trace_id>")
-print(json.dumps(trace_events, default=str, indent=2))
+# Recent reflections — recurring ones only (seen_count >= 2, most persistent first)
+curl -s 'http://elasticsearch:9200/agent-captains-reflections-*/_search' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 10,
+    "query": {"range": {"seen_count": {"gte": 2}}},
+    "sort": [{"seen_count": "desc"}, {"created_at": "desc"}],
+    "_source": ["rationale","proposed_change_what","seen_count","category","created_at","linear_issue_id"]
+  }' | jq '.hits.hits[]._source'
 
-# Latency breakdown by stage for a trace
-breakdown = get_request_latency_breakdown(trace_id="<trace_id>")
-print(json.dumps(breakdown, default=str, indent=2))
-
-# Captain's Log captures (self-improvement data)
-captures = read_captures(limit=20)
-print(json.dumps(captures, default=str, indent=2))
+# Full event trace for a specific request (by trace_id)
+curl -s 'http://elasticsearch:9200/agent-logs-*/_search' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 100,
+    "query": {"term": {"trace_id.keyword": "<trace_id>"}},
+    "sort": [{"@timestamp": "asc"}],
+    "_source": ["event_type","@timestamp","duration_ms","latency_ms","model_id","tokens"]
+  }' | jq '.hits.hits[]._source'
 ```
 
 ## Common mistakes

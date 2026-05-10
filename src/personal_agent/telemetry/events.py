@@ -36,6 +36,11 @@ MODEL_CALL_COMPLETED = "model_call_completed"
 MODEL_CALL_ERROR = "model_call_error"
 HISTORY_SANITISED = "history_sanitised"
 
+# Orchestrator step events (distinct from LLM client events above)
+# FRE-352: step-level emit uses llm_step_completed to avoid conflating with
+# the richer client-level model_call_completed payload in ES consumers.
+LLM_STEP_COMPLETED = "llm_step_completed"
+
 # Tool execution events
 TOOL_CALL_STARTED = "tool_call_started"
 TOOL_CALL_COMPLETED = "tool_call_completed"

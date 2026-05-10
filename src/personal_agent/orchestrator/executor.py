@@ -35,7 +35,7 @@ from personal_agent.orchestrator.types import (
 )
 from personal_agent.security import sanitize_error_message
 from personal_agent.telemetry import (
-    MODEL_CALL_COMPLETED,
+    LLM_STEP_COMPLETED,
     MODEL_CALL_ERROR,
     MODEL_CALL_STARTED,
     ORCHESTRATOR_FATAL_ERROR,
@@ -1769,7 +1769,7 @@ async def step_llm_call(
             )
 
         log.info(
-            MODEL_CALL_COMPLETED,
+            LLM_STEP_COMPLETED,
             trace_id=ctx.trace_id,
             span_id=span_id,
             duration_ms=duration_ms,

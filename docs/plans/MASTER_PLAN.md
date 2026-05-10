@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-09 (Wave J ✅; Wave A ✅; Wave B ✅ except FRE-326; Wave C ✅; Wave D planning ✅; Wave E FRE-213 ✅; FRE-227 paused → Backlog; FRE-346 audit ✅; FRE-347 session_summary G1 ✅ shipped — `session_summary` now populated on every consolidated session; FRE-348/349 Opus pending)
+> **Last updated**: 2026-05-10 (Wave J ✅; Wave A ✅; Wave B ✅ except FRE-326; Wave C ✅; Wave D planning ✅; Wave E FRE-213 ✅; FRE-227 paused → Backlog; FRE-346 audit ✅; FRE-347 G1 session_summary ✅; FRE-348 G2 reflection surfacing ✅ via PR #29 + ADR-0067; FRE-350 post-deploy eval Needs Approval; FRE-349 G3 Opus pending)
 
 ---
 
@@ -72,7 +72,7 @@ FRE-335  (Captain's Log p95 monitor — ADR-0066 D2 trigger)               ← n
 
 | Work Item | Notes |
 |-----------|-------|
-| **FRE-348: Surface reflections in context assembly (G2)** | [FRE-348](https://linear.app/frenchforest/issue/FRE-348) — Tier-1:Opus. Design needed (selection, budget, anti-thrash). Now unblocked: FRE-347 shipped |
+| **FRE-350: Post-deploy reflection-surfacing eval (FRE-348 follow-up)** | [FRE-350](https://linear.app/frenchforest/issue/FRE-350) — Tier-1:Opus. Earliest start ≥ 2026-05-24 (2 weeks of usage data). Decides keep/tune/kill on reflection surfacing |
 | **FRE-349: Surface actionable Insights to agent (G3)** | [FRE-349](https://linear.app/frenchforest/issue/FRE-349) — Tier-1:Opus. Likely shares ADR + infra with FRE-348 |
 | Mermaid chart rendering in chat UI | [FRE-315](https://linear.app/frenchforest/issue/FRE-315) canonical — FRE-316/317/318 closed as duplicates 2026-05-06 |
 
@@ -98,6 +98,7 @@ ADR-0066 D2 trigger (auto switch hybrid → model_decided) blocked on FRE-335
 
 | Item | Date | Summary |
 |------|------|---------|
+| **FRE-348: Reflection surfacing in context assembly (FRE-346 G2)** | 2026-05-10 | PR #29 merged + ADR-0067. New `captains_log/recall.py` queries past reflections and `request_gateway/context.py` injects up to 3 relevant ones as a system message between memory and recall_controller. Selection: 14-day recency × `seen_count >= 2` (or has `failure_path.fix_what`) × capitalized-hint relevance × skip approved entries. Anti-thrash via prose framing ("signals, not directives") + `→ tracked as FRE-XXX` marker. Failure-mode: every error path returns `[]` silently. Four `AGENT_REFLECTION_RECALL_*` settings; kill-switch defaults true. 12 unit tests with stubbed ES; 30/30 captains_log+second_brain pass; no context_assembly regressions. Eval deferred to FRE-350 (post-deploy 2-week window). |
 | **FRE-347: session_summary generation (FRE-346 G1)** | 2026-05-09 | New `second_brain/session_summary.py` populates `SessionNode.session_summary` on every consolidation pass. Uses captains_log model role + budget cap; returns None on any failure (never blocks consolidation). New settings flag `AGENT_SESSION_SUMMARY_ENABLED` (default true). 10 unit tests with mocked LLM client (cloud + local + budget-denied + timeout + edge cases). Unblocks UC-1/2/5 from FRE-346. Drive-by: removed pre-existing dead `entity_counts` block in `_consolidate_sessions`. |
 | **FRE-346: Cross-session continuity audit** | 2026-05-09 | Read-only audit of memory + Captain's Log + Insights + context assembly + brainstem (3 parallel Explore agents). Verdict: capture is rich; gaps are in **synthesis** (`SessionNode.session_summary` always None — G1) and **surfacing** (Captain's Log + Insights never re-read by agent — G2/G3). Filed 3 followups: FRE-347 HIGH/Sonnet (G1), FRE-348 MEDIUM/Opus (G2), FRE-349 MEDIUM/Opus (G3). G4/G5 noted as observations only. Recommendation: keep FRE-227 paused until FRE-347 ships. Document: `docs/research/2026-05-09-cross-session-continuity-audit.md`. |
 | **FRE-213: Seshat owner identity primitive (ADR-0052 amended)** | 2026-05-09 | Owner identity primitive for single-owner / multi-user CF Access deployment. Deliverables: `AGENT_OWNER_NAME`/`AGENT_AGENT_ID` config; `MemoryService.bootstrap_owner_identity()` (user_id anchor, never name-match); `get_or_provision_user_person()` lazy provisioning for non-owner users; `get_owner_stanza()` per-turn stanza injected into system prompt; `display_name` threaded from `RequestUser` → `ctx`; extraction prompt rule #1 clarified. ADR-0052 amended in place (single-owner-multi-user, drops name-match adoption, harness-vs-extracted disambiguation invariant). Research note `docs/research/2026-05-09-graph-identity-multi-user-patterns.md`. 26 new tests. Wave E follow-ups filed: FRE-342 (dedup hardening, HIGH), FRE-343 (personal time-window retrieval), FRE-344 (display_name seeding), FRE-345 (admin/non-admin ADR placeholder). |

@@ -13,6 +13,133 @@ from typing import Any
 from personal_agent.llm_client.tool_call_parser import parse_text_tool_calls
 from personal_agent.llm_client.types import LLMInvalidResponse, LLMResponse, ToolCall
 
+
+def _aggregate_streaming_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]:
+    """Reassemble OpenAI-style streaming chunks into a single response dict.
+
+    The streaming protocol (OpenAI / vLLM / llama-server) emits a sequence of
+    ``chat.completion.chunk`` objects, each with a ``choices[0].delta`` carrying
+    incremental updates: a chunk of ``content``, or one or more ``tool_calls``
+    delta entries identified by ``index``. ``arguments`` arrive as JSON
+    fragments and must be concatenated. The final chunk (when
+    ``stream_options.include_usage=True`` is set on the request) carries the
+    ``usage`` block.
+
+    The aggregated dict matches the non-streaming shape consumed by
+    :func:`adapt_chat_completions_response` so the rest of the agent's
+    response-handling pipeline is unchanged.
+
+    Args:
+        chunks: Parsed JSON dicts from each ``data:`` line of the SSE stream
+            (excluding ``[DONE]`` sentinel and comment-only lines).
+
+    Returns:
+        Aggregated response in non-streaming chat/completions shape.
+
+    Raises:
+        LLMInvalidResponse: If chunks are unparseable or no choices ever appear.
+    """
+    if not chunks:
+        raise LLMInvalidResponse("Empty streaming response")
+
+    content_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    role: str = "assistant"
+    finish_reason: str | None = None
+    # tool_calls indexed by their server-supplied `index` so out-of-order
+    # deltas merge correctly.
+    tool_call_acc: dict[int, dict[str, Any]] = {}
+    usage: dict[str, Any] = {}
+    last_chunk_id: str | None = None
+
+    for chunk in chunks:
+        if chunk.get("error") is not None:
+            raise LLMInvalidResponse(f"Streaming chunk reported error: {chunk['error']}")
+        last_chunk_id = chunk.get("id") or last_chunk_id
+        # Some servers emit a usage-only final chunk with no choices.
+        chunk_usage = chunk.get("usage")
+        if chunk_usage:
+            usage = chunk_usage
+        choices = chunk.get("choices") or []
+        if not choices:
+            continue
+        choice = choices[0]
+        delta = choice.get("delta") or {}
+        if not delta and choice.get("message"):
+            # Some non-streaming-shaped chunks slip through; treat message as final.
+            delta = choice["message"]
+        delta_role = delta.get("role")
+        if delta_role:
+            role = delta_role
+        delta_content = delta.get("content")
+        if isinstance(delta_content, str) and delta_content:
+            content_parts.append(delta_content)
+        delta_reasoning = delta.get("reasoning_content")
+        if isinstance(delta_reasoning, str) and delta_reasoning:
+            reasoning_parts.append(delta_reasoning)
+        delta_tool_calls = delta.get("tool_calls") or []
+        for tc_delta in delta_tool_calls:
+            if not isinstance(tc_delta, dict):
+                continue
+            tc_index = tc_delta.get("index")
+            if not isinstance(tc_index, int):
+                # Some servers omit index when there's only one tool call.
+                tc_index = 0
+            slot = tool_call_acc.setdefault(
+                tc_index,
+                {
+                    "id": "",
+                    "type": "function",
+                    "function": {"name": "", "arguments": ""},
+                },
+            )
+            tc_id = tc_delta.get("id")
+            if tc_id:
+                slot["id"] = tc_id
+            tc_type = tc_delta.get("type")
+            if tc_type:
+                slot["type"] = tc_type
+            fn = tc_delta.get("function") or {}
+            fn_name = fn.get("name")
+            if fn_name:
+                slot["function"]["name"] = fn_name
+            fn_args = fn.get("arguments")
+            if isinstance(fn_args, str) and fn_args:
+                slot["function"]["arguments"] += fn_args
+        chunk_finish = choice.get("finish_reason")
+        if chunk_finish:
+            finish_reason = chunk_finish
+
+    tool_calls = (
+        [tool_call_acc[i] for i in sorted(tool_call_acc.keys())] if tool_call_acc else None
+    )
+
+    message: dict[str, Any] = {
+        "role": role,
+        "content": "".join(content_parts),
+    }
+    if reasoning_parts:
+        message["reasoning_content"] = "".join(reasoning_parts)
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+
+    return {
+        "id": last_chunk_id,
+        "object": "chat.completion",
+        "choices": [
+            {
+                "index": 0,
+                "message": message,
+                "finish_reason": finish_reason,
+            }
+        ],
+        "usage": usage or {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        },
+    }
+
 _THINK_TAG_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 # LM Studio MLX backend sometimes leaks model control tokens into content
 _CONTROL_TOKEN_RE = re.compile(r"<\|[^|>]+\|>")

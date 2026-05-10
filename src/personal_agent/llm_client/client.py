@@ -5,6 +5,7 @@ servers (LM Studio, Ollama, etc.) with proper error handling, retries, and telem
 """
 
 import asyncio
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -16,13 +17,13 @@ from personal_agent.config import settings
 # Import from module directly to avoid circular import
 from personal_agent.config.model_loader import ModelConfigError, load_model_config
 from personal_agent.llm_client.adapters import (
+    _aggregate_streaming_chunks,
     adapt_chat_completions_response,
     build_chat_completions_request,
 )
 from personal_agent.llm_client.concurrency import (
     InferenceConcurrencyController,
     InferencePriority,
-    InferenceSlotTimeout,
 )
 from personal_agent.llm_client.history_sanitiser import sanitise_messages
 from personal_agent.llm_client.models import ModelConfig, ModelDefinition
@@ -386,12 +387,47 @@ class LocalLLMClient:
                             settings.cf_access_client_secret
                         )
 
+                # Stream the chat/completions response. Streaming keeps the
+                # connection alive byte-by-byte, eliminating Cloudflare 524
+                # timeouts on long-running local-model generations (the model
+                # would otherwise generate silently for tens of seconds while
+                # the proxy gave up). The aggregated dict matches the
+                # non-streaming shape consumed by `adapt_chat_completions_response`.
+                payload["stream"] = True
+                # Ask for usage in the final chunk (vLLM / llama-server emit it
+                # only when this option is set; OpenAI ignores unknown keys).
+                payload["stream_options"] = {"include_usage": True}
+
                 async with httpx.AsyncClient(timeout=timeout_config, verify=verify_ssl) as client:
-                    response = await client.post(
-                        current_endpoint, json=payload, headers=cf_headers or None
-                    )
-                    response.raise_for_status()
-                    response_data = response.json()
+                    chunks: list[dict[str, Any]] = []
+                    async with client.stream(
+                        "POST",
+                        current_endpoint,
+                        json=payload,
+                        headers=cf_headers or None,
+                    ) as response:
+                        response.raise_for_status()
+                        async for line in response.aiter_lines():
+                            if not line:
+                                continue
+                            if line.startswith(":"):
+                                # SSE comment / keep-alive
+                                continue
+                            if not line.startswith("data:"):
+                                continue
+                            data = line[5:].lstrip()
+                            if data == "[DONE]":
+                                break
+                            try:
+                                chunks.append(json.loads(data))
+                            except json.JSONDecodeError as exc:
+                                log.warning(
+                                    "stream_chunk_parse_failed",
+                                    preview=data[:120],
+                                    error=str(exc),
+                                    trace_id=trace_ctx.trace_id,
+                                )
+                    response_data = _aggregate_streaming_chunks(chunks)
 
                     # Log raw response for debugging
                     output_items = response_data.get("output", [])

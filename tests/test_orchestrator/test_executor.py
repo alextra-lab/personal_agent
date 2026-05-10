@@ -9,12 +9,15 @@ import pytest
 
 from personal_agent.config.profile import ExecutionProfile, _current_profile, set_current_profile
 from personal_agent.governance.models import Mode
+from personal_agent.llm_client.history_sanitiser import sanitise_messages
 from personal_agent.llm_client.models import ToolCallingStrategy
 from personal_agent.memory.models import MemoryQueryResult, TurnNode
 from personal_agent.orchestrator import Channel, Orchestrator
 from personal_agent.orchestrator.executor import (
+    _build_assistant_tool_calls,
     _extract_entity_type_hints,
     _format_broad_recall,
+    _validate_and_fix_conversation_roles,
     execute_task_safe,
 )
 from personal_agent.orchestrator.session import SessionManager
@@ -761,3 +764,254 @@ async def test_execute_task_uses_profile_resolved_model_config(mock_client_class
         "Executor used PROMPT_INJECTED strategy from wrong model config lookup. "
         "Fix: executor must resolve model key through the active ExecutionProfile."
     )
+
+
+# ── tool_call ID collision regression tests (Bug 2) ─────────────────────────
+
+
+class TestBuildAssistantToolCalls:
+    """Regression tests for tool_call ID collision across turns.
+
+    The qwen3 server-side parser regenerates ``call_<n>`` ids each turn.
+    Without a turn prefix, a multi-round tool flow produces colliding ids and
+    the history sanitiser strips half the tool results as orphans.
+    """
+
+    def test_single_turn_ids_are_well_formed(self) -> None:
+        """Ids preserve the server-supplied suffix and carry the turn prefix."""
+        raw = [
+            {"id": "call_0", "name": "bash", "arguments": "{}"},
+            {"id": "call_1", "name": "bash", "arguments": '{"x":1}'},
+        ]
+        out = _build_assistant_tool_calls(raw, turn_id=0)
+        assert len(out) == 2
+        assert all(tc["type"] == "function" for tc in out)
+        assert out[0]["function"]["name"] == "bash"
+        # Server-supplied id is preserved as a suffix for debuggability
+        assert "call_0" in out[0]["id"]
+        assert "call_1" in out[1]["id"]
+        # Turn prefix is present
+        assert out[0]["id"].startswith("call_t0_")
+
+    def test_ids_are_unique_across_turns(self) -> None:
+        """Reproduces the orphan-stripping bug.
+
+        Server returns call_0 every turn; after our rewrite, ids must be
+        unique across turns within a request.
+        """
+        raw_turn0 = [
+            {"id": "call_0", "name": "bash", "arguments": "{}"},
+            {"id": "call_1", "name": "bash", "arguments": "{}"},
+        ]
+        raw_turn1 = [
+            {"id": "call_0", "name": "bash", "arguments": "{}"},
+            {"id": "call_1", "name": "bash", "arguments": "{}"},
+        ]
+        out0 = _build_assistant_tool_calls(raw_turn0, turn_id=0)
+        out1 = _build_assistant_tool_calls(raw_turn1, turn_id=1)
+
+        all_ids = [tc["id"] for tc in out0 + out1]
+        assert len(set(all_ids)) == len(all_ids), (
+            f"Expected 4 unique ids across two turns, got duplicates in {all_ids}"
+        )
+
+    def test_missing_id_falls_back_to_turn_prefixed_id(self) -> None:
+        """Empty server-supplied id falls back to a synthetic turn-prefixed id."""
+        raw = [{"id": "", "name": "bash", "arguments": "{}"}]
+        out = _build_assistant_tool_calls(raw, turn_id=3)
+        # No empty id sneaks through
+        assert out[0]["id"]
+        assert out[0]["id"].startswith("call_t3_")
+
+    def test_sanitiser_does_not_orphan_two_turn_history(self) -> None:
+        """End-to-end regression: two-turn flow with colliding server ids stays clean.
+
+        Builds two assistant turns plus their tool results using the executor's
+        id-construction helper. Runs the sanitiser. Expects zero orphans —
+        this would have failed with the pre-fix code.
+        """
+        # Turn 0: server emits call_0, call_1
+        turn0 = _build_assistant_tool_calls(
+            [{"id": "call_0", "name": "bash", "arguments": "{}"},
+             {"id": "call_1", "name": "bash", "arguments": "{}"}],
+            turn_id=0,
+        )
+        # Turn 1: server emits call_0, call_1 again (the bug)
+        turn1 = _build_assistant_tool_calls(
+            [{"id": "call_0", "name": "bash", "arguments": "{}"},
+             {"id": "call_1", "name": "bash", "arguments": "{}"}],
+            turn_id=1,
+        )
+
+        history: list[dict] = [
+            {"role": "user", "content": "do work"},
+            {"role": "assistant", "content": "ok", "tool_calls": turn0},
+            {"role": "tool", "tool_call_id": turn0[0]["id"], "content": "ok0"},
+            {"role": "tool", "tool_call_id": turn0[1]["id"], "content": "ok1"},
+            {"role": "user", "content": "more"},
+            {"role": "assistant", "content": "ok", "tool_calls": turn1},
+            {"role": "tool", "tool_call_id": turn1[0]["id"], "content": "ok2"},
+            {"role": "tool", "tool_call_id": turn1[1]["id"], "content": "ok3"},
+        ]
+        _, report = sanitise_messages(history)
+        assert report.orphaned_results_stripped == 0, (
+            "Tool results should not be orphaned across turns when ids are "
+            "turn-prefixed."
+        )
+        assert report.orphaned_calls_stripped == 0
+
+
+# ── conversation role validator merge bug regression tests (Bug 3) ──────────
+
+
+class TestRoleValidatorMergeBug:
+    """Regression tests for `_validate_and_fix_conversation_roles`.
+
+    The valid OpenAI tool flow is::
+
+        user, assistant{tool_calls}, tool, tool, …, assistant{tool_calls or content}
+
+    Pre-fix the validator merged the two assistants because tool messages did
+    not reset its same-role detector. The merge dropped the second assistant's
+    ``tool_calls``, making the matching tool results orphans on the next turn —
+    which the sanitiser then stripped. The runaway loop we observed today.
+    """
+
+    def test_two_assistants_with_intervening_tools_not_merged(self) -> None:
+        """The valid multi-turn tool flow: two assistants separated by tool messages.
+
+        Both assistants must survive with their own tool_calls intact. This is
+        the regression test for the bug that caused the runaway loop.
+        """
+        history: list[dict] = [
+            {"role": "user", "content": "do work"},
+            {
+                "role": "assistant",
+                "content": "running checks",
+                "tool_calls": [
+                    {"id": "A1", "type": "function", "function": {"name": "bash", "arguments": "{}"}},
+                    {"id": "A2", "type": "function", "function": {"name": "bash", "arguments": "{}"}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "A1", "content": "result1"},
+            {"role": "tool", "tool_call_id": "A2", "content": "result2"},
+            {
+                "role": "assistant",
+                "content": "synthesis",
+                "tool_calls": [
+                    {"id": "B1", "type": "function", "function": {"name": "bash", "arguments": "{}"}},
+                ],
+            },
+        ]
+        out = _validate_and_fix_conversation_roles(history)
+        roles = [m.get("role") for m in out]
+        assert roles == ["user", "assistant", "tool", "tool", "assistant"]
+        # Both assistants present, tool_calls intact on each
+        asst_idxs = [i for i, m in enumerate(out) if m.get("role") == "assistant"]
+        assert len(asst_idxs) == 2
+        first_calls = [tc["id"] for tc in out[asst_idxs[0]]["tool_calls"]]
+        second_calls = [tc["id"] for tc in out[asst_idxs[1]]["tool_calls"]]
+        assert first_calls == ["A1", "A2"]
+        assert second_calls == ["B1"]
+
+    def test_consecutive_assistants_no_tools_still_merge(self) -> None:
+        """True consecutive duplicates (no intervening tools) still merge."""
+        history: list[dict] = [
+            {"role": "user", "content": "ask"},
+            {"role": "assistant", "content": "first part"},
+            {"role": "assistant", "content": "second part"},
+        ]
+        out = _validate_and_fix_conversation_roles(history)
+        roles = [m.get("role") for m in out]
+        assert roles == ["user", "assistant"]
+        merged = out[1]["content"]
+        assert "first part" in merged and "second part" in merged
+
+    def test_consecutive_assistants_no_tools_preserve_tool_calls(self) -> None:
+        """Merging carries over the second assistant's tool_calls.
+
+        When two assistants are truly adjacent (no intervening tool messages)
+        and we have to merge them, the merged-in assistant's tool_calls must
+        still survive rather than being silently dropped.
+        """
+        history: list[dict] = [
+            {
+                "role": "user",
+                "content": "do",
+            },
+            {
+                "role": "assistant",
+                "content": "I'll think first",
+            },
+            {
+                "role": "assistant",
+                "content": "and now act",
+                "tool_calls": [
+                    {"id": "X1", "type": "function", "function": {"name": "bash", "arguments": "{}"}},
+                ],
+            },
+        ]
+        out = _validate_and_fix_conversation_roles(history)
+        # Merged into one assistant
+        roles = [m.get("role") for m in out]
+        assert roles == ["user", "assistant"]
+        # The merged assistant carries the tool_calls
+        assert out[1].get("tool_calls"), "merged assistant must preserve tool_calls"
+        assert out[1]["tool_calls"][0]["id"] == "X1"
+
+    def test_role_alternation_failure_log_does_not_fire_for_tool_separated_assistants(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """No alternation_failed log for the valid tool-separated pattern.
+
+        The final-validation pass must NOT emit
+        ``conversation_role_alternation_failed`` for the OpenAI tool flow
+        ``assistant{tool_calls} → tool → assistant{...}``.
+        """
+        history: list[dict] = [
+            {"role": "user", "content": "go"},
+            {
+                "role": "assistant",
+                "content": "calling tool",
+                "tool_calls": [
+                    {"id": "T1", "type": "function", "function": {"name": "bash", "arguments": "{}"}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "T1", "content": "ok"},
+            {"role": "assistant", "content": "done"},
+        ]
+        with caplog.at_level("ERROR"):
+            _validate_and_fix_conversation_roles(history)
+        for record in caplog.records:
+            assert "conversation_role_alternation_failed" not in record.getMessage(), (
+                f"alternation_failed fired incorrectly: {record.getMessage()}"
+            )
+
+    def test_three_round_tool_flow_keeps_every_assistant(self) -> None:
+        """Multi-round tool flow: A → tool → A → tool → A. All three assistants survive."""
+        history: list[dict] = [
+            {"role": "user", "content": "ask"},
+            {
+                "role": "assistant",
+                "content": "step1",
+                "tool_calls": [
+                    {"id": "R1", "type": "function", "function": {"name": "bash", "arguments": "{}"}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "R1", "content": "r1"},
+            {
+                "role": "assistant",
+                "content": "step2",
+                "tool_calls": [
+                    {"id": "R2", "type": "function", "function": {"name": "bash", "arguments": "{}"}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "R2", "content": "r2"},
+            {"role": "assistant", "content": "synthesis"},
+        ]
+        out = _validate_and_fix_conversation_roles(history)
+        asst_idxs = [i for i, m in enumerate(out) if m.get("role") == "assistant"]
+        assert len(asst_idxs) == 3
+        assert out[asst_idxs[0]]["tool_calls"][0]["id"] == "R1"
+        assert out[asst_idxs[1]]["tool_calls"][0]["id"] == "R2"
+        assert "synthesis" in out[asst_idxs[2]]["content"]

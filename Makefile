@@ -110,6 +110,10 @@ services:
 up:
 	@$(COMPOSE) up -d $(SERVICE)
 	@[ -n "$(SERVICE)" ] || [ "$(ENV)" != "local" ] || bash scripts/init-services.sh
+	@# Always (re)apply ES templates after a full-stack up. Idempotent; the
+	@# script has its own readiness wait. Cloud env uses 127.0.0.1:9200 too —
+	@# ES is bound to the loopback per docker-compose.cloud.yml.
+	@[ -n "$(SERVICE)" ] || ES_URL="http://localhost:9200" bash scripts/setup-elasticsearch.sh
 
 down:
 	@$(COMPOSE) down $(SERVICE)

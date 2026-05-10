@@ -109,6 +109,39 @@ def _resolve_max_iterations(ctx: "ExecutionContext") -> int:
     return global_max
 
 
+def _build_assistant_tool_calls(
+    response_tool_calls: list[Any],
+    turn_id: int,
+) -> list[dict[str, Any]]:
+    """Build the OpenAI-format ``tool_calls`` list for an assistant message.
+
+    Prefixes the server-provided ``id`` with the request-local ``turn_id`` so
+    ids are unique across turns within a single request. Server-side parsers
+    (e.g. ``tool_call_parser="qwen3"``) typically regenerate ids starting
+    from ``call_0`` on each turn; without a per-turn prefix those ids collide
+    across rounds and the history sanitiser drops the resulting tool results
+    as orphaned, which traps the agent in an unrecoverable re-discovery loop.
+
+    Args:
+        response_tool_calls: ToolCall objects from ``LLMResponse["tool_calls"]``.
+        turn_id: Monotonically increasing counter for this request — typically
+            ``ctx.tool_iteration_count`` taken at assistant-build time.
+
+    Returns:
+        List of OpenAI-format tool_call dicts (``id``, ``type``, ``function``,
+        ``index``) suitable for assignment to ``assistant_message["tool_calls"]``.
+    """
+    return [
+        {
+            "id": f"call_t{turn_id}_{idx}_{tc['id']}" if tc.get("id") else f"call_t{turn_id}_{idx}",
+            "type": "function",
+            "function": {"name": tc["name"], "arguments": tc["arguments"]},
+            "index": idx,  # Required by MLX backend per OpenAI API spec
+        }
+        for idx, tc in enumerate(response_tool_calls)
+    ]
+
+
 def _gate_blocked_result(
     tool_call_id: str,
     tool_name: str,
@@ -251,10 +284,20 @@ def _validate_and_fix_conversation_roles(messages: list[dict[str, Any]]) -> list
     - After system (or from start), strict user/assistant alternation
     - Tool messages don't break alternation
 
+    The OpenAI tool-calling pattern is::
+
+        user → assistant{tool_calls} → tool → tool → … → assistant{tool_calls or content} → …
+
+    Two assistants separated by tool messages are a *valid* multi-turn tool flow,
+    not a duplicate. Merging them would drop the second assistant's
+    ``tool_calls`` (the bug we hit when the agent looped re-calling tools because
+    each turn lost the prior turn's tool_calls). Only merge when the immediate
+    prior user/assistant message is the same role with NO tool messages between.
+
     This function:
     1. Preserves system message at start
-    2. Ensures user/assistant alternation
-    3. Merges consecutive messages of the same role (combines content)
+    2. Ensures user/assistant alternation when truly consecutive
+    3. Merges true duplicates (no intervening tools), preserving any tool_calls
     4. Preserves tool messages
 
     Args:
@@ -268,7 +311,6 @@ def _validate_and_fix_conversation_roles(messages: list[dict[str, Any]]) -> list
 
     fixed: list[dict[str, Any]] = []
     system_msg: dict[str, Any] | None = None
-    last_non_tool_role: str | None = None
 
     # First pass: extract system message and build alternating sequence
     for msg in messages:
@@ -285,31 +327,57 @@ def _validate_and_fix_conversation_roles(messages: list[dict[str, Any]]) -> list
             fixed.append(msg)
             continue
 
-        # For user/assistant: ensure alternation
+        # For user/assistant: detect *true* consecutive duplicates.
+        # A true duplicate is a same-role message immediately preceded by
+        # another same-role user/assistant in `fixed` with no tool messages
+        # between them. Tool messages reset the duplicate detector — that's
+        # the valid OpenAI tool flow, not a duplicate.
         if role in ("user", "assistant"):
-            # If same role as last non-tool message, merge content
-            if role == last_non_tool_role and fixed:
-                # Find the last message with this role
-                for i in range(len(fixed) - 1, -1, -1):
-                    if fixed[i].get("role") == role:
-                        # Merge content
-                        old_content = fixed[i].get("content", "")
-                        new_content = msg.get("content", "")
-                        if old_content and new_content:
-                            fixed[i]["content"] = f"{old_content}\n\n{new_content}"
-                        elif new_content:
-                            fixed[i]["content"] = new_content
-                        log.warning(
-                            "conversation_role_duplicate_merged",
-                            role=role,
-                            trace_id=getattr(fixed[i], "trace_id", None),
-                            message_preview=str(new_content)[:50],
-                        )
-                        break
+            # Walk fixed in reverse, skip tool messages, find the first
+            # user/assistant. If it has the same role AND no tool sat
+            # between, treat as a real duplicate.
+            prior_idx: int | None = None
+            saw_tool_between = False
+            for i in range(len(fixed) - 1, -1, -1):
+                prior_role = fixed[i].get("role")
+                if prior_role == "tool":
+                    saw_tool_between = True
+                    continue
+                if prior_role in ("user", "assistant"):
+                    prior_idx = i
+                    break
+
+            is_true_duplicate = (
+                prior_idx is not None
+                and not saw_tool_between
+                and fixed[prior_idx].get("role") == role
+            )
+
+            if is_true_duplicate:
+                # Merge content into the prior message AND preserve tool_calls
+                # if the incoming message had any (otherwise we silently
+                # disarm a tool round, which is the failure we just fixed).
+                assert prior_idx is not None  # narrowed by is_true_duplicate
+                prior = fixed[prior_idx]
+                old_content = prior.get("content", "") or ""
+                new_content = msg.get("content", "") or ""
+                if old_content and new_content:
+                    prior["content"] = f"{old_content}\n\n{new_content}"
+                elif new_content:
+                    prior["content"] = new_content
+                # Preserve incoming tool_calls — concatenate when both sides have them.
+                incoming_tool_calls = msg.get("tool_calls") or []
+                if incoming_tool_calls:
+                    existing_tool_calls = prior.get("tool_calls") or []
+                    prior["tool_calls"] = list(existing_tool_calls) + list(incoming_tool_calls)
+                log.warning(
+                    "conversation_role_duplicate_merged",
+                    role=role,
+                    message_preview=str(new_content)[:50],
+                    preserved_tool_calls=len(incoming_tool_calls),
+                )
             else:
-                # Different role or no previous message: add it
                 fixed.append(msg)
-                last_non_tool_role = role
 
     # Rebuild with system at start
     result: list[dict[str, Any]] = []
@@ -317,21 +385,29 @@ def _validate_and_fix_conversation_roles(messages: list[dict[str, Any]]) -> list
         result.append(system_msg)
     result.extend(fixed)
 
-    # Final validation: check that non-tool, non-system messages alternate
-    roles_sequence = [
-        msg.get("role") for msg in result if msg.get("role") not in ("system", "tool")
-    ]
-
-    # Verify alternation
-    for i in range(1, len(roles_sequence)):
-        if roles_sequence[i] == roles_sequence[i - 1]:
-            log.error(
-                "conversation_role_alternation_failed",
-                position=i,
-                role=roles_sequence[i],
-                sequence=roles_sequence,
-                message="Failed to fix conversation alternation - consecutive same roles remain",
-            )
+    # Final validation: only flag as a fault when two same-role user/assistant
+    # messages are immediately adjacent with no tool message between them. Tool
+    # messages between same-role assistants are the valid OpenAI tool-call
+    # pattern (assistant{tool_calls} → tool → assistant{synthesis}).
+    saw_tool_between = False
+    prev_user_or_asst: str | None = None
+    for i, msg in enumerate(result):
+        role = msg.get("role")
+        if role == "system":
+            continue
+        if role == "tool":
+            saw_tool_between = True
+            continue
+        if role in ("user", "assistant"):
+            if role == prev_user_or_asst and not saw_tool_between:
+                log.error(
+                    "conversation_role_alternation_failed",
+                    position=i,
+                    role=role,
+                    message="Failed to fix conversation alternation - consecutive same roles remain",
+                )
+            prev_user_or_asst = role
+            saw_tool_between = False
 
     return result
 
@@ -1849,7 +1925,19 @@ async def step_llm_call(
                         "for the user's original question."
                     ),
                 }
-                ctx.messages.append({"role": "assistant", "content": response_content})
+                hybrid_assistant_msg: dict[str, Any] = {
+                    "role": "assistant",
+                    "content": response_content,
+                }
+                # Preserve thinking trace for templates that support
+                # `preserve_thinking` (Qwen3.6 unsloth template reads
+                # `message.reasoning_content` first, falls back to <think> tags
+                # in content). Cloud paths and sub-agents with disable_thinking
+                # emit reasoning_trace=None, so this is a no-op for them.
+                hybrid_reasoning = response.get("reasoning_trace")
+                if hybrid_reasoning:
+                    hybrid_assistant_msg["reasoning_content"] = hybrid_reasoning
+                ctx.messages.append(hybrid_assistant_msg)
                 ctx.messages.append(synthesis_msg)
 
                 log.info(
@@ -1870,20 +1958,23 @@ async def step_llm_call(
             )
         # --- End HYBRID expansion hook ---
 
-        # Add assistant message to history (with tool calls if present)
+        # Add assistant message to history (with tool calls if present).
+        # Tool_call ids are rewritten with a turn prefix so ids do not collide
+        # across rounds — see _build_assistant_tool_calls for why this matters.
         assistant_message: dict[str, Any] = {"role": "assistant", "content": response_content}
+        # Preserve thinking trace for templates that support `preserve_thinking`
+        # (Qwen3.6 unsloth template reads `message.reasoning_content` first,
+        # falls back to <think> tags in content). Cloud paths and sub-agents
+        # with disable_thinking emit reasoning_trace=None, so this is a no-op
+        # for them. Until the slm_server flag flips, the template ignores it.
+        reasoning_trace = response.get("reasoning_trace")
+        if reasoning_trace:
+            assistant_message["reasoning_content"] = reasoning_trace
         if response_tool_calls:
-            # Store tool calls in assistant message (OpenAI format)
-            # MLX backend requires 'index' field per OpenAI API spec
-            assistant_message["tool_calls"] = [
-                {
-                    "id": tc["id"],
-                    "type": "function",
-                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
-                    "index": idx,  # Required by MLX backend for validation
-                }
-                for idx, tc in enumerate(response_tool_calls)
-            ]
+            assistant_message["tool_calls"] = _build_assistant_tool_calls(
+                response_tool_calls,
+                turn_id=ctx.tool_iteration_count,
+            )
         ctx.messages.append(assistant_message)
 
         # If tool calls present, transition to tool execution
@@ -2273,6 +2364,11 @@ async def step_tool_execution(
     # ── Phase 1: Sequential gate check ────────────────────────────────────────
     # Gate FSM mutations must be sequential so call-count and consecutive-count
     # thresholds are correct before any I/O is dispatched (ADR-0062).
+    # Mark the start of a new turn so that within-turn parallel dispatch (e.g.
+    # 14 bash calls in one assistant message) does not inflate consecutive_count
+    # — only cross-turn repeats of the same tool advance the counter.
+    ctx.loop_gate.begin_turn()
+
     tool_results: list[dict[str, Any]] = []  # blocked + error results (immediate)
     allowed_plans: list[dict[str, Any]] = []  # tool calls cleared for async dispatch
 

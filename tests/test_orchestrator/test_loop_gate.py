@@ -381,3 +381,102 @@ def test_gate_result_fields_are_complete():
     assert result.consecutive_count >= 1
     assert result.total_calls >= 1
     assert result.reason != ""
+
+
+# ── begin_turn() / within-turn parallel dispatch tests ─────────────────────
+
+
+def test_begin_turn_skips_consecutive_for_within_turn_repeats():
+    """Multiple parallel calls to the same tool within one turn count as 1 consecutive event.
+
+    Reproduces the production bug: a healthcheck dispatches 14 parallel bash
+    calls in one assistant turn. Without begin_turn() these 14 calls would
+    accumulate consecutive_count=14 and trip BLOCK_CONSECUTIVE at threshold 10.
+    With begin_turn() they all stay at consecutive=1, none are blocked.
+    """
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(
+        loop_max_per_signature=10,
+        loop_max_consecutive=3,
+        loop_consecutive_terminal=True,
+    )
+    gate.begin_turn()
+    last_result: GateResult | None = None
+    for i in range(14):
+        last_result = gate.check_before("bash", f"hash_{i}", policy)
+    assert last_result is not None
+    assert last_result.decision == GateDecision.ALLOW
+    assert gate._fsms["bash"].consecutive_count == 1
+    # total_calls and signature_counts still grow normally — only consecutive
+    # is suppressed for within-turn parallel dispatch.
+    assert gate._fsms["bash"].total_calls == 14
+
+
+def test_consecutive_still_increments_across_turns_with_begin_turn():
+    """Cross-turn repeats of the same tool still accumulate consecutive_count."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(
+        loop_max_per_signature=10,
+        loop_max_consecutive=3,
+        loop_consecutive_terminal=True,
+    )
+    gate.begin_turn()
+    r1 = gate.check_before("bash", "hash_a", policy)
+    assert r1.decision == GateDecision.ALLOW
+    assert gate._fsms["bash"].consecutive_count == 1
+
+    gate.begin_turn()
+    r2 = gate.check_before("bash", "hash_b", policy)
+    assert r2.decision == GateDecision.ALLOW
+    assert gate._fsms["bash"].consecutive_count == 2
+
+    gate.begin_turn()
+    r3 = gate.check_before("bash", "hash_c", policy)
+    assert r3.decision == GateDecision.BLOCK_CONSECUTIVE
+    assert gate._fsms["bash"].consecutive_count == 3
+
+
+def test_begin_turn_default_off_preserves_legacy_semantics():
+    """Without begin_turn(), every check_before counts toward consecutive (legacy)."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(
+        loop_max_per_signature=10,
+        loop_max_consecutive=2,
+        loop_consecutive_terminal=True,
+    )
+    gate.check_before("bash", "hash_a", policy)  # consecutive=1, ALLOW
+    r2 = gate.check_before("bash", "hash_b", policy)  # consecutive=2, BLOCK
+    assert r2.decision == GateDecision.BLOCK_CONSECUTIVE
+
+
+def test_begin_turn_resets_within_turn_set_each_call():
+    """Calling begin_turn() repeatedly clears the prior turn's tool set."""
+    gate = ToolLoopGate()
+    policy = ToolLoopPolicy(loop_max_per_signature=10, loop_max_consecutive=10)
+
+    gate.begin_turn()
+    gate.check_before("bash", "h1", policy)  # advances consecutive to 1
+    gate.check_before("bash", "h2", policy)  # within turn → consecutive stays at 1
+    assert gate._fsms["bash"].consecutive_count == 1
+
+    gate.begin_turn()  # new turn — set cleared
+    gate.check_before("bash", "h3", policy)  # first bash of this turn → consecutive 2
+    assert gate._fsms["bash"].consecutive_count == 2
+    gate.check_before("bash", "h4", policy)  # within new turn → still 2
+    assert gate._fsms["bash"].consecutive_count == 2
+
+
+def test_begin_turn_does_not_affect_signature_terminal_block():
+    """Identity-terminal still fires for parallel dispatch with same args."""
+    gate = ToolLoopGate()
+    # Default loop_max_per_signature=1 means terminal hits at 1+IDENTITY_TERMINAL_OFFSET (=3) calls.
+    policy = ToolLoopPolicy(loop_max_per_signature=1, loop_max_consecutive=100)
+    gate.begin_turn()
+    r1 = gate.check_before("bash", "same_args", policy)
+    r2 = gate.check_before("bash", "same_args", policy)
+    r3 = gate.check_before("bash", "same_args", policy)
+    r4 = gate.check_before("bash", "same_args", policy)
+    assert r1.decision == GateDecision.ALLOW
+    assert r2.decision == GateDecision.ADVISE_IDENTITY
+    assert r3.decision == GateDecision.ADVISE_IDENTITY
+    assert r4.decision == GateDecision.BLOCK_IDENTITY  # exceeded max+offset

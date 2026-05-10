@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-10 (Wave J ✅; Wave A ✅; Wave B ✅ except FRE-326; Wave C ✅; Wave D planning ✅; Wave E FRE-213 ✅; FRE-227 paused → Backlog; FRE-346 audit ✅; FRE-347 G1 session_summary ✅; FRE-348 G2 reflection surfacing ✅ via PR #29 + ADR-0067; FRE-350 post-deploy eval Needs Approval; FRE-349 G3 Opus pending)
+> **Last updated**: 2026-05-10 (Wave J ✅; Wave A ✅; Wave B ✅ except FRE-326; Wave C ✅; Wave D planning ✅; Wave E FRE-213 ✅; FRE-227 paused → Backlog; FRE-346 audit ✅; FRE-347 G1 session_summary ✅; FRE-348 G2 reflection surfacing ✅ via PR #29 + ADR-0067; FRE-350 post-deploy eval Needs Approval; FRE-349 G3 Opus pending; FRE-258 ADR-0068 ✅ + FRE-351/352/353/354/355/356 filed)
 
 ---
 
@@ -74,6 +74,12 @@ FRE-335  (Captain's Log p95 monitor — ADR-0066 D2 trigger)               ← n
 |-----------|-------|
 | **FRE-350: Post-deploy reflection-surfacing eval (FRE-348 follow-up)** | [FRE-350](https://linear.app/frenchforest/issue/FRE-350) — Tier-1:Opus. Earliest start ≥ 2026-05-24 (2 weeks of usage data). Decides keep/tune/kill on reflection surfacing |
 | **FRE-349: Surface actionable Insights to agent (G3)** | [FRE-349](https://linear.app/frenchforest/issue/FRE-349) — Tier-1:Opus. Likely shares ADR + infra with FRE-348 |
+| **FRE-351: Cloud emit field parity** | [FRE-351](https://linear.app/frenchforest/issue/FRE-351) — Tier-3:Haiku. `litellm_request_complete` missing `completion_tokens`, `latency_ms`, `endpoint` (→ ADR-0068 D3) |
+| **FRE-352: Step-level emit disambiguation** | [FRE-352](https://linear.app/frenchforest/issue/FRE-352) — Tier-2:Sonnet. `model_call_completed` event name collision between client-level and executor-level emits (→ ADR-0068 D3) |
+| **FRE-353: ES index template reconciliation** | [FRE-353](https://linear.app/frenchforest/issue/FRE-353) — Tier-3:Haiku. Blocked on FRE-351+FRE-352 (→ ADR-0068 D4) |
+| **FRE-354: Fix query-elasticsearch.md skill doc** | [FRE-354](https://linear.app/frenchforest/issue/FRE-354) — Tier-3:Haiku. `run_python` import snippet will ImportError in sandbox (→ ADR-0068 D5) |
+| **FRE-355: read primitive log-file tailing** | [FRE-355](https://linear.app/frenchforest/issue/FRE-355) — Tier-2:Sonnet. `current.jsonl` (19 MB) exceeds 10 MB cap; design decision needed (→ ADR-0068 D6) |
+| **FRE-356: Write self-telemetry.md skill doc** | [FRE-356](https://linear.app/frenchforest/issue/FRE-356) — Tier-3:Haiku. Blocked on FRE-354 (→ ADR-0068 D7) |
 | Mermaid chart rendering in chat UI | [FRE-315](https://linear.app/frenchforest/issue/FRE-315) canonical — FRE-316/317/318 closed as duplicates 2026-05-06 |
 
 ---
@@ -86,6 +92,7 @@ FRE-178 (Recall L2) → FRE-179 (L3 judge) → FRE-180 (context gap score)
 FRE-214 (arch review) ✅ ratified 2026-05-08 → FRE-238 / FRE-240 / FRE-241 / FRE-236 + FRE-336 + FRE-338-341 unblocked (FRE-217 closed dup)
   Track 2a (endpoint abstraction) → Track 2b (compose unification + tunnel mode) → Track 3 (test parity / FRE-336)
 FRE-265 (legacy delete) — calendar gate ≥ 2026-05-12
+FRE-351 (cloud emit) + FRE-352 (step emit) → FRE-353 (ES template) → FRE-354 (skill doc fix) → FRE-356 (self-telemetry.md) — ADR-0068 cleanup chain; FRE-355 (read primitive) independent
 FRE-326 (consolidation gates) — telemetry gate ≥ 2026-05-13
 FRE-311 (budget auto-tuning) — parked until FRE-302 (ADR-0065) lands
 FRE-329 → FRE-331 → FRE-330 → FRE-334 → FRE-335   (Wave J chain — see diagram above)
@@ -98,6 +105,7 @@ ADR-0066 D2 trigger (auto switch hybrid → model_decided) blocked on FRE-335
 
 | Item | Date | Summary |
 |------|------|---------|
+| **FRE-258: Adaptive self-telemetry ADR (ADR-0068)** | 2026-05-10 | Read-only audit (3 Explore agents) reframed the original diagnosis. Root cause of 24-/50-call loops was tool-design stasis, already resolved by FRE-261 primitives + skill docs. ADR-0068 ratifies primitives+skills as canonical, retires `self_telemetry_query` / `query_elasticsearch` via FRE-265 with no replacement. Audit surfaced 4 concrete emit-site gaps + ES template mismatch + live skill-doc bug → 6 follow-up tickets filed (FRE-351..356, all Needs Approval). No code changed. |
 | **FRE-348: Reflection surfacing in context assembly (FRE-346 G2)** | 2026-05-10 | PR #29 merged + ADR-0067. New `captains_log/recall.py` queries past reflections and `request_gateway/context.py` injects up to 3 relevant ones as a system message between memory and recall_controller. Selection: 14-day recency × `seen_count >= 2` (or has `failure_path.fix_what`) × capitalized-hint relevance × skip approved entries. Anti-thrash via prose framing ("signals, not directives") + `→ tracked as FRE-XXX` marker. Failure-mode: every error path returns `[]` silently. Four `AGENT_REFLECTION_RECALL_*` settings; kill-switch defaults true. 12 unit tests with stubbed ES; 30/30 captains_log+second_brain pass; no context_assembly regressions. Eval deferred to FRE-350 (post-deploy 2-week window). |
 | **FRE-347: session_summary generation (FRE-346 G1)** | 2026-05-09 | New `second_brain/session_summary.py` populates `SessionNode.session_summary` on every consolidation pass. Uses captains_log model role + budget cap; returns None on any failure (never blocks consolidation). New settings flag `AGENT_SESSION_SUMMARY_ENABLED` (default true). 10 unit tests with mocked LLM client (cloud + local + budget-denied + timeout + edge cases). Unblocks UC-1/2/5 from FRE-346. Drive-by: removed pre-existing dead `entity_counts` block in `_consolidate_sessions`. |
 | **FRE-346: Cross-session continuity audit** | 2026-05-09 | Read-only audit of memory + Captain's Log + Insights + context assembly + brainstem (3 parallel Explore agents). Verdict: capture is rich; gaps are in **synthesis** (`SessionNode.session_summary` always None — G1) and **surfacing** (Captain's Log + Insights never re-read by agent — G2/G3). Filed 3 followups: FRE-347 HIGH/Sonnet (G1), FRE-348 MEDIUM/Opus (G2), FRE-349 MEDIUM/Opus (G3). G4/G5 noted as observations only. Recommendation: keep FRE-227 paused until FRE-347 ships. Document: `docs/research/2026-05-09-cross-session-continuity-audit.md`. |

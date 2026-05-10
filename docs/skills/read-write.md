@@ -92,6 +92,21 @@ See `config/governance/tools.yaml` entries `read` and `write` for exact patterns
 }
 ```
 
+### read — tail the last 200 lines of a large log file
+
+Use `tail_lines` when the file exceeds the 10 MB default cap (e.g. `telemetry/logs/current.jsonl`).
+The `max_bytes` size gate is bypassed; output is still capped at `max_bytes` bytes of text.
+
+```json
+{
+  "tool": "read",
+  "arguments": {
+    "path": "/opt/seshat/telemetry/logs/current.jsonl",
+    "tail_lines": 200
+  }
+}
+```
+
 ### write — create a scratch analysis file
 
 ```json

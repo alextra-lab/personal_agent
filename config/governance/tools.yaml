@@ -83,7 +83,7 @@ tools:
   read:
     category: "read_only"
     allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"]
-    max_file_size_mb: 10
+    max_file_size_mb: 10  # applies to normal reads; bypassed when tail_lines is set (FRE-355)
     allowed_paths:
       - "/app/**"
       - "$HOME/**/personal_agent/**"

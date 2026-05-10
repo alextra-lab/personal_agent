@@ -1,6 +1,8 @@
 """Tests for LocalLLMClient."""
 
+import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -18,6 +20,67 @@ from personal_agent.llm_client.types import (
     ModelRole,
 )
 from personal_agent.telemetry.trace import TraceContext
+
+
+def _stream_mock_for_response(response: dict[str, Any]) -> MagicMock:
+    """Build a streaming-shaped httpx mock from a non-streaming response dict.
+
+    The client now calls ``async with client.stream("POST", ...) as resp:``
+    and reads SSE lines via ``resp.aiter_lines()``. This helper converts a
+    final response dict into a one-shot stream that emits the full message
+    in a single chunk, then ``[DONE]``. Sufficient to test orchestration —
+    the streaming aggregator itself has dedicated tests.
+    """
+    choice = response.get("choices", [{}])[0]
+    msg = choice.get("message", {})
+    delta = {k: v for k, v in msg.items() if v is not None}
+    chunk = {
+        "id": "chatcmpl-mock",
+        "object": "chat.completion.chunk",
+        "choices": [
+            {
+                "index": 0,
+                "delta": delta,
+                "finish_reason": choice.get("finish_reason", "stop"),
+            }
+        ],
+        "usage": response.get("usage"),
+    }
+    lines = [f"data: {json.dumps(chunk)}", "data: [DONE]"]
+
+    async def aiter_lines() -> Any:
+        for line in lines:
+            yield line
+
+    response_obj = MagicMock()
+    response_obj.raise_for_status = MagicMock()
+    response_obj.aiter_lines = aiter_lines
+
+    stream_cm = MagicMock()
+    stream_cm.__aenter__ = AsyncMock(return_value=response_obj)
+    stream_cm.__aexit__ = AsyncMock(return_value=None)
+    return stream_cm
+
+
+def _stream_mock_raising(exc: Exception) -> MagicMock:
+    """Streaming context manager that raises during the response phase.
+
+    Suitable for simulating connect/timeout failures and HTTP errors that
+    surface via ``raise_for_status`` mid-stream.
+    """
+    response_obj = MagicMock()
+    response_obj.raise_for_status = MagicMock(side_effect=exc)
+
+    async def aiter_lines() -> Any:
+        if False:  # pragma: no cover — generator never advances
+            yield ""
+
+    response_obj.aiter_lines = aiter_lines
+
+    stream_cm = MagicMock()
+    stream_cm.__aenter__ = AsyncMock(return_value=response_obj)
+    stream_cm.__aexit__ = AsyncMock(return_value=None)
+    return stream_cm
 
 
 class TestLocalLLMClient:
@@ -70,10 +133,7 @@ models:
 
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_response_obj = MagicMock()
-            mock_response_obj.json.return_value = mock_response
-            mock_response_obj.raise_for_status = MagicMock()
-            mock_client.post = AsyncMock(return_value=mock_response_obj)
+            mock_client.stream = MagicMock(return_value=_stream_mock_for_response(mock_response))
             mock_client_class.return_value.__aenter__.return_value = mock_client
 
             trace_ctx = TraceContext.new_trace()
@@ -98,10 +158,7 @@ models:
 
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_response_obj = MagicMock()
-            mock_response_obj.json.return_value = mock_response
-            mock_response_obj.raise_for_status = MagicMock()
-            mock_client.post = AsyncMock(return_value=mock_response_obj)
+            mock_client.stream = MagicMock(return_value=_stream_mock_for_response(mock_response))
             mock_client_class.return_value.__aenter__.return_value = mock_client
 
             trace_ctx = TraceContext.new_trace()
@@ -112,7 +169,7 @@ models:
                 trace_ctx=trace_ctx,
             )
 
-            call_args = mock_client.post.call_args
+            call_args = mock_client.stream.call_args
             payload = call_args[1]["json"]
             assert payload["messages"][0]["role"] == "system"
             assert payload["messages"][0]["content"] == "You are a helpful assistant."
@@ -145,10 +202,7 @@ models:
 
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_response_obj = MagicMock()
-            mock_response_obj.json.return_value = mock_response
-            mock_response_obj.raise_for_status = MagicMock()
-            mock_client.post = AsyncMock(return_value=mock_response_obj)
+            mock_client.stream = MagicMock(return_value=_stream_mock_for_response(mock_response))
             mock_client_class.return_value.__aenter__.return_value = mock_client
 
             trace_ctx = TraceContext.new_trace()
@@ -178,7 +232,9 @@ models:
         """Test timeout handling."""
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
+            mock_client.stream = MagicMock(
+                return_value=_stream_mock_raising(httpx.TimeoutException("Timeout"))
+            )
             mock_client_class.return_value.__aenter__.return_value = mock_client
 
             trace_ctx = TraceContext.new_trace()
@@ -194,7 +250,9 @@ models:
         """Test connection error handling."""
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_client.post = AsyncMock(side_effect=httpx.ConnectError("Connection failed"))
+            mock_client.stream = MagicMock(
+                return_value=_stream_mock_raising(httpx.ConnectError("Connection failed"))
+            )
             mock_client_class.return_value.__aenter__.return_value = mock_client
 
             trace_ctx = TraceContext.new_trace()
@@ -210,12 +268,14 @@ models:
         """Test rate limit error handling."""
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_response_obj = MagicMock()
-            mock_response_obj.status_code = 429
-            mock_response_obj.raise_for_status.side_effect = httpx.HTTPStatusError(
-                "Rate limit", request=MagicMock(), response=mock_response_obj
+            err_response = MagicMock(status_code=429)
+            mock_client.stream = MagicMock(
+                return_value=_stream_mock_raising(
+                    httpx.HTTPStatusError(
+                        "Rate limit", request=MagicMock(), response=err_response
+                    )
+                )
             )
-            mock_client.post = AsyncMock(return_value=mock_response_obj)
             mock_client_class.return_value.__aenter__.return_value = mock_client
 
             trace_ctx = TraceContext.new_trace()
@@ -231,12 +291,14 @@ models:
         """Test server error handling."""
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_response_obj = MagicMock()
-            mock_response_obj.status_code = 500
-            mock_response_obj.raise_for_status.side_effect = httpx.HTTPStatusError(
-                "Server error", request=MagicMock(), response=mock_response_obj
+            err_response = MagicMock(status_code=500)
+            mock_client.stream = MagicMock(
+                return_value=_stream_mock_raising(
+                    httpx.HTTPStatusError(
+                        "Server error", request=MagicMock(), response=err_response
+                    )
+                )
             )
-            mock_client.post = AsyncMock(return_value=mock_response_obj)
             mock_client_class.return_value.__aenter__.return_value = mock_client
 
             trace_ctx = TraceContext.new_trace()
@@ -249,27 +311,25 @@ models:
 
     @pytest.mark.asyncio
     async def test_respond_invalid_response(self, client: LocalLLMClient) -> None:
-        """Test invalid response handling."""
+        """An empty stream (no chunks at all) is invalid."""
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_response_obj = MagicMock()
-            # Invalid responses format - tool_calls contains non-dict items that will cause error
-            mock_response_obj.json.return_value = {
-                "role": "assistant",
-                "content": "Test",
-                "tool_calls": [
-                    {"id": "call_1", "name": "test", "arguments": "{}"},  # Valid
-                    "invalid_tool_call",  # Invalid - not a dict, will cause error in adapter
-                ],
-            }
-            mock_response_obj.raise_for_status = MagicMock()
-            mock_client.post = AsyncMock(return_value=mock_response_obj)
+
+            # Stream that emits zero chunks → aggregator raises LLMInvalidResponse.
+            async def aiter_lines() -> Any:
+                if False:  # pragma: no cover
+                    yield ""
+
+            response_obj = MagicMock()
+            response_obj.raise_for_status = MagicMock()
+            response_obj.aiter_lines = aiter_lines
+            stream_cm = MagicMock()
+            stream_cm.__aenter__ = AsyncMock(return_value=response_obj)
+            stream_cm.__aexit__ = AsyncMock(return_value=None)
+            mock_client.stream = MagicMock(return_value=stream_cm)
             mock_client_class.return_value.__aenter__.return_value = mock_client
 
             trace_ctx = TraceContext.new_trace()
-            # The adapter should handle this gracefully (skips invalid items)
-            # So we test with a response that's completely malformed
-            mock_response_obj.json.return_value = None  # None response will cause error
             with pytest.raises((LLMInvalidResponse, LLMClientError)):
                 await client.respond(
                     role=ModelRole.PRIMARY,
@@ -287,14 +347,11 @@ models:
 
         with patch("httpx.AsyncClient") as mock_client_class, patch("asyncio.sleep") as mock_sleep:
             mock_client = AsyncMock()
-            # First call times out, second succeeds
-            mock_response_obj = MagicMock()
-            mock_response_obj.json.return_value = mock_response
-            mock_response_obj.raise_for_status = MagicMock()
-            mock_client.post = AsyncMock(
+            # First call times out, second succeeds.
+            mock_client.stream = MagicMock(
                 side_effect=[
-                    httpx.TimeoutException("Timeout"),
-                    mock_response_obj,
+                    _stream_mock_raising(httpx.TimeoutException("Timeout")),
+                    _stream_mock_for_response(mock_response),
                 ]
             )
             mock_client_class.return_value.__aenter__.return_value = mock_client
@@ -307,7 +364,7 @@ models:
             )
 
             assert response["content"] == "Success"
-            assert mock_client.post.call_count == 2
+            assert mock_client.stream.call_count == 2
             assert mock_sleep.call_count == 1  # One retry
 
     def test_missing_model_config(self, tmp_path: Path) -> None:
@@ -350,12 +407,14 @@ models:
         """Test that 404 from server raises LLMClientError (no retry for 4xx)."""
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_response_404 = MagicMock()
-            mock_response_404.status_code = 404
-            mock_response_404.raise_for_status.side_effect = httpx.HTTPStatusError(
-                "Not found", request=MagicMock(), response=mock_response_404
+            err_response = MagicMock(status_code=404)
+            mock_client.stream = MagicMock(
+                return_value=_stream_mock_raising(
+                    httpx.HTTPStatusError(
+                        "Not found", request=MagicMock(), response=err_response
+                    )
+                )
             )
-            mock_client.post = AsyncMock(return_value=mock_response_404)
             mock_client_class.return_value.__aenter__.return_value = mock_client
 
             trace_ctx = TraceContext.new_trace()
@@ -401,10 +460,10 @@ models:
 
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_response_obj = MagicMock()
-            mock_response_obj.json.return_value = mock_response
-            mock_response_obj.raise_for_status = MagicMock()
-            mock_client.post = AsyncMock(return_value=mock_response_obj)
+            # Re-create the stream mock per call so call_args reflects only the latest invocation
+            mock_client.stream = MagicMock(
+                side_effect=lambda *a, **k: _stream_mock_for_response(mock_response)
+            )
             mock_client_class.return_value.__aenter__.return_value = mock_client
 
             trace_ctx = TraceContext.new_trace()
@@ -414,7 +473,7 @@ models:
                 messages=[{"role": "user", "content": "Test"}],
                 trace_ctx=trace_ctx,
             )
-            call_args = mock_client.post.call_args
+            call_args = mock_client.stream.call_args
             assert "http://localhost:8001/v1/chat/completions" in str(call_args)
 
             await client.respond(
@@ -422,7 +481,7 @@ models:
                 messages=[{"role": "user", "content": "Test"}],
                 trace_ctx=trace_ctx,
             )
-            call_args = mock_client.post.call_args
+            call_args = mock_client.stream.call_args
             assert "http://localhost:1234/v1/chat/completions" in str(call_args)
 
     @pytest.mark.asyncio
@@ -430,7 +489,11 @@ models:
         """Test that persistent connection errors raise after all retries exhausted."""
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_client.post = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
+            mock_client.stream = MagicMock(
+                side_effect=lambda *a, **k: _stream_mock_raising(
+                    httpx.ConnectError("Connection refused")
+                )
+            )
             mock_client_class.return_value.__aenter__.return_value = mock_client
 
             trace_ctx = TraceContext.new_trace()
@@ -465,10 +528,7 @@ models:
 
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_response_obj = MagicMock()
-            mock_response_obj.json.return_value = mock_response
-            mock_response_obj.raise_for_status = MagicMock()
-            mock_client.post = AsyncMock(return_value=mock_response_obj)
+            mock_client.stream = MagicMock(return_value=_stream_mock_for_response(mock_response))
             mock_client_class.return_value.__aenter__.return_value = mock_client
 
             trace_ctx = TraceContext.new_trace()
@@ -478,7 +538,7 @@ models:
                 trace_ctx=trace_ctx,
             )
 
-            payload = mock_client.post.call_args.kwargs["json"]
+            payload = mock_client.stream.call_args.kwargs["json"]
             assert payload["temperature"] == 0.15
 
     @pytest.mark.asyncio
@@ -505,10 +565,7 @@ models:
 
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_response_obj = MagicMock()
-            mock_response_obj.json.return_value = mock_response
-            mock_response_obj.raise_for_status = MagicMock()
-            mock_client.post = AsyncMock(return_value=mock_response_obj)
+            mock_client.stream = MagicMock(return_value=_stream_mock_for_response(mock_response))
             mock_client_class.return_value.__aenter__.return_value = mock_client
 
             trace_ctx = TraceContext.new_trace()
@@ -519,7 +576,7 @@ models:
                 trace_ctx=trace_ctx,
             )
 
-            payload = mock_client.post.call_args.kwargs["json"]
+            payload = mock_client.stream.call_args.kwargs["json"]
             assert payload["temperature"] == 0.6
 
     @pytest.mark.asyncio
@@ -536,10 +593,7 @@ models:
 
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
-            mock_response_obj = MagicMock()
-            mock_response_obj.json.return_value = mock_response
-            mock_response_obj.raise_for_status = MagicMock()
-            mock_client.post = AsyncMock(return_value=mock_response_obj)
+            mock_client.stream = MagicMock(return_value=_stream_mock_for_response(mock_response))
             mock_client_class.return_value.__aenter__.return_value = mock_client
 
             trace_ctx = TraceContext.new_trace()
@@ -550,7 +604,7 @@ models:
                 trace_ctx=trace_ctx,
             )
 
-            payload = mock_client.post.call_args.kwargs["json"]
+            payload = mock_client.stream.call_args.kwargs["json"]
             assert payload["response_format"] == response_format
 
     @pytest.mark.asyncio
@@ -594,10 +648,7 @@ models:
             mock_settings.cf_access_client_id = "test-id-123"
             mock_settings.cf_access_client_secret = "test-secret-456"
             mock_http = AsyncMock()
-            mock_response_obj = MagicMock()
-            mock_response_obj.json.return_value = mock_response
-            mock_response_obj.raise_for_status = MagicMock()
-            mock_http.post = AsyncMock(return_value=mock_response_obj)
+            mock_http.stream = MagicMock(return_value=_stream_mock_for_response(mock_response))
             mock_client_class.return_value.__aenter__.return_value = mock_http
 
             trace_ctx = TraceContext.new_trace()
@@ -607,7 +658,7 @@ models:
                 trace_ctx=trace_ctx,
             )
 
-            call_kwargs = mock_http.post.call_args[1]
+            call_kwargs = mock_http.stream.call_args[1]
             headers = call_kwargs.get("headers") or {}
             assert headers.get("CF-Access-Client-Id") == "test-id-123"
             assert headers.get("CF-Access-Client-Secret") == "test-secret-456"
@@ -629,10 +680,7 @@ models:
             mock_settings.cf_access_client_id = "test-id-123"
             mock_settings.cf_access_client_secret = "test-secret-456"
             mock_http = AsyncMock()
-            mock_response_obj = MagicMock()
-            mock_response_obj.json.return_value = mock_response
-            mock_response_obj.raise_for_status = MagicMock()
-            mock_http.post = AsyncMock(return_value=mock_response_obj)
+            mock_http.stream = MagicMock(return_value=_stream_mock_for_response(mock_response))
             mock_client_class.return_value.__aenter__.return_value = mock_http
 
             trace_ctx = TraceContext.new_trace()
@@ -642,7 +690,7 @@ models:
                 trace_ctx=trace_ctx,
             )
 
-            call_kwargs = mock_http.post.call_args[1]
+            call_kwargs = mock_http.stream.call_args[1]
             headers = call_kwargs.get("headers")
             assert headers is None or "CF-Access-Client-Id" not in (headers or {})
             assert headers is None or "CF-Access-Client-Secret" not in (headers or {})

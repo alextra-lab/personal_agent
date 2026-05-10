@@ -54,8 +54,6 @@ keywords:
   - check myself
 canonical_patterns:
   - "litellm_request_complete"
-  - "model_call_completed"
-  - "llm_step_completed"
   - "agent-captains-captures-*"
   - "agent-captains-reflections-*"
 known_bad_patterns:

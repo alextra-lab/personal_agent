@@ -111,11 +111,33 @@ class ToolLoopGate:
     """Per-request registry of per-tool FSMs for deterministic loop detection.
 
     Instantiate one per request in ExecutionContext. Call check_before() before
-    each tool execution and record_output() after.
+    each tool execution and record_output() after. Optionally call begin_turn()
+    before each batch of parallel tool dispatches (e.g. when the executor
+    transitions into TOOL_EXECUTION) so that within-turn parallel calls do not
+    inflate the cross-turn consecutive counter.
     """
 
     _fsms: dict[str, ToolFSM] = field(default_factory=dict)
     _last_tool_name: str | None = None
+    # Tools already counted toward consecutive_count in the current turn.
+    # Populated by begin_turn(); ignored when _in_turn is False (legacy path).
+    _tools_called_in_turn: set[str] = field(default_factory=set)
+    _in_turn: bool = False
+
+    def begin_turn(self) -> None:
+        """Mark the start of a new tool dispatch batch (e.g. one assistant turn).
+
+        Within a turn, multiple parallel calls to the same tool count once
+        toward ``consecutive_count``. Only the first call to a given tool in a
+        turn advances the counter; subsequent within-turn calls leave it
+        unchanged. Cross-turn invocations of the same tool still accumulate.
+
+        Call this from the executor when entering tool_execution. When never
+        called, ``check_before`` falls back to legacy behaviour (every call is
+        its own consecutive event) so existing tests remain valid.
+        """
+        self._tools_called_in_turn = set()
+        self._in_turn = True
 
     def _get_or_create_fsm(self, tool_name: str) -> ToolFSM:
         if tool_name not in self._fsms:
@@ -140,12 +162,19 @@ class ToolLoopGate:
         fsm = self._get_or_create_fsm(tool_name)
         state_before = fsm.state
 
-        # Update consecutive counter — reset when a different tool runs
-        if self._last_tool_name == tool_name:
-            fsm.consecutive_count += 1
-        else:
-            fsm.consecutive_count = 1
-        self._last_tool_name = tool_name
+        # Update consecutive counter — reset when a different tool runs.
+        # Within a turn (begin_turn() was called), repeat calls to the same
+        # tool are parallel dispatches, not consecutive retries: skip the
+        # counter update so a single batch of N parallel calls counts as 1.
+        is_within_turn_repeat = self._in_turn and tool_name in self._tools_called_in_turn
+        if not is_within_turn_repeat:
+            if self._last_tool_name == tool_name:
+                fsm.consecutive_count += 1
+            else:
+                fsm.consecutive_count = 1
+            self._last_tool_name = tool_name
+            if self._in_turn:
+                self._tools_called_in_turn.add(tool_name)
 
         # Increment signature call count and total before any blocking check
         fsm.signature_counts[args_hash] = fsm.signature_counts.get(args_hash, 0) + 1

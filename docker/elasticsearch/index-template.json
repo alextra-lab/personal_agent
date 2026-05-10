@@ -4,10 +4,46 @@
   "template": {
     "settings": {
       "number_of_shards": 1,
-      "number_of_replicas": 0
+      "number_of_replicas": 0,
+      "index.codec": "best_compression",
+      "index.refresh_interval": "5s"
     },
     "mappings": {
       "dynamic": true,
+      "dynamic_templates": [
+        {
+          "ids_keyword": {
+            "match": "*_id",
+            "match_mapping_type": "string",
+            "mapping": { "type": "keyword" }
+          }
+        },
+        {
+          "enums_keyword": {
+            "match_pattern": "regex",
+            "match": "^(.*_type|.*_name|.*_role|.*_status|.*_decision|.*_strategy|.*_mode|.*_phase|.*_action|.*_kind|.*_state)$",
+            "match_mapping_type": "string",
+            "mapping": { "type": "keyword" }
+          }
+        },
+        {
+          "free_text": {
+            "match_pattern": "regex",
+            "match": "^(.*_message|.*_content|.*_description|reason|hint|stderr|stdout|raw_.*|.*_text|.*_prompt)$",
+            "match_mapping_type": "string",
+            "mapping": { "type": "text" }
+          }
+        },
+        {
+          "default_string_keyword": {
+            "match_mapping_type": "string",
+            "mapping": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        }
+      ],
       "properties": {
         "@timestamp":         { "type": "date" },
         "event":              { "type": "keyword" },
@@ -31,7 +67,7 @@
         "expansion_permitted": { "type": "boolean" },
         "expansion_budget":    { "type": "integer" },
         "strategy":            { "type": "keyword" },
-        "reason":              { "type": "keyword" },
+        "reason":              { "type": "keyword", "ignore_above": 1024 },
         "message_count":       { "type": "integer" },
         "token_count":         { "type": "integer" },
         "estimated_tokens":    { "type": "integer" },

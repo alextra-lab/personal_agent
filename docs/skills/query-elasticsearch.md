@@ -1,6 +1,6 @@
 ---
 name: query-elasticsearch
-description: Query Elasticsearch indices via ES|QL for log analysis, telemetry, errors, and self-diagnosis. Primary path uses bash curl.
+description: Query Elasticsearch indices for log analysis, telemetry, errors, and self-diagnosis. Use the JSON `_search` DSL — it's deterministic. ES|QL is reserved for ad-hoc analytics and has syntax gotchas. Primary path uses bash curl.
 when_to_use: When you need to inspect agent telemetry, logs, errors, traces, or query ES directly. Always use agent-logs-* — never logs-*.
 tools: [bash]
 keywords:
@@ -90,14 +90,16 @@ The cluster has four index families. **Do not guess index names** — use only t
 
 ## Key fields in `agent-logs-*`
 
+> **Mapping note (2026-05-10 cleanup):** All `keyword` fields below are now **pure `keyword`** (no `.keyword` subfield needed) on every daily index, including older snapshots — they were reindexed against a corrected template. ES|QL term equality (`WHERE level == "ERROR"`) works directly. If you ever see term equality silently returning null, double-check the field's mapping with `_mapping/field/<name>` — a regression in the template would manifest as `text + .keyword` again, and the query would need the `.keyword` suffix to work.
+
 Most important fields for queries:
 
 | Field | Type | Purpose |
 |-------|------|---------|
 | `@timestamp` | date | Event time |
 | `level` | keyword | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-| `message` | text | Log message |
-| `trace_id` | keyword | Request trace (use `trace_id.keyword` in term filters) |
+| `message` | text | Log message (full-text search; not for term equality) |
+| `trace_id` | keyword | Request trace ID |
 | `session_id` | keyword | Session identifier |
 | `event_type` | keyword | What happened (e.g. `tool_call_started`, `litellm_request_complete`) |
 | `action` | keyword | Sub-event action |
@@ -112,7 +114,7 @@ Most important fields for queries:
 | `elapsed_s` | float | Elapsed wall time in seconds |
 | `elapsed_ms` / `duration_ms` | long | Elapsed time in milliseconds |
 | `success` | boolean | Whether the operation succeeded |
-| `error` | keyword | Error message (when applicable) |
+| `error` | text + `.keyword` | Free-form error message; use `error.keyword` for term equality / aggregations, `error` for full-text search |
 | `turn_count` | long | Number of LLM turns in request |
 | `model` / `model_id` | keyword | LLM model used |
 
@@ -133,56 +135,111 @@ curl -s 'http://elasticsearch:9200/agent-logs-*/_mapping' \
   | jq 'to_entries[0].value.mappings.properties | keys | sort'
 ```
 
-## Querying Elasticsearch (ES|QL)
+## Querying Elasticsearch — prefer `_search` (JSON DSL)
 
-ES|QL is the preferred query language. Send a POST to `_query`:
+> **Use `_search` for everything in this skill.** ES|QL has subtle syntax gotchas (time-unit pluralisation, `KEEP` vs `PROJECT`, `COUNT_IF` vs ternaries) that send the agent into iteration loops trying variants that fail silently. The JSON DSL is verbose but deterministic — every field, query type, and aggregation is named explicitly. Post-2026-05-10 reindex, all named keyword fields are pure keyword so `term` filters work directly with no `.keyword` suffix.
+
+### Canonical recipes for `agent-logs-*`
+
+```bash
+# Count events in the last 3 hours by level (errors / warnings / etc.)
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "query": {"range": {"@timestamp": {"gte": "now-3h"}}},
+    "aggs": {"by_level": {"terms": {"field": "level", "size": 10}}}
+  }' | jq '.aggregations.by_level.buckets'
+
+# Top N event_types in the last hour
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "query": {"range": {"@timestamp": {"gte": "now-1h"}}},
+    "aggs": {"by_event": {"terms": {"field": "event_type", "size": 20}}}
+  }' | jq '.aggregations.by_event.buckets'
+
+# Recent ERROR events with details
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 20,
+    "query": {"bool": {"must": [
+      {"term": {"level": "ERROR"}},
+      {"range": {"@timestamp": {"gte": "now-3h"}}}
+    ]}},
+    "sort": [{"@timestamp": "desc"}],
+    "_source": ["@timestamp","level","event_type","message","tool_name","trace_id","error"]
+  }' | jq ".hits.hits[]._source"
+
+# All events for one trace (by trace_id)
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 200,
+    "query": {"term": {"trace_id": "<trace_id>"}},
+    "sort": [{"@timestamp": "asc"}],
+    "_source": ["@timestamp","event_type","level","tool_name","duration_ms","latency_ms","model_id"]
+  }' | jq ".hits.hits[]._source"
+
+# Total tokens / cost in last 24h, grouped by task_type
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "query": {"range": {"@timestamp": {"gte": "now-24h"}}},
+    "aggs": {
+      "by_task": {
+        "terms": {"field": "task_type", "size": 10},
+        "aggs": {
+          "input": {"sum": {"field": "prompt_tokens"}},
+          "output": {"sum": {"field": "completion_tokens"}},
+          "cost": {"sum": {"field": "cost_usd"}}
+        }
+      }
+    }
+  }' | jq '.aggregations.by_task.buckets'
+
+# Loop-gate fires (consecutive or identity blocks) in last 7 days
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "size": 0,
+    "query": {"bool": {"must": [
+      {"term": {"event_type": "tool_loop_gate"}},
+      {"terms": {"decision": ["warn_consecutive","block_consecutive","block_identity"]}},
+      {"range": {"@timestamp": {"gte": "now-7d"}}}
+    ]}},
+    "aggs": {"by_decision": {"terms": {"field": "decision", "size": 5}}}
+  }' | jq '.aggregations.by_decision.buckets'
+```
+
+**Time math** uses ES date math: `now-1h`, `now-3h`, `now-24h`, `now-7d`, `now-30d`, etc. No spaces, no plurals.
+
+**Term equality** uses `{"term": {"field": "value"}}` for keyword fields (most named fields). Use `{"match": ...}` for full-text in `message`, `user_message`, or `error` (the `error` field also has an `.keyword` subfield for term equality).
+
+### ES|QL — for ad-hoc analytics only
+
+ES|QL (`/_query`) can be useful for one-off analytics with `STATS … BY …` chains, but it has gotchas the JSON DSL doesn't:
+
+| ES\|QL gotcha | Symptom | Workaround |
+|---|---|---|
+| Time units must be plural with space: `NOW()-3 hours`, NOT `NOW()-3hour` | Empty result, no error | Use the JSON DSL's `now-3h` instead |
+| Column selection uses `KEEP`, not `PROJECT` | Parse error or unexpected columns | Use the JSON DSL's `_source` filter instead |
+| Conditional aggregation: `COUNT_IF(condition)` (no ternaries) | Parse error | Use JSON `aggs` with `filter` instead |
+| Term equality on `text` fields silently returns null | Empty result, no error | After 2026-05-10 reindex this only affects `error` and `message` — use `_search` |
+
+If you must use ES|QL for an ad-hoc shape:
 
 ```bash
 curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
   -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE @timestamp > NOW()-1hour | LIMIT 50"}' \
-  | jq .
-```
-
-Common patterns:
-
-```bash
-# Errors in the last hour
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE level == \"ERROR\" AND @timestamp > NOW()-1hour | LIMIT 100"}' \
-  | jq '.values'
-
-# Tool calls for a specific tool
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"tool_call_started\" AND tool_name == \"query_elasticsearch\" AND @timestamp > NOW()-24hours | STATS count=COUNT(*) | LIMIT 10"}' \
-  | jq '.values'
-
-# LLM token usage by task type
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE @timestamp > NOW()-24hours AND prompt_tokens IS NOT NULL | STATS total_tokens=SUM(prompt_tokens) BY task_type | SORT total_tokens DESC"}' \
-  | jq '.values'
-
-# Find a trace by ID
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE trace_id == \"<trace_id>\" | SORT @timestamp ASC | LIMIT 200"}' \
-  | jq '.values'
-
-# Count tool_call_started events for query_elasticsearch in the last day
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"tool_call_started\" AND tool_name == \"query_elasticsearch\" AND @timestamp > NOW()-24hours | STATS count=COUNT(*)"}' \
-  | jq '.values'
-
-# Find traces where the loop gate fired (consecutive or identity blocks)
-curl -s -X POST 'http://elasticsearch:9200/_query?format=json' \
-  -H 'Content-Type: application/json' \
-  -d '{"query": "FROM agent-logs-* | WHERE event_type == \"tool_loop_gate\" AND decision IN (\"warn_consecutive\",\"block_consecutive\",\"block_identity\") AND @timestamp > NOW()-7days | STATS max_count=MAX(consecutive_count) BY trace_id, tool_name | SORT max_count DESC | LIMIT 10"}' \
+  -d '{"query": "FROM agent-logs-* | WHERE @timestamp > NOW()-3 hours | STATS count=COUNT(*) BY level | SORT count DESC"}' \
   | jq '.values'
 ```
+
+If you get an empty `values` array, switch to `_search` rather than iterating ES|QL syntax.
 
 ## Index / schema inspection
 
@@ -205,9 +262,14 @@ sandbox container does not have project source installed (`from personal_agent i
 
 ```bash
 # Recent agent log events (last 20, any type)
-curl -s 'http://elasticsearch:9200/agent-logs-*/_query' \
+curl -s -X POST 'http://elasticsearch:9200/agent-logs-*/_search?format=json' \
   -H 'Content-Type: application/json' \
-  -d 'FROM `agent-logs-*` | SORT @timestamp DESC | LIMIT 20' | jq .
+  -d '{
+    "size": 20,
+    "query": {"match_all": {}},
+    "sort": [{"@timestamp": "desc"}],
+    "_source": ["@timestamp","level","event_type","message","tool_name","trace_id"]
+  }' | jq ".hits.hits[]._source"
 
 # Recent Captain's Log captures (last 10, newest first)
 curl -s 'http://elasticsearch:9200/agent-captains-captures-*/_search' \
@@ -244,13 +306,11 @@ curl -s 'http://elasticsearch:9200/agent-logs-*/_search' \
 | Mistake | Fix |
 |---------|-----|
 | Using `agent-events-*` or `agent-traces-*` | These don't exist. Use `agent-logs-*` |
-| `term` query on `trace_id` text field | Use `trace_id.keyword` for exact match in JSON queries |
-| No LIMIT on large queries | Always add `\| LIMIT N` to ES|QL; default returns all rows |
-| `_search` with Lucene syntax | Prefer ES|QL (`_query`) — simpler and more predictable |
-| Wrong time boundary for "today" | "Today" is ambiguous. Use `@timestamp > NOW()-24hours` (rolling window) instead of a midnight boundary — events from earlier in the day may be in yesterday's UTC index |
-| `=` instead of `==` for equality | ES|QL uses `==` not `=`. `WHERE level = "ERROR"` is a syntax error; use `WHERE level == "ERROR"` |
-| Single quotes for strings | ES|QL requires double quotes: `WHERE level == "ERROR"` not `WHERE level == 'ERROR'` |
-| Guessing event_type values | Verify with: `FROM agent-logs-* \| STATS count=COUNT(*) BY event_type \| SORT count DESC \| LIMIT 20`. Known values: `tool_call_started`, `tool_call_completed`, `litellm_request_complete`, `tool_loop_gate`, `session_created`, `gateway_request` |
+| Iterating ES\|QL syntax variants when a query returns null | Switch to `_search` JSON DSL. ES\|QL gotchas (plural time units, `KEEP` vs `PROJECT`, `COUNT_IF`) waste turns. The JSON DSL is verbose but every name is explicit. |
+| `term` query on `error` text field | Use `error.keyword`. All other named fields (`level`, `event_type`, `tool_name`, `trace_id`, etc.) are pure keyword post-2026-05-10 reindex — `term` works directly. |
+| Wrong time boundary for "today" | "Today" is ambiguous. Use `@timestamp >= now-24h` (rolling window) instead of a midnight boundary — events from earlier in the day may be in yesterday's UTC index. |
+| Empty `_source` filter | Omit `_source` to get the full doc (it's small). Or list explicit fields to keep results small. |
+| Guessing `event_type` values | Run a `terms` agg on `event_type` to see what's actually emitted. Known values: `tool_call_started`, `tool_call_completed`, `litellm_request_complete`, `tool_loop_gate`, `session_created`, `gateway_request`, `state_transition`, `model_call_started`, `model_call_completed`, `history_sanitised`. |
 
 ## Governance
 

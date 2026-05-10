@@ -60,12 +60,21 @@ class TestSkillBlockFunctionalInjection:
     """Functional tests: drive step_llm_call and inspect the system_prompt passed to LLM."""
 
     @pytest.mark.asyncio
-    async def test_skill_block_injected_when_flag_enabled(self) -> None:
-        """When get_skill_block() returns content, it must appear in the system_prompt."""
+    async def test_skill_block_injected_when_flag_enabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When get_skill_block() returns content, it must appear in the system_prompt.
+
+        ``get_skill_block`` is only called in the ``keyword`` and ``hybrid``
+        routing paths. ``model_decided`` (the production default since the
+        2026-05-10 routing fix) bypasses it in favour of the model-routed
+        skill index. Force ``hybrid`` here so the patched function is exercised.
+        """
+        from personal_agent.config import settings
         from personal_agent.telemetry.trace import TraceContext
 
-        # get_skill_block is patched to return a sentinel — settings flag is irrelevant here.
-        # Flag gating is separately tested in test_skills.py::TestFlagGating.
+        monkeypatch.setattr(settings, "skill_routing_mode", "hybrid")
+        monkeypatch.setattr(settings, "skill_routing_model_key", "")
 
         ctx = _make_minimal_ctx()
         trace_ctx = TraceContext.new_trace()
@@ -101,12 +110,19 @@ class TestSkillBlockFunctionalInjection:
         )
 
     @pytest.mark.asyncio
-    async def test_skill_block_not_injected_when_flag_disabled(self) -> None:
-        """When get_skill_block() returns '', the sentinel must NOT appear in system_prompt."""
+    async def test_skill_block_not_injected_when_flag_disabled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When get_skill_block() returns '', the sentinel must NOT appear in system_prompt.
+
+        Pinned to ``hybrid`` routing for the same reason as the companion test
+        above: ``get_skill_block`` is the keyword/hybrid-path entry point.
+        """
+        from personal_agent.config import settings
         from personal_agent.telemetry.trace import TraceContext
 
-        # get_skill_block is patched to return a sentinel — settings flag is irrelevant here.
-        # Flag gating is separately tested in test_skills.py::TestFlagGating.
+        monkeypatch.setattr(settings, "skill_routing_mode", "hybrid")
+        monkeypatch.setattr(settings, "skill_routing_model_key", "")
 
         ctx = _make_minimal_ctx()
         trace_ctx = TraceContext.new_trace()

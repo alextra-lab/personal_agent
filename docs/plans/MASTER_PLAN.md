@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-10 (Wave J ✅; Wave A ✅; Wave B ✅ except FRE-326; Wave C ✅; Wave D planning ✅; Wave E FRE-213 ✅; FRE-227 paused → Backlog; FRE-346 audit ✅; FRE-347 G1 ✅; FRE-348 G2 ✅ PR #29; FRE-258 ADR-0068 ✅; FRE-351/352/354 ✅ PR #30; FRE-350 post-deploy eval Needs Approval; FRE-349 G3 pending)
+> **Last updated**: 2026-05-10 (Wave J ✅; Wave A ✅; Wave B ✅ except FRE-326; Wave C ✅; Wave D planning ✅; Wave E FRE-213 ✅; FRE-227 paused → Backlog; FRE-346 audit ✅; FRE-347 G1 ✅; FRE-348 G2 ✅ PR #29; FRE-258 ADR-0068 ✅; FRE-351/352/354 ✅ PR #30; FRE-353 ✅ PR #31; FRE-350 post-deploy eval Needs Approval; FRE-349 G3 pending)
 
 ---
 
@@ -74,9 +74,8 @@ FRE-335  (Captain's Log p95 monitor — ADR-0066 D2 trigger)               ← n
 |-----------|-------|
 | **FRE-350: Post-deploy reflection-surfacing eval (FRE-348 follow-up)** | [FRE-350](https://linear.app/frenchforest/issue/FRE-350) — Tier-1:Opus. Earliest start ≥ 2026-05-24 (2 weeks of usage data). Decides keep/tune/kill on reflection surfacing |
 | **FRE-349: Surface actionable Insights to agent (G3)** | [FRE-349](https://linear.app/frenchforest/issue/FRE-349) — Tier-1:Opus. Likely shares ADR + infra with FRE-348 |
-| **FRE-353: ES index template reconciliation** | [FRE-353](https://linear.app/frenchforest/issue/FRE-353) — Tier-3:Haiku. Blocked on PR #30 merge (→ ADR-0068 D4) |
 | **FRE-355: read primitive log-file tailing** | [FRE-355](https://linear.app/frenchforest/issue/FRE-355) — Tier-2:Sonnet. `current.jsonl` (19 MB) exceeds 10 MB cap; design decision needed (→ ADR-0068 D6) |
-| **FRE-356: Write self-telemetry.md skill doc** | [FRE-356](https://linear.app/frenchforest/issue/FRE-356) — Tier-3:Haiku. Blocked on FRE-354 (→ ADR-0068 D7) |
+| **FRE-356: Write self-telemetry.md skill doc** | [FRE-356](https://linear.app/frenchforest/issue/FRE-356) — Tier-3:Haiku. Unblocked (FRE-354 ✅ PR #30, FRE-353 ✅ PR #31) |
 | Mermaid chart rendering in chat UI | [FRE-315](https://linear.app/frenchforest/issue/FRE-315) canonical — FRE-316/317/318 closed as duplicates 2026-05-06 |
 
 ---
@@ -89,7 +88,7 @@ FRE-178 (Recall L2) → FRE-179 (L3 judge) → FRE-180 (context gap score)
 FRE-214 (arch review) ✅ ratified 2026-05-08 → FRE-238 / FRE-240 / FRE-241 / FRE-236 + FRE-336 + FRE-338-341 unblocked (FRE-217 closed dup)
   Track 2a (endpoint abstraction) → Track 2b (compose unification + tunnel mode) → Track 3 (test parity / FRE-336)
 FRE-265 (legacy delete) — calendar gate ≥ 2026-05-12
-FRE-351 ✅ + FRE-352 ✅ (PR #30) → FRE-353 (ES template, post-PR-#30) → FRE-354 ✅ (PR #30) → FRE-356 (self-telemetry.md, post-PR-#30); FRE-355 (read primitive) independent
+FRE-351 ✅ + FRE-352 ✅ (PR #30) → FRE-353 ✅ (PR #31) → FRE-354 ✅ (PR #30) → FRE-356 (self-telemetry.md, unblocked); FRE-355 (read primitive) independent
 FRE-326 (consolidation gates) — telemetry gate ≥ 2026-05-13
 FRE-311 (budget auto-tuning) — parked until FRE-302 (ADR-0065) lands
 FRE-329 → FRE-331 → FRE-330 → FRE-334 → FRE-335   (Wave J chain — see diagram above)
@@ -102,6 +101,7 @@ ADR-0066 D2 trigger (auto switch hybrid → model_decided) blocked on FRE-335
 
 | Item | Date | Summary |
 |------|------|---------|
+| **FRE-353: ES agent-logs-* index template reconciliation (ADR-0068 D4)** | 2026-05-10 | Deleted 4 dead field declarations (`model_name`, `tokens_used`, `input_tokens`, `output_tokens`). Added 8 explicit typed mappings for actually-emitted fields (`model`, `model_id`, `endpoint`, `api_type`, `prompt_tokens`, `completion_tokens`, `cache_read_tokens`, `cache_creation_input_tokens`). Fixed 3 type mismatches (`total_tokens` int→long, `latency_ms` float→long, `cost_usd` float→double). PR #31. |
 | **FRE-354: Fix query-elasticsearch.md skill doc** | 2026-05-10 | Replaced impossible `from personal_agent.telemetry.metrics import ...` (ImportError in sandbox) with `bash curl` snippets for captures and reflections. In PR #30. |
 | **FRE-352: Step-level emit → llm_step_completed** | 2026-05-10 | Added `LLM_STEP_COMPLETED = "llm_step_completed"` to `telemetry/events.py`; executor step emit renamed from `model_call_completed` to prevent ES payload collision. 3 unit tests. In PR #30. |
 | **FRE-351: Cloud emit field parity** | 2026-05-10 | `litellm_request_complete` gains `completion_tokens`, `latency_ms` (int ms), `total_tokens`, `endpoint`; `cache_creation_input_tokens` added. Backward-compat double-write for `tokens`/`elapsed_s`/`cache_write_tokens`. 6 unit tests. In PR #30. |

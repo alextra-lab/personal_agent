@@ -46,8 +46,17 @@ def _total_context_tokens(
     memory_context: list[dict[str, Any]] | None,
     tool_definitions: list[dict[str, Any]] | None,
 ) -> int:
-    """Estimate total tokens across all context components."""
-    parts: list[str] = [m.get("content", "") or "" for m in messages]
+    """Estimate total tokens across all context components.
+
+    Counts both ``content`` and ``reasoning_content`` per message — the latter is
+    populated when ``preserve_thinking`` is enabled (Qwen3.6+), and ignoring it
+    leaves the budget blind to the very content that grows the prompt across
+    multi-step turns.
+    """
+    parts: list[str] = [
+        (m.get("content") or "") + " " + (m.get("reasoning_content") or "")
+        for m in messages
+    ]
 
     if memory_context:
         for item in memory_context:

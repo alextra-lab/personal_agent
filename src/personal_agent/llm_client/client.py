@@ -344,6 +344,8 @@ class LocalLLMClient:
                     top_p=model_config.top_p,
                     top_k=model_config.top_k,
                     presence_penalty=model_config.presence_penalty,
+                    min_p=model_config.min_p,
+                    repetition_penalty=model_config.repetition_penalty,
                     disable_thinking=model_config.disable_thinking,
                     thinking_budget_tokens=model_config.thinking_budget_tokens,
                     parallel_tool_calls=model_config.parallel_tool_calls,

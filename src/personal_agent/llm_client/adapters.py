@@ -538,6 +538,8 @@ def build_chat_completions_request(
     top_p: float | None = None,
     top_k: int | None = None,
     presence_penalty: float | None = None,
+    min_p: float | None = None,
+    repetition_penalty: float | None = None,
     disable_thinking: bool = False,
     thinking_budget_tokens: int | None = None,
     parallel_tool_calls: bool = True,
@@ -559,6 +561,8 @@ def build_chat_completions_request(
         top_p: Top-p nucleus sampling probability (standard OpenAI field).
         top_k: Top-k sampling; passed via extra_body (non-standard, vLLM/LM Studio extension).
         presence_penalty: Presence penalty to reduce repetition (standard OpenAI field).
+        min_p: Min-p sampling threshold; passed via extra_body (llama.cpp / vLLM extension).
+        repetition_penalty: Repetition penalty; passed via extra_body (llama.cpp / vLLM extension).
         disable_thinking: If True, inject chat_template_kwargs enable_thinking=False via extra_body.
             Hard-disables thinking for Qwen3.5+ models at the chat-template level.
             Mutually exclusive with thinking_budget_tokens.
@@ -629,6 +633,12 @@ def build_chat_completions_request(
 
     if top_k is not None:
         extra_body["top_k"] = top_k
+
+    if min_p is not None:
+        extra_body["min_p"] = min_p
+
+    if repetition_penalty is not None:
+        extra_body["repetition_penalty"] = repetition_penalty
 
     if disable_thinking:
         extra_body["chat_template_kwargs"] = {"enable_thinking": False}

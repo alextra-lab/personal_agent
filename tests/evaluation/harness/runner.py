@@ -31,14 +31,18 @@ from tests.evaluation.harness.telemetry import TelemetryChecker
 log = structlog.get_logger(__name__)
 
 DEFAULT_AGENT_URL = "http://localhost:9000"
-DEFAULT_CHAT_TIMEOUT_S = 300.0
+# Timeout per /chat call. Sized for Qwen3.6-35B-A3B at 128K context: cold-cache
+# prefill can take 1-3 minutes on first turn of a path; subsequent turns benefit
+# from KV reuse. 600s leaves headroom for up to 32K of thinking output too.
+DEFAULT_CHAT_TIMEOUT_S = 600.0
 DEFAULT_INTER_TURN_DELAY_S = 2.0
 # Time to wait between paths — lets the inference server flush KV cache and
 # recover thermals before the next path starts. 0 = disabled (legacy behaviour).
-DEFAULT_INTER_PATH_DELAY_S = 8.0
+# 12s accommodates longer generations from preserve_thinking.
+DEFAULT_INTER_PATH_DELAY_S = 12.0
 # Timeout for the responsiveness probe sent before each run. Shorter than
 # the full chat timeout so we fail fast on an overloaded server.
-_RESPONSIVENESS_PROBE_TIMEOUT_S = 20.0
+_RESPONSIVENESS_PROBE_TIMEOUT_S = 30.0
 _RESPONSIVENESS_PROBE_MSG = "ping"
 
 

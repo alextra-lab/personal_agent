@@ -52,6 +52,8 @@ class EvaluationRunner:
         inter_turn_delay_s: Delay between turns to allow ES indexing.
         inter_path_delay_s: Cooldown between paths to let the inference server
             recover. Set to 0 to disable. Default 8 s.
+        headers: Extra HTTP headers sent with every request (e.g. auth headers
+            for cloud profiles that require Cf-Access-Authenticated-User-Email).
 
     Note:
         Neo4j post-path assertions (``Neo4jAssertion`` in ConversationPath) are
@@ -66,6 +68,7 @@ class EvaluationRunner:
         chat_timeout_s: float = DEFAULT_CHAT_TIMEOUT_S,
         inter_turn_delay_s: float = DEFAULT_INTER_TURN_DELAY_S,
         inter_path_delay_s: float = DEFAULT_INTER_PATH_DELAY_S,
+        headers: dict[str, str] | None = None,
     ) -> None:
         self._agent_url = agent_url
         self._telemetry = telemetry or TelemetryChecker()
@@ -73,6 +76,7 @@ class EvaluationRunner:
         self._chat_timeout_s = chat_timeout_s
         self._inter_turn_delay_s = inter_turn_delay_s
         self._inter_path_delay_s = inter_path_delay_s
+        self._headers: dict[str, str] = headers or {}
 
     async def check_agent_health(self) -> bool:
         """Verify the agent service is running and healthy.
@@ -80,7 +84,7 @@ class EvaluationRunner:
         Returns:
             True if agent is reachable and healthy.
         """
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=5.0, headers=self._headers) as client:
             try:
                 resp = await client.get(f"{self._agent_url}/health")
                 resp.raise_for_status()
@@ -100,7 +104,7 @@ class EvaluationRunner:
         Returns:
             True if the agent responds within ``_RESPONSIVENESS_PROBE_TIMEOUT_S``.
         """
-        async with httpx.AsyncClient(timeout=_RESPONSIVENESS_PROBE_TIMEOUT_S) as client:
+        async with httpx.AsyncClient(timeout=_RESPONSIVENESS_PROBE_TIMEOUT_S, headers=self._headers) as client:
             try:
                 resp = await client.post(
                     f"{self._agent_url}/chat",
@@ -127,7 +131,7 @@ class EvaluationRunner:
         Returns:
             The session_id string.
         """
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, headers=self._headers) as client:
             resp = await client.post(
                 f"{self._agent_url}/sessions",
                 json={"channel": "CHAT", "mode": "NORMAL", "metadata": {}},
@@ -175,6 +179,7 @@ class EvaluationRunner:
 
         async with httpx.AsyncClient(
             timeout=self._chat_timeout_s,
+            headers=self._headers,
         ) as client:
             for i, turn in enumerate(path.turns):
                 turn_result = await self._execute_turn(
@@ -237,6 +242,7 @@ class EvaluationRunner:
 
             async with httpx.AsyncClient(
                 timeout=self._chat_timeout_s,
+                headers=self._headers,
             ) as client:
                 for i, turn in enumerate(session_spec.turns):
                     turn_result = await self._execute_turn(

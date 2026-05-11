@@ -30,8 +30,8 @@ TelemetryEvent = dict[str, object]
 # Default ES config
 DEFAULT_ES_URL = "http://localhost:9200"
 DEFAULT_INDEX_PATTERN = "agent-logs-*"
-DEFAULT_RETRY_DELAY_S = 1.5
-DEFAULT_MAX_RETRIES = 4
+DEFAULT_RETRY_DELAY_S = 2.0
+DEFAULT_MAX_RETRIES = 8
 
 
 class TelemetryChecker:
@@ -78,9 +78,7 @@ class TelemetryChecker:
                     query={
                         "bool": {
                             "filter": [
-                                # trace_id is a text field in the index; use .keyword
-                                # sub-field for exact-match term queries
-                                {"term": {"trace_id.keyword": trace_id}},
+                                {"term": {"trace_id": trace_id}},
                             ]
                         }
                     },

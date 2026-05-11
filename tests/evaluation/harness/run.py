@@ -173,6 +173,14 @@ def parse_args() -> argparse.Namespace:
             "Use only when you are confident the server is not overloaded."
         ),
     )
+    parser.add_argument(
+        "--cf-email",
+        metavar="EMAIL",
+        help=(
+            "Email to send as Cf-Access-Authenticated-User-Email header. "
+            "Required when targeting a cloud profile with gateway_auth_enabled=True."
+        ),
+    )
     args = parser.parse_args()
     if args.category and args.categories:
         log.error("conflicting_filters", detail="Use only one of --category or --categories")
@@ -264,10 +272,15 @@ async def main() -> None:
 
     telemetry = TelemetryChecker(es_url=args.es_url)
 
+    extra_headers: dict[str, str] = {}
+    if args.cf_email:
+        extra_headers["Cf-Access-Authenticated-User-Email"] = args.cf_email
+
     runner = EvaluationRunner(
         agent_url=args.agent_url,
         telemetry=telemetry,
         inter_path_delay_s=args.inter_path_delay,
+        headers=extra_headers if extra_headers else None,
     )
 
     # Structural health check

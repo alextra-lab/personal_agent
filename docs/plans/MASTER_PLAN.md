@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-10 — ADR-0068 chain ✅ (FRE-351/352/353/354/355/356); Wave J ✅; FRE-265 gate opens 2026-05-12; FRE-326 gate opens 2026-05-13
+> **Last updated**: 2026-05-11 — Post-PR-#34 eval stabilization (PRs #35–40): harness alignment, 128K Qwen3.6-A3B context + Qwen Instruct sampling, Qwen3.6-A3B sub-agent (replaces 9B MLX), primary temp 1.0 → 0.6. Eval at 34/37 paths / 97.8% assertions; CP-05 + CP-24 fixed in targeted re-run; projected full run 36/37. FRE-265 gate opens 2026-05-12; FRE-326 gate opens 2026-05-13.
 
 ---
 
@@ -80,6 +80,7 @@ FRE-302 ✅ → FRE-311 (budget auto-tuning, parked pending data)
 
 | Item | Date | Summary |
 |------|------|---------|
+| **Post-PR-#34 eval stabilization (PRs #35–40)** | 2026-05-11 | Six PRs in one day. (1) Harness alignment for PR #34 changes: ES `trace_id.keyword`→pure keyword, `--cf-email` flag for cloud profile auth, retry config for 5s ES refresh — PR #35. (2) Config aligned with Qwen3.6-35B-A3B card: `context_length` 64K→**131072**, sampling to "Thinking — General Tasks", `thinking_budget_tokens` 3K→32K, budgets up to **120K max/96K window**, harness timeouts bumped — PR #36. (3) `thinking_budget_tokens` calibration to 16K — PR #37 (later reverted). (4) Revert PR #37 after diagnosis showed sub-agent failures, not budget overruns, were the root cause — PR #38. (5) Swap sub-agent from `mlx-community/Qwen3.5-9B-8bit` to a second instance of Qwen3.6-A3B (`unsloth/qwen3.6-35-A3B-subagent`, Instruct preset, 16K, no thinking) — PR #39. Sub-agent layer measured: success rate 24% → **100%**, avg latency 39s → **22s**. (6) Primary `temperature` 1.0 → **0.6** after EVAL-2026-05-11-subagent-qwen36 showed three of four remaining failures were temp-variance driven — PR #40. Targeted re-run confirmed CP-05 and CP-24 fixed (CP-24 was previously suspected architectural). Remaining 2 known failures (CP-01 turn 2, CP-20 turn 1) are test-fragility — Qwen3.6 makes reasonable choices the tests forbid. Full eval progression: 33/37 (broken) → 34/37 (clean) → projected 36/37 with temp 0.6 now on main. Plan + diagnoses in `docs/superpowers/plans/analyze-the-results-and-immutable-lerdorf.md` and four `telemetry/evaluation/EVAL-2026-05-1X-*/COMPARISON.md` files. |
 | **FRE-355: read primitive tail_lines (ADR-0068 D6)** | 2026-05-10 | `tail_lines: int \| None` on read executor. Seeks backward in 4 KiB blocks from EOF; bypasses `max_bytes` size gate; caps output at `max_bytes`. Resolves `current.jsonl` (19 MB) inaccessibility. 5 new tests. PR #33. |
 | **FRE-356: self-telemetry.md skill doc (ADR-0068 D7)** | 2026-05-10 | New `docs/skills/self-telemetry.md` — 43-keyword frontmatter, 5 canonical bash+curl patterns (token stats, cache hit rate, cost by model_role, interaction outcomes, per-trace latency). PR #32. |
 | **FRE-353: ES index template reconcile (ADR-0068 D4)** | 2026-05-10 | Deleted 4 dead field declarations; added 8 explicit typed mappings; fixed 3 type mismatches (`total_tokens` int→long, `latency_ms` float→long, `cost_usd` float→double). PR #31. |

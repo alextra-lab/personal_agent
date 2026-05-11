@@ -75,22 +75,27 @@ models:
   # ── Tier 2: Sub-Agent ───────────────────────────────────────────
   sub_agent:
     # Focused single-task completion for HYBRID expansion sub-agents.
-    # No thinking. Lower temperature for deterministic output. Bounded tokens.
-    # Renamed from "standard" (ADR-0033). Parameters tuned for focused tasks.
-    id: "mlx-community/Qwen3.5-9B-8bit"
-    context_length: 32768  # corrected from 16384 (FRE-319 audit — matches models.yaml)
+    # Second instance of Qwen3.6-35B-A3B, served with thinking disabled
+    # and a smaller context window. MoE (~3B active) outperforms the
+    # Qwen3.5-9B-8bit dense it replaced — same family as primary, llama.cpp
+    # toolchain (no MLX), better quality.
+    # Sampling per the Qwen3.6 card "Instruct (Non-Thinking) Mode" preset.
+    id: "unsloth/qwen3.6-35-A3B-subagent"
+    context_length: 16384       # Bounded for focused sub-tasks (was 32768)
     quantization: "8bit"
     min_concurrency: 1
     max_concurrency: 3
-    default_timeout: 90  # seconds
-    temperature: 0.4     # Lower for deterministic focused output
-    top_p: 0.8
+    default_timeout: 90          # Fail-fast — sub-agent delays cascade to primary
+    temperature: 0.7             # Qwen card Instruct preset (was 0.4 for Qwen3.5-9B)
+    top_p: 0.80                  # Qwen card Instruct (was 0.8 — same in practice)
     top_k: 20
-    presence_penalty: 0.5  # Focused, coherent output
-    max_tokens: 2048        # Bounded output for summary-length sub-task results
-    disable_thinking: true  # Hard disable via chat_template_kwargs (ADR-0023)
+    min_p: 0.0                   # Qwen card Instruct (new)
+    presence_penalty: 1.5        # Qwen card Instruct (was 0.5)
+    repetition_penalty: 1.0      # Qwen card Instruct (new); via extra_body
+    max_tokens: 2048             # Bounded output for summary-length sub-task results
+    disable_thinking: true       # Hard disable via chat_template_kwargs (ADR-0023)
     supports_function_calling: true
-    tool_calling_strategy: "native"  # Qwen3.5 chat template supports tools natively
+    tool_calling_strategy: "native"  # Qwen3.6 chat template supports tools natively
     provider_type: "local"
     endpoint: "https://slm.frenchforet.com/v1"
 

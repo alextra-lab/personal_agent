@@ -339,19 +339,29 @@ class AppConfig(BaseSettings):
 
     # Request Gateway & Expansion Budget (Phase 2.4)
     context_budget_comfortable_tokens: int = Field(
-        default=32000,
+        default=64000,
         ge=1000,
-        description="Comfortable context budget threshold for token management",
+        description=(
+            "Comfortable context budget threshold for token management. "
+            "Aligned to ~50% of the Qwen3.6-35B-A3B 131K thinking-mode window."
+        ),
     )
     context_budget_max_tokens: int = Field(
-        default=65536,
+        default=120000,
         ge=2000,
-        description="Maximum context budget limit",
+        description=(
+            "Maximum context budget limit. Aligned to the SLM context_length "
+            "(131K for Qwen3.6-35B-A3B) minus generation reserve, leaving ~11K "
+            "for system + tool definitions + thinking output."
+        ),
     )
     context_budget_generation_reserve_tokens: int = Field(
-        default=4096,
+        default=32768,
         ge=500,
-        description="Reserve tokens for LLM generation in context budget calculations",
+        description=(
+            "Reserve tokens for LLM generation in context budget calculations. "
+            "Matches the Qwen3.6-35B-A3B card's 'standard' thinking-mode output budget."
+        ),
     )
     expansion_budget_max: int = Field(
         default=3,
@@ -444,13 +454,13 @@ class AppConfig(BaseSettings):
         description="Maximum number of historical session messages to hydrate into orchestrator memory.",
     )
     context_window_max_tokens: int = Field(
-        default=49152,
+        default=96000,
         ge=500,
         description=(
             "Maximum context token budget for conversation messages before each LLM call. "
-            "Default leaves ~16k tokens of headroom against the primary model's 64k context "
-            "for system prompt, tool definitions, skill blocks, memory slab, and response "
-            "generation. Calibrate per model profile via env override."
+            "Default leaves ~35k tokens of headroom against the primary Qwen3.6-35B-A3B's "
+            "131k thinking-mode window for system prompt, tool definitions, skill blocks, "
+            "memory slab, and response generation. Calibrate per model profile via env override."
         ),
     )
     conversation_context_strategy: str = Field(

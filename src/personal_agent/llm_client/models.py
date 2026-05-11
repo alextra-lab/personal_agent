@@ -140,6 +140,17 @@ class ModelDefinition(BaseModel):
         le=2.0,
         description="Presence penalty to reduce token repetition.",
     )
+    min_p: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Min-p sampling — passed via extra_body (llama.cpp / vLLM extension).",
+    )
+    repetition_penalty: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="Repetition penalty — passed via extra_body (llama.cpp / vLLM extension).",
+    )
     supports_function_calling: bool = Field(
         True,
         description=(

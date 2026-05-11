@@ -1,0 +1,318 @@
+{
+  "timestamp": "2026-05-11T16:38:17.841055+00:00",
+  "summary": {
+    "total_paths": 4,
+    "paths_passed": 2,
+    "paths_failed": 2,
+    "path_pass_rate": 0.5,
+    "total_assertions": 22,
+    "assertions_passed": 20,
+    "assertions_failed": 2,
+    "assertion_pass_rate": 0.9090909090909091,
+    "total_response_time_ms": 1392159.724136931,
+    "avg_turn_response_time_ms": 126559.97492153918
+  },
+  "by_category": {
+    "Intent Classification": {
+      "total": 2,
+      "passed": 1
+    },
+    "Context Management": {
+      "total": 1,
+      "passed": 0
+    },
+    "Edge Cases": {
+      "total": 1,
+      "passed": 1
+    }
+  },
+  "paths": [
+    {
+      "path_id": "CP-01",
+      "path_name": "Conversational Intent",
+      "category": "Intent Classification",
+      "session_id": "febf164c-9057-45d5-943c-06771f5f07e1",
+      "all_passed": false,
+      "assertions_passed": 7,
+      "assertions_total": 8,
+      "total_time_ms": 29290.082624997012,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Hey, how's it going?",
+          "response_text": "Hey! I'm doing well, thanks for asking. How are things on your end? Anything interesting I can help you with today?",
+          "trace_id": "971358a0-98be-4369-b9a2-e560050c3c93",
+          "response_time_ms": 8870.19840895664,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            },
+            {
+              "passed": true,
+              "message": "intent_classified.confidence: expected=0.7, actual=0.7",
+              "actual_value": 0.7
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.complexity: expected=simple, actual=simple",
+              "actual_value": "simple"
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=single, actual=single",
+              "actual_value": "single"
+            },
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': not found (expected: absent)",
+              "actual_value": 0
+            },
+            {
+              "passed": true,
+              "message": "Event 'expansion_dispatch_started': not found (expected: absent)",
+              "actual_value": 0
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Tell me something interesting you've learned recently.",
+          "response_text": "Since I'm an AI, I don't really \"learn\" things in the human sense between conversations \u2014 but I do get to draw from a lot of interesting knowledge! Here's something I find genuinely fascinating:\n\n**Octopuses have three hearts and blue blood**, but here's the weird part \u2014 two of those hearts *stop beating* when the octopus swims. That's actually why octopuses prefer crawling; swimming exhausts them so much that they'll often switch to crawling instead. It's one of those evolutionary trade-offs th",
+          "trace_id": "67c1b347-dd09-4717-bbaf-a3746c552984",
+          "response_time_ms": 20419.884216040373,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            },
+            {
+              "passed": false,
+              "message": "Event 'tool_call_completed': found (expected: absent)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Response is natural and engaging, not robotic",
+        "Appropriate length (not a one-word answer, not an essay)",
+        "No unnecessary tool invocations or system introspection",
+        "Turn 2 response demonstrates personality or knowledge"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-05",
+      "path_name": "Delegation Intent (Explicit and Implicit)",
+      "category": "Intent Classification",
+      "session_id": "49eb7570-3d97-4aef-a142-7a935ee2220e",
+      "all_passed": true,
+      "assertions_passed": 5,
+      "assertions_total": 5,
+      "total_time_ms": 703720.3819178976,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Use Claude Code to write a function that parses nested JSON configuration files with schema validation and returns structured error messages for each validation failure.",
+          "response_text": "I've built a complete JSON configuration validator with schema validation and structured error reporting. Here's what was created:\n\n---\n\n## `/app/json_config_validator.py` \u2014 Core Module\n\n### `SchemaField` \u2014 Declarative Schema Definition\n\n```python\nSchemaField(\n    name=\"port\",\n    field_type=int,\n    required=True,\n    min_value=1, max_value=65535,\n)\n```\n\nSupports: `name`, `field_type`, `required`, `min_value`/`max_value`, `allowed_values` (enum), `nested` (sub-schema for dicts), `inner_schema` ",
+          "trace_id": "336c635d-f8be-4803-9341-0fbe32d1633b",
+          "response_time_ms": 325313.9259859454,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=delegation, actual=delegation",
+              "actual_value": "delegation"
+            },
+            {
+              "passed": true,
+              "message": "intent_classified.confidence: expected=0.85, actual=0.85",
+              "actual_value": 0.85
+            },
+            {
+              "passed": true,
+              "message": "decomposition_assessed.strategy: expected=delegate, actual=delegate",
+              "actual_value": "delegate"
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Write unit tests for the edge cases \u2014 circular references, missing required keys, and deeply nested structures beyond 10 levels.",
+          "response_text": "An error occurred while processing your request. Please try again.",
+          "trace_id": "86885632-86f6-4d80-ab74-a3bdfc3e348d",
+          "response_time_ms": 282298.1310299365,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=delegation, actual=delegation",
+              "actual_value": "delegation"
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "What context would you include in the handoff to make sure Claude Code doesn't need to ask follow-up questions?",
+          "response_text": "Here's a complete handoff context document for Claude Code:\n\n---\n\n## Handoff Context: JSON Config Validator \u2014 Edge Case Tests\n\n### 1. Project Structure\n\n```\n/app/\n\u251c\u2500\u2500 json_config_validator.py      # Core module (already written)\n\u251c\u2500\u2500 test_json_config_validator.py # Test suite (already written, 46 tests)\n\u251c\u2500\u2500 pyproject.toml                # Config: pytest + uv for env management\n\u2514\u2500\u2500 .venv/                        # Virtual env already created\n```\n\n**Run tests:** `uv run pytest test_json_config_valid",
+          "trace_id": "0e7d048b-f293-464e-a276-0eefcab90be9",
+          "response_time_ms": 96108.32490201574,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=conversational, actual=conversational",
+              "actual_value": "conversational"
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 1: Agent composes a DelegationPackage rather than writing code",
+        "Turn 1: task_description is clear for an agent with no prior context",
+        "Turn 2: acceptance_criteria includes the three edge cases",
+        "Turn 3: Demonstrates awareness of what external agents need",
+        "Package is sufficient for Claude Code without follow-up questions"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-20",
+      "path_name": "Progressive Token Budget Management",
+      "category": "Context Management",
+      "session_id": "1954d70d-4f1d-46c2-859f-150fdce4de6b",
+      "all_passed": false,
+      "assertions_passed": 4,
+      "assertions_total": 5,
+      "total_time_ms": 262272.4073260324,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Run the system health check.",
+          "response_text": "## System Health Check Report\n\n### \u2705 Infrastructure Services\n\n| Service | Status | Details |\n|---------|--------|---------|\n| **PostgreSQL** | \u2705 Healthy | Query `SELECT 1` succeeded |\n| **Elasticsearch** | \u26a0\ufe0f Yellow | 147 primary shards active, **50 unassigned replica shards** (expected on single-node cluster), 0 missing primaries |\n| **Redis** | \u2705 Healthy | Responded PONG |\n| **Neo4j** | \u2705 Healthy | v5.26.24 Community Edition |\n| **Embeddings** | \u2705 Healthy | `{\"status\":\"ok\"}` |\n| **Reranker** |",
+          "trace_id": "60b6c985-1c9c-41a6-83ac-c3118c5bac5a",
+          "response_time_ms": 85674.85679197125,
+          "assertions": [
+            {
+              "passed": false,
+              "message": "intent_classified.task_type: expected=conversational, actual=tool_use",
+              "actual_value": "tool_use"
+            },
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': found (expected: present)",
+              "actual_value": 11
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Now show me the recent error details.",
+          "response_text": "## Recent Error Details\n\n### Summary \u2014 Today (2026-05-11)\n\n| Metric | Count |\n|--------|-------|\n| **Total logs** | 157,916 |\n| **ERROR** | **110** |\n| **WARNING** | **1,015** |\n| **INFO** | 70,486 |\n| **DEBUG** | 74,998 |\n\n---\n\n### Error Types Observed (Most Recent)\n\nThe errors fall into three distinct categories:\n\n1. **`model_call_error`** \u2014 LLM API calls failing (e.g., timeouts, rate limits, or downstream service unavailability). Several appear in pairs, suggesting retry attempts.\n2. **`tool_",
+          "trace_id": "ea0ebd54-3707-4533-b563-9520fafeb037",
+          "response_time_ms": 117200.5040809745,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': found (expected: present)",
+              "actual_value": 11
+            }
+          ]
+        },
+        {
+          "turn_index": 2,
+          "user_message": "Also check the system metrics.",
+          "response_text": "## System Metrics Snapshot\n\n**Timestamp:** 16:30:52 | **Uptime:** 8 days, 6 hours\n\n---\n\n### \ud83d\udda5\ufe0f Host Resources\n\n| Metric | Value | Status |\n|--------|-------|--------|\n| **Load Average (1m / 5m / 15m)** | 0.90 / 0.60 / 0.54 | \u2705 Normal, rising slightly on 1-min |\n| **CPU Usage** | 82.9% idle, 12.2% user, 3.7% system | \u2705 Healthy |\n| **Memory Total** | 23.5 GB | \u2014 |\n| **Memory Used** | 8.6 GB (**37%**) | \u2705 Well within limits |\n| **Memory Available** | 14.9 GB (incl. 14.6 GB buff/cache) | \u2705 Plenty of",
+          "trace_id": "7ca98f55-1367-4f61-a780-e92750ae2aa3",
+          "response_time_ms": 37644.4037060719,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'tool_call_completed': found (expected: present)",
+              "actual_value": 6
+            }
+          ]
+        },
+        {
+          "turn_index": 3,
+          "user_message": "Summarize everything you've found \u2014 is the system healthy overall?",
+          "response_text": "# \ud83d\udfe2 System Health Summary \u2014 Overall: HEALTHY\n\n---\n\n### Infrastructure Services\nAll **6 services** are reachable and responding:\n\n| Service | Status |\n|---------|--------|\n| PostgreSQL | \u2705 Healthy |\n| Elasticsearch | \u26a0\ufe0f Yellow (50 unassigned replica shards \u2014 normal on single-node cluster) |\n| Redis | \u2705 Healthy |\n| Neo4j v5.26.24 | \u2705 Healthy |\n| Embeddings | \u2705 Healthy |\n| Reranker | \u2705 Healthy |\n\n---\n\n### Recent Errors (Today, May 11)\n- **110 errors**, **1,015 warnings** out of ~158k total log entr",
+          "trace_id": "75fbd096-af18-418a-a663-ba856942e7b4",
+          "response_time_ms": 21752.64274701476,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "Event 'context_budget_applied': found (expected: present)",
+              "actual_value": 1
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Each tool call returns valid data",
+        "Turn 4 synthesizes findings coherently",
+        "If trimmed, most recent tool results preserved",
+        "Agent identifies any genuine issues",
+        "context_budget_applied event fires on Turn 4 with correct trimmed/overflow_action fields"
+      ],
+      "post_path_assertions": []
+    },
+    {
+      "path_id": "CP-24",
+      "path_name": "Ambiguous Intent",
+      "category": "Edge Cases",
+      "session_id": "e0ecb758-e84d-4741-9598-51689a738667",
+      "all_passed": true,
+      "assertions_passed": 4,
+      "assertions_total": 4,
+      "total_time_ms": 396876.85226800386,
+      "turns": [
+        {
+          "turn_index": 0,
+          "user_message": "Can you look into why our unit tests keep failing and fix the flaky ones in the authentication module?",
+          "response_text": "Here's what I found after a thorough investigation:\n\n## Authentication Module Tests \u2014 Don't Exist\n\nThere are **no unit test files for the authentication module** anywhere in the project. The auth code lives at:\n- `/app/src/personal_agent/gateway/auth.py` (bearer-token auth, scope validation)\n- `/app/src/personal_agent/service/auth.py` (Cloudflare Access identity resolution)\n\nNeither has a corresponding `test_auth*.py` file, and there are no `tests/` directories outside `.venv`. The authenticatio",
+          "trace_id": "1598d0c9-72e4-4418-856d-4ddb76f1764b",
+          "response_time_ms": 327772.8127549635,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=delegation, actual=delegation",
+              "actual_value": "delegation"
+            },
+            {
+              "passed": true,
+              "message": "intent_classified.confidence: expected=0.85, actual=0.85",
+              "actual_value": 0.85
+            }
+          ]
+        },
+        {
+          "turn_index": 1,
+          "user_message": "Actually, before fixing anything, just analyze the failure patterns first.",
+          "response_text": "Here's my analysis of the failure patterns:\n\n---\n\n## Failure Pattern Analysis\n\n### Test Suite Overview\n- **46 tests total**, **2 failures**, **44 passing** \u2014 all in `test_json_config_validator.py`\n- There are **zero test files for the auth modules** (`gateway/auth.py`, `service/auth.py`). The authentication code is completely untested.\n\n---\n\n### Failure 1: `TestRecursionDepth.test_deeply_nested_bad_json`\n\n**What it does:** Builds a dict `{root: {x: {nested: {...nested... {leaf: 1}}}}}` with 10 l",
+          "trace_id": "174ac471-3ec8-4104-b68e-f591f4611267",
+          "response_time_ms": 69104.03951304033,
+          "assertions": [
+            {
+              "passed": true,
+              "message": "intent_classified.task_type: expected=analysis, actual=analysis",
+              "actual_value": "analysis"
+            },
+            {
+              "passed": true,
+              "message": "intent_classified.confidence: expected=0.8, actual=0.8",
+              "actual_value": 0.8
+            }
+          ]
+        }
+      ],
+      "quality_criteria": [
+        "Turn 1: treats as delegation/coding task",
+        "Turn 2: shifts to analysis mode \u2014 investigates patterns",
+        "Transition between intents is smooth",
+        "No carry-over of Turn 1 intent into Turn 2"
+      ],
+      "post_path_assertions": []
+    }
+  ]
+}

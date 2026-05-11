@@ -51,18 +51,24 @@ models:
     # Orchestrator brain: deep reasoning, tool calling, decomposition planning.
     # Thinking enabled with bounded budget. Single concurrent (GPU-limited).
     # Renamed from "reasoning" (ADR-0033).
+    # Sampling per the Qwen3.6-35B-A3B HuggingFace model card,
+    # "Thinking Mode — General Tasks" preset. The card requires context >= 128K
+    # to preserve thinking capability across multi-turn agent loops.
     id: "unsloth/qwen3.6-35-A3B"
-    context_length: 64000
+    context_length: 131072       # Qwen card: thinking-mode minimum (was 64000)
     quantization: "8bit"
     min_concurrency: 1
     max_concurrency: 1
-    default_timeout: 180  # seconds (35B model: ~40s thinking + ~30s JSON generation)
-    temperature: 0.6      # Qwen3.5 thinking mode recommended
-    top_p: 0.95           # Qwen3.5 thinking mode recommended
-    top_k: 20             # Qwen3.5 recommended (passed via extra_body)
-    thinking_budget_tokens: 3000  # Cap thinking tokens to limit over-generation (ADR-0023)
+    default_timeout: 600         # 128K prefill + up to 32K thinking output (was 180)
+    temperature: 1.0             # Qwen card "Thinking Mode — General Tasks" (was 0.6, Qwen3.5 carryover)
+    top_p: 0.95
+    top_k: 20                    # via extra_body
+    min_p: 0.0                   # Qwen card recommended; via extra_body
+    presence_penalty: 1.5        # Qwen card recommended for thinking
+    repetition_penalty: 1.0      # Qwen card default; via extra_body
+    thinking_budget_tokens: 32768  # Qwen card "standard" max output (was 3000)
     supports_function_calling: true
-    tool_calling_strategy: "native"  # Qwen3.5 chat template supports tools natively
+    tool_calling_strategy: "native"  # Qwen3.5/3.6 chat template supports tools natively
     provider_type: "local"
     endpoint: "https://slm.frenchforet.com/v1"
 

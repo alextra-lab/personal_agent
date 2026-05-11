@@ -54,7 +54,7 @@ models:
     min_concurrency: 1
     max_concurrency: 1
     default_timeout: 600         # 128K prefill + up to 32K thinking output (was 180)
-    temperature: 1.0             # Qwen card "Thinking Mode — General Tasks" (was 0.6, Qwen3.5 carryover)
+    temperature: 0.6             # Qwen3.5 carryover; outperforms card's 1.0 on our agent loop (deterministic intent + bounded tool iterations). See EVAL-2026-05-11-subagent-qwen36 COMPARISON.
     top_p: 0.95
     top_k: 20                    # via extra_body
     min_p: 0.0                   # Qwen card recommended; via extra_body

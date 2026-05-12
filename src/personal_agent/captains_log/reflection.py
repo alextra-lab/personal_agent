@@ -303,7 +303,7 @@ async def generate_reflection_entry(
                 failure_path_enabled=settings.failure_path_reflection_enabled,
                 component="reflection",
             )
-            entry = await asyncio.to_thread(
+            entry, missing_skill_names = await asyncio.to_thread(
                 generate_reflection_dspy,
                 user_message=user_message,
                 trace_id=trace_id,
@@ -328,6 +328,14 @@ async def generate_reflection_entry(
                 metrics_count=len(entry.supporting_metrics),
                 component="reflection",
             )
+            # FRE-328 follow-up — emit gap-recognition warnings from the main
+            # loop so ElasticsearchHandler forwards them to agent-logs-*.
+            if missing_skill_names:
+                from personal_agent.captains_log.reflection_dspy import (
+                    emit_missing_skill_warnings,
+                )
+
+                emit_missing_skill_warnings(missing_skill_names, trace_id=trace_id)
             return entry
         except Exception as e:
             # DSPy failed, fallback to manual

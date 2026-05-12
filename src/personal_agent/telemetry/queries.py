@@ -487,9 +487,14 @@ class TelemetryQueries:
     async def get_missing_skill_buckets(self, days: int) -> list[tuple[str, int, int]]:
         """Aggregate ``missing_skill_requested`` events over trailing ``days`` (FRE-328).
 
-        Queries agent-logs-* for events where ``event.keyword == "missing_skill_requested"``
-        and groups by ``requested_name.keyword``.  Each bucket carries the total
-        request count and a cardinality sub-aggregation counting distinct sessions.
+        Queries agent-logs-* for events where ``event_type == "missing_skill_requested"``
+        and groups by ``requested_name``.  Each bucket carries the total request
+        count and a cardinality sub-aggregation counting distinct sessions.
+
+        Note on field naming: ``ElasticsearchHandler.emit()`` stores the structlog
+        ``event`` key under the ES field ``event_type``.  ``requested_name`` and
+        ``session_id`` are mapped directly as ``keyword`` — there is no
+        ``.keyword`` sub-field to query through.
 
         Args:
             days: Rolling look-back window size in days.
@@ -515,7 +520,7 @@ class TelemetryQueries:
                                 }
                             }
                         },
-                        {"term": {"event.keyword": "missing_skill_requested"}},
+                        {"term": {"event_type": "missing_skill_requested"}},
                     ]
                 }
             },
@@ -523,11 +528,11 @@ class TelemetryQueries:
             aggs={
                 "by_skill": {
                     "terms": {
-                        "field": "requested_name.keyword",
+                        "field": "requested_name",
                         "size": 50,
                         "min_doc_count": 1,
                     },
-                    "aggs": {"distinct_sessions": {"cardinality": {"field": "session_id.keyword"}}},
+                    "aggs": {"distinct_sessions": {"cardinality": {"field": "session_id"}}},
                 }
             },
         )

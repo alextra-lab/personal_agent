@@ -224,7 +224,7 @@ def test_default_registry_includes_search_memory() -> None:
     registry = get_default_registry()
     names = registry.list_tool_names()
     assert "search_memory" in names
-    # self_telemetry_query is now behind AGENT_LEGACY_TOOLS_ENABLED (ADR-0063 PIVOT-4)
+    # self_telemetry_query was deleted in FRE-265 (ADR-0063 PIVOT-6)
 
 
 def test_search_memory_in_llm_tool_definitions() -> None:
@@ -238,4 +238,4 @@ def test_search_memory_in_llm_tool_definitions() -> None:
     search_memory_def = next(t for t in llm_tools if t["function"]["name"] == "search_memory")
     assert "query_text" in search_memory_def["function"]["parameters"]["properties"]
     assert "query_text" in search_memory_def["function"]["parameters"]["required"]
-    # self_telemetry_query is behind AGENT_LEGACY_TOOLS_ENABLED (ADR-0063 PIVOT-4)
+    # self_telemetry_query was deleted in FRE-265 (ADR-0063 PIVOT-6)

@@ -82,9 +82,8 @@ _TOOL_INTENT_PATTERNS: re.Pattern[str] = re.compile(
     r"|(?:(?:call|use|invoke|execute|run)\s+(?:the\s+)?(?:\w+\s+)?tool)"
     r"|(?:using\s+the\s+\w+\s+tool)"
     # Explicit tool name mention (native tools registered in tools.yaml)
-    r"|(?:\b(?:infra_health|self_telemetry_query|run_sysdiag|search_memory|"
-    r"query_elasticsearch|system_metrics_snapshot|web_search|fetch_url|"
-    r"perplexity_query|read_file|list_directory|get_library_docs|"
+    r"|(?:\b(?:search_memory|web_search|perplexity_query|get_library_docs|"
+    r"read|write|bash|run_python|read_skill|"
     r"create_linear_issue|find_linear_issues|list_linear_projects)\b)"
     # Log/telemetry observation verbs ("see logs", "look at the logs")
     r"|(?:(?:see|look\s+at|read|tail|watch|show\s+me)\s+(?:the\s+|my\s+|your\s+)?"

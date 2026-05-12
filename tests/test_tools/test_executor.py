@@ -222,8 +222,7 @@ async def test_approval_ui_disabled_warning(governance_config) -> None:
 def test_get_default_registry() -> None:
     """Test get_default_registry returns registry with always-present tools.
 
-    Legacy curated tools (read_file, system_metrics_snapshot, etc.) are absent
-    by default per ADR-0063 PIVOT-4 (FRE-263, AGENT_LEGACY_TOOLS_ENABLED=false).
+    Legacy curated tools were deleted in FRE-265 (ADR-0063 PIVOT-6).
     """
     from personal_agent.tools import get_default_registry
 
@@ -232,7 +231,7 @@ def test_get_default_registry() -> None:
     # Always-present tools
     assert "search_memory" in registry.list_tool_names()
     assert "web_search" in registry.list_tool_names()
-    # Legacy tools absent by default (FRE-263)
+    # Legacy tools deleted (FRE-265)
     assert "read_file" not in registry.list_tool_names()
     assert "system_metrics_snapshot" not in registry.list_tool_names()
 
@@ -240,8 +239,7 @@ def test_get_default_registry() -> None:
 def test_register_mvp_tools() -> None:
     """Test register_mvp_tools registers always-present tools.
 
-    Legacy curated tools absent by default per ADR-0063 PIVOT-4 (FRE-263).
-    See test_legacy_tools_deprecation.py for flag-specific coverage.
+    Legacy curated tools deleted in FRE-265 (ADR-0063 PIVOT-6).
     """
     from personal_agent.tools import register_mvp_tools
     from personal_agent.tools.registry import ToolRegistry

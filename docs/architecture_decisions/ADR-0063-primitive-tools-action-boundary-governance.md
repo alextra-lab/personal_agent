@@ -234,9 +234,9 @@ Summary:
 | P1 | Sever TaskType→tool-filter wire | Low | Token cost / latency within 5% of baseline after 48h | ✅ Done — FRE-260 (2026-04-25) |
 | P2 | Add `bash` / `read` / `write` / `run_python` + sandbox + approval | Medium | Pentest clean; approval UX acceptable | ✅ Done — FRE-261 (2026-04-27) |
 | P3 | Skill docs for 8 deprecated tools + model eval | Medium | Primitive success ≥ curated success on 20 traces | ✅ Done — FRE-262 (2026-04-28); FRE-283 fixed bash contract; FRE-284 fixed skill docs |
-| P4 | Flag-gated deprecation (`AGENT_LEGACY_TOOLS_ENABLED=false`), all 8 tools | Medium | 2 weeks production stability | 🔜 Next — FRE-263 (FULL scope: 8 tools) |
+| P4 | Flag-gated deprecation (`AGENT_LEGACY_TOOLS_ENABLED=false`), all 8 tools | Medium | 2 weeks production stability | ✅ Done — FRE-263 (2026-04-28) |
 | P5 | Loop gate signal split + `model_config` fix | Low | Existing output-identity decisions unchanged | 📋 Planned — FRE-264 (parallel) |
-| P6 | Delete legacy tool code | Low | `AGENT_LEGACY_TOOLS_ENABLED` untouched ≥2 weeks | 📋 Planned — FRE-265 |
+| P6 | Delete legacy tool code | Low | `AGENT_LEGACY_TOOLS_ENABLED` untouched ≥2 weeks | ✅ Done — FRE-265 (2026-05-12) |
 
 ---
 

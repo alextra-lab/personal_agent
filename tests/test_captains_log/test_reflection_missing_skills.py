@@ -1,15 +1,12 @@
 """Tests for reflection-time capability-gap capture (FRE-328 follow-up).
 
-Verifies that `_emit_missing_skill_events`:
+`parse_missing_skill_names` is the pure parser called inside the DSPy worker
+thread (no logging side-effects, just returns a clean list).
 
-- emits one `missing_skill_requested` log event per accepted name,
-- rejects malformed names without emitting,
-- dedupes names within a single call,
-- caps at 3 emitted names per reflection.
-
-These events flow into the same Elasticsearch bucket scanned by
-`InsightsEngine.detect_missing_skill_patterns`, so reflection-time gap
-recognition reuses the FRE-328 aggregation → Linear pipeline.
+`emit_missing_skill_warnings` is the main-loop emitter called by
+`reflection.generate_reflection_entry` after the to_thread returns; its
+warnings reach Elasticsearch via the standard handler chain and feed
+`InsightsEngine.detect_missing_skill_patterns`.
 """
 
 from typing import Any
@@ -19,95 +16,96 @@ import pytest
 from personal_agent.captains_log import reflection_dspy
 
 
-def _capture_warnings(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, Any]]]:
-    """Replace `reflection_dspy.log.warning` with a recorder and return the buffer."""
-    captured: list[tuple[str, dict[str, Any]]] = []
+class TestParseMissingSkillNames:
+    """Behavioral contract for the pure parser."""
 
-    def fake_warning(event: str, **kwargs: Any) -> None:
-        captured.append((event, kwargs))
+    def test_empty_input_returns_empty(self) -> None:
+        """Empty string → empty list."""
+        assert reflection_dspy.parse_missing_skill_names("", trace_id="t") == []
 
-    monkeypatch.setattr(reflection_dspy.log, "warning", fake_warning)
-    return captured
+    def test_whitespace_only_returns_empty(self) -> None:
+        """Whitespace and bare commas → empty list."""
+        assert reflection_dspy.parse_missing_skill_names("  , , ", trace_id="t") == []
 
-
-class TestEmitMissingSkillEvents:
-    """Behavioral contract for `_emit_missing_skill_events`."""
-
-    def test_empty_input_emits_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """No string → no events."""
-        captured = _capture_warnings(monkeypatch)
-        result = reflection_dspy._emit_missing_skill_events("", trace_id="t-1")
-        assert result == []
-        assert captured == []
-
-    def test_whitespace_only_emits_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Whitespace string → no events."""
-        captured = _capture_warnings(monkeypatch)
-        result = reflection_dspy._emit_missing_skill_events("   ,  ,  ", trace_id="t-1")
-        assert result == []
-        assert captured == []
-
-    def test_single_valid_name_emits_one_event(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """One valid name → one structured event."""
-        captured = _capture_warnings(monkeypatch)
-        result = reflection_dspy._emit_missing_skill_events("slack-notify", trace_id="trace-abc")
+    def test_single_valid_name(self) -> None:
+        """One valid kebab-case name passes through."""
+        result = reflection_dspy.parse_missing_skill_names("slack-notify", trace_id="t")
         assert result == ["slack-notify"]
-        assert len(captured) == 1
-        event, kw = captured[0]
-        assert event == "missing_skill_requested"
-        assert kw["requested_name"] == "slack-notify"
-        assert kw["source"] == "reflection"
-        assert kw["trace_id"] == "trace-abc"
 
-    def test_multiple_names_emit_in_order(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Comma-separated names → one event each, preserved order."""
-        captured = _capture_warnings(monkeypatch)
-        result = reflection_dspy._emit_missing_skill_events(
+    def test_multiple_names_preserve_order(self) -> None:
+        """Comma-separated names retain LLM-emitted order."""
+        result = reflection_dspy.parse_missing_skill_names(
             "slack-notify, pagerduty-alert, github-release",
-            trace_id="t-multi",
+            trace_id="t",
         )
         assert result == ["slack-notify", "pagerduty-alert", "github-release"]
-        names = [kw["requested_name"] for _, kw in captured]
-        assert names == result
 
-    def test_dedup_within_single_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Same name twice in one reflection → emitted once only."""
-        captured = _capture_warnings(monkeypatch)
-        result = reflection_dspy._emit_missing_skill_events(
-            "slack-notify, slack-notify, Slack-Notify",
-            trace_id="t-dup",
+    def test_dedup_case_insensitive(self) -> None:
+        """Case-variant duplicates collapse into the lowercased form."""
+        result = reflection_dspy.parse_missing_skill_names(
+            "slack-notify, Slack-Notify, SLACK-NOTIFY",
+            trace_id="t",
         )
         assert result == ["slack-notify"]
-        assert len(captured) == 1
 
-    def test_invalid_names_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Names with spaces, uppercase mid-word, or special chars are silently skipped."""
-        captured = _capture_warnings(monkeypatch)
-        # Mixed: one valid, two invalid (space and punctuation).
-        result = reflection_dspy._emit_missing_skill_events(
+    def test_invalid_names_rejected(self) -> None:
+        """Names with spaces, underscores, or punctuation are silently dropped."""
+        result = reflection_dspy.parse_missing_skill_names(
             "ok-name, bad name, bad_name!",
-            trace_id="t-mix",
+            trace_id="t",
         )
         assert result == ["ok-name"]
-        assert len(captured) == 1
-        assert captured[0][1]["requested_name"] == "ok-name"
 
-    def test_cap_at_three_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Even if the LLM returns 5 names, only the first 3 are emitted."""
-        captured = _capture_warnings(monkeypatch)
-        result = reflection_dspy._emit_missing_skill_events(
+    def test_cap_at_max(self) -> None:
+        """Output is capped at _MISSING_SKILL_MAX names."""
+        result = reflection_dspy.parse_missing_skill_names(
             "skill-a, skill-b, skill-c, skill-d, skill-e",
-            trace_id="t-cap",
+            trace_id="t",
         )
         assert result == ["skill-a", "skill-b", "skill-c"]
-        assert len(captured) == 3
+        assert len(result) == reflection_dspy._MISSING_SKILL_MAX
 
-    def test_lowercase_normalization(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Names are lowercased so dedup is case-insensitive across runs."""
-        captured = _capture_warnings(monkeypatch)
-        result = reflection_dspy._emit_missing_skill_events("Slack-Notify", trace_id="t-case")
+    def test_lowercase_normalization(self) -> None:
+        """Mixed-case input is lowercased so fingerprint dedup stays stable."""
+        result = reflection_dspy.parse_missing_skill_names("Slack-Notify", trace_id="t")
         assert result == ["slack-notify"]
-        assert captured[0][1]["requested_name"] == "slack-notify"
+
+
+class TestEmitMissingSkillWarnings:
+    """The main-loop emitter calls log.warning once per name."""
+
+    def test_no_names_no_warnings(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Empty list → no warning calls."""
+        captured: list[tuple[str, dict[str, Any]]] = []
+        monkeypatch.setattr(
+            reflection_dspy.log,
+            "warning",
+            lambda event, **kw: captured.append((event, kw)),
+        )
+        reflection_dspy.emit_missing_skill_warnings([], trace_id="t")
+        assert captured == []
+
+    def test_one_warning_per_name_with_correct_fields(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Each name produces one ``missing_skill_requested`` warning with the expected fields."""
+        captured: list[tuple[str, dict[str, Any]]] = []
+        monkeypatch.setattr(
+            reflection_dspy.log,
+            "warning",
+            lambda event, **kw: captured.append((event, kw)),
+        )
+        reflection_dspy.emit_missing_skill_warnings(
+            ["slack-notify", "pagerduty-alert"], trace_id="trace-xyz"
+        )
+        assert len(captured) == 2
+        events = [e for e, _ in captured]
+        assert events == ["missing_skill_requested", "missing_skill_requested"]
+        names = [kw["requested_name"] for _, kw in captured]
+        assert names == ["slack-notify", "pagerduty-alert"]
+        for _, kw in captured:
+            assert kw["source"] == "reflection"
+            assert kw["trace_id"] == "trace-xyz"
 
 
 class TestDspySignatureField:
@@ -118,7 +116,6 @@ class TestDspySignatureField:
         if not reflection_dspy.DSPY_AVAILABLE:
             pytest.skip("dspy not installed; signature is not constructed")
         signature_cls = reflection_dspy.GenerateReflection
-        # DSPy stores fields on the model_fields attribute (Pydantic BaseModel)
         fields = getattr(signature_cls, "model_fields", {}) or getattr(signature_cls, "fields", {})
         assert "missing_skill_names" in fields, (
             f"missing_skill_names not declared on GenerateReflection. Available: {list(fields)}"

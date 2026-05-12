@@ -186,23 +186,30 @@ def _parse_enum(enum_cls: type, raw: str) -> object | None:
 
 
 _MISSING_SKILL_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,79}$")
+_MISSING_SKILL_MAX = 3
 
 
-def _emit_missing_skill_events(raw: str, trace_id: str) -> list[str]:
-    """Parse comma-separated capability-gap names and emit one event per name.
+def parse_missing_skill_names(raw: str, trace_id: str = "") -> list[str]:
+    """Parse the ``missing_skill_names`` DSPy field into a clean, capped list.
 
-    Routes reflection-time gap recognition through the FRE-328 aggregation
-    channel by emitting ``missing_skill_requested`` log events with
-    ``source="reflection"`` so they appear in the same Elasticsearch bucket
-    that ``InsightsEngine.detect_missing_skill_patterns`` scans.
+    Pure validation step: lowercases, dedupes (case-insensitively), rejects
+    anything that doesn't match the kebab-case regex, and caps at
+    ``_MISSING_SKILL_MAX`` names.
+
+    Emission of the ``missing_skill_requested`` warning event is deliberately
+    NOT done here — it must happen on the main asyncio event loop so the
+    ``ElasticsearchHandler`` can forward it.  DSPy reflection runs via
+    ``asyncio.to_thread``, where ``loop.is_running()`` is False and ES emission
+    is silently skipped (see ``telemetry/es_handler.py``).  Callers should
+    invoke ``emit_missing_skill_warnings`` on the main loop after the thread
+    returns.
 
     Args:
-        raw: Output of the ``missing_skill_names`` DSPy field — comma-separated
-            kebab-case names, or empty.
-        trace_id: Trace ID of the task that produced the reflection.
+        raw: The DSPy ``missing_skill_names`` output (comma-separated names).
+        trace_id: Trace ID, used only for debug logging on rejection.
 
     Returns:
-        The list of accepted (valid) skill names emitted, deduped within this call.
+        Deduped, validated list of kebab-case skill names (max ``_MISSING_SKILL_MAX``).
     """
     if not raw or not raw.strip():
         return []
@@ -222,6 +229,23 @@ def _emit_missing_skill_events(raw: str, trace_id: str) -> list[str]:
             continue
         seen.add(name)
         accepted.append(name)
+        if len(accepted) >= _MISSING_SKILL_MAX:
+            break
+    return accepted
+
+
+def emit_missing_skill_warnings(names: list[str], trace_id: str) -> None:
+    """Emit one ``missing_skill_requested`` warning per name (main-loop only).
+
+    Must be called from a coroutine running on the main asyncio event loop so
+    the ``ElasticsearchHandler`` forwards the events to agent-logs-* — that is
+    the index ``InsightsEngine.detect_missing_skill_patterns`` aggregates over.
+
+    Args:
+        names: Validated names from ``parse_missing_skill_names``.
+        trace_id: Trace ID of the reflection's source task.
+    """
+    for name in names:
         log.warning(
             "missing_skill_requested",
             trace_id=trace_id,
@@ -229,9 +253,6 @@ def _emit_missing_skill_events(raw: str, trace_id: str) -> list[str]:
             source="reflection",
             component="reflection_dspy",
         )
-        if len(accepted) >= 3:
-            break
-    return accepted
 
 
 def generate_reflection_dspy(
@@ -250,8 +271,15 @@ def generate_reflection_dspy(
     task_type: str = "",
     iteration_count: int = 0,
     max_iterations: int = 0,
-) -> CaptainLogEntry:
+) -> tuple[CaptainLogEntry, list[str]]:
     """Generate reflection using DSPy ChainOfThought with deterministic metrics extraction.
+
+    Returns:
+        A tuple of ``(entry, missing_skill_names)``.  The names list is
+        validated by ``parse_missing_skill_names`` but NOT emitted as warnings
+        here — DSPy runs in a worker thread where ES emission is silently
+        skipped.  The main-loop caller must invoke
+        ``emit_missing_skill_warnings(names, trace_id)`` to surface the events.
 
     Raises:
         ImportError: If dspy is not installed.
@@ -460,19 +488,21 @@ def generate_reflection_dspy(
             component="reflection_dspy",
         )
 
-        # FRE-328 follow-up — capability-gap recognition during reflection
+        # FRE-328 follow-up — capability-gap recognition during reflection.
+        # Pure parse only — the main-loop caller is responsible for emitting
+        # the missing_skill_requested warnings so the ES handler can see them.
         missing_skills_raw = _ensure_str(getattr(result, "missing_skill_names", ""), "")
-        emitted = _emit_missing_skill_events(missing_skills_raw, trace_id=trace_id)
-        if emitted:
+        missing_skill_names = parse_missing_skill_names(missing_skills_raw, trace_id=trace_id)
+        if missing_skill_names:
             log.info(
-                "reflection_missing_skills_captured",
+                "reflection_missing_skills_parsed",
                 trace_id=trace_id,
-                count=len(emitted),
-                names=emitted,
+                count=len(missing_skill_names),
+                names=missing_skill_names,
                 component="reflection_dspy",
             )
 
-        return entry
+        return entry, missing_skill_names
 
     except Exception as e:
         # Log DSPy failure (caller should fallback to manual)

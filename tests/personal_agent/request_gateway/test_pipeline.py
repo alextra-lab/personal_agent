@@ -289,23 +289,12 @@ class TestRunGatewayPipeline:
 
 
 class TestPivot1Regression:
-    """ADR-0063 §D1 / FRE-260 — TaskType→tool-filter wire severed."""
+    """ADR-0063 §D1 / FRE-260 — TaskType→tool-filter wire severed.
 
-    def test_governance_allowed_tool_categories_always_none(self) -> None:
-        """evaluate_governance no longer populates allowed_tool_categories.
-
-        Before PIVOT-1, a conversational intent intersected to
-        allowed_categories=[] and stripped every tool from the request,
-        causing the FRE-254 <tool_code> pseudo-code failure.  After PIVOT-1
-        the field is always None (deprecated) and mode is the only gate.
-        """
-        from personal_agent.request_gateway.governance import evaluate_governance
-
-        for mode in (Mode.NORMAL, Mode.ALERT, Mode.DEGRADED, Mode.LOCKDOWN):
-            ctx = evaluate_governance(mode=mode)
-            assert ctx.allowed_tool_categories is None, (
-                f"allowed_tool_categories must be None in {mode} (ADR-0063 §D1)"
-            )
+    The deprecated GovernanceContext.allowed_tool_categories field was removed
+    in FRE-265 (PIVOT-6); the regression guard is now structural (no such
+    attribute) and is covered in test_governance.py.
+    """
 
     def test_tool_registry_returns_tools_in_normal_mode(self) -> None:
         """Mode-only gate: NORMAL mode always yields a non-empty tool list.

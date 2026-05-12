@@ -20,7 +20,7 @@ tool_categories:
   read_only:
     description: "Tools that only observe, never modify"
     risk_level: "low"
-    examples: ["read_file", "list_directory", "system_metrics_snapshot"]
+    examples: ["read", "search_memory"]
 
   system_dangerous:
     description: "Tools that execute arbitrary code or shell commands; governed at action-boundary"
@@ -53,11 +53,6 @@ tools:
     timeout_seconds: 15
     rate_limit_per_hour: 120
 
-  read_file:
-    category: "read_only"
-    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"]
-    max_file_size_mb: 10
-
   write_file:
     category: "system_write"
     allowed_in_modes: ["NORMAL"]
@@ -73,7 +68,6 @@ tools:
     loop_max_per_signature: 1
     loop_max_consecutive: 2
 
-  # FRE-261 Step 3: primitive read tool (supersedes read_file)
   # Phase B skill routing (FRE-skill-routing): load skill doc body on demand
   read_skill:
     category: "read_only"
@@ -117,10 +111,6 @@ tools:
       - "/proc/**"
     loop_max_per_signature: 1
     loop_max_consecutive: 2
-
-  system_metrics_snapshot:
-    category: "read_only"
-    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"]
 
   # Auto-discovered: 2026-01-18T20:34:06.850323
   # Perform click on a web page
@@ -526,48 +516,6 @@ tools:
     loop_output_sensitive: true
     loop_consecutive_terminal: true  # FRE-279: unknown commands fail; terminate instead of indefinite retry
 
-  # FRE-188: System diagnostics — subprocess allow-list (ps, lsof, find, iostat, …)
-  run_sysdiag:
-    category: "read_only"
-    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
-    risk_level: "low"
-    requires_approval: false
-    timeout_seconds: 65
-    rate_limit_per_hour: 300
-    loop_max_per_signature: 3
-    loop_max_consecutive: 4
-    loop_output_sensitive: true
-
-  self_telemetry_query:
-    category: "read_only"
-    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
-    risk_level: "low"
-    requires_approval: false
-    loop_max_per_signature: 2
-    loop_max_consecutive: 3
-    loop_output_sensitive: true
-
-  infra_health:
-    category: "read_only"
-    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
-    risk_level: "low"
-    requires_approval: false
-    loop_max_per_signature: 2
-    loop_max_consecutive: 3
-    loop_output_sensitive: true
-
-  # ADR-0028 Phase 1: Replaced by native query_elasticsearch tool
-  query_elasticsearch:
-    category: "network"
-    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
-    risk_level: "low"
-    requires_approval: false
-    timeout_seconds: 30
-    rate_limit_per_hour: 200
-    loop_max_per_signature: 3   # FRE-279: allow 3 attempts with same query before advisory
-    loop_max_consecutive: 5     # FRE-279: allow 5 consecutive ES calls before terminal
-    loop_consecutive_terminal: true  # FRE-279: wrong index names → 400s; terminate instead of 120s timeout
-
   # ADR-0028 Phase 2: Replaced by native perplexity_query tool
   perplexity_query:
     category: "network"
@@ -576,15 +524,6 @@ tools:
     requires_approval: false
     timeout_seconds: 120
     rate_limit_per_hour: 50
-
-  # ADR-0028 Phase 3: Replaced by native fetch_url tool
-  fetch_url:
-    category: "network"
-    allowed_in_modes: ["NORMAL", "DEGRADED"]
-    risk_level: "low"
-    requires_approval: false
-    timeout_seconds: 30
-    rate_limit_per_hour: 100
 
   # ADR-0028 Phase 3: Replaced by native get_library_docs tool
   get_library_docs:
@@ -608,7 +547,7 @@ tools:
     # timeout_seconds: 30
 
   # Auto-discovered: 2026-01-18T20:34:06.943694
-  # Perform an Elasticsearch ES|QL query. — DISABLED: ADR-0028 Phase 1 (use query_elasticsearch)
+  # Perform an Elasticsearch ES|QL query. — DISABLED: superseded by bash + query-elasticsearch skill (FRE-265)
   mcp_esql:
     category: "mcp"
     allowed_in_modes: []
@@ -620,7 +559,7 @@ tools:
     # timeout_seconds: 30
 
   # Auto-discovered: 2026-01-18T20:34:06.948747
-  # Fetch and parse content from a webpage URL. — DISABLED: ADR-0028 Phase 3 (use fetch_url)
+  # Fetch and parse content from a webpage URL. — DISABLED: superseded by bash curl + fetch-url skill (FRE-265)
   mcp_fetch_content:
     category: "mcp"
     allowed_in_modes: []
@@ -645,7 +584,7 @@ tools:
     # timeout_seconds: 30
 
   # Auto-discovered: 2026-01-18T20:34:06.959873
-  # Get field mappings for a specific Elasticsearch index — DISABLED: ADR-0028 Phase 1 (use query_elasticsearch)
+  # Get field mappings for a specific Elasticsearch index — DISABLED: superseded by bash + query-elasticsearch skill (FRE-265)
   mcp_get_mappings:
     category: "mcp"
     allowed_in_modes: []
@@ -657,7 +596,7 @@ tools:
     # timeout_seconds: 30
 
   # Auto-discovered: 2026-01-18T20:34:06.965793
-  # Get shard information for all or specific indices. — DISABLED: ADR-0028 Phase 1 (use query_elasticsearch)
+  # Get shard information for all or specific indices. — DISABLED: superseded by bash + query-elasticsearch skill (FRE-265)
   mcp_get_shards:
     category: "mcp"
     allowed_in_modes: []
@@ -669,7 +608,7 @@ tools:
     # timeout_seconds: 30
 
   # Auto-discovered: 2026-01-18T20:34:06.971814
-  # List all available Elasticsearch indices — DISABLED: ADR-0028 Phase 1 (use query_elasticsearch)
+  # List all available Elasticsearch indices — DISABLED: superseded by bash + query-elasticsearch skill (FRE-265)
   mcp_list_indices:
     category: "mcp"
     allowed_in_modes: []

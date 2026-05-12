@@ -34,9 +34,9 @@ def test_load_governance_config_success() -> None:
 
     # Verify tools
     assert len(config.tools) > 0
-    assert "read_file" in config.tools
     assert "write_file" in config.tools
-    assert "system_metrics_snapshot" in config.tools
+    assert "bash" in config.tools
+    assert "read" in config.tools
 
     # Verify model constraints
     assert len(config.mode_constraints) == 5
@@ -187,11 +187,11 @@ def test_governance_config_tool_structure() -> None:
 
     config = load_governance_config(config_dir)
 
-    # Check read_file tool
-    read_file_tool = config.tools["read_file"]
-    assert read_file_tool.category == "read_only"
-    assert len(read_file_tool.allowed_in_modes) > 0
-    assert "NORMAL" in read_file_tool.allowed_in_modes
+    # Check read primitive (replaced legacy read_file in FRE-265)
+    read_tool = config.tools["read"]
+    assert read_tool.category == "read_only"
+    assert len(read_tool.allowed_in_modes) > 0
+    assert "NORMAL" in read_tool.allowed_in_modes
 
     # Check write_file tool
     write_file_tool = config.tools["write_file"]

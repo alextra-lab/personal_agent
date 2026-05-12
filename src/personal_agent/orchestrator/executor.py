@@ -472,10 +472,7 @@ def _fallback_reply_from_tool_results(ctx: ExecutionContext) -> str:
     """Build a safe, user-facing reply when the model fails to synthesize after tools."""
     if not ctx.tool_results:
         return (
-            "I couldn't produce a final answer. Try rephrasing your request or being more specific. "
-            "For questions about recent errors or failures, I can query my telemetry using the "
-            "self_telemetry_query tool with query_type='events', event='model_call_error' or "
-            "'task_failed', and a time window (e.g. window='1h')."
+            "I couldn't produce a final answer. Try rephrasing your request or being more specific."
         )
 
     last_results = ctx.tool_results[-3:]
@@ -1718,33 +1715,10 @@ async def step_llm_call(
             # Add tool awareness so agent can answer questions about its capabilities
             tool_awareness = get_tool_awareness_prompt()
 
-            # Production-only: append deployment-specific tool hints, filtered to
-            # only mention tools that are actually available this turn. Naming a
-            # tool the model can't call teaches it to hallucinate pseudo-code.
-            deployment_tool_hints = ""
-            if settings.environment == Environment.PRODUCTION:
-                _available_tool_names = {
-                    (t.get("function", {}).get("name") or "") for t in (tools or [])
-                }
-                _hint_map = {
-                    "run_sysdiag": "- Use `run_sysdiag` to inspect the container filesystem starting at `/app`",
-                    "infra_health": "- Use `infra_health` to check connectivity and health of all backend services at once",
-                    "self_telemetry_query": "- Use `self_telemetry_query` to inspect logs, errors, and execution history",
-                    "search_memory": "- Use `search_memory` to query the knowledge graph",
-                    "query_elasticsearch": "- Use `query_elasticsearch` to query trace data",
-                }
-                _hint_lines = [
-                    hint for name, hint in _hint_map.items() if name in _available_tool_names
-                ]
-                if _hint_lines:
-                    deployment_tool_hints = "\n\n## Deployment Tools\n" + "\n".join(_hint_lines)
-
             if system_prompt:
-                system_prompt = (
-                    f"{tool_awareness}\n\n{system_prompt}{deployment_tool_hints}\n\n{tool_prompt}"
-                )
+                system_prompt = f"{tool_awareness}\n\n{system_prompt}\n\n{tool_prompt}"
             else:
-                system_prompt = f"{tool_awareness}{deployment_tool_hints}\n\n{tool_prompt}"
+                system_prompt = f"{tool_awareness}\n\n{tool_prompt}"
 
         # HYBRID decomposition prompt (autonomous mode only — enforced mode
         # uses the expansion controller which has already run by this point).

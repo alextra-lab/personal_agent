@@ -55,14 +55,13 @@ def _all_tool_names() -> set[str]:
     """Return all tool names across every registration path (settings-independent).
 
     Imports ToolDefinition objects directly from each tool module so the result
-    is not gated by runtime settings (primitive_tools_enabled, legacy_tools_enabled).
-    This is the correct set to validate frontmatter ``tools:`` entries against.
+    is not gated by runtime settings (primitive_tools_enabled).  This is the
+    correct set to validate frontmatter ``tools:`` entries against.
+
+    The 8 legacy curated tools were deleted in FRE-265 (ADR-0063 PIVOT-6) and
+    do not appear here.
     """
     from personal_agent.tools.context7 import get_library_docs_tool
-    from personal_agent.tools.elasticsearch import query_elasticsearch_tool
-    from personal_agent.tools.fetch import fetch_url_tool
-    from personal_agent.tools.filesystem import list_directory_tool, read_file_tool
-    from personal_agent.tools.infra_health import infra_health_tool
     from personal_agent.tools.linear import (
         create_linear_issue_tool,
         create_linear_project_tool,
@@ -75,9 +74,6 @@ def _all_tool_names() -> set[str]:
     from personal_agent.tools.primitives.read import read_tool
     from personal_agent.tools.primitives.run_python import run_python_tool
     from personal_agent.tools.primitives.write import write_tool
-    from personal_agent.tools.self_telemetry import self_telemetry_query_tool
-    from personal_agent.tools.sysdiag import run_sysdiag_tool
-    from personal_agent.tools.system_health import system_metrics_snapshot_tool
     from personal_agent.tools.web import web_search_tool
 
     return {
@@ -89,14 +85,6 @@ def _all_tool_names() -> set[str]:
         find_linear_issues_tool.name,
         list_linear_projects_tool.name,
         create_linear_project_tool.name,
-        read_file_tool.name,
-        list_directory_tool.name,
-        system_metrics_snapshot_tool.name,
-        self_telemetry_query_tool.name,
-        query_elasticsearch_tool.name,
-        fetch_url_tool.name,
-        run_sysdiag_tool.name,
-        infra_health_tool.name,
         bash_tool.name,
         read_tool.name,
         write_tool.name,

@@ -47,13 +47,12 @@ _TOOL_RULES = """\
 Rules:
 - If no tool is needed to answer accurately, respond directly without calling any tool.
 - Do not invent tools or parameters. If no tool fits, say so directly.
-- Provide ALL required parameters (e.g., list_directory requires {"path": "..."}).
-- For large directories, prefer calling list_directory with include_details=false and/or max_entries (unless the user explicitly asked for every entry).
+- Provide ALL required parameters as specified by each tool's schema.
 - PARALLEL CALLS: When a task needs multiple independent tool calls (e.g. checking errors AND checking memory AND checking infra health), issue ALL of them in a SINGLE response as multiple tool_calls entries. Never call them one at a time when they are independent — batching saves iterations.
 - Step budget: Complete most requests in ≤ 6 tool calls. Prefer synthesizing with gathered data over additional lookups. If you have enough information to answer, synthesize immediately.
 - After tool results are returned, synthesize a final natural-language answer. Do NOT request the same tool again unless the path/args must change.
 - Whenever the user asks about current events, recent news, CVEs, product versions, or anything requiring live web data, call web_search for quick lookups (free, private, multi-engine). Pass categories='it' for technical queries, 'science' for research, 'news' for current events, 'weather' for forecasts.
-- After web_search returns URLs, use fetch_url to read full page content when snippets are insufficient.
+- After web_search returns URLs, use `bash` with curl (per docs/skills/fetch-url.md) to read full page content when snippets are insufficient.
 - Use perplexity_query only when you specifically need a synthesized answer with citations, or when web_search results are insufficient for a complex question.
 - Do NOT answer from your own knowledge when live information is needed; always search first."""
 
@@ -169,12 +168,8 @@ def get_tool_awareness_prompt() -> str:
             capabilities.append("web search via DuckDuckGo (fallback)")
         if any("browser" in n or "playwright" in n for n in tool_names_lower):
             capabilities.append("browser automation")
-        if any("elasticsearch" in n for n in tool_names_lower):
-            capabilities.append("Elasticsearch queries")
-        if any("read_file" in n for n in tool_names_lower):
-            capabilities.append("file reading")
-        if any("list_directory" in n for n in tool_names_lower):
-            capabilities.append("directory listing")
+        if any(n in ("read", "bash") for n in tool_names_lower):
+            capabilities.append("file reading and shell access via primitives")
 
         if capabilities:
             lines.append(f"Key capabilities: {', '.join(capabilities)}.")

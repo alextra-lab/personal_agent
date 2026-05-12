@@ -53,15 +53,12 @@ class TestEvaluateGovernance:
             result.expansion_permitted = False  # type: ignore[misc]
 
 
-class TestGovernanceContextDeprecatedField:
-    """Verify allowed_tool_categories is deprecated and always None (ADR-0063 §D1)."""
+class TestGovernanceContextNoToolFilter:
+    """TaskType→tool-filter wire was severed in FRE-260; the field that briefly
+    carried it (allowed_tool_categories) was removed entirely in FRE-265 (ADR-0063
+    PIVOT-6). Mode is now the only tool-availability signal at this layer.
+    """
 
-    def test_allowed_tool_categories_always_none(self) -> None:
-        """TaskType→tool-filter wire severed in FRE-260: field is always None."""
+    def test_governance_context_has_no_tool_category_field(self) -> None:
         result = evaluate_governance(mode=Mode.NORMAL)
-        assert result.allowed_tool_categories is None
-
-    def test_allowed_tool_categories_none_in_lockdown(self) -> None:
-        """Even in LOCKDOWN mode the deprecated field is None (mode gate is elsewhere)."""
-        result = evaluate_governance(mode=Mode.LOCKDOWN)
-        assert result.allowed_tool_categories is None
+        assert not hasattr(result, "allowed_tool_categories")

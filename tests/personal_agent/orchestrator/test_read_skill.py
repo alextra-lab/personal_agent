@@ -150,7 +150,17 @@ class TestAssembleSkillIndex:
         # Cap at 2 tokens (8 chars) — should truncate after header
         tiny_index = assemble_skill_index(cap_tokens=2)
         # With only 8 chars budget and the header alone being much longer, result is empty
-        assert tiny_index == "" or len(tiny_index) <= 8 + len("## Available Skills\n\nCall `read_skill(name)` to load the full guidance for any skill below.\n\n")
+        assert tiny_index == "" or len(tiny_index) <= 8 + len(skills_mod._SKILL_INDEX_HEADER)
+
+    def test_index_header_invites_capability_gap_calls(self) -> None:
+        """FRE-328 follow-up: the header tells the model to propose new skills via read_skill."""
+        import personal_agent.orchestrator.skills as skills_mod
+
+        header = skills_mod._SKILL_INDEX_HEADER
+        # Positive phrasing: action-first, no negation.
+        assert "To propose a new skill" in header
+        assert 'read_skill(name="your-desired-name")' in header
+        assert "capability-gap signal" in header
 
 
 # ---------------------------------------------------------------------------

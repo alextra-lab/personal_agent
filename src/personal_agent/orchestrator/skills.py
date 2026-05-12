@@ -174,7 +174,13 @@ def _get_cache() -> _SkillCache:
 # ---------------------------------------------------------------------------
 
 
-_SKILL_INDEX_HEADER = "## Available Skills\n\nCall `read_skill(name)` to load the full guidance for any skill below.\n\n"
+_SKILL_INDEX_HEADER = (
+    "## Available Skills\n\n"
+    "Call `read_skill(name)` to load the full guidance for any skill below.\n\n"
+    'To propose a new skill, call `read_skill(name="your-desired-name")` '
+    "with the name you'd want for it. Every such call is logged as a "
+    "capability-gap signal and feeds skill-library growth.\n\n"
+)
 _CHARS_PER_TOKEN = 4  # conservative estimate for token counting
 
 

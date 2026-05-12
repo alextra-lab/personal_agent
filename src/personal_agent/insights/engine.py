@@ -32,6 +32,11 @@ log = get_logger(__name__)
 DEFAULT_ACTIONABLE_CONFIDENCE = 0.55
 INSIGHTS_INDEX_PREFIX = "agent-insights"
 
+# FRE-328: threshold for promoting a `missing_skill_requested` cluster into an
+# Insight (and onward into a Linear "Create skill: <name>" ticket).
+MIN_MISSING_SKILL_REQUESTS = 3
+MIN_MISSING_SKILL_SESSIONS = 2
+
 
 @dataclass(frozen=True)
 class Insight:
@@ -138,6 +143,9 @@ class InsightsEngine:
             trace_id="",
         )
         insights.extend(delegation_insights)
+
+        missing_skill_insights = await self.detect_missing_skill_patterns(days=days)
+        insights.extend(missing_skill_insights)
 
         self._index_insights(insights=insights, days=days)
         log.info("insights_generated", days=days, count=len(insights))
@@ -271,6 +279,68 @@ class InsightsEngine:
             total_delegations=total,
             days=days,
             trace_id=trace_id,
+        )
+        return insights
+
+    async def detect_missing_skill_patterns(self, days: int = 7) -> list[Insight]:
+        """Detect recurring `read_skill` calls for skills that don't exist (FRE-328).
+
+        Queries ``missing_skill_requested`` events in agent-logs-*, grouped by
+        ``requested_name``.  Emits one insight per skill name with at least
+        ``MIN_MISSING_SKILL_REQUESTS`` requests across
+        ``MIN_MISSING_SKILL_SESSIONS`` distinct sessions.
+
+        The insight flows through ``create_captain_log_proposals`` → CaptainLog
+        → existing promotion pipeline → Linear ``Needs Approval`` ticket
+        (ADR-0030 fingerprint dedup keys on the skill name, so repeated detection
+        increments ``seen_count`` rather than filing duplicates).
+
+        Args:
+            days: Lookback window in days.
+
+        Returns:
+            List of missing-skill insights; empty if no skill clears the threshold
+            or ES is unavailable.
+        """
+        insights: list[Insight] = []
+        try:
+            buckets = await self._queries.get_missing_skill_buckets(days=days)
+        except Exception:
+            log.warning("missing_skill_pattern_analysis_failed", exc_info=True)
+            return insights
+
+        for name, count, sessions in buckets:
+            if count < MIN_MISSING_SKILL_REQUESTS:
+                continue
+            if sessions < MIN_MISSING_SKILL_SESSIONS:
+                continue
+            confidence = min(0.95, 0.60 + 0.05 * min(7, count - MIN_MISSING_SKILL_REQUESTS))
+            insights.append(
+                Insight(
+                    insight_type="missing_skill",
+                    pattern_kind="missing_skill_requested",
+                    title=f"Create skill: `{name}` — requested {count}x across {sessions} sessions",
+                    summary=(
+                        f'The agent called `read_skill("{name}")` {count} times across '
+                        f"{sessions} distinct sessions over the last {days} days, but no skill "
+                        f"by that name exists.  The model is naming a capability gap."
+                    ),
+                    confidence=confidence,
+                    evidence={
+                        "requested_name": name,
+                        "request_count": count,
+                        "distinct_sessions": sessions,
+                        "window_days": days,
+                    },
+                    actionable=True,
+                )
+            )
+
+        log.info(
+            "missing_skill_pattern_analysis_complete",
+            buckets=len(buckets),
+            insights=len(insights),
+            days=days,
         )
         return insights
 
@@ -897,6 +967,7 @@ def _category_for_insight_type(insight_type: str) -> ChangeCategory:
         "feedback_summary": ChangeCategory.OBSERVABILITY,
         "feedback_category": ChangeCategory.OBSERVABILITY,
         "delegation": ChangeCategory.RELIABILITY,
+        "missing_skill": ChangeCategory.ARCHITECTURE,
     }
     return mapping.get(insight_type, ChangeCategory.OBSERVABILITY)
 
@@ -916,5 +987,6 @@ def _scope_for_insight_type(insight_type: str) -> ChangeScope:
         "feedback_summary": ChangeScope.CAPTAINS_LOG,
         "feedback_category": ChangeScope.CAPTAINS_LOG,
         "delegation": ChangeScope.ORCHESTRATOR,
+        "missing_skill": ChangeScope.TOOLS,
     }
     return mapping.get(insight_type, ChangeScope.CROSS_CUTTING)

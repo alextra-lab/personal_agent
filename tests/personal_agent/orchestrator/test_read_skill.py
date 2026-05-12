@@ -56,6 +56,43 @@ class TestReadSkillExecutor:
         assert "bash" in result["hint"]  # known skills listed
 
     @pytest.mark.asyncio
+    async def test_unknown_skill_emits_missing_skill_requested_event(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FRE-328 Phase 1: unknown skill emits structured `missing_skill_requested` event.
+
+        Captures the structlog warning call by monkeypatching ``log.warning`` on
+        the read_skill module; verifies the event name and field shape.
+        """
+        from personal_agent.telemetry.trace import TraceContext
+        from personal_agent.tools import read_skill as read_skill_mod
+
+        captured: list[tuple[str, dict[str, Any]]] = []
+
+        def fake_warning(event: str, **kwargs: Any) -> None:
+            captured.append((event, kwargs))
+
+        monkeypatch.setattr(read_skill_mod.log, "warning", fake_warning)
+
+        trace_ctx = TraceContext.new_trace()
+        result = await read_skill_executor(
+            name="nonexistent-skill-xyz",
+            ctx=trace_ctx,
+            session_id="session-abc",
+        )
+
+        assert result["status"] == "error"
+        missing_events = [(e, kw) for e, kw in captured if e == "missing_skill_requested"]
+        assert len(missing_events) == 1, f"captured: {captured}"
+        _, kw = missing_events[0]
+        assert kw["requested_name"] == "nonexistent-skill-xyz"
+        assert kw["session_id"] == "session-abc"
+        assert kw["trace_id"] == trace_ctx.trace_id
+        assert isinstance(kw["available_skills"], list)
+        assert len(kw["available_skills"]) > 0
+        assert kw["known_count"] == len(kw["available_skills"])
+
+    @pytest.mark.asyncio
     async def test_bash_skill_returns_body(self) -> None:
         """read_skill('bash') returns the bash skill doc body."""
         from personal_agent.telemetry.trace import TraceContext

@@ -484,6 +484,64 @@ class TelemetryQueries:
             "missing_context_terms": missing_terms,
         }
 
+    async def get_missing_skill_buckets(self, days: int) -> list[tuple[str, int, int]]:
+        """Aggregate ``missing_skill_requested`` events over trailing ``days`` (FRE-328).
+
+        Queries agent-logs-* for events where ``event.keyword == "missing_skill_requested"``
+        and groups by ``requested_name.keyword``.  Each bucket carries the total
+        request count and a cardinality sub-aggregation counting distinct sessions.
+
+        Args:
+            days: Rolling look-back window size in days.
+
+        Returns:
+            List of ``(requested_name, request_count, distinct_sessions)`` tuples,
+            sorted descending by request count, capped at 50 buckets.
+        """
+        client = await self._get_client()
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(days=days)
+
+        response = await client.search(
+            index=f"{self._logs_index_prefix}-*",
+            query={
+                "bool": {
+                    "filter": [
+                        {
+                            "range": {
+                                "@timestamp": {
+                                    "gte": start.isoformat(),
+                                    "lte": now.isoformat(),
+                                }
+                            }
+                        },
+                        {"term": {"event.keyword": "missing_skill_requested"}},
+                    ]
+                }
+            },
+            size=0,
+            aggs={
+                "by_skill": {
+                    "terms": {
+                        "field": "requested_name.keyword",
+                        "size": 50,
+                        "min_doc_count": 1,
+                    },
+                    "aggs": {"distinct_sessions": {"cardinality": {"field": "session_id.keyword"}}},
+                }
+            },
+        )
+        buckets = (response.get("aggregations") or {}).get("by_skill", {}).get("buckets", [])
+        results: list[tuple[str, int, int]] = []
+        for bucket in buckets:
+            name = str(bucket.get("key", "") or "").strip()
+            if not name:
+                continue
+            count = int(bucket.get("doc_count", 0) or 0)
+            sessions = int((bucket.get("distinct_sessions") or {}).get("value", 0) or 0)
+            results.append((name, count, sessions))
+        return results
+
     async def get_error_events(
         self,
         days: int,

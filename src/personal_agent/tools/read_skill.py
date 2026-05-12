@@ -90,8 +90,11 @@ async def read_skill_executor(
     if skill is None:
         hint = f"Unknown skill '{name}'. Available skills: {', '.join(known)}"
         log.warning(
-            "read_skill_unknown_name",
-            skill_name=name,
+            "missing_skill_requested",
+            trace_id=ctx.trace_id if ctx else "unknown",
+            session_id=session_id,
+            requested_name=name,
+            available_skills=known,
             known_count=len(known),
         )
         return {"status": "error", "hint": hint}

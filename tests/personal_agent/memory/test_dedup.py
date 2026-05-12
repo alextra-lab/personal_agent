@@ -14,6 +14,7 @@ import pytest
 from personal_agent.memory.dedup import (
     DedupDecision,
     DedupResult,
+    _find_similar_entities,
     check_entity_duplicate,
 )
 
@@ -28,6 +29,8 @@ def _pin_dedup_settings() -> None:
 
 
 class TestCheckEntityDuplicate:
+    """Tests for the top-level dedup decision function."""
+
     @pytest.mark.asyncio
     async def test_no_existing_entities_no_dedup(self) -> None:
         """No existing entities → create new (no duplicate)."""
@@ -96,12 +99,45 @@ class TestCheckEntityDuplicate:
         assert result.decision == DedupDecision.CREATE_NEW
 
 
+class TestFindSimilarEntities:
+    """Tests for the Cypher candidate query itself."""
+
+    @pytest.mark.asyncio
+    async def test_query_excludes_user_id_bound_nodes(self) -> None:
+        """Cypher must filter out user_id-bound :Person nodes (FRE-342).
+
+        Owner/user-anchored :Person nodes (FRE-213 schema) must never appear
+        as merge candidates for extracted entities, otherwise an extracted
+        "Alex" would collide into the harness owner Person and destroy the
+        user_id anchor invariant.
+        """
+        session = AsyncMock()
+        result_obj = AsyncMock()
+        result_obj.data = AsyncMock(return_value=[])
+        session.run = AsyncMock(return_value=result_obj)
+
+        await _find_similar_entities(
+            embedding=[0.1] * 1536,
+            entity_type="Person",
+            neo4j_session=session,
+            top_k=5,
+        )
+
+        session.run.assert_awaited_once()
+        cypher = session.run.await_args.args[0]
+        assert "node.user_id IS NULL" in cypher
+
+
 class TestDedupResult:
+    """Tests for the DedupResult dataclass."""
+
     def test_create_new(self) -> None:
+        """CREATE_NEW result has no canonical name."""
         result = DedupResult(decision=DedupDecision.CREATE_NEW)
         assert result.canonical_name is None
 
     def test_merge_existing(self) -> None:
+        """MERGE_EXISTING result carries canonical name and score."""
         result = DedupResult(
             decision=DedupDecision.MERGE_EXISTING,
             canonical_name="PostgreSQL",

@@ -29,6 +29,8 @@ def _pin_dedup_settings() -> None:
 
 
 class TestCheckEntityDuplicate:
+    """Tests for the top-level dedup decision function."""
+
     @pytest.mark.asyncio
     async def test_no_existing_entities_no_dedup(self) -> None:
         """No existing entities → create new (no duplicate)."""
@@ -127,11 +129,15 @@ class TestFindSimilarEntities:
 
 
 class TestDedupResult:
+    """Tests for the DedupResult dataclass."""
+
     def test_create_new(self) -> None:
+        """CREATE_NEW result has no canonical name."""
         result = DedupResult(decision=DedupDecision.CREATE_NEW)
         assert result.canonical_name is None
 
     def test_merge_existing(self) -> None:
+        """MERGE_EXISTING result carries canonical name and score."""
         result = DedupResult(
             decision=DedupDecision.MERGE_EXISTING,
             canonical_name="PostgreSQL",

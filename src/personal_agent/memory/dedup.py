@@ -123,6 +123,9 @@ async def _find_similar_entities(
         List of dicts with name, similarity, entity_type.
     """
     try:
+        # node.user_id IS NULL excludes owner/user-anchored :Person nodes
+        # (FRE-213 schema invariant); extracted entities must never collide
+        # into them. See FRE-342, ADR-0052 amendment 2026-05-09.
         result = await neo4j_session.run(
             """
             CALL db.index.vector.queryNodes(
@@ -130,6 +133,7 @@ async def _find_similar_entities(
             )
             YIELD node, score
             WHERE node.entity_type = $entity_type
+              AND node.user_id IS NULL
             RETURN node.name AS name,
                    node.entity_type AS entity_type,
                    score AS similarity

@@ -658,6 +658,7 @@ async def _trigger_captains_log_reflection(ctx: ExecutionContext) -> None:
             task_type=task_type,
             iteration_count=ctx.tool_iteration_count,
             max_iterations=effective_max,
+            session_id=ctx.session_id,
         )
 
         # Write entry to file

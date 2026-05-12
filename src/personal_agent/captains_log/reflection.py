@@ -218,6 +218,7 @@ async def generate_reflection_entry(
     task_type: str = "",
     iteration_count: int = 0,
     max_iterations: int = 0,
+    session_id: str | None = None,
 ) -> CaptainLogEntry:
     """Generate an LLM-based reflection entry analyzing task execution.
 
@@ -238,6 +239,10 @@ async def generate_reflection_entry(
         task_type: TaskType value string (e.g. "analysis") for cap-raise proposals.
         iteration_count: Actual tool iterations consumed this request.
         max_iterations: Effective cap that was applied.
+        session_id: Optional session ID for the task; threaded through to the
+            ``missing_skill_requested`` warnings emitted on capability-gap
+            recognition (FRE-328) so the ≥2-distinct-sessions clustering
+            threshold can be evaluated.
 
     Returns:
         A rich CaptainLogEntry with LLM-generated insights.
@@ -330,12 +335,18 @@ async def generate_reflection_entry(
             )
             # FRE-328 follow-up — emit gap-recognition warnings from the main
             # loop so ElasticsearchHandler forwards them to agent-logs-*.
+            # session_id is required by the ≥2-distinct-sessions clustering
+            # threshold in InsightsEngine.detect_missing_skill_patterns.
             if missing_skill_names:
                 from personal_agent.captains_log.reflection_dspy import (
                     emit_missing_skill_warnings,
                 )
 
-                emit_missing_skill_warnings(missing_skill_names, trace_id=trace_id)
+                emit_missing_skill_warnings(
+                    missing_skill_names,
+                    trace_id=trace_id,
+                    session_id=session_id,
+                )
             return entry
         except Exception as e:
             # DSPy failed, fallback to manual

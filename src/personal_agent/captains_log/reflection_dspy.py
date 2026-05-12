@@ -23,6 +23,7 @@ Design:
 """
 
 import inspect
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -153,6 +154,15 @@ try:
                 "'docs/skills/fetch_url.md'. Empty string if had_errors is False or unknown."
             )
         )
+        # FRE-328 follow-up — capability gap recognition during reflection
+        missing_skill_names: str = dspy.OutputField(  # type: ignore[misc]
+            desc=(
+                "Comma-separated list of kebab-case skill names you wished existed during this "
+                "task — names that would have made the work materially easier if a skill doc "
+                "existed for them. Empty string when nothing was missing. Pick short, specific "
+                "names: 'slack-notify' not 'a way to send slack'. Maximum 3 names."
+            )
+        )
 
     DSPY_AVAILABLE = True
 except ImportError:
@@ -173,6 +183,55 @@ def _parse_enum(enum_cls: type, raw: str) -> object | None:
         return enum_cls(raw)
     except ValueError:
         return None
+
+
+_MISSING_SKILL_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,79}$")
+
+
+def _emit_missing_skill_events(raw: str, trace_id: str) -> list[str]:
+    """Parse comma-separated capability-gap names and emit one event per name.
+
+    Routes reflection-time gap recognition through the FRE-328 aggregation
+    channel by emitting ``missing_skill_requested`` log events with
+    ``source="reflection"`` so they appear in the same Elasticsearch bucket
+    that ``InsightsEngine.detect_missing_skill_patterns`` scans.
+
+    Args:
+        raw: Output of the ``missing_skill_names`` DSPy field — comma-separated
+            kebab-case names, or empty.
+        trace_id: Trace ID of the task that produced the reflection.
+
+    Returns:
+        The list of accepted (valid) skill names emitted, deduped within this call.
+    """
+    if not raw or not raw.strip():
+        return []
+    seen: set[str] = set()
+    accepted: list[str] = []
+    for token in raw.split(","):
+        name = token.strip().lower()
+        if not name or name in seen:
+            continue
+        if not _MISSING_SKILL_NAME_RE.match(name):
+            log.debug(
+                "missing_skill_name_rejected_by_validator",
+                requested_name=name,
+                trace_id=trace_id,
+                component="reflection_dspy",
+            )
+            continue
+        seen.add(name)
+        accepted.append(name)
+        log.warning(
+            "missing_skill_requested",
+            trace_id=trace_id,
+            requested_name=name,
+            source="reflection",
+            component="reflection_dspy",
+        )
+        if len(accepted) >= 3:
+            break
+    return accepted
 
 
 def generate_reflection_dspy(
@@ -400,6 +459,18 @@ def generate_reflection_dspy(
             trace_id=trace_id,
             component="reflection_dspy",
         )
+
+        # FRE-328 follow-up — capability-gap recognition during reflection
+        missing_skills_raw = _ensure_str(getattr(result, "missing_skill_names", ""), "")
+        emitted = _emit_missing_skill_events(missing_skills_raw, trace_id=trace_id)
+        if emitted:
+            log.info(
+                "reflection_missing_skills_captured",
+                trace_id=trace_id,
+                count=len(emitted),
+                names=emitted,
+                component="reflection_dspy",
+            )
 
         return entry
 

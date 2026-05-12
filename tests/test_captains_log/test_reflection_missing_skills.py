@@ -96,7 +96,9 @@ class TestEmitMissingSkillWarnings:
             lambda event, **kw: captured.append((event, kw)),
         )
         reflection_dspy.emit_missing_skill_warnings(
-            ["slack-notify", "pagerduty-alert"], trace_id="trace-xyz"
+            ["slack-notify", "pagerduty-alert"],
+            trace_id="trace-xyz",
+            session_id="sess-abc",
         )
         assert len(captured) == 2
         events = [e for e, _ in captured]
@@ -106,6 +108,19 @@ class TestEmitMissingSkillWarnings:
         for _, kw in captured:
             assert kw["source"] == "reflection"
             assert kw["trace_id"] == "trace-xyz"
+            assert kw["session_id"] == "sess-abc"
+
+    def test_session_id_defaults_to_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When session_id isn't passed, the warning still emits with session_id=None."""
+        captured: list[tuple[str, dict[str, Any]]] = []
+        monkeypatch.setattr(
+            reflection_dspy.log,
+            "warning",
+            lambda event, **kw: captured.append((event, kw)),
+        )
+        reflection_dspy.emit_missing_skill_warnings(["s"], trace_id="t")
+        assert len(captured) == 1
+        assert captured[0][1]["session_id"] is None
 
 
 class TestDspySignatureField:

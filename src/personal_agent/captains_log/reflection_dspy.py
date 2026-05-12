@@ -234,7 +234,9 @@ def parse_missing_skill_names(raw: str, trace_id: str = "") -> list[str]:
     return accepted
 
 
-def emit_missing_skill_warnings(names: list[str], trace_id: str) -> None:
+def emit_missing_skill_warnings(
+    names: list[str], trace_id: str, session_id: str | None = None
+) -> None:
     """Emit one ``missing_skill_requested`` warning per name (main-loop only).
 
     Must be called from a coroutine running on the main asyncio event loop so
@@ -244,11 +246,15 @@ def emit_missing_skill_warnings(names: list[str], trace_id: str) -> None:
     Args:
         names: Validated names from ``parse_missing_skill_names``.
         trace_id: Trace ID of the reflection's source task.
+        session_id: Session ID of the reflection's source task.  Required for
+            the ≥2-distinct-sessions threshold in
+            ``InsightsEngine.detect_missing_skill_patterns``.
     """
     for name in names:
         log.warning(
             "missing_skill_requested",
             trace_id=trace_id,
+            session_id=session_id,
             requested_name=name,
             source="reflection",
             component="reflection_dspy",

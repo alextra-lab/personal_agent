@@ -978,12 +978,28 @@ async def step_init(
                 trace_id=ctx.trace_id,
                 conversations_found=len(gw.context.memory_context),
             )
+        # Populate operator stanza in gateway path (was only wired for legacy path).
+        if ctx.user_id and ctx.user_email:
+            try:
+                from personal_agent.service.app import memory_service as _ms
+                from personal_agent.orchestrator.prompts import get_owner_stanza  # noqa: PLC0415
+
+                if _ms and _ms.connected:
+                    ctx.operator_stanza = await get_owner_stanza(
+                        memory_service=_ms,
+                        user_id=ctx.user_id,
+                        email=ctx.user_email,
+                        display_name=ctx.user_display_name,
+                    )
+            except Exception as _stanza_e:
+                log.warning("operator_stanza_failed", error=str(_stanza_e), trace_id=ctx.trace_id)
         log.info(
             "step_init_gateway_path",
             trace_id=ctx.trace_id,
             task_type=gw.intent.task_type.value,
             complexity=gw.intent.complexity.value,
             has_memory=gw.context.memory_context is not None,
+            has_operator_stanza=bool(ctx.operator_stanza),
         )
         if gw.intent.task_type.value == "memory_recall":
             # Gateway path returns early, so emit broad-recall telemetry here.

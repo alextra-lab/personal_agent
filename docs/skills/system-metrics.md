@@ -3,6 +3,7 @@ name: system-metrics
 description: CPU, memory, and disk utilisation snapshot for the agent process and host.
 when_to_use: When you need to check CPU usage, memory consumption, disk space, or system load.
 tools: [bash]
+nudge: "Always run the metrics command before answering. Do not estimate or approximate values."
 keywords:
   - cpu load
   - cpu usage

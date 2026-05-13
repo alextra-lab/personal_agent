@@ -20,12 +20,13 @@ _KEYWORD_ROUTES to frontmatter-driven auto-discovery.
 
 from __future__ import annotations
 
+import collections.abc
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import yaml  # type: ignore[import-untyped]
 import structlog
+import yaml  # type: ignore[import-untyped]
 
 from personal_agent.config import settings
 
@@ -58,6 +59,7 @@ class SkillDoc:
     canonical_patterns: tuple[str, ...]
     known_bad_patterns: tuple[dict[str, Any], ...]
     body: str
+    nudge: str | None = None
 
 
 @dataclass
@@ -130,6 +132,7 @@ def _load_all_skills(skills_dir: Path) -> _SkillCache:
             log.debug("skill_doc_no_frontmatter", file=path.name)
             continue
 
+        _nudge_raw = fm.get("nudge")
         docs[name] = SkillDoc(
             name=str(name),
             description=str(fm.get("description", "")),
@@ -139,6 +142,7 @@ def _load_all_skills(skills_dir: Path) -> _SkillCache:
             canonical_patterns=tuple(fm.get("canonical_patterns") or []),
             known_bad_patterns=tuple(fm.get("known_bad_patterns") or []),
             body=body,
+            nudge=str(_nudge_raw).strip() if _nudge_raw is not None else None,
         )
 
     return _SkillCache(docs=docs, mtimes=mtimes)
@@ -215,6 +219,76 @@ def assemble_skill_index(cap_tokens: int = 2048) -> str:
     if not lines:
         return ""
     return _SKILL_INDEX_HEADER + "".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# FRE-337 — Skill directive blocks (deterministic XML wrappers)
+# ---------------------------------------------------------------------------
+
+_SKILL_INDEX_DIRECTIVE_TAG = "skill_index_directive"
+_SKILL_USAGE_DIRECTIVES_TAG = "skill_usage_directives"
+
+_INDEX_DIRECTIVE_BODY = (
+    "The skill index lists capabilities you may load with read_skill(name).\n"
+    "For requests about live systems, logs, metrics, infrastructure, files, or\n"
+    "project-specific procedures, load the matching skill before answering.\n"
+    "For general knowledge questions, answer normally."
+)
+
+_USAGE_DIRECTIVES_WRAPPER = (
+    "Loaded skill bodies are actionable instructions for this turn.\n"
+    "If a loaded skill describes how to investigate or answer the user's request,\n"
+    "follow it and use its tools before giving a substantive answer.\n"
+    "If no loaded skill applies, answer normally.\n"
+    "If an indexed skill appears necessary but was not loaded, call read_skill(name)\n"
+    "before improvising.\n"
+    "Do not speculate about live system state when an available skill can check it."
+)
+
+
+def assemble_skill_index_directive() -> str:
+    """Return the constant ``<skill_index_directive>`` XML block.
+
+    Emitted whenever the compact skill index is present in the system prompt
+    (always in hybrid mode, never in pure keyword mode with no index).
+    Weak wording intentional: must not push tool use on conceptual prompts.
+
+    Returns:
+        XML-wrapped directive string.
+    """
+    return f"<{_SKILL_INDEX_DIRECTIVE_TAG}>\n{_INDEX_DIRECTIVE_BODY}\n</{_SKILL_INDEX_DIRECTIVE_TAG}>"
+
+
+def assemble_skill_usage_directives(
+    loaded: collections.abc.Sequence[str],
+    skills: collections.abc.Mapping[str, "SkillDoc"],
+) -> str:
+    """Return the ``<skill_usage_directives>`` XML block for *loaded* skill bodies.
+
+    Emitted only when ≥1 skill body is present in the system prompt. Per-skill
+    bullets are included only for skills whose ``nudge`` field is non-empty.
+
+    Args:
+        loaded: Names of skills whose full body is currently in the prompt.
+        skills: Mapping from skill name to SkillDoc (from ``get_all_skills()``).
+
+    Returns:
+        XML-wrapped directive string, or empty string when *loaded* is empty.
+    """
+    if not loaded:
+        return ""
+
+    bullets: list[str] = []
+    for name in loaded:
+        doc = skills.get(name)
+        if doc and doc.nudge:
+            bullets.append(f"- {doc.name}: {doc.nudge}")
+
+    inner = _USAGE_DIRECTIVES_WRAPPER
+    if bullets:
+        inner = inner + "\n\n" + "\n".join(bullets)
+
+    return f"<{_SKILL_USAGE_DIRECTIVES_TAG}>\n{inner}\n</{_SKILL_USAGE_DIRECTIVES_TAG}>"
 
 
 def get_skill_block(

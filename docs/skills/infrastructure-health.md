@@ -3,6 +3,7 @@ name: infrastructure-health
 description: Probe all infrastructure services (Postgres, Elasticsearch, Neo4j, Redis) for reachability.
 when_to_use: When you need to check if backend services are healthy or reachable.
 tools: [bash]
+nudge: "Probe the live endpoints with bash curl before concluding a service is healthy or degraded."
 keywords:
   - infrastructure health
   - services healthy

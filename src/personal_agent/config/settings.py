@@ -1080,6 +1080,18 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # FRE-337: Skill nudge injection
+    skill_nudge_enabled: bool = Field(
+        default=True,
+        alias="AGENT_SKILL_NUDGE_ENABLED",
+        description=(
+            "Inject deterministic skill directive blocks (<skill_index_directive> and "
+            "<skill_usage_directives>) into the system prompt after skill content. "
+            "Set to False for eval baseline cells. "
+            "Env var: AGENT_SKILL_NUDGE_ENABLED"
+        ),
+    )
+
     # FRE-225: Egress URL guard (domain blocklist)
     url_guard_enabled: bool = Field(
         default=True,

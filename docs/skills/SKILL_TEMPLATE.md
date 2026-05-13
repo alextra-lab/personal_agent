@@ -1,5 +1,21 @@
 # SKILL: <tool-name>
 
+<!-- Frontmatter for auto-loaded skills (name required; all other fields optional):
+
+---
+name: <tool-name>
+description: <one-line description shown in the compact index>
+when_to_use: <when the agent should prefer this skill>
+tools: [bash]           # primitive tools this skill uses
+keywords: [...]         # keyword/phrase triggers for hybrid routing
+nudge: |                # optional — only set when the behavior is custom and specific to this
+  <strong directive text>    skill (e.g. "run a live query — never answer from priors").
+  <second line if needed>    Generic skills (bash, list-directory) don't need nudge.
+                             Nudge is reviewed with the same gate as other frontmatter.
+---
+
+-->
+
 > **Tier:** 2 — CLI tool  
 > **Binary:** `<cli-command>`  
 > **Auth:** `<how auth is configured, e.g. AGENT_MYSERVICE_API_KEY env var>`  

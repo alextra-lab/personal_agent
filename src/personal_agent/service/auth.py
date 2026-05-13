@@ -84,6 +84,65 @@ async def get_or_create_user_by_email(db: AsyncSession, email: str) -> UUID:
     return user_id
 
 
+async def upsert_display_name_for_email(
+    db: AsyncSession, email: str, display_name: str
+) -> UUID:
+    """Ensure user row exists and set display_name if still unset or default.
+
+    Coalesce rule: only writes display_name when the existing value is NULL or
+    equals the email local-part (meaning it was never enriched by entity extraction).
+    Idempotent — safe to call on every startup.
+
+    Args:
+        db: Active async SQLAlchemy session.
+        email: CF Access email (will be lowercased).
+        display_name: Human-readable name to seed.
+
+    Returns:
+        Stable UUID for this email.
+    """
+    email = email.lower()
+    local_part = email.split("@")[0]
+
+    result = await db.execute(
+        select(UserModel.user_id, UserModel.display_name).where(UserModel.email == email)
+    )
+    row = result.one_or_none()
+
+    if row is not None:
+        user_id: UUID = row.user_id
+        existing_name: str | None = row.display_name
+        if existing_name is None or existing_name == local_part:
+            await db.execute(
+                text("UPDATE users SET display_name = :dn WHERE user_id = :uid"),
+                {"dn": display_name, "uid": str(user_id)},
+            )
+            await db.commit()
+        return user_id
+
+    # Row does not exist — insert with display_name already set.
+    insert_result = await db.execute(
+        text(
+            "INSERT INTO users (user_id, email, display_name, created_at) "
+            "VALUES (gen_random_uuid(), :email, :dn, :now) "
+            "ON CONFLICT (email) DO UPDATE "
+            "  SET display_name = EXCLUDED.display_name "
+            "  WHERE users.display_name IS NULL "
+            "     OR users.display_name = :local_part "
+            "RETURNING user_id"
+        ),
+        {
+            "email": email,
+            "dn": display_name,
+            "now": datetime.now(timezone.utc),
+            "local_part": local_part,
+        },
+    )
+    user_id = insert_result.scalar_one()
+    await db.commit()
+    return user_id
+
+
 async def _get_user_with_display_name(db: AsyncSession, email: str) -> tuple[UUID, str | None]:
     """Resolve (user_id, display_name) for email, creating the row if needed.
 

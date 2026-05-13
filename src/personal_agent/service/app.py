@@ -29,7 +29,12 @@ from personal_agent.memory.protocol_adapter import MemoryServiceAdapter
 from personal_agent.memory.service import MemoryService
 from personal_agent.request_gateway import run_gateway_pipeline
 from personal_agent.security import sanitize_error_message
-from personal_agent.service.auth import RequestUser, get_or_create_user_by_email, get_request_user
+from personal_agent.service.auth import (
+    RequestUser,
+    get_or_create_user_by_email,
+    get_request_user,
+    upsert_display_name_for_email,
+)
 from personal_agent.service.database import AsyncSessionLocal, get_db_session, init_db
 from personal_agent.service.models import SessionCreate, SessionResponse, SessionUpdate
 from personal_agent.service.repositories.session_repository import SessionRepository
@@ -464,6 +469,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                     )
                 except Exception as boot_e:
                     log.warning("owner_bootstrap_failed", error=str(boot_e))
+            # Seed display names for non-owner CF Access users (FRE-344)
+            for _email, _display_name in settings.user_display_names.items():
+                try:
+                    async with AsyncSessionLocal() as db:
+                        _uid = await upsert_display_name_for_email(db, _email, _display_name)
+                    local_part = _email.split("@")[0]
+                    await memory_service.update_person_name_if_default(
+                        user_id=_uid,
+                        current_default=local_part,
+                        new_name=_display_name,
+                    )
+                    log.info("display_name_seeded", email=_email)
+                except Exception as seed_e:
+                    log.warning("display_name_seed_failed", email=_email, error=str(seed_e))
         except Exception as e:
             log.warning(
                 "memory_service_connect_failed",

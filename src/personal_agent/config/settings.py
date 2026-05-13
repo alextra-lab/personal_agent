@@ -1018,6 +1018,31 @@ class AppConfig(BaseSettings):
             "':OPERATED_BY'. Should be unique per deployment."
         ),
     )
+    user_display_names_json: str = Field(
+        default="{}",
+        alias="AGENT_USER_DISPLAY_NAMES_JSON",
+        description=(
+            "JSON map of email → display_name for non-owner CF Access users. "
+            "Applied idempotently at startup after owner bootstrap. "
+            "Only overwrites a :Person.name that still equals the email local-part. "
+            "Example: '{\"alice@x.com\":\"Alice\",\"bob@x.com\":\"Bob\"}' "
+            "Env var: AGENT_USER_DISPLAY_NAMES_JSON"
+        ),
+    )
+
+    @property
+    def user_display_names(self) -> dict[str, str]:
+        """Parse user_display_names_json into a dict, returning {} on error."""
+        import json
+        from typing import cast
+
+        try:
+            parsed = json.loads(self.user_display_names_json)
+            if isinstance(parsed, dict):
+                return cast(dict[str, str], parsed)
+            return {}
+        except (json.JSONDecodeError, ValueError):
+            return {}
 
     # FRE-261 PIVOT-2: Primitive tools feature flags (ADR-0063 Phase 2)
     # All flags default OFF — enable after pentest gate clears.

@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-13 — FRE-341 token pruned · FRE-344 display-name seeding shipped (PR #50, all 4 users seeded) · FRE-299 governance gate live.
+> **Last updated**: 2026-05-13 — FRE-341 token pruned · FRE-344 display-name seeding shipped (PR #50) · FRE-299 governance gate live · FRE-363 operator stanza bug fixed (PR #51, In Review).
 
 ---
 
@@ -75,6 +75,7 @@ FRE-302 ✅ → FRE-311 (budget auto-tuning, parked pending data)
 
 | Item | Date | Summary |
 |------|------|---------|
+| **FRE-363: operator stanza missing from gateway execution path** | 2026-05-13 | `get_owner_stanza()` was only called in the legacy non-gateway branch, which is unreachable in production. Every production request hit the gateway path which had no stanza call — `## Operator / You are assisting {name}` was never injected. Fix: add stanza population to the gateway branch using the global memory_service. Discovered during FRE-344 follow-up. PR #51. |
 | **FRE-344: display_name config-driven seeding (FRE-213 follow-up)** | 2026-05-13 | `AGENT_USER_DISPLAY_NAMES_JSON` env var seeds `users.display_name` (Postgres) and `:Person.name` (Neo4j) idempotently at startup. Coalesce rule: only overwrites NULL or email local-part. All 4 CF Access users seeded (Alex, Susan, Erika, Laurent). PR #50. |
 | **FRE-299: Flip graph_quality_governance_enabled gate (ADR-0060 P2-3)** | 2026-05-13 | Set `AGENT_GRAPH_QUALITY_GOVERNANCE_ENABLED=true` in `.env` after 14-day Phase 1 validation (33 anomalies published, 0% false-positive rate). `governance_enabled=True` confirmed in gateway startup logs. |
 | **FRE-341: Prune execution-service gateway token** | 2026-05-13 | Deleted stale `execution-service` token block from `config/gateway_access.yaml`. ADR-0045 amended 2026-05-08 confirmed orchestrator and gateway are the same process — the role was never used. Config-only change, no tests needed. Direct-to-main commit. |

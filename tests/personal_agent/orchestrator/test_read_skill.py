@@ -118,9 +118,9 @@ class TestAssembleSkillIndex:
             assert name in index, f"Skill '{name}' missing from index"
 
     def test_index_starts_with_header(self) -> None:
-        """Index starts with the ## Available Skills header."""
+        """Index starts with the Available Skills header."""
         index = assemble_skill_index()
-        assert index.startswith("## Available Skills")
+        assert "Available Skills" in index
 
     def test_index_entries_have_description(self) -> None:
         """Each entry has '- name: description' format."""

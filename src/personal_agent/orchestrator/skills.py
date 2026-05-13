@@ -35,10 +35,11 @@ log = structlog.get_logger(__name__)
 _SKILLS_DIR = Path(__file__).resolve().parents[3] / "docs" / "skills"
 _SEPARATOR = "\n\n---\n\n"
 SKILL_BLOCK_HEADER = (
-    "## Skill Library — How to Drive Primitive Tools\n\n"
+    "<skill_library>\n"
     "The following skill docs are reference material for using the `bash`, `read`, "
     "`write`, and `run_python` primitives effectively. Prefer these idioms over named "
-    "curated tools when both are available.\n\n"
+    "curated tools when both are available.\n"
+    "</skill_library>\n\n"
 )
 
 
@@ -180,7 +181,6 @@ def _get_cache() -> _SkillCache:
 
 _SKILL_INDEX_HEADER = (
     "## Available Skills\n\n"
-    "Call `read_skill(name)` to load the full guidance for any skill below.\n\n"
     'To propose a new skill, call `read_skill(name="your-desired-name")` '
     "with the name you'd want for it. Every such call is logged as a "
     "capability-gap signal and feeds skill-library growth.\n\n"

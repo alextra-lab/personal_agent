@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-13 — FRE-341 token pruned. FRE-344 display-name seeding PR #50 merged. FRE-299 governance gate flipped (33 anomalies, governance_enabled=True confirmed in logs).
+> **Last updated**: 2026-05-13 — FRE-341 token pruned · FRE-344 display-name seeding shipped (PR #50, all 4 users seeded) · FRE-299 governance gate live.
 
 ---
 
@@ -22,7 +22,7 @@ Wave D implementation (endpoint abstraction, compose unification, test parity) r
 | **B** ✅ (partial) | Self-observation | FRE-326 pending | FRE-301 ✅ · FRE-300 ✅ · FRE-319 ✅ · FRE-269 ✅ · [FRE-326](https://linear.app/frenchforest/issue/FRE-326) | FRE-326 gate ≥ 2026-05-13 |
 | **C** ✅ | Security | Done | [FRE-225](https://linear.app/frenchforest/issue/FRE-225) ✅ | Shipped 2026-05-08 |
 | **D** | Architecture | Planning ✅, impl deferred | [FRE-214](https://linear.app/frenchforest/issue/FRE-214) ✅ · FRE-238 · FRE-240 · FRE-241 · FRE-236 · FRE-336 · FRE-338–340 · [FRE-341](https://linear.app/frenchforest/issue/FRE-341) ✅ | Tracks 2a/2b/3 + follow-ups unblocked; deferred per audit §8.7; FRE-341 shipped 2026-05-13 |
-| **E** ✅ (partial) | Identity & write surface | FRE-343 pending | [FRE-213](https://linear.app/frenchforest/issue/FRE-213) ✅ · FRE-227 ⏸ · [FRE-342](https://linear.app/frenchforest/issue/FRE-342) ✅ · [FRE-343](https://linear.app/frenchforest/issue/FRE-343) · [FRE-344](https://linear.app/frenchforest/issue/FRE-344) 🔵 · FRE-345 | FRE-227 paused → Backlog; FRE-344 PR #50 In Review |
+| **E** ✅ (partial) | Identity & write surface | FRE-343 pending | [FRE-213](https://linear.app/frenchforest/issue/FRE-213) ✅ · FRE-227 ⏸ · [FRE-342](https://linear.app/frenchforest/issue/FRE-342) ✅ · [FRE-343](https://linear.app/frenchforest/issue/FRE-343) · [FRE-344](https://linear.app/frenchforest/issue/FRE-344) ✅ · FRE-345 | FRE-227 paused → Backlog; FRE-344 shipped 2026-05-13 (PR #50) |
 | **F** | Self-improvement | Partial | [FRE-328](https://linear.app/frenchforest/issue/FRE-328) 🅿️ · FRE-226 · FRE-234 | FRE-328 pipeline shipped (PRs #43–47), parked 2026-05-12 for natural-usage eval; review gate 2026-05-26. FRE-226 needs FRE-227 |
 | **G** | Cleanups & gates | Partial | [FRE-265](https://linear.app/frenchforest/issue/FRE-265) ✅ · [FRE-299](https://linear.app/frenchforest/issue/FRE-299) ✅ · [FRE-314](https://linear.app/frenchforest/issue/FRE-314) · [FRE-337](https://linear.app/frenchforest/issue/FRE-337) ✅ · FRE-311 | FRE-265 shipped 2026-05-12; FRE-337 shipped 2026-05-13 (PR #48); FRE-299 gate flipped 2026-05-13; FRE-311 parked on FRE-302 |
 | **H** | Memory / context value | Not started | [FRE-178](https://linear.app/frenchforest/issue/FRE-178) → [FRE-179](https://linear.app/frenchforest/issue/FRE-179) → [FRE-180](https://linear.app/frenchforest/issue/FRE-180) · [FRE-230](https://linear.app/frenchforest/issue/FRE-230) | FRE-178 → 179 → 180 chain |
@@ -75,6 +75,7 @@ FRE-302 ✅ → FRE-311 (budget auto-tuning, parked pending data)
 
 | Item | Date | Summary |
 |------|------|---------|
+| **FRE-344: display_name config-driven seeding (FRE-213 follow-up)** | 2026-05-13 | `AGENT_USER_DISPLAY_NAMES_JSON` env var seeds `users.display_name` (Postgres) and `:Person.name` (Neo4j) idempotently at startup. Coalesce rule: only overwrites NULL or email local-part. All 4 CF Access users seeded (Alex, Susan, Erika, Laurent). PR #50. |
 | **FRE-299: Flip graph_quality_governance_enabled gate (ADR-0060 P2-3)** | 2026-05-13 | Set `AGENT_GRAPH_QUALITY_GOVERNANCE_ENABLED=true` in `.env` after 14-day Phase 1 validation (33 anomalies published, 0% false-positive rate). `governance_enabled=True` confirmed in gateway startup logs. |
 | **FRE-341: Prune execution-service gateway token** | 2026-05-13 | Deleted stale `execution-service` token block from `config/gateway_access.yaml`. ADR-0045 amended 2026-05-08 confirmed orchestrator and gateway are the same process — the role was never used. Config-only change, no tests needed. Direct-to-main commit. |
 | **FRE-337: Skill nudge injection + XML headers (ADR-0067)** | 2026-05-13 | Two deterministic XML directive blocks (`<skill_index_directive>` and `<skill_usage_directives>`) appended after all skill content in the system prompt, immediately before the user message. Closes the behavioral gap where the primary model (recall=1.0 from router) answered from training-data priors instead of executing the injected skill. `nudge:` YAML frontmatter field added to `SkillDoc`; seeded on 4 skills. Feature-gated via `AGENT_SKILL_NUDGE_ENABLED`. ADR-0067 accepted. PR #48. Follow-up PR #49: `SKILL_BLOCK_HEADER` wrapped in `<skill_library>` XML; redundant `read_skill` instruction removed from index header. Eval: Family A 5/5 live tool use (was 0/5), Family B 4/4 knowledge-only (no regression), adversarial guard held. |

@@ -146,7 +146,7 @@ def test_bash_not_duplicated_in_block():
 
 def test_block_contains_header():
     block = get_skill_block("What's the CPU load?")
-    assert "Skill Library" in block
+    assert "<skill_library>" in block
 
 
 def test_unrecognised_message_returns_only_bash():

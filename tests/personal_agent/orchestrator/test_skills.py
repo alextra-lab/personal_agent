@@ -129,7 +129,7 @@ class TestFlagGating:
         monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
         result = get_skill_block()
         assert result != ""
-        assert result.startswith("## Skill Library — How to Drive Primitive Tools")
+        assert result.startswith("<skill_library>")
 
     def test_returns_empty_with_message_when_flag_disabled(
         self, monkeypatch: pytest.MonkeyPatch
@@ -179,7 +179,7 @@ class TestKeywordRouting:
         """Passing message=None returns only the bash skill block."""
         monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
         result = get_skill_block(message=None)
-        assert result.startswith("## Skill Library — How to Drive Primitive Tools")
+        assert result.startswith("<skill_library>")
         assert "bash — Shell Command Executor" in result
 
 

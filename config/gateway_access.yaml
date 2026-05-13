@@ -37,17 +37,6 @@ tokens:
       - observations:read
     rate_limit: 200
 
-  - name: execution-service
-    secret: "${GATEWAY_TOKEN_EXECUTION}"
-    scopes:
-      - knowledge:read
-      - knowledge:write
-      - sessions:read
-      - sessions:write
-      - observations:read
-      - observations:write
-    rate_limit: 1000
-
   - name: external-agent
     secret: "${GATEWAY_TOKEN_EXTERNAL_AGENT}"
     scopes:

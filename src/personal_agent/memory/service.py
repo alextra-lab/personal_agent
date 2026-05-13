@@ -799,6 +799,48 @@ class MemoryService:
             log.warning("user_person_provision_failed", error=str(e))
             return {}
 
+    async def update_person_name_if_default(
+        self,
+        user_id: UUID,
+        current_default: str,
+        new_name: str,
+    ) -> bool:
+        """Overwrite :Person.name only when it still equals the default email local-part.
+
+        Coalesce rule mirrors the Postgres upsert: if entity extraction has already
+        enriched the name (i.e. it differs from the local-part), leave it untouched.
+
+        Args:
+            user_id: User's UUID (anchors the :Person node).
+            current_default: The email local-part that signals "never enriched".
+            new_name: The configured display name to write.
+
+        Returns:
+            True when the name was updated, False otherwise (node missing, already
+            enriched, or Neo4j unavailable).
+        """
+        if not self.connected or not self.driver:
+            return False
+
+        try:
+            async with self.driver.session() as session:
+                result = await session.run(
+                    """
+                    MATCH (p:Person {user_id: $user_id})
+                    WHERE p.name = $current_default OR p.name IS NULL
+                    SET p.name = $new_name
+                    RETURN count(p) AS updated
+                    """,
+                    user_id=str(user_id),
+                    current_default=current_default,
+                    new_name=new_name,
+                )
+                record = await result.single()
+                return bool(record and record["updated"] > 0)
+        except Exception as e:
+            log.warning("person_name_update_failed", user_id=str(user_id), error=str(e))
+            return False
+
     async def create_relationship(
         self, relationship: Relationship, visibility: str = "public"
     ) -> str | None:

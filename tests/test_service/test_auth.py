@@ -10,6 +10,7 @@ from personal_agent.service.auth import (
     RequestUser,
     get_or_create_user_by_email,
     get_request_user,
+    upsert_display_name_for_email,
 )
 
 
@@ -168,3 +169,86 @@ async def test_raises_401_when_no_owner_email_fallback(
         await get_request_user(request)
 
     assert exc_info.value.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# upsert_display_name_for_email (FRE-344)
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_session_with_row(
+    existing_uid: UUID,
+    existing_display_name: str | None,
+) -> AsyncMock:
+    session = AsyncMock()
+    row = MagicMock()
+    row.user_id = existing_uid
+    row.display_name = existing_display_name
+    select_result = MagicMock()
+    select_result.one_or_none.return_value = row
+    update_result = MagicMock()
+    session.execute.side_effect = [select_result, update_result]
+    return session
+
+
+@pytest.mark.asyncio
+async def test_upsert_display_name_updates_when_null() -> None:
+    """When display_name is NULL, it is overwritten."""
+    uid = uuid4()
+    session = _make_mock_session_with_row(uid, None)
+
+    result_id = await upsert_display_name_for_email(session, "alice@example.com", "Alice")
+
+    assert result_id == uid
+    assert session.execute.call_count == 2  # SELECT + UPDATE
+    session.commit.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_upsert_display_name_updates_when_local_part() -> None:
+    """When display_name equals the email local-part, it is overwritten."""
+    uid = uuid4()
+    session = _make_mock_session_with_row(uid, "alice")
+
+    result_id = await upsert_display_name_for_email(session, "alice@example.com", "Alice B.")
+
+    assert result_id == uid
+    assert session.execute.call_count == 2
+    session.commit.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_upsert_display_name_no_op_when_already_enriched() -> None:
+    """When display_name was already enriched, leave it unchanged."""
+    uid = uuid4()
+    session = AsyncMock()
+    row = MagicMock()
+    row.user_id = uid
+    row.display_name = "Alice Enriched"
+    select_result = MagicMock()
+    select_result.one_or_none.return_value = row
+    session.execute.return_value = select_result
+
+    result_id = await upsert_display_name_for_email(session, "alice@example.com", "Alice")
+
+    assert result_id == uid
+    assert session.execute.call_count == 1  # SELECT only
+    session.commit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_upsert_display_name_creates_row_when_missing() -> None:
+    """When user row does not exist, INSERT with display_name is executed."""
+    new_uid = uuid4()
+    session = AsyncMock()
+    select_result = MagicMock()
+    select_result.one_or_none.return_value = None
+    insert_result = MagicMock()
+    insert_result.scalar_one.return_value = new_uid
+    session.execute.side_effect = [select_result, insert_result]
+
+    result_id = await upsert_display_name_for_email(session, "new@example.com", "New User")
+
+    assert result_id == new_uid
+    assert session.execute.call_count == 2
+    session.commit.assert_called_once()

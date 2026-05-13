@@ -1436,6 +1436,9 @@ async def step_llm_call(
     # Placed before dynamic content (memory/decomposition) to stay in the cached prefix.
     from personal_agent.orchestrator.skills import (  # noqa: PLC0415
         assemble_skill_index,
+        assemble_skill_index_directive,
+        assemble_skill_usage_directives,
+        get_all_skills,
         get_skill_block,
     )
 
@@ -1503,20 +1506,21 @@ async def step_llm_call(
 
         _skill_injection: str = ""
 
+        _all_skills = get_all_skills()
+
         if _routing_mode == "model_decided":
             # Build: skill index + bodies of any pre-loaded (router-selected) skills
             _skill_index = assemble_skill_index(cap_tokens=settings.skill_index_max_tokens)
             _preloaded_bodies: list[str] = []
             if ctx.loaded_skills:
-                from personal_agent.orchestrator.skills import get_all_skills  # noqa: PLC0415
-
-                _all = get_all_skills()
                 for _name in sorted(ctx.loaded_skills):
-                    _doc = _all.get(_name)
+                    _doc = _all_skills.get(_name)
                     if _doc and _doc.body:
                         _preloaded_bodies.append(_doc.body)
             parts = [p for p in [_skill_index, *_preloaded_bodies] if p]
             _skill_injection = "\n\n".join(parts)
+            _has_index = bool(_skill_index)
+            _has_bodies = bool(ctx.loaded_skills)
         elif _routing_mode == "hybrid":
             _skill_index = assemble_skill_index(cap_tokens=settings.skill_index_max_tokens)
             _keyword_block = get_skill_block(
@@ -1525,14 +1529,37 @@ async def step_llm_call(
             )
             parts = [p for p in [_skill_index, _keyword_block] if p]
             _skill_injection = "\n\n".join(parts)
+            _has_index = bool(_skill_index)
+            _has_bodies = bool(_keyword_block)
         else:  # keyword (default / legacy)
             _skill_injection = get_skill_block(message=_user_message)
+            _has_index = False
+            _has_bodies = bool(_skill_injection)
 
-        if _skill_injection:
+        # FRE-337: Append deterministic directive blocks after all skill content.
+        # <skill_index_directive> fires whenever the compact index is present.
+        # <skill_usage_directives> fires only when ≥1 skill body is loaded.
+        # Both are gated by settings.skill_nudge_enabled.
+        # Per-skill nudge bullets use ctx.loaded_skills (explicitly tracked across all modes);
+        # keyword-matched bodies in hybrid/keyword mode trigger the wrapper but no bullets unless
+        # the skill was also explicitly tracked (read via read_skill or router).
+        _nudge_parts: list[str] = []
+        if settings.skill_nudge_enabled and _skill_injection:
+            if _has_index:
+                _nudge_parts.append(assemble_skill_index_directive())
+            if _has_bodies:
+                _nudge_parts.append(
+                    assemble_skill_usage_directives(list(ctx.loaded_skills), _all_skills)
+                )
+        _nudge_block = "\n\n".join(p for p in _nudge_parts if p)
+
+        _full_skill_injection = "\n\n".join(p for p in [_skill_injection, _nudge_block] if p)
+
+        if _full_skill_injection:
             if system_prompt:
-                system_prompt = f"{system_prompt}\n\n{_skill_injection}"
+                system_prompt = f"{system_prompt}\n\n{_full_skill_injection}"
             else:
-                system_prompt = _skill_injection
+                system_prompt = _full_skill_injection
 
         log.info(
             "skill_index_assembled",
@@ -1540,6 +1567,8 @@ async def step_llm_call(
             injected_chars=len(_skill_injection),
             loaded_skills_count=len(ctx.loaded_skills),
             skill_routing_model_key=ctx.skill_routing_model_id or None,
+            index_directive_emitted=_has_index and settings.skill_nudge_enabled,
+            usage_directives_emitted=_has_bodies and settings.skill_nudge_enabled,
             trace_id=ctx.trace_id,
         )
 

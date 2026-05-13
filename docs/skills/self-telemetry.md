@@ -3,6 +3,7 @@ name: self-telemetry
 description: Query agent self-telemetry — token usage, prompt-cache hit rate, LLM latency, cost breakdown, and interaction outcomes from Elasticsearch and Captain's Log. Uses bash+curl throughout.
 when_to_use: When asked about my own token stats, cache hit rate, latency, cost, model usage, LLM call counts, interaction success rate, or anything involving my telemetry, performance, or introspection. Also use for latency breakdown of a specific trace_id.
 tools: [bash]
+nudge: "Cite real ES counts/traces in your answer — do not paraphrase what the telemetry 'probably' shows."
 keywords:
   # Token / cost questions
   - token

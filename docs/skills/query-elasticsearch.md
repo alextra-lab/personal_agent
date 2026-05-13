@@ -3,6 +3,7 @@ name: query-elasticsearch
 description: Query Elasticsearch indices for log analysis, telemetry, errors, and self-diagnosis. Use the JSON `_search` DSL — it's deterministic. ES|QL is reserved for ad-hoc analytics and has syntax gotchas. Primary path uses bash curl.
 when_to_use: When you need to inspect agent telemetry, logs, errors, traces, or query ES directly. Always use agent-logs-* — never logs-*.
 tools: [bash]
+nudge: "These results must come from a live ES query — never answer from training-data priors about what the logs might contain."
 keywords:
   # Natural user phrasing — what a person actually types
   - logs

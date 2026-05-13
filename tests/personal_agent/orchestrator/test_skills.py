@@ -182,6 +182,36 @@ class TestKeywordRouting:
         assert result.startswith("## Skill Library — How to Drive Primitive Tools")
         assert "bash — Shell Command Executor" in result
 
+
+class TestSkillNudgeParser:
+    """Test 5: _load_all_skills() parses the optional nudge: frontmatter field."""
+
+    def _write_skill(self, tmp_path: Path, name: str, extra_fm: str = "", body: str = "# body") -> None:
+        content = f"---\nname: {name}\ndescription: desc\nwhen_to_use: always\n{extra_fm}---\n\n{body}"
+        (tmp_path / f"{name}.md").write_text(content, encoding="utf-8")
+
+    def test_nudge_field_parsed_from_frontmatter(self, tmp_path: Path) -> None:
+        """When nudge: is set in frontmatter, SkillDoc.nudge carries that text."""
+        self._write_skill(tmp_path, "es", extra_fm='nudge: "Run a live ES query."\n')
+        cache = _load_all_skills(tmp_path)
+        assert cache.docs["es"].nudge == "Run a live ES query."
+
+    def test_nudge_field_none_when_absent(self, tmp_path: Path) -> None:
+        """When nudge: is absent from frontmatter, SkillDoc.nudge is None."""
+        self._write_skill(tmp_path, "bash")
+        cache = _load_all_skills(tmp_path)
+        assert cache.docs["bash"].nudge is None
+
+    def test_nudge_multiline_yaml_preserved(self, tmp_path: Path) -> None:
+        """Multi-line YAML nudge strings are loaded verbatim."""
+        multiline = "nudge: |\n  Line one.\n  Line two.\n"
+        self._write_skill(tmp_path, "metrics", extra_fm=multiline)
+        cache = _load_all_skills(tmp_path)
+        nudge = cache.docs["metrics"].nudge
+        assert nudge is not None
+        assert "Line one." in nudge
+        assert "Line two." in nudge
+
     def test_two_calls_return_identical_result(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -155,3 +155,178 @@ class TestSkillBlockFunctionalInjection:
         assert _SENTINEL not in (system_prompt_passed or ""), (
             f"Sentinel unexpectedly found in system_prompt: {system_prompt_passed!r}"
         )
+
+
+_INDEX_DIRECTIVE_SENTINEL = "<skill_index_directive>"
+_USAGE_DIRECTIVE_SENTINEL = "<skill_usage_directives>"
+
+
+def _make_nudge_patches(
+    skill_injection: str,
+    index_directive_return: str,
+    usage_directives_return: str,
+) -> tuple:
+    return (
+        patch("personal_agent.orchestrator.skills.get_skill_block", return_value=skill_injection),
+        patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
+        patch(
+            "personal_agent.orchestrator.skills.assemble_skill_index_directive",
+            return_value=index_directive_return,
+        ),
+        patch(
+            "personal_agent.orchestrator.skills.assemble_skill_usage_directives",
+            return_value=usage_directives_return,
+        ),
+        patch("personal_agent.orchestrator.skills.get_all_skills", return_value={}),
+        patch(
+            "personal_agent.llm_client.factory.get_llm_client",
+            return_value=_make_mock_llm_client(_make_minimal_response()),
+        ),
+        patch(
+            "personal_agent.orchestrator.executor.get_default_registry",
+            return_value=MagicMock(get_tool_definitions_for_llm=MagicMock(return_value=[])),
+        ),
+    )
+
+
+class TestSkillNudgeInjection:
+    """FRE-337: skill directive blocks appear after skill content, gated by flag."""
+
+    @pytest.mark.asyncio
+    async def test_directive_blocks_appear_after_skill_content(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Usage directive block lands AFTER the skill body sentinel."""
+        from personal_agent.config import settings
+        from personal_agent.telemetry.trace import TraceContext
+
+        monkeypatch.setattr(settings, "skill_routing_mode", "keyword")
+        monkeypatch.setattr(settings, "skill_routing_model_key", "")
+        monkeypatch.setattr(settings, "skill_nudge_enabled", True)
+
+        ctx = _make_minimal_ctx()
+        trace_ctx = TraceContext.new_trace()
+        mock_llm = _make_mock_llm_client(_make_minimal_response())
+        mock_session = MagicMock()
+        mock_session.add_message = AsyncMock()
+        mock_session.get_messages = AsyncMock(return_value=[])
+
+        with (
+            patch("personal_agent.orchestrator.skills.get_skill_block", return_value=_SENTINEL),
+            patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
+            patch(
+                "personal_agent.orchestrator.skills.assemble_skill_index_directive",
+                return_value="",
+            ),
+            patch(
+                "personal_agent.orchestrator.skills.assemble_skill_usage_directives",
+                return_value=_USAGE_DIRECTIVE_SENTINEL,
+            ),
+            patch("personal_agent.orchestrator.skills.get_all_skills", return_value={}),
+            patch("personal_agent.llm_client.factory.get_llm_client", return_value=mock_llm),
+            patch(
+                "personal_agent.orchestrator.executor.get_default_registry",
+                return_value=MagicMock(get_tool_definitions_for_llm=MagicMock(return_value=[])),
+            ),
+        ):
+            from personal_agent.orchestrator.executor import step_llm_call
+
+            await step_llm_call(ctx, mock_session, trace_ctx)  # type: ignore[arg-type]
+
+        call_kwargs = mock_llm.respond.call_args.kwargs
+        system_prompt = call_kwargs.get("system_prompt", "") or ""
+        assert _SENTINEL in system_prompt
+        assert _USAGE_DIRECTIVE_SENTINEL in system_prompt
+        assert system_prompt.index(_SENTINEL) < system_prompt.index(_USAGE_DIRECTIVE_SENTINEL)
+
+    @pytest.mark.asyncio
+    async def test_neither_directive_block_when_flag_off(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When skill_nudge_enabled=False, neither directive block is injected."""
+        from personal_agent.config import settings
+        from personal_agent.telemetry.trace import TraceContext
+
+        monkeypatch.setattr(settings, "skill_routing_mode", "keyword")
+        monkeypatch.setattr(settings, "skill_routing_model_key", "")
+        monkeypatch.setattr(settings, "skill_nudge_enabled", False)
+
+        ctx = _make_minimal_ctx()
+        trace_ctx = TraceContext.new_trace()
+        mock_llm = _make_mock_llm_client(_make_minimal_response())
+        mock_session = MagicMock()
+        mock_session.add_message = AsyncMock()
+        mock_session.get_messages = AsyncMock(return_value=[])
+
+        with (
+            patch("personal_agent.orchestrator.skills.get_skill_block", return_value=_SENTINEL),
+            patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
+            patch(
+                "personal_agent.orchestrator.skills.assemble_skill_index_directive",
+                return_value=_INDEX_DIRECTIVE_SENTINEL,
+            ),
+            patch(
+                "personal_agent.orchestrator.skills.assemble_skill_usage_directives",
+                return_value=_USAGE_DIRECTIVE_SENTINEL,
+            ),
+            patch("personal_agent.orchestrator.skills.get_all_skills", return_value={}),
+            patch("personal_agent.llm_client.factory.get_llm_client", return_value=mock_llm),
+            patch(
+                "personal_agent.orchestrator.executor.get_default_registry",
+                return_value=MagicMock(get_tool_definitions_for_llm=MagicMock(return_value=[])),
+            ),
+        ):
+            from personal_agent.orchestrator.executor import step_llm_call
+
+            await step_llm_call(ctx, mock_session, trace_ctx)  # type: ignore[arg-type]
+
+        call_kwargs = mock_llm.respond.call_args.kwargs
+        system_prompt = call_kwargs.get("system_prompt", "") or ""
+        assert _INDEX_DIRECTIVE_SENTINEL not in system_prompt
+        assert _USAGE_DIRECTIVE_SENTINEL not in system_prompt
+
+    @pytest.mark.asyncio
+    async def test_neither_directive_block_when_no_skill_content(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When no skill content is injected at all, no directive blocks fire."""
+        from personal_agent.config import settings
+        from personal_agent.telemetry.trace import TraceContext
+
+        monkeypatch.setattr(settings, "skill_routing_mode", "keyword")
+        monkeypatch.setattr(settings, "skill_routing_model_key", "")
+        monkeypatch.setattr(settings, "skill_nudge_enabled", True)
+
+        ctx = _make_minimal_ctx()
+        trace_ctx = TraceContext.new_trace()
+        mock_llm = _make_mock_llm_client(_make_minimal_response())
+        mock_session = MagicMock()
+        mock_session.add_message = AsyncMock()
+        mock_session.get_messages = AsyncMock(return_value=[])
+
+        with (
+            patch("personal_agent.orchestrator.skills.get_skill_block", return_value=""),
+            patch("personal_agent.orchestrator.skills.assemble_skill_index", return_value=""),
+            patch(
+                "personal_agent.orchestrator.skills.assemble_skill_index_directive",
+                return_value=_INDEX_DIRECTIVE_SENTINEL,
+            ),
+            patch(
+                "personal_agent.orchestrator.skills.assemble_skill_usage_directives",
+                return_value=_USAGE_DIRECTIVE_SENTINEL,
+            ),
+            patch("personal_agent.orchestrator.skills.get_all_skills", return_value={}),
+            patch("personal_agent.llm_client.factory.get_llm_client", return_value=mock_llm),
+            patch(
+                "personal_agent.orchestrator.executor.get_default_registry",
+                return_value=MagicMock(get_tool_definitions_for_llm=MagicMock(return_value=[])),
+            ),
+        ):
+            from personal_agent.orchestrator.executor import step_llm_call
+
+            await step_llm_call(ctx, mock_session, trace_ctx)  # type: ignore[arg-type]
+
+        call_kwargs = mock_llm.respond.call_args.kwargs
+        system_prompt = call_kwargs.get("system_prompt", "") or ""
+        assert _INDEX_DIRECTIVE_SENTINEL not in system_prompt
+        assert _USAGE_DIRECTIVE_SENTINEL not in system_prompt

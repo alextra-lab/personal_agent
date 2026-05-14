@@ -284,6 +284,11 @@ test-cov:
 sandbox-build:  ## Build the Python sandbox image for run_python
 	docker build -t seshat-sandbox-python:0.1 docker/sandbox/ -f docker/sandbox/Dockerfile.python
 
+# ─── One-shot maintenance ─────────────────────────────────────────────────────
+
+backfill-participated-in:  ## one-shot backfill of (:Person)-[:PARTICIPATED_IN]->(:Turn) edges (FRE-343)
+	uv run python -m scripts.backfill_participated_in
+
 # ─── Code quality ─────────────────────────────────────────────────────────────
 
 mypy:

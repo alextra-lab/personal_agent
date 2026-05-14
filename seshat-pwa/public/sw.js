@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v2-fre-315';
+const CACHE_NAME = 'seshat-v3-fre-315-c4';
 
 const PRECACHE_URLS = [
   '/',

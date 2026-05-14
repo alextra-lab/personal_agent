@@ -78,15 +78,23 @@ export function MermaidBlock({ chart }: MermaidBlockProps) {
         const { svg } = await mermaid.render(renderId.current, chart);
         if (cancelled) return;
 
-        // Parse the sanitized SVG via DOMParser (image/svg+xml) and append as a
-        // proper DOM node — avoids innerHTML/dangerouslySetInnerHTML patterns while
-        // remaining safe: mermaid's securityLevel:'strict' strips scripts/handlers
-        // before serialization, and the SVG MIME type enforces strict XML parsing.
+        // Parse via DOMParser using text/html — mermaid's browser-side render()
+        // emits SVG fragments that assume inline-HTML context (e.g. C4 diagrams
+        // use `xlink:href` without declaring `xmlns:xlink` on the root <svg>).
+        // image/svg+xml is strict XML and rejects undeclared namespaces; the
+        // HTML5 parser handles SVG-in-HTML correctly per the WHATWG spec and
+        // preserves SVG attribute case. mermaid's securityLevel:'strict' already
+        // sanitized scripts and handlers from the content.
         if (containerRef.current) {
           const parser = new DOMParser();
-          const doc = parser.parseFromString(svg, 'image/svg+xml');
-          const svgEl = doc.documentElement;
-          containerRef.current.replaceChildren(svgEl);
+          const doc = parser.parseFromString(
+            `<!doctype html><body>${svg}`,
+            'text/html',
+          );
+          const svgEl = doc.body.firstElementChild;
+          if (svgEl) {
+            containerRef.current.replaceChildren(svgEl);
+          }
         }
         setStatus('rendered');
       } catch (err) {

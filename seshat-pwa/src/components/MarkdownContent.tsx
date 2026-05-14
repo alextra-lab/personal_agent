@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import type { Components } from 'react-markdown';
+import { MermaidBlock } from './MermaidBlock';
 
 interface MarkdownContentProps {
   content: string;
@@ -91,6 +92,10 @@ const markdownComponents: Components = {
     const isInline = !className;
     const languageMatch = className?.match(/language-(\w+)/);
     const language = languageMatch ? languageMatch[1] : 'text';
+
+    if (!isInline && language === 'mermaid') {
+      return <MermaidBlock chart={String(children).replace(/\n$/, '')} />;
+    }
 
     if (isInline) {
       return (

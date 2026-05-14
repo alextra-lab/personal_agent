@@ -66,14 +66,6 @@ make ruff-check    # uv run ruff check src/
 make ruff-format   # uv run ruff format src/
 ```
 
-### Migrations
-
-```bash
-alembic revision --autogenerate -m "description"
-alembic upgrade head
-alembic downgrade -1
-```
-
 ### Pre-commit
 
 ```bash
@@ -182,6 +174,6 @@ Promotion pipeline: episodic interactions → entity extraction (qwen3-8b) → s
 - Public API functions: Google-style docstrings, full type hints with modern syntax (`str | None`, not `Optional[str]`)
 - Test markers: `integration` (requires live LLM), `requires_llm_server`, `evaluation` (100+ calls) — unit tests carry no marker
 
-### Evaluation status (as of 2026-04-21)
+### Evaluation status (as of 2026-05-14)
 
 Slices 1 & 2 implemented and running. Currently in **evaluation phase** — building real usage traces before implementing Slice 3 (proactive memory, programmatic delegation, self-improvement). See `docs/plans/MASTER_PLAN.md` for current priorities.

@@ -54,7 +54,8 @@ def _total_context_tokens(
     multi-step turns.
     """
     parts: list[str] = [
-        (m.get("content") or "") + " " + (m.get("reasoning_content") or "") for m in messages
+        (m.get("content") or "") + " " + (m.get("reasoning_content") or "")
+        for m in messages
     ]
 
     if memory_context:

@@ -64,14 +64,24 @@ def _build_query(
         text_should.append({"match_phrase": {"failure_path.fix_what": hint}})
 
     must: list[dict[str, Any]] = [
-        {"range": {"timestamp": {"gte": start.isoformat(), "lte": now.isoformat()}}},
+        {
+            "range": {
+                "timestamp": {"gte": start.isoformat(), "lte": now.isoformat()}
+            }
+        },
         {
             "bool": {
                 "should": [
-                    {"range": {"proposed_change.seen_count": {"gte": min_seen_count}}},
+                    {
+                        "range": {
+                            "proposed_change.seen_count": {"gte": min_seen_count}
+                        }
+                    },
                     # Failure-path-only reflections may not have a proposed_change at all.
                     # Surface those when they include a fix suggestion regardless of seen_count.
-                    {"exists": {"field": "failure_path.fix_what"}},
+                    {
+                        "exists": {"field": "failure_path.fix_what"}
+                    },
                 ],
                 "minimum_should_match": 1,
             }
@@ -85,8 +95,16 @@ def _build_query(
         {
             "bool": {
                 "must": [
-                    {"bool": {"must_not": [{"exists": {"field": "proposed_change.what"}}]}},
-                    {"bool": {"must_not": [{"exists": {"field": "failure_path.fix_what"}}]}},
+                    {
+                        "bool": {
+                            "must_not": [{"exists": {"field": "proposed_change.what"}}]
+                        }
+                    },
+                    {
+                        "bool": {
+                            "must_not": [{"exists": {"field": "failure_path.fix_what"}}]
+                        }
+                    },
                 ]
             }
         },

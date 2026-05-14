@@ -85,7 +85,9 @@ class RedisStreamBus:
             redis.ConnectionError: If Redis is unreachable.
         """
         url = redis_url or get_settings().event_bus_redis_url
-        client: aioredis.Redis = aioredis.from_url(url, decode_responses=True)
+        client: aioredis.Redis = aioredis.from_url(
+            url, decode_responses=True
+        )
         # Verify connectivity
         await client.ping()  # type: ignore[misc]
         log.info("redis_stream_bus_connected", redis_url=url)

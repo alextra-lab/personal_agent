@@ -275,6 +275,4 @@ class GovernanceConfig(BaseModel):
     mode_constraints: dict[str, ModeModelConstraints] = Field(
         ..., description="Model constraints per mode"
     )
-    safety: SafetyConfig = Field(
-        default_factory=lambda: SafetyConfig(), description="Safety config"
-    )
+    safety: SafetyConfig = Field(default_factory=lambda: SafetyConfig(), description="Safety config")

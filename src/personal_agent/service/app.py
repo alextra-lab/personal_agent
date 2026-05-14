@@ -977,7 +977,9 @@ from personal_agent.cost_gate import BudgetDenied as _BudgetDenied  # noqa: E402
 
 
 @app.exception_handler(_BudgetDenied)
-async def _budget_denied_handler(_request: _Request, exc: _BudgetDenied) -> _JSONResponse:
+async def _budget_denied_handler(
+    _request: _Request, exc: _BudgetDenied
+) -> _JSONResponse:
     """Render :class:`BudgetDenied` as a structured HTTP 503.
 
     The PWA error card consumes ``error="budget_denied"`` and renders the

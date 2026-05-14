@@ -172,6 +172,9 @@ class MemoryServiceAdapter:
         )
 
         try:
+            # Episode doesn't carry user identity (pre-FRE-213 design; Slice 1 stub).
+            # store_episode is unused in production — only the consolidator path
+            # writes Turns at runtime, and that path always provides user_id.
             await self._service.create_conversation(turn)
         except Exception:
             logger.warning(

@@ -256,9 +256,7 @@ def assemble_skill_index_directive() -> str:
     Returns:
         XML-wrapped directive string.
     """
-    return (
-        f"<{_SKILL_INDEX_DIRECTIVE_TAG}>\n{_INDEX_DIRECTIVE_BODY}\n</{_SKILL_INDEX_DIRECTIVE_TAG}>"
-    )
+    return f"<{_SKILL_INDEX_DIRECTIVE_TAG}>\n{_INDEX_DIRECTIVE_BODY}\n</{_SKILL_INDEX_DIRECTIVE_TAG}>"
 
 
 def assemble_skill_usage_directives(

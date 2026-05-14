@@ -208,9 +208,7 @@ class MCPGatewayAdapter:
                 )
                 # Continue with other tools
 
-    def _create_executor(
-        self, mcp_tool_name: str
-    ) -> Callable[..., Coroutine[Any, Any, str | dict[str, Any]]]:
+    def _create_executor(self, mcp_tool_name: str) -> Callable[..., Coroutine[Any, Any, str | dict[str, Any]]]:
         """Create async executor function for MCP tool.
 
         Args:

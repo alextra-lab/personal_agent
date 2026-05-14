@@ -70,6 +70,7 @@ def _all_tool_names() -> set[str]:
     )
     from personal_agent.tools.memory_search import search_memory_tool
     from personal_agent.tools.perplexity import perplexity_query_tool
+    from personal_agent.tools.personal_history import recall_personal_history_tool
     from personal_agent.tools.primitives.bash import bash_tool
     from personal_agent.tools.primitives.read import read_tool
     from personal_agent.tools.primitives.run_python import run_python_tool
@@ -85,6 +86,7 @@ def _all_tool_names() -> set[str]:
         find_linear_issues_tool.name,
         list_linear_projects_tool.name,
         create_linear_project_tool.name,
+        recall_personal_history_tool.name,
         bash_tool.name,
         read_tool.name,
         write_tool.name,

@@ -325,7 +325,7 @@ class TestWriteVisibility:
             timestamp=datetime.now(timezone.utc),
             user_message="test",
         )
-        await service.create_conversation(turn, visibility="group")
+        await service.create_conversation(turn, user_id=uuid4(), visibility="group")
 
         # The first run call (Turn MERGE) should have visibility="group"
         assert captured_kwargs[0].get("visibility") == "group"
@@ -357,7 +357,7 @@ class TestWriteVisibility:
             user_message="ping",
             key_entities=["Berlin", "Paris"],
         )
-        await service.create_conversation(turn, visibility="group")
+        await service.create_conversation(turn, user_id=uuid4(), visibility="group")
 
         # The entity-loop statement is the one that does DISCUSSES.
         entity_cyphers = [c for c in captured_cypher if "DISCUSSES" in c]
@@ -402,7 +402,7 @@ class TestWriteVisibility:
             timestamp=datetime.now(timezone.utc),
             user_message="test",
         )
-        await service.create_conversation(turn)
+        await service.create_conversation(turn, user_id=uuid4())
 
         assert captured_kwargs[0].get("visibility") == "public"
 

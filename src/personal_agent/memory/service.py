@@ -303,14 +303,23 @@ class MemoryService:
             )
         return out
 
-    async def create_conversation(self, conversation: TurnNode, visibility: str = "public") -> bool:
-        """Create a Turn node in the graph.
+    async def create_conversation(
+        self,
+        conversation: TurnNode,
+        user_id: UUID,
+        visibility: str = "public",
+    ) -> bool:
+        """Create a Turn node in the graph and link the participating user.
 
         Args:
             conversation: Turn node to create (accepts TurnNode or legacy ConversationNode).
-            visibility: Visibility scope for the Turn node (FRE-229). Defaults to "public"
-                for backward compatibility; callers should pass "group" for authenticated
-                sessions.
+            user_id: UUID of the connected user. MUST exist as :Person {user_id}
+                in the graph (created by get_or_provision_user_person at first
+                request per FRE-213). MATCH (not MERGE) — missing :Person silently
+                writes no edge (Turn itself is still created).
+            visibility: Visibility scope for the Turn node (FRE-229). Defaults
+                to "public" for backward compatibility; callers should pass
+                "group" for authenticated sessions.
 
         Returns:
             True if successful, False otherwise.
@@ -354,6 +363,27 @@ class MemoryService:
                     key_entities=conversation.key_entities,
                     properties=orjson.dumps(conversation.properties).decode(),
                     visibility=visibility,
+                )
+
+                # FRE-343: provenance edge linking the user to this Turn.
+                # MATCH (not MERGE) on :Person — the node must exist
+                # (get_or_provision_user_person bootstraps it on first auth request).
+                await session.run(
+                    """
+                    MATCH (p:Person {user_id: $user_id})
+                    MATCH (t:Turn {turn_id: $turn_id})
+                    MERGE (p)-[r:PARTICIPATED_IN]->(t)
+                    ON CREATE SET r.created_at = $timestamp
+                    """,
+                    user_id=str(user_id),
+                    turn_id=turn_id,
+                    timestamp=conversation.timestamp.isoformat(),
+                )
+                log.info(
+                    "participated_in_edge_written",
+                    turn_id=turn_id,
+                    user_id=str(user_id),
+                    was_backfilled=False,
                 )
 
                 # Create Turn→Entity DISCUSSES edges.

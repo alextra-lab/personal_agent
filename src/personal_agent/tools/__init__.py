@@ -28,13 +28,13 @@ from personal_agent.tools.memory_search import (
     search_memory_executor,
     search_memory_tool,
 )
-from personal_agent.tools.personal_history import (
-    recall_personal_history_executor,
-    recall_personal_history_tool,
-)
 from personal_agent.tools.perplexity import (
     perplexity_query_executor,
     perplexity_query_tool,
+)
+from personal_agent.tools.personal_history import (
+    recall_personal_history_executor,
+    recall_personal_history_tool,
 )
 from personal_agent.tools.registry import ToolRegistry
 from personal_agent.tools.types import ToolDefinition, ToolParameter, ToolResult
@@ -105,6 +105,7 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
             run_python_tool,
         )
         from personal_agent.tools.primitives.write import write_executor, write_tool  # noqa: PLC0415
+
         # Phase B skill routing: read_skill tool (always registered with primitives)
         from personal_agent.tools.read_skill import read_skill_executor, read_skill_tool  # noqa: PLC0415, I001
 

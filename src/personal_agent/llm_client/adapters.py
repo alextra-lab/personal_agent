@@ -110,9 +110,7 @@ def _aggregate_streaming_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]:
         if chunk_finish:
             finish_reason = chunk_finish
 
-    tool_calls = (
-        [tool_call_acc[i] for i in sorted(tool_call_acc.keys())] if tool_call_acc else None
-    )
+    tool_calls = [tool_call_acc[i] for i in sorted(tool_call_acc.keys())] if tool_call_acc else None
 
     message: dict[str, Any] = {
         "role": role,
@@ -133,12 +131,14 @@ def _aggregate_streaming_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any]:
                 "finish_reason": finish_reason,
             }
         ],
-        "usage": usage or {
+        "usage": usage
+        or {
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0,
         },
     }
+
 
 _THINK_TAG_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 # LM Studio MLX backend sometimes leaks model control tokens into content
@@ -169,6 +169,7 @@ def _strip_think_tags(content: str) -> tuple[str, str | None]:
         reasoning_trace: Joined text from all think blocks, or None if no blocks.
     """
     think_parts: list[str] = []
+
     def _collect_think(m: re.Match[str]) -> str:
         think_parts.append(m.group(1))
         return ""

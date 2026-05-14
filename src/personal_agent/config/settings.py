@@ -1034,7 +1034,7 @@ class AppConfig(BaseSettings):
             "JSON map of email → display_name for non-owner CF Access users. "
             "Applied idempotently at startup after owner bootstrap. "
             "Only overwrites a :Person.name that still equals the email local-part. "
-            "Example: '{\"alice@x.com\":\"Alice\",\"bob@x.com\":\"Bob\"}' "
+            'Example: \'{"alice@x.com":"Alice","bob@x.com":"Bob"}\' '
             "Env var: AGENT_USER_DISPLAY_NAMES_JSON"
         ),
     )
@@ -1225,8 +1225,7 @@ class AppConfig(BaseSettings):
         ge=1,
         le=365,
         description=(
-            "Look-back window for reflection recall. "
-            "Env var: AGENT_REFLECTION_RECALL_RECENCY_DAYS"
+            "Look-back window for reflection recall. Env var: AGENT_REFLECTION_RECALL_RECENCY_DAYS"
         ),
     )
     reflection_recall_max_results: int = Field(

@@ -174,6 +174,13 @@ def read_captures(
             try:
                 content = json_file.read_text(encoding="utf-8")
                 data = orjson.loads(content)
+                # FRE-343: pre-FRE-343 capture files on disk have user_id=null.
+                # Inject the nil UUID so model validation succeeds; the
+                # PARTICIPATED_IN MERGE downstream will MATCH no :Person and
+                # silently skip the edge — which is the correct behavior for
+                # historical, owner-attribution-pending data.
+                if data.get("user_id") is None:
+                    data["user_id"] = "00000000-0000-0000-0000-000000000000"
                 capture = TaskCapture(**data)
                 captures.append(capture)
 

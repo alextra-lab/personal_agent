@@ -83,7 +83,7 @@ class MemoryService:
     Usage:
         service = MemoryService()
         await service.connect()
-        await service.create_conversation(conversation_node)
+        await service.create_conversation(conversation_node, user_id=user_id)
         results = await service.query_memory(MemoryQuery(entity_names=["France"]))
         await service.disconnect()
     """
@@ -306,19 +306,21 @@ class MemoryService:
     async def create_conversation(
         self,
         conversation: TurnNode,
-        user_id: UUID,
+        user_id: UUID | None = None,
         visibility: str = "public",
     ) -> bool:
-        """Create a Turn node in the graph and link the participating user.
+        """Create a Turn node in the graph and (optionally) link the participating user.
 
         Args:
             conversation: Turn node to create (accepts TurnNode or legacy ConversationNode).
-            user_id: UUID of the connected user. MUST exist as :Person {user_id}
-                in the graph (created by get_or_provision_user_person at first
-                request per FRE-213). MATCH (not MERGE) on :Person — chosen to
-                avoid silently creating a name-less :Person on every Turn. If
-                the :Person is missing, the MERGE writes no edge (Turn itself
-                is still created); that is a logic bug worth investigating.
+            user_id: UUID of the connected user. When provided, MERGEs a
+                (:Person {user_id})-[:PARTICIPATED_IN]->(:Turn) edge per FRE-343.
+                MATCH (not MERGE) on :Person — chosen to avoid silently creating
+                a name-less :Person on every Turn. If the :Person is missing,
+                the MERGE writes no edge (Turn itself is still created); that is
+                a logic bug worth investigating. The production consolidator
+                path always provides user_id (TaskCapture invariant); other
+                callers (store_episode) pass it from their own context.
             visibility: Visibility scope for the Turn node (FRE-229). Defaults
                 to "public" for backward compatibility; callers should pass
                 "group" for authenticated sessions.
@@ -370,23 +372,25 @@ class MemoryService:
                 # FRE-343: provenance edge linking the user to this Turn.
                 # MATCH (not MERGE) on :Person — the node must exist
                 # (get_or_provision_user_person bootstraps it on first auth request).
-                await session.run(
-                    """
-                    MATCH (p:Person {user_id: $user_id})
-                    MATCH (t:Turn {turn_id: $turn_id})
-                    MERGE (p)-[r:PARTICIPATED_IN]->(t)
-                    ON CREATE SET r.created_at = $timestamp
-                    """,
-                    user_id=str(user_id),
-                    turn_id=turn_id,
-                    timestamp=conversation.timestamp.isoformat(),
-                )
-                log.info(
-                    "participated_in_edge_written",
-                    turn_id=turn_id,
-                    user_id=str(user_id),
-                    was_backfilled=False,
-                )
+                if user_id is not None:
+                    await session.run(
+                        """
+                        MATCH (p:Person {user_id: $user_id})
+                        MATCH (t:Turn {turn_id: $turn_id})
+                        MERGE (p)-[r:PARTICIPATED_IN]->(t)
+                        ON CREATE SET r.created_at = $timestamp
+                        """,
+                        user_id=str(user_id),
+                        turn_id=turn_id,
+                        timestamp=conversation.timestamp.isoformat(),
+                    )
+                    log.info(
+                        "participated_in_edge_written",
+                        turn_id=turn_id,
+                        user_id=str(user_id),
+                        trace_id=conversation.trace_id,
+                        was_backfilled=False,
+                    )
 
                 # Create Turn→Entity DISCUSSES edges.
                 # entity_types_map lets us set entity_type on the node when we know it;

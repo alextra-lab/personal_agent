@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-13 — FRE-341 token pruned · FRE-344 display-name seeding shipped (PR #50) · FRE-299 governance gate live · FRE-363 operator stanza bug fixed (PR #51, In Review).
+> **Last updated**: 2026-05-14 — FRE-363 operator stanza bug merged (PR #51) · FRE-326 calendar gate cleared (≥ 2026-05-13).
 
 ---
 

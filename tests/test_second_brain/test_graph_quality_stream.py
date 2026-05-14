@@ -755,8 +755,9 @@ class TestConfigFlags:
         assert cfg.freshness_tier_factors["cold"] == 0.60
         assert cfg.freshness_tier_factors["dormant"] == 0.30
 
-    def test_graph_quality_governance_defaults_false(self) -> None:
+    def test_graph_quality_governance_defaults_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from personal_agent.config.settings import AppConfig
 
+        monkeypatch.delenv("AGENT_GRAPH_QUALITY_GOVERNANCE_ENABLED", raising=False)
         cfg = AppConfig()
         assert cfg.graph_quality_governance_enabled is False

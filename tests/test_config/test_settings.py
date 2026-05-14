@@ -168,7 +168,7 @@ class TestCompressionGeometry:
     def test_defaults_pass_validator(self) -> None:
         """Default compression geometry must reserve ≥1024 tokens for head+middle."""
         config = AppConfig()
-        assert config.context_window_max_tokens == 49152
+        assert config.context_window_max_tokens == 96000
         assert config.within_session_min_tail_ratio == 0.25
         absolute_tail = int(config.context_window_max_tokens * config.within_session_min_tail_ratio)
         head_middle_budget = config.context_window_max_tokens - absolute_tail

@@ -23,8 +23,9 @@ async def test_inference_probe_does_not_send_invalid_session_id(
             return None
 
     class _FakeAsyncClient:
-        def __init__(self, timeout: float) -> None:
+        def __init__(self, timeout: float, headers: dict[str, str] | None = None) -> None:
             self._timeout = timeout
+            self._headers = headers
 
         async def __aenter__(self) -> _FakeAsyncClient:
             return self

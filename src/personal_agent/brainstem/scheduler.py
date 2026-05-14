@@ -206,8 +206,25 @@ class BrainstemScheduler:
     async def _should_consolidate(self) -> bool:
         """Check if consolidation should be triggered.
 
+        Two layers of gating:
+
+        1. **Universal guards** (always active): no in-flight requests, and at
+           least ``min_consolidation_interval_seconds`` since the last run.
+        2. **Host-resource guards** (deployment-conditional, behind
+           ``resource_gating_enabled``): idle time, CPU load, memory pressure.
+
+        The host-resource guards exist for the **local-inference deployment
+        mode** — agent and LLM on the same machine (e.g. Apple-silicon laptop
+        running MLX). There, background consolidation competes with
+        user-facing inference for GPU/CPU/memory, so we defer until the host
+        is quiet. Under the current **remote-inference deployment** (VPS +
+        cloud or tunnelled MLX), host metrics don't correlate with inference
+        load, so the gates are disabled via
+        ``AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED=false`` and only the
+        universal guards apply. See ADR-0041 §Update 2026-05-14 (FRE-326).
+
         Returns:
-            True if conditions are met for consolidation
+            True if conditions are met for consolidation.
         """
         if self._active_request_count > 0:
             log.debug(

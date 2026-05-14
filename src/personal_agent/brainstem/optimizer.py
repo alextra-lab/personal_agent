@@ -1,7 +1,19 @@
 """Adaptive threshold optimizer for brainstem scheduling.
 
-FRE-11 implementation: analyze telemetry patterns, detect false positives, and
-generate data-backed threshold proposals with shadow A/B evaluation.
+Analyzes telemetry patterns, detects false positives, and generates
+data-backed proposals for the scheduler's host-resource thresholds
+(``cpu_threshold``, ``memory_threshold``, ``idle_time_seconds``,
+``min_consolidation_interval_seconds``) with shadow A/B evaluation.
+
+Scope: this module is meaningful only under the **local-inference deployment
+mode** (agent and LLM co-resident on the same host — e.g. Apple-silicon
+laptop running MLX), where host CPU/memory/idle metrics are a useful proxy
+for inference saturation and the thresholds that gate consolidation actually
+fire. Under the current **remote-inference deployment** the host-resource
+gates are disabled (see ``BrainstemScheduler._should_consolidate`` and
+ADR-0041 §Update 2026-05-14 / FRE-326), so this optimizer is dormant — it is
+not wired into any runtime loop and is retained for the local-inference
+deployment path.
 """
 
 from dataclasses import dataclass, field

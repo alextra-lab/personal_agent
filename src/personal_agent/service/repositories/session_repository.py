@@ -104,7 +104,9 @@ class SessionRepository:
         await self.db.commit()
         return await self.get(session_id, user_id=user_id)
 
-    async def append_message(self, session_id: UUID, message: dict[str, Any]) -> SessionModel | None:
+    async def append_message(
+        self, session_id: UUID, message: dict[str, Any]
+    ) -> SessionModel | None:
         """Append message to session (internal — no ownership check).
 
         Args:
@@ -138,9 +140,12 @@ class SessionRepository:
         Returns:
             True if deleted, False if not found.
         """
-        result = cast(CursorResult[Any], await self.db.execute(
-            delete(SessionModel).where(SessionModel.session_id == session_id)
-        ))
+        result = cast(
+            CursorResult[Any],
+            await self.db.execute(
+                delete(SessionModel).where(SessionModel.session_id == session_id)
+            ),
+        )
         await self.db.commit()
         return bool(result.rowcount > 0)
 

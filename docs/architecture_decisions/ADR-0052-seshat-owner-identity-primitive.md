@@ -263,3 +263,47 @@ A `CREATE CONSTRAINT person_user_id_unique` is ensured at startup to guarantee o
 ### Known follow-up: dedup hardening (HIGH)
 
 `memory/dedup.py:_find_similar_entities` currently matches on exact lowercase name across all `:Person` nodes regardless of `user_id`. A same-named extracted third party could collide into the owner Person on a future extraction turn. Fix: add `WHERE node.user_id IS NULL` to the similarity search candidates. Tracked as a Wave E follow-up ticket.
+
+---
+
+## Update 2026-05-14 — Personal-history retrieval (FRE-343)
+
+### Decision
+
+Adopt the W3C-PROV provenance edge pattern:
+
+```cypher
+(:Person {user_id})-[:PARTICIPATED_IN {created_at, backfilled?}]->(:Turn {turn_id})
+```
+
+Written at Turn-save time inside `MemoryService.create_conversation` (atomic with the Turn MERGE, same Neo4j session). Read by a new native tool `recall_personal_history`. Default `search_memory` behavior — and the shared-knowledge-graph design — is **unchanged**.
+
+### `user_id` invariant tightening
+
+`TaskCapture.user_id` is now `UUID` (non-optional). This is the correct invariant because `service.auth.get_request_user` always resolves a `user_id` from one of three sources:
+
+1. `Cf-Access-Authenticated-User-Email` header (CF Access, production path).
+2. `settings.agent_owner_email` fallback (dev/CLI path).
+3. HTTP 401 — request rejected.
+
+The previous `user_id: UUID | None = None` was a defensive holdover, not a real production state. `MemoryService.create_conversation` keeps `user_id: UUID | None = None` (optional) so that the unused `store_episode` adapter path doesn't break; the PARTICIPATED_IN MERGE block is guarded on `if user_id is not None`. The production consolidator always provides `user_id`, so the edge always lands.
+
+### Rationale
+
+`(:Person)-[:PARTICIPATED_IN]->(:Turn)` is the Neo4j-community-recommended pattern for "multi-tenant shared-entity graphs with per-tenant interaction history" and aligns with W3C PROV's `(:Activity)-[:wasAssociatedWith]->(:Agent)`. Shared entities stay shared; provenance is modelled as edges, not as per-user copies of nodes. Forward-compatible with FRE-230 (Location) — `(:Turn)-[:OCCURRED_AT]->(:Location)` is a parallel additive edge that needs no rework here.
+
+### MATCH-not-MERGE on `:Person`
+
+The PARTICIPATED_IN Cypher uses `MATCH (p:Person {user_id: $user_id})` — not MERGE. MERGE would silently create a name-less `:Person` on every Turn for any unknown `user_id`, polluting the graph. With MATCH, a missing `:Person` results in no edge written (the Turn itself is still created). That outcome is a logic bug worth investigating, not a fallback.
+
+### Backfill
+
+One-shot script `scripts/backfill_participated_in.py` (run via `make backfill-participated-in`) backfills the edge for existing Turns. For each Session in Postgres: `target_uid = session.user_id` if set, else owner UUID. The current Postgres schema enforces `sessions.user_id NOT NULL` (FRE-268 migration), so the owner-fallback branch is defensive only. Idempotent (MERGE + `ON CREATE SET r.backfilled = true`).
+
+### See also
+
+- Spec: `docs/superpowers/specs/2026-05-14-fre-343-personal-time-window-retrieval-design.md`
+- Plan: `docs/superpowers/plans/2026-05-14-fre-343-personal-time-window-retrieval.md`
+- Research: `docs/research/2026-05-09-graph-identity-multi-user-patterns.md` §6
+- Skill doc: `docs/skills/personal-history-recall.md` (XML-pilot in body)
+- Linear: [FRE-343](https://linear.app/frenchforest/issue/FRE-343)

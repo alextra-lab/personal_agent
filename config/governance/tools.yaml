@@ -68,6 +68,16 @@ tools:
     loop_max_per_signature: 1
     loop_max_consecutive: 2
 
+  # FRE-343: personal time-window retrieval scoped to ctx.user_id
+  recall_personal_history:
+    category: "read_only"
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "LOCKDOWN", "RECOVERY"]
+    risk_level: "low"
+    requires_approval: false
+    requires_sandbox: false
+    rate_limit_per_hour: null
+    description: "FRE-343 — personal time-window retrieval scoped to ctx.user_id"
+
   # Phase B skill routing (FRE-skill-routing): load skill doc body on demand
   read_skill:
     category: "read_only"

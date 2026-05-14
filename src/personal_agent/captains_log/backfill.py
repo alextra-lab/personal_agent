@@ -226,6 +226,9 @@ async def run_backfill(
             continue
         try:
             raw = json.loads(file_path.read_text(encoding="utf-8"))
+            # FRE-343: pre-FRE-343 capture files have user_id=null.
+            if raw.get("user_id") is None:
+                raw["user_id"] = "00000000-0000-0000-0000-000000000000"
             capture = TaskCapture(**raw)
             date_str = capture.timestamp.strftime("%Y-%m-%d")
             index_name = f"{CAPTURES_INDEX_PREFIX}-{date_str}"

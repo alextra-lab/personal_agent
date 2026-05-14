@@ -632,9 +632,7 @@ async def _trigger_captains_log_reflection(ctx: ExecutionContext) -> None:
         effective_max = _resolve_max_iterations(ctx)
         hit_iteration_limit = ctx.tool_iteration_count > effective_max
         task_type = (
-            ctx.gateway_output.intent.task_type.value
-            if ctx.gateway_output is not None
-            else ""
+            ctx.gateway_output.intent.task_type.value if ctx.gateway_output is not None else ""
         )
 
         if hit_iteration_limit:
@@ -828,6 +826,15 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                         cap_completion_tokens += meta.get("completion_tokens", 0)
                         cap_total_tokens += meta.get("tokens", 0)
 
+                # FRE-343: TaskCapture.user_id is non-optional. ExecutionContext.user_id
+                # is typed UUID | None for legacy reasons but is always populated in
+                # production by the orchestrator from request_user.user_id (which
+                # get_request_user always resolves). Pydantic validation catches the
+                # None case as a real bug.
+                assert ctx.user_id is not None, (
+                    "ExecutionContext.user_id missing — orchestrator should populate it "
+                    "from request_user.user_id (FRE-343)"
+                )
                 capture = TaskCapture(
                     trace_id=ctx.trace_id,
                     session_id=ctx.session_id,
@@ -845,7 +852,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                     completion_tokens=cap_completion_tokens,
                     total_tokens=cap_total_tokens,
                     tool_results=ctx.tool_results,
-                    user_id=getattr(ctx, "user_id", None),
+                    user_id=ctx.user_id,
                 )
                 write_capture(capture)
 
@@ -981,8 +988,8 @@ async def step_init(
         # Populate operator stanza in gateway path (was only wired for legacy path).
         if ctx.user_id and ctx.user_email:
             try:
-                from personal_agent.service.app import memory_service as _ms
                 from personal_agent.orchestrator.prompts import get_owner_stanza  # noqa: PLC0415
+                from personal_agent.service.app import memory_service as _ms
 
                 if _ms and _ms.connected:
                     ctx.operator_stanza = await get_owner_stanza(

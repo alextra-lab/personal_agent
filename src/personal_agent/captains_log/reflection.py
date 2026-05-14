@@ -467,9 +467,7 @@ async def generate_reflection_entry(
             status=CaptainLogStatus.AWAITING_APPROVAL,
             related_adrs=reflection_data.get("related_adrs", []),
             related_experiments=reflection_data.get("related_experiments", []),
-            telemetry_refs=[
-                TelemetryRef(trace_id=trace_id, metric_name=None, value=None)
-            ],
+            telemetry_refs=[TelemetryRef(trace_id=trace_id, metric_name=None, value=None)],
         )
 
         log.info(
@@ -540,7 +538,9 @@ def _build_proposed_change(raw: dict[str, str] | None) -> ProposedChange | None:
     )
 
 
-def _summarize_telemetry(events: list[dict[str, Any]], metrics_summary: dict[str, Any] | None = None) -> str:
+def _summarize_telemetry(
+    events: list[dict[str, Any]], metrics_summary: dict[str, Any] | None = None
+) -> str:
     """Summarize telemetry events and metrics for inclusion in LLM prompt.
 
     Combines traditional telemetry events with request-scoped metrics summary
@@ -700,7 +700,5 @@ def _create_basic_reflection_entry(
         ],
         impact_assessment=None,
         status=CaptainLogStatus.AWAITING_APPROVAL,
-        telemetry_refs=[
-            TelemetryRef(trace_id=trace_id, metric_name=None, value=None)
-        ],
+        telemetry_refs=[TelemetryRef(trace_id=trace_id, metric_name=None, value=None)],
     )

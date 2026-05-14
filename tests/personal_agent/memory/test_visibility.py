@@ -14,7 +14,7 @@ Covers:
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -103,7 +103,6 @@ class TestVisibilityEnum:
             SessionNode,
             TurnNode,
         )
-        from personal_agent.memory.weight import KnowledgeWeight
 
         entity = Entity(name="Test", entity_type="Concept")
         assert entity.visibility == "public"
@@ -326,7 +325,7 @@ class TestWriteVisibility:
             timestamp=datetime.now(timezone.utc),
             user_message="test",
         )
-        await service.create_conversation(turn, visibility="group")
+        await service.create_conversation(turn, user_id=uuid4(), visibility="group")
 
         # The first run call (Turn MERGE) should have visibility="group"
         assert captured_kwargs[0].get("visibility") == "group"
@@ -358,7 +357,7 @@ class TestWriteVisibility:
             user_message="ping",
             key_entities=["Berlin", "Paris"],
         )
-        await service.create_conversation(turn, visibility="group")
+        await service.create_conversation(turn, user_id=uuid4(), visibility="group")
 
         # The entity-loop statement is the one that does DISCUSSES.
         entity_cyphers = [c for c in captured_cypher if "DISCUSSES" in c]
@@ -403,7 +402,7 @@ class TestWriteVisibility:
             timestamp=datetime.now(timezone.utc),
             user_message="test",
         )
-        await service.create_conversation(turn)
+        await service.create_conversation(turn, user_id=uuid4())
 
         assert captured_kwargs[0].get("visibility") == "public"
 
@@ -494,19 +493,25 @@ class TestConsolidatorVisibility:
         assert visibility == "group"
 
     def test_visibility_public_when_user_id_absent(self) -> None:
-        """Consolidator assigns 'public' visibility when capture.user_id is None."""
-        from personal_agent.captains_log.capture import TaskCapture
+        """user_id=None is no longer accepted after FRE-343 — user_id is always required.
 
-        capture = TaskCapture(
-            trace_id="trace-2",
-            session_id="session-2",
-            timestamp=datetime.now(timezone.utc),
-            user_message="test",
-            outcome="completed",
-            user_id=None,
-        )
-        visibility = "group" if getattr(capture, "user_id", None) else "public"
-        assert visibility == "public"
+        This scenario cannot occur in production: get_request_user always resolves
+        a user_id (CF Access header or settings.agent_owner_email fallback or 401).
+        The test is retained as a documentation placeholder only; it asserts the
+        ValidationError is raised when None is supplied.
+        """
+        from personal_agent.captains_log.capture import TaskCapture
+        import pydantic
+
+        with pytest.raises(pydantic.ValidationError):
+            TaskCapture(
+                trace_id="trace-2",
+                session_id="session-2",
+                timestamp=datetime.now(timezone.utc),
+                user_message="test",
+                outcome="completed",
+                user_id=None,
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -34,6 +34,7 @@ def _make_capture(
         user_message=user,
         assistant_response=assistant,
         outcome="completed",
+        user_id=uuid4(),
     )
 
 

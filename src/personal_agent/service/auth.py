@@ -84,9 +84,7 @@ async def get_or_create_user_by_email(db: AsyncSession, email: str) -> UUID:
     return user_id
 
 
-async def upsert_display_name_for_email(
-    db: AsyncSession, email: str, display_name: str
-) -> UUID:
+async def upsert_display_name_for_email(db: AsyncSession, email: str, display_name: str) -> UUID:
     """Ensure user row exists and set display_name if still unset or default.
 
     Coalesce rule: only writes display_name when the existing value is NULL or
@@ -154,9 +152,7 @@ async def _get_user_with_display_name(db: AsyncSession, email: str) -> tuple[UUI
         Tuple of (stable user_id UUID, display_name or None).
     """
     result = await db.execute(
-        select(UserModel.user_id, UserModel.display_name).where(
-            UserModel.email == email.lower()
-        )
+        select(UserModel.user_id, UserModel.display_name).where(UserModel.email == email.lower())
     )
     row = result.one_or_none()
     if row is not None:

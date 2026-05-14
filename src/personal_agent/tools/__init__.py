@@ -32,6 +32,10 @@ from personal_agent.tools.perplexity import (
     perplexity_query_executor,
     perplexity_query_tool,
 )
+from personal_agent.tools.personal_history import (
+    recall_personal_history_executor,
+    recall_personal_history_tool,
+)
 from personal_agent.tools.registry import ToolRegistry
 from personal_agent.tools.types import ToolDefinition, ToolParameter, ToolResult
 from personal_agent.tools.web import (
@@ -60,6 +64,7 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
 
     Always registered:
     - search_memory: Query memory graph (ADR-0026)
+    - recall_personal_history: Personal time-window retrieval scoped to ctx.user_id (FRE-343)
     - web_search: Private web search via SearXNG (ADR-0034)
     - perplexity_query: Perplexity AI synthesized answers (ADR-0028 Phase 2)
     - get_library_docs: Context7 library documentation (ADR-0028 Phase 3)
@@ -79,6 +84,7 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
 
     # --- Always-available tools ---
     registry.register(search_memory_tool, search_memory_executor)
+    registry.register(recall_personal_history_tool, recall_personal_history_executor)
     registry.register(web_search_tool, web_search_executor)  # ADR-0034
     registry.register(perplexity_query_tool, perplexity_query_executor)
     registry.register(get_library_docs_tool, get_library_docs_executor)
@@ -99,6 +105,7 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
             run_python_tool,
         )
         from personal_agent.tools.primitives.write import write_executor, write_tool  # noqa: PLC0415
+
         # Phase B skill routing: read_skill tool (always registered with primitives)
         from personal_agent.tools.read_skill import read_skill_executor, read_skill_tool  # noqa: PLC0415, I001
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from datetime import date, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from personal_agent.telemetry import get_logger
 
@@ -108,7 +108,7 @@ class SkillRoutingThresholdMonitor:
         """Load state JSON; return empty skeleton on missing or corrupt file."""
         if self._state_path.exists():
             try:
-                return json.loads(self._state_path.read_text())
+                return cast(dict[str, Any], json.loads(self._state_path.read_text()))
             except (json.JSONDecodeError, OSError):
                 log.warning(
                     "skill_routing_monitor_state_corrupt",

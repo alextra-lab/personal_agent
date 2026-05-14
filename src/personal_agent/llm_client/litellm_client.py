@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import time
 from typing import TYPE_CHECKING, Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import litellm
 import structlog
@@ -266,7 +266,7 @@ class LiteLLMClient:
             reservation_id = await gate.reserve(
                 role=self.budget_role,
                 amount=reservation_amount,
-                trace_id=trace_ctx.trace_id if trace_ctx else None,
+                trace_id=UUID(trace_ctx.trace_id) if trace_ctx and trace_ctx.trace_id else None,
             )
         except BudgetDenied:
             log.warning(

@@ -191,6 +191,7 @@ class InferenceConcurrencyController:
         default_base_url: str = "http://127.0.0.1:1234/v1",
         default_endpoint_limit: int = 2,
     ) -> None:
+        """Initialize controller with default URL and per-endpoint concurrency limit."""
         self._default_base_url = default_base_url
         self._default_endpoint_limit = default_endpoint_limit
 

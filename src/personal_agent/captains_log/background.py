@@ -5,17 +5,18 @@ garbage collection while keeping the main execution responsive.
 """
 
 import asyncio
-from typing import Set
+from collections.abc import Coroutine
+from typing import Any
 
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
 
 # Global set to hold references to running background tasks
-_background_tasks: Set[asyncio.Task] = set()
+_background_tasks: set[asyncio.Task[None]] = set()
 
 
-def run_in_background(coro) -> None:
+def run_in_background(coro: Coroutine[Any, Any, None]) -> None:
     """Run a coroutine in the background without blocking.
 
     The task is tracked to prevent garbage collection but won't
@@ -32,7 +33,7 @@ def run_in_background(coro) -> None:
     task.add_done_callback(_log_task_error)
 
 
-def _log_task_error(task: asyncio.Task) -> None:
+def _log_task_error(task: asyncio.Task[None]) -> None:
     """Log errors from background tasks.
 
     Args:

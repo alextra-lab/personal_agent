@@ -1,7 +1,7 @@
 """Thin CLI client for service mode."""
 
 import asyncio
-from typing import Optional
+from typing import Any, Optional, cast
 
 import httpx
 import typer
@@ -27,7 +27,7 @@ class ServiceClient:
         self.base_url = base_url
         self.session_id: Optional[str] = None
 
-    async def health_check(self) -> dict:
+    async def health_check(self) -> dict[str, Any]:
         """Check service health.
 
         Returns:
@@ -39,7 +39,7 @@ class ServiceClient:
         async with httpx.AsyncClient() as client:
             response = await client.get(f"{self.base_url}/health")
             response.raise_for_status()
-            return response.json()
+            return cast(dict[Any, Any], response.json())
 
     async def chat(self, message: str) -> str:
         """Send chat message and get response.
@@ -60,14 +60,14 @@ class ServiceClient:
             # Store session ID for continuity
             self.session_id = data.get("session_id")
 
-            return data["response"]
+            return str(data["response"])
 
-    async def list_sessions(self) -> list[dict]:
+    async def list_sessions(self) -> list[dict[Any, Any]]:
         """List recent sessions."""
         async with httpx.AsyncClient() as client:
             response = await client.get(f"{self.base_url}/sessions")
             response.raise_for_status()
-            return response.json()
+            return cast(list[dict[Any, Any]], response.json())
 
 
 # ============================================================================
@@ -78,7 +78,7 @@ app = typer.Typer(help="Personal Agent CLI (Service Mode)")
 
 
 @app.command()
-def chat(message: str):
+def chat(message: str) -> None:
     """Send a chat message to the agent."""
     client = ServiceClient()
 
@@ -94,7 +94,7 @@ def chat(message: str):
 
 
 @app.command()
-def health():
+def health() -> None:
     """Check service health."""
     client = ServiceClient()
 
@@ -110,7 +110,7 @@ def health():
 
 
 @app.command()
-def sessions():
+def sessions() -> None:
     """List recent sessions."""
     client = ServiceClient()
 

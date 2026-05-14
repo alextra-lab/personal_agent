@@ -169,10 +169,11 @@ def _strip_think_tags(content: str) -> tuple[str, str | None]:
         reasoning_trace: Joined text from all think blocks, or None if no blocks.
     """
     think_parts: list[str] = []
-    cleaned = _THINK_TAG_RE.sub(
-        lambda m: think_parts.append(m.group(1)) or "",
-        content,
-    )
+    def _collect_think(m: re.Match[str]) -> str:
+        think_parts.append(m.group(1))
+        return ""
+
+    cleaned = _THINK_TAG_RE.sub(_collect_think, content)
 
     # Handle unclosed <think> tag — treat the remainder as thinking content
     unclosed_idx = cleaned.find("<think>")

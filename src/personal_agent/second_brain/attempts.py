@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID
 
-import asyncpg
+import asyncpg  # type: ignore[import-untyped]
 import structlog
 
 from personal_agent.config import settings

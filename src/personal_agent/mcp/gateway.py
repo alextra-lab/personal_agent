@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Coroutine
 from typing import Any
 
 from personal_agent.config import settings
@@ -207,7 +208,7 @@ class MCPGatewayAdapter:
                 )
                 # Continue with other tools
 
-    def _create_executor(self, mcp_tool_name: str):
+    def _create_executor(self, mcp_tool_name: str) -> Callable[..., Coroutine[Any, Any, str | dict[str, Any]]]:
         """Create async executor function for MCP tool.
 
         Args:
@@ -217,7 +218,7 @@ class MCPGatewayAdapter:
             Async executor function.
         """
 
-        async def executor(**kwargs: Any) -> dict[str, Any]:
+        async def executor(**kwargs: Any) -> str | dict[str, Any]:
             """Execute MCP tool via persistent gateway session.
 
             Args:
@@ -255,7 +256,7 @@ class MCPGatewayAdapter:
                     import json
 
                     return json.dumps(result, default=str)
-                return result
+                return dict(result) if isinstance(result, dict) else result
 
             except Exception as e:
                 log.error(

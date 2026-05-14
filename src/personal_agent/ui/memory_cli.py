@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 import typer
@@ -58,15 +58,15 @@ async def _get_memory_service() -> Any:
 @memory_app.command("search")
 def memory_search(
     query: str = typer.Argument(..., help="Free-text search query"),
-    entity_type: list[str] = typer.Option(
+    entity_type: list[str] = typer.Option(  # noqa: B008
         [],
         "--type",
         "-t",
         help="Filter by entity type (repeatable). E.g. --type Location --type Person",
     ),
-    days: int = typer.Option(90, "--days", "-d", help="Look back this many days (0 = all history)"),
-    limit: int = typer.Option(20, "--limit", "-n", help="Max results"),
-    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+    days: int = typer.Option(90, "--days", "-d", help="Look back this many days (0 = all history)"),  # noqa: B008
+    limit: int = typer.Option(20, "--limit", "-n", help="Max results"),  # noqa: B008
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),  # noqa: B008
 ) -> None:
     """Search the memory graph by text, returning entities and matching turns."""
     from personal_agent.memory.models import MemoryQuery
@@ -130,15 +130,15 @@ def memory_search(
 
 @memory_app.command("entities")
 def memory_entities(
-    entity_type: list[str] = typer.Option(
+    entity_type: list[str] = typer.Option(  # noqa: B008
         [], "--type", "-t", help="Filter by entity type (repeatable)"
     ),
-    days: int = typer.Option(
+    days: int = typer.Option(  # noqa: B008
         90, "--days", "-d", help="Only entities seen in last N days (0 = all)"
     ),
-    limit: int = typer.Option(30, "--limit", "-n", help="Max entities to show"),
-    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
-    sort_by: str = typer.Option(
+    limit: int = typer.Option(30, "--limit", "-n", help="Max entities to show"),  # noqa: B008
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),  # noqa: B008
+    sort_by: str = typer.Option(  # noqa: B008
         "mentions",
         "--sort",
         help="Sort by: mentions | name (last_seen not available from broad query)",
@@ -274,7 +274,7 @@ def memory_stats(
                 if ts is None:
                     return None
                 if hasattr(ts, "isoformat"):
-                    return ts.isoformat()
+                    return str(ts.isoformat())
                 return str(ts)
 
             stats: dict[str, Any] = {
@@ -331,7 +331,6 @@ def memory_freshness_backfill(
     """
     from personal_agent.config import settings as app_settings
     from personal_agent.memory.freshness_backfill import run_freshness_first_accessed_backfill
-    from personal_agent.memory.service import MemoryService
 
     if not dry_run and not app_settings.freshness_backfill_confirm:
         console.print(

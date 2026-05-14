@@ -7,7 +7,7 @@ in the governance config file (config/governance/tools.yaml).
 from datetime import datetime
 from typing import Any, Literal
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from personal_agent.config import settings
 from personal_agent.telemetry import get_logger
@@ -26,7 +26,7 @@ class MCPGovernanceManager:
     - Provide description overrides for better LLM tool selection
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize governance manager."""
         self.tools_config_path = settings.governance_config_path / "tools.yaml"
 
@@ -54,7 +54,8 @@ class MCPGovernanceManager:
 
         tools_section = self._config_cache.get("tools", {})
         tool_config = tools_section.get(tool_name, {})
-        return tool_config.get("description_override")
+        result = tool_config.get("description_override")
+        return str(result) if result is not None else None
 
     def ensure_tool_configured(
         self,

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 log = structlog.get_logger(__name__)
 

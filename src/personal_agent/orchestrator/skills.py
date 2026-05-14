@@ -393,7 +393,7 @@ async def route_skills(
     cap_tokens: int = 2048,
     trace_id: str | None = None,
 ) -> list[str]:
-    """Ask the routing model which skills are relevant to *user_message*.
+    r"""Ask the routing model which skills are relevant to *user_message*.
 
     Issues a single structured LLM call to the routing model with:
       - System prompt: instructions to return a JSON array of skill names
@@ -419,6 +419,7 @@ async def route_skills(
         relevant. Bounded by the size of the skill registry (≤ 20 today).
     """
     import json
+
     from personal_agent.llm_client.types import ModelRole  # noqa: PLC0415
 
     cache = _get_cache()

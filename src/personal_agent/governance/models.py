@@ -57,7 +57,7 @@ class ModeDefinition(BaseModel):
         description="List of actions/categories requiring human approval",
     )
     thresholds: ModeThresholds = Field(
-        default_factory=ModeThresholds, description="Mode transition thresholds"
+        default_factory=lambda: ModeThresholds(), description="Mode transition thresholds"
     )
 
 
@@ -248,16 +248,16 @@ class SafetyConfig(BaseModel):
     """Safety and security configuration."""
 
     content_filtering: ContentFiltering = Field(
-        default_factory=ContentFiltering, description="Content filtering settings"
+        default_factory=lambda: ContentFiltering(), description="Content filtering settings"
     )
     outbound_gateway: OutboundGateway = Field(
-        default_factory=OutboundGateway, description="Outbound gateway settings"
+        default_factory=lambda: OutboundGateway(), description="Outbound gateway settings"
     )
     rate_limits: dict[str, RateLimits] = Field(
         default_factory=dict, description="Rate limits per mode"
     )
     human_approval: HumanApproval = Field(
-        default_factory=HumanApproval, description="Human approval settings"
+        default_factory=lambda: HumanApproval(), description="Human approval settings"
     )
 
 
@@ -275,4 +275,4 @@ class GovernanceConfig(BaseModel):
     mode_constraints: dict[str, ModeModelConstraints] = Field(
         ..., description="Model constraints per mode"
     )
-    safety: SafetyConfig = Field(default_factory=SafetyConfig, description="Safety config")
+    safety: SafetyConfig = Field(default_factory=lambda: SafetyConfig(), description="Safety config")

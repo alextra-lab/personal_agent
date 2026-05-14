@@ -6,7 +6,7 @@ to retrieve past conversations, entities, or session history.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from personal_agent.telemetry import get_logger
 from personal_agent.tools.executor import ToolExecutionError
@@ -134,7 +134,7 @@ async def search_memory_executor(
 
         memory_service: MemoryService | None = None
         try:
-            from personal_agent.service.app import (  # type: ignore[attr-defined]
+            from personal_agent.service.app import (
                 memory_service as global_memory_service,
             )
 
@@ -191,7 +191,7 @@ async def search_memory_executor(
 
         total = output.get("total_turns")
         if total is None:
-            entities: list[Any] = output.get("entities", []) or []
+            entities: list[Any] = cast(list[Any], output.get("entities", []) or [])
             total = len(entities) if isinstance(entities, list) else 0
         log.info(
             "search_memory_tool_completed",

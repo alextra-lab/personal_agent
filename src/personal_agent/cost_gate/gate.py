@@ -27,10 +27,10 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-import asyncpg
+import asyncpg  # type: ignore[import-untyped]
 import structlog
 
 from personal_agent.cost_gate.types import (
@@ -450,10 +450,10 @@ class CostGate:
         self,
         conn: asyncpg.Connection,
         *,
-        caps: Sequence,
+        caps: Sequence[Any],
         user_id: UUID | None,
         provider: str | None,
-    ) -> list[tuple]:
+    ) -> list[tuple[Any, ...]]:
         """Upsert + lock every counter row matching the given cap set.
 
         Locks are acquired in deterministic ``id`` order to avoid deadlock
@@ -483,7 +483,7 @@ class CostGate:
             )
 
         # Now select + lock every relevant row in id order.
-        rows: list[tuple] = []
+        rows: list[tuple[Any, ...]] = []
         for cap in caps:
             window_start = _window_start(cap.time_window)
             row = await conn.fetchrow(

@@ -109,7 +109,7 @@ class MetricsRepository:
 
         result = await self.db.execute(
             select(
-                func.count(MetricModel.id).label("count"),
+                func.count(MetricModel.id).label("total"),
                 func.min(MetricModel.metric_value).label("min_value"),
                 func.max(MetricModel.metric_value).label("max_value"),
                 func.avg(MetricModel.metric_value).label("avg_value"),
@@ -119,12 +119,12 @@ class MetricsRepository:
         )
         row = result.one()
 
-        if row.count == 0:
+        if row.total == 0:
             return None
 
         return MetricStats(
             metric_name=metric_name,
-            count=row.count,
+            count=int(row.total),
             min_value=row.min_value,
             max_value=row.max_value,
             avg_value=float(row.avg_value),

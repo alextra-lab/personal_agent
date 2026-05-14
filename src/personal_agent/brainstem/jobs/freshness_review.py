@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from personal_agent.captains_log.dedup import compute_proposal_fingerprint
 from personal_agent.captains_log.manager import CaptainLogManager
@@ -83,7 +83,7 @@ def _load_previous_snapshot(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
     except Exception:
         log.warning("freshness_snapshot_read_failed", path=str(path))
         return None

@@ -1,9 +1,11 @@
 """Session storage repository using Postgres."""
 
 from datetime import datetime, timezone
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import delete, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from personal_agent.service.models import SessionCreate, SessionModel, SessionUpdate
@@ -102,7 +104,7 @@ class SessionRepository:
         await self.db.commit()
         return await self.get(session_id, user_id=user_id)
 
-    async def append_message(self, session_id: UUID, message: dict) -> SessionModel | None:
+    async def append_message(self, session_id: UUID, message: dict[str, Any]) -> SessionModel | None:
         """Append message to session (internal — no ownership check).
 
         Args:
@@ -136,11 +138,11 @@ class SessionRepository:
         Returns:
             True if deleted, False if not found.
         """
-        result = await self.db.execute(
+        result = cast(CursorResult[Any], await self.db.execute(
             delete(SessionModel).where(SessionModel.session_id == session_id)
-        )
+        ))
         await self.db.commit()
-        return result.rowcount > 0
+        return bool(result.rowcount > 0)
 
     async def list_recent(self, limit: int = 50, user_id: UUID | None = None) -> list[SessionModel]:
         """List recent sessions, optionally scoped to user_id.

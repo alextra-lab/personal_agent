@@ -56,4 +56,5 @@ class PromotionResult:
 
     @property
     def success(self) -> bool:
+        """Return True if at least one fact was promoted."""
         return self.promoted_count > 0

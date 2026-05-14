@@ -173,6 +173,8 @@ class MemoryProtocol(Protocol):
         recency_days: int,
         limit: int,
         trace_id: str,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
     ) -> BroadRecallResult:
         """Broad recall for open-ended memory queries.
 
@@ -181,6 +183,8 @@ class MemoryProtocol(Protocol):
             recency_days: Only include memories from last N days.
             limit: Maximum entities per type to return.
             trace_id: Trace identifier for observability.
+            user_id: Optional user UUID for scoped recall.
+            authenticated: Whether the caller is authenticated.
 
         Returns:
             BroadRecallResult with entities grouped by type and recent sessions.
@@ -235,6 +239,8 @@ class MemoryProtocol(Protocol):
         session_topic_hint: str | None,
         current_session_id: str,
         trace_id: str,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
     ) -> ProactiveMemorySuggestions:
         """Rank cross-session memories for proactive context injection (ADR-0039).
 
@@ -242,6 +248,10 @@ class MemoryProtocol(Protocol):
             user_message: Current user message (embedded for similarity).
             session_entity_names: Entities already associated with this session (names).
             session_topic_hint: Optional short topic proxy (e.g. recent user text).
+            current_session_id: Session ID for the current conversation.
+            trace_id: Trace identifier for observability.
+            user_id: Optional user UUID for scoped recall.
+            authenticated: Whether the caller is authenticated.
             current_session_id: Active session id (exclude same-session turns).
             trace_id: Request trace for logging.
 

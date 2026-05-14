@@ -7,7 +7,6 @@ from uuid import UUID
 if TYPE_CHECKING:
     from elasticsearch import AsyncElasticsearch
 
-    from personal_agent.telemetry.request_timer import RequestTimer
 else:
     AsyncElasticsearch = Any  # noqa: A001
 

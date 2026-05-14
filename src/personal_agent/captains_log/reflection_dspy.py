@@ -25,7 +25,7 @@ Design:
 import inspect
 import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from personal_agent.captains_log.dedup import compute_proposal_fingerprint
 from personal_agent.captains_log.metrics_extraction import (
@@ -87,67 +87,67 @@ try:
         """
 
         # Input fields
-        user_message: str = dspy.InputField(desc="The user's original message")  # type: ignore[misc]
-        trace_id: str = dspy.InputField(desc="Trace ID for the task execution")  # type: ignore[misc]
-        steps_count: int = dspy.InputField(desc="Number of orchestrator steps executed")  # type: ignore[misc]
-        final_state: str = dspy.InputField(desc="Final task state (e.g., COMPLETED, FAILED)")  # type: ignore[misc]
-        reply_length: int = dspy.InputField(desc="Length of agent's reply in characters")  # type: ignore[misc]
-        telemetry_summary: str = dspy.InputField(  # type: ignore[misc]
+        user_message: str = dspy.InputField(desc="The user's original message")
+        trace_id: str = dspy.InputField(desc="Trace ID for the task execution")
+        steps_count: int = dspy.InputField(desc="Number of orchestrator steps executed")
+        final_state: str = dspy.InputField(desc="Final task state (e.g., COMPLETED, FAILED)")
+        reply_length: int = dspy.InputField(desc="Length of agent's reply in characters")
+        telemetry_summary: str = dspy.InputField(
             desc="Summarized telemetry events showing LLM calls, tool executions, errors"
         )
-        metrics_summary: str = dspy.InputField(  # type: ignore[misc]
+        metrics_summary: str = dspy.InputField(
             desc="Pre-formatted system metrics from RequestMonitor (e.g., 'cpu: 9.3%, duration: 5.4s')"
         )
         # ADR-0056 Phase 2 — failure-path reflection (GEPA-inspired)
-        failure_excerpt: str = dspy.InputField(  # type: ignore[misc]
+        failure_excerpt: str = dspy.InputField(
             desc=(
                 "JSON-serialized FailureExcerpt with failed tool calls, error summary, "
                 "and recovery actions. Empty string when had_errors is False."
             )
         )
-        had_errors: bool = dspy.InputField(  # type: ignore[misc]
+        had_errors: bool = dspy.InputField(
             desc="True when the trace contained at least one tool call failure or error event."
         )
 
         # Output fields (metrics removed - now deterministically extracted)
-        rationale: str = dspy.OutputField(  # type: ignore[misc]
+        rationale: str = dspy.OutputField(
             desc="Analysis of what happened and key observations about the execution"
         )
-        proposed_change_what: str = dspy.OutputField(  # type: ignore[misc]
+        proposed_change_what: str = dspy.OutputField(
             desc="What to change (empty string if no change proposed)"
         )
-        proposed_change_why: str = dspy.OutputField(  # type: ignore[misc]
+        proposed_change_why: str = dspy.OutputField(
             desc="Why this change would help (empty string if no change proposed)"
         )
-        proposed_change_how: str = dspy.OutputField(  # type: ignore[misc]
+        proposed_change_how: str = dspy.OutputField(
             desc="How to implement this change (empty string if no change proposed)"
         )
-        proposed_change_category: str = dspy.OutputField(  # type: ignore[misc]
+        proposed_change_category: str = dspy.OutputField(
             desc=(
                 "Category of proposed change. One of: performance, reliability, "
                 "concurrency, knowledge, cost, ux, observability, architecture, safety. "
                 "Empty string if no change proposed."
             )
         )
-        proposed_change_scope: str = dspy.OutputField(  # type: ignore[misc]
+        proposed_change_scope: str = dspy.OutputField(
             desc=(
                 "Target subsystem of proposed change. One of: llm_client, orchestrator, "
                 "second_brain, captains_log, brainstem, tools, telemetry, governance, "
                 "insights, config, cross_cutting. Empty string if no change proposed."
             )
         )
-        impact_assessment: str = dspy.OutputField(  # type: ignore[misc]
+        impact_assessment: str = dspy.OutputField(
             desc="Expected benefits if change is implemented (empty string if none)"
         )
         # ADR-0056 Phase 2 — failure-path fix suggestion
-        failure_path_fix_what: str = dspy.OutputField(  # type: ignore[misc]
+        failure_path_fix_what: str = dspy.OutputField(
             desc=(
                 "Surgical fix (≤ 80 chars) that would have prevented this exact failure. "
                 "Example: 'Add retry-with-scope-reduction note to query_elasticsearch tool description.' "
                 "Return empty string if had_errors is False or no specific fix is identifiable."
             )
         )
-        failure_path_fix_location: str = dspy.OutputField(  # type: ignore[misc]
+        failure_path_fix_location: str = dspy.OutputField(
             desc=(
                 "File path + symbol of the text to edit, if known. "
                 "Example: 'src/personal_agent/tools/fetch_url.py::DESCRIPTION' or "
@@ -155,7 +155,7 @@ try:
             )
         )
         # FRE-328 follow-up — capability gap recognition during reflection
-        missing_skill_names: str = dspy.OutputField(  # type: ignore[misc]
+        missing_skill_names: str = dspy.OutputField(
             desc=(
                 "Comma-separated list of kebab-case skill names you wished existed during this "
                 "task — names that would have made the work materially easier if a skill doc "
@@ -180,7 +180,7 @@ def _parse_enum(enum_cls: type, raw: str) -> object | None:
     if not raw:
         return None
     try:
-        return enum_cls(raw)
+        return cast(object, enum_cls(raw))
     except ValueError:
         return None
 
@@ -432,14 +432,18 @@ def generate_reflection_dspy(
 
             fingerprint = None
             if category and scope:
-                fingerprint = compute_proposal_fingerprint(category, scope, proposed_change_what)
+                fingerprint = compute_proposal_fingerprint(
+                    cast(ChangeCategory, category),
+                    cast(ChangeScope, scope),
+                    proposed_change_what,
+                )
 
             proposed_change = ProposedChange(
                 what=proposed_change_what,
                 why=_ensure_str(getattr(result, "proposed_change_why", ""), ""),
                 how=_ensure_str(getattr(result, "proposed_change_how", ""), ""),
-                category=category,
-                scope=scope,
+                category=cast(ChangeCategory | None, category),
+                scope=cast(ChangeScope | None, scope),
                 fingerprint=fingerprint,
                 first_seen=datetime.now(timezone.utc),
             )

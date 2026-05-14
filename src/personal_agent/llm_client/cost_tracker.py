@@ -2,10 +2,10 @@
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
-import asyncpg
+import asyncpg  # type: ignore[import-untyped]
 
 from personal_agent.config.settings import get_settings
 from personal_agent.telemetry import get_logger
@@ -104,7 +104,7 @@ class CostTrackerService:
                     record_id=record_id,
                 )
 
-                return record_id
+                return cast(int | None, record_id)
 
         except Exception as e:
             log.error("cost_recording_failed", error=str(e), exc_info=True, provider=provider)

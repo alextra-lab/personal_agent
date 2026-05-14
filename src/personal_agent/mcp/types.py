@@ -1,6 +1,6 @@
 """Type conversions between MCP and tool execution formats."""
 
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from personal_agent.telemetry import get_logger
 from personal_agent.tools.types import ToolDefinition, ToolParameter
@@ -64,7 +64,10 @@ def mcp_tool_to_definition(
         parameters.append(
             ToolParameter(
                 name=param_name,
-                type=type_mapping.get(param_type, "string"),
+                type=cast(
+                    Literal["string", "number", "boolean", "object", "array"],
+                    type_mapping.get(param_type, "string"),
+                ),
                 description=param_schema.get("description", ""),
                 required=param_name in required_fields,
                 default=param_schema.get("default"),

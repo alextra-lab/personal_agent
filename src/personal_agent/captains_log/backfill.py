@@ -203,8 +203,6 @@ async def run_backfill(
     start = perf_counter()
     cp = checkpoint or _load_checkpoint()
     cp.last_scan_started_at = datetime.now(timezone.utc).isoformat()
-    root = _project_root()
-
     log.info(
         CAPTAINS_LOG_BACKFILL_STARTED,
         checkpoint_captures=cp.captures.get("last_processed_path"),

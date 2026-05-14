@@ -80,7 +80,7 @@ def _get_tool_loop_policy(tool_name: str) -> ToolLoopPolicy:
     """
     try:
         gov_config = _get_cached_governance_config()
-        tool_policy = gov_config.tools.get(tool_name)  # type: ignore[union-attr]
+        tool_policy = gov_config.tools.get(tool_name)  # type: ignore[attr-defined]
         if tool_policy is None:
             return ToolLoopPolicy()
         return ToolLoopPolicy(
@@ -1172,8 +1172,8 @@ async def step_init(
             from personal_agent.memory.models import MemoryQuery
             from personal_agent.memory.service import MemoryService
 
-            memory_service = None
-            global_memory_service = None
+            memory_service: MemoryService | None = None
+            global_memory_service: MemoryService | None = None
             try:
                 from personal_agent.service.app import memory_service as global_memory_service
 

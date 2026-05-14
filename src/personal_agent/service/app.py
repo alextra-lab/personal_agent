@@ -140,8 +140,8 @@ async def _process_chat_stream_background(
 
         # ── Session ──────────────────────────────────────────────────────
         session_uuid = UUID(session_id)
-        db_messages: list[dict] = []
-        prior_messages: list[dict] = []
+        db_messages: list[dict[str, Any]] = []
+        prior_messages: list[dict[str, Any]] = []
 
         async with AsyncSessionLocal() as db:
             repo = SessionRepository(db)
@@ -887,7 +887,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except (Exception, BaseExceptionGroup) as e:
             log.warning(
                 "mcp_gateway_init_failed",
-                error=sanitize_error_message(e),
+                error=sanitize_error_message(e) if isinstance(e, Exception) else str(e),
                 error_type=type(e).__name__,
                 exc_info=True,
             )
@@ -977,7 +977,7 @@ from personal_agent.cost_gate import BudgetDenied as _BudgetDenied  # noqa: E402
 
 
 @app.exception_handler(_BudgetDenied)
-async def _budget_denied_handler(  # type: ignore[misc]
+async def _budget_denied_handler(
     _request: _Request, exc: _BudgetDenied
 ) -> _JSONResponse:
     """Render :class:`BudgetDenied` as a structured HTTP 503.
@@ -1084,7 +1084,7 @@ async def create_session(
         user_id=str(request_user.user_id),
     )
 
-    return session
+    return SessionResponse.model_validate(session)
 
 
 @app.get("/sessions/{session_id}", response_model=SessionResponse)
@@ -1100,7 +1100,7 @@ async def get_session(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    return session
+    return SessionResponse.model_validate(session)
 
 
 @app.patch("/sessions/{session_id}", response_model=SessionResponse)
@@ -1117,7 +1117,7 @@ async def update_session(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    return session
+    return SessionResponse.model_validate(session)
 
 
 @app.get("/sessions", response_model=list[SessionResponse])
@@ -1153,6 +1153,8 @@ async def chat(
     Args:
         message: User's message
         session_id: Optional existing session ID (creates new if not provided)
+        profile: Model profile to use (default: "local")
+        skill_routing_mode: Override skill routing mode if provided
         request_user: Resolved user identity (injected by FastAPI)
         db: Database session (injected by FastAPI)
 

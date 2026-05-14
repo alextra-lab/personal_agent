@@ -14,7 +14,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from personal_agent.captains_log.dedup import compute_proposal_fingerprint
 from personal_agent.captains_log.metrics_extraction import (
@@ -27,6 +27,7 @@ from personal_agent.captains_log.models import (
     ChangeCategory,
     ChangeScope,
     ProposedChange,
+    TelemetryRef,
 )
 from personal_agent.config import settings
 from personal_agent.llm_client import LocalLLMClient, ModelRole
@@ -467,11 +468,7 @@ async def generate_reflection_entry(
             related_adrs=reflection_data.get("related_adrs", []),
             related_experiments=reflection_data.get("related_experiments", []),
             telemetry_refs=[
-                {
-                    "trace_id": trace_id,
-                    "metric_name": None,
-                    "value": None,
-                }
+                TelemetryRef(trace_id=trace_id, metric_name=None, value=None)
             ],
         )
 
@@ -543,7 +540,7 @@ def _build_proposed_change(raw: dict[str, str] | None) -> ProposedChange | None:
     )
 
 
-def _summarize_telemetry(events: list[dict], metrics_summary: dict[str, Any] | None = None) -> str:
+def _summarize_telemetry(events: list[dict[str, Any]], metrics_summary: dict[str, Any] | None = None) -> str:
     """Summarize telemetry events and metrics for inclusion in LLM prompt.
 
     Combines traditional telemetry events with request-scoped metrics summary
@@ -560,7 +557,7 @@ def _summarize_telemetry(events: list[dict], metrics_summary: dict[str, Any] | N
         summary_parts = ["No telemetry events found for this trace."]
     else:
         # Extract key events
-        event_types = {}
+        event_types: dict[str, int] = {}
         for event in events:
             event_name = event.get("event", "unknown")
             event_types[event_name] = event_types.get(event_name, 0) + 1
@@ -585,13 +582,13 @@ def _summarize_telemetry(events: list[dict], metrics_summary: dict[str, Any] | N
             tool_failures = [e for e in tool_calls if not e.get("success")]
 
             summary_parts.append(
-                f"**Tools Used**: {len(tool_calls)} calls - {', '.join(set(tool_names))}"
+                f"**Tools Used**: {len(tool_calls)} calls - {', '.join(set(x for x in tool_names if x is not None))}"
             )
 
             if tool_failures:
                 failed_tools = [e.get("tool") for e in tool_failures]
                 summary_parts.append(
-                    f"**Tool Failures**: {len(tool_failures)} failures - {', '.join(failed_tools)}"
+                    f"**Tool Failures**: {len(tool_failures)} failures - {', '.join([x for x in failed_tools if x is not None])}"
                 )
 
             # Extract tool durations
@@ -642,7 +639,7 @@ def _summarize_telemetry(events: list[dict], metrics_summary: dict[str, Any] | N
     return "\n".join(summary_parts)
 
 
-def _parse_reflection_response(content: str) -> dict:
+def _parse_reflection_response(content: str) -> dict[str, Any]:
     """Parse LLM reflection response.
 
     Args:
@@ -662,7 +659,7 @@ def _parse_reflection_response(content: str) -> dict:
             content = content.split("```")[1].split("```")[0].strip()
 
         data = json.loads(content)
-        return data
+        return cast(dict[str, Any], data)
     except (json.JSONDecodeError, IndexError) as e:
         log.warning("reflection_parse_failed", error=str(e), content=content[:200])
         raise ValueError(f"Failed to parse reflection response: {e}") from e
@@ -704,10 +701,6 @@ def _create_basic_reflection_entry(
         impact_assessment=None,
         status=CaptainLogStatus.AWAITING_APPROVAL,
         telemetry_refs=[
-            {
-                "trace_id": trace_id,
-                "metric_name": None,
-                "value": None,
-            }
+            TelemetryRef(trace_id=trace_id, metric_name=None, value=None)
         ],
     )

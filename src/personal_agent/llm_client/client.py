@@ -109,7 +109,7 @@ class LocalLLMClient:
         # Use default_timeout from each model's config, fallback to hardcoded defaults
         self._role_timeouts: dict[ModelRole, int] = {}
         for role in ModelRole:
-            model_def = self.model_configs.get(role.value)
+            model_def = self.model_configs.get(role.value)  # type: ignore[assignment]
             if model_def and model_def.default_timeout:
                 self._role_timeouts[role] = model_def.default_timeout
             else:

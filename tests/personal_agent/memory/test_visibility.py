@@ -14,7 +14,7 @@ Covers:
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -103,7 +103,6 @@ class TestVisibilityEnum:
             SessionNode,
             TurnNode,
         )
-        from personal_agent.memory.weight import KnowledgeWeight
 
         entity = Entity(name="Test", entity_type="Concept")
         assert entity.visibility == "public"
@@ -501,8 +500,6 @@ class TestConsolidatorVisibility:
         The test is retained as a documentation placeholder only; it asserts the
         ValidationError is raised when None is supplied.
         """
-        from uuid import uuid4 as _uuid4
-
         from personal_agent.captains_log.capture import TaskCapture
         import pydantic
 

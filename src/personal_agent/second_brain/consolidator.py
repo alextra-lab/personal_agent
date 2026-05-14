@@ -453,9 +453,10 @@ class SecondBrainConsolidator:
                 "relationship_element_ids": [],
             }
 
-        # FRE-343: TaskCapture.user_id is non-optional, so authenticated sessions
-        # always produce "group"-visibility nodes (visible to all CF Access users).
-        visibility = "group"
+        # FRE-229: set visibility based on whether the capture has an owning user.
+        # Authenticated sessions produce "group" nodes (visible to all CF Access users);
+        # CLI/unauthenticated captures (user_id=None) produce "public" nodes.
+        visibility = "group" if getattr(capture, "user_id", None) else "public"
 
         # Create Turn node
         turn = TurnNode(
@@ -477,9 +478,7 @@ class SecondBrainConsolidator:
         # This is a transient attribute — not part of the Pydantic model — used only during write.
         object.__setattr__(turn, "_entity_data", extraction_result.get("entities", []))
 
-        await self.memory_service.create_conversation(
-            turn, user_id=capture.user_id, visibility=visibility
-        )
+        await self.memory_service.create_conversation(turn, visibility=visibility)
         turns_created = 1
 
         relationship_element_ids: list[str] = list(

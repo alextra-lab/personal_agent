@@ -34,8 +34,7 @@ recall_personal_history_tool = ToolDefinition(
             name="days_ago",
             type="number",
             description=(
-                "How many days back to look. 1 = last 24 hours, 7 = past week. "
-                "Range 1..365."
+                "How many days back to look. 1 = last 24 hours, 7 = past week. Range 1..365."
             ),
             required=True,
         ),
@@ -113,9 +112,7 @@ async def recall_personal_history_executor(
 
     days_ago_int = int(days_ago)
     if days_ago_int < 1 or days_ago_int > 365:
-        raise ToolExecutionError(
-            f"days_ago must be between 1 and 365, got {days_ago_int}"
-        )
+        raise ToolExecutionError(f"days_ago must be between 1 and 365, got {days_ago_int}")
 
     effective_limit = min(max(int(limit) if limit is not None else 10, 1), 50)
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days_ago_int)).isoformat()

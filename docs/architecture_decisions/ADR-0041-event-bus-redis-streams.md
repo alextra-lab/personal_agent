@@ -250,6 +250,31 @@ Consolidation is now driven **exclusively** by the event-driven path: `stream:re
 
 The Phase 3 note "Scheduler lifecycle loop becomes a thin event publisher (`system.idle`, …)" is superseded: the lifecycle loop continues to run disk housekeeping, archive, purge, and quality monitoring, but no longer publishes `system.idle`.
 
+## Update — 2026-05-14 (FRE-326)
+
+The FRE-325 update intentionally kept `_should_consolidate()`'s host-resource gates (`idle_time_seconds`, `cpu_threshold`, `memory_threshold`, `resource_gating_enabled`) in place pending an empirical re-evaluation. That re-evaluation is now complete and the gates **remain in the codebase as deployment-conditional**.
+
+**Observation window** — 8 days post-FRE-325 (2026-05-06 → 2026-05-14) with `AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED=false`:
+
+| Event | Count | Notes |
+|---|---|---|
+| `consolidation_triggered` | 405 | continuous daily operation |
+| `consolidation_skipped_active_requests` | 117 | universal in-flight-request guard |
+| `consolidation_skipped_already_consolidated` | 19,487 | consolidator-internal dedup |
+| `consolidation_skipped_cpu_high` | 0 | gate disabled — cannot fire |
+| `consolidation_skipped_memory_high` | 0 | gate disabled — cannot fire |
+| `consolidation_check_failed` | 0 | gate disabled — cannot fire |
+
+**Interpretation** — the gates' zero counts are tautological given they're disabled. The honest finding is: *under remote-inference deployment, the system operated healthily for ≥8 days without host-resource gating, with safety carried entirely by the universal guards (`_active_request_count > 0` and `min_consolidation_interval_seconds`)*.
+
+**Decision** — retain the gates as a **deployment-conditional safety valve**, not deprecate. Rationale:
+
+- The gates serve the **local-inference deployment mode** (agent + LLM co-resident on an Apple-silicon laptop running MLX). In that mode, host CPU/memory/idle metrics are a useful proxy for inference saturation, and background consolidation competing for GPU/CPU with user-facing inference is a real problem the gates solve.
+- Under the current **remote-inference deployment** (VPS, cloud API or tunnelled MLX), host metrics don't correlate with inference load. The gates are correctly disabled — they would be measuring the wrong thing if enabled.
+- The previous documentation framed `resource_gating_enabled=false` as "remote extraction" without articulating the forward purpose. That framing is the actual problem and has been corrected.
+
+**Artifacts** — no code change. Docstring on `_should_consolidate()`, module docstring on `brainstem/optimizer.py`, field descriptions in `config/settings.py`, and `.env.example` comments updated to make the deployment-conditional intent explicit. `ThresholdOptimizer` is retained as dormant infrastructure for the local-inference deployment path; it is not wired into any runtime loop today.
+
 ---
 
 ## References

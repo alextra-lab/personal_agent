@@ -628,22 +628,31 @@ class AppConfig(BaseSettings):
     enable_memory_graph: bool = Field(default=False, description="Enable memory graph (Phase 2.2)")
 
     # Second Brain Scheduling (Phase 2.2)
+    # The four fields below are the host-resource gate, used only when the
+    # agent and LLM co-reside on the same host (local-inference deployment).
+    # Under remote-inference deployments (current VPS setup) the gate is
+    # disabled and these values are inert. See ADR-0041 §Update 2026-05-14
+    # (FRE-326) and BrainstemScheduler._should_consolidate.
     second_brain_resource_gating_enabled: bool = Field(
         default=True,
         description=(
-            "Enable idle-time and CPU/memory gating before consolidation. "
-            "Set False when entity extraction uses a remote model and local "
-            "resource pressure is irrelevant."
+            "Enable host-resource gating (idle-time + CPU/memory) before "
+            "consolidation. True for local-inference deployments where the "
+            "agent and LLM share a host; False for remote-inference "
+            "deployments where host metrics don't reflect inference load."
         ),
     )
     second_brain_idle_time_seconds: float = Field(
-        default=300.0, description="Idle time before consolidation (5 minutes)"
+        default=300.0,
+        description="Idle time before consolidation (5 min) — local-inference only",
     )
     second_brain_cpu_threshold: float = Field(
-        default=50.0, description="Maximum CPU usage for consolidation (50%)"
+        default=50.0,
+        description="Max CPU usage for consolidation (50%) — local-inference only",
     )
     second_brain_memory_threshold: float = Field(
-        default=70.0, description="Maximum memory usage for consolidation (70%)"
+        default=70.0,
+        description="Max memory usage for consolidation (70%) — local-inference only",
     )
     second_brain_min_interval_seconds: float = Field(
         default=3600.0, description="Minimum time between consolidations (1 hour)"

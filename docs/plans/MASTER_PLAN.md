@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-14 — FRE-363 operator stanza bug merged (PR #51) · FRE-326 re-eval complete: host-resource gates retained as deployment-conditional safety valve for local-inference mode (no code change).
+> **Last updated**: 2026-05-14 — FRE-363 operator stanza bug merged (PR #51) · FRE-326 re-eval complete: host-resource gates retained as deployment-conditional safety valve for local-inference mode (no code change) · FRE-315 moved to Immediately Actionable (Approved in Linear).
 
 ---
 
@@ -38,6 +38,7 @@ Wave D implementation (endpoint abstraction, compose unification, test parity) r
 | [FRE-343](https://linear.app/frenchforest/issue/FRE-343) | Medium | Sonnet | Personal time-window retrieval — "what did we talk about N days ago" scoped to user_id |
 | [FRE-314](https://linear.app/frenchforest/issue/FRE-314) | Medium | Sonnet | `feedback_history/` retention policy in DataLifecycleManager |
 | [FRE-349](https://linear.app/frenchforest/issue/FRE-349) | Medium | Opus | Surface actionable Insights in agent context (G3 from FRE-346) |
+| [FRE-315](https://linear.app/frenchforest/issue/FRE-315) | Medium | Sonnet | Mermaid chart rendering in chat UI (lazy-load mermaid.js, graceful fallback) |
 
 **Calendar-gated (approved but not yet startable):**
 - **FRE-350** (Opus) — post-deploy reflection-surfacing eval; gate ≥ 2026-05-24
@@ -47,9 +48,7 @@ Wave D implementation (endpoint abstraction, compose unification, test parity) r
 
 ## Needs Approval
 
-| Work Item | Notes |
-|-----------|-------|
-| **FRE-315: Mermaid chart rendering** | [FRE-315](https://linear.app/frenchforest/issue/FRE-315) — FRE-316/317/318 closed as duplicates |
+*(nothing pending)*
 
 ---
 

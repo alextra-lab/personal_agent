@@ -474,6 +474,7 @@ tools:
         - "env"
         - "which"
         - "python3"
+        - "mmdc"  # FRE-315: mermaid-cli for diagram syntax validation
       ALERT:
         - "curl"
         - "grep"

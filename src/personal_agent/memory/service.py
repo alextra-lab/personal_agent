@@ -315,8 +315,10 @@ class MemoryService:
             conversation: Turn node to create (accepts TurnNode or legacy ConversationNode).
             user_id: UUID of the connected user. MUST exist as :Person {user_id}
                 in the graph (created by get_or_provision_user_person at first
-                request per FRE-213). MATCH (not MERGE) — missing :Person silently
-                writes no edge (Turn itself is still created).
+                request per FRE-213). MATCH (not MERGE) on :Person — chosen to
+                avoid silently creating a name-less :Person on every Turn. If
+                the :Person is missing, the MERGE writes no edge (Turn itself
+                is still created); that is a logic bug worth investigating.
             visibility: Visibility scope for the Turn node (FRE-229). Defaults
                 to "public" for backward compatibility; callers should pass
                 "group" for authenticated sessions.

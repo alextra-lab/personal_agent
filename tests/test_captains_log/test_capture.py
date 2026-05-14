@@ -3,6 +3,7 @@
 import pathlib
 from datetime import datetime, timezone
 from unittest.mock import patch
+from uuid import uuid4
 
 from personal_agent.captains_log.capture import (
     TaskCapture,
@@ -46,11 +47,6 @@ def test_user_id_coercion() -> None:
     assert isinstance(c2.user_id, StdUUID)
     orjson.dumps(c2.model_dump())
 
-    # None stays None
-    c3 = TaskCapture(**_base, user_id=None)
-    assert c3.user_id is None
-    orjson.dumps(c3.model_dump())
-
 
 class TestWriteCapture:
     """Test write_capture and optional ES indexing."""
@@ -64,6 +60,7 @@ class TestWriteCapture:
             user_message="Hello",
             assistant_response="Hi",
             outcome="completed",
+            user_id=uuid4(),
         )
         with (
             patch(

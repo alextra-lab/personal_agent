@@ -845,7 +845,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                     completion_tokens=cap_completion_tokens,
                     total_tokens=cap_total_tokens,
                     tool_results=ctx.tool_results,
-                    user_id=getattr(ctx, "user_id", None),
+                    user_id=ctx.user_id,
                 )
                 write_capture(capture)
 

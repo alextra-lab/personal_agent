@@ -494,19 +494,27 @@ class TestConsolidatorVisibility:
         assert visibility == "group"
 
     def test_visibility_public_when_user_id_absent(self) -> None:
-        """Consolidator assigns 'public' visibility when capture.user_id is None."""
-        from personal_agent.captains_log.capture import TaskCapture
+        """user_id=None is no longer accepted after FRE-343 — user_id is always required.
 
-        capture = TaskCapture(
-            trace_id="trace-2",
-            session_id="session-2",
-            timestamp=datetime.now(timezone.utc),
-            user_message="test",
-            outcome="completed",
-            user_id=None,
-        )
-        visibility = "group" if getattr(capture, "user_id", None) else "public"
-        assert visibility == "public"
+        This scenario cannot occur in production: get_request_user always resolves
+        a user_id (CF Access header or settings.agent_owner_email fallback or 401).
+        The test is retained as a documentation placeholder only; it asserts the
+        ValidationError is raised when None is supplied.
+        """
+        from uuid import uuid4 as _uuid4
+
+        from personal_agent.captains_log.capture import TaskCapture
+        import pydantic
+
+        with pytest.raises(pydantic.ValidationError):
+            TaskCapture(
+                trace_id="trace-2",
+                session_id="session-2",
+                timestamp=datetime.now(timezone.utc),
+                user_message="test",
+                outcome="completed",
+                user_id=None,
+            )
 
 
 # ---------------------------------------------------------------------------

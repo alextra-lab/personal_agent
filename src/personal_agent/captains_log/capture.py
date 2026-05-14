@@ -61,14 +61,14 @@ class TaskCapture(BaseModel):
     total_tokens: int = 0
     # Raw tool results (tool_name, success, output, error, latency_ms) for comparing LLM reply vs actual tool output
     tool_results: list[dict[str, Any]] = Field(default_factory=list)
-    # FRE-229: owning user UUID — None for CLI/unauthenticated paths; used by consolidator to set visibility
-    user_id: UUID | None = None
+    # FRE-343: user_id is non-optional. get_request_user always resolves one
+    # (CF Access header or settings.agent_owner_email fallback or 401),
+    # so user_id=None at write time is a real bug, not a fallback.
+    user_id: UUID
 
     @field_validator("user_id", mode="before")
     @classmethod
-    def _coerce_user_id(cls, v: Any) -> UUID | None:
-        if v is None:
-            return None
+    def _coerce_user_id(cls, v: Any) -> UUID:
         if type(v) is UUID:
             return v
         return UUID(str(v))

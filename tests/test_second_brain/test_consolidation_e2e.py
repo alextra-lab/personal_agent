@@ -55,6 +55,7 @@ class TestConsolidationE2E:
             tools_used=["llm_client"],
             duration_ms=1000,
             outcome="SUCCESS",
+            user_id=uuid.uuid4(),
         )
 
         # Process the capture
@@ -96,6 +97,7 @@ class TestConsolidationE2E:
             tools_used=["llm_client"],
             duration_ms=1500,
             outcome="SUCCESS",
+            user_id=uuid.uuid4(),
         )
 
         # Process capture
@@ -134,6 +136,7 @@ class TestConsolidationE2E:
                 tools_used=["llm_client"],
                 duration_ms=800,
                 outcome="SUCCESS",
+                user_id=uuid.uuid4(),
             ),
             TaskCapture(
                 trace_id=str(uuid.uuid4()),
@@ -144,6 +147,7 @@ class TestConsolidationE2E:
                 tools_used=["llm_client"],
                 duration_ms=900,
                 outcome="SUCCESS",
+                user_id=uuid.uuid4(),
             ),
         ]
 
@@ -177,6 +181,7 @@ class TestConsolidationE2E:
             tools_used=["tool1", "tool2", "tool3"],
             duration_ms=2500,
             outcome="SUCCESS",
+            user_id=uuid.uuid4(),
         )
 
         # Process capture
@@ -210,6 +215,7 @@ class TestConsolidationE2E:
             tools_used=[],
             duration_ms=100,
             outcome="FAILED",
+            user_id=uuid.uuid4(),
         )
 
         # Should handle gracefully
@@ -241,6 +247,7 @@ class TestConsolidationE2E:
             tools_used=["llm_client"],
             duration_ms=1200,
             outcome="SUCCESS",
+            user_id=uuid.uuid4(),
         )
 
         result = await consolidator._process_capture(capture)
@@ -274,6 +281,7 @@ class TestConsolidationE2E:
                 tools_used=[],
                 duration_ms=100,
                 outcome="SUCCESS",
+                user_id=uuid.uuid4(),
             )
             for i in range(3)
         ]

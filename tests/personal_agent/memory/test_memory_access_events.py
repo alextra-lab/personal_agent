@@ -9,6 +9,7 @@ Verifies that:
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
@@ -485,6 +486,7 @@ class TestConsolidatorAccessContext:
             tools_used=[],
             duration_ms=100,
             outcome="success",
+            user_id=uuid4(),
         )
 
         extraction = {
@@ -581,6 +583,7 @@ class TestConsolidatorAccessContext:
             tools_used=[],
             duration_ms=50,
             outcome="success",
+            user_id=uuid4(),
         )
 
         extraction = {

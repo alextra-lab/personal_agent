@@ -2,13 +2,13 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-14 — FRE-343 personal time-window retrieval shipped (PR #57): `(:Person)-[:PARTICIPATED_IN]->(:Turn)` provenance edge + `recall_personal_history` native tool + SKILL.md (XML-body pilot) + idempotent backfill + ADR-0052 amendment. TaskCapture.user_id tightened to non-optional. Default `search_memory` shared-graph behavior unchanged.
+> **Last updated**: 2026-05-15 — Artifact substrate designed end-to-end. **ADR-0069** (R2-backed substrate: Cloudflare R2 + Worker + Postgres metadata + native S3 SDK) and **ADR-0070** (Output channel model: markdown for agent-to-agent, rich for human-facing, hybrid chat surface, dual-representation deferred until measured) landed. FRE-227 reactivated and rescoped to substrate foundation; three sibling tickets created: FRE-368 (agent artifact tools), FRE-369 (user upload UX), FRE-370 (Cloudflare Access 720h session duration). Discussion record: `docs/superpowers/plans/i-want-to-research-bubbly-shannon.md`.
 
 ---
 
 ## Current State
 
-Waves A ✅ B ✅ C ✅ E (FRE-213) ✅ J ✅ complete. ADR-0063 (primitive tools) fully closed with FRE-265 legacy-tools deletion. ADR-0068 self-telemetry chain fully shipped (PRs #30–33). FRE-326 closed 2026-05-14 (host-resource gates retained deployment-conditional). Next gates: FRE-350 post-deploy eval earliest 2026-05-24 (2-week usage window); FRE-328 naming-stability decision 2026-05-26.
+Waves A ✅ B ✅ C ✅ E (FRE-213) ✅ J ✅ complete. ADR-0063 (primitive tools) fully closed with FRE-265 legacy-tools deletion. ADR-0068 self-telemetry chain fully shipped (PRs #30–33). FRE-326 closed 2026-05-14 (host-resource gates retained deployment-conditional). **Artifact substrate** designed 2026-05-15 (ADR-0069 + ADR-0070); FRE-227 reactivated, sibling tickets FRE-368/369/370 in Needs Approval. Next gates: FRE-350 post-deploy eval earliest 2026-05-24 (2-week usage window); FRE-328 naming-stability decision 2026-05-26.
 
 Wave D implementation (endpoint abstraction, compose unification, test parity) remains deferred per FRE-214 audit §8.7 until further owner direction.
 
@@ -22,7 +22,7 @@ Wave D implementation (endpoint abstraction, compose unification, test parity) r
 | **B** ✅ | Self-observation | Done | FRE-301 ✅ · FRE-300 ✅ · FRE-319 ✅ · FRE-269 ✅ · [FRE-326](https://linear.app/frenchforest/issue/FRE-326) ✅ | FRE-326 closed 2026-05-14 — gates retained as deployment-conditional |
 | **C** ✅ | Security | Done | [FRE-225](https://linear.app/frenchforest/issue/FRE-225) ✅ | Shipped 2026-05-08 |
 | **D** | Architecture | Planning ✅, impl deferred | [FRE-214](https://linear.app/frenchforest/issue/FRE-214) ✅ · FRE-238 · FRE-240 · FRE-241 · FRE-236 · FRE-336 · FRE-338–340 · [FRE-341](https://linear.app/frenchforest/issue/FRE-341) ✅ | Tracks 2a/2b/3 + follow-ups unblocked; deferred per audit §8.7; FRE-341 shipped 2026-05-13 |
-| **E** ✅ (partial) | Identity & write surface | FRE-343 pending | [FRE-213](https://linear.app/frenchforest/issue/FRE-213) ✅ · FRE-227 ⏸ · [FRE-342](https://linear.app/frenchforest/issue/FRE-342) ✅ · [FRE-343](https://linear.app/frenchforest/issue/FRE-343) · [FRE-344](https://linear.app/frenchforest/issue/FRE-344) ✅ · FRE-345 | FRE-227 paused → Backlog; FRE-344 shipped 2026-05-13 (PR #50) |
+| **E** ✅ (partial) | Identity & write surface | FRE-343 pending | [FRE-213](https://linear.app/frenchforest/issue/FRE-213) ✅ · [FRE-227](https://linear.app/frenchforest/issue/FRE-227) (substrate, Needs Approval) · [FRE-368](https://linear.app/frenchforest/issue/FRE-368) (artifacts, Needs Approval) · [FRE-369](https://linear.app/frenchforest/issue/FRE-369) (uploads, Needs Approval) · [FRE-342](https://linear.app/frenchforest/issue/FRE-342) ✅ · [FRE-343](https://linear.app/frenchforest/issue/FRE-343) · [FRE-344](https://linear.app/frenchforest/issue/FRE-344) ✅ · FRE-345 | FRE-227 reactivated 2026-05-15 with R2-substrate scope (ADR-0069/0070); FRE-368/369 layer on top; FRE-344 shipped 2026-05-13 (PR #50) |
 | **F** | Self-improvement | Partial | [FRE-328](https://linear.app/frenchforest/issue/FRE-328) 🅿️ · FRE-226 · FRE-234 | FRE-328 pipeline shipped (PRs #43–47), parked 2026-05-12 for natural-usage eval; review gate 2026-05-26. FRE-226 needs FRE-227 |
 | **G** | Cleanups & gates | Partial | [FRE-265](https://linear.app/frenchforest/issue/FRE-265) ✅ · [FRE-299](https://linear.app/frenchforest/issue/FRE-299) ✅ · [FRE-314](https://linear.app/frenchforest/issue/FRE-314) · [FRE-337](https://linear.app/frenchforest/issue/FRE-337) ✅ · FRE-311 | FRE-265 shipped 2026-05-12; FRE-337 shipped 2026-05-13 (PR #48); FRE-299 gate flipped 2026-05-13; FRE-311 parked on FRE-302 |
 | **H** | Memory / context value | Not started | [FRE-178](https://linear.app/frenchforest/issue/FRE-178) → [FRE-179](https://linear.app/frenchforest/issue/FRE-179) → [FRE-180](https://linear.app/frenchforest/issue/FRE-180) · [FRE-230](https://linear.app/frenchforest/issue/FRE-230) | FRE-178 → 179 → 180 chain |
@@ -46,7 +46,12 @@ Wave D implementation (endpoint abstraction, compose unification, test parity) r
 
 ## Needs Approval
 
-*(nothing pending)*
+| Ticket | Priority | Tier | What |
+|--------|----------|------|------|
+| [FRE-227](https://linear.app/frenchforest/issue/FRE-227) | Medium | Sonnet | Protected artifact tree — R2-backed substrate foundation (per ADR-0069); first consumer is notes tools |
+| [FRE-368](https://linear.app/frenchforest/issue/FRE-368) | Medium | Sonnet | Agent-side artifact tools (`artifact_write/list/read`) + PWA inline card + sandboxed viewer (blocked by FRE-227) |
+| [FRE-369](https://linear.app/frenchforest/issue/FRE-369) | Medium | Sonnet | User-upload UX in PWA with presigned PUT to R2 (blocked by FRE-227) |
+| [FRE-370](https://linear.app/frenchforest/issue/FRE-370) | Medium | Haiku | Cloudflare Access `session_duration` → 720h (kill the daily re-auth pain); operational fix, no code change |
 
 ---
 
@@ -100,6 +105,8 @@ FRE-302 ✅ → FRE-311 (budget auto-tuning, parked pending data)
 
 | ADR | Title | Status |
 |-----|-------|--------|
+| **0070** | **Output Channel Model — Markdown for Agents, Rich for Humans** | **Proposed 2026-05-15; companion to ADR-0069; build-to-learn rig is FRE-368** |
+| **0069** | **R2-Backed Artifact Substrate** | **Proposed 2026-05-15; substrate impl is FRE-227, consumers are FRE-368/369** |
 | **0068** | **Agent Self-Telemetry Data Plane** | **Accepted 2026-05-10; all 7 follow-ups shipped (FRE-351–356)** |
 | **0067** | **Reflection Surfacing in Context Assembly** | **Accepted 2026-05-10 (FRE-348); eval → FRE-350** |
 | **0066** | **Skill Routing Defaults + Threshold + Feedback Loop** | Accepted 2026-05-07; D1–D5 all implemented; eval complete (Wave J) |

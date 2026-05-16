@@ -17,6 +17,40 @@ from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
 
+# Engines whose backend expects only a place name (geolocation lookup) and
+# raises ValueError on "weather <city>". When the caller targets weather
+# explicitly, strip a leading "weather " token so the lookup succeeds.
+_WEATHER_ENGINE_NAMES = frozenset(
+    {
+        "wttr.in",
+        "wttr",
+        "openmeteo",
+        "open_meteo",
+        "duckduckgo weather",
+        "duckduckgo_weather",
+    }
+)
+
+
+def _strip_weather_prefix_if_targeted(query: str, categories: str, engines: str | None) -> str:
+    """Strip a leading ``weather `` token when targeting weather engines.
+
+    The wttr and duckduckgo_weather SearXNG engines feed the full query
+    string into a geolocation lookup and raise ``ValueError`` on inputs
+    like ``"weather Berlin"``. When the caller has already signalled
+    weather intent via ``categories`` or ``engines``, the prefix is
+    redundant and we drop it to keep those engines functional.
+    """
+    targets_weather = "weather" in {c.strip() for c in categories.split(",")}
+    if not targets_weather and engines:
+        engine_set = {e.strip().lower() for e in engines.split(",")}
+        targets_weather = bool(engine_set & _WEATHER_ENGINE_NAMES)
+    if not targets_weather:
+        return query
+    if query[:8].lower() == "weather ":
+        return query[8:].lstrip()
+    return query
+
 
 web_search_tool = ToolDefinition(
     name="web_search",
@@ -154,6 +188,7 @@ async def web_search_executor(
 
     categories = categories or settings.searxng_default_categories
     capped_max = min(max(int(max_results or settings.searxng_max_results), 1), 50)
+    query = _strip_weather_prefix_if_targeted(query, categories, engines)
 
     trace_id = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
 
@@ -178,6 +213,13 @@ async def web_search_executor(
     if time_range:
         params["time_range"] = time_range
 
+    # SearXNG's botdetection logs ERROR on requests missing X-Forwarded-For
+    # / X-Real-IP. The agent calls SearXNG directly over the docker network
+    # (no Caddy proxy in front), so we set the header explicitly to keep
+    # telemetry signal clean. The botdetection limiter itself is disabled
+    # via docker/searxng/settings.yml (server.limiter: false).
+    headers = {"X-Forwarded-For": "127.0.0.1"}
+
     try:
         async with httpx.AsyncClient(
             timeout=settings.searxng_timeout_seconds,
@@ -185,6 +227,7 @@ async def web_search_executor(
             response = await client.get(
                 f"{settings.searxng_base_url}/search",
                 params=params,
+                headers=headers,
             )
             response.raise_for_status()
             data = response.json()

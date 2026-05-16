@@ -513,6 +513,40 @@ After this plan is approved I will file the following new Linear issue. It is **
 
 ---
 
+## Follow-up bug: `ctx.user_id` not threaded to tool executors
+
+Surfaced during the FRE-371 smoke test (2026-05-16). `notes_write` raised `notes tools require ctx.user_id (set by the request gateway)` even when the call came through CF Access, despite `sse.stream_requested user_id=…` proving identity reached the request edge.
+
+**Root cause** — `src/personal_agent/orchestrator/executor.py:694` constructs `trace_ctx = TraceContext(trace_id=ctx.trace_id)`, dropping `ctx.user_id`. The frozen `TraceContext` dataclass (`telemetry/trace.py:11`) has no `user_id` field. That stripped `trace_ctx` is what `ToolExecutionLayer.execute_tool` passes to tool executors as their `ctx` kwarg (`tools/executor.py:412`). `recall_personal_history` (FRE-343) has the same latent bug — 0 successful invocations in production since shipping.
+
+**Fix (decided)** — extend `TraceContext` with optional `user_id` and `session_id` and populate at the construction site.
+
+Steps:
+
+1. **`src/personal_agent/telemetry/trace.py`** — add `user_id: UUID | None = None` and `session_id: str | None = None` to the frozen dataclass. Update `new_span()` so the child span inherits both fields. Update `new_trace()` to accept them as optional kwargs (back-compat; default None).
+2. **`src/personal_agent/orchestrator/executor.py:694`** — change to `TraceContext(trace_id=ctx.trace_id, user_id=ctx.user_id, session_id=ctx.session_id)`.
+3. **`src/personal_agent/orchestrator/orchestrator.py:94`** — same enrichment if the path is reachable from authenticated entry points; otherwise leave (it's a fresh-trace bootstrap).
+4. **Regression test** — `tests/personal_agent/orchestrator/test_trace_ctx_identity.py` (new). Build a minimal `ExecutionContext` with a known `user_id`, drive a no-op tool that captures `ctx.user_id`, assert the captured value matches. Prevents future drift.
+5. **Don't break existing callers** — both new fields default to `None`, so every `TraceContext(trace_id=...)` call site keeps working.
+6. **Quality gates** — `make test` (45 new notes/router/storage tests + the new regression test must pass), `make mypy`, `make ruff-check`.
+7. **Ship** — branch `fix/trace-context-identity-FRE-227-followup`, PR, after merge `ENV=cloud make rebuild SERVICE=seshat-gateway`, re-run the smoke test (`notes_write slug=fre227-smoke …` → expect success with a populated `public_url`).
+
+Open the artifact in iPad Safari to validate the end-to-end CF Access path lights up. Then update MASTER_PLAN.md noting FRE-227 substrate fully verified.
+
+## Post-merge housekeeping (PR #62 merged 2026-05-16)
+
+The PR is merged to `main` (commit `1d2f4e5`). Standard follow-up:
+
+1. **Update `docs/plans/MASTER_PLAN.md`**:
+   - Bump the "Last updated" header line to note FRE-227 substrate shipped (PR #62), with the caveat that FRE-227 only fully closes once FRE-371 (terraform half) lands.
+   - Move FRE-227 entry in the "Immediately Actionable" table to indicate the substrate is shipped and it now waits on FRE-371. Or, given the substrate is decoupled, remove FRE-227 from the actionable table and add FRE-371 as the actionable item that closes it.
+   - Add a "Recently Completed" entry for the FRE-227 substrate PR.
+   - Wave E status: FRE-227 substrate half done; FRE-368 / FRE-369 still blocked on FRE-371 (not on FRE-227 substrate code anymore).
+2. **Commit + push direct-to-main** per the docs convention (memory `feedback_branch_pr_for_code`: docs go direct-to-main, code goes via PR).
+3. **Delete the merged feature branch**:
+   - Local: `git branch -d fre-227-r2-artifact-substrate`
+   - Remote: `git push origin --delete fre-227-r2-artifact-substrate`
+
 ## Out of scope (deferred)
 
 - **`notes_read(slug)`** as an explicit tool — defer to FRE-368 (artifact read is a fuller surface).

@@ -691,7 +691,15 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
         Updated execution context after state machine completion.
     """
     state = ctx.state
-    trace_ctx = TraceContext(trace_id=ctx.trace_id)
+    # Carry user_id / session_id through to tool executors that receive
+    # `ctx` (notes_write, notes_search, recall_personal_history). Without
+    # this propagation those tools see a None user_id and refuse to run
+    # even on fully authenticated CF Access requests.
+    trace_ctx = TraceContext(
+        trace_id=ctx.trace_id,
+        user_id=ctx.user_id,
+        session_id=ctx.session_id,
+    )
 
     log.info(
         TASK_STARTED,

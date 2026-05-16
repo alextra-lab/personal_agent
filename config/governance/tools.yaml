@@ -1189,6 +1189,29 @@ tools:
     timeout_seconds: 15
     rate_limit_per_hour: 10
 
+  # FRE-227: write a durable note into the R2-backed artifact substrate.
+  # Path traversal blocked at storage/artifact_store.py:build_r2_key; the
+  # tool cannot write to an `artifact_*` / `upload_*` / `capture_*` prefix.
+  # Loop guards keep tight-loop slug rewrites from monopolising the budget.
+  notes_write:
+    category: "artifact_write"
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
+    risk_level: "medium"
+    requires_approval: false
+    timeout_seconds: 20
+    rate_limit_per_hour: 60
+    loop_max_per_signature: 3
+    loop_max_consecutive: 5
+
+  # FRE-227: pgvector NN search over the calling user's notes. Read-only.
+  notes_search:
+    category: "memory_read"
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
+    risk_level: "low"
+    requires_approval: false
+    timeout_seconds: 10
+    rate_limit_per_hour: 200
+
   # Auto-discovered: 2026-04-03T18:57:35.611133
   # Update an existing Linear document
   mcp_update_document:

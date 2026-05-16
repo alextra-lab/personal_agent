@@ -28,6 +28,12 @@ from personal_agent.tools.memory_search import (
     search_memory_executor,
     search_memory_tool,
 )
+from personal_agent.tools.notes_tools import (
+    notes_search_executor,
+    notes_search_tool,
+    notes_write_executor,
+    notes_write_tool,
+)
 from personal_agent.tools.perplexity import (
     perplexity_query_executor,
     perplexity_query_tool,
@@ -93,6 +99,17 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
     registry.register(find_linear_issues_tool, find_linear_issues_executor)
     registry.register(list_linear_projects_tool, list_linear_projects_executor)
     registry.register(create_linear_project_tool, create_linear_project_executor)
+
+    # FRE-227 — notes tools, register only when R2 substrate is wired.
+    # When unset (laptop-only dev, fresh installs before terraform applies)
+    # the gateway logs "notes_tools_skipped_unconfigured" and the LLM never
+    # sees these tool definitions, so it cannot try to use them.
+    if settings.r2_endpoint_url and settings.r2_access_key_id and settings.r2_secret_access_key:
+        registry.register(notes_write_tool, notes_write_executor)
+        registry.register(notes_search_tool, notes_search_executor)
+        log.info("notes_tools_registered", bucket=settings.r2_bucket_name)
+    else:
+        log.warning("notes_tools_skipped_unconfigured")
 
     # FRE-261 PIVOT-2 — primitive tools (ADR-0063 Phase 2).
     # Lazy imports inside the guard to avoid circular-import issues and to

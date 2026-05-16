@@ -210,3 +210,45 @@ SELECT
 FROM api_costs
 WHERE timestamp >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
 ON CONFLICT (user_id, time_window, provider, role, window_start) DO NOTHING;
+
+-- ===========================================================================
+-- Artifact substrate (ADR-0069 / FRE-227)
+--
+-- Metadata canon for every byte-string parked in R2: notes, artifacts,
+-- uploads, captures. Bytes live in R2 keyed by r2_key; this table is the
+-- source of truth for ownership, type, and (for notes) the pgvector
+-- embedding used by notes_search. Mirrored in
+-- docker/postgres/migrations/0003_artifacts_schema.sql for existing DBs.
+-- ===========================================================================
+
+CREATE TABLE IF NOT EXISTS artifacts (
+    id              UUID PRIMARY KEY,
+    user_id         UUID NOT NULL REFERENCES users(user_id),
+    session_id      UUID NULL REFERENCES sessions(session_id),
+    type            TEXT NOT NULL
+                        CHECK (type IN ('note', 'artifact', 'upload', 'capture')),
+    slug            TEXT NULL,
+    title           TEXT NULL,
+    summary         TEXT NULL,
+    content_type    TEXT NOT NULL,
+    size_bytes      BIGINT NOT NULL CHECK (size_bytes >= 0),
+    r2_key          TEXT NOT NULL UNIQUE,
+    tags            TEXT[] NOT NULL DEFAULT '{}',
+    embedding       vector(1024) NULL,
+    created_by      TEXT NOT NULL CHECK (created_by IN ('agent', 'user')),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_artifacts_owner_type_created
+    ON artifacts (user_id, type, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_artifacts_embedding
+    ON artifacts USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
+
+CREATE INDEX IF NOT EXISTS idx_artifacts_tags
+    ON artifacts USING gin (tags);
+
+CREATE INDEX IF NOT EXISTS idx_artifacts_session
+    ON artifacts (session_id)
+    WHERE session_id IS NOT NULL;

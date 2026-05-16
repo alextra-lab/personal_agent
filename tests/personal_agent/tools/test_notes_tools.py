@@ -24,6 +24,31 @@ import pytest
 
 from personal_agent.tools import notes_tools
 from personal_agent.tools.executor import ToolExecutionError
+from personal_agent.tools.notes_tools import _pgvector_literal
+
+
+def test_pgvector_literal_basic_shape() -> None:
+    """Bracketed, comma-separated, no whitespace — matches pgvector grammar."""
+    out = _pgvector_literal([0.1, -0.2, 0.0])
+    assert out.startswith("[") and out.endswith("]")
+    assert out.count(",") == 2
+    assert " " not in out
+    # Round-trip lossless.
+    assert [float(x) for x in out[1:-1].split(",")] == [0.1, -0.2, 0.0]
+
+
+def test_pgvector_literal_empty_list() -> None:
+    """Empty list renders as ``[]`` (pgvector parses but vector(N) will reject — that's correct)."""
+    assert _pgvector_literal([]) == "[]"
+
+
+def test_pgvector_literal_handles_full_1024_vector() -> None:
+    """Hot path: realistic 1024-dim vector serializes without scientific-notation surprises."""
+    vec = [float(i) / 1024.0 for i in range(1024)]
+    out = _pgvector_literal(vec)
+    assert out.count(",") == 1023
+    parsed = [float(x) for x in out[1:-1].split(",")]
+    assert parsed == vec
 
 
 def _ctx(user_id: UUID | None = None, session_id: UUID | None = None) -> Any:
@@ -245,9 +270,17 @@ async def test_notes_write_embedding_passed_with_correct_dim(
         slug="dim-test", content="body", mode="overwrite", ctx=_ctx()
     )
 
-    # The INSERT is the only call with an embedding param.
+    # The INSERT is the only call with an embedding param. asyncpg cannot
+    # serialise a list to pgvector — the executor must bind the literal
+    # bracketed text form so `CAST($n AS vector)` succeeds.
     insert_call = next(c for c in session.calls if "INSERT INTO artifacts" in c[0])
-    assert insert_call[1]["embedding"] == vec
+    bound = insert_call[1]["embedding"]
+    assert isinstance(bound, str)
+    assert bound.startswith("[") and bound.endswith("]")
+    assert bound.count(",") == len(vec) - 1
+    # Round-trip the literal back to floats and assert equality.
+    parsed = [float(x) for x in bound[1:-1].split(",")]
+    assert parsed == vec
 
 
 @pytest.mark.asyncio

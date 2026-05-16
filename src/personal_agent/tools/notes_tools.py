@@ -43,6 +43,22 @@ _MAX_NOTE_BYTES = 256 * 1024  # 256 KiB ceiling per note (revision-aware).
 _MAX_SEARCH_K = 25
 
 
+def _pgvector_literal(values: list[float]) -> str:
+    """Render a list of floats as a pgvector text literal: ``"[v1,v2,...]"``.
+
+    asyncpg does not ship a built-in codec for the pgvector ``vector`` type;
+    passing a Python ``list[float]`` directly to a ``CAST($n AS vector)``
+    placeholder raises ``DataError: expected str, got list``. The pgvector
+    extension accepts a text representation — a JSON-like bracketed list of
+    decimal floats — and the ``CAST`` in the SQL converts it to the binary
+    column type. ``repr(float)`` preserves full precision (Python's default
+    ``str(float)`` is also lossless for round-tripping but ``repr`` is
+    explicit), and comma-separated with no whitespace matches pgvector's
+    parser exactly.
+    """
+    return "[" + ",".join(repr(v) for v in values) + "]"
+
+
 # ---------------------------------------------------------------------------
 # Tool definitions
 # ---------------------------------------------------------------------------
@@ -339,7 +355,7 @@ async def notes_write_executor(
                 "size_bytes": size_bytes,
                 "r2_key": r2_key,
                 "tags": list(tags) if tags else [],
-                "embedding": embedding,
+                "embedding": _pgvector_literal(embedding),
             },
         )
         await session.commit()
@@ -425,7 +441,7 @@ async def notes_search_executor(
             ),
             {
                 "user_id": user_id,
-                "query_emb": query_emb,
+                "query_emb": _pgvector_literal(query_emb),
                 "tag_filter": tag_filter,
                 "k": effective_k,
             },

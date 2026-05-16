@@ -1023,6 +1023,12 @@ from personal_agent.transport.agui.endpoint import router as transport_router  #
 
 app.include_router(transport_router)
 
+# Artifact substrate (ADR-0069 / FRE-227) — internal-only resolve endpoint
+# called by the Cloudflare Worker fronting artifacts.frenchforet.com.
+from personal_agent.service.artifacts_router import router as artifacts_router  # noqa: E402
+
+app.include_router(artifacts_router)
+
 # Seshat API Gateway (FRE-206) — additive, does not affect existing routes.
 # In local dev mode the gateway router mounts on this app (port 9000).
 # In production, run personal_agent.gateway.app:gateway_app on its own port.

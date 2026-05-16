@@ -427,6 +427,44 @@ class AppConfig(BaseSettings):
         description="Number of top candidates to re-score with reranker",
     )
 
+    # --- Artifact substrate (ADR-0069 / FRE-227) ---
+    # R2 (Cloudflare) holds the bytes; Postgres holds the metadata canon.
+    # The agent talks to R2 via aiobotocore. The cloud-side Worker resolves
+    # /{artifact_id} by calling back to /internal/artifacts/{id} on the
+    # gateway with `X-Internal-Token: <artifact_resolve_internal_token>`.
+    # All values are populated by the laptop-side terraform half (see the
+    # sibling Linear ticket for FRE-227); when unset the notes_* tools are
+    # not registered, see tools/__init__.py.
+    r2_endpoint_url: str | None = Field(
+        default=None,
+        description="R2 S3-compatible endpoint, e.g. https://<account>.r2.cloudflarestorage.com",
+    )
+    r2_bucket_name: str = Field(
+        default="seshat-artifacts",
+        description="R2 bucket name for the artifact substrate",
+    )
+    r2_access_key_id: str | None = Field(
+        default=None, description="R2 access key id (S3 SDK credential)"
+    )
+    r2_secret_access_key: str | None = Field(
+        default=None, description="R2 secret access key (S3 SDK credential)"
+    )
+    r2_region: str = Field(
+        default="auto",
+        description="R2 region. R2 ignores the value but the S3 SDK requires one ('auto').",
+    )
+    artifacts_public_base_url: str | None = Field(
+        default=None,
+        description="Public Worker URL prefix, e.g. https://artifacts.frenchforet.com",
+    )
+    artifact_resolve_internal_token: str | None = Field(
+        default=None,
+        description=(
+            "Shared secret the Worker presents to /internal/artifacts/{id}. "
+            "Constant-time compared via secrets.compare_digest on the gateway side."
+        ),
+    )
+
     # Paths (for domain config loaders)
     governance_config_path: Path = Field(
         default=Path("config/governance"), description="Path to governance config directory"

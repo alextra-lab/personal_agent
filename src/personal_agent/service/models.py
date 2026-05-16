@@ -283,6 +283,51 @@ class BudgetReservationModel(Base):
     trace_id = Column(PG_UUID(as_uuid=True), nullable=True)
 
 
+# ============================================================================
+# Artifact substrate (ADR-0069 / FRE-227)
+#
+# Metadata canon for every byte-string parked in R2. Bytes live in R2 keyed
+# by r2_key; this table is the source of truth for ownership, type, and
+# (for notes) the pgvector embedding used by notes_search. The vector
+# column is intentionally omitted from the ORM model — embedding writes and
+# vector-distance reads happen via raw SQL through ``text()`` so the ORM
+# never touches the ``vector(1024)`` type.
+# ============================================================================
+
+
+class ArtifactModel(Base):
+    """SQLAlchemy view over the artifacts table.
+
+    Used by the gateway's ``/internal/artifacts/{id}`` resolve endpoint and
+    by future metadata-only consumers. Writes happen via raw SQL elsewhere
+    because they include the pgvector embedding column.
+    """
+
+    __tablename__ = "artifacts"
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.user_id"),
+        nullable=False,
+    )
+    session_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("sessions.session_id"),
+        nullable=True,
+    )
+    type = Column(Text, nullable=False)
+    slug = Column(Text, nullable=True)
+    title = Column(Text, nullable=True)
+    summary = Column(Text, nullable=True)
+    content_type = Column(Text, nullable=False)
+    size_bytes = Column(BigInteger, nullable=False)
+    r2_key = Column(Text, nullable=False, unique=True)
+    # tags TEXT[] and embedding vector(1024) are managed at the SQL layer.
+    created_by = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+
+
 class ConsolidationAttemptModel(Base):
     """SQLAlchemy model for the consolidation_attempts table.
 

@@ -47,7 +47,83 @@ Rules:
 - Maximum 200 words total
 - Only include information actually present in the messages
 - Prefer specifics over generalities (names, versions, choices)
-- Skip pleasantries and meta-conversation"""
+- Skip pleasantries and meta-conversation
+- Each bullet should stand on its own — a downstream reader will not see the
+  original messages
+- Preserve identifiers (file paths, ticket IDs, function names, model IDs,
+  hostnames, ports) verbatim — they are how the next turn re-grounds itself
+- Tool outputs may be truncated upstream; if you encounter an "[Earlier \
+messages truncated]" marker or an existing "## Conversation Summary"
+  block, fold that prior summary into the new one rather than re-summarising
+  raw text that no longer exists
+
+Worked example 1 — coding session:
+  Input (paraphrased):
+    [user]: We're deciding between SQLite and Postgres for the metrics store.
+    [assistant]: How many writes/sec do you expect, and is concurrent
+                 read/write a hard requirement?
+    [user]: ~50/sec peak, multiple concurrent readers, single writer.
+    [assistant]: Postgres is the right call — SQLite WAL handles concurrent
+                 readers fine but multiple-writer concurrency requires
+                 server-grade locking, and you'll want pg_stat_statements
+                 from day one.
+    [tool: ran ALTER TABLE …]: ok
+  Output:
+    ## Conversation Summary
+    - **Decisions:** Use Postgres (not SQLite) for the metrics store; enable
+      pg_stat_statements from day one.
+    - **Entities:** Postgres, SQLite, WAL, pg_stat_statements, metrics store.
+    - **Facts:** Expected load ~50 writes/sec peak, multiple concurrent
+      readers, single writer. ALTER TABLE applied successfully.
+    - **Open Items:** None.
+
+Worked example 2 — debugging session:
+  Input (paraphrased):
+    [user]: The /chat endpoint is returning 504 after 30s when the prompt
+            exceeds ~10k tokens.
+    [assistant]: That looks like the gateway timeout, not the LLM. Check
+                 the proxy.
+    [tool: curl /chat]: HTTP 504 after 30.1s
+    [assistant]: Confirmed — Caddy's default upstream timeout is 30s.
+                 Raise it on the /chat path.
+  Output:
+    ## Conversation Summary
+    - **Decisions:** Raise Caddy upstream timeout on the /chat path; root
+      cause is gateway, not LLM.
+    - **Entities:** /chat endpoint, Caddy reverse proxy, 504 status.
+    - **Facts:** 504 reproduces at ~30s when prompt exceeds ~10k tokens;
+      Caddy default upstream_timeout=30s.
+    - **Open Items:** Apply the timeout bump and re-test.
+
+Worked example 3 — tool-heavy session with prior summary:
+  Input (paraphrased):
+    [system]: ## Conversation Summary
+              - **Decisions:** Use Neo4j 5.26 LTS for the knowledge graph.
+              - **Entities:** Neo4j 5.26 LTS, pgvector.
+              - **Facts:** pgvector deferred to phase 2.
+              - **Open Items:** Choose embedding dimension.
+    [user]: Let's go with 768d embeddings — matches Qwen3-Embedding-0.6B.
+    [tool: edit docker-compose.yml]: ok
+    [assistant]: 768d set. Embedding service rebuilt.
+  Output:
+    ## Conversation Summary
+    - **Decisions:** Use Neo4j 5.26 LTS for the knowledge graph; embedding
+      dimension is 768 to match Qwen3-Embedding-0.6B.
+    - **Entities:** Neo4j 5.26 LTS, pgvector, Qwen3-Embedding-0.6B,
+      docker-compose.yml.
+    - **Facts:** pgvector deferred to phase 2; embedding service rebuilt.
+    - **Open Items:** None pending from this slice.
+
+Anti-patterns to avoid:
+- Do not invent details that are not in the messages — if a decision was
+  discussed but not concluded, list it under Open Items, not Decisions.
+- Do not summarise meta-conversation ("I will now check…", "let me think
+  about this…") — only the substantive turn output matters.
+- Do not collapse distinct entities into a generic term ("the database",
+  "the model") — name them.
+- Do not write narrative prose under the headings — every line is a bullet.
+- Do not include this instruction text or any system metadata in the
+  output. Output only the four-section summary."""
 
 
 async def compress_turns(

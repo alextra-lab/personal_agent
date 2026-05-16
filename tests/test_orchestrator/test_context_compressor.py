@@ -8,10 +8,58 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from personal_agent.orchestrator.context_compressor import (
+    _COMPRESSOR_SYSTEM_PROMPT,
     FALLBACK_MARKER,
     _format_messages_for_compression,
     compress_turns,
 )
+
+
+class TestSystemPromptCacheEligibility:
+    """The compressor system prompt must be ≥1024 tokens.
+
+    OpenAI prompt caching activates when the prompt prefix is at least
+    1024 tokens. The compressor's user message is fully variable (it is
+    the evicted-turn payload), so the only stable cacheable region is the
+    system message. Keeping it above 1024 tokens unlocks automatic
+    caching on every compressor call after the first.
+
+    See FRE-365 diagnostic (2026-05-16): before this lock-in the system
+    prompt was ~188 tokens and every gpt-5.4-nano compressor call missed
+    cache despite 50%+ of calls being eligible by total prompt size.
+    """
+
+    def test_system_prompt_is_cache_eligible_under_tiktoken(self) -> None:
+        """Token count under tiktoken must be ≥1024.
+
+        tiktoken is OpenAI's authoritative tokenizer for cache
+        eligibility; the project's char-based estimator is only a fast
+        approximation.
+        """
+        tiktoken = pytest.importorskip("tiktoken")
+        encoding = tiktoken.encoding_for_model("gpt-4o")
+        token_count = len(encoding.encode(_COMPRESSOR_SYSTEM_PROMPT))
+        assert token_count >= 1024, (
+            f"Compressor system prompt is {token_count} tokens — below the "
+            "1024-token OpenAI cache-eligibility floor. Cache hits will fail."
+        )
+
+    def test_system_prompt_is_stable_across_invocations(self) -> None:
+        """The constant must not be mutated at import or call time.
+
+        Cache hits depend on byte-identical prefixes between requests; any
+        mutation (timestamp interpolation, machine-specific path injection,
+        randomised example shuffling) would defeat caching.
+        """
+        from personal_agent.orchestrator import context_compressor
+
+        first = context_compressor._COMPRESSOR_SYSTEM_PROMPT
+        # Re-import to simulate a fresh request boundary
+        import importlib
+
+        importlib.reload(context_compressor)
+        second = context_compressor._COMPRESSOR_SYSTEM_PROMPT
+        assert first == second
 
 
 def _msg(role: str, content: str) -> dict[str, Any]:

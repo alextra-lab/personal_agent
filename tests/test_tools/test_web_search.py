@@ -140,6 +140,100 @@ async def test_web_search_engines_passed_in_params() -> None:
 
 
 @pytest.mark.asyncio
+async def test_web_search_weather_category_strips_weather_prefix() -> None:
+    """When categories='weather', a leading 'weather ' token is stripped.
+
+    The wttr.in and duckduckgo_weather engines treat the full query as a
+    geo location and raise ValueError on 'weather <city>'. Stripping the
+    prefix at the router lets those engines resolve the location.
+    """
+    resp = _mock_searxng_response()
+    client = _mock_client(resp)
+
+    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
+        await web_search_executor(query="weather Berlin", categories="weather")
+
+    params = client.get.call_args.kwargs["params"]
+    assert params["q"] == "Berlin"
+
+
+@pytest.mark.asyncio
+async def test_web_search_weather_engines_strips_weather_prefix() -> None:
+    """When engines targets a weather engine, leading 'weather ' is stripped."""
+    resp = _mock_searxng_response()
+    client = _mock_client(resp)
+
+    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
+        await web_search_executor(query="weather Tokyo", engines="wttr.in,openmeteo")
+
+    params = client.get.call_args.kwargs["params"]
+    assert params["q"] == "Tokyo"
+
+
+@pytest.mark.asyncio
+async def test_web_search_weather_prefix_case_insensitive() -> None:
+    """'Weather ' / 'WEATHER ' (any case) is stripped for weather targets."""
+    resp = _mock_searxng_response()
+    client = _mock_client(resp)
+
+    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
+        await web_search_executor(query="Weather Paris", categories="weather")
+
+    params = client.get.call_args.kwargs["params"]
+    assert params["q"] == "Paris"
+
+
+@pytest.mark.asyncio
+async def test_web_search_general_category_keeps_weather_prefix() -> None:
+    """General-category searches preserve the literal query (no strip).
+
+    A user asking 'weather Berlin' against the general category wants
+    weather-related pages, not a location lookup.
+    """
+    resp = _mock_searxng_response()
+    client = _mock_client(resp)
+
+    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
+        await web_search_executor(query="weather Berlin", categories="general")
+
+    params = client.get.call_args.kwargs["params"]
+    assert params["q"] == "weather Berlin"
+
+
+@pytest.mark.asyncio
+async def test_web_search_non_leading_weather_token_not_stripped() -> None:
+    """Only a leading 'weather ' is stripped; mid-query occurrences stay."""
+    resp = _mock_searxng_response()
+    client = _mock_client(resp)
+
+    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
+        await web_search_executor(query="cold weather climate", categories="weather")
+
+    params = client.get.call_args.kwargs["params"]
+    assert params["q"] == "cold weather climate"
+
+
+@pytest.mark.asyncio
+async def test_web_search_sets_x_forwarded_for_header() -> None:
+    """Outbound httpx GET sends an X-Forwarded-For header.
+
+    SearXNG's botdetection logs ERROR-level warnings on requests with
+    neither X-Forwarded-For nor X-Real-IP. The agent calls SearXNG
+    directly over the docker network (no Caddy proxy), so we set the
+    header ourselves to keep telemetry signal clean.
+    """
+    resp = _mock_searxng_response()
+    client = _mock_client(resp)
+
+    with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
+        await web_search_executor(query="anything")
+
+    headers = client.get.call_args.kwargs.get("headers") or {}
+    assert "X-Forwarded-For" in headers
+    assert headers["X-Forwarded-For"]
+
+
+@pytest.mark.asyncio
 async def test_web_search_time_range_passed() -> None:
     """time_range parameter is forwarded to SearXNG query params."""
     resp = _mock_searxng_response()

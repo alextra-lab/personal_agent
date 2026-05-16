@@ -39,11 +39,16 @@
 #   provider_type    "cloud" (set explicitly for ADR-0029 concurrency pass-through)
 
 # ── Process-to-model assignments ──────────────────────────────────────────────
-entity_extraction_role: gpt-5.4-nano
-captains_log_role: gpt-5.4-nano
-insights_role: gpt-5.4-nano
-# captains_log_role: claude_sonnet
-# insights_role: claude_sonnet
+# Background role assignments (FRE-365 — 2026-05-16):
+# Upgraded from gpt-5.4-nano to gpt-5.4-mini / claude_sonnet after the cache
+# diagnostic confirmed (a) gpt-5.4-nano does not participate in OpenAI's
+# automatic prompt caching at all, (b) compressor fidelity for downstream
+# agent-loop consumers benefits materially from mini/sonnet over nano on
+# multi-step / state-tracking tasks. See
+# docs/superpowers/plans/2026-05-16-fre-365-cache-diagnostic.md.
+entity_extraction_role: gpt-5.4-mini
+captains_log_role: claude_sonnet
+insights_role: claude_sonnet
 
 models:
   # ── Tier 1: Primary Agent ───────────────────────────────────────
@@ -183,9 +188,13 @@ models:
   compressor:
     # Lightweight summarization of evicted context turns.
     # Runs asynchronously between turns when token threshold is crossed.
-    # Cloud nano chosen for: low cost ($0.20/$1.25/MTok), strong structured
-    # output, high concurrency (no GPU contention with local primary).
-    id: "gpt-5.4-nano"
+    # gpt-5.4-mini chosen (FRE-365, 2026-05-16): cache-participating
+    # (unlike nano) and materially better fidelity on multi-step / state-
+    # tracking compression — what an agent-loop downstream actually
+    # depends on. Pricing $0.75/$4.50 per MTok; with the ≥1024-token
+    # stable system prompt (context_compressor.py) the cached portion
+    # bills at ~$0.075/MTok across all calls after the first.
+    id: "gpt-5.4-mini"
     provider: "openai"
     provider_type: "cloud"
     max_tokens: 512

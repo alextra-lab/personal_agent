@@ -93,13 +93,9 @@ class Orchestrator:
         # Propagate user_id / session_id so tool executors that receive
         # `ctx` can scope per-user (notes_*, recall_personal_history).
         if trace_id is not None:
-            trace_ctx = TraceContext(
-                trace_id=trace_id, user_id=user_id, session_id=session_id
-            )
+            trace_ctx = TraceContext(trace_id=trace_id, user_id=user_id, session_id=session_id)
         else:
-            trace_ctx = TraceContext.new_trace(
-                user_id=user_id, session_id=session_id
-            )
+            trace_ctx = TraceContext.new_trace(user_id=user_id, session_id=session_id)
 
         # Create execution context with timer
         ctx = ExecutionContext(

@@ -1,6 +1,6 @@
 # ADR-0069: R2-Backed Artifact Substrate
 
-**Status**: Proposed — pending FRE-227 (substrate), FRE-368 (agent artifacts), FRE-369 (user uploads) implementation
+**Status**: Implemented (FRE-227 + FRE-371 shipped 2026-05-17) — two implementation deviations recorded below
 **Date**: 2026-05-15
 **Deciders**: Project owner
 **Related**: ADR-0064 (Inbound User Identity via Cloudflare Access), ADR-0063 (Primitive Tools / Action-Boundary Governance), ADR-0052 (Seshat Owner Identity Primitive), ADR-0070 (Output Channel Model), FRE-227, FRE-368, FRE-369, FRE-370
@@ -252,6 +252,18 @@ Flat content-addressable URLs are the de-facto pattern at every hosted agent (Cl
 ### G. Separate buckets per flow
 
 *Rejected.* Three buckets, three Worker routes, three Access policies, three terraform stanzas — for no benefit beyond "type discrimination at the storage layer instead of the metadata layer." Single bucket with `type` discriminator is simpler, cheaper, and equally auditable.
+
+---
+
+## Implementation Deviations (FRE-371, 2026-05-17)
+
+### Dev-1 — EU jurisdiction dropped from R2 bucket (D1)
+
+ADR prescribed `jurisdiction: eu`. In practice, Cloudflare's Workers binding API (error 10085) cannot locate EU-jurisdiction buckets — they live in a separate API namespace (`/jurisdictions/eu/accounts/…/r2/buckets`) that the script deployment endpoint does not query. The bucket was created with `location = "EEUR"` (Eastern Europe datacenter) and no jurisdiction flag. Physical data residency is unchanged; the CF contractual GDPR guarantee is not present. Acceptable for a personal project with no regulatory obligation.
+
+### Dev-2 — Separate artifacts Access app replaced with self_hosted_domains (D3)
+
+ADR implied a separate `cloudflare_zero_trust_access_application` for `artifacts.frenchforet.com` (inherited from FRE-371 issue spec). In practice, CF Access requires a separate per-domain auth cookie, meaning the user was prompted to log in again each time they opened an artifact URL from the agent. The separate app was removed; `artifacts.frenchforet.com` is added to `self_hosted_domains` on the existing `agent` Access application. CF Access now preemptively issues cookies for both domains in one auth flow (≤5 domain fast path per CF docs). `Cf-Access-Authenticated-User-Email` header injection is unchanged. Future policy split (different allowlist for artifacts vs agent) would require reversing this consolidation.
 
 ---
 

@@ -261,9 +261,31 @@ Flat content-addressable URLs are the de-facto pattern at every hosted agent (Cl
 
 ADR prescribed `jurisdiction: eu`. In practice, Cloudflare's Workers binding API (error 10085) cannot locate EU-jurisdiction buckets — they live in a separate API namespace (`/jurisdictions/eu/accounts/…/r2/buckets`) that the script deployment endpoint does not query. The bucket was created with `location = "EEUR"` (Eastern Europe datacenter) and no jurisdiction flag. Physical data residency is unchanged; the CF contractual GDPR guarantee is not present. Acceptable for a personal project with no regulatory obligation.
 
-### Dev-2 — Separate artifacts Access app replaced with self_hosted_domains (D3)
+### Dev-2 — Separate artifacts Access app replaced with self_hosted_domains (D3) — **REVERTED 2026-05-17**
 
-ADR implied a separate `cloudflare_zero_trust_access_application` for `artifacts.frenchforet.com` (inherited from FRE-371 issue spec). In practice, CF Access requires a separate per-domain auth cookie, meaning the user was prompted to log in again each time they opened an artifact URL from the agent. The separate app was removed; `artifacts.frenchforet.com` is added to `self_hosted_domains` on the existing `agent` Access application. CF Access now preemptively issues cookies for both domains in one auth flow (≤5 domain fast path per CF docs). `Cf-Access-Authenticated-User-Email` header injection is unchanged. Future policy split (different allowlist for artifacts vs agent) would require reversing this consolidation.
+**Original deviation (no longer in force):** ADR implied a separate `cloudflare_zero_trust_access_application` for `artifacts.frenchforet.com`. To avoid a per-visit OTP prompt (separate per-app cookies), `artifacts.frenchforet.com` was originally added as a secondary entry under the `destinations` attribute of the existing `agent` Access application.
+
+**Why the revert (H1 finding, 2026-05-17 07:54 UTC):** during FRE-227 smoke testing the Worker fronting `artifacts.frenchforet.com` returned 404 on every legitimate request even though CF Access was authenticating the user. Wrangler tail showed the request arriving at the Worker **without `Cf-Access-Jwt-Assertion`**. The cause is a documented-but-subtle CF Access behavior: **the JWT header is injected only on the application's primary `domain`, not on secondary `destinations` entries.** Destinations get policy enforcement (auth gate, allowlist) but not auth-context propagation. The Worker had no JWT to verify, the gateway had no JWT to receive — the entire identity chain collapsed silently.
+
+**Current state:** the dedicated `cloudflare_zero_trust_access_application.artifacts` is restored, with the same policy as the agent app (`personal_only`) and `session_duration = "720h"` + `auto_redirect_to_identity = true` per FRE-370 convention. Cross-app SSO works at the CF Access team-domain level (one global session covers both `agent.frenchforet.com` and `artifacts.frenchforet.com`), so the original UX motivation for Dev-2 (no per-visit re-auth) is still satisfied without breaking JWT propagation.
+
+**Lesson for future ADRs:** when a substrate depends on `Cf-Access-Jwt-Assertion` injection, each hostname that needs the JWT must be the **primary `domain`** of its own Access application. The `destinations` attribute is for policy reuse, not auth-context reuse.
+
+### Dev-3 — JWT verification required end-to-end (security hardening, 2026-05-17)
+
+**Background:** the original ADR D3 inherited authorization from ADR-0064 (header-based identity via `Cf-Access-Authenticated-User-Email`). During FRE-227 smoke testing on 2026-05-17, an off-allowlist email materialized a `users` row at 04:45:18 UTC despite the CF Access policy include list containing only four allowlisted emails. Root cause: the `Cf-Access-Authenticated-User-Email` header is a plaintext string that can be forged by any caller that reaches the Worker (e.g., via the workers.dev default URL) or the gateway internal endpoint (with the shared `X-Internal-Token`). Trusting it without cryptographic verification was a spoofing vector.
+
+**Hardening (PR #65 + FRE-371 Phase B):** every layer that consumes a CF Access identity now requires a cryptographically-verified `Cf-Access-Jwt-Assertion`:
+
+1. **Worker** validates the incoming JWT against the team JWKS + app `aud` before any further processing. Returns 404 to the caller if verification fails.
+2. **Worker forwards the validated JWT** to the gateway as `X-Cf-Access-Jwt-Assertion` — it does *not* forward `X-Authenticated-User-Email`.
+3. **Gateway re-verifies the JWT** independently (`service/cf_access_jwt.py`) against the same JWKS + `aud`. The verified `email` claim is the only trusted identity source. Plaintext email headers are explicitly ignored.
+4. **`X-Internal-Token`** remains as a defense-in-depth filter that rejects callers that aren't our Worker — but it is no longer the sole gate.
+5. **`workers_dev = false`** on the artifacts Worker resource eliminates the bypass URL, leaving `artifacts.frenchforet.com` (Access-gated) as the only public ingress.
+
+The gateway requires `cf_access_team_domain` + `cf_access_aud` to be populated; missing config returns 503 (fail-closed) rather than degrading to header-trust. Settings live in `personal_agent.config.settings` (already defined since FRE-213; verification code is new).
+
+Verified end-to-end at 08:08 + 08:11 UTC on 2026-05-17 with fresh writes and reads.
 
 ---
 
@@ -287,13 +309,15 @@ A detailed implementation plan will be written in `docs/superpowers/plans/YYYY-M
 
 ## Verification
 
-1. **Round-trip**: agent calls `notes_write("test", "hello")`, retrieves via `notes_search("hello")`, verifies content matches and `r2_key` resolves to the same bytes via Worker (via the Access-gated URL).
-2. **Access policy**: an unauthenticated browser session attempting `GET https://artifacts.frenchforet.com/{any-id}` is blocked at the Cloudflare Access edge before reaching the Worker.
+1. **Round-trip**: agent calls `notes_write("test", "hello")`, retrieves via `notes_search("hello")`, verifies content matches and `r2_key` resolves to the same bytes via Worker (via the Access-gated URL). ✅ verified 2026-05-17 08:08 + 08:11 UTC.
+2. **Access policy**: an unauthenticated browser session attempting `GET https://artifacts.frenchforet.com/{any-id}` is blocked at the Cloudflare Access edge before reaching the Worker. ✅ verified — returns 302 to `frenchforest.cloudflareaccess.com/cdn-cgi/access/login/...`.
 3. **Prefix escape**: `notes_write` cannot write to an `artifact_*` R2 prefix; governance + storage layer both reject. Negative tests in FRE-227.
 4. **Cross-user ownership**: user A writes an artifact; user B's `artifact_list` does not return it; user B's `GET /{artifact_id}` returns 404 per ADR-0064 D3 semantics.
-5. **Sovereignty**: R2 bucket location confirmed `eu` via R2 API; no failover to non-EU jurisdictions.
+5. **Sovereignty**: R2 bucket location confirmed `EEUR` (physical EU residency, no CF contractual EU jurisdiction — see Dev-1).
 6. **CLI fallback**: a CLI-originated `notes_write` resolves to the deployment owner's `user_id` and is visible to the same user through the PWA (no disjoint identity across entry points).
 7. **Cost monitoring**: monthly R2 + Workers spend visible via Cloudflare dashboard; alert at 80% of bundled limits (alerting itself deferred to ops follow-up).
+8. **JWT spoofing rejected (Dev-3 hardening)**: a request to `/internal/artifacts/{id}` with `X-Internal-Token` but no `X-Cf-Access-Jwt-Assertion` returns 401 (verified on VPS); a request with a forged `X-Authenticated-User-Email` header but no JWT returns 401 (regression test pinned in `tests/personal_agent/service/test_artifacts_router.py`).
+9. **`workers_dev = false`** (Phase B1): the `<script>.workers.dev` bypass URL is unreachable; the Worker only accepts traffic via `artifacts.frenchforet.com` behind CF Access.
 
 ---
 

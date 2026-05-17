@@ -148,3 +148,97 @@ After Phase B deployment:
 If wrangler tail shows the offending request **came from the user's iPad against `artifacts.frenchforet.com`** (not the workers.dev URL), then **CF Access itself authenticated the off-allowlist email**, which would be a much more serious finding — it would mean the policy isn't being enforced as defined. In that case, Phase B alone is insufficient; we'd need to file a CF support ticket.
 
 The most likely Phase A outcome is that the request came from a laptop-Claude test call with the email header set from the Linear MCP `createdBy` value — a self-inflicted artifact of the implementation process, not an external attack. **But we should not assume that without evidence.**
+
+---
+
+## 2026-05-17 07:39 UTC update — Phase B fully deployed, smoke test still fails ("Not found")
+
+**State of the world:**
+- PR #65 (`fix(security): require CF Access JWT verification on artifact-resolve endpoint`) **merged**.
+- Gateway rebuilt; `cf_access_verifier_initialized team_domain=frenchforest.cloudflareaccess.com aud_prefix=e0c3928bbfbf…` confirmed in logs.
+- Token-only probe from VPS confirmed 401 + `artifact_resolve_missing_jwt` — gateway side is enforcing correctly.
+- LC reports **B2 already applied** (Worker updated to verify + forward JWT).
+- User opens `https://artifacts.frenchforet.com/94c09610-...` on iPad → "Not found".
+
+**Critical observation:** the iPad request **never reached the gateway**. The only `/internal/artifacts/{id}` log lines since the rebuild are from the VPS-side probe at 07:39:34. The Worker is returning 404 *before* calling back to the gateway.
+
+That means the Worker's local JWT pre-check (step in `worker/artifacts.js` between header read and gateway fetch) is rejecting the request. One of three things is happening:
+
+### Hypothesis 1 — Worker has no JWT to verify
+The Worker reads `request.headers.get('Cf-Access-Jwt-Assertion')` and, when null, returns 404. If CF Access isn't sending the JWT header for the `artifacts.frenchforet.com` destination (perhaps because of the `destinations`-based consolidation rather than a dedicated app), the Worker has nothing to verify.
+
+### Hypothesis 2 — Worker has a JWT but `verifyAccessJwt` rejects it
+Most likely causes:
+- `env.ACCESS_AUD` and `env.ACCESS_TEAM_DOMAIN` not actually bound on the deployed Worker (terraform apply succeeded for the resource but binding update lagged, or the worker version didn't pick up the new bindings)
+- `ACCESS_AUD` value mismatched against the JWT's actual `aud` claim
+- kid lookup in JWKS fails (kid not present, possibly due to a partial JWKS response or a stale isolate cache)
+- Signature verification fails (key serialization mismatch in `@tsndr/cloudflare-worker-jwt` — known issue with some JWK structures)
+
+### Hypothesis 3 — Worker code wasn't actually deployed
+`terraform apply` reported success but `wrangler` didn't push new code (e.g., terraform updated bindings but the script content reference is stale, or the deploy resource has drift).
+
+## Diagnostic plan — LC executes on laptop
+
+The goal is to localize the 404 to one of the three hypotheses without code changes first.
+
+### Step 1 — Confirm the deployed Worker version
+
+```bash
+cd ~/Dev/personal_agent_secrets/infrastructure/terraform-cloudflare
+wrangler deployments list --name artifacts-substrate | head -5
+```
+
+Expect the most recent deployment to be timestamped within the last hour (since LC applied B2). If the latest deployment predates the B2 work, the Worker is still running old code — re-deploy.
+
+### Step 2 — Confirm Worker bindings include ACCESS_TEAM_DOMAIN and ACCESS_AUD
+
+```bash
+wrangler secret list --name artifacts-substrate    # for secret_text bindings
+# AND
+terraform state show cloudflare_workers_script.artifacts_substrate \
+  | grep -A 2 -E "name = \"ACCESS_TEAM_DOMAIN\"|name = \"ACCESS_AUD\""
+```
+
+Expect both to appear with the values from FRE-371 comment B2.3. If absent, the JWT verify call uses `undefined` and fails.
+
+### Step 3 — Tail the Worker, then have Alex retry the iPad URL
+
+```bash
+wrangler tail --name artifacts-substrate --format=pretty
+# Alex opens https://artifacts.frenchforet.com/94c09610-b7bc-401b-b32a-67bf80b02ad0 on iPad
+```
+
+What we want to see:
+
+| Worker log says | Diagnosis |
+|---|---|
+| No request appears at all | DNS / route binding broken; the request isn't reaching this Worker. Check `cloudflare_workers_custom_domain.artifacts`. |
+| Request arrives, no `Cf-Access-Jwt-Assertion` in headers | Hypothesis 1. CF Access isn't injecting the JWT for this destination. Likely the `destinations` consolidation issue. |
+| Request arrives with JWT, then "jwks fetch failed" or "no signing key" | Hypothesis 2a. JWKS endpoint or team domain mismatch. Verify `ACCESS_TEAM_DOMAIN`. |
+| Request arrives with JWT, `verifyAccessJwt` returns null | Hypothesis 2b. Check incoming `aud` claim vs `env.ACCESS_AUD`. Add `console.log({audClaim: claims.aud, expected: audience})` temporarily. |
+| Request arrives, JWT verifies, fetch to gateway returns 401 | Hypothesis is wrong — gateway-side issue. Check gateway logs (we'd see `artifact_resolve_jwt_invalid` since the Worker would have forwarded the JWT). |
+
+### Step 4 — Direct test of CF Access JWT injection on artifacts.frenchforet.com
+
+If Hypothesis 1 is suspected (CF Access not forwarding the JWT for the artifacts destination after consolidation):
+
+```bash
+# From Alex's iPad, in Safari, while signed in:
+# Visit https://artifacts.frenchforet.com/cdn-cgi/access/get-identity
+# Expect JSON containing { email, identity_nonce, ... } — proves CF Access is active for this host.
+# If 404, CF Access isn't gating the host at all, meaning the destinations entry isn't taking effect.
+```
+
+If the identity endpoint returns 404 on `artifacts.frenchforet.com` but works on `agent.frenchforet.com`, the consolidation under the destinations attribute isn't behaving as expected. Fix would be to split into a dedicated `cloudflare_zero_trust_access_application.artifacts` again (reverse the FRE-371 Dev-2 decision), with its own session_duration=720h and shared policy.
+
+## What happens once the diagnosis lands
+
+Each hypothesis maps to a small change, all laptop-side:
+
+- **H1 (no JWT)**: split the artifacts Access app back out from the consolidated app. Re-add `cloudflare_zero_trust_access_application.artifacts` with the same policy as the agent app. Re-apply.
+- **H2 (binding/aud)**: fix the binding value in `*.tf`, re-apply, re-deploy Worker.
+- **H3 (stale deploy)**: `cd worker && wrangler deploy` (or terraform-managed deploy).
+
+## Phase C deferred until Phase B verifies
+
+The "Delete spurious users row + smoke test" is unchanged but blocked on the diagnosis above. The spurious `users` row from 04:45:18 (`starry-plaza-1s@icloud.com`) is still untouched — it represents pre-hardening state and will be deleted after the URL works end-to-end.

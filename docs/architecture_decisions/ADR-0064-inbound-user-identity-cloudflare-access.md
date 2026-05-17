@@ -193,11 +193,37 @@ Full plan in `plans/i-think-fre-213-258-linear-mitten.md`. Summary: ~300–500 l
 
 ---
 
+## Update 2026-05-17 — JWT verification now actually implemented (partial)
+
+D1 always specified that the service "verifies the JWT against the cached team JWKS as defense-in-depth." Until 2026-05-17 **this verification was specified but never built** — every inbound endpoint trusted `Cf-Access-Authenticated-User-Email` as a plaintext string. That gap was exposed during FRE-227 smoke testing when an off-allowlist email appeared in the `users` table at 04:45:18 UTC, confirming that any caller who reached the gateway (via the workers.dev bypass URL with a forged header, or directly through the CF Tunnel with the shared `X-Internal-Token`) could spoof identity.
+
+**What shipped (FRE-227 Phase B / PR #65):** a new `service/cf_access_jwt.py` module with `CFAccessVerifier` — async cached JWKS client, RS256 signature verification, `aud` / `exp` / `iat` / `email` claim enforcement, kid-miss → JWKS refresh retry. Configuration via the existing `cf_access_team_domain` + `cf_access_aud` settings.
+
+**Scope of this implementation:** only the artifact-resolve endpoint (`/internal/artifacts/{id}`, called by the Cloudflare Worker fronting `artifacts.frenchforet.com`) currently calls the verifier. Plaintext `X-Authenticated-User-Email` is explicitly ignored on that path.
+
+**Not yet migrated** (out of scope for FRE-227, tracked as a Wave E follow-up):
+
+- SSE `/stream/{session_id}` — still uses `get_request_user` which trusts the header
+- `POST /chat`, `POST /chat/stream` — same
+- `GET /sessions`, `GET /sessions/{id}`, `PATCH /sessions/{id}`, `POST /sessions` — same
+
+These paths sit behind CF Access in production so the practical risk is low, but the defense-in-depth promise of D1 isn't fully redeemed until they all flow through the verifier. The follow-up ticket should:
+
+1. Refactor `service/auth.py:get_request_user` to require a verified JWT (use `CFAccessVerifier`) and source `email` from JWT claims rather than the plaintext header.
+2. Keep the dev/CLI fallback unchanged — the verifier is bypassed when `gateway_auth_enabled=False` and no CF headers are present, per D4.
+3. Add a regression test guarding against re-introduction of header-trust on authenticated paths.
+
+ADR-0069 records the substrate-side details under "Implementation Deviations § Dev-3".
+
+---
+
 ## Related
 
 - ADR-0052 — Seshat Owner Identity Primitive (single-operator stanza; remains as-is)
+- ADR-0069 — R2-Backed Artifact Substrate (Dev-3 documents the JWT verification rollout on the artifacts path)
 - FRE-213 — Owner identity bootstrap (Approved; unchanged by this ADR)
 - FRE-228 — `:User` node + me/I/my resolution (parked; ships when memory partitioning is desired)
 - FRE-229 — memory visibility model (this ADR redirects to two-level; FRE-229 should be edited accordingly)
 - FRE-235 — session list drawer (the live leak)
+- FRE-227 — first endpoint to actually implement D1 JWT verification (2026-05-17)
 - Implementation plan: `plans/i-think-fre-213-258-linear-mitten.md`

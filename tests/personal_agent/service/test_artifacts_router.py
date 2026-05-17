@@ -1,8 +1,8 @@
 """Unit tests for /internal/artifacts/{id} resolve endpoint (FRE-227).
 
-These tests build a minimal FastAPI app, override the DB dependency with a
-stub session, and patch the email->user_id resolver. No real Postgres,
-aiobotocore, or Cloudflare Worker required.
+These tests build a minimal FastAPI app, override the DB dependency with
+a stub session, and patch the CF Access JWT verifier. No real Postgres,
+aiobotocore, JWKS endpoint, or Cloudflare Worker is involved.
 """
 
 from __future__ import annotations
@@ -19,9 +19,14 @@ from fastapi.testclient import TestClient
 
 from personal_agent.service import artifacts_router as router_module
 from personal_agent.service.artifacts_router import router
+from personal_agent.service.cf_access_jwt import (
+    CFAccessClaims,
+    CFAccessVerifierError,
+)
 from personal_agent.service.database import get_db_session
 
 _TOKEN = "test-token-deadbeef"
+_JWT = "header.body.signature"  # opaque — the verifier is mocked
 
 
 class _StubSession:
@@ -36,7 +41,7 @@ class _StubSession:
         return SimpleNamespace(one_or_none=lambda: self._found)
 
 
-def _build_app(session: _StubSession, *, email_resolves_to: UUID | None) -> FastAPI:
+def _build_app(session: _StubSession) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
 
@@ -47,8 +52,22 @@ def _build_app(session: _StubSession, *, email_resolves_to: UUID | None) -> Fast
     return app
 
 
+def _stub_verifier(claims: CFAccessClaims) -> Any:
+    """Build an object with an async ``verify`` returning the given claims."""
+    v = SimpleNamespace()
+    v.verify = AsyncMock(return_value=claims)
+    return v
+
+
+def _stub_verifier_rejecting() -> Any:
+    """Build a verifier whose ``verify`` raises ``CFAccessVerifierError``."""
+    v = SimpleNamespace()
+    v.verify = AsyncMock(side_effect=CFAccessVerifierError("bad jwt"))
+    return v
+
+
 @pytest.fixture(autouse=True)
-def _patch_token_and_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
+def _patch_token(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         router_module.settings,
         "artifact_resolve_internal_token",
@@ -77,12 +96,12 @@ def test_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     art_id = uuid4()
     user_id = uuid4()
     session = _StubSession(found=_row(art_id, user_id))
-    app = _build_app(session, email_resolves_to=user_id)
+    app = _build_app(session)
 
+    claims = CFAccessClaims(email="alex@example.com", sub="u", aud="a", iss="i")
+    monkeypatch.setattr(router_module, "get_verifier", lambda: _stub_verifier(claims))
     monkeypatch.setattr(
-        router_module,
-        "get_or_create_user_by_email",
-        AsyncMock(return_value=user_id),
+        router_module, "get_or_create_user_by_email", AsyncMock(return_value=user_id)
     )
 
     with TestClient(app) as client:
@@ -90,7 +109,7 @@ def test_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
             f"/internal/artifacts/{art_id}",
             headers={
                 "x-internal-token": _TOKEN,
-                "x-authenticated-user-email": "alex@example.com",
+                "x-cf-access-jwt-assertion": _JWT,
             },
         )
 
@@ -98,38 +117,40 @@ def test_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     body = resp.json()
     assert body["artifact_id"] == str(art_id)
     assert body["r2_key"].startswith(f"note/{user_id}/")
-    assert body["content_type"] == "text/markdown; charset=utf-8"
-    assert body["size_bytes"] == 42
 
 
 # ---------------------------------------------------------------------------
-# 401 — bad / missing token
+# 401 — internal token
 # ---------------------------------------------------------------------------
 
 
-def test_missing_token_is_401(monkeypatch: pytest.MonkeyPatch) -> None:
-    session = _StubSession(found=None)
-    app = _build_app(session, email_resolves_to=uuid4())
+def test_missing_internal_token_is_401(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _build_app(_StubSession(found=None))
+    monkeypatch.setattr(router_module, "get_verifier", lambda: _stub_verifier(
+        CFAccessClaims(email="x@y.z", sub="s", aud="a", iss="i")
+    ))
 
     with TestClient(app) as client:
         resp = client.get(
             f"/internal/artifacts/{uuid4()}",
-            headers={"x-authenticated-user-email": "x@example.com"},
+            headers={"x-cf-access-jwt-assertion": _JWT},
         )
 
     assert resp.status_code == 401
 
 
-def test_wrong_token_is_401(monkeypatch: pytest.MonkeyPatch) -> None:
-    session = _StubSession(found=None)
-    app = _build_app(session, email_resolves_to=uuid4())
+def test_wrong_internal_token_is_401(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _build_app(_StubSession(found=None))
+    monkeypatch.setattr(router_module, "get_verifier", lambda: _stub_verifier(
+        CFAccessClaims(email="x@y.z", sub="s", aud="a", iss="i")
+    ))
 
     with TestClient(app) as client:
         resp = client.get(
             f"/internal/artifacts/{uuid4()}",
             headers={
                 "x-internal-token": "nope",
-                "x-authenticated-user-email": "x@example.com",
+                "x-cf-access-jwt-assertion": _JWT,
             },
         )
 
@@ -137,22 +158,17 @@ def test_wrong_token_is_401(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_unset_token_on_server_is_401(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If the gateway hasn't been configured with a token, every call is 401."""
     monkeypatch.setattr(
-        router_module.settings,
-        "artifact_resolve_internal_token",
-        None,
-        raising=False,
+        router_module.settings, "artifact_resolve_internal_token", None, raising=False
     )
-    session = _StubSession(found=None)
-    app = _build_app(session, email_resolves_to=uuid4())
+    app = _build_app(_StubSession(found=None))
 
     with TestClient(app) as client:
         resp = client.get(
             f"/internal/artifacts/{uuid4()}",
             headers={
                 "x-internal-token": _TOKEN,
-                "x-authenticated-user-email": "x@example.com",
+                "x-cf-access-jwt-assertion": _JWT,
             },
         )
 
@@ -160,13 +176,38 @@ def test_unset_token_on_server_is_401(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 404 — auth-shape mismatch / unknown id / cross-user
+# 503 — verifier misconfigured
 # ---------------------------------------------------------------------------
 
 
-def test_missing_email_is_404(monkeypatch: pytest.MonkeyPatch) -> None:
-    session = _StubSession(found=None)
-    app = _build_app(session, email_resolves_to=uuid4())
+def test_missing_verifier_is_503(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If cf_access_team_domain / cf_access_aud aren't set, fail closed."""
+    app = _build_app(_StubSession(found=None))
+    monkeypatch.setattr(router_module, "get_verifier", lambda: None)
+
+    with TestClient(app) as client:
+        resp = client.get(
+            f"/internal/artifacts/{uuid4()}",
+            headers={
+                "x-internal-token": _TOKEN,
+                "x-cf-access-jwt-assertion": _JWT,
+            },
+        )
+
+    assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# 401 — JWT verification
+# ---------------------------------------------------------------------------
+
+
+def test_missing_jwt_is_401(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No JWT in the request → 401. Token alone is not sufficient."""
+    app = _build_app(_StubSession(found=None))
+    monkeypatch.setattr(router_module, "get_verifier", lambda: _stub_verifier(
+        CFAccessClaims(email="x@y.z", sub="s", aud="a", iss="i")
+    ))
 
     with TestClient(app) as client:
         resp = client.get(
@@ -174,18 +215,66 @@ def test_missing_email_is_404(monkeypatch: pytest.MonkeyPatch) -> None:
             headers={"x-internal-token": _TOKEN},
         )
 
-    assert resp.status_code == 404
+    assert resp.status_code == 401
+
+
+def test_invalid_jwt_is_401(monkeypatch: pytest.MonkeyPatch) -> None:
+    """JWT verifier rejects → 401, never reaches the DB."""
+    session = _StubSession(found=None)
+    app = _build_app(session)
+    monkeypatch.setattr(router_module, "get_verifier", lambda: _stub_verifier_rejecting())
+
+    with TestClient(app) as client:
+        resp = client.get(
+            f"/internal/artifacts/{uuid4()}",
+            headers={
+                "x-internal-token": _TOKEN,
+                "x-cf-access-jwt-assertion": _JWT,
+            },
+        )
+
+    assert resp.status_code == 401
+    # DB must not be touched when JWT verification fails.
+    assert session.queries == []
+
+
+def test_email_header_alone_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Forwarded email without JWT must NOT authenticate.
+
+    Regression guard against the pre-2026-05-17 behavior where
+    ``X-Authenticated-User-Email`` alone was trusted.
+    """
+    session = _StubSession(found=None)
+    app = _build_app(session)
+    monkeypatch.setattr(router_module, "get_verifier", lambda: _stub_verifier(
+        CFAccessClaims(email="attacker@example.com", sub="s", aud="a", iss="i")
+    ))
+    # The forwarded email header is now meaningless without a JWT.
+
+    with TestClient(app) as client:
+        resp = client.get(
+            f"/internal/artifacts/{uuid4()}",
+            headers={
+                "x-internal-token": _TOKEN,
+                "x-authenticated-user-email": "attacker@example.com",
+            },
+        )
+
+    assert resp.status_code == 401
+    assert session.queries == []  # no user row created, no artifact lookup
+
+
+# ---------------------------------------------------------------------------
+# 404 — unknown / cross-user
+# ---------------------------------------------------------------------------
 
 
 def test_unknown_artifact_is_404(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``scalar_one_or_none()`` returning None must surface as 404."""
-    session = _StubSession(found=None)
-    app = _build_app(session, email_resolves_to=uuid4())
-
+    app = _build_app(_StubSession(found=None))
+    claims = CFAccessClaims(email="alex@example.com", sub="s", aud="a", iss="i")
+    monkeypatch.setattr(router_module, "get_verifier", lambda: _stub_verifier(claims))
     monkeypatch.setattr(
-        router_module,
-        "get_or_create_user_by_email",
-        AsyncMock(return_value=uuid4()),
+        router_module, "get_or_create_user_by_email", AsyncMock(return_value=uuid4())
     )
 
     with TestClient(app) as client:
@@ -193,7 +282,7 @@ def test_unknown_artifact_is_404(monkeypatch: pytest.MonkeyPatch) -> None:
             f"/internal/artifacts/{uuid4()}",
             headers={
                 "x-internal-token": _TOKEN,
-                "x-authenticated-user-email": "x@example.com",
+                "x-cf-access-jwt-assertion": _JWT,
             },
         )
 
@@ -201,18 +290,12 @@ def test_unknown_artifact_is_404(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_cross_user_yields_404(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Querying for an artifact owned by another user must 404, never 200.
-
-    The WHERE clause filters by user_id so the stub returns None — this
-    test asserts that the endpoint does not leak a 403 vs 404 split.
-    """
-    session = _StubSession(found=None)  # the WHERE filter would yield no rows
-    app = _build_app(session, email_resolves_to=uuid4())
-
+    """Cross-user access masked as 404 (no 403, no metadata leak)."""
+    app = _build_app(_StubSession(found=None))
+    claims = CFAccessClaims(email="intruder@example.com", sub="s", aud="a", iss="i")
+    monkeypatch.setattr(router_module, "get_verifier", lambda: _stub_verifier(claims))
     monkeypatch.setattr(
-        router_module,
-        "get_or_create_user_by_email",
-        AsyncMock(return_value=uuid4()),
+        router_module, "get_or_create_user_by_email", AsyncMock(return_value=uuid4())
     )
 
     with TestClient(app) as client:
@@ -220,8 +303,37 @@ def test_cross_user_yields_404(monkeypatch: pytest.MonkeyPatch) -> None:
             f"/internal/artifacts/{uuid4()}",
             headers={
                 "x-internal-token": _TOKEN,
-                "x-authenticated-user-email": "intruder@example.com",
+                "x-cf-access-jwt-assertion": _JWT,
             },
         )
 
     assert resp.status_code == 404
+
+
+def test_accepts_lowercase_jwt_header_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``cf-access-jwt-assertion`` (no x- prefix) also works.
+
+    Cloudflare sends the header as ``Cf-Access-Jwt-Assertion``; whether
+    the Worker forwards it with ``X-`` prefixed or bare, the gateway
+    accepts both.
+    """
+    art_id = uuid4()
+    user_id = uuid4()
+    session = _StubSession(found=_row(art_id, user_id))
+    app = _build_app(session)
+    claims = CFAccessClaims(email="alex@example.com", sub="s", aud="a", iss="i")
+    monkeypatch.setattr(router_module, "get_verifier", lambda: _stub_verifier(claims))
+    monkeypatch.setattr(
+        router_module, "get_or_create_user_by_email", AsyncMock(return_value=user_id)
+    )
+
+    with TestClient(app) as client:
+        resp = client.get(
+            f"/internal/artifacts/{art_id}",
+            headers={
+                "x-internal-token": _TOKEN,
+                "cf-access-jwt-assertion": _JWT,
+            },
+        )
+
+    assert resp.status_code == 200

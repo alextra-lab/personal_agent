@@ -193,6 +193,20 @@ Full plan in `plans/i-think-fre-213-258-linear-mitten.md`. Summary: ~300–500 l
 
 ---
 
+## Correction 2026-05-17 (later, same day) — OTP-per-visit was a PWA issue, not a CF Access config issue
+
+The update below initially attributed an observed "re-OTP on every artifact URL visit" UX symptom to `session_duration` not being inherited by the new dedicated artifacts Access app. That attribution was **wrong**. Laptop terraform state showed `session_duration = "720h"` and `auto_redirect_to_identity = true` correctly set; `terraform plan` returned no changes.
+
+The actual root cause: the agent PWA opens `public_url` links in an **iOS WKWebView / SFSafariViewController** in-app browser context, which is sandboxed from Safari proper. The CF Access `CF_Authorization` cookie lives in Safari's cookie jar; the in-app browser context starts cookie-less every time, so CF Access OTPs on every tap regardless of how long the cookie's TTL is.
+
+**Fix lives in the PWA**, not in CF Access. `MarkdownContent.tsx` (or wherever artifact URLs render as anchors / open buttons) needs `target="_blank" rel="noopener noreferrer"` or programmatic `window.open(url, '_blank', 'noopener,noreferrer')`. On iOS that opens full Safari rather than the in-app browser, and the CF Access cookie persists across visits for the configured `session_duration`.
+
+Captured as an explicit FRE-368 PWA scope item (its existing scope already specified "open standalone affordance opens artifacts.frenchforet.com/{id} in a new tab"; the new comment makes the WKWebView avoidance mechanism explicit).
+
+This is a pure CF Access semantics clarification — the platform behavior is per-cookie-jar, not per-app or per-domain in the simple sense.
+
+---
+
 ## Update 2026-05-17 — JWT verification now actually implemented (partial)
 
 D1 always specified that the service "verifies the JWT against the cached team JWKS as defense-in-depth." Until 2026-05-17 **this verification was specified but never built** — every inbound endpoint trusted `Cf-Access-Authenticated-User-Email` as a plaintext string. That gap was exposed during FRE-227 smoke testing when an off-allowlist email appeared in the `users` table at 04:45:18 UTC, confirming that any caller who reached the gateway (via the workers.dev bypass URL with a forged header, or directly through the CF Tunnel with the shared `X-Internal-Token`) could spoof identity.

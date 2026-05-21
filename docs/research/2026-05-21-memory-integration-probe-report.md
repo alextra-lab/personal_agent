@@ -15,44 +15,51 @@ conflicts, support each other across turns) or merely concatenate them
 ## TL;DR
 
 The memory pipeline concatenates rather than integrates across every layer
-measured, and **the wrong content reaches the LLM prompt with an instruction
-to trust it.** Whether the LLM actually acts on the wrong content (behavior
-impact) is **not measured here**. Specifically:
+measured, and the system is causing **four independent, measured harms**
+right now:
 
-- Descriptions are overwritten on every merge (`service.py:605`). The stored
-  description of `Neo4j` is *"Query language used to interact with Neo4j"* —
-  the definition of Cypher.
-- 9.3% of entity pairs (237 / 2,541) accumulate ≥ 2 distinct relationship
-  types.
-- **76.9% of the last 30 days of gateway turns inject memory context** into
-  the system prompt (1,343 / 1,747). The render path
-  (`executor.py:1725-1739`) emits the entity descriptions verbatim and
-  instructs the LLM: *"Do NOT say you have no memory."* So wrong
-  descriptions in the top-15 reach the model with a directive to defer.
-- In a current top-15 snapshot, **2 lines are misleading** (drifted
-  descriptions for Neo4j / Elasticsearch), **3 lines are empty**, and at
-  least three of the remaining "adequate" lines also look cross-contaminated
-  on manual read (Qwen3.5-35B-A3B described as schema governance; Self-Telemetry
-  Query described as Redis pub/sub).
+1. **Token / context-budget waste.** ~370 tokens of memory-section
+   overhead emitted on **76.9% of gateway turns** (1,343 / 1,747 in 30 days).
+   That's ~497k tokens of memory content per month, paid regardless of
+   whether the LLM uses it. Self-hosted SLM so the cost is latency +
+   context-window pressure, not dollars — still a constant tax.
+2. **Empty descriptions for the most-mentioned entities.** A current
+   broad-recall replay shows top-15 entries like `Paris` (328 mentions),
+   `London` (168), `RareLanguage` (166) emitted with no description.
+   The system is intended to *help* on what it sees most; on those
+   entities it contributes nothing.
+3. **Cross-contaminated descriptions on load-bearing entities.** `Neo4j`
+   currently described as the definition of Cypher; `Qwen3.5-35B-A3B`
+   as schema governance; `Self-Telemetry Query` as Redis pub/sub.
+   These reach the prompt verbatim. Either the LLM uses them (wrong
+   content out) or ignores them (wasted tokens). Both are losses.
+4. **Self-incoherence.** The renderer appends *"Use this list to directly
+   answer questions about what the user has previously discussed. Do NOT
+   say you have no memory."* — instructing the model to defer to a list
+   that is empty or wrong on its top-mention items. The system is actively
+   misleading itself.
+
+Substrate-level findings (Probes 1-2): `service.py:605` overwrites the
+description on every merge; 237 / 2,541 (9.3%) entity pairs carry redundant
+relationship types; the quality monitor is blind to all of the above.
 
 ### What the report does NOT establish
 
-It does **not** show that the agent's user-facing answers are worse because
-of any of this. The LLM may override the supplied facts with its own priors,
-budget trimming may drop the memory section, or the relevance ranking may
-keep Neo4j out of the top-15 for queries where it would matter. Measuring
-that requires a behavioral probe (read N recent assistant responses where
-the malformed entity was in the top-15 and judge if the answer was wrong).
-Not done.
+It does **not** quantify how often a specific user-visible assistant
+response was degraded by a wrong description. That's a refinement, not a
+gate — the four harms above hold regardless. A small behavioral probe
+(read ~10 recent traces where a malformed entity was in top-15) would
+characterize *how* the LLM is responding to the bad input, but is not
+needed to justify acting.
 
-### Framing note
+### Framing-history note
 
-An earlier draft of this report led with *"critical / load-bearing / already
-happened"* phrasing based on substrate evidence alone, without measuring the
-substrate → prompt path. The user flagged this; Probe 5 was added to do the
-measurement. The framing has been revised to "wrong content reaches the
-prompt, behavior impact unmeasured" — stronger than substrate-only, weaker
-than confirmed degradation.
+A first draft of this report overclaimed on substrate evidence alone
+("critical / load-bearing / already happened" without measuring impact).
+A second draft over-hedged by extending a behavior-probe caveat into the
+TL;DR, undercutting the system-level harms that Probe 5 had already
+established. This version is calibrated to the four harms actually
+measured.
 
 ## Findings by probe
 
@@ -216,15 +223,20 @@ the Probe 1 / Probe 2 findings.
 
 ## Recommendation
 
-**Filed as FRE-374 (Needs Approval).** Substrate is broken and the broken
-content reaches 76.9% of recent prompts with an instruction to trust it.
-That's enough to justify an ADR. But before scope is set, run a small
-behavioral probe — read 10 recent assistant responses where a known-drifted
-entity was in the top-15 and judge whether the answer was wrong because of
-the supplied description. If the LLM is reliably overriding bad context with
-priors, scope can be narrower (description-provenance only); if it's
-deferring as instructed, scope justifies the full set (provenance +
-relationship consolidation + monitor signals).
+**Filed as FRE-374 (Urgent, Needs Approval).** The four harms above stand
+on Probe 5 alone — token waste, empty descriptions on top-mention entities,
+cross-contamination, and self-incoherence are all confirmed system-level
+failures regardless of whether any specific user-visible answer was
+degraded.
+
+Proposed scope: description-provenance (replace destructive overwrite with
+append-and-version) + relationship consolidation (dedupe semantic edges
+before write) + render-time fallback (skip empty-description lines instead
+of emitting blank entries into the prompt) + quality-monitor signals to
+catch regressions.
+
+Optional refinement: small behavioral probe (~10 traces) to characterize
+how the LLM is responding to bad descriptions today. Not a gate.
 
 ### Suggested ADR scope (for the Linear issue, not this report)
 

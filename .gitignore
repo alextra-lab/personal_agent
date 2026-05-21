@@ -73,6 +73,9 @@ telemetry/evaluation/EVAL-skill-routing-*/
 # Single-prompt retest runs (debugging artifacts from eval iteration — not baselines)
 telemetry/evaluation/EVAL-primitive-tools/retest-*/
 
+# Memory integration probe outputs — regeneratable; may contain turn-text excerpts
+scripts/research/*/output/
+
 # Empty or incomplete run directories
 telemetry/evaluation/EVAL-primitive-tools/run-2026-04-27-1716/
 

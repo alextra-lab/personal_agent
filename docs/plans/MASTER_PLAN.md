@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-21 — **FRE-368 backend (PR #A) shipped**. `artifact_write`, `artifact_list`, `artifact_read` tools live on main (PR #66, squash-merged). Gateway rebuilt 07:19 UTC — startup logs confirm `artifact_tools_registered bucket=seshat-artifacts`. AC-4 confirmed. **AC-5 + AC-6 pending** — require a real PWA session (CF Access auth required; CLI blocked by `AGENT_GATEWAY_AUTH_ENABLED=true`): on next session, ask agent to `artifact_write` an HTML artifact and verify round-trip + open the public URL on iPad. PR #B (PWA inline cards + `/artifacts` route) is the next task — unblocked. Also added acceptance criteria discipline to plan template: plans must now include pre-merge / post-deploy / future-gate AC table. Previous (2026-05-17): FRE-227 substrate + FRE-371 shipped end-to-end.
+> **Last updated**: 2026-05-21 — **FRE-368 fully verified on feature branch** (PR #67 ready to merge). AC-4 through AC-10 confirmed live on iPad. Two bugs found and fixed during branch testing: SQL NULL type inference in artifact_list (CAST fix), and auth AUD mismatch on public endpoints (switched to get_request_user). Branch testing before merge validated both fixes. FRE-368 closes in Linear after PR #67 merges. Previous: `artifact_write`, `artifact_list`, `artifact_read` tools live on main (PR #66, squash-merged). Gateway rebuilt 07:19 UTC — startup logs confirm `artifact_tools_registered bucket=seshat-artifacts`. AC-4 confirmed. **AC-5 + AC-6 pending** — require a real PWA session (CF Access auth required; CLI blocked by `AGENT_GATEWAY_AUTH_ENABLED=true`): on next session, ask agent to `artifact_write` an HTML artifact and verify round-trip + open the public URL on iPad. PR #B (PWA inline cards + `/artifacts` route) is the next task — unblocked. Also added acceptance criteria discipline to plan template: plans must now include pre-merge / post-deploy / future-gate AC table. Previous (2026-05-17): FRE-227 substrate + FRE-371 shipped end-to-end.
 
 ---
 
@@ -28,6 +28,12 @@ Wave D implementation (endpoint abstraction, compose unification, test parity) r
 | **H** | Memory / context value | Not started | [FRE-178](https://linear.app/frenchforest/issue/FRE-178) → [FRE-179](https://linear.app/frenchforest/issue/FRE-179) → [FRE-180](https://linear.app/frenchforest/issue/FRE-180) · [FRE-230](https://linear.app/frenchforest/issue/FRE-230) | FRE-178 → 179 → 180 chain |
 | **I** | User feedback + meta-learning | Not started | [FRE-267](https://linear.app/frenchforest/issue/FRE-267) · [FRE-183](https://linear.app/frenchforest/issue/FRE-183) · [FRE-184](https://linear.app/frenchforest/issue/FRE-184) | — |
 | **J** ✅ | Eval methodology hardening | Done | FRE-329–335 all shipped | See archive for Wave J details |
+
+---
+
+## Pending Verification (merged, not yet tested in production)
+
+*(nothing pending)*
 
 ---
 

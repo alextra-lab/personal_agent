@@ -330,3 +330,114 @@ export async function getSessionMessages(
   if (!resp.ok) throw new Error(`getSessionMessages failed: ${resp.status}`);
   return resp.json() as Promise<ServerMessage[]>;
 }
+
+// --------------------------------------------------------------------------
+// FRE-368 — Artifact helpers
+// --------------------------------------------------------------------------
+
+/** Public-facing metadata for a single artifact (no r2_key, no embedding). */
+export interface ArtifactSummary {
+  artifact_id: string;
+  public_url: string | null;
+  slug: string | null;
+  title: string | null;
+  summary: string | null;
+  content_type: string;
+  size_bytes: number;
+  tags: string[];
+  created_at: string;
+}
+
+export interface ListArtifactsOptions {
+  type?: 'artifact' | 'note' | 'upload' | 'capture';
+  prefix?: string;
+  k?: number;
+  since?: string;
+}
+
+/**
+ * List the authenticated user's artifacts, newest first.
+ *
+ * CF Access JWT is injected by the CF edge for browser requests —
+ * no manual header setting required.
+ *
+ * @throws Error when the backend returns a non-2xx status.
+ */
+export async function listArtifacts(
+  opts: ListArtifactsOptions = {},
+): Promise<ArtifactSummary[]> {
+  const params = new URLSearchParams();
+  if (opts.type) params.set('type', opts.type);
+  if (opts.prefix) params.set('prefix', opts.prefix);
+  if (opts.k !== undefined) params.set('k', String(opts.k));
+  if (opts.since) params.set('since', opts.since);
+
+  const qs = params.toString();
+  const resp = await fetch(
+    `${SESHAT_API}/api/v1/artifacts${qs ? `?${qs}` : ''}`,
+    { headers: authHeaders() },
+  );
+  if (!resp.ok) throw new Error(`listArtifacts failed: ${resp.status}`);
+  const body = await resp.json() as { items: ArtifactSummary[] };
+  return body.items;
+}
+
+/**
+ * Fetch metadata for a single artifact by ID.
+ *
+ * Returns null when the artifact is not found (404) or belongs to another user,
+ * so callers can fall back to rendering the plain URL without crashing.
+ *
+ * @throws Error for non-2xx, non-404 responses.
+ */
+export async function getArtifactMetadata(
+  artifactId: string,
+): Promise<ArtifactSummary | null> {
+  const resp = await fetch(
+    `${SESHAT_API}/api/v1/artifacts/${encodeURIComponent(artifactId)}`,
+    { headers: authHeaders() },
+  );
+  if (resp.status === 404) return null;
+  if (!resp.ok) throw new Error(`getArtifactMetadata failed: ${resp.status}`);
+  return resp.json() as Promise<ArtifactSummary>;
+}
+
+/**
+ * Fire-and-forget card-click telemetry for ADR-0070 D8 measurement.
+ *
+ * Never throws — telemetry must never break the user interaction that
+ * triggered it. Uses sendBeacon when available (survives page unload on
+ * iOS PWA); falls back to keepalive fetch.
+ */
+export function postCardClick(
+  artifactId: string,
+  surface: 'inline' | 'drawer' | 'standalone',
+  sessionId?: string,
+): void {
+  const url = `${SESHAT_API}/api/v1/telemetry/card_click`;
+  const body = JSON.stringify({
+    artifact_id: artifactId,
+    kind: 'card_click',
+    surface,
+    ...(sessionId ? { session_id: sessionId } : {}),
+  });
+
+  try {
+    if (typeof navigator !== 'undefined' && 'sendBeacon' in navigator) {
+      const blob = new Blob([body], { type: 'application/json' });
+      navigator.sendBeacon(url, blob);
+      return;
+    }
+  } catch {
+    // sendBeacon not available or failed — fall through to fetch
+  }
+
+  void fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body,
+    keepalive: true,
+  }).catch(() => {
+    // Best-effort — swallow all errors
+  });
+}

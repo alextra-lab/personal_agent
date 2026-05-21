@@ -480,8 +480,8 @@ async def artifact_list_executor(
                 FROM artifacts
                 WHERE user_id = :user_id
                   AND type = 'artifact'
-                  AND (:prefix IS NULL OR slug LIKE :prefix || '%')
-                  AND (:since IS NULL OR created_at > CAST(:since AS TIMESTAMPTZ))
+                  AND (CAST(:prefix AS TEXT) IS NULL OR slug LIKE :prefix || '%')
+                  AND (CAST(:since AS TEXT) IS NULL OR created_at > CAST(:since AS TIMESTAMPTZ))
                 ORDER BY created_at DESC
                 LIMIT :k
                 """

@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from personal_agent.service import artifacts_router as router_module
 from personal_agent.service.artifacts_router import router
+from personal_agent.service.auth import RequestUser, get_request_user
 from personal_agent.service.cf_access_jwt import (
     CFAccessClaims,
     CFAccessVerifierError,
@@ -359,14 +360,23 @@ class _ListStubSession:
         return SimpleNamespace(all=lambda: [], one_or_none=lambda: None)
 
 
-def _build_app_with_list_session(session: _ListStubSession) -> FastAPI:
+def _build_app_with_list_session(
+    session: _ListStubSession,
+    user_id: UUID | None = None,
+) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
+
+    resolved_user_id = user_id or uuid4()
 
     async def _override_db() -> Any:
         yield session
 
+    async def _override_request_user() -> RequestUser:
+        return RequestUser(user_id=resolved_user_id, email="test@example.com")
+
     app.dependency_overrides[get_db_session] = _override_db
+    app.dependency_overrides[get_request_user] = _override_request_user
     return app
 
 
@@ -385,39 +395,30 @@ def _artifact_row(art_id: UUID, user_id: UUID, type_: str = "artifact") -> Simpl
     )
 
 
-def test_list_artifacts_requires_jwt(monkeypatch: pytest.MonkeyPatch) -> None:
-    """GET /api/v1/artifacts without CF Access JWT → 401."""
-    session = _ListStubSession()
-    app = _build_app_with_list_session(session)
-    monkeypatch.setattr(router_module, "get_verifier", lambda: _stub_verifier(
-        CFAccessClaims(email="x@y.z", sub="s", aud="a", iss="i")
-    ))
+def test_list_artifacts_requires_auth() -> None:
+    """GET /api/v1/artifacts without a resolved user → 401.
 
-    with TestClient(app) as client:
+    The dependency_overrides are NOT set, so get_request_user runs its real
+    logic, reads no CF email header, and raises 401.
+    """
+    session = _ListStubSession()
+    app = FastAPI()
+    app.include_router(router)
+
+    async def _override_db() -> Any:
+        yield session
+
+    app.dependency_overrides[get_db_session] = _override_db
+    # get_request_user is NOT overridden — will raise 401 with no header
+
+    with TestClient(app, raise_server_exceptions=False) as client:
         resp = client.get("/api/v1/artifacts")
 
     assert resp.status_code == 401
 
 
-def test_list_artifacts_verifier_not_configured_is_503(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """GET /api/v1/artifacts with no verifier → 503 (fail-closed)."""
-    session = _ListStubSession()
-    app = _build_app_with_list_session(session)
-    monkeypatch.setattr(router_module, "get_verifier", lambda: None)
-
-    with TestClient(app) as client:
-        resp = client.get(
-            "/api/v1/artifacts",
-            headers={"cf-access-jwt-assertion": _JWT},
-        )
-
-    assert resp.status_code == 503
-
-
-def test_list_artifacts_returns_user_items(monkeypatch: pytest.MonkeyPatch) -> None:
-    """GET /api/v1/artifacts with valid JWT returns the calling user's items."""
+def test_list_artifacts_returns_user_items() -> None:
+    """GET /api/v1/artifacts with resolved user returns the calling user's items."""
     user_id = uuid4()
     art1, art2 = uuid4(), uuid4()
     session = _ListStubSession()
@@ -426,18 +427,10 @@ def test_list_artifacts_returns_user_items(monkeypatch: pytest.MonkeyPatch) -> N
             all=lambda: [_artifact_row(art1, user_id), _artifact_row(art2, user_id)]
         )
     )
-    app = _build_app_with_list_session(session)
-    claims = CFAccessClaims(email="alex@example.com", sub="u", aud="a", iss="i")
-    monkeypatch.setattr(router_module, "get_verifier", lambda: _stub_verifier(claims))
-    monkeypatch.setattr(
-        router_module, "get_or_create_user_by_email", AsyncMock(return_value=user_id)
-    )
+    app = _build_app_with_list_session(session, user_id=user_id)
 
     with TestClient(app) as client:
-        resp = client.get(
-            "/api/v1/artifacts",
-            headers={"cf-access-jwt-assertion": _JWT},
-        )
+        resp = client.get("/api/v1/artifacts")
 
     assert resp.status_code == 200
     items = resp.json()["items"]
@@ -447,46 +440,19 @@ def test_list_artifacts_returns_user_items(monkeypatch: pytest.MonkeyPatch) -> N
     assert str(art2) in ids
 
 
-def test_get_artifact_metadata_requires_jwt(monkeypatch: pytest.MonkeyPatch) -> None:
-    """GET /api/v1/artifacts/{id} without JWT → 401."""
+def test_get_artifact_metadata_cross_user_is_404() -> None:
+    """GET /api/v1/artifacts/{id} for another user's artifact → 404."""
     session = _ListStubSession()
+    session.enqueue(SimpleNamespace(one_or_none=lambda: None))
     app = _build_app_with_list_session(session)
-    monkeypatch.setattr(router_module, "get_verifier", lambda: _stub_verifier(
-        CFAccessClaims(email="x@y.z", sub="s", aud="a", iss="i")
-    ))
 
     with TestClient(app) as client:
         resp = client.get(f"/api/v1/artifacts/{uuid4()}")
 
-    assert resp.status_code == 401
-
-
-def test_get_artifact_metadata_cross_user_is_404(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """GET /api/v1/artifacts/{id} for another user's artifact → 404."""
-    session = _ListStubSession()
-    # No row found — existence-hiding per ADR-0064 D3
-    session.enqueue(SimpleNamespace(one_or_none=lambda: None))
-    app = _build_app_with_list_session(session)
-    claims = CFAccessClaims(email="intruder@example.com", sub="s", aud="a", iss="i")
-    monkeypatch.setattr(router_module, "get_verifier", lambda: _stub_verifier(claims))
-    monkeypatch.setattr(
-        router_module, "get_or_create_user_by_email", AsyncMock(return_value=uuid4())
-    )
-
-    with TestClient(app) as client:
-        resp = client.get(
-            f"/api/v1/artifacts/{uuid4()}",
-            headers={"cf-access-jwt-assertion": _JWT},
-        )
-
     assert resp.status_code == 404
 
 
-def test_get_artifact_metadata_returns_summary_fields(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_get_artifact_metadata_returns_summary_fields() -> None:
     """GET /api/v1/artifacts/{id} with a matching row returns metadata fields."""
     user_id = uuid4()
     art_id = uuid4()
@@ -494,18 +460,10 @@ def test_get_artifact_metadata_returns_summary_fields(
     session.enqueue(
         SimpleNamespace(one_or_none=lambda: _artifact_row(art_id, user_id))
     )
-    app = _build_app_with_list_session(session)
-    claims = CFAccessClaims(email="alex@example.com", sub="u", aud="a", iss="i")
-    monkeypatch.setattr(router_module, "get_verifier", lambda: _stub_verifier(claims))
-    monkeypatch.setattr(
-        router_module, "get_or_create_user_by_email", AsyncMock(return_value=user_id)
-    )
+    app = _build_app_with_list_session(session, user_id=user_id)
 
     with TestClient(app) as client:
-        resp = client.get(
-            f"/api/v1/artifacts/{art_id}",
-            headers={"cf-access-jwt-assertion": _JWT},
-        )
+        resp = client.get(f"/api/v1/artifacts/{art_id}")
 
     assert resp.status_code == 200
     body = resp.json()

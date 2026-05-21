@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 
+import Link from 'next/link';
+
 import { resumeInterrupt, getSessionMessages } from '@/lib/agui-client';
 import { generateUUID } from '@/lib/uuid';
 import type { ExecutionProfile } from '@/lib/types';
@@ -175,6 +177,16 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
                 ✕
               </button>
             </div>
+            {/* Artifacts nav link — FRE-368 */}
+            <Link
+              href="/artifacts"
+              onClick={() => setIsDrawerOpen(false)}
+              className="flex items-center gap-2 px-4 py-2.5 text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 border-b border-slate-700/50 transition-colors"
+            >
+              <span aria-hidden="true">📎</span>
+              Artifacts
+            </Link>
+
             {/* Session list — remounts on each open (fresh fetch) */}
             <SessionList
               currentSessionId={sessionId}

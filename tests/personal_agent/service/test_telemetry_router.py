@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from personal_agent.service import telemetry_router as telemetry_module
+from personal_agent.service.auth import RequestUser, get_request_user
 from personal_agent.service.cf_access_jwt import CFAccessClaims, CFAccessVerifierError
 from personal_agent.service.database import get_db_session
 from personal_agent.service.telemetry_router import router
@@ -35,9 +36,14 @@ def _stub_verifier_rejecting() -> Any:
     return v
 
 
-def _build_app() -> FastAPI:
+def _build_app(user_id: UUID | None = None) -> FastAPI:
+    """Build a test app. Overrides get_request_user when user_id is given."""
     app = FastAPI()
     app.include_router(router)
+    if user_id is not None:
+        async def _override_user() -> RequestUser:
+            return RequestUser(user_id=user_id, email="test@example.com")
+        app.dependency_overrides[get_request_user] = _override_user
     return app
 
 
@@ -46,52 +52,20 @@ def _build_app() -> FastAPI:
 # ---------------------------------------------------------------------------
 
 
-def test_card_click_no_jwt_is_401(monkeypatch: pytest.MonkeyPatch) -> None:
-    """POST without a CF Access JWT → 401."""
-    app = _build_app()
-    monkeypatch.setattr(telemetry_module, "get_verifier", lambda: _stub_verifier(
-        CFAccessClaims(email="x@y.z", sub="s", aud="a", iss="i")
-    ))
+def test_card_click_no_auth_is_401() -> None:
+    """POST without a resolved user → 401.
 
-    with TestClient(app) as client:
+    get_request_user not overridden — reads no CF email header → 401.
+    """
+    app = _build_app()  # no user_id override → get_request_user runs real logic
+
+    with TestClient(app, raise_server_exceptions=False) as client:
         resp = client.post(
             "/api/v1/telemetry/card_click",
             json={"artifact_id": str(uuid4()), "kind": "card_click", "surface": "inline"},
         )
 
     assert resp.status_code == 401
-
-
-def test_card_click_invalid_jwt_is_401(monkeypatch: pytest.MonkeyPatch) -> None:
-    """JWT verification failure → 401."""
-    app = _build_app()
-    monkeypatch.setattr(telemetry_module, "get_verifier", lambda: _stub_verifier_rejecting())
-
-    with TestClient(app) as client:
-        resp = client.post(
-            "/api/v1/telemetry/card_click",
-            json={"artifact_id": str(uuid4()), "kind": "card_click", "surface": "inline"},
-            headers={"cf-access-jwt-assertion": _JWT},
-        )
-
-    assert resp.status_code == 401
-
-
-def test_card_click_verifier_unconfigured_is_503(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Verifier not configured → 503 (fail-closed)."""
-    app = _build_app()
-    monkeypatch.setattr(telemetry_module, "get_verifier", lambda: None)
-
-    with TestClient(app) as client:
-        resp = client.post(
-            "/api/v1/telemetry/card_click",
-            json={"artifact_id": str(uuid4()), "kind": "card_click", "surface": "inline"},
-            headers={"cf-access-jwt-assertion": _JWT},
-        )
-
-    assert resp.status_code == 503
 
 
 # ---------------------------------------------------------------------------
@@ -99,39 +73,27 @@ def test_card_click_verifier_unconfigured_is_503(
 # ---------------------------------------------------------------------------
 
 
-def test_card_click_bad_uuid_is_422(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_card_click_bad_uuid_is_422() -> None:
     """Non-UUID artifact_id → 422 validation error."""
-    app = _build_app()
-    claims = CFAccessClaims(email="alex@x.com", sub="u", aud="a", iss="i")
-    monkeypatch.setattr(telemetry_module, "get_verifier", lambda: _stub_verifier(claims))
-    monkeypatch.setattr(
-        telemetry_module, "get_or_create_user_by_email", AsyncMock(return_value=uuid4())
-    )
+    app = _build_app(user_id=uuid4())
 
     with TestClient(app) as client:
         resp = client.post(
             "/api/v1/telemetry/card_click",
             json={"artifact_id": "not-a-uuid", "kind": "card_click", "surface": "inline"},
-            headers={"cf-access-jwt-assertion": _JWT},
         )
 
     assert resp.status_code == 422
 
 
-def test_card_click_bad_surface_is_422(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_card_click_bad_surface_is_422() -> None:
     """surface must be 'inline' | 'drawer' | 'standalone'."""
-    app = _build_app()
-    claims = CFAccessClaims(email="alex@x.com", sub="u", aud="a", iss="i")
-    monkeypatch.setattr(telemetry_module, "get_verifier", lambda: _stub_verifier(claims))
-    monkeypatch.setattr(
-        telemetry_module, "get_or_create_user_by_email", AsyncMock(return_value=uuid4())
-    )
+    app = _build_app(user_id=uuid4())
 
     with TestClient(app) as client:
         resp = client.post(
             "/api/v1/telemetry/card_click",
             json={"artifact_id": str(uuid4()), "kind": "card_click", "surface": "modal"},
-            headers={"cf-access-jwt-assertion": _JWT},
         )
 
     assert resp.status_code == 422
@@ -142,15 +104,9 @@ def test_card_click_bad_surface_is_422(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_card_click_happy_path_returns_204(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Valid JWT + valid body → 204 No Content."""
-    user_id = uuid4()
-    app = _build_app()
-    claims = CFAccessClaims(email="alex@x.com", sub="u", aud="a", iss="i")
-    monkeypatch.setattr(telemetry_module, "get_verifier", lambda: _stub_verifier(claims))
-    monkeypatch.setattr(
-        telemetry_module, "get_or_create_user_by_email", AsyncMock(return_value=user_id)
-    )
+def test_card_click_happy_path_returns_204() -> None:
+    """Resolved user + valid body → 204 No Content."""
+    app = _build_app(user_id=uuid4())
 
     with TestClient(app) as client:
         resp = client.post(
@@ -161,24 +117,17 @@ def test_card_click_happy_path_returns_204(monkeypatch: pytest.MonkeyPatch) -> N
                 "kind": "card_click",
                 "surface": "drawer",
             },
-            headers={"cf-access-jwt-assertion": _JWT},
         )
 
     assert resp.status_code == 204
 
 
-def test_card_click_emits_structlog_event(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Verified request emits 'artifact_card_click' structlog event."""
+def test_card_click_emits_structlog_event() -> None:
+    """Resolved request emits 'artifact_card_click' structlog event."""
     import structlog.testing
 
-    user_id = uuid4()
     art_id = uuid4()
-    app = _build_app()
-    claims = CFAccessClaims(email="alex@x.com", sub="u", aud="a", iss="i")
-    monkeypatch.setattr(telemetry_module, "get_verifier", lambda: _stub_verifier(claims))
-    monkeypatch.setattr(
-        telemetry_module, "get_or_create_user_by_email", AsyncMock(return_value=user_id)
-    )
+    app = _build_app(user_id=uuid4())
 
     with structlog.testing.capture_logs() as logs:
         with TestClient(app) as client:
@@ -189,7 +138,6 @@ def test_card_click_emits_structlog_event(monkeypatch: pytest.MonkeyPatch) -> No
                     "kind": "card_click",
                     "surface": "inline",
                 },
-                headers={"cf-access-jwt-assertion": _JWT},
             )
 
     event_names = [log.get("event") for log in logs]
@@ -199,17 +147,9 @@ def test_card_click_emits_structlog_event(monkeypatch: pytest.MonkeyPatch) -> No
     assert click_log["surface"] == "inline"
 
 
-def test_card_click_without_session_id_is_valid(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_card_click_without_session_id_is_valid() -> None:
     """session_id is optional — omitting it is not a validation error."""
-    user_id = uuid4()
-    app = _build_app()
-    claims = CFAccessClaims(email="alex@x.com", sub="u", aud="a", iss="i")
-    monkeypatch.setattr(telemetry_module, "get_verifier", lambda: _stub_verifier(claims))
-    monkeypatch.setattr(
-        telemetry_module, "get_or_create_user_by_email", AsyncMock(return_value=user_id)
-    )
+    app = _build_app(user_id=uuid4())
 
     with TestClient(app) as client:
         resp = client.post(
@@ -219,7 +159,6 @@ def test_card_click_without_session_id_is_valid(
                 "kind": "card_click",
                 "surface": "standalone",
             },
-            headers={"cf-access-jwt-assertion": _JWT},
         )
 
     assert resp.status_code == 204

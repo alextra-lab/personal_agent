@@ -36,6 +36,7 @@ import { useEffect, useState } from 'react';
 
 import { listArtifacts } from '@/lib/agui-client';
 import type { ArtifactSummary } from '@/lib/agui-client';
+import { ArtifactViewer } from './ArtifactViewer';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -95,6 +96,7 @@ export function ArtifactsIndex() {
   const [items, setItems] = useState<ArtifactSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [viewing, setViewing] = useState<ArtifactSummary | null>(null);
 
   useEffect(() => {
     listArtifacts({ type: 'artifact', k: 50 })
@@ -105,6 +107,16 @@ export function ArtifactsIndex() {
 
   return (
     <div className="min-h-full bg-slate-900 text-slate-100 px-4 py-6 md:px-8">
+      {viewing && viewing.public_url && (
+        <ArtifactViewer
+          artifactId={viewing.artifact_id}
+          publicUrl={viewing.public_url}
+          title={viewing.title}
+          contentType={viewing.content_type}
+          onClose={() => setViewing(null)}
+        />
+      )}
+
       <h1 className="text-lg font-semibold text-slate-100 mb-6">Artifacts</h1>
 
       {loading && <GridSkeleton />}
@@ -143,21 +155,31 @@ export function ArtifactsIndex() {
                 </p>
               )}
 
-              {/* Footer: timestamp + open link */}
+              {/* Footer: timestamp + actions */}
               <div className="flex items-center justify-between mt-auto pt-1">
                 <span className="text-xs text-slate-600">
                   {relativeTime(item.created_at)}
                 </span>
-                {item.public_url && (
-                  <a
-                    href={item.public_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs text-slate-400 hover:text-blue-400 transition-colors"
-                  >
-                    Open ↗
-                  </a>
-                )}
+                <div className="flex items-center gap-2">
+                  {item.public_url && (
+                    <button
+                      onClick={() => setViewing(item)}
+                      className="text-xs text-slate-400 hover:text-blue-400 transition-colors"
+                    >
+                      Expand
+                    </button>
+                  )}
+                  {item.public_url && (
+                    <a
+                      href={item.public_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-slate-400 hover:text-blue-400 transition-colors"
+                    >
+                      Open ↗
+                    </a>
+                  )}
+                </div>
               </div>
             </div>
           ))}

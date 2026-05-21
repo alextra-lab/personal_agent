@@ -114,8 +114,8 @@ FRE-302 ✅ → FRE-311 (budget auto-tuning, parked pending data)
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| **0070** | **Output Channel Model — Markdown for Agents, Rich for Humans** | **Proposed 2026-05-15; companion to ADR-0069; build-to-learn rig is FRE-368** |
-| **0069** | **R2-Backed Artifact Substrate** | **Proposed 2026-05-15; substrate impl is FRE-227, consumers are FRE-368/369** |
+| **0070** | **Output Channel Model — Markdown for Agents, Rich for Humans** | **Implemented 2026-05-21 (FRE-368 PRs #66 + #67); D8 measurement window open, review gate ≥ 2026-06-04** |
+| **0069** | **R2-Backed Artifact Substrate** | **Implemented 2026-05-17 (FRE-227 + FRE-371); FRE-368 ✅; FRE-369 next consumer** |
 | **0068** | **Agent Self-Telemetry Data Plane** | **Accepted 2026-05-10; all 7 follow-ups shipped (FRE-351–356)** |
 | **0067** | **Reflection Surfacing in Context Assembly** | **Accepted 2026-05-10 (FRE-348); eval → FRE-350** |
 | **0066** | **Skill Routing Defaults + Threshold + Feedback Loop** | Accepted 2026-05-07; D1–D5 all implemented; eval complete (Wave J) |

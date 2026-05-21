@@ -1,10 +1,10 @@
 # ADR-0070: Output Channel Model — Markdown for Agents, Rich for Humans
 
-**Status**: Proposed — pending FRE-368 (agent artifacts) implementation
+**Status**: Implemented — FRE-368 shipped 2026-05-21 (PRs #66 + #67). D8 measurement window open; review gate ≥ 2026-06-04.
 **Date**: 2026-05-15
 **Deciders**: Project owner
 **Related**: ADR-0069 (R2-Backed Artifact Substrate), ADR-0064 (Inbound User Identity), ADR-0063 (Primitive Tools / Action-Boundary Governance), FRE-227, FRE-368, FRE-369, FRE-315 (PWA Mermaid block rendering — precedent), FRE-209 (approval modal — precedent)
-**Implementation Plan**: deferred — FRE-368 execution will produce one
+**Implementation Plan**: `docs/superpowers/plans/implement-the-next-master-sharded-pinwheel.md`
 
 ---
 

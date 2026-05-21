@@ -1,38 +1,31 @@
 /**
- * ArtifactsIndex — client component for the /artifacts route (FRE-368).
+ * ArtifactsIndex — compact list view for the /artifacts route (FRE-368).
  *
- * Lists all artifacts owned by the current user, newest first. Each card
- * shows title, summary, content-type chip, relative timestamp, and an
- * "Open" link to the public URL.
+ * Tight table-like rows: type chip + title + summary + timestamp + actions.
+ * No card grid — one row per artifact, scannable at a glance.
  *
  * MANUAL TEST PLAN
  * ================
- * Prerequisites: PR #A merged, at least one artifact written via artifact_write.
- *
  * 1. Navigate to /artifacts from the session drawer.
- *    Expected: loading skeleton visible briefly, then a grid of artifact cards
- *    ordered newest-first.
+ *    Expected: compact list of rows, newest first. Each row fits on one line
+ *    on iPad landscape; summary truncates with ellipsis on narrow viewports.
  *
- * 2. Empty state (no artifacts yet).
- *    Expected: "No artifacts yet — ask the agent to make you one." message
- *    centered on the page.
+ * 2. "← Conversations" back link returns to the most recent session (/).
  *
- * 3. Each card shows title (or slug if no title), summary, content-type chip,
- *    and relative timestamp ("5m ago", "2h ago", "3d ago").
+ * 3. Tap Expand on any row → ArtifactViewer drawer opens.
+ *    Tap ESC or backdrop → closes and returns to list.
  *
- * 4. "Open" link uses target=_blank rel=noopener.
- *    On an installed iOS home-screen PWA: opens in Safari, CF Access SSO
- *    carries over, content renders.
+ * 4. Tap Open ↗ → opens in new tab (Safari on iOS home-screen PWA).
  *
- * 5. Network error during list fetch.
- *    Expected: "Could not load artifacts." error message, no crash.
+ * 5. Empty state: "No artifacts yet — ask the agent to make you one."
  *
- * 6. Responsive layout: 1 column on iPhone, 2 on iPad, 3 on laptop.
+ * 6. Network error: "Could not load artifacts." — no crash.
  */
 
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 
 import { listArtifacts } from '@/lib/agui-client';
 import type { ArtifactSummary } from '@/lib/agui-client';
@@ -45,10 +38,10 @@ import { ArtifactViewer } from './ArtifactViewer';
 function relativeTime(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diffMs / 60_000);
-  if (mins < 60) return `${Math.max(mins, 1)}m ago`;
+  if (mins < 60) return `${Math.max(mins, 1)}m`;
   const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
+  if (hrs < 24) return `${hrs}h`;
+  return `${Math.floor(hrs / 24)}d`;
 }
 
 function contentTypeLabel(ct: string): string {
@@ -64,23 +57,18 @@ function contentTypeLabel(ct: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Skeleton
+// Row skeleton
 // ---------------------------------------------------------------------------
 
-function GridSkeleton() {
+function ListSkeleton() {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-      {Array.from({ length: 6 }).map((_, i) => (
-        <div
-          key={i}
-          className="rounded-xl border border-slate-700/60 bg-slate-800/60 p-4 animate-pulse"
-        >
-          <div className="flex items-center gap-2 mb-2">
-            <div className="h-4 w-10 rounded bg-slate-700" />
-            <div className="h-4 flex-1 rounded bg-slate-700" />
-          </div>
-          <div className="h-3 w-4/5 rounded bg-slate-700/70 mb-3" />
-          <div className="h-3 w-1/3 rounded bg-slate-700/50" />
+    <div className="divide-y divide-slate-800">
+      {Array.from({ length: 5 }).map((_, i) => (
+        <div key={i} className="flex items-center gap-3 px-4 py-3 animate-pulse">
+          <div className="h-4 w-10 rounded bg-slate-700 flex-shrink-0" />
+          <div className="h-4 w-40 rounded bg-slate-700 flex-shrink-0" />
+          <div className="h-3 flex-1 rounded bg-slate-700/60" />
+          <div className="h-3 w-8 rounded bg-slate-700/40 flex-shrink-0" />
         </div>
       ))}
     </div>
@@ -91,7 +79,7 @@ function GridSkeleton() {
 // Component
 // ---------------------------------------------------------------------------
 
-/** Client-side artifact list for the /artifacts page. */
+/** Compact list view for the /artifacts route. */
 export function ArtifactsIndex() {
   const [items, setItems] = useState<ArtifactSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -106,8 +94,9 @@ export function ArtifactsIndex() {
   }, []);
 
   return (
-    <div className="min-h-full bg-slate-900 text-slate-100 px-4 py-6 md:px-8">
-      {viewing && viewing.public_url && (
+    <div className="min-h-full bg-slate-900 text-slate-100 flex flex-col">
+      {/* Viewer overlay */}
+      {viewing?.public_url && (
         <ArtifactViewer
           artifactId={viewing.artifact_id}
           publicUrl={viewing.public_url}
@@ -117,59 +106,70 @@ export function ArtifactsIndex() {
         />
       )}
 
-      <h1 className="text-lg font-semibold text-slate-100 mb-6">Artifacts</h1>
+      {/* Header */}
+      <header className="flex items-center gap-3 px-4 border-b border-slate-700 bg-slate-900/80 backdrop-blur-sm flex-shrink-0"
+        style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)', paddingBottom: '0.75rem' }}
+      >
+        <Link
+          href="/"
+          className="flex items-center gap-1 text-sm text-slate-400 hover:text-slate-100 transition-colors"
+        >
+          ← Conversations
+        </Link>
+        <span className="text-slate-700">|</span>
+        <h1 className="text-sm font-semibold text-slate-100">Artifacts</h1>
+      </header>
 
-      {loading && <GridSkeleton />}
+      {/* List */}
+      <main className="flex-1 overflow-y-auto">
+        {loading && <ListSkeleton />}
 
-      {error && (
-        <p className="text-sm text-red-400">{error}</p>
-      )}
+        {error && (
+          <p className="px-4 py-6 text-sm text-red-400">{error}</p>
+        )}
 
-      {!loading && !error && items.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-24 text-slate-500 gap-2">
-          <p className="text-sm">No artifacts yet — ask the agent to make you one.</p>
-        </div>
-      )}
+        {!loading && !error && items.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-24 text-slate-500">
+            <p className="text-sm">No artifacts yet — ask the agent to make you one.</p>
+          </div>
+        )}
 
-      {!loading && !error && items.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {items.map((item) => (
-            <div
-              key={item.artifact_id}
-              className="flex flex-col gap-2 rounded-xl border border-slate-700/60 bg-slate-800/60 p-4 hover:border-slate-600 transition-colors"
-            >
-              {/* Header: chip + title */}
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-slate-700 text-slate-400 flex-shrink-0">
+        {!loading && !error && items.length > 0 && (
+          <div className="divide-y divide-slate-800/60">
+            {items.map((item) => (
+              <div
+                key={item.artifact_id}
+                className="flex items-center gap-3 px-4 py-2.5 hover:bg-slate-800/40 transition-colors"
+              >
+                {/* Type chip */}
+                <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-slate-700 text-slate-400 flex-shrink-0 w-10 text-center">
                   {contentTypeLabel(item.content_type)}
                 </span>
-                <span className="text-sm font-medium text-slate-100 truncate">
+
+                {/* Title — fixed width, truncated */}
+                <span className="text-sm font-medium text-slate-100 truncate w-40 flex-shrink-0">
                   {item.title ?? item.slug ?? 'Artifact'}
                 </span>
-              </div>
 
-              {/* Summary */}
-              {item.summary && (
-                <p className="text-xs text-slate-400 leading-relaxed line-clamp-2">
-                  {item.summary}
-                </p>
-              )}
+                {/* Summary — fills remaining space */}
+                <span className="text-xs text-slate-500 truncate flex-1 hidden sm:block">
+                  {item.summary ?? ''}
+                </span>
 
-              {/* Footer: timestamp + actions */}
-              <div className="flex items-center justify-between mt-auto pt-1">
-                <span className="text-xs text-slate-600">
+                {/* Timestamp */}
+                <span className="text-xs text-slate-600 flex-shrink-0 w-8 text-right">
                   {relativeTime(item.created_at)}
                 </span>
-                <div className="flex items-center gap-2">
-                  {item.public_url && (
+
+                {/* Actions */}
+                {item.public_url && (
+                  <div className="flex items-center gap-2 flex-shrink-0">
                     <button
                       onClick={() => setViewing(item)}
                       className="text-xs text-slate-400 hover:text-blue-400 transition-colors"
                     >
                       Expand
                     </button>
-                  )}
-                  {item.public_url && (
                     <a
                       href={item.public_url}
                       target="_blank"
@@ -178,13 +178,13 @@ export function ArtifactsIndex() {
                     >
                       Open ↗
                     </a>
-                  )}
-                </div>
+                  </div>
+                )}
               </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </main>
     </div>
   );
 }

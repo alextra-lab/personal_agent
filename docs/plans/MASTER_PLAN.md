@@ -31,6 +31,23 @@ Wave D implementation (endpoint abstraction, compose unification, test parity) r
 
 ---
 
+## Pending Verification (merged, not yet tested in production)
+
+These items are shipped but require a live browser session to confirm. Run them in the same session as the next PWA deploy. Check each off here and in Linear when done.
+
+**FRE-368 post-deploy verification** (PR #66 + PR #67, pending merge of #67):
+- [ ] **AC-5** — Write → list → read round-trip: ask agent to `artifact_write` an HTML artifact, verify `artifact_list` returns it, `artifact_read` returns the title, and `public_url` is reachable
+- [ ] **AC-6** — Open `https://artifacts.frenchforet.com/{artifact_id}` in iPad Safari → bytes render (existing Worker, no Worker changes needed)
+- [ ] **AC-7** — Artifact URL in assistant reply renders as an inline card (type chip, title, summary, Expand button) — NOT a bare hyperlink
+- [ ] **AC-8** — Artifact containing `<script>document.title='PWNED'</script>` → expand → title stays "Artifact" (`sandbox=""` enforced)
+- [ ] **AC-9** — "Open ↗" on installed iOS home-screen PWA → opens in Safari (WKWebView→Safari handoff), CF Access SSO covers it
+- [ ] **AC-10** — `/artifacts` route lists user's artifacts; "Open ↗" per card works
+- [ ] **AC-11** — DevTools Network: Expand → `POST /api/v1/telemetry/card_click` surface=inline → 204
+
+When all AC-5 through AC-11 pass: mark FRE-368 Done in Linear.
+
+---
+
 ## Immediately Actionable (approved, no gate)
 
 | Ticket | Priority | Tier | What |

@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-21 — **FRE-368 fully shipped** (PRs #66 + #67, both squash-merged). All ACs confirmed live on iPad before merge. Two production bugs caught and fixed on the feature branch before merging: SQL NULL type inference in artifact_list SQL, auth AUD mismatch on public artifact endpoints (agent app JWT ≠ artifacts app AUD — switched to get_request_user). Both containers rebuilt from main. ADR-0070 D8 two-week review gate ≥ 2026-06-04. **Next**: FRE-369 (user uploads).
+> **Last updated**: 2026-05-21 — **Memory integration probe shipped** (`docs/research/2026-05-21-memory-integration-probe-report.md`, 6 probes, commits `9866093` → `9b47a38`). Surfaced two Urgent Approved issues: **FRE-375** (isolate test/eval scripts from production substrate — 87% of last-7d Neo4j writes are eval-harness pollution) and **FRE-374** (cross-fact constraint layer for memory pipeline — description provenance, relationship consolidation, render-time fallback, replay from Postgres). FRE-375 blocks FRE-374. **Next**: FRE-375 (Tier-1:Opus) first, then FRE-374. FRE-369 (user uploads) remains queued separately.
 
 ---
 
@@ -25,7 +25,7 @@ Wave D implementation (endpoint abstraction, compose unification, test parity) r
 | **E** ✅ (partial) | Identity & write surface | Substrate + artifacts shipped | [FRE-213](https://linear.app/frenchforest/issue/FRE-213) ✅ · [FRE-227](https://linear.app/frenchforest/issue/FRE-227) ✅ · [FRE-371](https://linear.app/frenchforest/issue/FRE-371) ✅ · [FRE-368](https://linear.app/frenchforest/issue/FRE-368) ✅ · [FRE-369](https://linear.app/frenchforest/issue/FRE-369) (uploads, Approved) · [FRE-342](https://linear.app/frenchforest/issue/FRE-342) ✅ · [FRE-343](https://linear.app/frenchforest/issue/FRE-343) · [FRE-344](https://linear.app/frenchforest/issue/FRE-344) ✅ · FRE-345 | FRE-368 shipped 2026-05-21 (PRs #66 + #67). FRE-369 next. |
 | **F** | Self-improvement | Partial | [FRE-328](https://linear.app/frenchforest/issue/FRE-328) 🅿️ · FRE-226 · FRE-234 | FRE-328 pipeline shipped (PRs #43–47), parked 2026-05-12 for natural-usage eval; review gate 2026-05-26. FRE-226 needs FRE-227 |
 | **G** | Cleanups & gates | Partial | [FRE-265](https://linear.app/frenchforest/issue/FRE-265) ✅ · [FRE-299](https://linear.app/frenchforest/issue/FRE-299) ✅ · [FRE-314](https://linear.app/frenchforest/issue/FRE-314) · [FRE-337](https://linear.app/frenchforest/issue/FRE-337) ✅ · FRE-311 | FRE-265 shipped 2026-05-12; FRE-337 shipped 2026-05-13 (PR #48); FRE-299 gate flipped 2026-05-13; FRE-311 parked on FRE-302 |
-| **H** | Memory / context value | Not started | [FRE-178](https://linear.app/frenchforest/issue/FRE-178) → [FRE-179](https://linear.app/frenchforest/issue/FRE-179) → [FRE-180](https://linear.app/frenchforest/issue/FRE-180) · [FRE-230](https://linear.app/frenchforest/issue/FRE-230) | FRE-178 → 179 → 180 chain |
+| **H** | Memory / context value | Not started | [FRE-375](https://linear.app/frenchforest/issue/FRE-375) (Urgent) → [FRE-374](https://linear.app/frenchforest/issue/FRE-374) (Urgent) · [FRE-178](https://linear.app/frenchforest/issue/FRE-178) → [FRE-179](https://linear.app/frenchforest/issue/FRE-179) → [FRE-180](https://linear.app/frenchforest/issue/FRE-180) · [FRE-230](https://linear.app/frenchforest/issue/FRE-230) | FRE-375 blocks FRE-374. Probe report: `docs/research/2026-05-21-memory-integration-probe-report.md` |
 | **I** | User feedback + meta-learning | Not started | [FRE-267](https://linear.app/frenchforest/issue/FRE-267) · [FRE-183](https://linear.app/frenchforest/issue/FRE-183) · [FRE-184](https://linear.app/frenchforest/issue/FRE-184) | — |
 | **J** ✅ | Eval methodology hardening | Done | FRE-329–335 all shipped | See archive for Wave J details |
 
@@ -41,6 +41,8 @@ Wave D implementation (endpoint abstraction, compose unification, test parity) r
 
 | Ticket | Priority | Tier | What |
 |--------|----------|------|------|
+| [FRE-375](https://linear.app/frenchforest/issue/FRE-375) | **Urgent** | Opus | Isolate test/eval scripts from production memory + log substrate. 87% of last-7d Neo4j churn is eval-harness pollution. **Blocks FRE-374.** |
+| [FRE-374](https://linear.app/frenchforest/issue/FRE-374) | **Urgent** | Opus | Cross-fact constraint layer for memory pipeline (description provenance, relationship consolidation, render fallback, replay from Postgres). **Blocked by FRE-375.** |
 | [FRE-369](https://linear.app/frenchforest/issue/FRE-369) | Medium | Sonnet | User-upload UX in PWA with presigned PUT to R2. Spec: ADR-0069 + ADR-0070. **Unblocked** by FRE-227 ship 2026-05-17. |
 | [FRE-314](https://linear.app/frenchforest/issue/FRE-314) | Medium | Sonnet | `feedback_history/` retention policy in DataLifecycleManager |
 | [FRE-349](https://linear.app/frenchforest/issue/FRE-349) | Medium | Opus | Surface actionable Insights in agent context (G3 from FRE-346) |
@@ -70,6 +72,7 @@ FRE-328 capture pipeline ✅ → FRE-328 naming-stability decision gate ≥ 2026
 FRE-346 ✅ → FRE-347 ✅ → FRE-348 ✅ → FRE-349 (G3, unblocked)
 ADR-0068 ✅ (FRE-351/352/353/354/355/356 all done)
 FRE-302 ✅ → FRE-311 (budget auto-tuning, parked pending data)
+FRE-375 (test/prod isolation) → FRE-374 (memory integration ADR + replay)
 ```
 
 ---

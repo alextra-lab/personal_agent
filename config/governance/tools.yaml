@@ -1212,6 +1212,40 @@ tools:
     timeout_seconds: 10
     rate_limit_per_hour: 200
 
+  # FRE-368: write a human-facing artifact (HTML/chart/table/JSON/SVG) into
+  # the R2-backed artifact substrate. Size capped at 5 MB in tool code.
+  # Per-mode approval mirrors the `write` primitive precedent: no approval
+  # required in NORMAL, but approval required in ALERT/DEGRADED so unhealthy
+  # gateways cannot accidentally fan-out artifacts. Loop guards match notes_write.
+  artifact_write:
+    category: "artifact_write"
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
+    risk_level: "medium"
+    requires_approval: false
+    requires_approval_in_modes: ["ALERT", "DEGRADED"]
+    timeout_seconds: 30
+    rate_limit_per_hour: 30
+    loop_max_per_signature: 3
+    loop_max_consecutive: 5
+
+  # FRE-368: read-only listing of the calling user's artifacts. No approval.
+  artifact_list:
+    category: "memory_read"
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
+    risk_level: "low"
+    requires_approval: false
+    timeout_seconds: 10
+    rate_limit_per_hour: 200
+
+  # FRE-368: fetch a single artifact's metadata + (small textual) content.
+  artifact_read:
+    category: "memory_read"
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
+    risk_level: "low"
+    requires_approval: false
+    timeout_seconds: 10
+    rate_limit_per_hour: 60
+
   # Auto-discovered: 2026-04-03T18:57:35.611133
   # Update an existing Linear document
   mcp_update_document:

@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-21 — **FRE-368 backend (PR #A) shipped**. `artifact_write`, `artifact_list`, `artifact_read` tools live on main (PR #66, squash-merged). Gateway rebuilt 07:19 UTC — startup logs confirm `artifact_tools_registered bucket=seshat-artifacts`. AC-4 confirmed. **AC-5 + AC-6 pending** — require a real PWA session (CF Access auth required; CLI blocked by `AGENT_GATEWAY_AUTH_ENABLED=true`): on next session, ask agent to `artifact_write` an HTML artifact and verify round-trip + open the public URL on iPad. PR #B (PWA inline cards + `/artifacts` route) is the next task — unblocked. Also added acceptance criteria discipline to plan template: plans must now include pre-merge / post-deploy / future-gate AC table. Previous (2026-05-17): FRE-227 substrate + FRE-371 shipped end-to-end.
+> **Last updated**: 2026-05-21 — **FRE-368 fully verified on feature branch** (PR #67 ready to merge). AC-4 through AC-10 confirmed live on iPad. Two bugs found and fixed during branch testing: SQL NULL type inference in artifact_list (CAST fix), and auth AUD mismatch on public endpoints (switched to get_request_user). Branch testing before merge validated both fixes. FRE-368 closes in Linear after PR #67 merges. Previous: `artifact_write`, `artifact_list`, `artifact_read` tools live on main (PR #66, squash-merged). Gateway rebuilt 07:19 UTC — startup logs confirm `artifact_tools_registered bucket=seshat-artifacts`. AC-4 confirmed. **AC-5 + AC-6 pending** — require a real PWA session (CF Access auth required; CLI blocked by `AGENT_GATEWAY_AUTH_ENABLED=true`): on next session, ask agent to `artifact_write` an HTML artifact and verify round-trip + open the public URL on iPad. PR #B (PWA inline cards + `/artifacts` route) is the next task — unblocked. Also added acceptance criteria discipline to plan template: plans must now include pre-merge / post-deploy / future-gate AC table. Previous (2026-05-17): FRE-227 substrate + FRE-371 shipped end-to-end.
 
 ---
 
@@ -33,18 +33,7 @@ Wave D implementation (endpoint abstraction, compose unification, test parity) r
 
 ## Pending Verification (merged, not yet tested in production)
 
-These items are shipped but require a live browser session to confirm. Run them in the same session as the next PWA deploy. Check each off here and in Linear when done.
-
-**FRE-368 post-deploy verification** (PR #66 + PR #67, pending merge of #67):
-- [ ] **AC-5** — Write → list → read round-trip: ask agent to `artifact_write` an HTML artifact, verify `artifact_list` returns it, `artifact_read` returns the title, and `public_url` is reachable
-- [ ] **AC-6** — Open `https://artifacts.frenchforet.com/{artifact_id}` in iPad Safari → bytes render (existing Worker, no Worker changes needed)
-- [ ] **AC-7** — Artifact URL in assistant reply renders as an inline card (type chip, title, summary, Expand button) — NOT a bare hyperlink
-- [ ] **AC-8** — Artifact containing `<script>document.title='PWNED'</script>` → expand → title stays "Artifact" (`sandbox=""` enforced)
-- [ ] **AC-9** — "Open ↗" on installed iOS home-screen PWA → opens in Safari (WKWebView→Safari handoff), CF Access SSO covers it
-- [ ] **AC-10** — `/artifacts` route lists user's artifacts; "Open ↗" per card works
-- [ ] **AC-11** — DevTools Network: Expand → `POST /api/v1/telemetry/card_click` surface=inline → 204
-
-When all AC-5 through AC-11 pass: mark FRE-368 Done in Linear.
+*(nothing pending)*
 
 ---
 

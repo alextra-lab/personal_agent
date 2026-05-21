@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime, timezone
+from typing import Annotated
 from uuid import UUID
 
 import structlog
@@ -37,7 +38,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from personal_agent.config.settings import get_settings
-from personal_agent.service.auth import get_or_create_user_by_email
+from personal_agent.service.auth import RequestUser, get_or_create_user_by_email, get_request_user
 from personal_agent.service.cf_access_jwt import (
     CFAccessVerifierError,
     get_verifier,
@@ -102,36 +103,6 @@ def _artifacts_public_base_url() -> str | None:
     """Return the configured artifacts public base URL, or None."""
     base = settings.artifacts_public_base_url
     return base.rstrip("/") if base else None
-
-
-async def _resolve_user_via_cf_access(request: Request, db: AsyncSession) -> UUID:
-    """Verify the CF Access JWT and return the resolved user_id.
-
-    The JWT is read from the standard header used by the browser-facing PWA
-    (``cf-access-jwt-assertion``). Raises HTTP 401 / 503 on failure —
-    never falls back to plaintext email headers.
-    """
-    verifier = get_verifier()
-    if verifier is None:
-        log.error("artifacts_public_verifier_missing")
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
-
-    jwt_token = request.headers.get("cf-access-jwt-assertion") or request.headers.get(
-        "x-cf-access-jwt-assertion"
-    )
-    if not jwt_token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
-
-    try:
-        claims = await verifier.verify(jwt_token)
-    except CFAccessVerifierError as exc:
-        log.info(
-            "artifacts_public_jwt_invalid",
-            error_class=type(exc).__name__,
-        )
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED) from exc
-
-    return await get_or_create_user_by_email(db, claims.email)
 
 
 def _row_to_summary(row: object) -> ArtifactSummary:
@@ -250,13 +221,10 @@ async def resolve_artifact(
     "/api/v1/artifacts",
     response_model=ArtifactListResponse,
     tags=["artifacts-public"],
-    responses={
-        401: {"description": "Missing or invalid CF Access JWT."},
-        503: {"description": "CF Access verifier not configured."},
-    },
+    responses={401: {"description": "Not authenticated via CF Access."}},
 )
 async def list_artifacts(
-    request: Request,
+    request_user: Annotated[RequestUser, Depends(get_request_user)],  # noqa: B008
     db: AsyncSession = Depends(get_db_session),  # noqa: B008
     type: str = Query("artifact", pattern=r"^(artifact|note|upload|capture)$"),
     prefix: str | None = Query(None, max_length=64),
@@ -265,11 +233,12 @@ async def list_artifacts(
 ) -> ArtifactListResponse:
     """List the authenticated user's artifacts, newest first.
 
-    Authentication: CF Access JWT in ``cf-access-jwt-assertion`` header.
-    No ``X-Internal-Token`` is required — this endpoint is for the browser
-    (PWA), not the Worker.
+    Authentication: same as the rest of the gateway — CF Access injects the
+    ``Cf-Access-Authenticated-User-Email`` header which ``get_request_user``
+    reads. This matches the ``agent.frenchforet.com`` CF Access app; the
+    internal Worker endpoint uses JWT (different AUD) and is unaffected.
     """
-    user_id = await _resolve_user_via_cf_access(request, db)
+    user_id = request_user.user_id
 
     result = await db.execute(
         text(
@@ -302,14 +271,13 @@ async def list_artifacts(
     response_model=ArtifactSummary,
     tags=["artifacts-public"],
     responses={
-        401: {"description": "Missing or invalid CF Access JWT."},
+        401: {"description": "Not authenticated via CF Access."},
         404: {"description": "Artifact not found or not owned by this user."},
-        503: {"description": "CF Access verifier not configured."},
     },
 )
 async def get_artifact_metadata(
     artifact_id: UUID,
-    request: Request,
+    request_user: Annotated[RequestUser, Depends(get_request_user)],  # noqa: B008
     db: AsyncSession = Depends(get_db_session),  # noqa: B008
 ) -> ArtifactSummary:
     """Metadata-only fetch for a single artifact.
@@ -320,7 +288,7 @@ async def get_artifact_metadata(
 
     Cross-user access returns 404 (existence-hiding per ADR-0064 D3).
     """
-    user_id = await _resolve_user_via_cf_access(request, db)
+    user_id = request_user.user_id
 
     result = await db.execute(
         text(

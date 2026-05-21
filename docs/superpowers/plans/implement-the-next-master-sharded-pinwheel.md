@@ -18,6 +18,30 @@ The substrate (Postgres `artifacts` table, `R2ArtifactStore`, `/internal/artifac
 
 ---
 
+## Acceptance Criteria — Definition of Done for FRE-368
+
+FRE-368 is **not Done** in Linear until every item in this table is checked. Items are labelled by when they can be completed; post-deploy items are not optional — they are required for closure.
+
+| # | Criterion | When | How to verify |
+|---|---|---|---|
+| AC-1 | `make test` passes (2400+ tests, 0 failed) | Pre-merge | CI / local run |
+| AC-2 | `make mypy` clean | Pre-merge | 0 errors |
+| AC-3 | `make ruff-check` + `make ruff-format` clean | Pre-merge | 0 errors |
+| AC-4 | `artifact_write`, `artifact_list`, `artifact_read` visible to LLM in NORMAL mode | Post-deploy (PR #A) | `make shell SERVICE=seshat-gateway` → `tool_registry.list_tools(mode='NORMAL')` shows all three |
+| AC-5 | CLI write → list → read round-trip succeeds | Post-deploy (PR #A) | `uv run agent "Use artifact_write to save HTML titled 'Round-trip smoke', then artifact_list, then artifact_read"` — public_url in output matches artifact_id |
+| AC-6 | Worker serves `type='artifact'` rows — no Worker changes needed | Post-deploy (PR #A) | Open `https://artifacts.frenchforet.com/{artifact_id}` in iPad Safari → CF Access gate + bytes render |
+| AC-7 | Inline artifact card renders in chat when assistant reply contains an artifact URL | Post-deploy (PR #B) | Ask agent to write an HTML artifact → URL in reply → card appears with title/summary/open button |
+| AC-8 | Sandboxed viewer: `sandbox=""` enforced, script blocked | Post-deploy (PR #B) | Write artifact with `<script>document.title='PWNED'</script>` → expand → title stays "Artifact" |
+| AC-9 | WKWebView → Safari handoff on iPad PWA | Post-deploy (PR #B) | "Open standalone ↗" on installed home-screen PWA → opens in Safari, CF Access SSO covers it |
+| AC-10 | `/artifacts` route shows list of user's artifacts | Post-deploy (PR #B) | Navigate from session drawer → list renders; each entry opens viewer |
+| AC-11 | `artifact_card_click` telemetry emits to ES on Expand | Post-deploy (PR #B) | DevTools Network → 204 on POST; `curl es.frenchforet.com/seshat-logs-*/_search?q=event_type:artifact_card_click` returns hits |
+| AC-12 | ADR-0070 status updated from Proposed → Accepted or amended | After two-week review ≥ 2026-06-04 | ADR file Status line updated; ES query confirms `artifact_write` + `artifact_card_click` counts |
+
+**PR #A closes** when AC-1 through AC-6 are done.
+**FRE-368 closes** when AC-1 through AC-11 are done (AC-12 is the follow-up D8 review, tracked in MASTER_PLAN).
+
+---
+
 ## Shipping shape: two PRs
 
 | | PR #A — Backend | PR #B — PWA |

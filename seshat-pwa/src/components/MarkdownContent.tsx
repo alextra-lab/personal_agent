@@ -6,7 +6,35 @@ import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import type { Components } from 'react-markdown';
+import { ArtifactCard } from './ArtifactCard';
 import { MermaidBlock } from './MermaidBlock';
+
+// ---------------------------------------------------------------------------
+// Artifact URL detection (FRE-368, ADR-0070 Tier 3)
+// ---------------------------------------------------------------------------
+
+const ARTIFACTS_HOST =
+  process.env.NEXT_PUBLIC_ARTIFACTS_HOST ?? 'artifacts.frenchforet.com';
+
+// Matches /xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (UUID v4 canonical form)
+const ARTIFACT_UUID_RE =
+  /^\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i;
+
+/**
+ * Parse an artifact UUID from an href, or return null if it's not an
+ * artifacts URL. Catches malformed URLs without throwing.
+ */
+function tryParseArtifactId(href: string | undefined): string | null {
+  if (!href) return null;
+  try {
+    const u = new URL(href);
+    if (u.host !== ARTIFACTS_HOST) return null;
+    const m = u.pathname.match(ARTIFACT_UUID_RE);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+}
 
 interface MarkdownContentProps {
   content: string;
@@ -112,6 +140,16 @@ const markdownComponents: Components = {
     );
   },
   a({ href, children }) {
+    // Tier 3 (ADR-0070): intercept artifact URLs and render an inline card.
+    const artifactId = tryParseArtifactId(href);
+    if (artifactId) {
+      return (
+        <ArtifactCard
+          artifactId={artifactId}
+          fallbackHref={href ?? ''}
+        />
+      );
+    }
     return (
       <a
         href={href}

@@ -14,14 +14,45 @@ conflicts, support each other across turns) or merely concatenate them
 
 ## TL;DR
 
-**Concatenates across every layer measured.** The empirical numbers confirm
-what the static audit predicted: descriptions are overwritten on every
-merge, 9.3% of entity pairs accumulate redundant relationship types, and
-near-duplicate entity names slip past dedup into co-retrieval neighborhoods.
-The most striking finding is qualitative — the stored description of "Neo4j"
-in our graph is currently *"Query language used to interact with Neo4j"*,
-which is the definition of Cypher, not Neo4j. Cross-fact contamination is
-not theoretical; it has already happened to load-bearing entities.
+The memory pipeline concatenates rather than integrates across every layer
+measured, and **the wrong content reaches the LLM prompt with an instruction
+to trust it.** Whether the LLM actually acts on the wrong content (behavior
+impact) is **not measured here**. Specifically:
+
+- Descriptions are overwritten on every merge (`service.py:605`). The stored
+  description of `Neo4j` is *"Query language used to interact with Neo4j"* —
+  the definition of Cypher.
+- 9.3% of entity pairs (237 / 2,541) accumulate ≥ 2 distinct relationship
+  types.
+- **76.9% of the last 30 days of gateway turns inject memory context** into
+  the system prompt (1,343 / 1,747). The render path
+  (`executor.py:1725-1739`) emits the entity descriptions verbatim and
+  instructs the LLM: *"Do NOT say you have no memory."* So wrong
+  descriptions in the top-15 reach the model with a directive to defer.
+- In a current top-15 snapshot, **2 lines are misleading** (drifted
+  descriptions for Neo4j / Elasticsearch), **3 lines are empty**, and at
+  least three of the remaining "adequate" lines also look cross-contaminated
+  on manual read (Qwen3.5-35B-A3B described as schema governance; Self-Telemetry
+  Query described as Redis pub/sub).
+
+### What the report does NOT establish
+
+It does **not** show that the agent's user-facing answers are worse because
+of any of this. The LLM may override the supplied facts with its own priors,
+budget trimming may drop the memory section, or the relevance ranking may
+keep Neo4j out of the top-15 for queries where it would matter. Measuring
+that requires a behavioral probe (read N recent assistant responses where
+the malformed entity was in the top-15 and judge if the answer was wrong).
+Not done.
+
+### Framing note
+
+An earlier draft of this report led with *"critical / load-bearing / already
+happened"* phrasing based on substrate evidence alone, without measuring the
+substrate → prompt path. The user flagged this; Probe 5 was added to do the
+measurement. The framing has been revised to "wrong content reaches the
+prompt, behavior impact unmeasured" — stronger than substrate-only, weaker
+than confirmed degradation.
 
 ## Findings by probe
 
@@ -105,6 +136,62 @@ proxy metric. The proxy is conservative, however — the actual cost of
 these duplicates only materializes when both names get retrieved for the
 same query, which is a stronger condition.
 
+### Probe 5 — Impact path measurement (added after first draft)
+
+**Method:** trace whether the malformed descriptions from Probes 1-2
+actually reach the LLM prompt. Done by code-reading the retrieval render
+(`executor.py:1725-1739`), counting memory-injection frequency in 30 days
+of Elasticsearch logs, and replaying the broad-recall query against the
+current Neo4j to print the literal memory-section text that would be
+emitted into the next prompt.
+
+**Result:**
+
+- **76.9% of gateway turns** in the last 30 days inject memory context
+  (1,343 / 1,747).
+- Both broad-recall (4.6% of turns) and proactive-memory (72.1% of turns)
+  paths emit entries as `type: entity` and flow through the same renderer.
+- The render format includes the entity's `description` field verbatim and
+  appends *"Use this list to directly answer questions about what the
+  user has previously discussed. Do NOT say you have no memory."*
+- In a fresh broad-recall replay (limit 20, sliced to top 15):
+  - **2 lines misleading** (Neo4j → Cypher's definition; Elasticsearch →
+    narrow indexer-only framing). 13.3%.
+  - **3 lines empty** (Paris, London, RareLanguage have no description
+    despite 166–328 mentions each). 20%.
+  - **10 lines adequate** under the strict known-drift heuristic; manual
+    re-read suggests at least 3 of those are also cross-contaminated.
+
+**The exact memory section the next `MEMORY_RECALL` turn would emit**
+(replayed against current Neo4j):
+
+```
+## Your Memory Graph — Known Entities
+- [LOCATION] Paris:  (mentioned 328x)
+- [Technology] Neo4j: Query language used to interact with Neo4j in the Seshat stack. (mentioned 287x)
+- [Technology] Elasticsearch: Search/indexing backend that receives request trace indexing from the ES indexer consumer group. (mentioned 277x)
+- [LOCATION] London:  (mentioned 168x)
+- [LANGUAGE] RareLanguage:  (mentioned 166x)
+- [Technology] Embeddings: Platform referenced as integrated with SearXNG through community ecosystem integrations. (mentioned 138x)
+- [Technology] Self-Telemetry Query: Session cache and pub/sub component used to support fast session access and messaging. (mentioned 79x)
+- [Technology] Uvicorn: ASGI server observed running at elevated CPU while handling diagnostic commands, but determined not to be the sustained cause of slowness. (mentioned 76x)
+- [Topic] context_compressor.py: A Python file in src/personal_agent/orchestrator/ that defines at least one async function. (mentioned 63x)
+- [Topic] compression_manager.py: A Python file in src/personal_agent/orchestrator/ that defines at least one async function. (mentioned 61x)
+- [Technology] Qwen3.5-35B-A3B: Governance mechanism for managing and evolving schemas (mentioned for Avro/Protobuf) to avoid breaking consumers. (mentioned 61x)
+- [Technology] run_sysdiag: Performs external probing (HTTP/TCP) to monitor service health endpoints. (mentioned 51x)
+- [Concept] Single-node Elasticsearch: Failure routing mechanism where events that exceed max retries are stored for later inspection instead of repeated redelivery. (mentioned 49x)
+- [Location] Crete: A travel region discussed, including visits related to the island's cities and ancient history. (mentioned 49x)
+- [Concept] Event Bus: Initialization step that creates a Redis client and verifies connectivity (ping) before running subscriptions. (mentioned 45x)
+
+Use this list to directly answer questions about what the user has previously discussed. Do NOT say you have no memory.
+```
+
+This is what the LLM is told about itself today. The interpretation is up
+to a behavioral probe that has not been run.
+
+**Verdict:** the substrate → prompt path is confirmed live. The prompt →
+behavior step still requires a separate behavioral probe.
+
 ### Probe 4 — Quality monitor blind spot
 
 **Method:** static review (skipped the synthetic-data run — the static
@@ -129,11 +216,15 @@ the Probe 1 / Probe 2 findings.
 
 ## Recommendation
 
-**Open a Linear issue (Needs Approval) for an ADR proposing a cross-fact
-constraint layer.** Two of three quantitative thresholds were met
-emphatically, and the qualitative finding (Neo4j's description is Cypher's
-definition) demonstrates that load-bearing entities already carry wrong
-information that the system has no mechanism to detect or repair.
+**Filed as FRE-374 (Needs Approval).** Substrate is broken and the broken
+content reaches 76.9% of recent prompts with an instruction to trust it.
+That's enough to justify an ADR. But before scope is set, run a small
+behavioral probe — read 10 recent assistant responses where a known-drifted
+entity was in the top-15 and judge whether the answer was wrong because of
+the supplied description. If the LLM is reliably overriding bad context with
+priors, scope can be narrower (description-provenance only); if it's
+deferring as instructed, scope justifies the full set (provenance +
+relationship consolidation + monitor signals).
 
 ### Suggested ADR scope (for the Linear issue, not this report)
 

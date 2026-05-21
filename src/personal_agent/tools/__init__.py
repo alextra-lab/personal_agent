@@ -9,6 +9,14 @@ This module provides:
 
 import structlog
 
+from personal_agent.tools.artifact_tools import (
+    artifact_list_executor,
+    artifact_list_tool,
+    artifact_read_executor,
+    artifact_read_tool,
+    artifact_write_executor,
+    artifact_write_tool,
+)
 from personal_agent.tools.context7 import (
     get_library_docs_executor,
     get_library_docs_tool,
@@ -108,6 +116,11 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
         registry.register(notes_write_tool, notes_write_executor)
         registry.register(notes_search_tool, notes_search_executor)
         log.info("notes_tools_registered", bucket=settings.r2_bucket_name)
+        # FRE-368 — artifact tools share the same R2 substrate dependency.
+        registry.register(artifact_write_tool, artifact_write_executor)
+        registry.register(artifact_list_tool, artifact_list_executor)
+        registry.register(artifact_read_tool, artifact_read_executor)
+        log.info("artifact_tools_registered", bucket=settings.r2_bucket_name)
     else:
         log.warning("notes_tools_skipped_unconfigured")
 

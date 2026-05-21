@@ -27,13 +27,13 @@ Cross-user lookups still return 404 (existence-hiding per ADR-0064 D3).
 from __future__ import annotations
 
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from personal_agent.config.settings import get_settings
@@ -49,7 +49,7 @@ log = structlog.get_logger(__name__)
 settings = get_settings()
 
 
-router = APIRouter(prefix="/internal/artifacts", tags=["artifacts-internal"])
+router = APIRouter(tags=["artifacts"])
 
 
 class ArtifactResolveResponse(BaseModel):
@@ -62,6 +62,34 @@ class ArtifactResolveResponse(BaseModel):
     created_at: datetime
 
 
+class ArtifactSummary(BaseModel):
+    """Public-facing metadata for a single artifact (FRE-368).
+
+    Intentionally omits ``r2_key`` and ``embedding`` — those are
+    server-side implementation details that must never reach the client.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    artifact_id: UUID
+    public_url: str | None
+    slug: str | None
+    title: str | None
+    summary: str | None
+    content_type: str
+    size_bytes: int
+    tags: list[str]
+    created_at: datetime
+
+
+class ArtifactListResponse(BaseModel):
+    """Response body for GET /api/v1/artifacts."""
+
+    model_config = ConfigDict(frozen=True)
+
+    items: list[ArtifactSummary]
+
+
 def _verify_internal_token(request: Request) -> None:
     """Reject the request unless the Worker's shared secret matches."""
     expected = settings.artifact_resolve_internal_token
@@ -70,9 +98,65 @@ def _verify_internal_token(request: Request) -> None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
 
+def _artifacts_public_base_url() -> str | None:
+    """Return the configured artifacts public base URL, or None."""
+    base = settings.artifacts_public_base_url
+    return base.rstrip("/") if base else None
+
+
+async def _resolve_user_via_cf_access(request: Request, db: AsyncSession) -> UUID:
+    """Verify the CF Access JWT and return the resolved user_id.
+
+    The JWT is read from the standard header used by the browser-facing PWA
+    (``cf-access-jwt-assertion``). Raises HTTP 401 / 503 on failure —
+    never falls back to plaintext email headers.
+    """
+    verifier = get_verifier()
+    if verifier is None:
+        log.error("artifacts_public_verifier_missing")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    jwt_token = request.headers.get("cf-access-jwt-assertion") or request.headers.get(
+        "x-cf-access-jwt-assertion"
+    )
+    if not jwt_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+
+    try:
+        claims = await verifier.verify(jwt_token)
+    except CFAccessVerifierError as exc:
+        log.info(
+            "artifacts_public_jwt_invalid",
+            error_class=type(exc).__name__,
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED) from exc
+
+    return await get_or_create_user_by_email(db, claims.email)
+
+
+def _row_to_summary(row: object) -> ArtifactSummary:
+    """Convert a SQLAlchemy Row (or SimpleNamespace) to ArtifactSummary."""
+    base = _artifacts_public_base_url()
+    raw_id = getattr(row, "id", None)
+    artifact_id: UUID = raw_id if isinstance(raw_id, UUID) else UUID(str(raw_id))
+    public_url = f"{base}/{artifact_id}" if base else None
+    return ArtifactSummary(
+        artifact_id=artifact_id,
+        public_url=public_url,
+        slug=getattr(row, "slug", None),
+        title=getattr(row, "title", None),
+        summary=getattr(row, "summary", None),
+        content_type=getattr(row, "content_type", ""),
+        size_bytes=getattr(row, "size_bytes", 0),
+        tags=list(getattr(row, "tags", []) or []),
+        created_at=getattr(row, "created_at", datetime.now(timezone.utc)),
+    )
+
+
 @router.get(
-    "/{artifact_id}",
+    "/internal/artifacts/{artifact_id}",
     response_model=ArtifactResolveResponse,
+    tags=["artifacts-internal"],
     responses={
         401: {"description": "Missing/invalid internal token or CF Access JWT."},
         404: {"description": "Artifact not visible to the resolved user."},
@@ -155,3 +239,106 @@ async def resolve_artifact(
         size_bytes=row.size_bytes,
         created_at=row.created_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# FRE-368 — public CF-Access-gated endpoints for the PWA
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/api/v1/artifacts",
+    response_model=ArtifactListResponse,
+    tags=["artifacts-public"],
+    responses={
+        401: {"description": "Missing or invalid CF Access JWT."},
+        503: {"description": "CF Access verifier not configured."},
+    },
+)
+async def list_artifacts(
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),  # noqa: B008
+    type: str = Query("artifact", pattern=r"^(artifact|note|upload|capture)$"),
+    prefix: str | None = Query(None, max_length=64),
+    k: int = Query(20, ge=1, le=100),
+    since: str | None = Query(None),
+) -> ArtifactListResponse:
+    """List the authenticated user's artifacts, newest first.
+
+    Authentication: CF Access JWT in ``cf-access-jwt-assertion`` header.
+    No ``X-Internal-Token`` is required — this endpoint is for the browser
+    (PWA), not the Worker.
+    """
+    user_id = await _resolve_user_via_cf_access(request, db)
+
+    result = await db.execute(
+        text(
+            """
+            SELECT id, slug, title, summary, content_type, size_bytes,
+                   tags, created_at
+            FROM artifacts
+            WHERE user_id = :user_id
+              AND type = :type
+              AND (:prefix IS NULL OR slug LIKE :prefix || '%')
+              AND (:since IS NULL OR created_at > CAST(:since AS TIMESTAMPTZ))
+            ORDER BY created_at DESC
+            LIMIT :k
+            """
+        ),
+        {
+            "user_id": user_id,
+            "type": type,
+            "prefix": prefix,
+            "since": since,
+            "k": k,
+        },
+    )
+    rows = result.all()
+    return ArtifactListResponse(items=[_row_to_summary(r) for r in rows])
+
+
+@router.get(
+    "/api/v1/artifacts/{artifact_id}",
+    response_model=ArtifactSummary,
+    tags=["artifacts-public"],
+    responses={
+        401: {"description": "Missing or invalid CF Access JWT."},
+        404: {"description": "Artifact not found or not owned by this user."},
+        503: {"description": "CF Access verifier not configured."},
+    },
+)
+async def get_artifact_metadata(
+    artifact_id: UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),  # noqa: B008
+) -> ArtifactSummary:
+    """Metadata-only fetch for a single artifact.
+
+    Bytes never flow through this endpoint — the browser opens the artifact
+    at ``artifacts.frenchforet.com/{artifact_id}`` where the Worker
+    streams bytes directly from R2.
+
+    Cross-user access returns 404 (existence-hiding per ADR-0064 D3).
+    """
+    user_id = await _resolve_user_via_cf_access(request, db)
+
+    result = await db.execute(
+        text(
+            """
+            SELECT id, slug, title, summary, content_type, size_bytes,
+                   tags, created_at
+            FROM artifacts
+            WHERE id = :artifact_id
+              AND user_id = :user_id
+            """
+        ),
+        {
+            "artifact_id": artifact_id,
+            "user_id": user_id,
+        },
+    )
+    row = result.one_or_none()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    return _row_to_summary(row)

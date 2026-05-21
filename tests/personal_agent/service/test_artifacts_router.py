@@ -337,3 +337,179 @@ def test_accepts_lowercase_jwt_header_alias(monkeypatch: pytest.MonkeyPatch) -> 
         )
 
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# FRE-368 — public CF-Access-gated endpoints
+# ---------------------------------------------------------------------------
+
+
+class _ListStubSession:
+    """Stub that returns canned results for list and single-row queries."""
+
+    def __init__(self) -> None:
+        self._queue: list[Any] = []
+
+    def enqueue(self, result: Any) -> None:
+        self._queue.append(result)
+
+    async def execute(self, statement: Any, params: Any = None) -> Any:
+        if self._queue:
+            return self._queue.pop(0)
+        return SimpleNamespace(all=lambda: [], one_or_none=lambda: None)
+
+
+def _build_app_with_list_session(session: _ListStubSession) -> FastAPI:
+    app = FastAPI()
+    app.include_router(router)
+
+    async def _override_db() -> Any:
+        yield session
+
+    app.dependency_overrides[get_db_session] = _override_db
+    return app
+
+
+def _artifact_row(art_id: UUID, user_id: UUID, type_: str = "artifact") -> SimpleNamespace:
+    return SimpleNamespace(
+        id=art_id,
+        user_id=user_id,
+        type=type_,
+        slug="test-slug",
+        title="Test Title",
+        summary="Test summary",
+        content_type="text/html; charset=utf-8",
+        size_bytes=512,
+        tags=["a", "b"],
+        created_at=datetime(2026, 5, 21, 12, 0, tzinfo=timezone.utc),
+    )
+
+
+def test_list_artifacts_requires_jwt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GET /api/v1/artifacts without CF Access JWT → 401."""
+    session = _ListStubSession()
+    app = _build_app_with_list_session(session)
+    monkeypatch.setattr(router_module, "get_verifier", lambda: _stub_verifier(
+        CFAccessClaims(email="x@y.z", sub="s", aud="a", iss="i")
+    ))
+
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/artifacts")
+
+    assert resp.status_code == 401
+
+
+def test_list_artifacts_verifier_not_configured_is_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /api/v1/artifacts with no verifier → 503 (fail-closed)."""
+    session = _ListStubSession()
+    app = _build_app_with_list_session(session)
+    monkeypatch.setattr(router_module, "get_verifier", lambda: None)
+
+    with TestClient(app) as client:
+        resp = client.get(
+            "/api/v1/artifacts",
+            headers={"cf-access-jwt-assertion": _JWT},
+        )
+
+    assert resp.status_code == 503
+
+
+def test_list_artifacts_returns_user_items(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GET /api/v1/artifacts with valid JWT returns the calling user's items."""
+    user_id = uuid4()
+    art1, art2 = uuid4(), uuid4()
+    session = _ListStubSession()
+    session.enqueue(
+        SimpleNamespace(
+            all=lambda: [_artifact_row(art1, user_id), _artifact_row(art2, user_id)]
+        )
+    )
+    app = _build_app_with_list_session(session)
+    claims = CFAccessClaims(email="alex@example.com", sub="u", aud="a", iss="i")
+    monkeypatch.setattr(router_module, "get_verifier", lambda: _stub_verifier(claims))
+    monkeypatch.setattr(
+        router_module, "get_or_create_user_by_email", AsyncMock(return_value=user_id)
+    )
+
+    with TestClient(app) as client:
+        resp = client.get(
+            "/api/v1/artifacts",
+            headers={"cf-access-jwt-assertion": _JWT},
+        )
+
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert len(items) == 2
+    ids = {item["artifact_id"] for item in items}
+    assert str(art1) in ids
+    assert str(art2) in ids
+
+
+def test_get_artifact_metadata_requires_jwt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GET /api/v1/artifacts/{id} without JWT → 401."""
+    session = _ListStubSession()
+    app = _build_app_with_list_session(session)
+    monkeypatch.setattr(router_module, "get_verifier", lambda: _stub_verifier(
+        CFAccessClaims(email="x@y.z", sub="s", aud="a", iss="i")
+    ))
+
+    with TestClient(app) as client:
+        resp = client.get(f"/api/v1/artifacts/{uuid4()}")
+
+    assert resp.status_code == 401
+
+
+def test_get_artifact_metadata_cross_user_is_404(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /api/v1/artifacts/{id} for another user's artifact → 404."""
+    session = _ListStubSession()
+    # No row found — existence-hiding per ADR-0064 D3
+    session.enqueue(SimpleNamespace(one_or_none=lambda: None))
+    app = _build_app_with_list_session(session)
+    claims = CFAccessClaims(email="intruder@example.com", sub="s", aud="a", iss="i")
+    monkeypatch.setattr(router_module, "get_verifier", lambda: _stub_verifier(claims))
+    monkeypatch.setattr(
+        router_module, "get_or_create_user_by_email", AsyncMock(return_value=uuid4())
+    )
+
+    with TestClient(app) as client:
+        resp = client.get(
+            f"/api/v1/artifacts/{uuid4()}",
+            headers={"cf-access-jwt-assertion": _JWT},
+        )
+
+    assert resp.status_code == 404
+
+
+def test_get_artifact_metadata_returns_summary_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GET /api/v1/artifacts/{id} with a matching row returns metadata fields."""
+    user_id = uuid4()
+    art_id = uuid4()
+    session = _ListStubSession()
+    session.enqueue(
+        SimpleNamespace(one_or_none=lambda: _artifact_row(art_id, user_id))
+    )
+    app = _build_app_with_list_session(session)
+    claims = CFAccessClaims(email="alex@example.com", sub="u", aud="a", iss="i")
+    monkeypatch.setattr(router_module, "get_verifier", lambda: _stub_verifier(claims))
+    monkeypatch.setattr(
+        router_module, "get_or_create_user_by_email", AsyncMock(return_value=user_id)
+    )
+
+    with TestClient(app) as client:
+        resp = client.get(
+            f"/api/v1/artifacts/{art_id}",
+            headers={"cf-access-jwt-assertion": _JWT},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["artifact_id"] == str(art_id)
+    assert body["title"] == "Test Title"
+    assert body["summary"] == "Test summary"
+    assert "r2_key" not in body  # never expose the internal R2 key

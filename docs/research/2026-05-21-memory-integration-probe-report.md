@@ -43,6 +43,38 @@ Substrate-level findings (Probes 1-2): `service.py:605` overwrites the
 description on every merge; 237 / 2,541 (9.3%) entity pairs carry redundant
 relationship types; the quality monitor is blind to all of the above.
 
+### Scope finding (Probe 6 — recent + production-only)
+
+Of the 300 `:Turn` nodes created in the last 7 days, **261 (87%) have
+`session_id: NULL`** — synthetic traffic from eval-harness scripts
+writing directly to Neo4j without ever creating a real Postgres session.
+Filed as **FRE-375 (Urgent, blocking FRE-374)**. Postgres `sessions` is
+clean: 1019 of 1025 sessions belong to the real user, so it is a viable
+replay source. On the production-only slice the harm signature persists
+(~7 of top-15 lines broken) — smaller in scale than the all-data view
+suggested, but not eliminated.
+
+### Production extractor identity
+
+Confirmed from the live gateway container env:
+
+```
+AGENT_MODEL_CONFIG_PATH=/app/config/models.cloud.yaml
+config/models.cloud.yaml:  entity_extraction_role: gpt-5.4-mini
+```
+
+So the **current** extractor is `gpt-5.4-mini`. Older descriptions in
+the graph were produced by `gpt-5.4-nano` (the previous setting; still
+the default in non-cloud `config/models.yaml`). The schema does not
+record extractor version per write — both eras are mixed in the
+`description` field, with no way to tell them apart short of correlating
+`last_seen` timestamps against the deploy that swapped the model.
+
+This matters for sequencing: a replay against the current `mini`
+extractor is expected to produce substantively better descriptions than
+what's stored now, which strengthens the case for purge + replay
+(post-FRE-375) over fix-forward.
+
 ### What the report does NOT establish
 
 It does **not** quantify how often a specific user-visible assistant
@@ -54,12 +86,18 @@ needed to justify acting.
 
 ### Framing-history note
 
-A first draft of this report overclaimed on substrate evidence alone
-("critical / load-bearing / already happened" without measuring impact).
-A second draft over-hedged by extending a behavior-probe caveat into the
-TL;DR, undercutting the system-level harms that Probe 5 had already
-established. This version is calibrated to the four harms actually
-measured.
+The framing has gone through four passes:
+1. **Overclaim** on substrate alone ("critical / load-bearing / already
+   happened" without measuring impact).
+2. **Overhedge** by extending a behavior-probe caveat into the TL;DR,
+   undercutting the system-level harms Probe 5 had already established.
+3. **Recalibrate** to the four measured harms.
+4. **Scope + extractor identity** — confirmed 87% of last-7d Neo4j
+   churn is test pollution (FRE-375); confirmed current production
+   extractor is `gpt-5.4-mini`, not `nano`. The harms persist on the
+   production-only slice but at smaller absolute scale, and replay
+   with the upgraded extractor becomes a substantively better path
+   than fix-forward.
 
 ## Findings by probe
 
@@ -221,41 +259,75 @@ It does **not** measure:
 **Verdict:** confirmed blind. The monitor would not have flagged any of
 the Probe 1 / Probe 2 findings.
 
+### Probe 6 — Recent + production-only slice (added after Probe 5)
+
+**Method:** restrict the corpus to last 7 days AND filter to turns with
+a real `session_id` (eval-harness traffic writes turns with
+`session_id: NULL`). Re-render the top-15 broad-recall section over the
+filtered corpus.
+
+**Result:**
+
+- 300 `:Turn` nodes in the last 7 days. **261 (87%) have `session_id:
+  NULL`** — synthetic traffic. **39 (13%)** are from real sessions.
+- Postgres `sessions` table is clean: 1019 of 1025 sessions belong to
+  the real user. So the test pollution is Neo4j-only and goes through
+  the gateway/extractor without ever creating a Postgres session.
+- Production-only top-15 still shows ~7 lines clearly broken:
+  - `Neo4j` → Cypher's definition (still)
+  - `Postgres` → *"An ISO-standard graph query language that is based
+    on openCypher"* — Cypher's definition, now leaking onto Postgres
+  - `Redis Streams` → *"A relational database query language based on
+    querying rows and columns, with joins and recursive CTEs"* — SQL's
+    definition, leaking onto Redis Streams
+  - `Elasticsearch` → still narrow
+  - `Cypher` → narrow / tied to a session-specific extraction
+  - `Paris` → empty despite 328 mentions
+  - `London` → empty despite 168 mentions
+
+**Verdict:** the test pollution inflated the headline scale, but the
+harm signature persists on the production-only slice. The cross-fact
+contamination pattern (Postgres ↔ Cypher ↔ SQL) is the kind you'd
+expect when an extractor confuses similar technical entities — that's
+a real-conversation problem, not an eval-harness artifact. Surfaced
+**FRE-375 (Urgent)** to stop test scripts from polluting production
+substrate — it blocks any cleanup or replay work under FRE-374.
+
 ## Recommendation
 
-**Filed as FRE-374 (Urgent, Needs Approval).** The four harms above stand
-on Probe 5 alone — token waste, empty descriptions on top-mention entities,
-cross-contamination, and self-incoherence are all confirmed system-level
-failures regardless of whether any specific user-visible answer was
-degraded.
+**Filed as FRE-374 (Urgent, Needs Approval) and FRE-375 (Urgent,
+blocking).**
 
-Proposed scope: description-provenance (replace destructive overwrite with
-append-and-version) + relationship consolidation (dedupe semantic edges
-before write) + render-time fallback (skip empty-description lines instead
-of emitting blank entries into the prompt) + quality-monitor signals to
-catch regressions.
+FRE-375 ships first: stop test/eval scripts from writing directly to
+the production Neo4j/ES/captains-log substrate. Without that fix, any
+cleanup or replay done under FRE-374 is undone by the next eval run.
 
-Optional refinement: small behavioral probe (~10 traces) to characterize
-how the LLM is responding to bad descriptions today. Not a gate.
-
-### Suggested ADR scope (for the Linear issue, not this report)
+FRE-374 then ships in the order:
 
 1. **Description provenance.** Replace `SET e.description = $description`
-   with append-and-version semantics (`e.descriptions = e.descriptions +
-   [{text, turn_id, ts}]`) so the *latest* extraction does not silently
-   destroy prior framings. Retrieval can then pick a canonical view or
-   summarize across them.
+   with append-and-version (`e.descriptions = e.descriptions + [{text,
+   turn_id, extractor_role, ts}]`) so the *latest* extraction does not
+   silently destroy prior framings. The `extractor_role` field
+   future-proofs against the `gpt-5.4-nano` → `gpt-5.4-mini` upgrade
+   that we cannot currently distinguish in the stored data.
 2. **Relationship consolidation.** Before `CREATE (a)-[:USES]->(b)`,
    check whether an edge of overlapping semantic type already exists.
    Either upsert (with provenance) or pick a single canonical type.
-3. **Quality-monitor signals.** Add two new anomalies:
-   `redundant_relationship_types_pair_count` and
-   `description_overwrite_rate`. These would have caught both findings
-   here without manual investigation.
+3. **Render-time fallback.** Skip or annotate empty-description lines
+   rather than emitting `- [LOCATION] Paris:  (mentioned 328x)`.
+4. **Quality-monitor signals.** Add `redundant_relationship_types_pair_count`
+   and `description_overwrite_rate` anomalies.
+5. **Backfill / replay.** Snapshot Neo4j → reset entity descriptions
+   (or drop entities entirely) → replay real Postgres sessions
+   chronologically through the current `gpt-5.4-mini` extractor to
+   populate the new `descriptions[]` array.
 
 The ADR should **not** propose a separate `:Fact` node type yet. That's
 a heavier schema change, and the cheaper interventions above buy most of
 the value. Re-evaluate after they ship.
+
+Optional refinement: small behavioral probe (~10 traces) to characterize
+how the LLM is responding to bad descriptions today. Not a gate.
 
 ### Out of scope
 

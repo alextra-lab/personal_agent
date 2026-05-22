@@ -14,6 +14,8 @@ ENTITY_RATIO_TARGET = (0.5, 2.0)
 RELATIONSHIP_DENSITY_TARGET = (1.0, 3.0)
 DUPLICATE_RATE_TARGET_MAX = 0.05
 EXTRACTION_FAILURE_RATE_TARGET_MAX = 0.01
+EMPTY_DESCRIPTION_RATE_TARGET_MAX = 0.10  # FRE-374: >10% empty descriptions
+REDUNDANT_RELATIONSHIP_PAIRS_TARGET_MAX = 50  # FRE-374: >50 redundant-type pairs
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,9 @@ class GraphHealthReport:
     orphaned_entity_rate: float
     clustered_entity_rate: float
     max_temporal_gap_hours: float
+    # FRE-374: content quality signals
+    empty_description_entity_count: int = 0
+    redundant_relationship_pairs: int = 0
 
 
 @dataclass(frozen=True)
@@ -264,6 +269,27 @@ class ConsolidationQualityMonitor:
         orphaned_rate = float(orphaned_entities / entity_nodes) if entity_nodes > 0 else 0.0
         max_temporal_gap_hours = _max_gap_hours(timestamps)
 
+        empty_description_count = int(
+            await self._run_scalar_query(
+                """
+                MATCH (e:Entity)
+                WHERE e.description IS NULL OR e.description = ''
+                RETURN count(e) AS value
+                """
+            )
+        )
+        redundant_relationship_pairs = int(
+            await self._run_scalar_query(
+                """
+                MATCH (a:Entity)-[r]-(b:Entity)
+                WHERE id(a) < id(b)
+                WITH a, b, collect(distinct type(r)) AS types
+                WHERE size(types) > 1
+                RETURN count(*) AS value
+                """
+            )
+        )
+
         report = GraphHealthReport(
             total_nodes=total_nodes,
             conversation_nodes=conversation_nodes,
@@ -274,6 +300,8 @@ class ConsolidationQualityMonitor:
             orphaned_entity_rate=orphaned_rate,
             clustered_entity_rate=clustered_ratio,
             max_temporal_gap_hours=max_temporal_gap_hours,
+            empty_description_entity_count=empty_description_count,
+            redundant_relationship_pairs=redundant_relationship_pairs,
         )
         log.info(
             "quality_monitor_graph_report",
@@ -281,6 +309,8 @@ class ConsolidationQualityMonitor:
             orphaned_entity_rate=round(report.orphaned_entity_rate, 4),
             clustered_entity_rate=round(report.clustered_entity_rate, 4),
             max_temporal_gap_hours=round(report.max_temporal_gap_hours, 2),
+            empty_description_entity_count=report.empty_description_entity_count,
+            redundant_relationship_pairs=report.redundant_relationship_pairs,
         )
         return report
 
@@ -341,6 +371,39 @@ class ConsolidationQualityMonitor:
                     message="Entity nodes exist but no relationships are present.",
                     observed_value=float(graph.relationship_count),
                     expected_range=(1.0, float("inf")),
+                )
+            )
+
+        # FRE-374: empty-description rate anomaly
+        if graph.entity_nodes > 0:
+            empty_rate = graph.empty_description_entity_count / graph.entity_nodes
+            if empty_rate > EMPTY_DESCRIPTION_RATE_TARGET_MAX:
+                anomalies.append(
+                    Anomaly(
+                        anomaly_type="empty_description_rate_high",
+                        severity="medium",
+                        message=(
+                            f"Empty-description entity rate {empty_rate:.1%} exceeds "
+                            f"{EMPTY_DESCRIPTION_RATE_TARGET_MAX:.0%} target "
+                            f"({graph.empty_description_entity_count} of {graph.entity_nodes} entities)."
+                        ),
+                        observed_value=empty_rate,
+                        expected_range=(0.0, EMPTY_DESCRIPTION_RATE_TARGET_MAX),
+                    )
+                )
+
+        # FRE-374: redundant relationship pairs anomaly
+        if graph.redundant_relationship_pairs > REDUNDANT_RELATIONSHIP_PAIRS_TARGET_MAX:
+            anomalies.append(
+                Anomaly(
+                    anomaly_type="redundant_relationship_pairs_high",
+                    severity="medium",
+                    message=(
+                        f"Redundant-relationship-type pairs ({graph.redundant_relationship_pairs}) "
+                        f"exceeds threshold of {REDUNDANT_RELATIONSHIP_PAIRS_TARGET_MAX}."
+                    ),
+                    observed_value=float(graph.redundant_relationship_pairs),
+                    expected_range=(0.0, float(REDUNDANT_RELATIONSHIP_PAIRS_TARGET_MAX)),
                 )
             )
 

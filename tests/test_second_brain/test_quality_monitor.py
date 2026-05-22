@@ -39,6 +39,8 @@ class TestConsolidationQualityMonitor:
                 40,  # relationship count
                 2,  # orphaned entities
                 0.6,  # clustered ratio
+                3,  # FRE-374: empty_description_entity_count
+                5,  # FRE-374: redundant_relationship_pairs
             ]
         )
         monitor._run_list_query = AsyncMock(  # type: ignore[method-assign]
@@ -85,6 +87,8 @@ class TestConsolidationQualityMonitor:
                     "relationship_density": 0.2,
                     "entity_nodes": 10,
                     "relationship_count": 0,
+                    "empty_description_entity_count": 0,  # FRE-374
+                    "redundant_relationship_pairs": 0,  # FRE-374
                 },
             )()
         )

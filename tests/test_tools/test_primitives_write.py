@@ -11,7 +11,10 @@ import pytest
 
 from personal_agent.governance.models import ToolPolicy
 from personal_agent.tools.primitives.write import write_executor
+from personal_agent.telemetry.trace import TraceContext
 
+
+_CTX = TraceContext.new_trace()
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -43,7 +46,7 @@ async def test_write_overwrite() -> None:
         target = Path(tmpdir) / "output.txt"
         content = "Hello from write_executor!"
 
-        result = await write_executor(str(target), content=content, mode="overwrite")
+        result = await write_executor(str(target), content=content, mode="overwrite", ctx=_CTX)
 
         assert result["success"] is True
         assert result["path"] == str(target.resolve())
@@ -63,8 +66,8 @@ async def test_write_append() -> None:
     with TemporaryDirectory() as tmpdir:
         target = Path(tmpdir) / "log.txt"
 
-        await write_executor(str(target), content="first\n", mode="append")
-        await write_executor(str(target), content="second\n", mode="append")
+        await write_executor(str(target), content="first\n", mode="append", ctx=_CTX)
+        await write_executor(str(target), content="second\n", mode="append", ctx=_CTX)
 
         combined = target.read_text(encoding="utf-8")
         assert "first\n" in combined
@@ -83,7 +86,7 @@ async def test_write_invalid_mode() -> None:
     with TemporaryDirectory() as tmpdir:
         target = Path(tmpdir) / "file.txt"
 
-        result = await write_executor(str(target), content="data", mode="invalid")
+        result = await write_executor(str(target), content="data", mode="invalid", ctx=_CTX)
 
         assert result["success"] is False
         assert result["error"] == "invalid_mode"
@@ -101,7 +104,7 @@ async def test_write_creates_parent_dirs() -> None:
         target = Path(tmpdir) / "subdir" / "nested" / "file.txt"
         assert not target.parent.exists()
 
-        result = await write_executor(str(target), content="deep write", mode="overwrite")
+        result = await write_executor(str(target), content="deep write", mode="overwrite", ctx=_CTX)
 
         assert result["success"] is True
         assert target.parent.exists()
@@ -131,7 +134,7 @@ async def test_write_forbidden_path() -> None:
         "personal_agent.tools.primitives._governance.load_governance_config",
         return_value=mock_config,
     ):
-        result = await write_executor("/etc/shadow", content="pwned", mode="overwrite")
+        result = await write_executor("/etc/shadow", content="pwned", mode="overwrite", ctx=_CTX)
 
     assert result["success"] is False
     assert result["error"] == "forbidden_path"
@@ -164,7 +167,7 @@ async def test_write_path_not_in_allowed_paths() -> None:
             "personal_agent.tools.primitives._governance.load_governance_config",
             return_value=mock_config,
         ):
-            result = await write_executor(str(target), content="data", mode="overwrite")
+            result = await write_executor(str(target), content="data", mode="overwrite", ctx=_CTX)
 
     assert result["success"] is False
     assert result["error"] == "path_not_allowed"

@@ -58,8 +58,9 @@ read_skill_tool = ToolDefinition(
 
 async def read_skill_executor(
     name: str = "",
-    ctx: TraceContext | None = None,
     session_id: str | None = None,
+    *,
+    ctx: TraceContext,
     **_kwargs: Any,
 ) -> dict[str, Any]:
     """Return the full body of a skill doc by name.
@@ -67,8 +68,8 @@ async def read_skill_executor(
     Args:
         name: Skill name to look up (must match a name in the skill index).
             If empty, returns the list of available skill names instead of crashing.
-        ctx: Telemetry trace context (passed as 'ctx' by the tool executor layer).
         session_id: Optional session identifier for logging.
+        ctx: Telemetry trace context (passed as 'ctx' by the tool executor layer).
 
     Returns:
         Dict with ``skill_name``, ``body``, and ``status``.
@@ -91,7 +92,7 @@ async def read_skill_executor(
         hint = f"Unknown skill '{name}'. Available skills: {', '.join(known)}"
         log.warning(
             "missing_skill_requested",
-            trace_id=ctx.trace_id if ctx else "unknown",
+            trace_id=ctx.trace_id,
             session_id=session_id,
             requested_name=name,
             available_skills=known,

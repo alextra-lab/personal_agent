@@ -75,7 +75,8 @@ async def get_library_docs_executor(
     library: str = "",
     topic: str | None = None,
     tokens: int | None = None,
-    ctx: TraceContext | None = None,
+    *,
+    ctx: TraceContext,
 ) -> dict[str, Any]:
     """Resolve a library name and fetch its documentation from Context7.
 
@@ -87,7 +88,7 @@ async def get_library_docs_executor(
         library: Library or package name.
         topic: Optional documentation topic filter.
         tokens: Max tokens to retrieve (default 5,000, max 20,000).
-        ctx: Optional trace context.
+        ctx: Trace context.
 
     Returns:
         Dict with ``library_id``, ``library_name``, ``docs``, and ``tokens_used`` keys.
@@ -101,7 +102,7 @@ async def get_library_docs_executor(
         raise ToolExecutionError("'library' parameter is required and cannot be empty.")
 
     token_cap = max(100, min(int(tokens or _DEFAULT_TOKENS), _MAX_TOKENS))
-    trace_id = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
+    trace_id = ctx.trace_id
 
     log.info("get_library_docs_started", trace_id=trace_id, library=library, topic=topic)
 

@@ -13,6 +13,7 @@ import pytest
 
 import personal_agent.tools.linear as lm
 from personal_agent.tools.executor import ToolExecutionError
+from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.linear import (
     create_linear_issue_executor,
     create_linear_issue_tool,
@@ -20,6 +21,8 @@ from personal_agent.tools.linear import (
     find_linear_issues_tool,
 )
 
+
+_CTX = TraceContext.new_trace()
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 
@@ -142,28 +145,28 @@ def test_find_tool_definition() -> None:
 async def test_create_empty_title_raises() -> None:
     """Empty title raises before any HTTP call."""
     with pytest.raises(ToolExecutionError, match="'title' is required"):
-        await create_linear_issue_executor(title="", description="some body")
+        await create_linear_issue_executor(title="", description="some body", ctx=_CTX)
 
 
 @pytest.mark.asyncio
 async def test_create_empty_description_raises() -> None:
     """Empty description raises before any HTTP call."""
     with pytest.raises(ToolExecutionError, match="'description' is required"):
-        await create_linear_issue_executor(title="A title", description="")
+        await create_linear_issue_executor(title="A title", description="", ctx=_CTX)
 
 
 @pytest.mark.asyncio
 async def test_create_title_too_long_raises() -> None:
     """Title over 255 chars raises before any HTTP call."""
     with pytest.raises(ToolExecutionError, match="exceeds 255"):
-        await create_linear_issue_executor(title="x" * 256, description="body")
+        await create_linear_issue_executor(title="x" * 256, description="body", ctx=_CTX)
 
 
 @pytest.mark.asyncio
 async def test_create_bad_priority_raises() -> None:
     """Priority outside 1-4 raises before any HTTP call."""
     with pytest.raises(ToolExecutionError, match="priority"):
-        await create_linear_issue_executor(title="T", description="D", priority=5)
+        await create_linear_issue_executor(title="T", description="D", priority=5, ctx=_CTX)
 
 
 @pytest.mark.asyncio
@@ -173,14 +176,14 @@ async def test_create_missing_api_key_raises() -> None:
         ms.linear_api_key = None
         ms.linear_agent_rate_limit_per_day = 10
         with pytest.raises(ToolExecutionError, match="API key not configured"):
-            await create_linear_issue_executor(title="T", description="D")
+            await create_linear_issue_executor(title="T", description="D", ctx=_CTX)
 
 
 @pytest.mark.asyncio
 async def test_find_no_query_no_state_raises() -> None:
     """Empty query with no state filter raises before any HTTP call."""
     with pytest.raises(ToolExecutionError, match="Provide 'query'"):
-        await find_linear_issues_executor(query="", state=None)
+        await find_linear_issues_executor(query="", state=None, ctx=_CTX)
 
 
 @pytest.mark.asyncio
@@ -190,7 +193,7 @@ async def test_find_state_only_is_valid() -> None:
         ms.linear_api_key = "lin_api_test"
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client([_issue_search_response([])])
-            result = await find_linear_issues_executor(query="", state="Needs Approval")
+            result = await find_linear_issues_executor(query="", state="Needs Approval", ctx=_CTX)
     assert result["count"] == 0
     assert result["state"] == "Needs Approval"
 
@@ -201,7 +204,7 @@ async def test_find_missing_api_key_raises() -> None:
     with patch("personal_agent.tools.linear.settings") as ms:
         ms.linear_api_key = None
         with pytest.raises(ToolExecutionError, match="API key not configured"):
-            await find_linear_issues_executor(query="something")
+            await find_linear_issues_executor(query="something", ctx=_CTX)
 
 
 # ── dry_run tests ──────────────────────────────────────────────────────────
@@ -227,6 +230,7 @@ async def test_create_dry_run_returns_payload_without_creating() -> None:
                 title="Test dry run",
                 description="body",
                 dry_run=True,
+                ctx=_CTX,
             )
 
     assert result["dry_run"] is True
@@ -258,6 +262,7 @@ async def test_create_issue_success() -> None:
                 title="Agent-detected memory issue",
                 description="## Context\n\nMemory query latency spiked.",
                 priority=2,
+                ctx=_CTX,
             )
 
     assert result["dry_run"] is False
@@ -300,9 +305,9 @@ async def test_create_issue_uses_cached_ids_on_second_call() -> None:
         ms.linear_agent_rate_limit_per_day = 10
         ms.linear_personal_agent_label_id = "25004aac-3b32-4fa4-bdc2-55ff348ea842"
         with patch("personal_agent.tools.linear.httpx.AsyncClient", return_value=client):
-            await create_linear_issue_executor(title="First", description="body")
+            await create_linear_issue_executor(title="First", description="body", ctx=_CTX)
             first_count = call_count
-            await create_linear_issue_executor(title="Second", description="body")
+            await create_linear_issue_executor(title="Second", description="body", ctx=_CTX)
             second_count = call_count - first_count
 
     assert second_count < first_count
@@ -324,7 +329,7 @@ async def test_find_issues_returns_matching_results() -> None:
         ms.linear_api_key = "lin_api_test"
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client([_issue_search_response(nodes)])
-            result = await find_linear_issues_executor(query="memory leak")
+            result = await find_linear_issues_executor(query="memory leak", ctx=_CTX)
 
     assert result["count"] == 1
     assert result["issues"][0]["identifier"] == "FRE-100"
@@ -339,7 +344,7 @@ async def test_find_issues_empty_results() -> None:
         ms.linear_api_key = "lin_api_test"
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client([_issue_search_response([])])
-            result = await find_linear_issues_executor(query="nonexistent thing xyz")
+            result = await find_linear_issues_executor(query="nonexistent thing xyz", ctx=_CTX)
 
     assert result["count"] == 0
     assert result["issues"] == []
@@ -358,7 +363,7 @@ async def test_rate_limit_blocks_after_threshold() -> None:
         ms.linear_api_key = "lin_api_test"
         ms.linear_agent_rate_limit_per_day = 3
         with pytest.raises(ToolExecutionError, match="Rate limit"):
-            await create_linear_issue_executor(title="Over limit", description="body")
+            await create_linear_issue_executor(title="Over limit", description="body", ctx=_CTX)
 
 
 @pytest.mark.asyncio
@@ -383,6 +388,7 @@ async def test_rate_limit_does_not_apply_to_dry_run() -> None:
                 title="Dry run regardless",
                 description="body",
                 dry_run=True,
+                ctx=_CTX,
             )
     assert result["dry_run"] is True
 
@@ -412,7 +418,7 @@ async def test_http_error_raises() -> None:
         ms.linear_agent_rate_limit_per_day = 10
         with patch("personal_agent.tools.linear.httpx.AsyncClient", return_value=client):
             with pytest.raises(ToolExecutionError, match="HTTP 500"):
-                await create_linear_issue_executor(title="T", description="D")
+                await create_linear_issue_executor(title="T", description="D", ctx=_CTX)
 
 
 @pytest.mark.asyncio
@@ -426,7 +432,7 @@ async def test_graphql_error_raises() -> None:
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client([error_response])
             with pytest.raises(ToolExecutionError, match="not authorized"):
-                await create_linear_issue_executor(title="T", description="D")
+                await create_linear_issue_executor(title="T", description="D", ctx=_CTX)
 
 
 @pytest.mark.asyncio
@@ -443,7 +449,7 @@ async def test_connect_error_raises() -> None:
         ms.linear_agent_rate_limit_per_day = 10
         with patch("personal_agent.tools.linear.httpx.AsyncClient", return_value=client):
             with pytest.raises(ToolExecutionError, match="Cannot connect"):
-                await create_linear_issue_executor(title="T", description="D")
+                await create_linear_issue_executor(title="T", description="D", ctx=_CTX)
 
 
 @pytest.mark.asyncio
@@ -457,7 +463,7 @@ async def test_unknown_team_raises() -> None:
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client([data])
             with pytest.raises(ToolExecutionError, match="team.*not found"):
-                await create_linear_issue_executor(title="T", description="D")
+                await create_linear_issue_executor(title="T", description="D", ctx=_CTX)
 
 
 # ── GraphQL type annotation tests ─────────────────────────────────────────────
@@ -519,6 +525,7 @@ async def test_create_issue_uses_configured_label_id_not_name_lookup() -> None:
                 title="Template-first test",
                 description="Uses config label ID, not name lookup.",
                 dry_run=True,
+                ctx=_CTX,
             )
 
     assert result["dry_run"] is True
@@ -542,4 +549,4 @@ async def test_create_issue_raises_when_personal_agent_label_id_not_configured()
         with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_http_client(responses)
             with pytest.raises(ToolExecutionError, match="PersonalAgent label ID not configured"):
-                await create_linear_issue_executor(title="T", description="D")
+                await create_linear_issue_executor(title="T", description="D", ctx=_CTX)

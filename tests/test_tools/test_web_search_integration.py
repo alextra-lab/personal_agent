@@ -12,7 +12,12 @@ import os
 import httpx
 import pytest
 
+from personal_agent.telemetry.trace import TraceContext
+
 pytestmark = pytest.mark.integration
+
+
+_CTX = TraceContext.new_trace()
 
 
 @pytest.fixture(autouse=True)
@@ -30,7 +35,7 @@ async def test_web_search_executor_smoke() -> None:
     """Smoke test: executor returns non-empty results for a broad query."""
     from personal_agent.tools.web import web_search_executor
 
-    result = await web_search_executor(query="python programming")
+    result = await web_search_executor(query="python programming", ctx=_CTX)
 
     assert isinstance(result, dict)
     assert result["result_count"] > 0, "Expected live results from SearXNG"
@@ -44,7 +49,7 @@ async def test_web_search_category_routing_it() -> None:
     """Category routing: 'it' category returns results from technical engines."""
     from personal_agent.tools.web import web_search_executor
 
-    result = await web_search_executor(query="asyncio event loop", categories="it")
+    result = await web_search_executor(query="asyncio event loop", categories="it", ctx=_CTX)
 
     assert isinstance(result, dict)
     assert result["result_count"] > 0, "Expected results for IT category query"

@@ -11,7 +11,10 @@ import pytest
 
 from personal_agent.governance.models import ToolPolicy
 from personal_agent.tools.primitives.read import read_executor
+from personal_agent.telemetry.trace import TraceContext
 
+
+_CTX = TraceContext.new_trace()
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -42,7 +45,7 @@ async def test_read_happy_path() -> None:
         expected = "Hello, primitives!\nLine 2."
         test_file.write_text(expected, encoding="utf-8")
 
-        result = await read_executor(str(test_file))
+        result = await read_executor(str(test_file), ctx=_CTX)
 
         assert result["success"] is True
         assert result["content"] == expected
@@ -60,7 +63,7 @@ async def test_read_not_a_file() -> None:
     """Reading a directory path returns error='not_a_file'."""
     with TemporaryDirectory() as tmpdir:
         # tmpdir is a directory, not a file
-        result = await read_executor(tmpdir)
+        result = await read_executor(tmpdir, ctx=_CTX)
 
         assert result["success"] is False
         assert result["error"] == "not_a_file"
@@ -80,7 +83,7 @@ async def test_read_too_large() -> None:
         # write 1100 bytes, read with cap at 1000
         large_file.write_bytes(b"x" * 1100)
 
-        result = await read_executor(str(large_file), max_bytes=1000)
+        result = await read_executor(str(large_file), max_bytes=1000, ctx=_CTX)
 
         assert result["success"] is False
         assert result["error"] == "too_large"
@@ -114,7 +117,7 @@ async def test_read_path_traversal() -> None:
         "personal_agent.tools.primitives._governance.load_governance_config",
         return_value=mock_config,
     ):
-        result = await read_executor("/etc/shadow")
+        result = await read_executor("/etc/shadow", ctx=_CTX)
 
     assert result["success"] is False
     assert result["error"] == "forbidden_path"
@@ -147,7 +150,7 @@ async def test_read_path_not_in_allowed_paths() -> None:
             "personal_agent.tools.primitives._governance.load_governance_config",
             return_value=mock_config,
         ):
-            result = await read_executor(str(test_file))
+            result = await read_executor(str(test_file), ctx=_CTX)
 
     assert result["success"] is False
     assert result["error"] == "path_not_allowed"
@@ -167,7 +170,7 @@ async def test_read_tail_lines_basic() -> None:
         lines = [f"line{i}" for i in range(1, 11)]  # line1..line10
         test_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-        result = await read_executor(str(test_file), tail_lines=3)
+        result = await read_executor(str(test_file), tail_lines=3, ctx=_CTX)
 
         assert result["success"] is True
         assert result["tail_lines"] == 3
@@ -191,11 +194,11 @@ async def test_read_tail_bypasses_size_gate() -> None:
         assert large_file.stat().st_size > 1000
 
         # Without tail_lines: too_large
-        normal = await read_executor(str(large_file), max_bytes=1000)
+        normal = await read_executor(str(large_file), max_bytes=1000, ctx=_CTX)
         assert normal["error"] == "too_large"
 
         # With tail_lines: succeeds
-        tail = await read_executor(str(large_file), max_bytes=1000, tail_lines=5)
+        tail = await read_executor(str(large_file), max_bytes=1000, tail_lines=5, ctx=_CTX)
         assert tail["success"] is True
         assert tail["tail_lines"] == 5
         tail_lines_content = tail["content"].strip().splitlines()
@@ -215,7 +218,7 @@ async def test_read_tail_more_than_file_has() -> None:
         test_file = Path(tmpdir) / "short.txt"
         test_file.write_text("only\ntwo lines\n", encoding="utf-8")
 
-        result = await read_executor(str(test_file), tail_lines=100)
+        result = await read_executor(str(test_file), tail_lines=100, ctx=_CTX)
 
         assert result["success"] is True
         lines = result["content"].strip().splitlines()
@@ -236,7 +239,7 @@ async def test_read_tail_output_capped_by_max_bytes() -> None:
         lines = ["x" * 100 for _ in range(20)]
         test_file.write_text("\n".join(lines), encoding="utf-8")
 
-        result = await read_executor(str(test_file), max_bytes=300, tail_lines=20)
+        result = await read_executor(str(test_file), max_bytes=300, tail_lines=20, ctx=_CTX)
 
         assert result["success"] is True
         assert result["truncated"] is True
@@ -255,7 +258,7 @@ async def test_read_tail_no_trailing_newline() -> None:
         test_file = Path(tmpdir) / "nonl.txt"
         test_file.write_bytes(b"alpha\nbeta\ngamma")  # no trailing newline
 
-        result = await read_executor(str(test_file), tail_lines=2)
+        result = await read_executor(str(test_file), tail_lines=2, ctx=_CTX)
 
         assert result["success"] is True
         lines = result["content"].splitlines()

@@ -19,7 +19,10 @@ from personal_agent.tools.primitives.run_python import (
     run_python_executor,
 )
 from personal_agent.tools.primitives.sandbox import SandboxResult
+from personal_agent.telemetry.trace import TraceContext
 
+
+_CTX = TraceContext.new_trace()
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -63,7 +66,7 @@ def _failure_result(
 async def test_run_python_no_docker() -> None:
     """When docker binary is absent, returns sandbox_unavailable error dict."""
     with patch("shutil.which", return_value=None):
-        result = await run_python_executor(script="print('hello')")
+        result = await run_python_executor(script="print('hello')", ctx=_CTX)
 
     assert result["success"] is False
     assert result["error"] == "sandbox_unavailable"
@@ -87,7 +90,7 @@ async def test_run_python_happy_path() -> None:
             new=AsyncMock(return_value=sandbox_result),
         ),
     ):
-        result = await run_python_executor(script="print(42)")
+        result = await run_python_executor(script="print(42)", ctx=_CTX)
 
     assert result["success"] is True
     assert result["exit_code"] == 0
@@ -118,7 +121,7 @@ async def test_run_python_timeout_clamp_high() -> None:
             new=capture_sandbox,
         ),
     ):
-        await run_python_executor(script="pass", timeout_seconds=9999)
+        await run_python_executor(script="pass", timeout_seconds=9999, ctx=_CTX)
 
     assert captured_kwargs["timeout_seconds"] == _MAX_TIMEOUT
 
@@ -139,7 +142,7 @@ async def test_run_python_timeout_clamp_low() -> None:
             new=capture_sandbox,
         ),
     ):
-        await run_python_executor(script="pass", timeout_seconds=0)
+        await run_python_executor(script="pass", timeout_seconds=0, ctx=_CTX)
 
     assert captured_kwargs["timeout_seconds"] == _MIN_TIMEOUT
 
@@ -159,7 +162,7 @@ async def test_run_python_timeout_propagated() -> None:
             new=AsyncMock(return_value=_failure_result(timed_out=True)),
         ),
     ):
-        result = await run_python_executor(script="import time; time.sleep(999)")
+        result = await run_python_executor(script="import time; time.sleep(999)", ctx=_CTX)
 
     assert result["timed_out"] is True
     assert result["success"] is False
@@ -175,7 +178,7 @@ async def test_run_python_oom_propagated() -> None:
             new=AsyncMock(return_value=_failure_result(exit_code=137, oom=True)),
         ),
     ):
-        result = await run_python_executor(script="x = bytearray(2**30)")
+        result = await run_python_executor(script="x = bytearray(2**30)", ctx=_CTX)
 
     assert result["oom"] is True
     assert result["success"] is False
@@ -198,7 +201,7 @@ async def test_run_python_output_truncation() -> None:
             new=AsyncMock(return_value=_success_result(stdout=big_stdout)),
         ),
     ):
-        result = await run_python_executor(script="print('x' * 60000)")
+        result = await run_python_executor(script="print('x' * 60000)", ctx=_CTX)
 
     assert result["truncated"] is True
     # stdout should be capped at ~25 KiB
@@ -230,7 +233,7 @@ async def test_run_python_scratch_files_propagated(tmp_path: Path) -> None:
             new=AsyncMock(return_value=sandbox_result),
         ),
     ):
-        result = await run_python_executor(script="open('/sandbox/output.txt','w').write('x')")
+        result = await run_python_executor(script="open('/sandbox/output.txt','w').write('x')", ctx=_CTX)
 
     assert result["scratch_files"] == fake_files
 
@@ -256,7 +259,7 @@ async def test_run_python_network_flag_forwarded() -> None:
             new=capture_sandbox,
         ),
     ):
-        await run_python_executor(script="pass", network=True)
+        await run_python_executor(script="pass", network=True, ctx=_CTX)
 
     assert captured_kwargs["network"] is True
 
@@ -292,7 +295,7 @@ async def test_run_python_integration() -> None:
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
         pytest.skip("docker info failed — Docker not available or not running")
 
-    result = await run_python_executor(script="print(6 * 7)")
+    result = await run_python_executor(script="print(6 * 7)", ctx=_CTX)
 
     assert result["success"] is True
     assert "42" in result["stdout"]

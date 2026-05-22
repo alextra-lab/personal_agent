@@ -20,7 +20,6 @@ import pytest
 from personal_agent.orchestrator.skills import assemble_skill_index, get_all_skills, get_skill_block
 from personal_agent.tools.read_skill import read_skill_executor
 
-
 # ---------------------------------------------------------------------------
 # read_skill tool executor
 # ---------------------------------------------------------------------------
@@ -36,7 +35,7 @@ class TestReadSkillExecutor:
 
         result = await read_skill_executor(
             name="query-elasticsearch",
-            trace_ctx=TraceContext.new_trace(),
+            ctx=TraceContext.new_trace(),
         )
         assert result["status"] == "ok"
         assert result["skill_name"] == "query-elasticsearch"
@@ -49,7 +48,7 @@ class TestReadSkillExecutor:
 
         result = await read_skill_executor(
             name="nonexistent-skill-xyz",
-            trace_ctx=TraceContext.new_trace(),
+            ctx=TraceContext.new_trace(),
         )
         assert result["status"] == "error"
         assert "nonexistent-skill-xyz" in result["hint"]
@@ -97,7 +96,7 @@ class TestReadSkillExecutor:
         """read_skill('bash') returns the bash skill doc body."""
         from personal_agent.telemetry.trace import TraceContext
 
-        result = await read_skill_executor(name="bash", trace_ctx=TraceContext.new_trace())
+        result = await read_skill_executor(name="bash", ctx=TraceContext.new_trace())
         assert result["status"] == "ok"
         assert "bash — Shell Command Executor" in result["body"]
 
@@ -175,7 +174,12 @@ async def _dispatch_read_skill(
     """Helper: call _dispatch_tool_call for read_skill with given loaded_skills."""
     from personal_agent.governance.models import Mode
     from personal_agent.orchestrator.channels import Channel
-    from personal_agent.orchestrator.loop_gate import GateDecision, GateResult, ToolCallState, ToolLoopPolicy
+    from personal_agent.orchestrator.loop_gate import (
+        GateDecision,
+        GateResult,
+        ToolCallState,
+        ToolLoopPolicy,
+    )
     from personal_agent.orchestrator.types import ExecutionContext
     from personal_agent.telemetry.trace import TraceContext
 
@@ -255,7 +259,12 @@ class TestReadSkillDedup:
         """After a successful read_skill, ctx.loaded_skills is updated."""
         from personal_agent.governance.models import Mode
         from personal_agent.orchestrator.channels import Channel
-        from personal_agent.orchestrator.loop_gate import GateDecision, GateResult, ToolCallState, ToolLoopPolicy
+        from personal_agent.orchestrator.loop_gate import (
+            GateDecision,
+            GateResult,
+            ToolCallState,
+            ToolLoopPolicy,
+        )
         from personal_agent.orchestrator.types import ExecutionContext
         from personal_agent.telemetry.trace import TraceContext
 
@@ -278,9 +287,13 @@ class TestReadSkillDedup:
         mock_layer.execute_tool = AsyncMock(return_value=mock_res)
 
         gate = GateResult(
-            decision=GateDecision.ALLOW, tool_name="read_skill",
-            state_before=ToolCallState.IDLE, state_after=ToolCallState.IDLE,
-            reason="ok", consecutive_count=0, total_calls=1,
+            decision=GateDecision.ALLOW,
+            tool_name="read_skill",
+            state_before=ToolCallState.IDLE,
+            state_after=ToolCallState.IDLE,
+            reason="ok",
+            consecutive_count=0,
+            total_calls=1,
         )
         with patch("personal_agent.orchestrator.skills.find_skills_for_tool", return_value=[]):
             from personal_agent.orchestrator.executor import _dispatch_tool_call

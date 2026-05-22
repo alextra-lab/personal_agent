@@ -96,7 +96,8 @@ async def run_python_executor(
     script: str,
     timeout_seconds: int = _DEFAULT_TIMEOUT,
     network: bool = False,
-    ctx: TraceContext | None = None,
+    *,
+    ctx: TraceContext,
 ) -> dict[str, Any]:
     """Execute *script* in the Python Docker sandbox.
 
@@ -112,7 +113,7 @@ async def run_python_executor(
         timeout_seconds: Execution timeout.  Clamped to [5, 300]; defaults to 60.
         network: When True the container is attached to the ``cloud-sim`` Docker
             network (outbound access).  When False ``--network=none`` is used.
-        ctx: Optional trace context used for structured logging and scratch-dir
+        ctx: Trace context used for structured logging and scratch-dir
             scoping.
 
     Returns:
@@ -129,7 +130,7 @@ async def run_python_executor(
         On pre-flight failures, returns ``{"success": False, "error": "<key>",
         "detail": "<message>"}``.
     """
-    trace_id = getattr(ctx, "trace_id", "no_trace") if ctx else "no_trace"
+    trace_id = ctx.trace_id
 
     # ------------------------------------------------------------------
     # 1. Docker binary check

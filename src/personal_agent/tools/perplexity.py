@@ -73,14 +73,15 @@ perplexity_query_tool = ToolDefinition(
 async def perplexity_query_executor(
     query: str = "",
     mode: str | None = None,
-    ctx: TraceContext | None = None,
+    *,
+    ctx: TraceContext,
 ) -> dict[str, Any]:
     """Execute a Perplexity AI query via the REST API.
 
     Args:
         query: Question or research prompt.
         mode: One of 'ask' (default), 'reason', 'research'.
-        ctx: Optional trace context for structured logging.
+        ctx: Trace context for structured logging.
 
     Returns:
         Dict with ``answer``, ``citations``, ``model``, and ``mode`` keys.
@@ -106,7 +107,7 @@ async def perplexity_query_executor(
         )
 
     model = _MODE_TO_MODEL[mode]
-    trace_id = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
+    trace_id = ctx.trace_id
 
     log.info(
         "perplexity_query_started",

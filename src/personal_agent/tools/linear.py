@@ -389,7 +389,8 @@ async def create_linear_issue_executor(
     priority: int | None = None,
     project: str | None = None,
     dry_run: bool = False,
-    ctx: TraceContext | None = None,
+    *,
+    ctx: TraceContext,
 ) -> dict[str, Any]:
     """Create a Linear issue from agent analysis.
 
@@ -399,7 +400,7 @@ async def create_linear_issue_executor(
         priority: 1=Urgent, 2=High, 3=Normal (default), 4=Low.
         project: Optional Linear project name.
         dry_run: If True, return resolved payload without creating.
-        ctx: Optional trace context.
+        ctx: Trace context.
 
     Returns:
         Dict with ``identifier``, ``url``, ``title``, and ``dry_run`` keys.
@@ -427,7 +428,7 @@ async def create_linear_issue_executor(
     if not dry_run:
         _check_rate_limit(project_key)
 
-    trace_id = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
+    trace_id = ctx.trace_id
     log.info(
         "linear_create_issue_start",
         trace_id=trace_id,
@@ -497,7 +498,8 @@ async def find_linear_issues_executor(
     query: str | None = None,
     state: str | None = None,
     limit: int | None = None,
-    ctx: TraceContext | None = None,
+    *,
+    ctx: TraceContext,
 ) -> dict[str, Any]:
     """Search or list Linear issues.
 
@@ -505,7 +507,7 @@ async def find_linear_issues_executor(
         query: Text to search in issue titles. Leave None/empty to list by state.
         state: Optional workflow state filter (e.g. 'Needs Approval', 'Approved').
         limit: Max results (default 25, max 50).
-        ctx: Optional trace context.
+        ctx: Trace context.
 
     Returns:
         Dict with ``issues`` list (each with identifier, title, state, url).
@@ -522,7 +524,7 @@ async def find_linear_issues_executor(
         )
 
     cap = max(1, min(int(limit) if limit else 25, 50))
-    trace_id = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
+    trace_id = ctx.trace_id
     log.info("linear_find_issues_start", trace_id=trace_id, query=query[:80], state=state)
 
     gql_filter: dict[str, Any] = {}
@@ -557,12 +559,13 @@ async def find_linear_issues_executor(
 
 
 async def list_linear_projects_executor(
-    ctx: TraceContext | None = None,
+    *,
+    ctx: TraceContext,
 ) -> dict[str, Any]:
     """List all Linear projects for the team.
 
     Args:
-        ctx: Optional trace context.
+        ctx: Trace context.
 
     Returns:
         Dict with ``projects`` list (each with id, name, description, url).
@@ -570,7 +573,7 @@ async def list_linear_projects_executor(
     Raises:
         ToolExecutionError: On missing API key or API error.
     """
-    trace_id = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
+    trace_id = ctx.trace_id
     log.info("linear_list_projects_start", trace_id=trace_id)
 
     team_id = await _get_team_id(_TEAM_NAME)
@@ -607,14 +610,15 @@ async def list_linear_projects_executor(
 async def create_linear_project_executor(
     name: str = "",
     description: str | None = None,
-    ctx: TraceContext | None = None,
+    *,
+    ctx: TraceContext,
 ) -> dict[str, Any]:
     """Create a new Linear project.
 
     Args:
         name: Project name.
         description: Optional markdown description.
-        ctx: Optional trace context.
+        ctx: Trace context.
 
     Returns:
         Dict with ``id``, ``name``, and ``url`` of the created project.
@@ -628,7 +632,7 @@ async def create_linear_project_executor(
     if not settings.linear_api_key:
         raise ToolExecutionError("Linear API key not configured. Set AGENT_LINEAR_API_KEY in .env.")
 
-    trace_id = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
+    trace_id = ctx.trace_id
     log.info("linear_create_project_start", trace_id=trace_id, name=name[:80])
 
     team_id = await _get_team_id(_TEAM_NAME)

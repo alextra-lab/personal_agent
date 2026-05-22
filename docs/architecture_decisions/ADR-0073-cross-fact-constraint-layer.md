@@ -70,14 +70,42 @@ Pre-requisite operator steps (manual, documented here, not coded):
 3. Run the replay script: `uv run python scripts/replay_sessions_to_neo4j.py --since 2025-01-01 --confirm-prod`
 4. Re-run Probe scripts 1, 2, 5, 6.
 
-### D4 — Description provenance (deferred — perf measurement required)
+### D4 — Description provenance (deferred — redesign required)
 
-Replacing the single `description` string with an append-and-version array
-`e.descriptions = [{text, turn_id, extractor_role, ts}]` requires every MATCH that
-reads `e.description` to instead compute a canonical view. Before committing, a
-benchmark must measure the write overhead on a graph of 4,000+ entities. Task 5 of
-the FRE-374 implementation plan runs this benchmark; a follow-up issue will ship the
-schema migration once the result is in hand.
+**Original proposal:** Replace the single `description` string with an append-and-version
+array `e.descriptions = [{text, turn_id, extractor_role, ts}]`.
+
+**2026-05-22 perf-probe finding:** This schema is **architecturally incompatible with
+Neo4j**. Running `scripts/research/fre374_provenance_perf_probe.py` against the test
+stack, Pattern A (current `CASE WHEN`) succeeded; Pattern B (descriptions[] array of
+maps) failed with:
+
+```
+neo4j.exceptions.CypherTypeError: Property values can only be of primitive types
+or arrays thereof. Encountered: Map{text -> ..., ts -> ...}
+```
+
+Neo4j property values may only be primitives (string, int, float, bool, datetime,
+spatial) or **arrays of primitives** — not arrays of maps. The proposed schema cannot
+be implemented as a node property.
+
+**Two viable alternatives surface from this finding:**
+
+1. **JSON-string array** — `e.descriptions = COALESCE(e.descriptions, []) + [$json_str]`
+   where `$json_str = json.dumps({text, ts, extractor_role, turn_id})`. Cypher cannot
+   query nested fields natively, but Python deserializes the strings on read. Lowest
+   schema change; canonical-view computation in Python.
+
+2. **Separate `:DescriptionVersion` nodes** — `(:Entity)-[:HAS_DESCRIPTION]->(:DescriptionVersion {text, ts, extractor_role, turn_id})`.
+   Proper graph model. Fully queryable from Cypher. Adds one relationship traversal
+   per description read; canonical view becomes a Cypher pattern with `ORDER BY` +
+   `LIMIT 1`.
+
+**Status:** Deferred pending design decision between (1) and (2). Perf measurement of
+the new approach (whichever is chosen) is the next gate; the original "measure array
+of maps" probe is moot.
+
+A follow-up issue will choose the approach and ship the migration.
 
 ### D5 — Relationship semantic dedup (deferred — type ontology required)
 

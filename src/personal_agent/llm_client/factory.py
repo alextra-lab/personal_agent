@@ -35,6 +35,8 @@ class LLMClient(Protocol):
         self,
         role: ModelRole,
         messages: list[dict[str, Any]],
+        *,
+        trace_ctx: TraceContext,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
         response_format: dict[str, Any] | None = None,
@@ -44,7 +46,6 @@ class LLMClient(Protocol):
         timeout_s: float | None = None,
         max_retries: int | None = None,
         reasoning_effort: str | None = None,
-        trace_ctx: TraceContext | None = None,
         previous_response_id: str | None = None,
         **kwargs: Any,
     ) -> LLMResponse:

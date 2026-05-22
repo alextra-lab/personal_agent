@@ -133,7 +133,8 @@ async def _check_permissions(
     governance_config: GovernanceConfig,
     transport: "AGUITransport | None" = None,
     session_id: str | None = None,
-    trace_ctx: TraceContext | None = None,
+    *,
+    trace_ctx: TraceContext,
 ) -> PermissionResult:
     """Check if tool execution is permitted, requesting UI approval if required.
 
@@ -180,14 +181,14 @@ async def _check_permissions(
                     "bash_auto_approved",
                     mode=mode_str,
                     command=command,
-                    trace_id=getattr(trace_ctx, "trace_id", "unknown") if trace_ctx else "unknown",
+                    trace_id=trace_ctx.trace_id,
                 )
                 return PermissionResult(allowed=True)
             log.debug(
                 "bash_allowlist_miss",
                 mode=mode_str,
                 bad_segment=bad_segment,
-                trace_id=getattr(trace_ctx, "trace_id", "unknown") if trace_ctx else "unknown",
+                trace_id=trace_ctx.trace_id,
             )
             # Fall through to normal approval flow with the bad segment as context.
 
@@ -214,7 +215,7 @@ async def _check_permissions(
 
             decision: ApprovalDecision = await transport.request_tool_approval(
                 request_id=str(uuid4()),
-                trace_id=trace_ctx.trace_id if trace_ctx else "",
+                trace_id=trace_ctx.trace_id,
                 session_id=session_id or "",
                 tool=tool_name,
                 args=arguments,

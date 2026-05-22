@@ -26,7 +26,7 @@ from personal_agent.config.model_loader import load_model_config
 from personal_agent.llm_client.factory import get_llm_client
 from personal_agent.llm_client.types import ModelRole
 from personal_agent.telemetry import get_logger
-from personal_agent.telemetry.trace import TraceContext
+from personal_agent.telemetry.trace import SystemTraceContext
 
 log = get_logger(__name__)
 
@@ -124,7 +124,7 @@ def _parse_seen_count(description: str) -> int:
 async def _feedback_llm_complete(role_key: str, system: str, user: str) -> str:
     """Run a single-turn completion for feedback responses."""
     client = get_llm_client(role_key)
-    ctx = TraceContext.new_trace()
+    ctx = SystemTraceContext.new("captains_log_feedback")
     try:
         resp = await client.respond(
             ModelRole.PRIMARY,

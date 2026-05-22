@@ -181,12 +181,15 @@ async def test_approval_ui_disabled_warning(governance_config) -> None:
     from personal_agent.governance.models import Mode, ToolPolicy
     from personal_agent.tools.executor import _check_permissions
     from personal_agent.tools.types import ToolDefinition, ToolParameter
+    from tests._helpers.trace import make_test_ctx
 
     tool_def = ToolDefinition(
         name="bash",
         description="Bash execution",
         category="shell_execution",
-        parameters=[ToolParameter(name="command", type="string", description="Command", required=True)],
+        parameters=[
+            ToolParameter(name="command", type="string", description="Command", required=True)
+        ],
         risk_level="high",
         allowed_modes=["NORMAL", "ALERT", "DEGRADED"],
     )
@@ -208,6 +211,7 @@ async def test_approval_ui_disabled_warning(governance_config) -> None:
                 current_mode=Mode.NORMAL,
                 governance_config=governance_config,
                 transport=None,
+                trace_ctx=make_test_ctx("approval_ui_disabled"),
             )
 
     assert result.allowed is True

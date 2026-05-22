@@ -93,6 +93,10 @@ Each phase is independently shippable.
 - `SystemTraceContext` factory for boot/scheduler/monitor paths.
 - mypy strict mode catches every site that passes `None`.
 
+Phase 4 ships in two slices:
+- **4a (shipped 2026-05-22):** `SystemTraceContext.new(source)` factory; `TraceContext.kind` field (`"user"` / `"system:<source>"`); `LocalLLMClient`, `LiteLLMClient`, `LLMClientProtocol`, all delegation adapters (`ClaudeCodeAdapter`, `CodexAdapter`, `GenericMCPAdapter`), and `tools.executor._check_permissions` require non-optional `trace_ctx`; ad-hoc `TraceContext.new_trace()` migrated to `SystemTraceContext.new(...)` in `captains_log.feedback`, `captains_log.reflection`, `gateway.knowledge_api`, `second_brain.session_summary`, `second_brain.entity_extraction`; `LiteLLMClient` cost-record + budget-reserve paths drop their `if trace_ctx else …` defensive branches; mypy strict clean.
+- **4b (pending):** Tighten tool executor signatures (`bash`, `read`, `write`, `run_python`, `web_search`, `perplexity`, `context7`, `linear.*`, `read_skill`) — currently keep `ctx: TraceContext | None = None` because their test surface (~57 invocations) needs a coordinated update; remove the `<truncated: no ctx>` codepath from `bash_executor` once the signature is required.
+
 **Phase 5 — Probes and CI gates:**
 - Joinability probe (one random session, full walk).
 - Pre-commit lint.

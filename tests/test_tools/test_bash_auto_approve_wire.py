@@ -15,8 +15,9 @@ import pytest
 
 from personal_agent.config.governance_loader import load_governance_config
 from personal_agent.governance.models import Mode
-from personal_agent.tools.executor import PermissionResult, _check_permissions
+from personal_agent.tools.executor import _check_permissions
 from personal_agent.tools.types import ToolDefinition, ToolParameter
+from tests._helpers.trace import make_test_ctx
 
 
 def run(coro):  # type: ignore[no-untyped-def]
@@ -65,6 +66,7 @@ class TestBashAutoApproveWire:
                     arguments=arguments,
                     current_mode=Mode.NORMAL,
                     governance_config=governance,
+                    trace_ctx=make_test_ctx("bash_auto_approve_normal"),
                 )
             )
 
@@ -92,6 +94,7 @@ class TestBashAutoApproveWire:
                     governance_config=governance,
                     transport=mock_transport,
                     session_id="test-session",
+                    trace_ctx=make_test_ctx("bash_auto_approve_disallowed"),
                 )
             )
 
@@ -119,6 +122,7 @@ class TestBashAutoApproveWire:
                     governance_config=governance,
                     transport=mock_transport,
                     session_id="test-session",
+                    trace_ctx=make_test_ctx("bash_auto_approve_alert"),
                 )
             )
 
@@ -140,6 +144,7 @@ class TestBashAutoApproveWire:
                     arguments=arguments,
                     current_mode=Mode.LOCKDOWN,
                     governance_config=governance,
+                    trace_ctx=make_test_ctx("bash_auto_approve_lockdown"),
                 )
             )
 

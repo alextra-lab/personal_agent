@@ -6,7 +6,10 @@ OpenTelemetry concepts but without requiring the full OTel SDK.
 
 import uuid
 from dataclasses import dataclass
+from typing import Final
 from uuid import UUID
+
+SYSTEM_KIND_PREFIX: Final[str] = "system:"
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,12 @@ class TraceContext:
             None for background / unauthenticated paths.
         session_id: Originating session id, when applicable. Same propagation
             rules as ``user_id``; tools may pass it through to row-level FKs.
+        kind: Origin classification (ADR-0074 §3.6, FRE-376 Phase 4).
+            ``"user"`` for traces initiated by an end user via the chat
+            surface. ``"system:<source>"`` for traces minted by background
+            paths that have no user-facing request — see
+            :class:`SystemTraceContext`. Telemetry consumers can filter on
+            this prefix to separate organic usage from scheduled work.
     """
 
     trace_id: str
@@ -41,6 +50,7 @@ class TraceContext:
     profile: str = "local"
     user_id: UUID | None = None
     session_id: str | None = None
+    kind: str = "user"
 
     @classmethod
     def new_trace(
@@ -74,7 +84,7 @@ class TraceContext:
         Returns:
             A tuple of (new TraceContext with this span as parent, new span_id).
             The new context has the same trace_id, profile, user_id, session_id,
-            and a new parent_span_id set to the generated span_id.
+            kind, and a new parent_span_id set to the generated span_id.
         """
         span_id = str(uuid.uuid4())
         return TraceContext(
@@ -83,4 +93,68 @@ class TraceContext:
             profile=self.profile,
             user_id=self.user_id,
             session_id=self.session_id,
+            kind=self.kind,
         ), span_id
+
+    @property
+    def is_system(self) -> bool:
+        """Return True if this trace was minted by a non-user system path."""
+        return self.kind.startswith(SYSTEM_KIND_PREFIX)
+
+
+class SystemTraceContext:
+    """Factory for non-user-driven :class:`TraceContext` instances.
+
+    Per ADR-0074 §3.6 (FRE-376 Phase 4) ``TraceContext`` is non-optional on
+    internal APIs. Functions that need to operate without a user-facing
+    request — boot probes, scheduler ticks, periodic monitors, captain's
+    log reflection, knowledge_api admin endpoints — mint their context
+    through this factory so the resulting traces are clearly distinguishable
+    from organic user traffic.
+
+    The class is a namespace-only container: it has no state and no
+    instances. All entry points are classmethods that return a plain
+    :class:`TraceContext` with ``kind="system:<source>"`` set.
+    """
+
+    @staticmethod
+    def new(
+        source: str,
+        *,
+        profile: str = "local",
+        session_id: str | None = None,
+        user_id: UUID | None = None,
+    ) -> TraceContext:
+        """Mint a system-tagged :class:`TraceContext`.
+
+        Args:
+            source: Short identifier of the system-driven caller — for
+                example ``"scheduler"``, ``"monitor"``, ``"reflection"``,
+                ``"captains_log_feedback"``, ``"knowledge_api"``,
+                ``"joinability_probe"``. Must be non-empty.
+            profile: Execution profile name; defaults to ``"local"``.
+            session_id: Optional session id when the system path operates
+                on behalf of a known session (e.g. a scheduler tick that
+                consolidates one session at a time).
+            user_id: Optional user UUID when the system path operates on
+                behalf of a known user.
+
+        Returns:
+            A new :class:`TraceContext` with a freshly generated
+            ``trace_id`` and ``kind`` set to ``f"system:{source}"``.
+
+        Raises:
+            ValueError: If ``source`` is empty or contains whitespace.
+        """
+        if not source or source.strip() != source or " " in source:
+            raise ValueError(
+                f"SystemTraceContext source must be a non-empty, "
+                f"whitespace-free identifier; got {source!r}"
+            )
+        return TraceContext(
+            trace_id=str(uuid.uuid4()),
+            profile=profile,
+            user_id=user_id,
+            session_id=session_id,
+            kind=f"{SYSTEM_KIND_PREFIX}{source}",
+        )

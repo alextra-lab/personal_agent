@@ -64,9 +64,7 @@ class TestClaudeCodeAdapterDelegate:
 
         mock_proc = MagicMock()
         mock_proc.returncode = 0
-        mock_proc.communicate = AsyncMock(
-            return_value=(b"def test_example(): pass\n", b"")
-        )
+        mock_proc.communicate = AsyncMock(return_value=(b"def test_example(): pass\n", b""))
 
         with (
             patch("shutil.which", return_value="/usr/bin/claude"),
@@ -94,15 +92,13 @@ class TestClaudeCodeAdapterDelegate:
 
         mock_proc = MagicMock()
         mock_proc.returncode = 1
-        mock_proc.communicate = AsyncMock(
-            return_value=(b"", b"Error: something went wrong")
-        )
+        mock_proc.communicate = AsyncMock(return_value=(b"", b"Error: something went wrong"))
 
         with (
             patch("shutil.which", return_value="/usr/bin/claude"),
             patch("asyncio.create_subprocess_exec", return_value=mock_proc),
         ):
-            outcome = await adapter.delegate(package, timeout=30.0)
+            outcome = await adapter.delegate(package, timeout=30.0, trace_ctx=_make_trace())
 
         assert outcome.success is False
         assert "Error: something went wrong" in outcome.what_was_missing
@@ -113,7 +109,7 @@ class TestClaudeCodeAdapterDelegate:
         with patch("shutil.which", return_value=None):
             adapter = ClaudeCodeAdapter()
             package = _make_package()
-            outcome = await adapter.delegate(package)
+            outcome = await adapter.delegate(package, trace_ctx=_make_trace())
 
         assert outcome.success is False
         assert "PATH" in outcome.what_was_missing
@@ -137,7 +133,7 @@ class TestClaudeCodeAdapterDelegate:
             patch("asyncio.create_subprocess_exec", return_value=mock_proc),
             patch("asyncio.wait_for", side_effect=asyncio.TimeoutError),
         ):
-            outcome = await adapter.delegate(package, timeout=0.001)
+            outcome = await adapter.delegate(package, timeout=0.001, trace_ctx=_make_trace())
 
         assert outcome.success is False
         assert "timed out" in outcome.what_was_missing.lower()
@@ -159,7 +155,7 @@ class TestClaudeCodeAdapterDelegate:
                 return_value=mock_proc,
             ) as mock_exec,
         ):
-            outcome = await adapter.delegate(package, timeout=30.0)
+            outcome = await adapter.delegate(package, timeout=30.0, trace_ctx=_make_trace())
 
         assert outcome.success is True
         args = mock_exec.call_args[0]
@@ -184,7 +180,7 @@ class TestClaudeCodeAdapterDelegate:
                 return_value=mock_proc,
             ) as mock_exec,
         ):
-            await adapter.delegate(package, timeout=30.0)
+            await adapter.delegate(package, timeout=30.0, trace_ctx=_make_trace())
 
         args = mock_exec.call_args[0]
         assert "--mcp-server" not in args

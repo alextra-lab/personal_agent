@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import shutil
-import uuid
 from datetime import datetime, timezone
 
 import structlog
@@ -64,7 +63,8 @@ class ClaudeCodeAdapter:
         self,
         package: DelegationPackage,
         timeout: float = 300.0,
-        trace_ctx: TraceContext | None = None,
+        *,
+        trace_ctx: TraceContext,
     ) -> DelegationOutcome:
         """Execute a delegation via the Claude Code CLI.
 
@@ -75,14 +75,13 @@ class ClaudeCodeAdapter:
             package: Structured delegation package. ``task_description`` is
                 passed as the prompt to Claude Code.
             timeout: Maximum seconds to wait before aborting.
-            trace_ctx: Trace context for telemetry correlation. If None, a
-                new trace ID is generated.
+            trace_ctx: Trace context for telemetry correlation.
 
         Returns:
             DelegationOutcome with success, result text, and any artifacts.
             Never raises — all errors are encoded as DelegationOutcome.
         """
-        trace_id = trace_ctx.trace_id if trace_ctx else str(uuid.uuid4())
+        trace_id = trace_ctx.trace_id
 
         if not self.available():
             log.warning(

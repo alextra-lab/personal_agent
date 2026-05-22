@@ -168,9 +168,7 @@ def _patched(
     stack.enter_context(
         patch("personal_agent.cost_gate.policy.load_budget_config", return_value=config)
     )
-    stack.enter_context(
-        patch("personal_agent.cost_gate.load_budget_config", return_value=config)
-    )
+    stack.enter_context(patch("personal_agent.cost_gate.load_budget_config", return_value=config))
     return stack
 
 
@@ -190,7 +188,11 @@ async def test_success_path_reserve_then_commit_with_actual_cost(
     )
 
     with _patched(gate_for_role, acompletion=fake_acompletion, cost_value=0.04):
-        await client.respond(role=ModelRole.PRIMARY, messages=[{"role": "user", "content": "hi"}])
+        await client.respond(
+            role=ModelRole.PRIMARY,
+            messages=[{"role": "user", "content": "hi"}],
+            trace_ctx=make_test_ctx("gate_wiring_success"),
+        )
 
     # Inspect the DB: there should be exactly one reservation for this role,
     # status='committed', actual_cost_usd=0.04.
@@ -224,7 +226,9 @@ async def test_failure_path_reserve_then_refund(
     with _patched(gate_for_role, acompletion=fake_acompletion):
         with pytest.raises(LLMClientError, match="LiteLLM call failed"):
             await client.respond(
-                role=ModelRole.PRIMARY, messages=[{"role": "user", "content": "hi"}]
+                role=ModelRole.PRIMARY,
+                messages=[{"role": "user", "content": "hi"}],
+                trace_ctx=make_test_ctx("gate_wiring_failure"),
             )
 
     async with cleanup_pool.acquire() as conn:
@@ -269,7 +273,9 @@ async def test_denied_path_does_not_call_litellm(
     with _patched(gate_for_role, acompletion=fake_acompletion):
         with pytest.raises(BudgetDenied):
             await client.respond(
-                role=ModelRole.PRIMARY, messages=[{"role": "user", "content": "hi"}]
+                role=ModelRole.PRIMARY,
+                messages=[{"role": "user", "content": "hi"}],
+                trace_ctx=make_test_ctx("gate_wiring_denied"),
             )
 
     fake_acompletion.assert_not_called()

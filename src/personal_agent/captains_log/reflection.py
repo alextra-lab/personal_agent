@@ -33,7 +33,7 @@ from personal_agent.config import settings
 from personal_agent.llm_client import LocalLLMClient, ModelRole
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.metrics import get_trace_events
-from personal_agent.telemetry.trace import TraceContext
+from personal_agent.telemetry.trace import SystemTraceContext
 
 log = get_logger(__name__)
 
@@ -388,7 +388,7 @@ async def generate_reflection_entry(
             temperature=0.3,  # Lower temperature for structured output
             max_tokens=3000,  # Increased for reasoning models with thinking process
             reasoning_effort="medium",  # LM Studio /v1/responses: minimal/low/medium/high
-            trace_ctx=TraceContext.new_trace(),  # New trace for reflection
+            trace_ctx=SystemTraceContext.new("captains_log_reflection"),
             priority=InferencePriority.BACKGROUND,
             priority_timeout=30.0,
         )

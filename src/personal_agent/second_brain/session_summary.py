@@ -28,6 +28,7 @@ from personal_agent.config.settings import get_settings
 from personal_agent.cost_gate import BudgetDenied
 from personal_agent.llm_client import InferenceSlotTimeout, LLMTimeout, LocalLLMClient, ModelRole
 from personal_agent.telemetry import get_logger
+from personal_agent.telemetry.trace import SystemTraceContext
 
 log = get_logger(__name__)
 
@@ -176,6 +177,7 @@ async def generate_session_summary(
                     timeout_s=60.0,
                     priority=InferencePriority.BACKGROUND,
                     priority_timeout=60.0,
+                    trace_ctx=SystemTraceContext.new("session_summary"),
                 )
             except (LLMTimeout, InferenceSlotTimeout) as e:
                 log.warning(

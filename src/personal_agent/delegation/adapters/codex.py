@@ -44,7 +44,8 @@ class CodexAdapter:
         self,
         package: DelegationPackage,
         timeout: float = 300.0,
-        trace_ctx: TraceContext | None = None,
+        *,
+        trace_ctx: TraceContext,
     ) -> DelegationOutcome:
         """Return a not-implemented failure outcome.
 
@@ -56,7 +57,7 @@ class CodexAdapter:
         Returns:
             DelegationOutcome with success=False and informative error message.
         """
-        trace_id = trace_ctx.trace_id if trace_ctx else "unknown"
+        trace_id = trace_ctx.trace_id
         log.info(
             "codex_adapter.not_implemented",
             trace_id=trace_id,

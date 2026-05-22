@@ -59,11 +59,12 @@ from personal_agent.telemetry.queries import (
     TelemetryQueries,
 )
 from personal_agent.telemetry.request_timer import RequestTimer
-from personal_agent.telemetry.trace import TraceContext
+from personal_agent.telemetry.trace import SystemTraceContext, TraceContext
 
 __all__ = [
     # Core exports
     "TraceContext",
+    "SystemTraceContext",
     "RequestTimer",
     "get_logger",
     "configure_logging",

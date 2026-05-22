@@ -20,7 +20,7 @@ from personal_agent.gateway.auth import TokenInfo, require_scope
 from personal_agent.gateway.errors import not_found, service_unavailable
 from personal_agent.gateway.rate_limiting import get_rate_limiter
 from personal_agent.memory.models import Entity, EntityNode, Relationship
-from personal_agent.telemetry.trace import TraceContext
+from personal_agent.telemetry.trace import SystemTraceContext
 
 log = structlog.get_logger(__name__)
 
@@ -111,7 +111,7 @@ async def search_knowledge(
     """
     get_rate_limiter().check(token)
     kg = _get_kg(request)
-    ctx = TraceContext.new_trace()
+    ctx = SystemTraceContext.new("knowledge_api")
 
     log.info("gateway_knowledge_search", query=q, limit=limit, token_name=token.name)
 
@@ -167,7 +167,7 @@ async def store_entity(
     """
     get_rate_limiter().check(token)
     kg = _get_kg(request)
-    ctx = TraceContext.new_trace()
+    ctx = SystemTraceContext.new("knowledge_api")
 
     log.info(
         "gateway_knowledge_store_entity",

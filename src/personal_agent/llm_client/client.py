@@ -124,6 +124,8 @@ class LocalLLMClient:
         self,
         role: ModelRole,
         messages: list[dict[str, Any]],
+        *,
+        trace_ctx: TraceContext,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
         response_format: dict[str, Any] | None = None,
@@ -133,7 +135,6 @@ class LocalLLMClient:
         timeout_s: float | None = None,
         max_retries: int | None = None,
         reasoning_effort: str | None = None,
-        trace_ctx: TraceContext | None = None,
         previous_response_id: str | None = None,
         priority: InferencePriority = InferencePriority.USER_FACING,
         priority_timeout: float | None = None,
@@ -215,6 +216,8 @@ class LocalLLMClient:
         role: ModelRole,
         model_config: ModelDefinition,
         messages: list[dict[str, Any]],
+        *,
+        trace_ctx: TraceContext,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
         response_format: dict[str, Any] | None = None,
@@ -224,7 +227,6 @@ class LocalLLMClient:
         timeout_s: float | None = None,
         max_retries: int | None = None,
         reasoning_effort: str | None = None,
-        trace_ctx: TraceContext | None = None,
         previous_response_id: str | None = None,
     ) -> LLMResponse:
         """Execute the HTTP request with retries (called within concurrency slot)."""
@@ -303,16 +305,10 @@ class LocalLLMClient:
             request_messages.insert(0, {"role": "system", "content": system_prompt})
 
         # Sanitise tool_call / tool_result consistency before dispatch (FRE-237).
-        request_messages, _ = sanitise_messages(
-            request_messages, trace_id=str(trace_ctx.trace_id) if trace_ctx else None
-        )
+        request_messages, _ = sanitise_messages(request_messages, trace_id=str(trace_ctx.trace_id))
 
         # Note: reasoning_effort is ignored for /v1/chat/completions (it's LM Studio /v1/responses specific)
         # We keep the parameter for API compatibility but don't use it
-
-        # Create trace context if not provided
-        if trace_ctx is None:
-            trace_ctx = TraceContext.new_trace()
 
         # Emit telemetry: call started
         start_time = time.time()

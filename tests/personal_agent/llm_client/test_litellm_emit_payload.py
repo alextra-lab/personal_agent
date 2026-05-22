@@ -47,6 +47,7 @@ async def _call_respond(captured_log_calls: list[tuple]) -> None:
     """
     from personal_agent.llm_client.litellm_client import LiteLLMClient
     from personal_agent.llm_client.types import ModelRole
+    from tests._helpers.trace import make_test_ctx
 
     mock_response = _make_mock_response()
 
@@ -107,6 +108,7 @@ async def _call_respond(captured_log_calls: list[tuple]) -> None:
         await client.respond(
             role=ModelRole.PRIMARY,
             messages=[{"role": "user", "content": "hello"}],
+            trace_ctx=make_test_ctx("litellm_emit_payload"),
         )
 
 
@@ -143,8 +145,7 @@ async def test_litellm_emit_includes_latency_ms() -> None:
     await _call_respond(calls)
     kwargs = _get_complete_event(calls)
     assert "latency_ms" in kwargs, (
-        "latency_ms missing from litellm_request_complete emit. "
-        f"Keys present: {sorted(kwargs)}"
+        f"latency_ms missing from litellm_request_complete emit. Keys present: {sorted(kwargs)}"
     )
     assert isinstance(kwargs["latency_ms"], int), (
         f"latency_ms must be int ms, got {type(kwargs['latency_ms'])}"
@@ -158,8 +159,7 @@ async def test_litellm_emit_includes_total_tokens() -> None:
     await _call_respond(calls)
     kwargs = _get_complete_event(calls)
     assert "total_tokens" in kwargs, (
-        "total_tokens missing from litellm_request_complete emit. "
-        f"Keys present: {sorted(kwargs)}"
+        f"total_tokens missing from litellm_request_complete emit. Keys present: {sorted(kwargs)}"
     )
     assert kwargs["total_tokens"] == 150
 
@@ -171,8 +171,7 @@ async def test_litellm_emit_includes_endpoint() -> None:
     await _call_respond(calls)
     kwargs = _get_complete_event(calls)
     assert "endpoint" in kwargs, (
-        "endpoint missing from litellm_request_complete emit. "
-        f"Keys present: {sorted(kwargs)}"
+        f"endpoint missing from litellm_request_complete emit. Keys present: {sorted(kwargs)}"
     )
     assert kwargs["endpoint"] == "anthropic"
 

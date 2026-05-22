@@ -127,6 +127,8 @@ class LiteLLMClient:
         self,
         role: ModelRole,
         messages: list[dict[str, Any]],
+        *,
+        trace_ctx: TraceContext,
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
         response_format: dict[str, Any] | None = None,
@@ -136,7 +138,6 @@ class LiteLLMClient:
         timeout_s: float | None = None,
         max_retries: int | None = None,
         reasoning_effort: str | None = None,
-        trace_ctx: TraceContext | None = None,
         previous_response_id: str | None = None,
         priority: Any = None,
         priority_timeout: float | None = None,
@@ -177,7 +178,7 @@ class LiteLLMClient:
         from personal_agent.llm_client.types import ToolCall as ToolCallType
 
         effective_max_tokens = max_tokens or self.max_tokens
-        trace_id = str(trace_ctx.trace_id) if trace_ctx else str(uuid4())
+        trace_id = str(trace_ctx.trace_id)
 
         # ── Settings + cost tracking ──────────────────────────────────────
         from personal_agent.config.settings import get_settings
@@ -266,7 +267,7 @@ class LiteLLMClient:
             reservation_id = await gate.reserve(
                 role=self.budget_role,
                 amount=reservation_amount,
-                trace_id=UUID(trace_ctx.trace_id) if trace_ctx and trace_ctx.trace_id else None,
+                trace_id=UUID(trace_ctx.trace_id),
             )
         except BudgetDenied:
             log.warning(
@@ -386,17 +387,19 @@ class LiteLLMClient:
             )
 
         if cost > 0:
-            # ADR-0074 / FRE-376: cost rows must carry trace_id + session_id.
-            # When session_id is missing (boot-time probes, scheduler ticks
-            # that haven't yet adopted SystemTraceContext — Phase 4 work) we
-            # log loudly and skip rather than raise; the chat turn keeps
-            # working with degraded cost attribution.
-            session_id_str = trace_ctx.session_id if trace_ctx else None
+            # ADR-0074 / FRE-376 Phase 4: trace_ctx is non-optional and
+            # carries a guaranteed UUID trace_id. session_id is still
+            # nullable for system-tagged paths (probes, scheduler ticks
+            # via SystemTraceContext) — in that case we log loudly and
+            # skip cost recording rather than raise, so the chat turn
+            # keeps working with degraded attribution.
+            session_id_str = trace_ctx.session_id
             if session_id_str is None:
                 log.error(
                     "cost_record_missing_identity",
                     model=self._litellm_model,
                     trace_id=trace_id,
+                    trace_kind=trace_ctx.kind,
                     reason="trace_ctx_missing_session_id",
                 )
             else:

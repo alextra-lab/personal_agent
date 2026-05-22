@@ -16,6 +16,7 @@ from personal_agent.config import load_model_config, settings
 from personal_agent.cost_gate import BudgetDenied
 from personal_agent.llm_client import InferenceSlotTimeout, LLMTimeout, LocalLLMClient, ModelRole
 from personal_agent.telemetry import get_logger
+from personal_agent.telemetry.trace import SystemTraceContext
 
 log = get_logger(__name__)
 
@@ -261,6 +262,7 @@ async def extract_entities_and_relationships(
                     timeout_s=float(settings.entity_extraction_timeout_seconds),
                     priority=InferencePriority.BACKGROUND,
                     priority_timeout=60.0,
+                    trace_ctx=SystemTraceContext.new("entity_extraction"),
                 )
             except (LLMTimeout, InferenceSlotTimeout) as e:
                 log.warning(

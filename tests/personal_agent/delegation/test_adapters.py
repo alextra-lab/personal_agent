@@ -62,7 +62,7 @@ class TestCodexAdapter:
         adapter = CodexAdapter()
         package = _make_package()
         # Should not raise
-        outcome = await adapter.delegate(package)
+        outcome = await adapter.delegate(package, trace_ctx=_make_trace())
         assert outcome is not None
 
 
@@ -96,7 +96,7 @@ class TestGenericMCPAdapter:
         """Stub must not raise regardless of inputs."""
         adapter = GenericMCPAdapter(server_url="http://localhost:9001")
         package = _make_package()
-        outcome = await adapter.delegate(package)
+        outcome = await adapter.delegate(package, trace_ctx=_make_trace())
         assert outcome is not None
 
     def test_stores_server_url(self) -> None:

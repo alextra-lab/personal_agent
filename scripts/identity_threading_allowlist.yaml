@@ -1,13 +1,338 @@
 # Identity-threading lint allowlist (FRE-376 Phase 3, ADR-0074 §I3/§I5).
 #
-# Each entry exempts a single (path, line) violation. Add `reason:` so future
-# auditors know why this site can't carry identity. Examples of valid reasons:
-#   - lifecycle log: runs at process start/stop, before any request context
-#   - platform sensor: macOS/system probe, no request context exists
+# Each entry exempts a single (path, line) violation. The `reason` field
+# documents why this site can't carry identity (must remain valid context-free).
 #
 # Schema:
 #   - path: str       (relative to repo root, as printed by the lint)
 #     line: int       (1-based, must match current source)
-#     pattern: str    ("log.info", "bus.publish", etc.)
+#     pattern: str    ("log", "bus.publish", etc.)
 #     reason: str     (one-line justification)
-[]
+- path: src/personal_agent/service/app.py
+  line: 405
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 413
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 567
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 895
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 928
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 986
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 431
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 454
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 464
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 552
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 576
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 609
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 871
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 893
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 376
+  pattern: log
+  reason: "FastAPI startup TCP preflight \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 439
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 479
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 542
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 763
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 802
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 824
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 860
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 907
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 911
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 472
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 483
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 516
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 544
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 917
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 955
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 485
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 512
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 500
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/service/app.py
+  line: 514
+  pattern: log
+  reason: "FastAPI lifespan startup/shutdown \u2014 no request context"
+- path: src/personal_agent/brainstem/sensors/platforms/base.py
+  line: 21
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/base.py
+  line: 39
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/base.py
+  line: 83
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/base.py
+  line: 63
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/base.py
+  line: 116
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/base.py
+  line: 59
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/base.py
+  line: 112
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 377
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 80
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 87
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 94
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 99
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 101
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 115
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 164
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 180
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 202
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 210
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 212
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 214
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 320
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 327
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 329
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 331
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 336
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 267
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 273
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/platforms/apple.py
+  line: 284
+  pattern: log
+  reason: "Sensor platform probe \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/sensors.py
+  line: 102
+  pattern: log
+  reason: "Sensor lifecycle \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/sensors.py
+  line: 131
+  pattern: log
+  reason: "Sensor lifecycle \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/sensors.py
+  line: 185
+  pattern: log
+  reason: "Sensor lifecycle \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/sensors.py
+  line: 217
+  pattern: log
+  reason: "Sensor lifecycle \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/sensors.py
+  line: 96
+  pattern: log
+  reason: "Sensor lifecycle \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/sensors.py
+  line: 119
+  pattern: log
+  reason: "Sensor lifecycle \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/sensors.py
+  line: 166
+  pattern: log
+  reason: "Sensor lifecycle \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/sensors.py
+  line: 172
+  pattern: log
+  reason: "Sensor lifecycle \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/sensors.py
+  line: 204
+  pattern: log
+  reason: "Sensor lifecycle \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/metrics_daemon.py
+  line: 82
+  pattern: log
+  reason: "Metrics daemon lifecycle \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/metrics_daemon.py
+  line: 102
+  pattern: log
+  reason: "Metrics daemon lifecycle \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/metrics_daemon.py
+  line: 77
+  pattern: log
+  reason: "Metrics daemon lifecycle \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/metrics_daemon.py
+  line: 179
+  pattern: log
+  reason: "Metrics daemon lifecycle \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/metrics_daemon.py
+  line: 161
+  pattern: log
+  reason: "Metrics daemon lifecycle \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/metrics_daemon.py
+  line: 171
+  pattern: log
+  reason: "Metrics daemon lifecycle \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors/metrics_daemon.py
+  line: 152
+  pattern: log
+  reason: "Metrics daemon lifecycle \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors.py
+  line: 84
+  pattern: log
+  reason: "Sensor polling top-level \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors.py
+  line: 92
+  pattern: log
+  reason: "Sensor polling top-level \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors.py
+  line: 130
+  pattern: log
+  reason: "Sensor polling top-level \u2014 runs outside any request context"
+- path: src/personal_agent/brainstem/sensors.py
+  line: 138
+  pattern: log
+  reason: "Sensor polling top-level \u2014 runs outside any request context"

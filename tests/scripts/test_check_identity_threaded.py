@@ -85,6 +85,73 @@ def test_bus_publish_with_inline_identity_payload_is_clean(tmp_path: Path) -> No
     assert bus_violations == []
 
 
+def test_bus_publish_typed_event_inline_is_clean(tmp_path: Path) -> None:
+    """Inline typed event constructor (Pydantic enforces identity at runtime)."""
+    src = tmp_path / "x.py"
+    src.write_text(
+        textwrap.dedent(
+            """
+            async def emit(bus, ctx) -> None:
+                await bus.publish(
+                    "stream:x",
+                    RequestCapturedEvent(trace_id=ctx.trace_id, session_id=ctx.session_id),
+                )
+            """
+        )
+    )
+    violations = lint_file(src, allowlist=[])
+    bus_violations = [v for v in violations if v.kind == "bus_publish_missing_identity"]
+    assert bus_violations == []
+
+
+def test_bus_publish_typed_event_via_local_var_is_clean(tmp_path: Path) -> None:
+    """Variable assigned from a typed Event constructor in same file."""
+    src = tmp_path / "x.py"
+    src.write_text(
+        textwrap.dedent(
+            """
+            async def emit(bus, ctx) -> None:
+                event = MemoryAccessedEvent(trace_id=ctx.trace_id, session_id=ctx.session_id)
+                await bus.publish("stream:x", event)
+            """
+        )
+    )
+    violations = lint_file(src, allowlist=[])
+    bus_violations = [v for v in violations if v.kind == "bus_publish_missing_identity"]
+    assert bus_violations == []
+
+
+def test_bus_publish_typed_event_via_function_param_is_clean(tmp_path: Path) -> None:
+    """Variable bound by an Event-typed function parameter (e.g. nested closure)."""
+    src = tmp_path / "x.py"
+    src.write_text(
+        textwrap.dedent(
+            """
+            async def _publish_safe(bus, evt: MetricsSampledEvent) -> None:
+                await bus.publish("stream:x", evt)
+            """
+        )
+    )
+    violations = lint_file(src, allowlist=[])
+    bus_violations = [v for v in violations if v.kind == "bus_publish_missing_identity"]
+    assert bus_violations == []
+
+
+def test_bus_publish_opaque_var_is_still_flagged(tmp_path: Path) -> None:
+    """Variable not traceable to a typed Event constructor stays flagged."""
+    src = tmp_path / "x.py"
+    src.write_text(
+        textwrap.dedent(
+            """
+            async def emit(bus, payload) -> None:
+                await bus.publish("stream:x", payload)
+            """
+        )
+    )
+    violations = lint_file(src, allowlist=[])
+    assert any(v.kind == "bus_publish_missing_identity" for v in violations)
+
+
 def test_self_bus_publish_is_recognized(tmp_path: Path) -> None:
     src = tmp_path / "x.py"
     src.write_text(

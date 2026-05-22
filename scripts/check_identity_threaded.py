@@ -88,16 +88,76 @@ def _is_bus_publish(call: ast.Call) -> bool:
     return isinstance(call.func, ast.Attribute) and call.func.attr == "publish"
 
 
-def _bus_publish_identity_kwargs(call: ast.Call) -> set[str]:
+def _is_typed_event_constructor(call: ast.Call) -> bool:
+    """Whether ``call`` constructs a typed ``Event`` Pydantic model.
+
+    Matches any ``XxxEvent(...)`` call by name suffix. The substrate
+    (``personal_agent.events.models``) makes ``trace_id`` / ``session_id``
+    mandatory at the type level for request-scoped event subclasses and
+    explicitly ``Optional[None]`` for system-scoped events (``MetricsSampled``,
+    ``ModeTransition``, ``ErrorPatternDetected``). Both are acceptable: the
+    Pydantic constructor enforces the §I3 contract at runtime, so a static
+    lint can trust the type.
+    """
+    if isinstance(call.func, ast.Name):
+        return call.func.id.endswith("Event")
+    if isinstance(call.func, ast.Attribute):
+        return call.func.attr.endswith("Event")
+    return False
+
+
+def _annotation_is_event(node: ast.expr | None) -> bool:
+    """Whether a type annotation ends with ``Event`` (e.g. ``MetricsSampledEvent``)."""
+    if isinstance(node, ast.Name):
+        return node.id.endswith("Event")
+    if isinstance(node, ast.Attribute):
+        return node.attr.endswith("Event")
+    return False
+
+
+def _name_resolves_to_event(tree: ast.AST, var_name: str, before_lineno: int) -> bool:
+    """Whether ``var_name`` resolves to a typed Event payload.
+
+    Two signals are accepted:
+        1. A local assignment ``var_name = XxxEvent(...)`` earlier in the file.
+        2. A function parameter ``var_name: XxxEvent`` on any enclosing or
+           sibling ``def``/``async def`` in the file (best-effort — we don't
+           track which function each ``bus.publish`` is actually in, only that
+           SOME function in the same file declares the name with an Event
+           annotation).
+
+    Best-effort intra-procedural lookup — ignores scopes and conditional
+    control flow (acceptable for the simple patterns in ``src/personal_agent/``).
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and node.lineno < before_lineno:
+            if isinstance(node.value, ast.Call) and _is_typed_event_constructor(node.value):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == var_name:
+                        return True
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for arg in node.args.args + node.args.kwonlyargs:
+                if arg.arg == var_name and _annotation_is_event(arg.annotation):
+                    return True
+    return False
+
+
+def _bus_publish_identity_kwargs(call: ast.Call, tree: ast.AST | None = None) -> set[str]:
     """Identity field names visible on a ``bus.publish`` call.
 
-    Positional signature is ``bus.publish(stream, event_dict)`` — the payload
+    Positional signature is ``bus.publish(stream, payload)`` — the payload
     is the SECOND positional argument, not the first. Also accept explicit
     kwargs.
 
+    Accepts three payload shapes:
+        1. Inline dict literal with ``trace_id``/``session_id`` keys.
+        2. Inline typed event constructor (``XxxEvent(...)``).
+        3. ``Name`` reference to a variable assigned from a typed event
+           constructor earlier in the file.
+
     Returns ``{"<spread>"}`` when ``**kwargs`` is spread and identity can't be
     proven statically. Returns ``{"<opaque-var>"}`` (plus any kwarg names) when
-    the payload is a variable reference rather than an inline dict literal.
+    the payload is an unrecognized expression.
     """
     names: set[str] = set()
     for kw in call.keywords:
@@ -109,7 +169,14 @@ def _bus_publish_identity_kwargs(call: ast.Call) -> set[str]:
         for k in payload_arg.keys:
             if isinstance(k, ast.Constant) and isinstance(k.value, str):
                 names.add(k.value)
-    elif payload_arg is not None and not isinstance(payload_arg, ast.Dict):
+    elif isinstance(payload_arg, ast.Call) and _is_typed_event_constructor(payload_arg):
+        names.update({"trace_id", "session_id"})
+    elif isinstance(payload_arg, ast.Name) and tree is not None:
+        if _name_resolves_to_event(tree, payload_arg.id, call.lineno):
+            names.update({"trace_id", "session_id"})
+        else:
+            names.add("<opaque-var>")
+    elif payload_arg is not None:
         names.add("<opaque-var>")
     return names
 
@@ -184,7 +251,7 @@ def lint_file(path: Path, allowlist: Iterable[dict[str, object]]) -> list[Violat
                 if "<spread>" not in kwargs and not REQUIRED_LOG_KWARGS.issubset(kwargs):
                     violations.append(Violation(path, node.lineno, "log_missing_trace_id", ""))
             elif _is_bus_publish(node):
-                kwargs = _bus_publish_identity_kwargs(node)
+                kwargs = _bus_publish_identity_kwargs(node, tree)
                 if "<spread>" not in kwargs and not REQUIRED_BUS_KWARGS.issubset(kwargs):
                     violations.append(
                         Violation(path, node.lineno, "bus_publish_missing_identity", "")

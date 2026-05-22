@@ -83,6 +83,7 @@ Linear MCP: Team `FrenchForest` · `save_issue` to create · `get_issue` to veri
 - Coverage target: 80%+ for core orchestrator, brainstem, telemetry
 - Mirror `src/` structure: `tests/personal_agent/<module>/test_<file>.py`
 - Shared fixtures in `conftest.py`
+- See root CLAUDE.md for test substrate isolation policy (FRE-375) — tests redirect to :7688/:9201/:5433.
 
 ### 5. Session Orientation
 

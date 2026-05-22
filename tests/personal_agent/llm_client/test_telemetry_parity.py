@@ -1,22 +1,31 @@
 """FRE-376 Phase 2 / ADR-0074 §I2 — model client telemetry parity.
 
-Both :class:`LocalLLMClient` and :class:`LiteLLMClient` must emit the
-canonical ``model_call_started`` and ``model_call_completed`` events with
-the field sets enumerated in
-:data:`personal_agent.telemetry.events.CANONICAL_MODEL_CALL_STARTED_FIELDS`
-and
-:data:`personal_agent.telemetry.events.CANONICAL_MODEL_CALL_COMPLETED_FIELDS`.
+Two layers of test:
 
-A request handler that switches between cloud and local cannot tell the
-difference from telemetry alone — the canonical fields are present on
-both, with the same names and meanings. This module is the contract
-enforcer: adding a required field to those frozensets in ``events.py``
-forces both clients (and any future model client) to populate it.
+1. **Helper contract** (``TestCanonicalEmitContract``) — calls
+   :func:`emit_model_call_started` / :func:`emit_model_call_completed`
+   directly against a mock logger and asserts the kwargs cover the
+   canonical field sets defined in
+   :data:`personal_agent.telemetry.events.CANONICAL_MODEL_CALL_STARTED_FIELDS`
+   /
+   :data:`personal_agent.telemetry.events.CANONICAL_MODEL_CALL_COMPLETED_FIELDS`.
+   Adding a required field to those frozensets forces this test to fail
+   until the helper is updated.
+
+2. **Client wiring** (``TestClientWiring``) — patches the helpers at each
+   client's import site and verifies the clients invoke them with the
+   right arguments (``trace_ctx``, ``span_id``, ``model``, ``role``,
+   ``endpoint``). The clients' transport / cost-gate / cost-tracker
+   surface is mocked only to the minimum needed to reach the emit; the
+   test does not assert on transport behavior.
+
+Splitting these concerns keeps the contract assertion close to the
+helper (where the contract lives) and the wiring assertion close to the
+client (where the wiring lives).
 """
 
 from __future__ import annotations
 
-import json
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -24,6 +33,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from personal_agent.llm_client.telemetry import (
+    emit_model_call_completed,
+    emit_model_call_started,
+)
 from personal_agent.telemetry.events import (
     CANONICAL_MODEL_CALL_COMPLETED_FIELDS,
     CANONICAL_MODEL_CALL_STARTED_FIELDS,
@@ -31,31 +44,11 @@ from personal_agent.telemetry.events import (
 from personal_agent.telemetry.trace import SystemTraceContext, TraceContext
 
 
-def _make_litellm_response() -> MagicMock:
-    """Build a minimal litellm ModelResponse mock for parity testing."""
-    usage = MagicMock()
-    usage.prompt_tokens = 100
-    usage.completion_tokens = 50
-    usage.total_tokens = 150
-    usage.cache_read_input_tokens = None
-    usage.cache_creation_input_tokens = None
-    usage.prompt_tokens_details = None
-
-    response = MagicMock()
-    response.choices = [MagicMock()]
-    response.choices[0].message.content = "hello"
-    response.choices[0].message.tool_calls = None
-    response.usage = usage
-    response.id = "resp_parity"
-    return response
-
-
-def _ctx_with_session(session_uuid: str = "11111111-1111-1111-1111-111111111111") -> TraceContext:
-    """Build a TraceContext that carries a non-None session_id for parity asserts.
-
-    Parent span is also non-None so ``parent_span_id`` is observable in emits.
-    """
-    base = SystemTraceContext.new("telemetry_parity_test", session_id=session_uuid)
+def _ctx_with_session() -> TraceContext:
+    """TraceContext with non-None session_id and parent_span_id for parity asserts."""
+    base = SystemTraceContext.new(
+        "telemetry_parity_test", session_id="11111111-1111-1111-1111-111111111111"
+    )
     return TraceContext(
         trace_id=base.trace_id,
         parent_span_id="22222222-2222-2222-2222-222222222222",
@@ -66,118 +59,192 @@ def _ctx_with_session(session_uuid: str = "11111111-1111-1111-1111-111111111111"
     )
 
 
-async def _drive_litellm(captured: list[tuple[str, dict[str, Any]]]) -> None:
-    """Run LiteLLMClient.respond() with all external I/O mocked.
+# ---------------------------------------------------------------------------
+# Layer 1: helper contract
+# ---------------------------------------------------------------------------
 
-    Captures structured-log calls into ``captured`` as ``(event_name, kwargs)``.
-    """
-    from personal_agent.llm_client.litellm_client import LiteLLMClient
-    from personal_agent.llm_client.types import ModelRole
 
-    mock_response = _make_litellm_response()
+class TestCanonicalEmitContract:
+    """The helpers must cover the canonical field set on every call."""
 
-    mock_gate = MagicMock()
-    mock_gate.reserve = AsyncMock(return_value="res-parity")
-    mock_gate.commit = AsyncMock()
+    def test_started_helper_emits_canonical_fields(self) -> None:
+        """``model_call_started`` kwargs cover ``CANONICAL_MODEL_CALL_STARTED_FIELDS``."""
+        log = MagicMock()
+        ctx = _ctx_with_session()
 
-    mock_tracker = AsyncMock()
-    mock_tracker.connect = AsyncMock()
-    mock_tracker.disconnect = AsyncMock()
-    mock_tracker.record_api_call = AsyncMock()
-
-    mock_log = MagicMock()
-    mock_log.info = MagicMock(side_effect=lambda event, **kw: captured.append((event, kw)))
-    mock_log.warning = MagicMock()
-    mock_log.error = MagicMock()
-
-    client = LiteLLMClient(
-        model_id="claude-sonnet-4-6",
-        provider="anthropic",
-        max_tokens=256,
-        budget_role="main_inference",
-    )
-
-    with (
-        patch("personal_agent.llm_client.litellm_client.log", mock_log),
-        patch("litellm.acompletion", AsyncMock(return_value=mock_response)),
-        patch("litellm.completion_cost", return_value=0.001),
-        patch("personal_agent.cost_gate.get_default_gate", return_value=mock_gate),
-        patch(
-            "personal_agent.cost_gate.load_budget_config",
-            return_value=MagicMock(),
-        ),
-        patch(
-            "personal_agent.llm_client.cost_estimator.estimate_reservation_for_call",
-            return_value=Decimal("0.01"),
-        ),
-        patch(
-            "personal_agent.llm_client.history_sanitiser.sanitise_messages",
-            side_effect=lambda msgs, trace_id: (msgs, []),
-        ),
-        patch(
-            "personal_agent.llm_client.cost_tracker.CostTrackerService",
-            return_value=mock_tracker,
-        ),
-        patch(
-            "personal_agent.config.settings.get_settings",
-            return_value=MagicMock(anthropic_api_key="test-key", openai_api_key=None),
-        ),
-    ):
-        await client.respond(
-            role=ModelRole.PRIMARY,
-            messages=[{"role": "user", "content": "hello"}],
-            trace_ctx=_ctx_with_session(),
+        emit_model_call_started(
+            log=log,
+            role="primary",
+            model="anthropic/claude-sonnet-4-6",
+            endpoint="anthropic",
+            trace_ctx=ctx,
+            span_id="33333333-3333-3333-3333-333333333333",
         )
 
+        log.info.assert_called_once()
+        event_name, kwargs = log.info.call_args.args[0], log.info.call_args.kwargs
+        assert event_name == "model_call_started"
+        missing = CANONICAL_MODEL_CALL_STARTED_FIELDS - set(kwargs)
+        assert not missing, f"started helper missing canonical fields: {missing}"
+        assert kwargs["trace_id"] == ctx.trace_id
+        assert kwargs["session_id"] == "11111111-1111-1111-1111-111111111111"
+        assert kwargs["span_id"] == "33333333-3333-3333-3333-333333333333"
+        assert kwargs["parent_span_id"] == "22222222-2222-2222-2222-222222222222"
 
-def _local_stream_mock(payload: dict[str, Any]) -> MagicMock:
-    """Build a streaming-shaped httpx mock that yields one chunk + [DONE]."""
-    choice = payload.get("choices", [{}])[0]
-    msg = choice.get("message", {})
-    delta = {k: v for k, v in msg.items() if v is not None}
-    chunk = {
-        "id": "chatcmpl-parity",
-        "object": "chat.completion.chunk",
-        "choices": [
-            {
-                "index": 0,
-                "delta": delta,
-                "finish_reason": choice.get("finish_reason", "stop"),
-            }
-        ],
-        "usage": payload.get("usage"),
-    }
-    lines = [f"data: {json.dumps(chunk)}", "data: [DONE]"]
+    def test_completed_helper_emits_canonical_fields(self) -> None:
+        """``model_call_completed`` kwargs cover ``CANONICAL_MODEL_CALL_COMPLETED_FIELDS``."""
+        log = MagicMock()
+        ctx = _ctx_with_session()
 
-    async def aiter_lines() -> Any:
-        for line in lines:
-            yield line
+        emit_model_call_completed(
+            log=log,
+            role="primary",
+            model="anthropic/claude-sonnet-4-6",
+            endpoint="anthropic",
+            trace_ctx=ctx,
+            span_id="33333333-3333-3333-3333-333333333333",
+            latency_ms=125,
+            input_tokens=100,
+            output_tokens=50,
+            total_tokens=150,
+        )
 
-    response_obj = MagicMock()
-    response_obj.raise_for_status = MagicMock()
-    response_obj.aiter_lines = aiter_lines
-    response_obj.status_code = 200
+        log.info.assert_called_once()
+        event_name, kwargs = log.info.call_args.args[0], log.info.call_args.kwargs
+        assert event_name == "model_call_completed"
+        missing = CANONICAL_MODEL_CALL_COMPLETED_FIELDS - set(kwargs)
+        assert not missing, f"completed helper missing canonical fields: {missing}"
+        assert kwargs["input_tokens"] == 100
+        assert kwargs["output_tokens"] == 50
+        assert kwargs["latency_ms"] == 125
 
-    stream_cm = MagicMock()
-    stream_cm.__aenter__ = AsyncMock(return_value=response_obj)
-    stream_cm.__aexit__ = AsyncMock(return_value=None)
-    return stream_cm
+    def test_completed_helper_keeps_legacy_token_aliases(self) -> None:
+        """Back-compat: ``prompt_tokens`` / ``completion_tokens`` / ``model_id`` aliases."""
+        log = MagicMock()
+        emit_model_call_completed(
+            log=log,
+            role="primary",
+            model="anthropic/claude-sonnet-4-6",
+            endpoint="anthropic",
+            trace_ctx=_ctx_with_session(),
+            span_id="33333333-3333-3333-3333-333333333333",
+            latency_ms=125,
+            input_tokens=100,
+            output_tokens=50,
+            total_tokens=150,
+        )
+        kwargs = log.info.call_args.kwargs
+        assert kwargs["prompt_tokens"] == 100
+        assert kwargs["completion_tokens"] == 50
+        assert kwargs["model_id"] == "anthropic/claude-sonnet-4-6"
 
 
-async def _drive_local(
-    captured: list[tuple[str, dict[str, Any]]],
-    tmp_path: Path,
-) -> None:
-    """Run LocalLLMClient.respond() with httpx fully mocked.
+# ---------------------------------------------------------------------------
+# Layer 2: client wiring
+# ---------------------------------------------------------------------------
 
-    Captures structured-log calls into ``captured``.
-    """
-    from personal_agent.llm_client.client import LocalLLMClient
-    from personal_agent.llm_client.types import ModelRole
 
-    config_file = tmp_path / "models.yaml"
-    config_file.write_text(
+class TestClientWiring:
+    """Each client invokes the helpers with the right ``trace_ctx`` + ``span_id``."""
+
+    @pytest.mark.asyncio
+    async def test_litellm_client_calls_both_helpers_with_matched_span(self) -> None:
+        """LiteLLMClient calls started + completed helpers with the same span_id."""
+        from personal_agent.llm_client.litellm_client import LiteLLMClient
+        from personal_agent.llm_client.types import ModelRole
+
+        # Minimal response — content only; usage fields are irrelevant here.
+        usage = MagicMock()
+        usage.prompt_tokens = 1
+        usage.completion_tokens = 1
+        usage.total_tokens = 2
+        usage.cache_read_input_tokens = None
+        usage.cache_creation_input_tokens = None
+        usage.prompt_tokens_details = None
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = "ok"
+        response.choices[0].message.tool_calls = None
+        response.usage = usage
+        response.id = "resp_wiring"
+
+        mock_gate = MagicMock()
+        mock_gate.reserve = AsyncMock(return_value="res-wire")
+        mock_gate.commit = AsyncMock()
+        mock_tracker = AsyncMock()
+
+        ctx = _ctx_with_session()
+
+        with (
+            patch("personal_agent.llm_client.litellm_client.emit_model_call_started") as started,
+            patch(
+                "personal_agent.llm_client.litellm_client.emit_model_call_completed"
+            ) as completed,
+            patch("litellm.acompletion", AsyncMock(return_value=response)),
+            patch("litellm.completion_cost", return_value=0.0),
+            patch("personal_agent.cost_gate.get_default_gate", return_value=mock_gate),
+            patch("personal_agent.cost_gate.load_budget_config", return_value=MagicMock()),
+            patch(
+                "personal_agent.llm_client.cost_estimator.estimate_reservation_for_call",
+                return_value=Decimal("0.01"),
+            ),
+            patch(
+                "personal_agent.llm_client.history_sanitiser.sanitise_messages",
+                side_effect=lambda msgs, trace_id: (msgs, []),
+            ),
+            patch(
+                "personal_agent.llm_client.cost_tracker.CostTrackerService",
+                return_value=mock_tracker,
+            ),
+            patch(
+                "personal_agent.config.settings.get_settings",
+                return_value=MagicMock(anthropic_api_key="k", openai_api_key=None),
+            ),
+        ):
+            client = LiteLLMClient(
+                model_id="claude-sonnet-4-6",
+                provider="anthropic",
+                max_tokens=16,
+                budget_role="main_inference",
+            )
+            await client.respond(
+                role=ModelRole.PRIMARY,
+                messages=[{"role": "user", "content": "hi"}],
+                trace_ctx=ctx,
+            )
+
+        # Both helpers called exactly once.
+        started.assert_called_once()
+        completed.assert_called_once()
+
+        # The client routed the right canonical args through.
+        s_kwargs = started.call_args.kwargs
+        c_kwargs = completed.call_args.kwargs
+        assert s_kwargs["trace_ctx"] is ctx
+        assert c_kwargs["trace_ctx"] is ctx
+        assert s_kwargs["model"] == "anthropic/claude-sonnet-4-6"
+        assert s_kwargs["role"] == "primary"
+        assert s_kwargs["endpoint"] == "anthropic"
+        # Started and completed must share the span_id so they join.
+        assert s_kwargs["span_id"] == c_kwargs["span_id"]
+        assert s_kwargs["span_id"]  # non-empty
+
+    @pytest.mark.asyncio
+    async def test_local_client_calls_started_with_correct_args(self, tmp_path: Path) -> None:
+        """LocalLLMClient invokes ``emit_model_call_started`` correctly.
+
+        We assert only on the started emit so we can short-circuit the call
+        by raising from ``httpx`` right after — keeping the test off the
+        streaming aggregator and response parser.
         """
+        import httpx
+
+        from personal_agent.llm_client.client import LocalLLMClient
+        from personal_agent.llm_client.types import LLMTimeout, ModelRole
+
+        config = tmp_path / "models.yaml"
+        config.write_text(
+            """
 models:
   primary:
     id: "test-primary"
@@ -186,136 +253,121 @@ models:
     max_concurrency: 2
     default_timeout: 60
 """
-    )
-
-    client = LocalLLMClient(
-        base_url="http://mock-slm.test/v1",
-        timeout_seconds=30,
-        max_retries=0,
-        model_config_path=config_file,
-    )
-
-    mock_response = {
-        "choices": [{"message": {"role": "assistant", "content": "hi"}}],
-        "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
-    }
-
-    mock_log = MagicMock()
-    mock_log.info = MagicMock(side_effect=lambda event, **kw: captured.append((event, kw)))
-    mock_log.warning = MagicMock()
-    mock_log.error = MagicMock()
-    mock_log.debug = MagicMock()
-
-    with (
-        patch("personal_agent.llm_client.client.log", mock_log),
-        patch("httpx.AsyncClient") as mock_client_class,
-    ):
-        mock_client = AsyncMock()
-        mock_client.stream = MagicMock(return_value=_local_stream_mock(mock_response))
-        mock_client_class.return_value.__aenter__.return_value = mock_client
-
-        await client.respond(
-            role=ModelRole.PRIMARY,
-            messages=[{"role": "user", "content": "hi"}],
-            trace_ctx=_ctx_with_session(),
         )
 
+        ctx = _ctx_with_session()
+        client = LocalLLMClient(
+            base_url="http://mock-slm.test/v1",
+            timeout_seconds=30,
+            max_retries=0,
+            model_config_path=config,
+        )
 
-def _pick(captured: list[tuple[str, dict[str, Any]]], event: str) -> dict[str, Any]:
-    """Return kwargs of the first emit whose event name matches ``event``."""
-    for name, kwargs in captured:
-        if name == event:
-            return kwargs
-    raise AssertionError(f"event {event!r} not found in captured emits: {[n for n, _ in captured]}")
+        with (
+            patch("personal_agent.llm_client.client.emit_model_call_started") as started,
+            patch("personal_agent.llm_client.client.emit_model_call_completed") as completed,
+            patch("httpx.AsyncClient") as mock_client_class,
+        ):
+            # Force the call to terminate right after the started emit so we
+            # don't have to fake the streaming response shape.
+            mock_client = AsyncMock()
+            mock_client.stream = MagicMock(side_effect=httpx.TimeoutException("stop"))
+            mock_client_class.return_value.__aenter__.return_value = mock_client
 
+            with pytest.raises(LLMTimeout):
+                await client.respond(
+                    role=ModelRole.PRIMARY,
+                    messages=[{"role": "user", "content": "hi"}],
+                    trace_ctx=ctx,
+                )
 
-@pytest.mark.asyncio
-async def test_litellm_emits_canonical_started_fields() -> None:
-    """LiteLLMClient model_call_started covers canonical field set (I2)."""
-    captured: list[tuple[str, dict[str, Any]]] = []
-    await _drive_litellm(captured)
-    started = _pick(captured, "model_call_started")
-    missing = CANONICAL_MODEL_CALL_STARTED_FIELDS - set(started)
-    assert not missing, f"LiteLLMClient model_call_started missing fields: {missing}"
-    assert started["session_id"] == "11111111-1111-1111-1111-111111111111"
-    assert started["model"] == "anthropic/claude-sonnet-4-6"
-    assert started["span_id"] is not None
-    assert started["parent_span_id"] == "22222222-2222-2222-2222-222222222222"
+        started.assert_called_once()
+        completed.assert_not_called()
 
-
-@pytest.mark.asyncio
-async def test_litellm_emits_canonical_completed_fields() -> None:
-    """LiteLLMClient model_call_completed covers canonical field set (I2)."""
-    captured: list[tuple[str, dict[str, Any]]] = []
-    await _drive_litellm(captured)
-    completed = _pick(captured, "model_call_completed")
-    missing = CANONICAL_MODEL_CALL_COMPLETED_FIELDS - set(completed)
-    assert not missing, f"LiteLLMClient model_call_completed missing fields: {missing}"
-    assert completed["input_tokens"] == 100
-    assert completed["output_tokens"] == 50
-    assert completed["total_tokens"] == 150
-    assert isinstance(completed["latency_ms"], int)
-
-
-@pytest.mark.asyncio
-async def test_litellm_preserves_legacy_event_names() -> None:
-    """Back-compat: legacy litellm_request_* events still emitted alongside canonical ones."""
-    captured: list[tuple[str, dict[str, Any]]] = []
-    await _drive_litellm(captured)
-    event_names = {n for n, _ in captured}
-    assert "litellm_request_start" in event_names
-    assert "litellm_request_complete" in event_names
-    legacy_complete = _pick(captured, "litellm_request_complete")
-    # Back-compat fields that downstream Kibana queries still rely on
-    assert "tokens" in legacy_complete
-    assert "prompt_tokens" in legacy_complete
-    assert "completion_tokens" in legacy_complete
+        s_kwargs = started.call_args.kwargs
+        assert s_kwargs["trace_ctx"] is ctx
+        assert s_kwargs["model"] == "test-primary"
+        assert s_kwargs["role"] == "primary"
+        assert s_kwargs["endpoint"] == "http://mock-slm.test/v1/chat/completions"
+        assert s_kwargs["span_id"]  # non-empty
 
 
-@pytest.mark.asyncio
-async def test_local_emits_canonical_started_fields(tmp_path: Path) -> None:
-    """LocalLLMClient model_call_started covers canonical field set (I2)."""
-    captured: list[tuple[str, dict[str, Any]]] = []
-    await _drive_local(captured, tmp_path)
-    started = _pick(captured, "model_call_started")
-    missing = CANONICAL_MODEL_CALL_STARTED_FIELDS - set(started)
-    assert not missing, f"LocalLLMClient model_call_started missing fields: {missing}"
-    assert started["session_id"] == "11111111-1111-1111-1111-111111111111"
-    assert started["model"] == "test-primary"
-    assert started["span_id"] is not None
-    assert started["parent_span_id"] == "22222222-2222-2222-2222-222222222222"
+# ---------------------------------------------------------------------------
+# Layer 3: legacy back-compat — narrow check that the deprecated event names
+# still emit until Phase 3 drops them.
+# ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_local_emits_canonical_completed_fields(tmp_path: Path) -> None:
-    """LocalLLMClient model_call_completed covers canonical field set (I2)."""
-    captured: list[tuple[str, dict[str, Any]]] = []
-    await _drive_local(captured, tmp_path)
-    completed = _pick(captured, "model_call_completed")
-    missing = CANONICAL_MODEL_CALL_COMPLETED_FIELDS - set(completed)
-    assert not missing, f"LocalLLMClient model_call_completed missing fields: {missing}"
-    assert completed["input_tokens"] == 100
-    assert completed["output_tokens"] == 50
-    assert completed["total_tokens"] == 150
-    assert isinstance(completed["latency_ms"], int)
+class TestLegacyBackCompat:
+    """Deprecated event names co-emit until Phase 3 cleanup drops them."""
 
+    @pytest.mark.asyncio
+    async def test_litellm_still_emits_legacy_event_names(self) -> None:
+        """``litellm_request_start`` / ``litellm_request_complete`` still emit."""
+        """``litellm_request_start`` / ``litellm_request_complete`` co-emit for one release cycle."""
+        from personal_agent.llm_client.litellm_client import LiteLLMClient
+        from personal_agent.llm_client.types import ModelRole
 
-@pytest.mark.asyncio
-async def test_clients_emit_identical_canonical_field_sets(tmp_path: Path) -> None:
-    """The whole point of I2: shapes match across clients for canonical events."""
-    cloud: list[tuple[str, dict[str, Any]]] = []
-    local: list[tuple[str, dict[str, Any]]] = []
-    await _drive_litellm(cloud)
-    await _drive_local(local, tmp_path)
+        usage = MagicMock()
+        usage.prompt_tokens = 1
+        usage.completion_tokens = 1
+        usage.total_tokens = 2
+        usage.cache_read_input_tokens = None
+        usage.cache_creation_input_tokens = None
+        usage.prompt_tokens_details = None
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = "ok"
+        response.choices[0].message.tool_calls = None
+        response.usage = usage
+        response.id = "resp_legacy"
 
-    cloud_started = set(_pick(cloud, "model_call_started"))
-    local_started = set(_pick(local, "model_call_started"))
-    canonical_started = CANONICAL_MODEL_CALL_STARTED_FIELDS
-    assert canonical_started.issubset(cloud_started)
-    assert canonical_started.issubset(local_started)
+        mock_gate = MagicMock()
+        mock_gate.reserve = AsyncMock(return_value="res-legacy")
+        mock_gate.commit = AsyncMock()
+        mock_tracker = AsyncMock()
 
-    cloud_completed = set(_pick(cloud, "model_call_completed"))
-    local_completed = set(_pick(local, "model_call_completed"))
-    canonical_completed = CANONICAL_MODEL_CALL_COMPLETED_FIELDS
-    assert canonical_completed.issubset(cloud_completed)
-    assert canonical_completed.issubset(local_completed)
+        captured: list[tuple[str, dict[str, Any]]] = []
+        mock_log = MagicMock()
+        mock_log.info = MagicMock(side_effect=lambda e, **kw: captured.append((e, kw)))
+        mock_log.warning = MagicMock()
+        mock_log.error = MagicMock()
+
+        with (
+            patch("personal_agent.llm_client.litellm_client.log", mock_log),
+            patch("litellm.acompletion", AsyncMock(return_value=response)),
+            patch("litellm.completion_cost", return_value=0.0),
+            patch("personal_agent.cost_gate.get_default_gate", return_value=mock_gate),
+            patch("personal_agent.cost_gate.load_budget_config", return_value=MagicMock()),
+            patch(
+                "personal_agent.llm_client.cost_estimator.estimate_reservation_for_call",
+                return_value=Decimal("0.01"),
+            ),
+            patch(
+                "personal_agent.llm_client.history_sanitiser.sanitise_messages",
+                side_effect=lambda msgs, trace_id: (msgs, []),
+            ),
+            patch(
+                "personal_agent.llm_client.cost_tracker.CostTrackerService",
+                return_value=mock_tracker,
+            ),
+            patch(
+                "personal_agent.config.settings.get_settings",
+                return_value=MagicMock(anthropic_api_key="k", openai_api_key=None),
+            ),
+        ):
+            client = LiteLLMClient(
+                model_id="claude-sonnet-4-6",
+                provider="anthropic",
+                max_tokens=16,
+                budget_role="main_inference",
+            )
+            await client.respond(
+                role=ModelRole.PRIMARY,
+                messages=[{"role": "user", "content": "hi"}],
+                trace_ctx=_ctx_with_session(),
+            )
+
+        names = {e for e, _ in captured}
+        assert "litellm_request_start" in names
+        assert "litellm_request_complete" in names

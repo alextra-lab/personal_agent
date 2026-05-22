@@ -130,7 +130,9 @@ class TestRunBackfill:
             assert result.indexed_count >= 1
             es_logger.index_document.assert_called()
             call = es_logger.index_document.call_args
-            assert call[0][0] == "agent-captains-captures-2026-02-22"
+            from personal_agent.captains_log.capture import CAPTURES_INDEX_PREFIX  # noqa: PLC0415
+
+            assert call[0][0] == f"{CAPTURES_INDEX_PREFIX}-2026-02-22"
             assert call[0][1].get("trace_id") == "trace-abc-123"
             assert call[1].get("id") == "trace-abc-123"
 
@@ -158,7 +160,9 @@ class TestRunBackfill:
             result = await run_backfill(es_logger)
             assert result.indexed_count >= 1
             call_args = es_logger.index_document.call_args
-            assert call_args[0][0] == "agent-captains-reflections-2026-02-22"
+            from personal_agent.captains_log.manager import REFLECTIONS_INDEX_PREFIX  # noqa: PLC0415
+
+            assert call_args[0][0] == f"{REFLECTIONS_INDEX_PREFIX}-2026-02-22"
             assert call_args[1].get("id") == "CL-20260222-120000-001"
 
     @pytest.mark.asyncio

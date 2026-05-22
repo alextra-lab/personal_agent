@@ -1,19 +1,24 @@
 # FRE-275 — Eval override: production-equivalent dual-instance stack
+# FRE-375 — Eval substrate isolation: eval gateway containers use their own
+#            postgres-eval / neo4j-eval / elasticsearch-eval services so eval
+#            runs never touch production data.
 #
 # Layered on top of docker-compose.cloud.yml.  Adds two seshat-gateway
-# instances (control + treatment) to the existing cloud-sim network so
+# instances (control + treatment) plus isolated eval substrate services.
 # Docker DNS, GNU procps, and /app/* paths all match the prod container.
 #
 # Usage:
 #
 #   docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml \
-#     up -d seshat-gateway-control seshat-gateway-treatment
+#     up -d postgres-eval neo4j-eval elasticsearch-eval \
+#            seshat-gateway-control seshat-gateway-treatment
 #
 #   curl -fsS http://localhost:9002/health   # control
 #   curl -fsS http://localhost:9003/health   # treatment
 #
 #   docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml \
-#     down seshat-gateway-control seshat-gateway-treatment
+#     down seshat-gateway-control seshat-gateway-treatment \
+#          postgres-eval neo4j-eval elasticsearch-eval
 #
 # Reusable for FRE-263 (PIVOT-4) and FRE-264 (PIVOT-5) evals.
 
@@ -25,11 +30,11 @@ x-seshat-gateway-eval-base: &seshat-gateway-eval-base
     dockerfile: Dockerfile.gateway
   image: seshat-gateway:latest
   depends_on:
-    postgres:
+    postgres-eval:
       condition: service_healthy
-    neo4j:
+    neo4j-eval:
       condition: service_healthy
-    elasticsearch:
+    elasticsearch-eval:
       condition: service_healthy
     redis:
       condition: service_healthy
@@ -40,9 +45,9 @@ x-seshat-gateway-eval-base: &seshat-gateway-eval-base
     searxng:
       condition: service_healthy
   volumes:
-    # Reuse cloud volumes so FRE-277 cleanup covers eval captures too
-    - seshat_captures_cloud:/app/telemetry/captains_log/captures
-    - seshat_workspace_cloud:/app/agent_workspace
+    # Eval-specific volumes — isolated from production captures and workspace.
+    - seshat_captures_eval:/app/telemetry/captains_log/captures
+    - seshat_workspace_eval:/app/agent_workspace
   healthcheck:
     test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9001/health')"]
     interval: 10s
@@ -57,17 +62,101 @@ x-seshat-gateway-eval-base: &seshat-gateway-eval-base
   restart: "no"
 
 services:
+  # ── Eval-specific substrate services ──────────────────────────────────────
+  # These run alongside the cloud services on separate ports with separate
+  # volumes.  Eval gateway containers connect to these; prod gateway continues
+  # to connect to the cloud postgres/neo4j/elasticsearch services.
+
+  # PostgreSQL (eval) — port 5434 on host, separate volume
+  postgres-eval:
+    image: pgvector/pgvector:pg17
+    container_name: cloud-sim-postgres-eval
+    environment:
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+      POSTGRES_DB: personal_agent
+    volumes:
+      - seshat_postgres_eval:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    ports:
+      - "127.0.0.1:5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d personal_agent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    mem_limit: 512m
+    cpus: 0.5
+    networks:
+      - cloud-sim
+    restart: "no"
+
+  # Neo4j (eval) — bolt 7689 / HTTP 7476 on host, separate volume
+  neo4j-eval:
+    image: neo4j:5.26-community
+    container_name: cloud-sim-neo4j-eval
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?NEO4J_PASSWORD required}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_usage__report_enabled: "false"
+      NEO4J_dbms_security_allow__csv__import__from__file__urls: "true"
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 128m
+    volumes:
+      - seshat_neo4j_eval:/data
+    ports:
+      - "127.0.0.1:7476:7474"  # HTTP Browser (eval)
+      - "127.0.0.1:7689:7687"  # Bolt Driver (eval)
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    mem_limit: 768m
+    cpus: 0.5
+    networks:
+      - cloud-sim
+    restart: "no"
+
+  # Elasticsearch (eval) — port 9202 on host, separate volume
+  elasticsearch-eval:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.0
+    container_name: cloud-sim-elasticsearch-eval
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms256m -Xmx512m"
+    volumes:
+      - seshat_es_eval:/usr/share/elasticsearch/data
+    ports:
+      - "127.0.0.1:9202:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q 'green\\|yellow'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    mem_limit: 768m
+    cpus: 0.5
+    networks:
+      - cloud-sim
+    restart: "no"
+
+  # ── Eval gateway instances ─────────────────────────────────────────────────
+
   # Control — curated tools only, primitives disabled
   seshat-gateway-control:
     <<: *seshat-gateway-eval-base
     container_name: cloud-sim-seshat-gateway-control
     environment:
-      # Infrastructure wiring (mirrors docker-compose.cloud.yml seshat-gateway)
-      AGENT_DATABASE_URL: postgresql+asyncpg://agent:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@postgres:5432/personal_agent
-      AGENT_NEO4J_URI: bolt://neo4j:7687
+      # Infrastructure wiring — eval substrate (isolated from prod)
+      AGENT_DATABASE_URL: postgresql+asyncpg://agent:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@postgres-eval:5432/personal_agent
+      AGENT_NEO4J_URI: bolt://neo4j-eval:7687
       AGENT_NEO4J_USER: neo4j
       AGENT_NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD required}
-      AGENT_ELASTICSEARCH_URL: http://elasticsearch:9200
+      AGENT_ELASTICSEARCH_URL: http://elasticsearch-eval:9200
       AGENT_EVENT_BUS_REDIS_URL: redis://redis:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
       AGENT_MODEL_CONFIG_PATH: /app/config/models.eval.yaml
@@ -75,6 +164,7 @@ services:
       AGENT_OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY}
       API_HOST: 0.0.0.0
       API_PORT: "9001"
+      APP_ENV: eval
       AGENT_LOG_LEVEL: "${AGENT_LOG_LEVEL:-info}"
       # Eval-specific: auth and MCP off; primitives off (baseline)
       # AGENT_OWNER_EMAIL is the dev-mode fallback when auth is disabled
@@ -93,11 +183,12 @@ services:
     <<: *seshat-gateway-eval-base
     container_name: cloud-sim-seshat-gateway-treatment
     environment:
-      AGENT_DATABASE_URL: postgresql+asyncpg://agent:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@postgres:5432/personal_agent
-      AGENT_NEO4J_URI: bolt://neo4j:7687
+      # Infrastructure wiring — eval substrate (isolated from prod)
+      AGENT_DATABASE_URL: postgresql+asyncpg://agent:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@postgres-eval:5432/personal_agent
+      AGENT_NEO4J_URI: bolt://neo4j-eval:7687
       AGENT_NEO4J_USER: neo4j
       AGENT_NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD required}
-      AGENT_ELASTICSEARCH_URL: http://elasticsearch:9200
+      AGENT_ELASTICSEARCH_URL: http://elasticsearch-eval:9200
       AGENT_EVENT_BUS_REDIS_URL: redis://redis:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
       AGENT_MODEL_CONFIG_PATH: /app/config/models.eval.yaml
@@ -105,6 +196,7 @@ services:
       AGENT_OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY}
       API_HOST: 0.0.0.0
       API_PORT: "9001"
+      APP_ENV: eval
       AGENT_LOG_LEVEL: "${AGENT_LOG_LEVEL:-info}"
       # Eval-specific: auth and MCP off; primitives on + auto-approve bash
       AGENT_OWNER_EMAIL: ${AGENT_OWNER_EMAIL:?AGENT_OWNER_EMAIL required}
@@ -118,3 +210,16 @@ services:
     ports:
       # Host 9003 → container 9001
       - "127.0.0.1:9003:9001"
+
+volumes:
+  # Eval-specific volumes — isolated from production
+  seshat_captures_eval:
+    driver: local
+  seshat_workspace_eval:
+    driver: local
+  seshat_postgres_eval:
+    driver: local
+  seshat_neo4j_eval:
+    driver: local
+  seshat_es_eval:
+    driver: local

@@ -73,8 +73,10 @@ class TestWriteCapture:
             assert path.exists()
             assert path.suffix == ".json"
             mock_schedule.assert_called_once()
+            from personal_agent.captains_log.capture import CAPTURES_INDEX_PREFIX  # noqa: PLC0415
+
             call_args = mock_schedule.call_args[0]
-            assert call_args[0] == "agent-captains-captures-2026-02-22"
+            assert call_args[0] == f"{CAPTURES_INDEX_PREFIX}-2026-02-22"
             assert call_args[1]["trace_id"] == "trace-123"
             assert call_args[1]["outcome"] == "completed"
             assert mock_schedule.call_args[1].get("doc_id") == "trace-123"

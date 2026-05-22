@@ -270,11 +270,13 @@ class TestCaptainLogManager:
             rationale="Test rationale",
             timestamp=datetime(2026, 2, 22, 12, 0, 0, tzinfo=timezone.utc),
         )
+        from personal_agent.captains_log.manager import REFLECTIONS_INDEX_PREFIX  # noqa: PLC0415
+
         with patch("personal_agent.captains_log.manager.schedule_es_index") as mock_schedule:
             manager.write_entry(entry)
             mock_schedule.assert_called_once()
             call_args = mock_schedule.call_args[0]
-            assert call_args[0] == "agent-captains-reflections-2026-02-22"
+            assert call_args[0] == f"{REFLECTIONS_INDEX_PREFIX}-2026-02-22"
             assert isinstance(call_args[1], dict)
             assert call_args[1]["entry_id"] == "CL-2026-02-22-001"
             assert call_args[1]["type"] == "reflection"
@@ -292,11 +294,13 @@ class TestCaptainLogManager:
             rationale="Test",
             timestamp=datetime(2026, 2, 22, 12, 0, 0, tzinfo=timezone.utc),
         )
+        from personal_agent.captains_log.manager import REFLECTIONS_INDEX_PREFIX  # noqa: PLC0415
+
         with patch("personal_agent.captains_log.manager.schedule_es_index") as mock_schedule:
             manager.write_entry(entry)
             mock_schedule.assert_called_once()
             call_args = mock_schedule.call_args[0]
-            assert call_args[0] == "agent-captains-reflections-2026-02-22"
+            assert call_args[0] == f"{REFLECTIONS_INDEX_PREFIX}-2026-02-22"
             assert isinstance(call_args[1], dict)
             assert call_args[1]["type"] == "config_proposal"
             assert mock_schedule.call_args[1].get("doc_id") == "CL-2026-02-22-001"

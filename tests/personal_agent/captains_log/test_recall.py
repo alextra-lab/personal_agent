@@ -114,7 +114,9 @@ async def test_returns_hits_when_entity_match() -> None:
         "How do we fix the Postgres slow query?", es_client=es, trace_id="t1"
     )
     assert result == [doc]
-    assert es.last_call["index"].startswith("agent-captains-reflections-")
+    from personal_agent.captains_log.manager import REFLECTIONS_INDEX_PREFIX  # noqa: PLC0415
+
+    assert es.last_call["index"].startswith(REFLECTIONS_INDEX_PREFIX + "-")
     assert es.last_call["size"] == 3
 
 

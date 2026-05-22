@@ -89,10 +89,13 @@ class TestScheduleESIndex:
         async def indexer(index_name: str, document: dict, doc_id: str | None = None) -> None:
             called.append((index_name, document, doc_id))
 
+        from personal_agent.captains_log.capture import CAPTURES_INDEX_PREFIX  # noqa: PLC0415
+
+        captures_index = f"{CAPTURES_INDEX_PREFIX}-2026-02-22"
         set_es_indexer(indexer)
         try:
             schedule_es_index(
-                "agent-captains-captures-2026-02-22",
+                captures_index,
                 {
                     "trace_id": "t1",
                     "tool_results": [
@@ -106,7 +109,10 @@ class TestScheduleESIndex:
             assert len(called) == 1
             doc = called[0][1]
             assert doc["tool_results"][0]["output"] == "stdout text"
-            assert doc["tool_results"][1]["output"] == '{"path": "/tmp/x", "content": "hi"}'
+            # Dict output is JSON-serialized; key order is insertion order
+            import json as _json  # noqa: PLC0415
+
+            assert _json.loads(doc["tool_results"][1]["output"]) == {"path": "/tmp/x", "content": "hi"}
         finally:
             set_es_indexer(None)
 

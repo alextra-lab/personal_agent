@@ -8,6 +8,23 @@ Auto-skip logic for @pytest.mark.requires_llm_server:
 
 from __future__ import annotations
 
+# FRE-375: Set test-stack URIs before any module import triggers get_settings().
+# This ensures all module-level "settings = get_settings()" calls (e.g. service.py:46)
+# resolve to the test configuration rather than prod defaults.
+# setdefault is used so individual tests or CI pipelines can override by setting
+# env vars before running pytest.
+import os
+
+os.environ.setdefault("APP_ENV", "test")
+os.environ.setdefault("AGENT_NEO4J_URI", "bolt://localhost:7688")
+os.environ.setdefault("AGENT_ELASTICSEARCH_URL", "http://localhost:9201")
+os.environ.setdefault(
+    "AGENT_DATABASE_URL",
+    "postgresql+asyncpg://agent:agent_dev_password@localhost:5433/personal_agent",
+)
+os.environ.setdefault("AGENT_ELASTICSEARCH_INDEX_PREFIX", "agent-logs-test")
+os.environ.setdefault("AGENT_CAPTAINS_LOG_INDEX_PREFIX", "agent-captains-test")
+
 import httpx
 import pytest
 
@@ -93,3 +110,23 @@ def pytest_collection_modifyitems(
     for item in items:
         if item.get_closest_marker("requires_llm_server"):
             item.add_marker(skip_mark)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _substrate_test_env_guard() -> None:
+    """Log which substrate URIs the test session will use.
+
+    Substrate-touching tests skip individually when they can't connect.
+    This fixture logs the configured test URIs at session start for diagnostics.
+    """
+    import structlog  # noqa: PLC0415
+
+    log = structlog.get_logger(__name__)
+    database_url = os.environ.get("AGENT_DATABASE_URL", "")
+    log.info(
+        "test_session_substrate_config",
+        app_env=os.environ.get("APP_ENV"),
+        neo4j_uri=os.environ.get("AGENT_NEO4J_URI"),
+        elasticsearch_url=os.environ.get("AGENT_ELASTICSEARCH_URL"),
+        database_url=database_url[:50] + "..." if len(database_url) > 50 else database_url,
+    )

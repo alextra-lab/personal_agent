@@ -614,6 +614,38 @@ def _determine_initial_model_role(ctx: ExecutionContext) -> ModelRole:
     return ModelRole.PRIMARY
 
 
+def _render_memory_section(entity_items: list[dict]) -> str:
+    """Build the ## Your Memory Graph entity section string.
+
+    Skips entities with None or blank descriptions (FRE-374 D1) so the
+    LLM does not receive empty lines like '- [LOCATION] Paris:  (mentioned 328x)'.
+
+    Args:
+        entity_items: List of entity dicts from memory_context.
+
+    Returns:
+        Formatted memory section string, or empty string if no described entities.
+    """
+    described = [
+        m for m in entity_items[:15]
+        if (m.get("description") or "").strip()
+    ]
+    if not described:
+        return ""
+    entity_lines = [
+        f"- [{m.get('entity_type', '')}] {m.get('name', '')}: {m.get('description', '').strip()} "
+        f"(mentioned {m.get('mentions', 1)}x)"
+        for m in described
+    ]
+    section = "\n\n## Your Memory Graph — Known Entities\n"
+    section += "\n".join(entity_lines)
+    section += (
+        "\n\nUse this list to directly answer questions about what the user "
+        "has previously discussed. Do NOT say you have no memory."
+    )
+    return section
+
+
 async def _trigger_captains_log_reflection(ctx: ExecutionContext) -> None:
     """Trigger an LLM-based Captain's Log reflection after task completion.
 
@@ -1726,17 +1758,7 @@ async def step_llm_call(
             if ctx.memory_context[0].get("type") in ("entity", "session"):
                 # Broad recall path — format as direct knowledge summary
                 entity_items = [m for m in ctx.memory_context if m.get("type") == "entity"]
-                entity_lines = [
-                    f"- [{m.get('entity_type', '')}] {m.get('name', '')}: {m.get('description', '')} "
-                    f"(mentioned {m.get('mentions', 1)}x)"
-                    for m in entity_items[:15]
-                ]
-                memory_section = "\n\n## Your Memory Graph — Known Entities\n"
-                memory_section += "\n".join(entity_lines)
-                memory_section += (
-                    "\n\nUse this list to directly answer questions about what the user "
-                    "has previously discussed. Do NOT say you have no memory."
-                )
+                memory_section = _render_memory_section(entity_items)
             else:
                 # Task-assist path — inject conversation summaries
                 memory_section = "\n\n## Relevant Past Conversations\n"

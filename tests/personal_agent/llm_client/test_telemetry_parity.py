@@ -189,7 +189,7 @@ models:
     )
 
     client = LocalLLMClient(
-        base_url="http://localhost:1234/v1",
+        base_url="http://mock-slm.test/v1",
         timeout_seconds=30,
         max_retries=0,
         model_config_path=config_file,

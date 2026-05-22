@@ -622,9 +622,12 @@ class MemoryService:
                 # MERGE using effective_name
                 set_clauses = [
                     "e.entity_id = COALESCE(e.entity_id, $entity_id)",
-                    "e.entity_type = $entity_type",
-                    "e.description = $description",
-                    "e.properties = $properties",
+                    # entity_type: first-write-wins (FRE-375 — prevent test overwrites)
+                    "e.entity_type = CASE WHEN e.entity_type IS NULL OR e.entity_type = '' THEN $entity_type ELSE e.entity_type END",
+                    # description: first-write-wins (FRE-375 — prevent test overwrites)
+                    "e.description = CASE WHEN e.description IS NULL OR e.description = '' THEN $description ELSE e.description END",
+                    # properties: first-write-wins (FRE-375 — prevent test overwrites)
+                    "e.properties = CASE WHEN e.properties IS NULL OR e.properties = '{}' THEN $properties ELSE e.properties END",
                     "e.last_seen = datetime()",
                     "e.mention_count = COALESCE(e.mention_count, 0) + 1",
                     "e.first_seen = COALESCE(e.first_seen, datetime())",

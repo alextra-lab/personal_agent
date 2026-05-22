@@ -534,6 +534,10 @@ class TestConsolidatorAccessContext:
                 "personal_agent.second_brain.consolidator.previous_attempt_count",
                 AsyncMock(return_value=0),
             ),
+            patch(
+                "personal_agent.second_brain.consolidator.record_consolidation_attempt",
+                AsyncMock(),
+            ),
         ):
             mock_settings = MagicMock()
             mock_settings.freshness_enabled = True

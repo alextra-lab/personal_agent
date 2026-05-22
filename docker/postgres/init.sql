@@ -2,6 +2,9 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- Sessions table
+-- primary_model_at_creation + model_config_path: row-level model attribution
+-- per ADR-0074 (FRE-376). NULL-able for historical rows; populated on every
+-- new session by the service layer.
 CREATE TABLE IF NOT EXISTS sessions (
     session_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -9,7 +12,9 @@ CREATE TABLE IF NOT EXISTS sessions (
     mode VARCHAR(20) NOT NULL DEFAULT 'NORMAL',
     channel VARCHAR(50),
     metadata JSONB DEFAULT '{}',
-    messages JSONB DEFAULT '[]'
+    messages JSONB DEFAULT '[]',
+    primary_model_at_creation VARCHAR(120),
+    model_config_path VARCHAR(255)
 );
 
 CREATE INDEX idx_sessions_last_active ON sessions(last_active_at DESC);
@@ -58,6 +63,10 @@ CREATE TABLE IF NOT EXISTS captains_log_reflections (
 CREATE INDEX idx_reflections_timestamp ON captains_log_reflections(reflection_timestamp DESC);
 
 -- API cost tracking
+-- trace_id / session_id: identity tuple required by ADR-0074 (FRE-376). The
+-- application-layer raise in CostTracker.record_api_call enforces presence on
+-- every new write. session_id is NULL-able in Phase 1 and flips to NOT NULL
+-- in a later phase once the local-LLM path also threads identity.
 CREATE TABLE IF NOT EXISTS api_costs (
     id BIGSERIAL PRIMARY KEY,
     timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -66,13 +75,16 @@ CREATE TABLE IF NOT EXISTS api_costs (
     input_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
     cost_usd DECIMAL(10, 6) NOT NULL DEFAULT 0,
-    trace_id UUID,
+    trace_id UUID NOT NULL,
+    session_id UUID,
     purpose VARCHAR(50),  -- 'user_request', 'second_brain', 'entity_extraction'
     latency_ms INTEGER
 );
 
 CREATE INDEX idx_api_costs_timestamp ON api_costs(timestamp DESC);
 CREATE INDEX idx_api_costs_provider ON api_costs(provider);
+CREATE INDEX idx_api_costs_trace_id ON api_costs(trace_id);
+CREATE INDEX idx_api_costs_session_id ON api_costs(session_id);
 
 -- Embeddings table (for future semantic search)
 -- Uses pgvector for efficient similarity search

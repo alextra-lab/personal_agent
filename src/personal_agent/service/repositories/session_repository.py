@@ -8,7 +8,13 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from personal_agent.exceptions import InvalidMessageError
 from personal_agent.service.models import SessionCreate, SessionModel, SessionUpdate
+
+# ADR-0074 (FRE-376) — every persisted assistant message must carry these
+# fields so per-message model attribution survives in Postgres. They live in
+# the top-level message dict OR under ``message["metadata"]``; either is fine.
+_REQUIRED_ASSISTANT_FIELDS: tuple[str, ...] = ("model", "model_role", "model_config_path")
 
 
 class SessionRepository:
@@ -30,12 +36,25 @@ class SessionRepository:
         """Initialize repository with database session."""
         self.db = db
 
-    async def create(self, data: SessionCreate, user_id: UUID) -> SessionModel:
+    async def create(
+        self,
+        data: SessionCreate,
+        user_id: UUID,
+        *,
+        primary_model_at_creation: str | None = None,
+        model_config_path: str | None = None,
+    ) -> SessionModel:
         """Create a new session owned by user_id.
 
         Args:
             data: Session creation parameters.
             user_id: UUID of the authenticated user who owns this session.
+            primary_model_at_creation: Identifier of the primary model active
+                when the session opened (ADR-0074 / FRE-376). Optional only so
+                callers in tests can omit it; production paths should always
+                pass the resolved value.
+            model_config_path: Resolved YAML config path active when the
+                session opened. Same provenance contract.
 
         Returns:
             Created session model.
@@ -49,6 +68,8 @@ class SessionRepository:
             channel=data.channel,
             metadata_=data.metadata,
             messages=[],
+            primary_model_at_creation=primary_model_at_creation,
+            model_config_path=model_config_path,
         )
         self.db.add(session)
         await self.db.commit()
@@ -111,11 +132,30 @@ class SessionRepository:
 
         Args:
             session_id: UUID of session.
-            message: Message dict with role, content, etc.
+            message: Message dict with role, content, etc. Assistant messages
+                must additionally carry ``model``, ``model_role`` and
+                ``model_config_path`` — either at the top level or under
+                ``message["metadata"]`` — per ADR-0074 (FRE-376).
 
         Returns:
             Updated session model or None if not found.
+
+        Raises:
+            InvalidMessageError: If an assistant message is missing any of the
+                required per-message attribution fields.
         """
+        if message.get("role") == "assistant":
+            metadata = message.get("metadata") or {}
+            missing = [
+                f
+                for f in _REQUIRED_ASSISTANT_FIELDS
+                if message.get(f) is None and metadata.get(f) is None
+            ]
+            if missing:
+                raise InvalidMessageError(
+                    f"assistant message missing required attribution fields: {missing}"
+                )
+
         session = await self.get(session_id)
         if not session:
             return None

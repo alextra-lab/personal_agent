@@ -8,6 +8,7 @@ from uuid import UUID
 import asyncpg  # type: ignore[import-untyped]
 
 from personal_agent.config.settings import get_settings
+from personal_agent.exceptions import MissingIdentityError
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
@@ -50,25 +51,44 @@ class CostTrackerService:
         input_tokens: int,
         output_tokens: int,
         cost_usd: float,
-        trace_id: UUID | None = None,
+        trace_id: UUID,
+        session_id: UUID,
         purpose: str | None = None,
         latency_ms: int | None = None,
     ) -> int | None:
         """Record an API call cost to the database.
 
         Args:
-            provider: API provider (e.g., 'anthropic', 'openai')
-            model: Model name (e.g., 'claude-sonnet-4.5')
-            input_tokens: Number of input tokens
-            output_tokens: Number of output tokens
-            cost_usd: Cost in USD
-            trace_id: Optional trace ID for request tracking
-            purpose: Optional purpose ('user_request', 'second_brain', etc.)
+            provider: API provider (e.g., ``"anthropic"``, ``"openai"``).
+            model: Model name (e.g., ``"claude-sonnet-4.5"``).
+            input_tokens: Number of input tokens.
+            output_tokens: Number of output tokens.
+            cost_usd: Cost in USD.
+            trace_id: Trace UUID of the request that produced this cost.
+                Required by ADR-0074 (FRE-376) — the cost row must be
+                attributable to the originating request.
+            session_id: Session UUID the request ran in. Also required by
+                ADR-0074 so cost rows roll up to a session.
+            purpose: Optional purpose (``"user_request"``, ``"second_brain"``,
+                ``"entity_extraction"`` …).
             latency_ms: Wall-clock time of the API round-trip in milliseconds.
 
         Returns:
-            ID of inserted record, or None if failed
+            ID of inserted record, or ``None`` if the pool is unavailable or
+            the underlying INSERT failed.
+
+        Raises:
+            MissingIdentityError: If ``trace_id`` or ``session_id`` is ``None``.
+                ADR-0074 makes identity load-bearing; silently inserting NULL
+                produced 4,077 unattributable rows in production before this
+                contract was tightened.
         """
+        if trace_id is None or session_id is None:
+            raise MissingIdentityError(
+                f"record_api_call requires trace_id and session_id "
+                f"(got trace_id={trace_id!r}, session_id={session_id!r})"
+            )
+
         if not self.pool:
             log.warning("cost_tracker_not_connected", provider=provider)
             return None
@@ -80,8 +100,8 @@ class CostTrackerService:
                     INSERT INTO api_costs (
                         timestamp, provider, model,
                         input_tokens, output_tokens, cost_usd,
-                        trace_id, purpose, latency_ms
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        trace_id, session_id, purpose, latency_ms
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                     RETURNING id
                     """,
                     datetime.now(timezone.utc),
@@ -91,6 +111,7 @@ class CostTrackerService:
                     output_tokens,
                     Decimal(str(cost_usd)),  # Convert to Decimal for precision
                     trace_id,
+                    session_id,
                     purpose,
                     latency_ms,
                 )
@@ -102,6 +123,8 @@ class CostTrackerService:
                     cost_usd=cost_usd,
                     latency_ms=latency_ms,
                     record_id=record_id,
+                    trace_id=str(trace_id),
+                    session_id=str(session_id),
                 )
 
                 return cast(int | None, record_id)

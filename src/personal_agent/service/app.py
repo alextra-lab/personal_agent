@@ -63,6 +63,37 @@ cost_gate_reaper_task: asyncio.Task[None] | None = None
 _pending_append_tasks: dict[str, asyncio.Task[None]] = {}
 
 
+def _resolve_active_model_attribution() -> tuple[str | None, str]:
+    """Resolve the active primary model id and its config path.
+
+    ADR-0074 (FRE-376) requires every new session and every assistant message
+    to carry the model attribution that was in effect when the row was
+    written. We resolve it from the same ``load_model_config`` helper the LLM
+    factory uses, so the value matches what actually serves the call.
+
+    Returns:
+        ``(primary_model_id, model_config_path_str)``. ``primary_model_id``
+        is ``None`` only if the config has no ``primary`` role assignment
+        (degenerate startup config); ``model_config_path_str`` is always the
+        resolved path string from settings.
+    """
+    from personal_agent.config.model_loader import load_model_config
+
+    config_path_str = str(settings.model_config_path)
+    try:
+        cfg = load_model_config()
+        primary = cfg.models.get("primary")
+        primary_id = primary.id if primary is not None else None
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "model_attribution_resolve_failed",
+            error=str(exc),
+            config_path=config_path_str,
+        )
+        primary_id = None
+    return primary_id, config_path_str
+
+
 async def _append_assistant_message_background(
     session_id: UUID,
     content: str,
@@ -74,6 +105,7 @@ async def _append_assistant_message_background(
     this task before loading session history.
     """
     sid = str(session_id)
+    primary_model_id, config_path_str = _resolve_active_model_attribution()
     try:
         async with AsyncSessionLocal() as db:
             repo = SessionRepository(db)
@@ -84,7 +116,12 @@ async def _append_assistant_message_background(
                     "content": content,
                     "trace_id": trace_id,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "metadata": {"source": "service.app"},
+                    "metadata": {
+                        "source": "service.app",
+                        "model": primary_model_id,
+                        "model_role": "primary",
+                        "model_config_path": config_path_str,
+                    },
                 },
             )
     except Exception as e:
@@ -151,6 +188,7 @@ async def _process_chat_stream_background(
                 # across turns without the client needing to track a separate DB ID.
                 from personal_agent.service.models import SessionModel
 
+                primary_model_id, config_path_str = _resolve_active_model_attribution()
                 now = datetime.now(timezone.utc)
                 session = SessionModel(
                     session_id=session_uuid,
@@ -161,6 +199,8 @@ async def _process_chat_stream_background(
                     channel="CHAT",
                     metadata_={},
                     messages=[],
+                    primary_model_at_creation=primary_model_id,
+                    model_config_path=config_path_str,
                 )
                 db.add(session)
                 await db.commit()
@@ -274,6 +314,7 @@ async def _process_chat_stream_background(
         await queue.put(TextDeltaEvent(text=response_content, session_id=session_id))
 
         try:
+            primary_model_id, config_path_str = _resolve_active_model_attribution()
             async with AsyncSessionLocal() as db:
                 repo = SessionRepository(db)
                 await repo.append_message(
@@ -283,7 +324,12 @@ async def _process_chat_stream_background(
                         "content": response_content,
                         "trace_id": trace_id,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "metadata": {"source": "service.app"},
+                        "metadata": {
+                            "source": "service.app",
+                            "model": primary_model_id,
+                            "model_role": "primary",
+                            "model_config_path": config_path_str,
+                        },
                     },
                 )
         except Exception as e:
@@ -418,7 +464,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         raise
 
     # Connect to Elasticsearch and integrate with logging
-    es_handler = ElasticsearchHandler(settings.elasticsearch_url, index_prefix=settings.elasticsearch_index_prefix)
+    es_handler = ElasticsearchHandler(
+        settings.elasticsearch_url, index_prefix=settings.elasticsearch_index_prefix
+    )
     if await es_handler.connect():
         add_elasticsearch_handler(es_handler)
         set_es_indexer(build_es_indexer_from_handler(es_handler))
@@ -1083,7 +1131,13 @@ async def create_session(
 ) -> SessionResponse:
     """Create a new session."""
     repo = SessionRepository(db)
-    session = await repo.create(data, user_id=request_user.user_id)
+    primary_model_id, config_path_str = _resolve_active_model_attribution()
+    session = await repo.create(
+        data,
+        user_id=request_user.user_id,
+        primary_model_at_creation=primary_model_id,
+        model_config_path=config_path_str,
+    )
 
     log.info(
         "session_created",
@@ -1091,6 +1145,8 @@ async def create_session(
         channel=session.channel,
         mode=session.mode,
         user_id=str(request_user.user_id),
+        primary_model_at_creation=primary_model_id,
+        model_config_path=config_path_str,
     )
 
     return SessionResponse.model_validate(session)
@@ -1196,7 +1252,13 @@ async def chat(
             if not session:
                 raise HTTPException(status_code=404, detail="Session not found")
         else:
-            session = await repo.create(SessionCreate(), user_id=request_user.user_id)
+            primary_model_id, config_path_str = _resolve_active_model_attribution()
+            session = await repo.create(
+                SessionCreate(),
+                user_id=request_user.user_id,
+                primary_model_at_creation=primary_model_id,
+                model_config_path=config_path_str,
+            )
 
     # FRE-51: await prior turn's assistant append (NoOp: background task; Redis: session-writer).
     sid = str(cast(UUID, session.session_id))

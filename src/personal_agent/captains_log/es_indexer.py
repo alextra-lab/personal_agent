@@ -115,7 +115,7 @@ def schedule_es_index(
     if not indexer:
         return
 
-    from personal_agent.captains_log.capture import CAPTURES_INDEX_PREFIX as _cap_prefix  # noqa: PLC0415
+    from personal_agent.captains_log.capture import CAPTURES_INDEX_PREFIX as _cap_prefix  # noqa: PLC0415, I001
     if index_name.startswith(_cap_prefix):
         document = normalize_capture_doc_for_es(document)
 

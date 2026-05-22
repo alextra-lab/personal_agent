@@ -167,8 +167,16 @@ async def _replay_session(
     """
     from personal_agent.captains_log.capture import TaskCapture
 
+    import json as _json
+
     session_id = str(session["session_id"])
-    metadata = session.get("metadata") or {}
+    raw_metadata = session.get("metadata") or {}
+    if isinstance(raw_metadata, str):
+        try:
+            raw_metadata = _json.loads(raw_metadata)
+        except (ValueError, TypeError):
+            raw_metadata = {}
+    metadata: dict[str, Any] = raw_metadata if isinstance(raw_metadata, dict) else {}
     user_id_raw = metadata.get("user_id") or metadata.get("owner_id")
     try:
         user_id = UUID(str(user_id_raw)) if user_id_raw else uuid4()

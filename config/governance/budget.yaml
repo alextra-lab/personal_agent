@@ -41,7 +41,7 @@ roles:
     on_denial: raise                # surface failures instead of silently returning []
 
 caps:
-  - {time_window: daily,  role: entity_extraction, cap_usd: 2.50}   # user-confirmed 2026-05-01
+  - {time_window: daily,  role: entity_extraction, cap_usd: 5.00}   # TEMP BUMP 2026-05-22: FRE-374 replay run; reset to $2.50 after
   - {time_window: daily,  role: captains_log,      cap_usd: 2.50}   # user-confirmed 2026-05-01
   - {time_window: daily,  role: main_inference,    cap_usd: 15.00}  # TEMP BUMP 2026-05-08→2026-05-10: FRE-334 eval runs; reset to $5.00
   - {time_window: daily,  role: skill_routing,     cap_usd: 0.10}   # user-confirmed 2026-05-07

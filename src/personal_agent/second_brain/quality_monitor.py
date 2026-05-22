@@ -273,7 +273,7 @@ class ConsolidationQualityMonitor:
             await self._run_scalar_query(
                 """
                 MATCH (e:Entity)
-                WHERE e.description IS NULL OR e.description = ''
+                WHERE e.description IS NULL OR trim(e.description) = ''
                 RETURN count(e) AS value
                 """
             )

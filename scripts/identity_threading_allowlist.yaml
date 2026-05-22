@@ -1,0 +1,13 @@
+# Identity-threading lint allowlist (FRE-376 Phase 3, ADR-0074 §I3/§I5).
+#
+# Each entry exempts a single (path, line) violation. Add `reason:` so future
+# auditors know why this site can't carry identity. Examples of valid reasons:
+#   - lifecycle log: runs at process start/stop, before any request context
+#   - platform sensor: macOS/system probe, no request context exists
+#
+# Schema:
+#   - path: str       (relative to repo root, as printed by the lint)
+#     line: int       (1-based, must match current source)
+#     pattern: str    ("log.info", "bus.publish", etc.)
+#     reason: str     (one-line justification)
+[]

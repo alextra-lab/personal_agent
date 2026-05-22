@@ -3,6 +3,7 @@
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlparse
 from uuid import UUID
 
 import orjson
@@ -117,9 +118,11 @@ class MemoryService:
                 and is_prod_neo4j_uri(uri)
                 and not settings.allow_test_writes_to_prod_substrate
             ):
+                _parsed = urlparse(uri)
                 log.error(
                     "memory_service_refused_prod_uri_in_test_env",
-                    uri=uri,
+                    uri_host=_parsed.hostname,
+                    uri_port=_parsed.port,
                     hint=(
                         "Set AGENT_NEO4J_URI=bolt://localhost:7688 (test stack) "
                         "or AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE=1 to bypass."

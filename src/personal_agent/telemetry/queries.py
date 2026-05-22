@@ -21,7 +21,6 @@ from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
 
-CAPTURES_INDEX_PREFIX = "agent-captains-captures"
 MODE_TRANSITION_EVENT = "mode_transition"
 CONSOLIDATION_EVENT = "consolidation_triggered"
 REQUEST_METRICS_EVENT = "request_metrics_summary"
@@ -84,6 +83,7 @@ class TelemetryQueries:
         self._es_client = es_client
         self._client_owned = es_client is None
         self._logs_index_prefix = settings.elasticsearch_index_prefix
+        self._captures_index_prefix = f"{settings.captains_log_index_prefix}-captures"
 
     async def _get_client(self) -> AsyncElasticsearch:
         """Get active Elasticsearch client, creating one if needed."""
@@ -341,7 +341,7 @@ class TelemetryQueries:
         start = now - timedelta(days=days)
 
         response = await client.search(
-            index=f"{CAPTURES_INDEX_PREFIX}-*",
+            index=f"{self._captures_index_prefix}-*",
             query={
                 "bool": {
                     "filter": [

@@ -13,6 +13,7 @@ from typing import Any
 
 from personal_agent.captains_log.capture import CAPTURES_INDEX_PREFIX, TaskCapture
 from personal_agent.captains_log.es_indexer import normalize_capture_doc_for_es
+from personal_agent.captains_log.manager import REFLECTIONS_INDEX_PREFIX
 from personal_agent.captains_log.models import CaptainLogEntry, CaptainLogEntryType
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.events import (
@@ -24,7 +25,6 @@ from personal_agent.telemetry.events import (
 
 log = get_logger(__name__)
 
-REFLECTIONS_INDEX_PREFIX = "agent-captains-reflections"
 CHECKPOINT_VERSION = 1
 CHECKPOINT_FILENAME = "es_backfill_checkpoint.json"
 

@@ -6,6 +6,8 @@ constants all honour the configured index prefix instead of hardcoding defaults.
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 class TestElasticsearchHandlerPrefix:
     """ElasticsearchHandler passes index_prefix through to its inner logger."""
@@ -91,3 +93,33 @@ class TestCaptainsLogPrefixMatchesSettings:
         from personal_agent.captains_log import manager
 
         assert manager.REFLECTIONS_INDEX_PREFIX == "agent-captains-reflections"
+
+
+class TestTelemetryQueriesCapturesPrefixPropagation:
+    """TelemetryQueries builds captures index prefix from settings (FRE-375)."""
+
+    def test_queries_captures_prefix_uses_settings(self) -> None:
+        """TelemetryQueries._captures_index_prefix derives from captains_log_index_prefix."""
+        mock_settings = MagicMock()
+        mock_settings.elasticsearch_url = "http://localhost:9200"
+        mock_settings.elasticsearch_index_prefix = "agent-logs"
+        mock_settings.captains_log_index_prefix = "agent-captains-custom"
+
+        with patch(
+            "personal_agent.telemetry.queries.get_settings",
+            return_value=mock_settings,
+        ):
+            from personal_agent.telemetry.queries import TelemetryQueries
+
+            queries = TelemetryQueries()
+            assert queries._captures_index_prefix == "agent-captains-custom-captures"
+
+    def test_queries_captures_prefix_default(self) -> None:
+        """TelemetryQueries._captures_index_prefix uses default 'agent-captains-captures'."""
+        from personal_agent.config import get_settings
+        from personal_agent.telemetry.queries import TelemetryQueries
+
+        settings = get_settings()
+        queries = TelemetryQueries()
+        expected = f"{settings.captains_log_index_prefix}-captures"
+        assert queries._captures_index_prefix == expected

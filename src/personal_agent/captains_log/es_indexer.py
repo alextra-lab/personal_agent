@@ -17,9 +17,6 @@ from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
 
-# Prefix for Captain's Log captures index (must match capture.CAPTURES_INDEX_PREFIX and template).
-CAPTURES_INDEX_PREFIX = "agent-captains-captures"
-
 
 def normalize_capture_doc_for_es(doc: dict[str, Any]) -> dict[str, Any]:
     """Ensure capture document conforms to ES captains-captures mapping.
@@ -118,7 +115,8 @@ def schedule_es_index(
     if not indexer:
         return
 
-    if index_name.startswith(CAPTURES_INDEX_PREFIX):
+    from personal_agent.captains_log.capture import CAPTURES_INDEX_PREFIX as _cap_prefix  # noqa: PLC0415
+    if index_name.startswith(_cap_prefix):
         document = normalize_capture_doc_for_es(document)
 
     async def _index() -> None:

@@ -22,9 +22,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from neo4j import AsyncGraphDatabase
 
-NEO4J_URI = "bolt://localhost:7687"
-NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "neo4j_dev_password"
+from personal_agent.config import get_settings as _get_settings
+
+_settings = _get_settings()
+NEO4J_URI = _settings.neo4j_uri
+NEO4J_USER = _settings.neo4j_user
+NEO4J_PASSWORD = _settings.neo4j_password
 
 # Entities that are always noise — generic conversation participants and test artifacts.
 # These names match what the old extraction prompt consistently generated.

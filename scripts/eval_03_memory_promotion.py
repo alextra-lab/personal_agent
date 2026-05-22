@@ -34,12 +34,16 @@ import structlog
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root / "src"))
 
+from personal_agent.config import get_settings as _get_settings  # noqa: E402
+
+_settings = _get_settings()
+
 log = structlog.get_logger(__name__)
 
 AGENT_URL = "http://localhost:9000"
-NEO4J_URI = "bolt://localhost:7687"
-NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "neo4j_dev_password"
+NEO4J_URI = _settings.neo4j_uri
+NEO4J_USER = _settings.neo4j_user
+NEO4J_PASSWORD = _settings.neo4j_password
 
 # ---------------------------------------------------------------------------
 # Conversation seeds — 5 scenarios × 2 seeding turns = 10 seed turns

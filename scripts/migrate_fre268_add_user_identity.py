@@ -16,6 +16,7 @@ Usage:
 The script is idempotent — safe to run more than once.
 """
 
+import argparse
 import asyncio
 import sys
 from uuid import UUID
@@ -109,5 +110,31 @@ async def run_migration() -> None:  # noqa: PLR0912
     print(f"Set AGENT_OWNER_EMAIL={owner_email} in your .env if not already set.")
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="One-time migration: add users table + user_id FK on sessions (FRE-268)."
+    )
+    parser.add_argument(
+        "--confirm-prod",
+        action="store_true",
+        default=False,
+        help=(
+            "Required when AGENT_ENVIRONMENT is not 'test'. "
+            "Confirms intent to write to the production substrate."
+        ),
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
+    args = _parse_args()
+    from personal_agent.config.env_loader import Environment
+    if settings.environment != Environment.TEST and not args.confirm_prod:
+        print(
+            "ERROR: Running against non-TEST environment without --confirm-prod.\n"
+            "This script writes to the production substrate.\n"
+            "Re-run with --confirm-prod if you intend to modify production data.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     asyncio.run(run_migration())

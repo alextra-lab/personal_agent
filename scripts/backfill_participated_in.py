@@ -14,6 +14,7 @@ Re-runs are safe (MERGE + ON CREATE SET).
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import sys
 from uuid import UUID
@@ -189,12 +190,38 @@ async def run_backfill() -> dict[str, int]:
         await neo4j_driver.close()
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="FRE-343 one-shot backfill — populate (:Person)-[:PARTICIPATED_IN]->(:Turn) edges."
+    )
+    parser.add_argument(
+        "--confirm-prod",
+        action="store_true",
+        default=False,
+        help=(
+            "Required when AGENT_ENVIRONMENT is not 'test'. "
+            "Confirms intent to write to the production substrate."
+        ),
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
     """Synchronous CLI entrypoint.
 
     Returns:
         0 on success, 1 on failure.
     """
+    args = _parse_args()
+    from personal_agent.config.env_loader import Environment
+    if settings.environment != Environment.TEST and not args.confirm_prod:
+        print(
+            "ERROR: Running against non-TEST environment without --confirm-prod.\n"
+            "This script writes to the production substrate.\n"
+            "Re-run with --confirm-prod if you intend to modify production data.",
+            file=sys.stderr,
+        )
+        return 2
     try:
         totals = asyncio.run(run_backfill())
     except Exception as e:  # noqa: BLE001

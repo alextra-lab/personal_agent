@@ -97,7 +97,7 @@ async def main() -> None:
     from personal_agent.config import get_settings
 
     settings = get_settings()
-    driver = AsyncGraphDatabase.driver(
+    driver = AsyncGraphDatabase.driver(  # fre-375-allow: benchmark probe, reads settings URI, creates test-prefixed entities only
         settings.neo4j_uri, auth=(settings.neo4j_user, settings.neo4j_password)
     )
     await driver.verify_connectivity()

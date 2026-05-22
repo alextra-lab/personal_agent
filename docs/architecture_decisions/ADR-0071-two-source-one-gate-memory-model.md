@@ -2,6 +2,7 @@
 
 **Status**: Proposed
 **Date**: 2026-05-21
+**Amended**: 2026-05-22 — entity-extraction model reference corrected; vision-fleet state recorded; D11 (vision-handling abstraction) added; cloud-profile compression calibration noted as related follow-up
 **Deciders**: Project owner
 **Related**: ADR-0069 (R2-Backed Artifact Substrate), ADR-0070 (Output Channel Model), ADR-0064 (Inbound User Identity via Cloudflare Access), ADR-0052 (Seshat Owner Identity Primitive), ADR-0060 (Knowledge Graph Quality Stream), ADR-0067 (Reflection Surfacing), FRE-368 ✅, FRE-369 (user uploads), FRE-372 (proposed — Qwen3-VL primary swap)
 **Implementation plans**: deferred — produced when downstream FREs are taken up
@@ -13,8 +14,12 @@
 Seshat's memory graph today is shaped by a single pipeline:
 
 ```
-turn → entity extraction (qwen3-8b background role) → straight into Neo4j as :Person / :Place / :Event / semantic facts
+turn → entity_extraction_role (currently gpt-5.4-mini per FRE-365) → straight into Neo4j as :Person / :Place / :Event / semantic facts
 ```
+
+The authoritative role-to-model mapping lives in `config/models.{cloud,local}.yaml`; this ADR uses role names rather than model identifiers wherever possible.
+
+Model-fleet state at amendment time (2026-05-22): the primary role on the local profile (`unsloth/qwen3.6-35-A3B`) has native vision activated; the sub-agent instance (`unsloth/qwen3.6-35-A3B-subagent`) is text-only by design (see D11). On the cloud profile, both primary (`claude_sonnet`) and sub-agent (`claude_haiku`) are vision-capable, as is `entity_extraction_role` (`gpt-5.4-mini`). Image-bearing artifact ingestion therefore has a native vision path on every role except the local sub-agent.
 
 That worked at small volume, with one user, on conversational input only. Three forces now break the assumption that "everything we can extract should become memory":
 
@@ -186,6 +191,17 @@ Fully-autonomous promotion (no confirmation) is rejected for v1 (Alt D). It can 
 
 `:Doc` nodes inherit ADR-0064's per-user ownership semantics: a user's documents and their derived `:Doc` subgraph are not visible to other users; promotion only produces `:Core` entities scoped to the same `user_id`. The placeholder for cross-user sharing (FRE-345) applies to both scopes uniformly.
 
+### D11 — Vision handling is a capability flag, not a code path
+
+Image content (uploaded photos, screenshots, image-only PDF pages) reaches the model through the existing `LiteLLMClient` dispatch surface, not through a parallel vision-only path. The mechanism:
+
+1. **Capability flag.** Each model definition in `config/models.{cloud,local}.yaml` gains a `supports_vision: bool` field. Source of truth for "can this role currently see images" is the active model definition for the active profile.
+2. **Content-block builder.** A small helper fetches artifact bytes from R2 (via the existing `R2ArtifactStore`), base64-encodes when required, and emits a LiteLLM-format image content block. LiteLLM normalizes the wire format per provider (Anthropic `image` source, OpenAI `image_url`, vLLM/LM Studio equivalents) — no provider-specific code in the orchestrator.
+3. **Capability guard at dispatch.** Before calling a role, the orchestrator checks `supports_vision` against the turn's modality. On match → image blocks pass through unchanged. On mismatch → fallback to a caption (generated on demand via a vision-capable role, cached on the artifact row).
+4. **Sub-agent asymmetry is policy, not a workaround.** The local sub-agent is intentionally text-only — its identity is fast focused completion bounded by a 16k context window, and image tokens consume 6–12% of that window per image. Image-bearing HYBRID branches are either routed to the primary or receive a caption rather than the raw bytes. The cloud sub-agent (Haiku) is vision-capable and follows the same dispatch rule trivially.
+
+Net effect: vision support is a configuration property of each model role, the orchestrator is model-agnostic about how to send an image, and the document ingestion pipeline (FRE-369 and beyond) does not need a separate caption pre-processing step except as a fallback for the text-only sub-agent and any future text-only consumer.
+
 ---
 
 ## Consequences
@@ -324,6 +340,10 @@ Each phase (P1–P4) will produce its own implementation plan with its own AC su
 - **FRE-372** (proposed) — Qwen3-VL primary swap (parallel; affects how images become `:Doc` content but does not gate this ADR)
 - **FRE-226** — auto-updating CLAUDE.md (future candidate for the same gate)
 - **HippoRAG**, **GraphRAG**, **MemGPT/Letta**, **Mem0** — research influences cited in Context
+
+### Related follow-ups surfaced during ADR-0071 design (not blocking)
+
+- **Cloud-profile compression sizing.** `settings.context_window_max_tokens` is a single global value (default 96000) calibrated for the local primary's 131k window. On the cloud profile, primary is `claude_sonnet` (200k context) and compression triggers at 0.65 × 96000 ≈ 62k — leaving ~100k of Sonnet's window unused. Either set the value per-profile via env override, or (cleaner) make compression-trigger ratios resolve against the active primary's `context_length` minus a fixed headroom buffer. Surfaced during ADR-0071 analysis on 2026-05-22; warrants its own ticket. Not blocking for FRE-369.
 
 ---
 

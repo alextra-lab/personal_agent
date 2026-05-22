@@ -289,7 +289,7 @@ async def test_scenario_5_memory_graph_enrichment() -> None:
     try:
         from personal_agent.memory.service import MemoryService
 
-        probe = MemoryService()
+        probe = MemoryService()  # fre-375-allow: integration test, skips when Neo4j unavailable
         connected = await probe.connect()
         if not connected:
             pytest.skip("Neo4j not reachable — run 'make infra-up' to enable this scenario")

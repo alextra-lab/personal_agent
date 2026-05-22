@@ -40,7 +40,7 @@ def _looks_synthetic(name: str | None) -> bool:
 async def _es_count(query: dict[str, Any]) -> int:
     async with httpx.AsyncClient() as client:
         r = await client.post(
-            "http://localhost:9200/agent-logs-*/_count",
+            "http://localhost:9200/agent-logs-*/_count",  # fre-375-allow: read-only production analysis probe
             json=query,
             timeout=10.0,
         )

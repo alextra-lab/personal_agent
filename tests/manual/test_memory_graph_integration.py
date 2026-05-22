@@ -23,7 +23,7 @@ async def test_memory_service():
     print("Testing Memory Service Integration\n")
 
     # Initialize service
-    memory = MemoryService()
+    memory = MemoryService()  # fre-375-allow: manual utility script, uses test stack via conftest
 
     try:
         # 1. Connect

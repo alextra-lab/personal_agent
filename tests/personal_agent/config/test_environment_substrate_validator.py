@@ -53,12 +53,12 @@ class TestValidatorRaises:
     def test_raises_when_test_env_with_prod_neo4j_uri(self) -> None:
         """ValidationError raised when TEST env + Neo4j on default port 7687."""
         with pytest.raises(ValidationError, match="prod/dev defaults"):
-            make_config(neo4j_uri="bolt://localhost:7687")
+            make_config(neo4j_uri="bolt://localhost:7687")  # fre-375-allow: tests the prod-URI guard itself
 
     def test_raises_when_test_env_with_prod_elasticsearch_url(self) -> None:
         """ValidationError raised when TEST env + Elasticsearch on default port 9200."""
         with pytest.raises(ValidationError, match="prod/dev defaults"):
-            make_config(elasticsearch_url="http://localhost:9200")
+            make_config(elasticsearch_url="http://localhost:9200")  # fre-375-allow: tests the prod-URI guard itself
 
     def test_raises_when_test_env_with_prod_postgres_url(self) -> None:
         """ValidationError raised when TEST env + PostgreSQL on default port 5432."""
@@ -71,14 +71,14 @@ class TestValidatorRaises:
         """ValidationError raised when TEST env + multiple prod-fingerprint URIs."""
         with pytest.raises(ValidationError, match="prod/dev defaults"):
             make_config(
-                neo4j_uri="bolt://localhost:7687",
-                elasticsearch_url="http://localhost:9200",
+                neo4j_uri="bolt://localhost:7687",  # fre-375-allow: tests the prod-URI guard itself
+                elasticsearch_url="http://localhost:9200",  # fre-375-allow: tests the prod-URI guard itself
             )
 
     def test_error_message_names_offending_uri(self) -> None:
         """Error message names the offending URI for actionability."""
         with pytest.raises(ValidationError) as exc_info:
-            make_config(neo4j_uri="bolt://localhost:7687")
+            make_config(neo4j_uri="bolt://localhost:7687")  # fre-375-allow: tests the prod-URI guard itself
         # The error message must reference the offending field
         assert "neo4j_uri" in str(exc_info.value)
 
@@ -99,7 +99,7 @@ class TestValidatorBypassFlag:
     def test_no_raise_when_bypass_flag_set_with_prod_neo4j(self) -> None:
         """No error when escape hatch is active, even with prod Neo4j URI."""
         cfg = make_config(
-            neo4j_uri="bolt://localhost:7687",
+            neo4j_uri="bolt://localhost:7687",  # fre-375-allow: tests the prod-URI guard itself
             allow_test_writes_to_prod_substrate=True,
         )
         assert cfg.allow_test_writes_to_prod_substrate is True
@@ -107,8 +107,8 @@ class TestValidatorBypassFlag:
     def test_no_raise_when_bypass_flag_set_with_all_prod_uris(self) -> None:
         """No error when bypass is active with all three prod-fingerprint URIs."""
         cfg = make_config(
-            neo4j_uri="bolt://localhost:7687",
-            elasticsearch_url="http://localhost:9200",
+            neo4j_uri="bolt://localhost:7687",  # fre-375-allow: tests the prod-URI guard itself
+            elasticsearch_url="http://localhost:9200",  # fre-375-allow: tests the prod-URI guard itself
             database_url="postgresql+asyncpg://agent:pw@localhost:5432/personal_agent",
             allow_test_writes_to_prod_substrate=True,
         )
@@ -127,7 +127,7 @@ class TestValidatorSilentForNonTestEnv:
         """No error for DEVELOPMENT environment regardless of URI."""
         cfg = make_config(
             environment=Environment.DEVELOPMENT,
-            neo4j_uri="bolt://localhost:7687",
+            neo4j_uri="bolt://localhost:7687",  # fre-375-allow: tests the prod-URI guard itself
         )
         assert cfg.environment == Environment.DEVELOPMENT
 
@@ -135,7 +135,7 @@ class TestValidatorSilentForNonTestEnv:
         """No error for PRODUCTION environment regardless of URI."""
         cfg = make_config(
             environment=Environment.PRODUCTION,
-            neo4j_uri="bolt://localhost:7687",
+            neo4j_uri="bolt://localhost:7687",  # fre-375-allow: tests the prod-URI guard itself
         )
         assert cfg.environment == Environment.PRODUCTION
 
@@ -143,7 +143,7 @@ class TestValidatorSilentForNonTestEnv:
         """No error for STAGING environment regardless of URI."""
         cfg = make_config(
             environment=Environment.STAGING,
-            neo4j_uri="bolt://localhost:7687",
+            neo4j_uri="bolt://localhost:7687",  # fre-375-allow: tests the prod-URI guard itself
         )
         assert cfg.environment == Environment.STAGING
 

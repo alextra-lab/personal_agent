@@ -34,7 +34,7 @@ pytestmark = pytest.mark.integration
 @pytest_asyncio.fixture
 async def memory_service():
     """Create and connect to MemoryService against live Neo4j."""
-    service = MemoryService()
+    service = MemoryService()  # fre-375-allow: integration test, skips when Neo4j unavailable
     connected = await service.connect()
     if not connected:
         pytest.skip("Neo4j not available (make up)")

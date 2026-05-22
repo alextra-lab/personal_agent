@@ -655,7 +655,7 @@ async def run_harness(
             raise ValueError(f"No prompt with id={only_prompt!r} in {prompts_path}")
 
     queries = TelemetryQueries()
-    memory_service = MemoryService()
+    memory_service = MemoryService()  # fre-375-allow: read-only MemoryService, post-FRE-375 settings-driven
     try:
         await memory_service.connect()
         prompt_results: dict[str, list[TurnResult]] = {}

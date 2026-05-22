@@ -25,7 +25,7 @@ from personal_agent.memory.service import MemoryService
 @pytest_asyncio.fixture
 async def memory_service():
     """Create and connect to memory service."""
-    service = MemoryService()
+    service = MemoryService()  # fre-375-allow: integration test, skips when Neo4j unavailable
     connected = await service.connect()
     if not connected:
         pytest.skip("Neo4j not available (docker compose up -d)")
@@ -48,7 +48,7 @@ class TestConnectionHandling:
     @pytest.mark.asyncio
     async def test_connect_success(self):
         """Test successful connection to Neo4j."""
-        service = MemoryService()
+        service = MemoryService()  # fre-375-allow: integration test, skips when Neo4j unavailable
         connected = await service.connect()
 
         if not connected:
@@ -70,7 +70,7 @@ class TestConnectionHandling:
     @pytest.mark.asyncio
     async def test_connect_invalid_credentials(self):
         """Test connection with invalid credentials."""
-        service = MemoryService()
+        service = MemoryService()  # fre-375-allow: unit test with mocked driver, no real connection
 
         # Test that connection failure is handled gracefully
         # (Can't easily test invalid credentials without mocking)
@@ -462,7 +462,7 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_query_without_connection(self):
         """Test querying without connection returns empty results."""
-        service = MemoryService()
+        service = MemoryService()  # fre-375-allow: unit test with mocked driver, no real connection
         # Don't connect
 
         query = MemoryQuery(entity_names=["Python"])
@@ -474,7 +474,7 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_create_conversation_without_connection(self):
         """Test creating conversation without connection."""
-        service = MemoryService()
+        service = MemoryService()  # fre-375-allow: unit test with mocked driver, no real connection
         # Don't connect
 
         conversation = ConversationNode(

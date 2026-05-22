@@ -15,7 +15,7 @@ from personal_agent.second_brain.consolidator import SecondBrainConsolidator
 @pytest_asyncio.fixture
 async def memory_service():
     """Create memory service for testing."""
-    service = MemoryService()
+    service = MemoryService()  # fre-375-allow: integration test, skips when Neo4j unavailable
     await service.connect()
 
     # Clean test data

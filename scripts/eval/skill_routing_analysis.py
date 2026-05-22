@@ -50,7 +50,7 @@ import structlog
 
 log = structlog.get_logger(__name__)
 
-ES_URL = "http://localhost:9200"
+ES_URL = "http://localhost:9200"  # fre-375-allow: read-only MemoryService, post-FRE-375 settings-driven
 ES_INDEX = "agent-logs-*"
 
 

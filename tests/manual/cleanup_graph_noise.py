@@ -72,7 +72,7 @@ SUSPICIOUS_ENTITY_TYPES: list[str] = [
 
 async def run_cleanup(dry_run: bool = True, stats_only: bool = False) -> None:
     """Connect to Neo4j and clean up noise entities."""
-    driver = AsyncGraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+    driver = AsyncGraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))  # fre-375-allow: manual utility script, uses test stack via conftest
     await driver.verify_connectivity()
     print(f"Connected to Neo4j at {NEO4J_URI}\n")
 

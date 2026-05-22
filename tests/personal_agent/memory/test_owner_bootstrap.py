@@ -12,7 +12,7 @@ from personal_agent.memory.service import MemoryService
 
 
 def _make_service(connected: bool = True) -> MemoryService:
-    svc = MemoryService()
+    svc = MemoryService()  # fre-375-allow: unit test with mocked driver, no real connection
     svc.connected = connected
     if connected:
         svc.driver = MagicMock()

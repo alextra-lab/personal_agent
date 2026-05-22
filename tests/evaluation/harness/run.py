@@ -136,7 +136,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--es-url",
-        default="http://localhost:9200",
+        default="http://localhost:9200",  # fre-375-allow: CLI argument default, actual value comes from env/flags
         help="Elasticsearch URL (default: http://localhost:9200)",
     )
     parser.add_argument(

@@ -16,14 +16,14 @@ class TestElasticsearchHandlerPrefix:
         """ElasticsearchHandler stores the passed index_prefix on its es_logger."""
         from personal_agent.telemetry.es_handler import ElasticsearchHandler
 
-        handler = ElasticsearchHandler("http://localhost:9200", index_prefix="agent-logs-test")
+        handler = ElasticsearchHandler("http://localhost:9200", index_prefix="agent-logs-test")  # fre-375-allow: unit test with mocked driver, no real connection
         assert handler.es_logger.index_prefix == "agent-logs-test"
 
     def test_handler_default_prefix(self) -> None:
         """ElasticsearchHandler uses 'agent-logs' as the default prefix."""
         from personal_agent.telemetry.es_handler import ElasticsearchHandler
 
-        handler = ElasticsearchHandler("http://localhost:9200")
+        handler = ElasticsearchHandler("http://localhost:9200")  # fre-375-allow: unit test with mocked driver, no real connection
         assert handler.es_logger.index_prefix == "agent-logs"
 
     def test_handler_passes_prefix_to_logger(self) -> None:
@@ -50,14 +50,14 @@ class TestElasticsearchLoggerPrefix:
         """ElasticsearchLogger exposes index_prefix as an attribute."""
         from personal_agent.telemetry.es_logger import ElasticsearchLogger
 
-        logger = ElasticsearchLogger("http://localhost:9200", index_prefix="my-prefix")
+        logger = ElasticsearchLogger("http://localhost:9200", index_prefix="my-prefix")  # fre-375-allow: unit test with mocked driver, no real connection
         assert logger.index_prefix == "my-prefix"
 
     def test_logger_default_prefix(self) -> None:
         """ElasticsearchLogger uses 'agent-logs' as the default prefix."""
         from personal_agent.telemetry.es_logger import ElasticsearchLogger
 
-        logger = ElasticsearchLogger("http://localhost:9200")
+        logger = ElasticsearchLogger("http://localhost:9200")  # fre-375-allow: unit test with mocked driver, no real connection
         assert logger.index_prefix == "agent-logs"
 
 
@@ -112,7 +112,7 @@ class TestTelemetryQueriesCapturesPrefixPropagation:
     def test_queries_captures_prefix_uses_settings(self) -> None:
         """TelemetryQueries._captures_index_prefix derives from captains_log_index_prefix."""
         mock_settings = MagicMock()
-        mock_settings.elasticsearch_url = "http://localhost:9200"
+        mock_settings.elasticsearch_url = "http://localhost:9200"  # fre-375-allow: unit test with mocked driver, no real connection
         mock_settings.elasticsearch_index_prefix = "agent-logs"
         mock_settings.captains_log_index_prefix = "agent-captains-custom"
 

@@ -15,7 +15,7 @@ from personal_agent.memory.service import MemoryService
 @pytest.mark.asyncio
 async def test_query_memory_event_reaches_consumer_neo4j_batch() -> None:
     """query_memory publishes MemoryAccessedEvent; consumer flush issues Neo4j UNWIND update."""
-    service = MemoryService()
+    service = MemoryService()  # fre-375-allow: unit test with mocked driver, no real connection
     service.connected = True
     service.driver = MagicMock()
 

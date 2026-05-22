@@ -503,7 +503,7 @@ async def run_survey(*, days: int, out_dir: Path) -> Path:
     report_path = out_dir / "report.md"
 
     queries = TelemetryQueries()
-    memory_service = MemoryService()
+    memory_service = MemoryService()  # fre-375-allow: read-only MemoryService, post-FRE-375 settings-driven
     monitor = ConsolidationQualityMonitor(memory_service=memory_service, telemetry_queries=queries)
 
     try:

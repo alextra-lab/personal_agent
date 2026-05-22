@@ -24,8 +24,8 @@ class TestIsProdNeo4jUri:
     """Tests for the Neo4j production fingerprint detector."""
 
     def test_canonical_prod_uri_returns_true(self) -> None:
-        """bolt://localhost:7687 is the default production fingerprint."""
-        assert is_prod_neo4j_uri("bolt://localhost:7687") is True
+        """bolt://localhost:7687 is the default production fingerprint."""  # fre-375-allow: tests the prod-URI guard itself
+        assert is_prod_neo4j_uri("bolt://localhost:7687") is True  # fre-375-allow: tests the prod-URI guard itself
 
     def test_127_alias_returns_true(self) -> None:
         """127.0.0.1 is treated as equivalent to localhost."""
@@ -66,8 +66,8 @@ class TestIsProdElasticsearchUrl:
     """Tests for the Elasticsearch production fingerprint detector."""
 
     def test_canonical_prod_url_returns_true(self) -> None:
-        """http://localhost:9200 is the default production fingerprint."""
-        assert is_prod_elasticsearch_url("http://localhost:9200") is True
+        """http://localhost:9200 is the default production fingerprint."""  # fre-375-allow: tests the prod-URI guard itself
+        assert is_prod_elasticsearch_url("http://localhost:9200") is True  # fre-375-allow: tests the prod-URI guard itself
 
     def test_127_alias_returns_true(self) -> None:
         """127.0.0.1 is treated as equivalent to localhost."""

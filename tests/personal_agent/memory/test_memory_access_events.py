@@ -52,7 +52,7 @@ class TestQueryMemoryEventPublishing:
         from personal_agent.memory.models import MemoryQuery, MemoryQueryResult
         from personal_agent.memory.service import MemoryService
 
-        service = MemoryService()
+        service = MemoryService()  # fre-375-allow: unit test with mocked driver, no real connection
         service.connected = True
         service.driver = MagicMock()
 
@@ -109,7 +109,7 @@ class TestQueryMemoryEventPublishing:
         from personal_agent.memory.models import MemoryQuery
         from personal_agent.memory.service import MemoryService
 
-        service = MemoryService()
+        service = MemoryService()  # fre-375-allow: unit test with mocked driver, no real connection
         service.connected = True
         service.driver = MagicMock()
 
@@ -145,7 +145,7 @@ class TestQueryMemoryEventPublishing:
         from personal_agent.memory.models import MemoryQuery
         from personal_agent.memory.service import MemoryService
 
-        service = MemoryService()
+        service = MemoryService()  # fre-375-allow: unit test with mocked driver, no real connection
         service.connected = True
         service.driver = MagicMock()
 
@@ -189,7 +189,7 @@ class TestQueryMemoryBroadEventPublishing:
         """query_memory_broad publishes event with entity names as IDs."""
         from personal_agent.memory.service import MemoryService
 
-        service = MemoryService()
+        service = MemoryService()  # fre-375-allow: unit test with mocked driver, no real connection
         service.connected = True
         service.driver = MagicMock()
 
@@ -255,7 +255,7 @@ class TestQueryMemoryBroadEventPublishing:
         """query_memory_broad does NOT publish when freshness_enabled=False."""
         from personal_agent.memory.service import MemoryService
 
-        service = MemoryService()
+        service = MemoryService()  # fre-375-allow: unit test with mocked driver, no real connection
         service.connected = True
         service.driver = MagicMock()
 

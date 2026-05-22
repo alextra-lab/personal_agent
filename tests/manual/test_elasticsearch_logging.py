@@ -29,7 +29,7 @@ async def test_logging():
     log = get_logger(__name__)
 
     print("🔧 Connecting to Elasticsearch...")
-    es_handler = ElasticsearchHandler("http://localhost:9200")
+    es_handler = ElasticsearchHandler("http://localhost:9200")  # fre-375-allow: manual utility script, uses test stack via conftest
 
     if not await es_handler.connect():
         print("❌ Failed to connect to Elasticsearch")
@@ -118,7 +118,7 @@ async def test_logging():
     print("   4. Go to: Analytics > Discover")
     print("   5. Filter by: event: test_* (to see these test logs)")
     print("\n🔍 Or query directly:")
-    print('   curl "http://localhost:9200/agent-logs-*/_search?q=event:test_*&pretty"')
+    print('   curl "http://localhost:9200/agent-logs-*/_search?q=event:test_*&pretty"')  # fre-375-allow: manual utility script, uses test stack via conftest
 
     return True
 
@@ -132,7 +132,7 @@ async def query_test_logs():
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(
-                "http://localhost:9200/agent-logs-*/_search",
+                "http://localhost:9200/agent-logs-*/_search",  # fre-375-allow: manual utility script, uses test stack via conftest
                 params={
                     "q": "event:test_*",
                     "size": 10,

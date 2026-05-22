@@ -8,7 +8,7 @@ from personal_agent.memory.service import MemoryService
 
 def test_detect_implicit_rephrase_true_for_recent_low_result_query() -> None:
     """Rephrase should be detected when a new query follows poor results quickly."""
-    service = MemoryService()
+    service = MemoryService()  # fre-375-allow: unit test with mocked driver, no real connection
     previous_state = {
         "signature": "text=python|entities=python|types=|conversations=|traces=|recency=None",
         "result_count": 0,
@@ -25,7 +25,7 @@ def test_detect_implicit_rephrase_true_for_recent_low_result_query() -> None:
 
 def test_detect_implicit_rephrase_false_for_stale_or_same_query() -> None:
     """Rephrase should not be detected when query is stale or unchanged."""
-    service = MemoryService()
+    service = MemoryService()  # fre-375-allow: unit test with mocked driver, no real connection
     stale_state = {
         "signature": "text=python|entities=python|types=|conversations=|traces=|recency=None",
         "result_count": 0,
@@ -52,7 +52,7 @@ def test_detect_implicit_rephrase_false_for_stale_or_same_query() -> None:
 
 def test_log_query_quality_metrics_updates_state_by_feedback_key() -> None:
     """Quality metrics logger should persist last query state for feedback."""
-    service = MemoryService()
+    service = MemoryService()  # fre-375-allow: unit test with mocked driver, no real connection
     query = MemoryQuery(entity_names=["Python"], limit=5)
 
     service._log_query_quality_metrics(  # noqa: SLF001

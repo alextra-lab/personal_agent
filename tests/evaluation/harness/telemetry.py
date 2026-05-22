@@ -28,7 +28,7 @@ log = structlog.get_logger(__name__)
 TelemetryEvent = dict[str, object]
 
 # Default ES config
-DEFAULT_ES_URL = "http://localhost:9200"
+DEFAULT_ES_URL = "http://localhost:9200"  # fre-375-allow: CLI argument default, actual value comes from env/flags
 DEFAULT_INDEX_PATTERN = "agent-logs-*"
 DEFAULT_RETRY_DELAY_S = 2.0
 DEFAULT_MAX_RETRIES = 8

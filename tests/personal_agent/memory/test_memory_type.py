@@ -12,7 +12,7 @@ from personal_agent.memory.service import MemoryService
 class TestPromoteEntity:
     @pytest.mark.asyncio
     async def test_promote_sets_memory_type_semantic(self) -> None:
-        service = MemoryService()
+        service = MemoryService()  # fre-375-allow: unit test with mocked driver, no real connection
         service.driver = MagicMock()
 
         mock_session = AsyncMock()
@@ -33,7 +33,7 @@ class TestPromoteEntity:
 
     @pytest.mark.asyncio
     async def test_promote_entity_not_found(self) -> None:
-        service = MemoryService()
+        service = MemoryService()  # fre-375-allow: unit test with mocked driver, no real connection
         service.driver = MagicMock()
 
         mock_session = AsyncMock()

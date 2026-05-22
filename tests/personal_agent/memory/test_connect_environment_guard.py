@@ -69,11 +69,11 @@ class TestConnectGuardRefuses:
 
         mock_settings = _make_mock_settings(
             environment=Environment.TEST,
-            neo4j_uri="bolt://localhost:7687",
+            neo4j_uri="bolt://localhost:7687",  # fre-375-allow: tests the prod-URI guard itself
         )
 
         with patch("personal_agent.memory.service.settings", mock_settings):
-            service = MemoryService()
+            service = MemoryService()  # fre-375-allow: tests the prod-URI guard itself
             result = await service.connect()
 
         assert result is False
@@ -91,7 +91,7 @@ class TestConnectGuardRefuses:
         )
 
         with patch("personal_agent.memory.service.settings", mock_settings):
-            service = MemoryService()
+            service = MemoryService()  # fre-375-allow: tests the prod-URI guard itself
             result = await service.connect()
 
         assert result is False
@@ -104,7 +104,7 @@ class TestConnectGuardRefuses:
 
         mock_settings = _make_mock_settings(
             environment=Environment.TEST,
-            neo4j_uri="bolt://localhost:7687",
+            neo4j_uri="bolt://localhost:7687",  # fre-375-allow: tests the prod-URI guard itself
         )
         mock_driver_cls = MagicMock()
 
@@ -112,7 +112,7 @@ class TestConnectGuardRefuses:
             patch("personal_agent.memory.service.settings", mock_settings),
             patch("personal_agent.memory.service.Neo4jAsyncGraphDatabase", mock_driver_cls),
         ):
-            service = MemoryService()
+            service = MemoryService()  # fre-375-allow: tests the prod-URI guard itself
             await service.connect()
 
         mock_driver_cls.driver.assert_not_called()
@@ -133,7 +133,7 @@ class TestConnectGuardBypassFlag:
 
         mock_settings = _make_mock_settings(
             environment=Environment.TEST,
-            neo4j_uri="bolt://localhost:7687",
+            neo4j_uri="bolt://localhost:7687",  # fre-375-allow: tests the prod-URI guard itself
             allow_bypass=True,
         )
         mock_driver = _make_mock_driver()
@@ -144,7 +144,7 @@ class TestConnectGuardBypassFlag:
             patch("personal_agent.memory.service.settings", mock_settings),
             patch("personal_agent.memory.service.Neo4jAsyncGraphDatabase", mock_driver_cls),
         ):
-            service = MemoryService()
+            service = MemoryService()  # fre-375-allow: tests the prod-URI guard itself
             result = await service.connect()
 
         assert result is True
@@ -167,7 +167,7 @@ class TestConnectGuardSilentForNonTestEnv:
 
         mock_settings = _make_mock_settings(
             environment=Environment.PRODUCTION,
-            neo4j_uri="bolt://localhost:7687",
+            neo4j_uri="bolt://localhost:7687",  # fre-375-allow: tests the prod-URI guard itself
         )
         mock_driver = _make_mock_driver()
         mock_driver_cls = MagicMock()
@@ -177,7 +177,7 @@ class TestConnectGuardSilentForNonTestEnv:
             patch("personal_agent.memory.service.settings", mock_settings),
             patch("personal_agent.memory.service.Neo4jAsyncGraphDatabase", mock_driver_cls),
         ):
-            service = MemoryService()
+            service = MemoryService()  # fre-375-allow: tests the prod-URI guard itself
             result = await service.connect()
 
         assert result is True
@@ -190,7 +190,7 @@ class TestConnectGuardSilentForNonTestEnv:
 
         mock_settings = _make_mock_settings(
             environment=Environment.DEVELOPMENT,
-            neo4j_uri="bolt://localhost:7687",
+            neo4j_uri="bolt://localhost:7687",  # fre-375-allow: tests the prod-URI guard itself
         )
         mock_driver = _make_mock_driver()
         mock_driver_cls = MagicMock()
@@ -200,7 +200,7 @@ class TestConnectGuardSilentForNonTestEnv:
             patch("personal_agent.memory.service.settings", mock_settings),
             patch("personal_agent.memory.service.Neo4jAsyncGraphDatabase", mock_driver_cls),
         ):
-            service = MemoryService()
+            service = MemoryService()  # fre-375-allow: tests the prod-URI guard itself
             result = await service.connect()
 
         assert result is True
@@ -231,7 +231,7 @@ class TestConnectGuardSilentForTestStackURI:
             patch("personal_agent.memory.service.settings", mock_settings),
             patch("personal_agent.memory.service.Neo4jAsyncGraphDatabase", mock_driver_cls),
         ):
-            service = MemoryService()
+            service = MemoryService()  # fre-375-allow: tests the prod-URI guard itself
             result = await service.connect()
 
         assert result is True
@@ -255,7 +255,7 @@ class TestConnectGuardSilentForTestStackURI:
             patch("personal_agent.memory.service.settings", mock_settings),
             patch("personal_agent.memory.service.Neo4jAsyncGraphDatabase", mock_driver_cls),
         ):
-            service = MemoryService()
+            service = MemoryService()  # fre-375-allow: tests the prod-URI guard itself
             result = await service.connect()
 
         assert result is True

@@ -80,7 +80,7 @@ def _check_eval_gate() -> None:
 _DEFAULT_PROMPTS = "telemetry/evaluation/EVAL-primitive-tools/prompts.yaml"
 _DEFAULT_CONTROL_URL = "http://localhost:9000"
 _DEFAULT_TREATMENT_URL = "http://localhost:9001"
-_DEFAULT_ES_URL = "http://localhost:9200"
+_DEFAULT_ES_URL = "http://localhost:9200"  # fre-375-allow: CLI argument default, actual value comes from env/flags
 _DEFAULT_SESSION_PREFIX = "eval-fre262"
 _DEFAULT_DELAY = 2.0
 _TIMEOUT_SECONDS = 120.0  # LLM calls can be slow; allow up to 2 min per prompt

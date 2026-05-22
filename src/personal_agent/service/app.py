@@ -63,6 +63,18 @@ cost_gate_reaper_task: asyncio.Task[None] | None = None
 _pending_append_tasks: dict[str, asyncio.Task[None]] = {}
 
 
+def _resolve_active_model_attribution() -> tuple[str | None, str]:
+    """Thin wrapper kept for clarity at call sites in this module.
+
+    Delegates to :func:`personal_agent.config.model_loader.resolve_active_attribution`
+    which is shared with the Redis session-writer consumer so both append
+    paths emit identical attribution (ADR-0074 / FRE-376).
+    """
+    from personal_agent.config.model_loader import resolve_active_attribution
+
+    return resolve_active_attribution()
+
+
 async def _append_assistant_message_background(
     session_id: UUID,
     content: str,
@@ -74,6 +86,7 @@ async def _append_assistant_message_background(
     this task before loading session history.
     """
     sid = str(session_id)
+    primary_model_id, config_path_str = _resolve_active_model_attribution()
     try:
         async with AsyncSessionLocal() as db:
             repo = SessionRepository(db)
@@ -84,7 +97,12 @@ async def _append_assistant_message_background(
                     "content": content,
                     "trace_id": trace_id,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "metadata": {"source": "service.app"},
+                    "metadata": {
+                        "source": "service.app",
+                        "model": primary_model_id,
+                        "model_role": "primary",
+                        "model_config_path": config_path_str,
+                    },
                 },
             )
     except Exception as e:
@@ -151,6 +169,7 @@ async def _process_chat_stream_background(
                 # across turns without the client needing to track a separate DB ID.
                 from personal_agent.service.models import SessionModel
 
+                primary_model_id, config_path_str = _resolve_active_model_attribution()
                 now = datetime.now(timezone.utc)
                 session = SessionModel(
                     session_id=session_uuid,
@@ -161,6 +180,8 @@ async def _process_chat_stream_background(
                     channel="CHAT",
                     metadata_={},
                     messages=[],
+                    primary_model_at_creation=primary_model_id,
+                    model_config_path=config_path_str,
                 )
                 db.add(session)
                 await db.commit()
@@ -274,6 +295,7 @@ async def _process_chat_stream_background(
         await queue.put(TextDeltaEvent(text=response_content, session_id=session_id))
 
         try:
+            primary_model_id, config_path_str = _resolve_active_model_attribution()
             async with AsyncSessionLocal() as db:
                 repo = SessionRepository(db)
                 await repo.append_message(
@@ -283,7 +305,12 @@ async def _process_chat_stream_background(
                         "content": response_content,
                         "trace_id": trace_id,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "metadata": {"source": "service.app"},
+                        "metadata": {
+                            "source": "service.app",
+                            "model": primary_model_id,
+                            "model_role": "primary",
+                            "model_config_path": config_path_str,
+                        },
                     },
                 )
         except Exception as e:
@@ -418,7 +445,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         raise
 
     # Connect to Elasticsearch and integrate with logging
-    es_handler = ElasticsearchHandler(settings.elasticsearch_url, index_prefix=settings.elasticsearch_index_prefix)
+    es_handler = ElasticsearchHandler(
+        settings.elasticsearch_url, index_prefix=settings.elasticsearch_index_prefix
+    )
     if await es_handler.connect():
         add_elasticsearch_handler(es_handler)
         set_es_indexer(build_es_indexer_from_handler(es_handler))
@@ -1083,7 +1112,13 @@ async def create_session(
 ) -> SessionResponse:
     """Create a new session."""
     repo = SessionRepository(db)
-    session = await repo.create(data, user_id=request_user.user_id)
+    primary_model_id, config_path_str = _resolve_active_model_attribution()
+    session = await repo.create(
+        data,
+        user_id=request_user.user_id,
+        primary_model_at_creation=primary_model_id,
+        model_config_path=config_path_str,
+    )
 
     log.info(
         "session_created",
@@ -1091,6 +1126,8 @@ async def create_session(
         channel=session.channel,
         mode=session.mode,
         user_id=str(request_user.user_id),
+        primary_model_at_creation=primary_model_id,
+        model_config_path=config_path_str,
     )
 
     return SessionResponse.model_validate(session)
@@ -1196,7 +1233,13 @@ async def chat(
             if not session:
                 raise HTTPException(status_code=404, detail="Session not found")
         else:
-            session = await repo.create(SessionCreate(), user_id=request_user.user_id)
+            primary_model_id, config_path_str = _resolve_active_model_attribution()
+            session = await repo.create(
+                SessionCreate(),
+                user_id=request_user.user_id,
+                primary_model_at_creation=primary_model_id,
+                model_config_path=config_path_str,
+            )
 
     # FRE-51: await prior turn's assistant append (NoOp: background task; Redis: session-writer).
     sid = str(cast(UUID, session.session_id))

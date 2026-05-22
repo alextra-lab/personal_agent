@@ -386,17 +386,43 @@ class LiteLLMClient:
             )
 
         if cost > 0:
-            try:
-                await cost_tracker.record_api_call(
-                    provider=self.provider,
-                    model=self.model_id,
-                    input_tokens=usage.get("prompt_tokens", 0),
-                    output_tokens=usage.get("completion_tokens", 0),
-                    cost_usd=cost,
-                    latency_ms=latency_ms,
+            # ADR-0074 / FRE-376: cost rows must carry trace_id + session_id.
+            # When session_id is missing (boot-time probes, scheduler ticks
+            # that haven't yet adopted SystemTraceContext — Phase 4 work) we
+            # log loudly and skip rather than raise; the chat turn keeps
+            # working with degraded cost attribution.
+            session_id_str = trace_ctx.session_id if trace_ctx else None
+            if session_id_str is None:
+                log.error(
+                    "cost_record_missing_identity",
+                    model=self._litellm_model,
+                    trace_id=trace_id,
+                    reason="trace_ctx_missing_session_id",
                 )
-            except Exception:
-                pass  # Non-fatal — degraded cost tracking
+            else:
+                try:
+                    await cost_tracker.record_api_call(
+                        provider=self.provider,
+                        model=self.model_id,
+                        input_tokens=usage.get("prompt_tokens", 0),
+                        output_tokens=usage.get("completion_tokens", 0),
+                        cost_usd=cost,
+                        trace_id=UUID(trace_id),
+                        session_id=UUID(session_id_str),
+                        purpose=self.budget_role,
+                        latency_ms=latency_ms,
+                    )
+                except Exception as record_exc:  # noqa: BLE001
+                    # Non-fatal — but the failure should not be silent any
+                    # more. ADR-0074 makes identity load-bearing; anything
+                    # that prevents the row from landing is operationally
+                    # interesting and worth a log line.
+                    log.error(
+                        "cost_record_failed",
+                        model=self._litellm_model,
+                        trace_id=trace_id,
+                        error=str(record_exc),
+                    )
 
         response_id: str | None = getattr(response, "id", None)
 

@@ -127,7 +127,9 @@ async def _gateway_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         from personal_agent.telemetry.es_handler import ElasticsearchHandler
 
-        es_handler = ElasticsearchHandler(settings.elasticsearch_url, index_prefix=settings.elasticsearch_index_prefix)
+        es_handler = ElasticsearchHandler(
+            settings.elasticsearch_url, index_prefix=settings.elasticsearch_index_prefix
+        )
         if await es_handler.connect() and es_handler.es_logger.client is not None:
             app.state.es_client = es_handler.es_logger.client
             log.info("gateway_elasticsearch_connected")

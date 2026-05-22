@@ -79,6 +79,8 @@ class SessionResponse(BaseModel):
     channel: str | None
     metadata: dict[str, Any] = Field(validation_alias="metadata_", serialization_alias="metadata")
     messages: list[dict[str, Any]]
+    primary_model_at_creation: str | None = None
+    model_config_path: str | None = None
 
     class Config:  # noqa: D106
         """Pydantic configuration."""
@@ -172,6 +174,10 @@ class SessionModel(Base):
     channel = Column(String(50), nullable=True)
     metadata_ = Column("metadata", JSONB, default=dict)
     messages = Column(JSONB, default=list)
+    # ADR-0074 (FRE-376) — row-level model attribution. NULL on historical
+    # rows; populated for every new session by SessionRepository.create.
+    primary_model_at_creation = Column(String(120), nullable=True)
+    model_config_path = Column(String(255), nullable=True)
 
 
 class MetricModel(Base):

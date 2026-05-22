@@ -110,3 +110,34 @@ def load_model_config(config_path: Path | str | None = None) -> ModelConfig:
         raise ModelConfigError(f"Model config path is not a file: {config_path}")
 
     return _load_model_config_at_path(str(config_path))
+
+
+def resolve_active_attribution() -> tuple[str | None, str]:
+    """Resolve the active primary model id and its config path string.
+
+    ADR-0074 (FRE-376) requires every new session and every assistant
+    message to carry the model attribution that was in effect when the row
+    was written. This helper centralises the lookup so the service layer
+    and the Redis event consumer both produce identical attribution.
+
+    Returns:
+        ``(primary_model_id, model_config_path_str)`` — ``primary_model_id``
+        is ``None`` only if the config has no ``primary`` role assignment
+        (degenerate startup config); ``model_config_path_str`` is always
+        the resolved path string from settings.
+    """
+    from personal_agent.config import settings  # noqa: PLC0415
+
+    config_path_str = str(settings.model_config_path)
+    try:
+        cfg = load_model_config()
+        primary = cfg.models.get("primary")
+        primary_id = primary.id if primary is not None else None
+    except Exception as exc:  # noqa: BLE001 — keep the chat-turn path live
+        log.warning(
+            "model_attribution_resolve_failed",
+            error=str(exc),
+            config_path=config_path_str,
+        )
+        primary_id = None
+    return primary_id, config_path_str

@@ -626,10 +626,7 @@ def _render_memory_section(entity_items: list[dict[str, Any]]) -> str:
     Returns:
         Formatted memory section string, or empty string if no described entities.
     """
-    described = [
-        m for m in entity_items[:15]
-        if (m.get("description") or "").strip()
-    ]
+    described = [m for m in entity_items[:15] if (m.get("description") or "").strip()]
     if not described:
         return ""
     entity_lines = [

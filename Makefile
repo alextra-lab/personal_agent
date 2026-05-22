@@ -56,7 +56,9 @@ endif
         sandbox-build \
         test test-integration test-all test-file test-verbose test-k test-cov eval \
         mypy ruff-check ruff-format \
-        eval-recovery-survey eval-recovery
+        eval-recovery-survey eval-recovery \
+        test-infra-up test-infra-down test-infra-reset test-infra-ps \
+        eval-infra-up eval-infra-down
 
 help:
 	@echo "Run from project root so uv uses .venv (e.g. cd /path/to/personal_agent)."
@@ -299,3 +301,31 @@ ruff-check:
 
 ruff-format:
 	@uv run ruff format src/
+
+# ─── Test infrastructure (FRE-375) ───────────────────────────────────────────
+# Isolated substrate for the test suite (separate ports and volumes from prod).
+# See docker-compose.test.yml for port mapping.
+
+TEST_COMPOSE := docker compose -f docker-compose.test.yml
+
+test-infra-up:          ## Start isolated test infra (Postgres:5433, ES:9201, Neo4j:7688)
+	@$(TEST_COMPOSE) up -d
+
+test-infra-down:        ## Stop and remove test infra containers
+	@$(TEST_COMPOSE) down
+
+test-infra-reset:       ## Stop, remove containers AND volumes (full reset)
+	@$(TEST_COMPOSE) down -v
+
+test-infra-ps:          ## Show test infra container status
+	@$(TEST_COMPOSE) ps
+
+# ─── Eval infrastructure (FRE-375) ───────────────────────────────────────────
+# The eval stack uses docker-compose.eval.yml on top of docker-compose.cloud.yml.
+# After FRE-375, eval services have their own isolated substrate.
+
+eval-infra-up:          ## Start eval infra (requires eval.yml rewire)
+	@docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml up -d
+
+eval-infra-down:        ## Stop eval infra
+	@docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml down seshat-gateway-control seshat-gateway-treatment

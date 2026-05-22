@@ -150,8 +150,17 @@ after D2's quality-monitor signal provides a live count baseline.
 - D1 reduces the size of the memory section for entities that have no description yet
   — the LLM sees fewer entities until the backfill lands. Acceptable: blank lines were
   not helping anyway.
+- **D1 creates a transient "no memory" window during D3.** When the graph is cleared
+  before replay starts, every entity has an empty description, so `_render_memory_section`
+  returns `""` and the "Do NOT say you have no memory" instruction disappears with it.
+  The LLM will correctly behave as if it has no memory during this window (minutes to
+  hours depending on replay speed). Mitigate by running the replay immediately after
+  clearing, ideally in a maintenance window.
 - D3 replay is a destructive operation on the production graph. The snapshot + guard
   (`--confirm-prod`) mitigate risk; data is recoverable from Postgres.
+- D3 replay makes ~3,000–5,000 gpt-5.4-mini calls (1,025 sessions × ~3–5 pairs each).
+  If the FRE-303 weekly budget cap is close to its limit, the replay may be interrupted.
+  Check remaining budget before starting and use `--limit N` to batch if needed.
 - D4 deferred means descriptions remain single-value first-write-wins until the follow-up.
 
 ## Verification
@@ -338,13 +347,11 @@ memory_section += (
     "has previously discussed. Do NOT say you have no memory."
 )
 
-# After (lines 1729-1731):
+# After (single line replaces 1729-1739):
 memory_section = _render_memory_section(entity_items)
-if not memory_section:
-    pass  # No described entities — skip the section entirely
 ```
 
-Wait — the `memory_section` variable is appended to `system_prompt` later. If it's empty, nothing is added. Check how `memory_section` is used after line 1739 in the actual file and make sure an empty string works correctly (it should — string concatenation with `""` is a no-op).
+The `memory_section` variable is appended to `system_prompt` later. An empty string from `_render_memory_section` is a no-op — no memory section is injected, which is the correct behavior when all descriptions are blank. Verify by checking how `memory_section` is used after line 1739 in the actual file before proceeding.
 
 - [ ] **Step 4: Run tests**
 
@@ -796,6 +803,12 @@ def _parse_args() -> argparse.Namespace:
         default=False,
         help="Required when AGENT_ENVIRONMENT is not 'test'. Confirms intent to write to production substrate.",
     )
+    parser.add_argument(
+        "--sleep-ms",
+        type=int,
+        default=0,
+        help="Sleep this many milliseconds between captures (rate-limiting for budget-constrained runs).",
+    )
     return parser.parse_args()
 
 
@@ -932,6 +945,9 @@ async def _replay_session(
         except Exception as exc:
             log.warning("replay_capture_failed", session_id=session_id, error=str(exc))
             counts["errors"] += 1
+
+        if args.sleep_ms > 0:
+            await asyncio.sleep(args.sleep_ms / 1000.0)
 
     return counts
 

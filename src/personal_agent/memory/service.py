@@ -8,6 +8,8 @@ from uuid import UUID
 import orjson
 import structlog
 
+from personal_agent.config._substrate_fingerprint import is_prod_neo4j_uri
+from personal_agent.config.env_loader import Environment
 from personal_agent.config.settings import get_settings
 from personal_agent.events import (
     STREAM_MEMORY_ACCESSED,
@@ -109,6 +111,22 @@ class MemoryService:
             uri = settings.neo4j_uri
             user = settings.neo4j_user
             password = settings.neo4j_password
+
+            if (
+                settings.environment == Environment.TEST
+                and is_prod_neo4j_uri(uri)
+                and not settings.allow_test_writes_to_prod_substrate
+            ):
+                log.error(
+                    "memory_service_refused_prod_uri_in_test_env",
+                    uri=uri,
+                    hint=(
+                        "Set AGENT_NEO4J_URI=bolt://localhost:7688 (test stack) "
+                        "or AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE=1 to bypass."
+                    ),
+                )
+                self.connected = False
+                return False
 
             self.driver = Neo4jAsyncGraphDatabase.driver(uri, auth=(user, password))
             await self.driver.verify_connectivity()

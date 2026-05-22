@@ -9,6 +9,11 @@ import structlog
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from personal_agent.config._substrate_fingerprint import (
+    is_prod_elasticsearch_url,
+    is_prod_neo4j_uri,
+    is_prod_postgres_url,
+)
 from personal_agent.config.env_loader import Environment, get_environment, load_env_files
 from personal_agent.config.validators import (
     resolve_path,
@@ -584,6 +589,17 @@ class AppConfig(BaseSettings):
     neo4j_uri: str = Field(default="bolt://localhost:7687", description="Neo4j connection URI")
     neo4j_user: str = Field(default="neo4j", description="Neo4j username")
     neo4j_password: str = Field(default="neo4j_dev_password", description="Neo4j password")
+
+    # Substrate isolation (FRE-375)
+    allow_test_writes_to_prod_substrate: bool = Field(
+        default=False,
+        description=(
+            "Emergency escape hatch: allow TEST environment to connect to prod-fingerprint URIs. "
+            "Set AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE=1 only when intentionally running "
+            "tests against a prod-equivalent stack (e.g. acceptance tests on the VPS). "
+            "Never set this in CI."
+        ),
+    )
 
     # Cloud API secrets (model identity lives in config/models.yaml — ADR-0031)
     anthropic_api_key: str | None = Field(default=None, description="Anthropic API key for Claude")
@@ -1450,6 +1466,48 @@ class AppConfig(BaseSettings):
                 "Lower the ratio, raise the window, or both."
             )
         return self
+
+    @model_validator(mode="after")
+    def _validate_substrate_isolation(self) -> "AppConfig":
+        """Refuse to start in TEST environment when substrate URIs point to prod defaults.
+
+        This guard prevents test runs from accidentally writing to the production
+        Neo4j graph, Elasticsearch indices, or PostgreSQL database.  It fires
+        when ALL three conditions hold:
+
+        1. ``environment == Environment.TEST``
+        2. At least one of the three substrate URIs matches the default prod
+           fingerprint (localhost on the canonical port).
+        3. ``allow_test_writes_to_prod_substrate`` is not set.
+
+        Raises:
+            ValueError: When the conditions above are all met, with an actionable
+                message naming the offending URIs and the env vars to fix them.
+        """
+        if self.environment != Environment.TEST:
+            return self
+        if self.allow_test_writes_to_prod_substrate:
+            return self
+
+        offenders: list[str] = []
+        if is_prod_neo4j_uri(self.neo4j_uri):
+            offenders.append(f"neo4j_uri={self.neo4j_uri!r}")
+        if is_prod_elasticsearch_url(self.elasticsearch_url):
+            offenders.append(f"elasticsearch_url={self.elasticsearch_url!r}")
+        if is_prod_postgres_url(self.database_url):
+            offenders.append(f"database_url={self.database_url!r}")
+
+        if not offenders:
+            return self
+
+        raise ValueError(
+            f"Running in TEST environment (APP_ENV=test) but substrate URIs point to "
+            f"prod/dev defaults. Offending: {', '.join(offenders)}. "
+            "Set AGENT_NEO4J_URI=bolt://localhost:7688 (test stack), "
+            "AGENT_ELASTICSEARCH_URL=http://localhost:9201, "
+            "AGENT_DATABASE_URL=<test-db-url>, "
+            "or set AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE=1 to bypass (use with care)."
+        )
 
 
 _settings: AppConfig | None = None

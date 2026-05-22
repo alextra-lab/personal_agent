@@ -36,6 +36,34 @@ MODEL_CALL_COMPLETED = "model_call_completed"
 MODEL_CALL_ERROR = "model_call_error"
 HISTORY_SANITISED = "history_sanitised"
 
+# ADR-0074 / FRE-376 Phase 2 (I2): both LocalLLMClient and LiteLLMClient emit
+# the canonical `model_call_started` / `model_call_completed` events with the
+# field sets below. These frozensets are imported by the parity test as the
+# single source of truth — adding a required field here forces both clients
+# (and any future model client) to emit it.
+CANONICAL_MODEL_CALL_STARTED_FIELDS: frozenset[str] = frozenset(
+    {
+        "model",
+        "role",
+        "endpoint",
+        "trace_id",
+        "session_id",
+        "span_id",
+        "parent_span_id",
+    }
+)
+CANONICAL_MODEL_CALL_COMPLETED_FIELDS: frozenset[str] = (
+    CANONICAL_MODEL_CALL_STARTED_FIELDS
+    | frozenset(
+        {
+            "latency_ms",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+        }
+    )
+)
+
 # Orchestrator step events (distinct from LLM client events above)
 # FRE-352: step-level emit uses llm_step_completed to avoid conflating with
 # the richer client-level model_call_completed payload in ES consumers.

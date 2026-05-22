@@ -27,6 +27,10 @@ from personal_agent.llm_client.concurrency import (
 )
 from personal_agent.llm_client.history_sanitiser import sanitise_messages
 from personal_agent.llm_client.models import ModelConfig, ModelDefinition
+from personal_agent.llm_client.telemetry import (
+    emit_model_call_completed,
+    emit_model_call_started,
+)
 from personal_agent.llm_client.types import (
     LLMClientError,
     LLMConnectionError,
@@ -39,9 +43,7 @@ from personal_agent.llm_client.types import (
 )
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.events import (
-    MODEL_CALL_COMPLETED,
     MODEL_CALL_ERROR,
-    MODEL_CALL_STARTED,
 )
 from personal_agent.telemetry.trace import TraceContext
 
@@ -310,15 +312,15 @@ class LocalLLMClient:
         # Note: reasoning_effort is ignored for /v1/chat/completions (it's LM Studio /v1/responses specific)
         # We keep the parameter for API compatibility but don't use it
 
-        # Emit telemetry: call started
+        # Emit telemetry: call started (ADR-0074 §I2 canonical shape)
         start_time = time.time()
         span_ctx, span_id = trace_ctx.new_span()
-        log.info(
-            MODEL_CALL_STARTED,
+        emit_model_call_started(
+            log=log,
             role=role.value,
-            model_id=model_id,
+            model=model_id,
             endpoint=current_endpoint,
-            trace_id=trace_ctx.trace_id,
+            trace_ctx=trace_ctx,
             span_id=span_id,
         )
 
@@ -485,20 +487,22 @@ class LocalLLMClient:
                     # and a prefix KV cache hit occurs — zero or absent means cache miss.
                     _timings = (llm_response.get("raw") or {}).get("timings") or {}
                     _cached = _timings.get("tokens_cached") or 0
-                    log.info(
-                        MODEL_CALL_COMPLETED,
+                    emit_model_call_completed(
+                        log=log,
                         role=role.value,
-                        model_id=model_id,
+                        model=model_id,
                         endpoint=current_endpoint,
-                        api_type=current_api_type,
-                        fallback_used=tried_fallback,
+                        trace_ctx=trace_ctx,
+                        span_id=span_id,
                         latency_ms=duration_ms,
-                        prompt_tokens=_pt,
-                        completion_tokens=_ct,
+                        input_tokens=_pt,
+                        output_tokens=_ct,
                         total_tokens=_usage.get("total_tokens") or (_pt + _ct),
                         cache_read_tokens=_cached if _cached > 0 else None,
-                        trace_id=trace_ctx.trace_id,
-                        span_id=span_id,
+                        extra={
+                            "api_type": current_api_type,
+                            "fallback_used": tried_fallback,
+                        },
                     )
 
                     return llm_response

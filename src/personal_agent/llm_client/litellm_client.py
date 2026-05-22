@@ -19,6 +19,13 @@ from uuid import UUID, uuid4
 import litellm
 import structlog
 
+from personal_agent.llm_client.telemetry import (
+    emit_legacy_litellm_complete,
+    emit_legacy_litellm_start,
+    emit_model_call_completed,
+    emit_model_call_started,
+)
+
 if TYPE_CHECKING:
     from personal_agent.llm_client.types import LLMResponse, ModelRole, ToolCall
     from personal_agent.telemetry.trace import TraceContext
@@ -281,11 +288,31 @@ class LiteLLMClient:
             raise
 
         start_time = time.monotonic()
-        log.info(
-            "litellm_request_start",
-            model=self._litellm_model,
-            trace_id=trace_id,
+
+        # ADR-0074 §I2: canonical model_call_started emission (parity with
+        # LocalLLMClient). Mint the model-call span here so a single span_id
+        # threads through started → completed for joinability.
+        _span_ctx, span_id = trace_ctx.new_span()
+        emit_model_call_started(
+            log=log,
             role=role.value,
+            model=self._litellm_model,
+            endpoint=self.provider,
+            trace_ctx=trace_ctx,
+            span_id=span_id,
+            extra={
+                "budget_role": self.budget_role,
+                "reservation_amount": str(reservation_amount),
+                "max_tokens": effective_max_tokens,
+            },
+        )
+        # Back-compat: emit the deprecated event name too so existing
+        # Kibana queries keep working through one release cycle.
+        emit_legacy_litellm_start(
+            log=log,
+            role=role.value,
+            model=self._litellm_model,
+            trace_ctx=trace_ctx,
             budget_role=self.budget_role,
             reservation_amount=str(reservation_amount),
             max_tokens=effective_max_tokens,
@@ -429,23 +456,50 @@ class LiteLLMClient:
 
         response_id: str | None = getattr(response, "id", None)
 
-        log.info(
-            "litellm_request_complete",
-            model=self._litellm_model,
-            trace_id=trace_id,
+        # ADR-0074 §I2: canonical model_call_completed emission (parity with
+        # LocalLLMClient). Reuses span_id minted at started emit so a single
+        # span threads through the call.
+        _cost_usd: float | None = round(cost, 6) if cost else None
+        _input_tokens = usage.get("prompt_tokens")
+        _output_tokens = usage.get("completion_tokens")
+        _total_tokens = usage.get("total_tokens")
+        _cache_read = usage.get("cache_read_input_tokens")
+        _cache_creation = usage.get("cache_creation_input_tokens")
+        emit_model_call_completed(
+            log=log,
             role=role.value,
+            model=self._litellm_model,
             endpoint=self.provider,
+            trace_ctx=trace_ctx,
+            span_id=span_id,
             latency_ms=latency_ms,
-            elapsed_s=round(elapsed, 2),  # backward-compat double-write
-            completion_tokens=usage.get("completion_tokens"),
-            prompt_tokens=usage.get("prompt_tokens"),
-            total_tokens=usage.get("total_tokens"),
-            tokens=usage.get("total_tokens"),  # backward-compat double-write
-            cost_usd=round(cost, 6) if cost else None,
+            input_tokens=_input_tokens,
+            output_tokens=_output_tokens,
+            total_tokens=_total_tokens,
+            cache_read_tokens=_cache_read,
+            extra={
+                "cost_usd": _cost_usd,
+                "tool_calls": len(tool_calls),
+                "cache_creation_input_tokens": _cache_creation,
+            },
+        )
+        # Back-compat: emit the deprecated event name too so existing
+        # Kibana queries keep working through one release cycle.
+        emit_legacy_litellm_complete(
+            log=log,
+            role=role.value,
+            model=self._litellm_model,
+            endpoint=self.provider,
+            trace_ctx=trace_ctx,
+            latency_ms=latency_ms,
+            elapsed_s=round(elapsed, 2),
+            input_tokens=_input_tokens,
+            output_tokens=_output_tokens,
+            total_tokens=_total_tokens,
+            cost_usd=_cost_usd,
             tool_calls=len(tool_calls),
-            cache_read_tokens=usage.get("cache_read_input_tokens"),
-            cache_creation_input_tokens=usage.get("cache_creation_input_tokens"),
-            cache_write_tokens=usage.get("cache_creation_input_tokens"),  # backward-compat
+            cache_read_tokens=_cache_read,
+            cache_creation_input_tokens=_cache_creation,
         )
 
         await cost_tracker.disconnect()

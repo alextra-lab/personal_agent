@@ -418,7 +418,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         raise
 
     # Connect to Elasticsearch and integrate with logging
-    es_handler = ElasticsearchHandler(settings.elasticsearch_url)
+    es_handler = ElasticsearchHandler(settings.elasticsearch_url, index_prefix=settings.elasticsearch_index_prefix)
     if await es_handler.connect():
         add_elasticsearch_handler(es_handler)
         set_es_indexer(build_es_indexer_from_handler(es_handler))

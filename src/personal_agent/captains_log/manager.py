@@ -18,12 +18,14 @@ from personal_agent.captains_log.models import (
     TelemetryRef,
 )
 from personal_agent.captains_log.suppression import is_fingerprint_suppressed
+from personal_agent.config import get_settings as _get_settings
 from personal_agent.telemetry import CAPTAINS_LOG_ENTRY_CREATED, get_logger
 
 log = get_logger(__name__)
 
-# Index name pattern for Captain's Log reflections (Phase 2.3)
-REFLECTIONS_INDEX_PREFIX = "agent-captains-reflections"
+# Captain's Log reflection index prefix (settings-driven for test/prod isolation — FRE-375)
+_cl_settings = _get_settings()
+REFLECTIONS_INDEX_PREFIX = f"{_cl_settings.captains_log_index_prefix}-reflections"
 
 if TYPE_CHECKING:
     from personal_agent.telemetry.es_handler import ElasticsearchHandler

@@ -130,6 +130,7 @@ def bootstrap(profile: str = "local") -> _WiredDependencies:
 
     es_logger: Any = ElasticsearchLogger(
         es_url=_settings.elasticsearch_url,
+        index_prefix=_settings.elasticsearch_index_prefix,
     )
 
     return _WiredDependencies(

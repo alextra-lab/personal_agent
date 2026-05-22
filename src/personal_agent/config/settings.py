@@ -584,6 +584,14 @@ class AppConfig(BaseSettings):
     elasticsearch_index_prefix: str = Field(
         default="agent-logs", description="Elasticsearch index prefix"
     )
+    captains_log_index_prefix: str = Field(
+        default="agent-captains",
+        description=(
+            "Captain's Log Elasticsearch index prefix. "
+            "Captures are stored as f'{prefix}-captures-YYYY.MM.DD'. "
+            "Reflections are stored as f'{prefix}-reflections-YYYY.MM.DD'."
+        ),
+    )
 
     # Neo4j
     neo4j_uri: str = Field(default="bolt://localhost:7687", description="Neo4j connection URI")

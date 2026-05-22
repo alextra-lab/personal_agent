@@ -14,12 +14,14 @@ import orjson
 from pydantic import BaseModel, Field, field_validator
 
 from personal_agent.captains_log.es_indexer import schedule_es_index
+from personal_agent.config import get_settings as _get_settings
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
 
-# Index name pattern for Captain's Log captures (Phase 2.3)
-CAPTURES_INDEX_PREFIX = "agent-captains-captures"
+# Captain's Log capture index prefix (settings-driven for test/prod isolation — FRE-375)
+_cl_settings = _get_settings()
+CAPTURES_INDEX_PREFIX = f"{_cl_settings.captains_log_index_prefix}-captures"
 
 if TYPE_CHECKING:
     from personal_agent.telemetry.es_handler import ElasticsearchHandler

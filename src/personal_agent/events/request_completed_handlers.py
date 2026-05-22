@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
+from personal_agent.config.model_loader import resolve_active_attribution
 from personal_agent.events.models import EventBase, RequestCompletedEvent
 from personal_agent.events.session_write_waiter import release_session_write_wait
 from personal_agent.security import sanitize_error_message
@@ -42,6 +43,11 @@ def build_session_writer_handler() -> Any:
         if not isinstance(event, RequestCompletedEvent):
             return
         sid = event.session_id
+        # ADR-0074 (FRE-376) — assistant messages must carry model attribution.
+        # We resolve it here rather than threading it onto RequestCompletedEvent
+        # to keep the event schema stable for downstream consumers; the
+        # active-config lookup runs in-process and is cached.
+        primary_model_id, config_path_str = resolve_active_attribution()
         try:
             async with AsyncSessionLocal() as db:
                 repo = SessionRepository(db)
@@ -52,7 +58,12 @@ def build_session_writer_handler() -> Any:
                         "content": event.assistant_response,
                         "trace_id": event.trace_id,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "metadata": {"source": event.source_component},
+                        "metadata": {
+                            "source": event.source_component,
+                            "model": primary_model_id,
+                            "model_role": "primary",
+                            "model_config_path": config_path_str,
+                        },
                     },
                 )
         except Exception as e:

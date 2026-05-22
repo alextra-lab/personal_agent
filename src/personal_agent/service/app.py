@@ -64,34 +64,15 @@ _pending_append_tasks: dict[str, asyncio.Task[None]] = {}
 
 
 def _resolve_active_model_attribution() -> tuple[str | None, str]:
-    """Resolve the active primary model id and its config path.
+    """Thin wrapper kept for clarity at call sites in this module.
 
-    ADR-0074 (FRE-376) requires every new session and every assistant message
-    to carry the model attribution that was in effect when the row was
-    written. We resolve it from the same ``load_model_config`` helper the LLM
-    factory uses, so the value matches what actually serves the call.
-
-    Returns:
-        ``(primary_model_id, model_config_path_str)``. ``primary_model_id``
-        is ``None`` only if the config has no ``primary`` role assignment
-        (degenerate startup config); ``model_config_path_str`` is always the
-        resolved path string from settings.
+    Delegates to :func:`personal_agent.config.model_loader.resolve_active_attribution`
+    which is shared with the Redis session-writer consumer so both append
+    paths emit identical attribution (ADR-0074 / FRE-376).
     """
-    from personal_agent.config.model_loader import load_model_config
+    from personal_agent.config.model_loader import resolve_active_attribution
 
-    config_path_str = str(settings.model_config_path)
-    try:
-        cfg = load_model_config()
-        primary = cfg.models.get("primary")
-        primary_id = primary.id if primary is not None else None
-    except Exception as exc:  # noqa: BLE001
-        log.warning(
-            "model_attribution_resolve_failed",
-            error=str(exc),
-            config_path=config_path_str,
-        )
-        primary_id = None
-    return primary_id, config_path_str
+    return resolve_active_attribution()
 
 
 async def _append_assistant_message_background(

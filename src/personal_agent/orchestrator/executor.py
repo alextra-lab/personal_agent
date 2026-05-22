@@ -614,7 +614,7 @@ def _determine_initial_model_role(ctx: ExecutionContext) -> ModelRole:
     return ModelRole.PRIMARY
 
 
-def _render_memory_section(entity_items: list[dict]) -> str:
+def _render_memory_section(entity_items: list[dict[str, Any]]) -> str:
     """Build the ## Your Memory Graph entity section string.
 
     Skips entities with None or blank descriptions (FRE-374 D1) so the

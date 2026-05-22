@@ -109,7 +109,8 @@ async def write_executor(
     path: str,
     content: str,
     mode: str = "overwrite",
-    ctx: TraceContext | None = None,
+    *,
+    ctx: TraceContext,
 ) -> dict[str, Any]:
     """Execute the ``write`` primitive tool.
 
@@ -122,7 +123,7 @@ async def write_executor(
         content: Text content to write.
         mode: ``'overwrite'`` (default) replaces the file; ``'append'`` adds
             to the end.
-        ctx: Optional trace context for structured logging correlation.
+        ctx: Trace context for structured logging correlation.
 
     Returns:
         On success::
@@ -151,7 +152,7 @@ async def write_executor(
         * ``"permission_denied"`` — OS permission error
         * ``"io_error"`` — other I/O error
     """
-    trace_id = ctx.trace_id if ctx else "n/a"
+    trace_id = ctx.trace_id
 
     # 1. Validate mode
     if mode not in ("overwrite", "append"):

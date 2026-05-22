@@ -287,7 +287,8 @@ def _truncate_to_bytes(s: str, max_bytes: int) -> str:
 async def bash_executor(
     command: str,
     timeout_seconds: int = _DEFAULT_TIMEOUT,
-    ctx: TraceContext | None = None,
+    *,
+    ctx: TraceContext,
 ) -> dict[str, Any]:
     """Execute a shell command via ``/bin/bash`` with hard-deny guards and output capping.
 
@@ -309,7 +310,7 @@ async def bash_executor(
         command: Shell command string to execute via ``/bin/bash -c``.
         timeout_seconds: Max seconds to wait for the process. Clamped to
             [1, 120]; defaults to 30.
-        ctx: Optional trace context for structured logging.
+        ctx: Trace context for structured logging.
 
     Returns:
         Dict with keys:
@@ -324,7 +325,7 @@ async def bash_executor(
         On guard failures, returns a dict with ``success=False`` and an
         ``error`` key set to one of: ``hard_denied``, ``empty_command``, ``timeout``.
     """
-    trace_id = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
+    trace_id = ctx.trace_id
 
     # ------------------------------------------------------------------
     # 1. Hard-deny check (belt-and-suspenders before any subprocess)
@@ -421,28 +422,23 @@ async def bash_executor(
     truncated_path: str | None = None
 
     if len(combined.encode("utf-8")) > MAX_OUTPUT_BYTES:
-        # Write overflow to scratch directory keyed by trace_id (when ctx available).
-        if ctx is not None:
-            try:
-                scratch = Path("/tmp/agent_scratch") / trace_id
-                scratch.mkdir(parents=True, exist_ok=True)
-                existing = list(scratch.glob("bash_output_*.txt"))
-                n = len(existing)
-                overflow_file = scratch / f"bash_output_{n}.txt"
-                overflow_file.write_text(combined, encoding="utf-8")
-                truncated_path = str(overflow_file)
-                log.info(
-                    "bash_output_overflow",
-                    trace_id=trace_id,
-                    overflow_file=truncated_path,
-                    combined_len=len(combined),
-                )
-            except OSError as exc:
-                log.warning("bash_overflow_write_error", trace_id=trace_id, error=str(exc))
-                truncated_path = "<truncated: scratch write failed>"
-        else:
-            # No trace context — caller must know data was discarded silently.
-            truncated_path = "<truncated: no ctx>"
+        try:
+            scratch = Path("/tmp/agent_scratch") / trace_id
+            scratch.mkdir(parents=True, exist_ok=True)
+            existing = list(scratch.glob("bash_output_*.txt"))
+            n = len(existing)
+            overflow_file = scratch / f"bash_output_{n}.txt"
+            overflow_file.write_text(combined, encoding="utf-8")
+            truncated_path = str(overflow_file)
+            log.info(
+                "bash_output_overflow",
+                trace_id=trace_id,
+                overflow_file=truncated_path,
+                combined_len=len(combined),
+            )
+        except OSError as exc:
+            log.warning("bash_overflow_write_error", trace_id=trace_id, error=str(exc))
+            truncated_path = "<truncated: scratch write failed>"
 
         # Byte-aware truncation: cap each stream at half the total limit.
         half = MAX_OUTPUT_BYTES // 2

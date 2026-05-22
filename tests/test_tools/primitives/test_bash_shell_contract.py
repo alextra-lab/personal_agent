@@ -14,21 +14,20 @@ from __future__ import annotations
 import asyncio
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
-import pytest
-
+from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.primitives.bash import (
     _check_segment_allowlist,
-    _is_hard_denied,
     _split_command_segments,
     bash_executor,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
+
+
+_CTX = TraceContext.new_trace()
 
 
 def run(coro):  # type: ignore[no-untyped-def]
@@ -124,24 +123,24 @@ class TestBashShellContractExecution:
     """These tests verify that the executor actually runs a real shell."""
 
     def test_pipe_works(self) -> None:
-        result = run(bash_executor("echo hello | tr 'a-z' 'A-Z'"))
+        result = run(bash_executor("echo hello | tr 'a-z' 'A-Z'", ctx=_CTX))
         assert result["success"] is True
         assert "HELLO" in result["stdout"]
 
     def test_pipe_with_wc(self) -> None:
-        result = run(bash_executor("printf 'a\\nb\\nc\\n' | wc -l"))
+        result = run(bash_executor("printf 'a\\nb\\nc\\n' | wc -l", ctx=_CTX))
         assert result["success"] is True
         assert result["stdout"].strip() == "3"
 
     def test_logical_and(self) -> None:
-        result = run(bash_executor("true && echo ok"))
+        result = run(bash_executor("true && echo ok", ctx=_CTX))
         assert result["success"] is True
         assert "ok" in result["stdout"]
 
     def test_redirect_to_tmp(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             target = Path(tmpdir) / "out.txt"
-            result = run(bash_executor(f"echo written > {target}"))
+            result = run(bash_executor(f"echo written > {target}", ctx=_CTX))
             assert result["success"] is True
             assert target.exists()
             assert "written" in target.read_text()
@@ -151,28 +150,28 @@ class TestBashShellContractExecution:
             (Path(tmpdir) / "a.yaml").write_text("a")
             (Path(tmpdir) / "b.yaml").write_text("b")
             (Path(tmpdir) / "c.txt").write_text("c")
-            result = run(bash_executor(f"ls {tmpdir}/*.yaml | wc -l"))
+            result = run(bash_executor(f"ls {tmpdir}/*.yaml | wc -l", ctx=_CTX))
             assert result["success"] is True
             assert result["stdout"].strip() == "2"
 
     def test_pipefail_propagates_exit(self) -> None:
         # With pipefail, 'false | true' should exit 1, not 0.
-        result = run(bash_executor("false | true"))
+        result = run(bash_executor("false | true", ctx=_CTX))
         assert result["success"] is False
         assert result["exit_code"] == 1
 
     def test_hard_deny_still_fires_in_pipeline(self) -> None:
         # rm -rf should be hard-denied even inside a pipeline.
-        result = run(bash_executor("ls /tmp && rm -rf /tmp/nonexistent-test-target"))
+        result = run(bash_executor("ls /tmp && rm -rf /tmp/nonexistent-test-target", ctx=_CTX))
         assert result["success"] is False
         assert result["error"] == "hard_denied"
 
     def test_empty_command_guard(self) -> None:
-        result = run(bash_executor("   "))
+        result = run(bash_executor("   ", ctx=_CTX))
         assert result["success"] is False
         assert result["error"] == "empty_command"
 
     def test_exit_code_propagated(self) -> None:
-        result = run(bash_executor("exit 42"))
+        result = run(bash_executor("exit 42", ctx=_CTX))
         assert result["exit_code"] == 42
         assert result["success"] is False

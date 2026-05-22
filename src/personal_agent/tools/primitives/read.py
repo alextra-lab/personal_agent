@@ -124,7 +124,8 @@ async def read_executor(
     path: str,
     max_bytes: int = 1_048_576,
     tail_lines: int | None = None,
-    ctx: TraceContext | None = None,
+    *,
+    ctx: TraceContext,
 ) -> dict[str, Any]:
     """Execute the ``read`` primitive tool.
 
@@ -142,7 +143,7 @@ async def read_executor(
             Ignored as a size-gate when *tail_lines* is set, but still used
             as the output cap for the tail content.
         tail_lines: When set, return the last N lines of the file.
-        ctx: Optional trace context for structured logging correlation.
+        ctx: Trace context for structured logging correlation.
 
     Returns:
         On success::
@@ -169,7 +170,7 @@ async def read_executor(
         * ``"permission_denied"`` — OS permission error
         * ``"io_error"`` — other I/O error
     """
-    trace_id = ctx.trace_id if ctx else "n/a"
+    trace_id = ctx.trace_id
 
     # 1. Resolve path
     resolved = Path(_expand_path(path)).expanduser().resolve()

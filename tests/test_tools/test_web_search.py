@@ -9,8 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.web import web_search_executor, web_search_tool
+
+_CTX = TraceContext.new_trace()
 
 
 def _mock_searxng_response(
@@ -85,7 +88,7 @@ async def test_web_search_happy_path() -> None:
     client = _mock_client(resp)
 
     with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        result = await web_search_executor(query="python docs")
+        result = await web_search_executor(query="python docs", ctx=_CTX)
 
     assert isinstance(result, dict)
     assert result["result_count"] == 1
@@ -104,7 +107,7 @@ async def test_web_search_empty_results() -> None:
     client = _mock_client(resp)
 
     with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        result = await web_search_executor(query="xyzzy_nonexistent_query")
+        result = await web_search_executor(query="xyzzy_nonexistent_query", ctx=_CTX)
 
     assert isinstance(result, dict)
     assert result["result_count"] == 0
@@ -113,12 +116,12 @@ async def test_web_search_empty_results() -> None:
 
 @pytest.mark.asyncio
 async def test_web_search_categories_passed_in_params() -> None:
-    """categories parameter is forwarded to SearXNG query params."""
+    """Categories parameter is forwarded to SearXNG query params."""
     resp = _mock_searxng_response()
     client = _mock_client(resp)
 
     with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        await web_search_executor(query="asyncio", categories="it")
+        await web_search_executor(query="asyncio", categories="it", ctx=_CTX)
 
     call_kwargs = client.get.call_args
     params = call_kwargs.kwargs["params"]
@@ -127,12 +130,12 @@ async def test_web_search_categories_passed_in_params() -> None:
 
 @pytest.mark.asyncio
 async def test_web_search_engines_passed_in_params() -> None:
-    """engines parameter is forwarded to SearXNG query params."""
+    """Engines parameter is forwarded to SearXNG query params."""
     resp = _mock_searxng_response()
     client = _mock_client(resp)
 
     with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        await web_search_executor(query="test", engines="google,stackoverflow")
+        await web_search_executor(query="test", engines="google,stackoverflow", ctx=_CTX)
 
     call_kwargs = client.get.call_args
     params = call_kwargs.kwargs["params"]
@@ -151,7 +154,7 @@ async def test_web_search_weather_category_strips_weather_prefix() -> None:
     client = _mock_client(resp)
 
     with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        await web_search_executor(query="weather Berlin", categories="weather")
+        await web_search_executor(query="weather Berlin", categories="weather", ctx=_CTX)
 
     params = client.get.call_args.kwargs["params"]
     assert params["q"] == "Berlin"
@@ -164,7 +167,7 @@ async def test_web_search_weather_engines_strips_weather_prefix() -> None:
     client = _mock_client(resp)
 
     with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        await web_search_executor(query="weather Tokyo", engines="wttr.in,openmeteo")
+        await web_search_executor(query="weather Tokyo", engines="wttr.in,openmeteo", ctx=_CTX)
 
     params = client.get.call_args.kwargs["params"]
     assert params["q"] == "Tokyo"
@@ -177,7 +180,7 @@ async def test_web_search_weather_prefix_case_insensitive() -> None:
     client = _mock_client(resp)
 
     with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        await web_search_executor(query="Weather Paris", categories="weather")
+        await web_search_executor(query="Weather Paris", categories="weather", ctx=_CTX)
 
     params = client.get.call_args.kwargs["params"]
     assert params["q"] == "Paris"
@@ -194,7 +197,7 @@ async def test_web_search_general_category_keeps_weather_prefix() -> None:
     client = _mock_client(resp)
 
     with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        await web_search_executor(query="weather Berlin", categories="general")
+        await web_search_executor(query="weather Berlin", categories="general", ctx=_CTX)
 
     params = client.get.call_args.kwargs["params"]
     assert params["q"] == "weather Berlin"
@@ -207,7 +210,7 @@ async def test_web_search_non_leading_weather_token_not_stripped() -> None:
     client = _mock_client(resp)
 
     with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        await web_search_executor(query="cold weather climate", categories="weather")
+        await web_search_executor(query="cold weather climate", categories="weather", ctx=_CTX)
 
     params = client.get.call_args.kwargs["params"]
     assert params["q"] == "cold weather climate"
@@ -226,7 +229,7 @@ async def test_web_search_sets_x_forwarded_for_header() -> None:
     client = _mock_client(resp)
 
     with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        await web_search_executor(query="anything")
+        await web_search_executor(query="anything", ctx=_CTX)
 
     headers = client.get.call_args.kwargs.get("headers") or {}
     assert "X-Forwarded-For" in headers
@@ -240,7 +243,7 @@ async def test_web_search_time_range_passed() -> None:
     client = _mock_client(resp)
 
     with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        await web_search_executor(query="openai news", time_range="week")
+        await web_search_executor(query="openai news", time_range="week", ctx=_CTX)
 
     call_kwargs = client.get.call_args
     params = call_kwargs.kwargs["params"]
@@ -251,14 +254,20 @@ async def test_web_search_time_range_passed() -> None:
 async def test_web_search_max_results_capped_at_50() -> None:
     """Requesting 100 results is silently capped at 50."""
     many_results = [
-        {"title": f"r{i}", "url": f"https://example.com/{i}", "content": "", "engine": "g", "score": 0.5}
+        {
+            "title": f"r{i}",
+            "url": f"https://example.com/{i}",
+            "content": "",
+            "engine": "g",
+            "score": 0.5,
+        }
         for i in range(60)
     ]
     resp = _mock_searxng_response(results=many_results)
     client = _mock_client(resp)
 
     with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        result = await web_search_executor(query="test", max_results=100)
+        result = await web_search_executor(query="test", max_results=100, ctx=_CTX)
 
     assert result["result_count"] <= 50
 
@@ -268,7 +277,16 @@ async def test_web_search_infobox_handling() -> None:
     """Infoboxes are truncated to 2 entries with content capped at 500 chars."""
     long_content = "x" * 1000
     infoboxes = [
-        {"infobox": "Python", "content": long_content, "urls": [{"url": "https://a.com"}, {"url": "https://b.com"}, {"url": "https://c.com"}, {"url": "https://d.com"}]},
+        {
+            "infobox": "Python",
+            "content": long_content,
+            "urls": [
+                {"url": "https://a.com"},
+                {"url": "https://b.com"},
+                {"url": "https://c.com"},
+                {"url": "https://d.com"},
+            ],
+        },
         {"infobox": "Guido", "content": "Creator of Python", "urls": []},
         {"infobox": "Third", "content": "Should be dropped", "urls": []},
     ]
@@ -276,7 +294,7 @@ async def test_web_search_infobox_handling() -> None:
     client = _mock_client(resp)
 
     with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
-        result = await web_search_executor(query="python creator")
+        result = await web_search_executor(query="python creator", ctx=_CTX)
 
     assert len(result["infoboxes"]) == 2  # capped at 2
     assert len(result["infoboxes"][0]["content"]) <= 500  # content truncated
@@ -290,14 +308,14 @@ async def test_web_search_infobox_handling() -> None:
 async def test_web_search_empty_query_raises() -> None:
     """Empty query string raises ToolExecutionError with descriptive message."""
     with pytest.raises(ToolExecutionError, match="query parameter is required"):
-        await web_search_executor(query="")
+        await web_search_executor(query="", ctx=_CTX)
 
 
 @pytest.mark.asyncio
 async def test_web_search_whitespace_query_raises() -> None:
     """Whitespace-only query raises ToolExecutionError."""
     with pytest.raises(ToolExecutionError, match="query parameter is required"):
-        await web_search_executor(query="   ")
+        await web_search_executor(query="   ", ctx=_CTX)
 
 
 @pytest.mark.asyncio
@@ -310,7 +328,7 @@ async def test_web_search_connect_error_raises() -> None:
 
     with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
         with pytest.raises(ToolExecutionError, match="Cannot connect to SearXNG"):
-            await web_search_executor(query="test query")
+            await web_search_executor(query="test query", ctx=_CTX)
 
 
 @pytest.mark.asyncio
@@ -323,7 +341,7 @@ async def test_web_search_timeout_raises() -> None:
 
     with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
         with pytest.raises(ToolExecutionError, match="timed out"):
-            await web_search_executor(query="test query")
+            await web_search_executor(query="test query", ctx=_CTX)
 
 
 @pytest.mark.asyncio
@@ -336,7 +354,7 @@ async def test_web_search_malformed_json_raises() -> None:
 
     with patch("personal_agent.tools.web.httpx.AsyncClient", return_value=client):
         with pytest.raises(ToolExecutionError):
-            await web_search_executor(query="test query")
+            await web_search_executor(query="test query", ctx=_CTX)
 
 
 # ── Governance / mode tests ────────────────────────────────────────────────

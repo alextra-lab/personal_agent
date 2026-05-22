@@ -10,7 +10,10 @@ import pytest
 
 from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.perplexity import perplexity_query_executor, perplexity_query_tool
+from personal_agent.telemetry.trace import TraceContext
 
+
+_CTX = TraceContext.new_trace()
 
 def _mock_response(status_code: int = 200, json_body: dict | None = None) -> MagicMock:
     mock_resp = MagicMock(spec=httpx.Response)
@@ -59,14 +62,14 @@ def test_tool_definition() -> None:
 async def test_empty_query_raises() -> None:
     """Empty query raises ToolExecutionError before any HTTP call."""
     with pytest.raises(ToolExecutionError, match="'query' parameter is required"):
-        await perplexity_query_executor(query="")
+        await perplexity_query_executor(query="", ctx=_CTX)
 
 
 @pytest.mark.asyncio
 async def test_invalid_mode_raises() -> None:
     """Invalid mode raises ToolExecutionError before any HTTP call."""
     with pytest.raises(ToolExecutionError, match="Invalid mode"):
-        await perplexity_query_executor(query="hello", mode="ultra")
+        await perplexity_query_executor(query="hello", mode="ultra", ctx=_CTX)
 
 
 @pytest.mark.asyncio
@@ -75,7 +78,7 @@ async def test_missing_api_key_raises() -> None:
     with patch("personal_agent.tools.perplexity.settings") as mock_settings:
         mock_settings.perplexity_api_key = None
         with pytest.raises(ToolExecutionError, match="API key not configured"):
-            await perplexity_query_executor(query="What is Python?")
+            await perplexity_query_executor(query="What is Python?", ctx=_CTX)
 
 
 # ── Success path tests ─────────────────────────────────────────────────────
@@ -92,7 +95,7 @@ async def test_ask_mode_success() -> None:
         mock_settings.perplexity_timeout_seconds = 90
         with patch("personal_agent.tools.perplexity.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_client(resp)
-            result = await perplexity_query_executor(query="What is Python?", mode="ask")
+            result = await perplexity_query_executor(query="What is Python?", mode="ask", ctx=_CTX)
 
     assert result["mode"] == "ask"
     assert result["model"] == "sonar"
@@ -112,7 +115,7 @@ async def test_reason_mode_uses_correct_model() -> None:
         with patch("personal_agent.tools.perplexity.httpx.AsyncClient") as mock_cls:
             client = _mock_client(resp)
             mock_cls.return_value = client
-            result = await perplexity_query_executor(query="Compare A vs B", mode="reason")
+            result = await perplexity_query_executor(query="Compare A vs B", mode="reason", ctx=_CTX)
 
     assert result["model"] == "sonar-reasoning"
     assert result["mode"] == "reason"
@@ -134,7 +137,7 @@ async def test_research_mode_uses_correct_model() -> None:
         mock_settings.perplexity_timeout_seconds = 90
         with patch("personal_agent.tools.perplexity.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_client(resp)
-            result = await perplexity_query_executor(query="Survey of LLMs", mode="research")
+            result = await perplexity_query_executor(query="Survey of LLMs", mode="research", ctx=_CTX)
 
     assert result["model"] == "sonar-deep-research"
 
@@ -150,7 +153,7 @@ async def test_default_mode_is_ask() -> None:
         mock_settings.perplexity_timeout_seconds = 90
         with patch("personal_agent.tools.perplexity.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_client(resp)
-            result = await perplexity_query_executor(query="Hello?")
+            result = await perplexity_query_executor(query="Hello?", ctx=_CTX)
 
     assert result["mode"] == "ask"
 
@@ -169,7 +172,7 @@ async def test_http_error_raises() -> None:
         with patch("personal_agent.tools.perplexity.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_client(resp)
             with pytest.raises(ToolExecutionError, match="HTTP 401"):
-                await perplexity_query_executor(query="What is Python?")
+                await perplexity_query_executor(query="What is Python?", ctx=_CTX)
 
 
 @pytest.mark.asyncio
@@ -186,4 +189,4 @@ async def test_connect_error_raises() -> None:
         with patch("personal_agent.tools.perplexity.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = client
             with pytest.raises(ToolExecutionError, match="Cannot connect"):
-                await perplexity_query_executor(query="What is Python?")
+                await perplexity_query_executor(query="What is Python?", ctx=_CTX)

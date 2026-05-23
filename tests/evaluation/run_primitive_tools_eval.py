@@ -146,10 +146,7 @@ def parse_args() -> argparse.Namespace:
         "--es-url",
         default=_DEFAULT_ES_URL,
         metavar="URL",
-        help=(
-            f"Elasticsearch URL for post-run telemetry fetch"
-            f" (default: {_DEFAULT_ES_URL})"
-        ),
+        help=(f"Elasticsearch URL for post-run telemetry fetch (default: {_DEFAULT_ES_URL})"),
     )
     parser.add_argument(
         "--skip",
@@ -273,18 +270,14 @@ async def _fetch_trace_metrics(es_url: str, trace_id: str) -> dict[str, Any]:
 
     for event in events:
         # event_type is the indexed field name (es_logger adds it); fall back to event/message
-        ev_type = (
-            event.get("event_type")
-            or event.get("event")
-            or event.get("message")
-        )
-        if ev_type == "litellm_request_complete":
-            pt = _to_int(event.get("prompt_tokens") or 0)
-            total = _to_int(event.get("tokens") or 0)
-            prompt_tokens += pt
-            completion_tokens += total - pt
+        ev_type = event.get("event_type") or event.get("event") or event.get("message")
+        # ADR-0074 Phase 3: source from canonical model_call_completed with
+        # canonical token field names (input_tokens / output_tokens).
+        if ev_type == "model_call_completed":
+            prompt_tokens += _to_int(event.get("input_tokens") or 0)
+            completion_tokens += _to_int(event.get("output_tokens") or 0)
             cache_read_tokens += _to_int(event.get("cache_read_tokens") or 0)
-            cache_write_tokens += _to_int(event.get("cache_write_tokens") or 0)
+            cache_write_tokens += _to_int(event.get("cache_creation_input_tokens") or 0)
         elif ev_type == "tool_call_started":
             tool_call_count += 1
             name = event.get("tool_name", "")
@@ -293,6 +286,9 @@ async def _fetch_trace_metrics(es_url: str, trace_id: str) -> dict[str, Any]:
         elif ev_type == "model_call_started":
             iteration_count += 1
 
+    # Output keys preserved (prompt_tokens / completion_tokens / cache_write_tokens)
+    # because they form the harness's report schema consumed by downstream
+    # report rendering / comparator. Only the INPUT sourcing changed.
     return {
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
@@ -451,7 +447,9 @@ def _write_report_md(
         ctrl_cw = ctrl.get("cache_write_tokens", 0)
         trt_cr = trt.get("cache_read_tokens", 0)
         trt_cw = trt.get("cache_write_tokens", 0)
-        cache_col = f"ctrl {_cache_hit_pct(ctrl_cr, ctrl_cw)} / trt {_cache_hit_pct(trt_cr, trt_cw)}"
+        cache_col = (
+            f"ctrl {_cache_hit_pct(ctrl_cr, ctrl_cw)} / trt {_cache_hit_pct(trt_cr, trt_cw)}"
+        )
 
         total_ctrl_tok += ctrl_tok
         total_trt_tok += trt_tok
@@ -605,8 +603,7 @@ def run_harness(args: argparse.Namespace) -> None:
         ctrl_mark = "ok" if ctrl_status == 200 else "ERR"
         trt_mark = "ok" if trt_status == 200 else "ERR"
         sys.stdout.write(
-            f"[{i:02d}/{n}] {pid}: "
-            f"ctrl={ctrl_mark} {ctrl_ms}ms  trt={trt_mark} {trt_ms}ms\n"
+            f"[{i:02d}/{n}] {pid}: ctrl={ctrl_mark} {ctrl_ms}ms  trt={trt_mark} {trt_ms}ms\n"
         )
         sys.stdout.flush()
 
@@ -647,9 +644,7 @@ def run_harness(args: argparse.Namespace) -> None:
     # per-prompt timing races and lets the 30s wait amortise across the whole run.
     graded = [r for r in results if r["control"].get("trace_id")]
     if graded and args.es_url:
-        sys.stdout.write(
-            f"\nWaiting 15s for ES to index {len(graded)} trace(s)...\n"
-        )
+        sys.stdout.write(f"\nWaiting 15s for ES to index {len(graded)} trace(s)...\n")
         sys.stdout.flush()
         time.sleep(15)
 
@@ -687,9 +682,7 @@ def run_harness(args: argparse.Namespace) -> None:
     )
 
     sys.stdout.write(
-        f"\nEval complete. {n} prompts.\n"
-        f"  Results: {json_path}\n"
-        f"  Grade:   {md_path}\n"
+        f"\nEval complete. {n} prompts.\n  Results: {json_path}\n  Grade:   {md_path}\n"
     )
 
 

@@ -142,7 +142,7 @@ async def generate_session_summary(
         turn_count=len(captures),
         role=role_name,
         provider=provider,
-        model_id=model_def.id if model_def else None,
+        model=model_def.id if model_def else None,
     )
 
     try:

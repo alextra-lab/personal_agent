@@ -272,7 +272,7 @@ class LocalLLMClient:
         if tools and strategy != ToolCallingStrategy.NATIVE:
             log.warning(
                 "tools_filtered_by_strategy",
-                model_id=model_id,
+                model=model_id,
                 role=role.value,
                 tools_count=len(tools),
                 strategy=strategy.value,
@@ -582,7 +582,7 @@ class LocalLLMClient:
         log.error(
             MODEL_CALL_ERROR,
             role=role.value,
-            model_id=model_id,
+            model=model_id,
             endpoint=current_endpoint,
             error_type=error_type,
             error=str(last_error) if last_error else "Unknown error",

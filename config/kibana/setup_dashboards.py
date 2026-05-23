@@ -24,7 +24,7 @@ DATA_VIEW_ID = "agent-logs-pattern"
 def create_index_template(es_url: str) -> bool:
     """Create ES index template so agent-logs-* fields are keyword for Kibana.
 
-    Ensures event_type, trace_id, session_id, phase, name, role, model_id,
+    Ensures event_type, trace_id, session_id, phase, name, role, model,
     from_state, to_state, delegated_role, component are mapped as keyword
     (required for Kibana terms aggregations). Template only applies to new
     indices; existing data may need reindex or wait for next daily rollover.
@@ -43,7 +43,7 @@ def create_index_template(es_url: str) -> bool:
                     "phase": {"type": "keyword"},
                     "name": {"type": "keyword"},
                     "role": {"type": "keyword"},
-                    "model_id": {"type": "keyword"},
+                    "model": {"type": "keyword"},
                     "from_state": {"type": "keyword"},
                     "to_state": {"type": "keyword"},
                     "delegated_role": {"type": "keyword"},
@@ -260,7 +260,7 @@ def create_llm_performance() -> None:
     _create_visualization(
         "llm-tokens-over-time",
         "Token Usage Over Time",
-        "Prompt and completion tokens over time",
+        "Input and output tokens over time",
         "line",
         q,
         [
@@ -269,14 +269,14 @@ def create_llm_performance() -> None:
                 "enabled": True,
                 "type": "sum",
                 "schema": "metric",
-                "params": {"field": "prompt_tokens", "customLabel": "Prompt Tokens"},
+                "params": {"field": "input_tokens", "customLabel": "Input Tokens"},
             },
             {
                 "id": "2",
                 "enabled": True,
                 "type": "sum",
                 "schema": "metric",
-                "params": {"field": "completion_tokens", "customLabel": "Completion Tokens"},
+                "params": {"field": "output_tokens", "customLabel": "Output Tokens"},
             },
             {
                 "id": "3",
@@ -291,7 +291,7 @@ def create_llm_performance() -> None:
     _create_visualization(
         "llm-call-count",
         "LLM Call Count by Model",
-        "Count of calls per model_id",
+        "Count of calls per model",
         "pie",
         q,
         [
@@ -302,7 +302,7 @@ def create_llm_performance() -> None:
                 "type": "terms",
                 "schema": "segment",
                 "params": {
-                    "field": "model_id",
+                    "field": "model",
                     "size": 10,
                     "order": "desc",
                     "orderBy": "1",
@@ -361,9 +361,9 @@ def create_llm_performance() -> None:
     )
 
     _create_visualization(
-        "llm-prompt-tokens-by-role",
-        "Avg Prompt Tokens by Model Role",
-        "Average prompt_tokens per call by role (ROUTER ~140, STANDARD ~600–700)",
+        "llm-input-tokens-by-role",
+        "Avg Input Tokens by Model Role",
+        "Average input_tokens per call by role (ROUTER ~140, STANDARD ~600–700)",
         "histogram",
         q,
         [
@@ -372,7 +372,7 @@ def create_llm_performance() -> None:
                 "enabled": True,
                 "type": "avg",
                 "schema": "metric",
-                "params": {"field": "prompt_tokens", "customLabel": "Avg Prompt Tokens"},
+                "params": {"field": "input_tokens", "customLabel": "Avg Input Tokens"},
             },
             {
                 "id": "2",
@@ -385,9 +385,9 @@ def create_llm_performance() -> None:
     )
 
     _create_visualization(
-        "llm-prompt-tokens-percentiles",
-        "Prompt Token Percentiles by Role",
-        "50th, 95th, 99th percentile of prompt_tokens per model role (outlier detection)",
+        "llm-input-tokens-percentiles",
+        "Input Token Percentiles by Role",
+        "50th, 95th, 99th percentile of input_tokens per model role (outlier detection)",
         "histogram",
         q,
         [
@@ -396,7 +396,7 @@ def create_llm_performance() -> None:
                 "enabled": True,
                 "type": "percentiles",
                 "schema": "metric",
-                "params": {"field": "prompt_tokens", "percents": [50, 95, 99]},
+                "params": {"field": "input_tokens", "percents": [50, 95, 99]},
             },
             {
                 "id": "2",
@@ -976,7 +976,9 @@ def create_task_analytics() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create Kibana dashboards for personal_agent")
     parser.add_argument("--kibana-url", default="http://localhost:5601")
-    parser.add_argument("--es-url", default="http://localhost:9200", help="Elasticsearch URL for index template")
+    parser.add_argument(
+        "--es-url", default="http://localhost:9200", help="Elasticsearch URL for index template"
+    )
     args = parser.parse_args()
 
     global KIBANA_URL, ES_URL

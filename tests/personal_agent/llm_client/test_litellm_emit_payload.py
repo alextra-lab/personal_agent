@@ -1,14 +1,25 @@
-"""FRE-351: litellm_request_complete emit must include field-parity fields.
+"""FRE-376 Phase 3 / FRE-351 (rebased): canonical model_call_completed emit fields.
 
-Tests verify that litellm_client.py logs completion_tokens, latency_ms,
-total_tokens, endpoint, and cache_creation_input_tokens alongside existing
-fields when a cloud LLM call succeeds.
+After FRE-376 Phase 3 removed the ``litellm_request_complete`` event and its
+legacy field aliases (``prompt_tokens``, ``completion_tokens``, ``tokens``,
+``cache_write_tokens``), these tests assert the canonical
+``model_call_completed`` event payload includes ``latency_ms``,
+``input_tokens``, ``output_tokens``, ``total_tokens``, ``endpoint``, and
+``cache_creation_input_tokens``.
+
+The Phase 2 contract (canonical-field frozenset) is enforced in
+``test_telemetry_parity.py``; this file complements it with a runtime
+wire-up check on LiteLLMClient.respond().
 """
+
+# ruff: noqa: D103
 
 from __future__ import annotations
 
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 
 def _make_mock_response(
@@ -24,12 +35,9 @@ def _make_mock_response(
     usage.prompt_tokens = prompt_tokens
     usage.completion_tokens = completion_tokens
     usage.total_tokens = total_tokens
-    # Anthropic cache fields — explicitly None unless provided, so getattr(..., None)
-    # returns None (MagicMock auto-creates attributes, making getattr never fall back
-    # to the default; we set them explicitly to control the value).
     usage.cache_read_input_tokens = cache_read
     usage.cache_creation_input_tokens = cache_write
-    usage.prompt_tokens_details = None  # no OpenAI cached_tokens
+    usage.prompt_tokens_details = None
 
     response = MagicMock()
     response.choices = [MagicMock()]
@@ -43,7 +51,8 @@ def _make_mock_response(
 async def _call_respond(captured_log_calls: list[tuple]) -> None:
     """Run LiteLLMClient.respond() with all external I/O mocked.
 
-    The log.info calls are captured into captured_log_calls as (event, kwargs) tuples.
+    The log.info calls are captured into captured_log_calls as (event, kwargs)
+    tuples.
     """
     from personal_agent.llm_client.litellm_client import LiteLLMClient
     from personal_agent.llm_client.types import ModelRole
@@ -51,18 +60,15 @@ async def _call_respond(captured_log_calls: list[tuple]) -> None:
 
     mock_response = _make_mock_response()
 
-    # Gate mock
     mock_gate = MagicMock()
     mock_gate.reserve = AsyncMock(return_value="res-001")
     mock_gate.commit = AsyncMock()
 
-    # Cost tracker mock
     mock_tracker = AsyncMock()
     mock_tracker.connect = AsyncMock()
     mock_tracker.disconnect = AsyncMock()
     mock_tracker.record_api_call = AsyncMock()
 
-    # Capture log calls
     mock_log = MagicMock()
 
     def _capture_info(event: str, **kwargs: object) -> None:
@@ -112,89 +118,72 @@ async def _call_respond(captured_log_calls: list[tuple]) -> None:
         )
 
 
-def _get_complete_event(calls: list[tuple]) -> dict:
-    """Return kwargs from the litellm_request_complete log call."""
+def _get_completed_event(calls: list[tuple]) -> dict:
+    """Return kwargs from the canonical ``model_call_completed`` log call."""
     for event, kwargs in calls:
-        if event == "litellm_request_complete":
+        if event == "model_call_completed":
             return kwargs
-    raise AssertionError(
-        f"litellm_request_complete event not found in calls: {[e for e, _ in calls]}"
-    )
-
-
-import pytest
+    raise AssertionError(f"model_call_completed event not found in calls: {[e for e, _ in calls]}")
 
 
 @pytest.mark.asyncio
-async def test_litellm_emit_includes_completion_tokens() -> None:
-    """litellm_request_complete must log completion_tokens (FRE-351)."""
+async def test_model_call_completed_includes_output_tokens() -> None:
     calls: list[tuple] = []
     await _call_respond(calls)
-    kwargs = _get_complete_event(calls)
-    assert "completion_tokens" in kwargs, (
-        "completion_tokens missing from litellm_request_complete emit. "
-        f"Keys present: {sorted(kwargs)}"
-    )
-    assert kwargs["completion_tokens"] == 50
+    kwargs = _get_completed_event(calls)
+    assert "output_tokens" in kwargs, f"output_tokens missing. Keys present: {sorted(kwargs)}"
+    assert kwargs["output_tokens"] == 50
 
 
 @pytest.mark.asyncio
-async def test_litellm_emit_includes_latency_ms() -> None:
-    """litellm_request_complete must log latency_ms in milliseconds (FRE-351)."""
+async def test_model_call_completed_includes_input_tokens() -> None:
     calls: list[tuple] = []
     await _call_respond(calls)
-    kwargs = _get_complete_event(calls)
-    assert "latency_ms" in kwargs, (
-        f"latency_ms missing from litellm_request_complete emit. Keys present: {sorted(kwargs)}"
-    )
-    assert isinstance(kwargs["latency_ms"], int), (
-        f"latency_ms must be int ms, got {type(kwargs['latency_ms'])}"
-    )
+    kwargs = _get_completed_event(calls)
+    assert "input_tokens" in kwargs, f"input_tokens missing. Keys present: {sorted(kwargs)}"
+    assert kwargs["input_tokens"] == 100
 
 
 @pytest.mark.asyncio
-async def test_litellm_emit_includes_total_tokens() -> None:
-    """litellm_request_complete must log total_tokens (distinct from legacy 'tokens') (FRE-351)."""
+async def test_model_call_completed_includes_latency_ms() -> None:
     calls: list[tuple] = []
     await _call_respond(calls)
-    kwargs = _get_complete_event(calls)
-    assert "total_tokens" in kwargs, (
-        f"total_tokens missing from litellm_request_complete emit. Keys present: {sorted(kwargs)}"
-    )
+    kwargs = _get_completed_event(calls)
+    assert "latency_ms" in kwargs
+    assert isinstance(kwargs["latency_ms"], int)
+
+
+@pytest.mark.asyncio
+async def test_model_call_completed_includes_total_tokens() -> None:
+    calls: list[tuple] = []
+    await _call_respond(calls)
+    kwargs = _get_completed_event(calls)
     assert kwargs["total_tokens"] == 150
 
 
 @pytest.mark.asyncio
-async def test_litellm_emit_includes_endpoint() -> None:
-    """litellm_request_complete must log endpoint (FRE-351)."""
+async def test_model_call_completed_includes_endpoint() -> None:
     calls: list[tuple] = []
     await _call_respond(calls)
-    kwargs = _get_complete_event(calls)
-    assert "endpoint" in kwargs, (
-        f"endpoint missing from litellm_request_complete emit. Keys present: {sorted(kwargs)}"
-    )
+    kwargs = _get_completed_event(calls)
     assert kwargs["endpoint"] == "anthropic"
 
 
 @pytest.mark.asyncio
-async def test_litellm_emit_includes_cache_creation_input_tokens_field() -> None:
-    """litellm_request_complete must use cache_creation_input_tokens (not cache_write_tokens) (FRE-351)."""
+async def test_model_call_completed_uses_cache_creation_input_tokens() -> None:
+    """Canonical name (not the dropped legacy ``cache_write_tokens`` alias)."""
     calls: list[tuple] = []
     await _call_respond(calls)
-    kwargs = _get_complete_event(calls)
-    assert "cache_creation_input_tokens" in kwargs, (
-        "cache_creation_input_tokens missing from litellm_request_complete emit. "
-        f"Keys present: {sorted(kwargs)}"
-    )
+    kwargs = _get_completed_event(calls)
+    assert "cache_creation_input_tokens" in kwargs
+    assert "cache_write_tokens" not in kwargs
 
 
 @pytest.mark.asyncio
-async def test_litellm_emit_backward_compat_tokens_field_still_present() -> None:
-    """Legacy 'tokens' field must remain for backward-compat during transition (FRE-351)."""
+async def test_legacy_litellm_events_are_not_emitted() -> None:
+    """ADR-0074 Phase 3: legacy ``litellm_request_*`` events are gone."""
     calls: list[tuple] = []
     await _call_respond(calls)
-    kwargs = _get_complete_event(calls)
-    assert "tokens" in kwargs, (
-        "Backward-compat 'tokens' field missing — double-write required during transition. "
-        f"Keys present: {sorted(kwargs)}"
-    )
+    event_names = {event for event, _ in calls}
+    assert "litellm_request_start" not in event_names
+    assert "litellm_request_complete" not in event_names

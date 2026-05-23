@@ -202,7 +202,7 @@ async def extract_entities_and_relationships(
         "entity_extraction_started",
         entity_extraction_role=entity_extraction_role,
         provider=provider,
-        model_id=model_def.id if model_def else None,
+        model=model_def.id if model_def else None,
         user_msg_len=len(user_message),
         assistant_msg_len=len(assistant_response),
     )
@@ -216,7 +216,7 @@ async def extract_entities_and_relationships(
             cloud_client = get_llm_client(role_name=entity_extraction_role)
             log.debug(
                 "entity_extraction_using_cloud",
-                model_id=model_def.id if model_def else None,
+                model=model_def.id if model_def else None,
                 provider=provider,
             )
 
@@ -282,8 +282,8 @@ async def extract_entities_and_relationships(
                 "entity_extraction_llm_response_received",
                 model=model_used,
                 response_len=len(content),
-                prompt_tokens=llm_response.get("usage", {}).get("prompt_tokens"),
-                completion_tokens=llm_response.get("usage", {}).get("completion_tokens"),
+                input_tokens=llm_response.get("usage", {}).get("prompt_tokens"),
+                output_tokens=llm_response.get("usage", {}).get("completion_tokens"),
             )
 
         if not content:

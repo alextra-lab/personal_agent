@@ -118,8 +118,8 @@ class TestCanonicalEmitContract:
         assert kwargs["output_tokens"] == 50
         assert kwargs["latency_ms"] == 125
 
-    def test_completed_helper_keeps_legacy_token_aliases(self) -> None:
-        """Back-compat: ``prompt_tokens`` / ``completion_tokens`` / ``model_id`` aliases."""
+    def test_completed_helper_drops_legacy_token_aliases(self) -> None:
+        """Phase 3 (ADR-0074): ``prompt_tokens`` / ``completion_tokens`` / ``model_id`` aliases removed."""
         log = MagicMock()
         emit_model_call_completed(
             log=log,
@@ -134,9 +134,27 @@ class TestCanonicalEmitContract:
             total_tokens=150,
         )
         kwargs = log.info.call_args.kwargs
-        assert kwargs["prompt_tokens"] == 100
-        assert kwargs["completion_tokens"] == 50
-        assert kwargs["model_id"] == "anthropic/claude-sonnet-4-6"
+        for legacy in ("prompt_tokens", "completion_tokens", "model_id"):
+            assert legacy not in kwargs, f"legacy alias {legacy!r} must not be emitted"
+        # Canonical names still present.
+        assert kwargs["input_tokens"] == 100
+        assert kwargs["output_tokens"] == 50
+        assert kwargs["model"] == "anthropic/claude-sonnet-4-6"
+
+    def test_started_helper_drops_model_id_alias(self) -> None:
+        """Phase 3: started emit does not co-emit the ``model_id`` alias."""
+        log = MagicMock()
+        emit_model_call_started(
+            log=log,
+            role="primary",
+            model="anthropic/claude-sonnet-4-6",
+            endpoint="anthropic",
+            trace_ctx=_ctx_with_session(),
+            span_id="33333333-3333-3333-3333-333333333333",
+        )
+        kwargs = log.info.call_args.kwargs
+        assert "model_id" not in kwargs
+        assert kwargs["model"] == "anthropic/claude-sonnet-4-6"
 
 
 # ---------------------------------------------------------------------------
@@ -293,18 +311,16 @@ models:
 
 
 # ---------------------------------------------------------------------------
-# Layer 3: legacy back-compat — narrow check that the deprecated event names
-# still emit until Phase 3 drops them.
+# Layer 3: Phase 3 cleanup — confirm legacy event names are no longer emitted.
 # ---------------------------------------------------------------------------
 
 
-class TestLegacyBackCompat:
-    """Deprecated event names co-emit until Phase 3 cleanup drops them."""
+class TestNoLegacyEvents:
+    """ADR-0074 Phase 3: deprecated event names removed from LiteLLMClient."""
 
     @pytest.mark.asyncio
-    async def test_litellm_still_emits_legacy_event_names(self) -> None:
-        """``litellm_request_start`` / ``litellm_request_complete`` still emit."""
-        """``litellm_request_start`` / ``litellm_request_complete`` co-emit for one release cycle."""
+    async def test_litellm_does_not_emit_legacy_event_names(self) -> None:
+        """No ``litellm_request_start`` / ``litellm_request_complete`` in respond()."""
         from personal_agent.llm_client.litellm_client import LiteLLMClient
         from personal_agent.llm_client.types import ModelRole
 
@@ -320,10 +336,10 @@ class TestLegacyBackCompat:
         response.choices[0].message.content = "ok"
         response.choices[0].message.tool_calls = None
         response.usage = usage
-        response.id = "resp_legacy"
+        response.id = "resp_canonical_only"
 
         mock_gate = MagicMock()
-        mock_gate.reserve = AsyncMock(return_value="res-legacy")
+        mock_gate.reserve = AsyncMock(return_value="res-canonical")
         mock_gate.commit = AsyncMock()
         mock_tracker = AsyncMock()
 
@@ -369,5 +385,8 @@ class TestLegacyBackCompat:
             )
 
         names = {e for e, _ in captured}
-        assert "litellm_request_start" in names
-        assert "litellm_request_complete" in names
+        assert "litellm_request_start" not in names
+        assert "litellm_request_complete" not in names
+        # Canonical events still present.
+        assert "model_call_started" in names
+        assert "model_call_completed" in names

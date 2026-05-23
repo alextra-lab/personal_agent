@@ -20,8 +20,6 @@ import litellm
 import structlog
 
 from personal_agent.llm_client.telemetry import (
-    emit_legacy_litellm_complete,
-    emit_legacy_litellm_start,
     emit_model_call_completed,
     emit_model_call_started,
 )
@@ -306,18 +304,6 @@ class LiteLLMClient:
                 "max_tokens": effective_max_tokens,
             },
         )
-        # Back-compat: emit the deprecated event name too so existing
-        # Kibana queries keep working through one release cycle.
-        emit_legacy_litellm_start(
-            log=log,
-            role=role.value,
-            model=self._litellm_model,
-            trace_ctx=trace_ctx,
-            budget_role=self.budget_role,
-            reservation_amount=str(reservation_amount),
-            max_tokens=effective_max_tokens,
-        )
-
         try:
             response = await litellm.acompletion(**litellm_kwargs)
         except Exception as e:
@@ -483,25 +469,6 @@ class LiteLLMClient:
                 "cache_creation_input_tokens": _cache_creation,
             },
         )
-        # Back-compat: emit the deprecated event name too so existing
-        # Kibana queries keep working through one release cycle.
-        emit_legacy_litellm_complete(
-            log=log,
-            role=role.value,
-            model=self._litellm_model,
-            endpoint=self.provider,
-            trace_ctx=trace_ctx,
-            latency_ms=latency_ms,
-            elapsed_s=round(elapsed, 2),
-            input_tokens=_input_tokens,
-            output_tokens=_output_tokens,
-            total_tokens=_total_tokens,
-            cost_usd=_cost_usd,
-            tool_calls=len(tool_calls),
-            cache_read_tokens=_cache_read,
-            cache_creation_input_tokens=_cache_creation,
-        )
-
         await cost_tracker.disconnect()
 
         return LLMResponseType(

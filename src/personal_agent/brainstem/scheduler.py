@@ -147,6 +147,13 @@ class BrainstemScheduler:
             settings, "quality_monitor_anomaly_window_days", 7
         )
 
+        # Joinability probe (ADR-0074 Phase 5 / FRE-376)
+        self._last_joinability_probe_run: datetime | None = None
+        self.joinability_probe_enabled = getattr(settings, "joinability_probe_enabled", True)
+        self.joinability_probe_interval_seconds = getattr(
+            settings, "joinability_probe_interval_seconds", 3600
+        )
+
     async def start(self) -> None:
         """Start the scheduler background task."""
         start_trace_id = _new_scheduler_trace_id("scheduler.lifecycle")
@@ -449,6 +456,32 @@ class BrainstemScheduler:
                         log.warning(
                             "captains_log_backfill_failed",
                             error=str(backfill_err),
+                            exc_info=True,
+                            trace_id=iteration_trace_id,
+                        )
+
+                # Hourly: joinability probe (ADR-0074 Phase 5 / FRE-376)
+                if self.joinability_probe_enabled and (
+                    self._last_joinability_probe_run is None
+                    or (now - self._last_joinability_probe_run).total_seconds()
+                    >= self.joinability_probe_interval_seconds
+                ):
+                    try:
+                        from personal_agent.observability.joinability.scheduler_runner import (
+                            run_scheduled_probe,
+                        )
+
+                        await run_scheduled_probe(
+                            es_client=cast(
+                                "AsyncElasticsearch | None",
+                                self.lifecycler._es_client,
+                            )
+                        )
+                        self._last_joinability_probe_run = now
+                    except Exception as probe_err:
+                        log.warning(
+                            "joinability_probe_failed",
+                            error=str(probe_err),
                             exc_info=True,
                             trace_id=iteration_trace_id,
                         )

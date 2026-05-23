@@ -97,7 +97,6 @@
         "api_type":            { "type": "keyword" },
         "input_tokens":        { "type": "long" },
         "output_tokens":       { "type": "long" },
-        "total_tokens":        { "type": "long" },
         "cache_read_tokens":   { "type": "long" },
         "cache_creation_input_tokens": { "type": "long" },
         "cost_usd":            { "type": "double" },

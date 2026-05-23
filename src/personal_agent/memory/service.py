@@ -375,7 +375,9 @@ class MemoryService:
                         t.assistant_response = $assistant_response,
                         t.key_entities = $key_entities,
                         t.properties = $properties,
-                        t.visibility = $visibility
+                        t.visibility = $visibility,
+                        t.originating_trace_id = $originating_trace_id,
+                        t.originating_session_id = $originating_session_id
                     """,
                     turn_id=turn_id,
                     trace_id=conversation.trace_id,
@@ -388,6 +390,8 @@ class MemoryService:
                     key_entities=conversation.key_entities,
                     properties=orjson.dumps(conversation.properties).decode(),
                     visibility=visibility,
+                    originating_trace_id=conversation.trace_id,
+                    originating_session_id=conversation.session_id,
                 )
 
                 # FRE-343: provenance edge linking the user to this Turn.
@@ -426,7 +430,9 @@ class MemoryService:
                     await session.run(
                         """
                         MERGE (e:Entity {name: $name})
-                        ON CREATE SET e.visibility = $visibility
+                        ON CREATE SET e.visibility = $visibility,
+                                      e.originating_trace_id = $originating_trace_id,
+                                      e.originating_session_id = $originating_session_id
                         SET e.last_seen = $timestamp,
                             e.mention_count = COALESCE(e.mention_count, 0) + 1,
                             e.first_seen = COALESCE(e.first_seen, $timestamp),
@@ -441,6 +447,8 @@ class MemoryService:
                         timestamp=conversation.timestamp.isoformat(),
                         turn_id=turn_id,
                         visibility=visibility,
+                        originating_trace_id=conversation.trace_id,
+                        originating_session_id=conversation.session_id,
                     )
 
                 log.info(
@@ -568,7 +576,14 @@ class MemoryService:
             log.error("link_session_turns_failed", error=str(e), exc_info=True)
             return 0
 
-    async def create_entity(self, entity: Entity, visibility: str = "public") -> str:
+    async def create_entity(
+        self,
+        entity: Entity,
+        visibility: str = "public",
+        originating_trace_id: str | None = None,
+        originating_session_id: str | None = None,
+        extractor_model: str | None = None,
+    ) -> str:
         """Create or update an entity node with dedup and optional embedding.
 
         Args:
@@ -576,6 +591,14 @@ class MemoryService:
             visibility: Visibility scope for the Entity node (FRE-229). Uses ON CREATE SET
                 semantics — an existing entity's visibility is never overwritten on merge,
                 preserving first-write semantics.
+            originating_trace_id: Trace identifier of the request that produced this
+                entity (ADR-0074 §I5). Written as ``e.originating_trace_id`` on first
+                creation — preserved on subsequent merges to keep first-write semantics.
+            originating_session_id: Session identifier of the originating request
+                (ADR-0074 §I5). Written as ``e.originating_session_id`` on first creation.
+            extractor_model: Identifier of the LLM that produced this entity's
+                description / extraction (ADR-0074 §I5). ``None`` for user-provided
+                facts (gateway ``store_fact`` path); set for entity-extraction outputs.
 
         Returns:
             Entity ID (name-based, may be canonical name if deduplicated).
@@ -661,9 +684,21 @@ class MemoryService:
                     params["geocoded"] = entity.geocoded
 
                 params["visibility"] = visibility
+                # ADR-0074 §I5: origination written ON CREATE SET so first-write
+                # semantics preserve the originating request even across merges.
+                on_create_clauses = ["e.visibility = $visibility"]
+                if originating_trace_id is not None:
+                    on_create_clauses.append("e.originating_trace_id = $originating_trace_id")
+                    params["originating_trace_id"] = originating_trace_id
+                if originating_session_id is not None:
+                    on_create_clauses.append("e.originating_session_id = $originating_session_id")
+                    params["originating_session_id"] = originating_session_id
+                if extractor_model is not None:
+                    on_create_clauses.append("e.extractor_model = $extractor_model")
+                    params["extractor_model"] = extractor_model
                 query = (
                     "MERGE (e:Entity {name: $name})\n"
-                    "ON CREATE SET e.visibility = $visibility\n"
+                    "ON CREATE SET " + ",\n    ".join(on_create_clauses) + "\n"
                     "SET " + ",\n    ".join(set_clauses) + "\n"
                     "RETURN e.name as entity_id"
                 )

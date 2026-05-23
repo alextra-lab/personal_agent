@@ -336,3 +336,7 @@
   line: 138
   pattern: log
   reason: "Sensor polling top-level \u2014 runs outside any request context"
+- path: src/personal_agent/memory/service.py
+  line: 700
+  pattern: cypher_merge
+  reason: "Dynamic Cypher build \u2014 originating_trace_id/session_id/extractor_model written via conditional set_clauses; covered by test_create_entity_writes_originating_identity_and_extractor"

@@ -150,7 +150,9 @@ class SecondBrainConsolidator:
                     total=len(captures),
                     trace_id=capture.trace_id,
                 )
-                result = await self._process_capture(capture)
+                result = await self._process_capture(
+                    capture, extractor_model=entity_extraction_role
+                )
                 if result.get("turns_created"):
                     turns_created += result["turns_created"]
                     if capture.session_id:
@@ -355,11 +357,16 @@ class SecondBrainConsolidator:
         except Exception as e:
             log.warning("update_dominant_entities_failed", session_id=session_id, error=str(e))
 
-    async def _process_capture(self, capture: TaskCapture) -> dict[str, Any]:
+    async def _process_capture(
+        self, capture: TaskCapture, *, extractor_model: str | None = None
+    ) -> dict[str, Any]:
         """Process a single capture: extract entities and update graph.
 
         Args:
             capture: Task capture to process
+            extractor_model: Identifier of the entity-extraction model role used
+                for this consolidation pass (ADR-0074 §I5). Threaded onto each
+                ``:Entity`` node as ``extractor_model``.
 
         Returns:
             Processing result summary with entity_ids for events.
@@ -498,7 +505,13 @@ class SecondBrainConsolidator:
                 description=entity_data.get("description"),
                 properties=entity_data.get("properties", {}),
             )
-            entity_id = await self.memory_service.create_entity(entity, visibility=visibility)
+            entity_id = await self.memory_service.create_entity(
+                entity,
+                visibility=visibility,
+                originating_trace_id=capture.trace_id,
+                originating_session_id=capture.session_id,
+                extractor_model=extractor_model,
+            )
             if entity_id:
                 entities_created += 1
                 entity_ids.append(entity_id)

@@ -1,0 +1,53 @@
+{
+  "index_patterns": ["agent-monitors-joinability-*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.codec": "best_compression",
+      "index.refresh_interval": "10s",
+      "index.lifecycle.name": "agent-monitors-joinability-policy"
+    },
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "run_id":             { "type": "keyword" },
+        "started_at":         { "type": "date" },
+        "duration_ms":        { "type": "float" },
+        "source":             { "type": "keyword" },
+        "window_hours":       { "type": "integer" },
+        "random_seed":        { "type": "long" },
+        "sampled_session_id": { "type": "keyword" },
+        "sampled_trace_ids":  { "type": "keyword" },
+        "outcome":            { "type": "keyword" },
+        "trace_id":           { "type": "keyword" },
+        "kind":               { "type": "keyword" },
+        "substrate_checks": {
+          "type": "nested",
+          "properties": {
+            "substrate":      { "type": "keyword" },
+            "expected":       { "type": "keyword" },
+            "observed_count": { "type": "long" },
+            "status":         { "type": "keyword" },
+            "duration_ms":    { "type": "float" },
+            "error":          { "type": "text" }
+          }
+        },
+        "orphans": {
+          "type": "nested",
+          "properties": {
+            "substrate": { "type": "keyword" },
+            "kind":      { "type": "keyword" },
+            "severity":  { "type": "keyword" },
+            "detail":    { "type": "object", "enabled": false }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Joinability probe result docs (ADR-0074 Phase 5 / FRE-376). One doc per probe run.",
+    "managed_by": "scripts/setup-elasticsearch.sh"
+  }
+}

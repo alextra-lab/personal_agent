@@ -82,7 +82,17 @@ put_resource "Index template: agent-captains-template" \
   "/_index_template/agent-captains-template" \
   "$PROJECT_ROOT/docker/elasticsearch/captains-index-template.json"
 
-# 4. Initial write-alias index — only create if absent. The HEAD probe uses
+# 4. Joinability probe ILM policy (ADR-0074 Phase 5 / FRE-376).
+put_resource "ILM policy: agent-monitors-joinability-policy" \
+  "/_ilm/policy/agent-monitors-joinability-policy" \
+  "$PROJECT_ROOT/docker/elasticsearch/monitors-joinability-ilm-policy.json"
+
+# 5. Joinability probe index template.
+put_resource "Index template: agent-monitors-joinability-template" \
+  "/_index_template/agent-monitors-joinability-template" \
+  "$PROJECT_ROOT/docker/elasticsearch/monitors-joinability-index-template.json"
+
+# 6. Initial write-alias index — only create if absent. The HEAD probe uses
 #    `-f` so a 404 is reported as a non-fatal exit; we then PUT.
 echo "Bootstrap write-alias index: agent-logs-000001"
 if curl -fsS -I -o /dev/null "$ES_URL/agent-logs-000001" 2>/dev/null; then

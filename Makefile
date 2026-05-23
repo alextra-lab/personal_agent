@@ -291,6 +291,14 @@ sandbox-build:  ## Build the Python sandbox image for run_python
 backfill-participated-in:  ## one-shot backfill of (:Person)-[:PARTICIPATED_IN]->(:Turn) edges (FRE-343)
 	uv run python -m scripts.backfill_participated_in
 
+# ─── Joinability probe (ADR-0074 Phase 5 / FRE-376) ──────────────────────────
+
+joinability-probe:  ## Run one joinability probe walk against the current substrates
+	uv run python -m scripts.monitors.joinability_probe $(ARGS)
+
+joinability-status: ## 7-day green-gate verdict from agent-monitors-joinability-* (exit 0 on green)
+	uv run python -m personal_agent.observability.joinability.status_cli $(ARGS)
+
 # ─── Code quality ─────────────────────────────────────────────────────────────
 
 mypy:

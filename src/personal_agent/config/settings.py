@@ -738,6 +738,27 @@ class AppConfig(BaseSettings):
         description="Enable automated retention, archive, and purge",
     )
 
+    # Joinability probe (ADR-0074 Phase 5 / FRE-376)
+    joinability_probe_enabled: bool = Field(
+        default=True,
+        description="Enable scheduled joinability probe runs (ADR-0074 Phase 5)",
+    )
+    joinability_probe_interval_seconds: int = Field(
+        default=3600,
+        ge=60,
+        description="Seconds between joinability probe runs in the brainstem scheduler",
+    )
+    joinability_probe_window_hours: int = Field(
+        default=24,
+        ge=1,
+        le=168,
+        description="Session sampling window for the joinability probe (hours)",
+    )
+    joinability_probe_index_prefix: str = Field(
+        default="agent-monitors-joinability",
+        description="Elasticsearch index prefix for joinability probe result docs",
+    )
+
     # Consolidation Quality Monitor (Phase 2.3, FRE-32)
     quality_monitor_enabled: bool = Field(
         default=True,

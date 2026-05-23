@@ -722,11 +722,13 @@ class BrainstemScheduler:
         jsonl_path = output_dir / f"GQ-{today}.jsonl"
         bus = get_event_bus()
 
+        # ADR-0074 §I4: ensure a non-None trace_id for the typed event.
+        effective_trace_id = trace_id or _new_scheduler_trace_id("graph_quality_anomaly")
         for anomaly in anomalies:
             fp = pattern_fingerprint("graph_quality", anomaly.anomaly_type, anomaly.message)
             gqa = GraphQualityAnomaly(
                 fingerprint=fp,
-                trace_id=trace_id,
+                trace_id=effective_trace_id,
                 anomaly_type=anomaly.anomaly_type,
                 severity=anomaly.severity,
                 message=anomaly.message,

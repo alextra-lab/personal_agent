@@ -83,10 +83,35 @@ Each phase is independently shippable.
 - `LocalLLMClient` and `LiteLLMClient` adopt it.
 - Existing event-name compatibility maintained (no breaking changes for downstream consumers).
 
-**Phase 3 — Thread session/trace through every emit site (I1):**
-- Audit every `log.*`, `bus.publish`, and Neo4j write site.
-- Pass through `TraceContext`.
-- Update Cypher `MERGE`/`CREATE` statements to write `originating_trace_id` and `originating_session_id` onto nodes (I5).
+**Phase 3 — Thread session/trace through every emit site (I1):** ✅ **Shipped**
+- `scripts/check_identity_threaded.py` AST lint enforces ADR-0074 §I3 / §I5
+  on every commit (wired into `.pre-commit-config.yaml`).
+- All 21 `bus.publish` sites use typed Pydantic `Event` payloads that enforce
+  identity at construction.
+- All Cypher `MERGE` writes on `:Turn` and `:Entity` carry
+  `originating_trace_id`, `originating_session_id`, and (for extracted
+  entities) `extractor_model` per §I5.
+- `executor.py` orchestrator step boundary emits `STEP_PLANNING_STARTED` /
+  `STEP_PLANNING_COMPLETED` with the full identity tuple — `MODEL_CALL_*` is
+  now exclusively a model-client event.
+- Phase 2 back-compat aliases removed (`model_id`, `prompt_tokens`,
+  `completion_tokens`, `litellm_request_start`, `litellm_request_complete`).
+  ES index template + Kibana dashboard generator + 4 NDJSON dashboards +
+  eval harness all re-pointed to canonical field names atomically.
+- 200+ structlog kwargs now carry `trace_id` (orchestrator, memory, gateway,
+  service, llm_client, captains_log, second_brain, brainstem, mcp, transport,
+  events, telemetry, cost_gate, config, tools, storage). Background ops mint
+  a `SystemTraceContext` per §I4 rather than passing `None`.
+- ~370 sites legitimately allowlisted with per-function reasons (sensor
+  hardware polls, FastAPI lifespan, MCP gateway init, protocol contract
+  boundaries that lack ctx without a wider refactor).
+
+**Deferred to follow-up FRE:**
+- `captains_log/capture.py:61` (`CaptureEntry` dataclass field names) —
+  internal substrate schema rename triggers Captain's Log replay.
+- Tightening the optional `trace_id: str | None = None` kwargs introduced
+  during this phase to the non-optional `SystemTraceContext`/`TraceContext`
+  parameters that Phase 4 (I6) calls for.
 
 **Phase 4 — Type system enforcement (I6):**
 - `TraceContext: ...` (non-optional) on internal APIs.

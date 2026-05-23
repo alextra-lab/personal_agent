@@ -177,7 +177,7 @@ async def read_executor(
     log.debug("read_executor_called", path=path, resolved=str(resolved), trace_id=trace_id)
 
     # 2. Path governance
-    governance_error = _check_path_governance(resolved, tool_name="read")
+    governance_error = _check_path_governance(resolved, tool_name="read", trace_id=trace_id)
     if governance_error is not None:
         log.warning(
             "read_path_rejected",

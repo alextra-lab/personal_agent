@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict
 from personal_agent.gateway.auth import TokenInfo, require_scope
 from personal_agent.gateway.errors import not_found, service_unavailable
 from personal_agent.gateway.rate_limiting import get_rate_limiter
+from personal_agent.telemetry.trace import SystemTraceContext
 
 log = structlog.get_logger(__name__)
 
@@ -94,8 +95,14 @@ async def get_recent_observations(
     """
     get_rate_limiter().check(token)
     es = _get_es(request)
+    ctx = SystemTraceContext.new("observation_api")
 
-    log.info("gateway_observations_recent", limit=limit, token_name=token.name)
+    log.info(
+        "gateway_observations_recent",
+        limit=limit,
+        token_name=token.name,
+        trace_id=ctx.trace_id,
+    )
 
     query: dict[str, Any] = {
         "size": min(limit, 200),
@@ -108,7 +115,7 @@ async def get_recent_observations(
         hits = resp.get("hits", {}).get("hits", [])
         return [_flatten_hit(h) for h in hits]
     except Exception as exc:
-        log.error("gateway_observations_recent_failed", error=str(exc))
+        log.error("gateway_observations_recent_failed", error=str(exc), trace_id=ctx.trace_id)
         raise service_unavailable("Elasticsearch query failed") from exc
 
 
@@ -173,6 +180,7 @@ async def query_observations(
     """
     get_rate_limiter().check(token)
     es = _get_es(request)
+    ctx = SystemTraceContext.new("observation_api")
 
     log.info(
         "gateway_observations_query",
@@ -180,6 +188,7 @@ async def query_observations(
         time_range=body.time_range,
         limit=body.limit,
         token_name=token.name,
+        trace_id=ctx.trace_id,
     )
 
     must_clauses: list[dict[str, Any]] = [{"range": {"@timestamp": {"gte": body.time_range}}}]
@@ -197,7 +206,7 @@ async def query_observations(
         hits = resp.get("hits", {}).get("hits", [])
         return [_flatten_hit(h) for h in hits]
     except Exception as exc:
-        log.error("gateway_observations_query_failed", error=str(exc))
+        log.error("gateway_observations_query_failed", error=str(exc), trace_id=ctx.trace_id)
         raise service_unavailable("Elasticsearch query failed") from exc
 
 

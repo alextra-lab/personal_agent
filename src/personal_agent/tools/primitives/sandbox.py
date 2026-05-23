@@ -97,6 +97,7 @@ async def run_in_sandbox(
     cpus: float = 1.0,
     network: bool = False,
     scratch_host_path: Path,
+    trace_id: str | None = None,
 ) -> SandboxResult:
     """Run *script* inside a Docker container with hard security constraints.
 
@@ -113,20 +114,28 @@ async def run_in_sandbox(
         scratch_host_path: Absolute path on the Docker host that will be
             bind-mounted as ``/sandbox`` inside the container (rw).  Created
             automatically if it does not yet exist.
+        trace_id: Originating request trace_id, threaded onto every sandbox
+            lifecycle log for §I3 identity threading. Defaults to ``None`` for
+            callers without a request context (e.g. test fixtures).
 
     Returns:
         :class:`SandboxResult` describing the outcome.  Never raises;
         errors are surfaced through the ``SandboxResult`` fields.
     """
     if shutil.which("docker") is None:
-        log.warning("sandbox_unavailable", reason="docker binary not found")
+        log.warning("sandbox_unavailable", reason="docker binary not found", trace_id=trace_id)
         return _DOCKER_UNAVAILABLE
 
     # Ensure scratch directory exists on the host before Docker tries to mount it.
     try:
         scratch_host_path.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        log.error("sandbox_scratch_mkdir_failed", path=str(scratch_host_path), error=str(exc))
+        log.error(
+            "sandbox_scratch_mkdir_failed",
+            path=str(scratch_host_path),
+            error=str(exc),
+            trace_id=trace_id,
+        )
         return SandboxResult(
             exit_code=1,
             stdout="",
@@ -170,6 +179,7 @@ async def run_in_sandbox(
         memory_mb=memory_mb,
         network=network,
         scratch=str(scratch_host_path),
+        trace_id=trace_id,
     )
 
     proc: asyncio.subprocess.Process | None = None
@@ -190,7 +200,12 @@ async def run_in_sandbox(
                 await proc.wait()
             except OSError:
                 pass
-        log.warning("sandbox_timed_out", image=image, timeout_seconds=timeout_seconds)
+        log.warning(
+            "sandbox_timed_out",
+            image=image,
+            timeout_seconds=timeout_seconds,
+            trace_id=trace_id,
+        )
         return SandboxResult(
             exit_code=1,
             stdout="",
@@ -200,7 +215,7 @@ async def run_in_sandbox(
             scratch_files=_list_scratch_files(scratch_host_path),
         )
     except OSError as exc:
-        log.error("sandbox_os_error", image=image, error=str(exc))
+        log.error("sandbox_os_error", image=image, error=str(exc), trace_id=trace_id)
         return SandboxResult(
             exit_code=1,
             stdout="",
@@ -228,6 +243,7 @@ async def run_in_sandbox(
         stdout_len=len(stdout_str),
         stderr_len=len(stderr_str),
         scratch_files_count=len(scratch_files),
+        trace_id=trace_id,
     )
 
     return SandboxResult(

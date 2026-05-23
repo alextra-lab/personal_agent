@@ -81,6 +81,7 @@ def build_consolidation_insights_handler(
             log.debug(
                 "insights_analysis_skipped_no_captures",
                 event_id=event.event_id,
+                trace_id=event.trace_id,
             )
             return
         from personal_agent.config.settings import get_settings
@@ -97,6 +98,7 @@ def build_consolidation_insights_handler(
                 event_id=event.event_id,
                 captures_processed=event.captures_processed,
                 insights_count=len(insights),
+                trace_id=event.trace_id,
             )
 
             # Short-circuit: no signals or wiring disabled → nothing to publish.
@@ -112,17 +114,19 @@ def build_consolidation_insights_handler(
 
                 bus = get_event_bus()
 
-            await _publish_insight_events(bus, insights)
+            await _publish_insight_events(bus, insights, trace_id=event.trace_id)
 
             proposals = await engine.create_captain_log_proposals(insights)
-            await _save_proposals(proposals)
+            await _save_proposals(proposals, trace_id=event.trace_id)
         finally:
             await queries.disconnect()
 
     return handler
 
 
-async def _publish_insight_events(bus: Any, insights: list[Any]) -> None:
+async def _publish_insight_events(
+    bus: Any, insights: list[Any], *, trace_id: str | None = None
+) -> None:
     """Publish InsightsPatternDetectedEvent + InsightsCostAnomalyEvent per insight.
 
     Each insight produces a pattern event. Insights where ``insight_type == "anomaly"``
@@ -131,6 +135,9 @@ async def _publish_insight_events(bus: Any, insights: list[Any]) -> None:
     Args:
         bus: EventBus instance to publish on.
         insights: List of Insight objects from InsightsEngine.analyze_patterns().
+        trace_id: Originating request trace_id (from the
+            ``ConsolidationCompletedEvent`` that triggered the analysis) to
+            attach to failure logs for §I3 identity threading.
     """
     from datetime import datetime, timezone
 
@@ -172,6 +179,7 @@ async def _publish_insight_events(bus: Any, insights: list[Any]) -> None:
                 "insights_pattern_event_publish_failed",
                 error=str(exc),
                 insight_type=insight.insight_type,
+                trace_id=trace_id,
             )
 
         if insight.insight_type == "anomaly":
@@ -197,10 +205,11 @@ async def _publish_insight_events(bus: Any, insights: list[Any]) -> None:
                 log.warning(
                     "insights_cost_anomaly_event_publish_failed",
                     error=str(exc),
+                    trace_id=trace_id,
                 )
 
 
-async def _save_proposals(proposals: list[Any]) -> None:
+async def _save_proposals(proposals: list[Any], *, trace_id: str | None = None) -> None:
     """Save each CaptainLogEntry proposal via CaptainLogManager (best-effort).
 
     ADR-0030 fingerprint dedup and ADR-0040 suppression are applied by
@@ -208,6 +217,9 @@ async def _save_proposals(proposals: list[Any]) -> None:
 
     Args:
         proposals: List of CaptainLogEntry objects from create_captain_log_proposals().
+        trace_id: Originating request trace_id (from the
+            ``ConsolidationCompletedEvent`` that triggered the proposals) to
+            attach to failure logs for §I3 identity threading.
     """
     if not proposals:
         return
@@ -222,6 +234,7 @@ async def _save_proposals(proposals: list[Any]) -> None:
                 "insights_captain_log_save_failed",
                 error=str(exc),
                 proposal_title=getattr(proposal, "title", None),
+                trace_id=trace_id,
             )
 
 
@@ -259,6 +272,7 @@ def build_consolidation_promotion_handler(
             "promotion_from_consolidation",
             event_id=event.event_id,
             promoted_count=len(promoted),
+            trace_id=event.trace_id,
         )
 
     return handler
@@ -312,6 +326,7 @@ def build_promotion_captain_log_handler() -> Any:
             "captain_log_promotion_reflection_saved",
             entry_id=event.entry_id,
             linear_issue_id=event.linear_issue_id,
+            trace_id=event.trace_id,
         )
 
     return handler
@@ -337,6 +352,7 @@ def build_feedback_insights_handler() -> Any:
             issue_identifier=event.issue_identifier,
             label=event.label,
             fingerprint=event.fingerprint,
+            trace_id=event.trace_id,
         )
 
     return handler
@@ -372,6 +388,7 @@ def build_feedback_suppression_handler() -> Any:
             event_id=event.event_id,
             issue_identifier=event.issue_identifier,
             fingerprint=event.fingerprint,
+            trace_id=event.trace_id,
         )
 
     return handler
@@ -509,6 +526,7 @@ def build_error_pattern_captain_log_handler(manager: Any | None = None) -> Any:
             event_name=event.event_name,
             occurrences=event.occurrences,
             scope=scope.value,
+            trace_id=event.trace_id,
         )
 
     return handler
@@ -628,6 +646,7 @@ def build_compaction_quality_captain_log_handler(manager: Any | None = None) -> 
             noun_phrase=event.noun_phrase,
             dropped_entity=event.dropped_entity,
             tier_affected=event.tier_affected,
+            trace_id=event.trace_id,
         )
 
     return handler
@@ -750,6 +769,7 @@ async def _handle_graph_quality_anomaly(
         anomaly_type=event.anomaly_type,
         severity=event.severity,
         observation_date=event.observation_date,
+        trace_id=event.trace_id,
     )
 
     # Phase 2 governance: high-severity → ModeAdvisoryEvent (flag-gated, default off)
@@ -776,12 +796,14 @@ async def _publish_mode_advisory(event: GraphQualityAnomalyEvent) -> None:
             surface_tag="consolidation",
             reason=advisory.reason,
             anomaly_fingerprint=event.fingerprint,
+            trace_id=event.trace_id,
         )
     except Exception as exc:
         log.warning(
             "mode_advisory_publish_failed",
             anomaly_type=event.anomaly_type,
             error=str(exc),
+            trace_id=event.trace_id,
         )
 
 
@@ -810,6 +832,7 @@ async def _handle_staleness_reviewed(
             entities_dormant=event.entities_dormant,
             threshold=threshold,
             iso_week=event.iso_week,
+            trace_id=event.trace_id,
         )
         return
 
@@ -872,4 +895,5 @@ async def _handle_staleness_reviewed(
         iso_week=event.iso_week,
         entities_dormant=event.entities_dormant,
         dominant_tier=event.dominant_tier,
+        trace_id=event.trace_id,
     )

@@ -74,7 +74,13 @@ class _FakeStore:
         self._payloads[key] = payload
 
     async def put(
-        self, *, r2_key: str, content: bytes, content_type: str, metadata: Any = None
+        self,
+        *,
+        r2_key: str,
+        content: bytes,
+        content_type: str,
+        metadata: Any = None,
+        trace_id: str | None = None,
     ) -> None:
         self.put_calls.append(
             {
@@ -82,11 +88,12 @@ class _FakeStore:
                 "content": content,
                 "content_type": content_type,
                 "metadata": metadata,
+                "trace_id": trace_id,
             }
         )
         self._payloads[r2_key] = content
 
-    async def get(self, r2_key: str) -> bytes:
+    async def get(self, r2_key: str, *, trace_id: str | None = None) -> bytes:
         self.get_calls.append(r2_key)
         return self._payloads.get(r2_key, b"")
 
@@ -137,7 +144,9 @@ def _install_fakes(
         AsyncMock(return_value=embedding if embedding is not None else [0.0] * 1024),
     )
     monkeypatch.setattr(notes_tools, "AsyncSessionLocal", lambda: session)
-    monkeypatch.setattr(notes_tools.settings, "artifacts_public_base_url", "https://artifacts.test", raising=False)
+    monkeypatch.setattr(
+        notes_tools.settings, "artifacts_public_base_url", "https://artifacts.test", raising=False
+    )
     return session
 
 
@@ -162,9 +171,7 @@ async def test_notes_write_rejects_unknown_mode(monkeypatch: pytest.MonkeyPatch)
     _install_fakes(monkeypatch, store=_FakeStore())
 
     with pytest.raises(ToolExecutionError, match="mode"):
-        await notes_tools.notes_write_executor(
-            slug="a", content="b", mode="replace", ctx=_ctx()
-        )
+        await notes_tools.notes_write_executor(slug="a", content="b", mode="replace", ctx=_ctx())
 
 
 @pytest.mark.asyncio
@@ -174,9 +181,7 @@ async def test_notes_write_invalid_slug_rejected_pre_id(monkeypatch: pytest.Monk
     session = _install_fakes(monkeypatch, store=store)
 
     with pytest.raises(ToolExecutionError):
-        await notes_tools.notes_write_executor(
-            slug="../etc/passwd", content="x", ctx=_ctx()
-        )
+        await notes_tools.notes_write_executor(slug="../etc/passwd", content="x", ctx=_ctx())
 
     assert store.put_calls == []
     assert session.calls == []  # SELECT for prior revision happens only after slug passes
@@ -224,7 +229,9 @@ async def test_notes_write_append_concatenates_existing(monkeypatch: pytest.Monk
     store.stash(prior_key, b"earlier text")
 
     session = _install_fakes(monkeypatch, store=store)
-    session.enqueue(SimpleNamespace(first=lambda: SimpleNamespace(id=prior_artifact_id, r2_key=prior_key)))
+    session.enqueue(
+        SimpleNamespace(first=lambda: SimpleNamespace(id=prior_artifact_id, r2_key=prior_key))
+    )
 
     out = await notes_tools.notes_write_executor(
         slug="continuing",
@@ -306,9 +313,7 @@ async def test_notes_search_requires_user_id(monkeypatch: pytest.MonkeyPatch) ->
     _install_fakes(monkeypatch, store=_FakeStore())
 
     with pytest.raises(ToolExecutionError, match="user_id"):
-        await notes_tools.notes_search_executor(
-            query="hello", ctx=SimpleNamespace(trace_id="t")
-        )
+        await notes_tools.notes_search_executor(query="hello", ctx=SimpleNamespace(trace_id="t"))
 
 
 @pytest.mark.asyncio
@@ -371,9 +376,7 @@ async def test_notes_search_passes_tag_filter(monkeypatch: pytest.MonkeyPatch) -
     session = _install_fakes(monkeypatch, store=_FakeStore())
     session.enqueue(SimpleNamespace(all=lambda: []))
 
-    await notes_tools.notes_search_executor(
-        query="anything", tags=["proj-x"], ctx=_ctx()
-    )
+    await notes_tools.notes_search_executor(query="anything", tags=["proj-x"], ctx=_ctx())
 
     sql_call = next(c for c in session.calls if "FROM artifacts" in c[0])
     assert sql_call[1]["tag_filter"] == ["proj-x"]

@@ -267,6 +267,7 @@ class LiteLLMClient:
             messages=api_messages,
             max_tokens=effective_max_tokens,
             config=budget_config,
+            trace_id=trace_ctx.trace_id,
         )
         try:
             reservation_id = await gate.reserve(

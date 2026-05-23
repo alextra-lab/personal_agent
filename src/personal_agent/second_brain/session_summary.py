@@ -124,7 +124,7 @@ async def generate_session_summary(
 
     settings = get_settings()
     if not getattr(settings, "session_summary_enabled", True):
-        log.debug("session_summary_disabled_by_settings", session_id=session_id)
+        log.debug("session_summary_disabled_by_settings", session_id=session_id, trace_id=trace_id)
         return None
 
     model_config = load_model_config()

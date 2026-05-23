@@ -84,7 +84,12 @@ class NoOpBus:
 
     async def publish(self, stream: str, event: EventBase, maxlen: int | None = None) -> None:
         """Discard the event."""
-        log.debug("event_discarded_noop_bus", stream=stream, event_type=event.event_type)
+        log.debug(
+            "event_discarded_noop_bus",
+            stream=stream,
+            event_type=event.event_type,
+            trace_id=event.trace_id,
+        )
 
     async def subscribe(
         self,

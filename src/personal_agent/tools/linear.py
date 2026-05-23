@@ -278,7 +278,11 @@ async def _get_state_id(team_id: str, state_name: str) -> str:
 
 
 async def _get_label_id(
-    team_id: str, label_name: str, *, auto_create_color: str | None = None
+    team_id: str,
+    label_name: str,
+    *,
+    auto_create_color: str | None = None,
+    trace_id: str | None = None,
 ) -> str:
     if label_name in _label_id_cache:
         return _label_id_cache[label_name]
@@ -315,7 +319,7 @@ async def _get_label_id(
         if not new_label.get("id"):
             raise ToolExecutionError(f"Failed to create Linear label '{label_name}'.")
         _label_id_cache[label_name] = str(new_label["id"])
-        log.info("linear_label_created", label=label_name)
+        log.info("linear_label_created", label=label_name, trace_id=trace_id)
     return _label_id_cache[label_name]
 
 
@@ -442,7 +446,10 @@ async def create_linear_issue_executor(
     state_id = await _get_state_id(team_id, _NEEDS_APPROVAL_STATE)
     personal_agent_label_id = _require_personal_agent_label_id()
     agent_filed_label_id = await _get_label_id(
-        team_id, _AGENT_FILED_LABEL, auto_create_color=_AGENT_FILED_COLOR
+        team_id,
+        _AGENT_FILED_LABEL,
+        auto_create_color=_AGENT_FILED_COLOR,
+        trace_id=trace_id,
     )
 
     issue_input: dict[str, Any] = {

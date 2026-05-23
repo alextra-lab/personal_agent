@@ -79,13 +79,13 @@ def parse_freshness_review_schedule(cron: str) -> tuple[int, int, int]:
     return minute, hour, py_weekday
 
 
-def _load_previous_snapshot(path: Path) -> dict[str, Any] | None:
+def _load_previous_snapshot(path: Path, trace_id: str) -> dict[str, Any] | None:
     if not path.exists():
         return None
     try:
         return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
     except Exception:
-        log.warning("freshness_snapshot_read_failed", path=str(path))
+        log.warning("freshness_snapshot_read_failed", path=str(path), trace_id=trace_id)
         return None
 
 
@@ -260,7 +260,7 @@ async def run_freshness_review(memory_service: MemoryService | None, trace_id: s
     now = datetime.now(timezone.utc)
     iso = f"{now.isocalendar().year}-W{now.isocalendar().week:02d}"
     snap_path = freshness_tier_snapshot_path(cfg)
-    prev = _load_previous_snapshot(snap_path)
+    prev = _load_previous_snapshot(snap_path, trace_id)
 
     prev_e = (
         StalenessTierCounts.from_dict(prev["entities"])
@@ -391,6 +391,7 @@ async def _emit_staleness_reviewed_event(
             iso_week=iso_week,
             fingerprint=fp,
             error=str(exc),
+            trace_id=trace_id,
         )
         return  # Skip bus publish if durable write failed
 
@@ -414,6 +415,7 @@ async def _emit_staleness_reviewed_event(
             iso_week=iso_week,
             fingerprint=fp,
             dominant_tier=tier,
+            trace_id=trace_id,
         )
     except Exception as exc:
         log.warning(
@@ -421,4 +423,5 @@ async def _emit_staleness_reviewed_event(
             iso_week=iso_week,
             fingerprint=fp,
             error=str(exc),
+            trace_id=trace_id,
         )

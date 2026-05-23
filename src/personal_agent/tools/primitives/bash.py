@@ -108,8 +108,12 @@ bash_tool = ToolDefinition(
 # ---------------------------------------------------------------------------
 
 
-def _load_deny_patterns() -> list[str]:
+def _load_deny_patterns(*, trace_id: str | None = None) -> list[str]:
     """Load hard_deny_patterns from governance config, falling back to _FALLBACK_DENY.
+
+    Args:
+        trace_id: Originating request trace_id, threaded onto the
+            governance-load failure log for §I3 identity threading.
 
     Returns:
         List of regex pattern strings that, if matched, hard-deny the command.
@@ -121,7 +125,7 @@ def _load_deny_patterns() -> list[str]:
             return policy.hard_deny_patterns
     except GovernanceConfigError as exc:
         # Config directory missing, YAML parse error, or Pydantic validation failure.
-        log.warning("bash_governance_load_error", error=str(exc))
+        log.warning("bash_governance_load_error", error=str(exc), trace_id=trace_id)
     return _FALLBACK_DENY
 
 
@@ -330,7 +334,7 @@ async def bash_executor(
     # ------------------------------------------------------------------
     # 1. Hard-deny check (belt-and-suspenders before any subprocess)
     # ------------------------------------------------------------------
-    deny_patterns = _load_deny_patterns()
+    deny_patterns = _load_deny_patterns(trace_id=trace_id)
     matched = _is_hard_denied(command, deny_patterns)
     if matched is not None:
         log.warning(

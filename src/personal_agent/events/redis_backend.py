@@ -121,6 +121,7 @@ class RedisStreamBus:
             event_type=event.event_type,
             event_id=event.event_id,
             message_id=message_id,
+            trace_id=event.trace_id,
         )
 
     # -- Subscribe --------------------------------------------------------
@@ -222,6 +223,7 @@ class RedisStreamBus:
             group=group,
             error=error,
             attempts=attempts,
+            trace_id=event.trace_id,
         )
 
     # -- Accessors --------------------------------------------------------

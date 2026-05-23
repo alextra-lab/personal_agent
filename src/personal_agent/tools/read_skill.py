@@ -105,6 +105,7 @@ async def read_skill_executor(
         skill_name=name,
         body_chars=len(skill.body),
         session_id=session_id,
+        trace_id=ctx.trace_id,
     )
     return {
         "status": "ok",

@@ -195,6 +195,7 @@ class LocalLLMClient:
             role=role.value,
             priority=priority,
             timeout=priority_timeout,
+            trace_id=trace_ctx.trace_id,
         ):
             return await self._do_request(
                 role=role,
@@ -277,6 +278,7 @@ class LocalLLMClient:
                 tools_count=len(tools),
                 strategy=strategy.value,
                 reason="Tools stripped — model strategy is not NATIVE",
+                trace_id=trace_ctx.trace_id,
             )
             tools = None
             tool_choice = None

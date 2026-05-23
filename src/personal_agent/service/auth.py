@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from personal_agent.config.settings import get_settings
 from personal_agent.service.database import AsyncSessionLocal
 from personal_agent.service.models import UserModel
+from personal_agent.telemetry.trace import SystemTraceContext
 
 log = structlog.get_logger(__name__)
 settings = get_settings()
@@ -190,6 +191,7 @@ async def get_request_user(request: Request) -> RequestUser:
     Raises:
         HTTPException: 401 when no identity can be resolved.
     """
+    ctx = SystemTraceContext.new("request_auth")
     email: str | None = request.headers.get(_CF_EMAIL_HEADER)
 
     if not email:
@@ -200,11 +202,17 @@ async def get_request_user(request: Request) -> RequestUser:
                 "unauthenticated_request",
                 path=request.url.path,
                 gateway_auth_enabled=settings.gateway_auth_enabled,
+                trace_id=ctx.trace_id,
             )
             raise HTTPException(status_code=401, detail="Authentication required")
 
     async with _get_db_session() as db:
         user_id, display_name = await _get_user_with_display_name(db, email)
 
-    log.debug("request_user_resolved", email=email, user_id=str(user_id))
+    log.debug(
+        "request_user_resolved",
+        email=email,
+        user_id=str(user_id),
+        trace_id=ctx.trace_id,
+    )
     return RequestUser(user_id=user_id, email=email, display_name=display_name)

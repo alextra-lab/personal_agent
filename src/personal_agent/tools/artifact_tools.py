@@ -385,6 +385,7 @@ async def artifact_write_executor(
         content=payload,
         content_type=content_type,
         metadata={"artifact_id": str(artifact_id)},
+        trace_id=trace_id,
     )
 
     async with AsyncSessionLocal() as session:
@@ -613,7 +614,7 @@ async def artifact_read_executor(
             artifact_id=str(parsed_id),
             size_bytes=row.size_bytes,
         )
-        raw = await store.get(row.r2_key)
+        raw = await store.get(row.r2_key, trace_id=trace_id)
         output["content"] = raw.decode("utf-8", errors="replace")
 
     log.info(

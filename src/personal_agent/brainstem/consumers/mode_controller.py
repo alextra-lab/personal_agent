@@ -41,11 +41,25 @@ from personal_agent.events.models import (
 )
 from personal_agent.governance.models import Mode
 from personal_agent.telemetry import get_logger
+from personal_agent.telemetry.trace import SystemTraceContext
 
 if TYPE_CHECKING:
     from personal_agent.brainstem.mode_manager import ModeManager
 
 log = get_logger(__name__)
+
+
+def _event_trace_id(event: EventBase) -> str:
+    """Return the event's trace_id, minting a system-scoped one if absent.
+
+    ``MetricsSampledEvent`` and ``ModeTransitionEvent`` are system-scoped
+    and may carry ``trace_id=None``. To preserve ADR-0074 §I3 (every async
+    boundary preserves identity) on the consumer side, we mint a
+    ``system:mode_controller`` trace when the event has none. Multiple log
+    lines emitted from a single handler invocation share the same trace.
+    """
+    return event.trace_id or SystemTraceContext.new("mode_controller").trace_id
+
 
 # Rolling window for cadence tracking — 10 minutes in seconds.
 _CADENCE_WINDOW_SECONDS: float = 600.0
@@ -164,6 +178,7 @@ class ModeControllerConsumer:
         Args:
             event: Incoming metrics-sampled event.
         """
+        trace_id = _event_trace_id(event)
         try:
             self._window.append(event)
 
@@ -173,7 +188,7 @@ class ModeControllerConsumer:
 
             # Aggregate window into a single sensor snapshot.
             sensor_data = self._aggregate_window()
-            self._mode_manager.evaluate_transitions(sensor_data)
+            self._mode_manager.evaluate_transitions(sensor_data, trace_id=trace_id)
             self._last_evaluation = now
 
             log.debug(
@@ -181,6 +196,7 @@ class ModeControllerConsumer:
                 window_samples=len(self._window),
                 sensor_cpu=sensor_data.get("perf_system_cpu_load"),
                 sensor_mem=sensor_data.get("perf_system_mem_used"),
+                trace_id=trace_id,
             )
 
         except Exception as exc:
@@ -188,6 +204,7 @@ class ModeControllerConsumer:
                 "mode_controller_metrics_handler_error",
                 error=str(exc),
                 exc_info=True,
+                trace_id=trace_id,
             )
 
     async def _on_mode_transition(self, event: ModeTransitionEvent) -> None:
@@ -196,6 +213,7 @@ class ModeControllerConsumer:
         Args:
             event: Incoming mode-transition event.
         """
+        trace_id = _event_trace_id(event)
         try:
             edge: tuple[Mode, Mode] = (event.from_mode, event.to_mode)
             now = time.monotonic()
@@ -215,16 +233,18 @@ class ModeControllerConsumer:
                 to_mode=event.to_mode.value,
                 edge_count_10min=count,
                 threshold=self._calibration_threshold,
+                trace_id=trace_id,
             )
 
             if count >= self._calibration_threshold:
-                await self._emit_calibration_proposal(event, count)
+                await self._emit_calibration_proposal(event, count, trace_id=trace_id)
 
         except Exception as exc:
             log.warning(
                 "mode_controller_transition_handler_error",
                 error=str(exc),
                 exc_info=True,
+                trace_id=trace_id,
             )
 
     # ------------------------------------------------------------------
@@ -268,7 +288,9 @@ class ModeControllerConsumer:
             "safety_policy_violations": 0,
         }
 
-    async def _emit_calibration_proposal(self, event: ModeTransitionEvent, count: int) -> None:
+    async def _emit_calibration_proposal(
+        self, event: ModeTransitionEvent, count: int, *, trace_id: str
+    ) -> None:
         """Write a Captain's Log CONFIG_PROPOSAL for anomalous edge cadence.
 
         De-duplicates within the process lifetime via the
@@ -278,6 +300,8 @@ class ModeControllerConsumer:
         Args:
             event: The transition event that triggered the threshold.
             count: Current edge count within the 10-minute rolling window.
+            trace_id: Trace identifier of the enclosing handler invocation
+                (ADR-0074 §I3). Threaded onto the de-dup / emitted logs.
         """
         fingerprint = _compute_calibration_fingerprint(event.from_mode, event.to_mode)
 
@@ -287,6 +311,7 @@ class ModeControllerConsumer:
                 from_mode=event.from_mode.value,
                 to_mode=event.to_mode.value,
                 fingerprint=fingerprint,
+                trace_id=trace_id,
             )
             return
 
@@ -345,4 +370,5 @@ class ModeControllerConsumer:
             count_10min=count,
             threshold=self._calibration_threshold,
             fingerprint=fingerprint,
+            trace_id=trace_id,
         )

@@ -372,6 +372,7 @@ async def chat(
                 messages=anthropic_messages,
                 max_tokens=_MAX_TOKENS,
                 config=load_budget_config(),
+                trace_id=trace_id,
             )
             reservation_id = await gate.reserve(
                 role="main_inference",

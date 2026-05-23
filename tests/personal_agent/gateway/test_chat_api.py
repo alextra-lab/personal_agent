@@ -1,8 +1,11 @@
-"""Tests for the gateway chat API endpoint (FRE-235).
+"""Tests for the gateway chat API endpoint (FRE-235 + cross-user leak hotfix).
 
 Uses FastAPI's TestClient with mocked SessionRepository and Anthropic client.
 Background streaming tasks are patched out for unit tests — only the
-synchronous contract of the endpoint is verified here.
+synchronous contract of the endpoint is verified here. After the cross-user
+hotfix the endpoint requires authentication; each test attaches the CF
+Access header and overrides the FastAPI dependency to return a stable
+mock user identity.
 """
 
 from __future__ import annotations
@@ -10,12 +13,26 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from personal_agent.gateway.chat_api import router as chat_router
+from personal_agent.service.auth import RequestUser, get_request_user
+
+_TEST_USER = RequestUser(
+    user_id=UUID("00000000-0000-0000-0000-000000000001"),
+    email="tester@example.com",
+    display_name=None,
+)
+_AUTH_HEADERS = {"Cf-Access-Authenticated-User-Email": "tester@example.com"}
+
+
+def _override_user(app: FastAPI) -> None:
+    """Override the get_request_user FastAPI dependency for unit tests."""
+    app.dependency_overrides[get_request_user] = lambda: _TEST_USER
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -39,6 +56,7 @@ def _build_app() -> FastAPI:
     """Build a minimal test FastAPI app with the chat router mounted."""
     app = FastAPI()
     app.include_router(chat_router)
+    _override_user(app)
     return app
 
 
@@ -79,6 +97,7 @@ def test_chat_starts_streaming() -> None:
             resp = client.post(
                 "/chat",
                 data={"message": "Hello", "session_id": sid},
+                headers=_AUTH_HEADERS,
             )
 
     assert resp.status_code == 200
@@ -105,6 +124,7 @@ def test_chat_invalid_uuid() -> None:
             resp = client.post(
                 "/chat",
                 data={"message": "Hello", "session_id": "not-a-uuid"},
+                headers=_AUTH_HEADERS,
             )
 
     assert resp.status_code == 422
@@ -125,7 +145,81 @@ def test_chat_missing_api_key() -> None:
             resp = client.post(
                 "/chat",
                 data={"message": "Hello", "session_id": sid},
+                headers=_AUTH_HEADERS,
             )
 
     assert resp.status_code == 503
     assert "Anthropic API key" in resp.json()["detail"]
+
+
+def test_chat_401_without_cf_access_header() -> None:
+    """POST /chat returns 401 when the CF Access header is absent.
+
+    Patches ``gateway_auth_enabled=True`` and clears ``agent_owner_email`` so
+    the dev fallback in :func:`get_request_user` cannot fire and confuse the
+    test.
+    """
+    sid = str(uuid4())
+    mock_settings = MagicMock(
+        gateway_auth_enabled=True,
+        agent_owner_email=None,
+        anthropic_api_key="sk-test",
+    )
+    with (
+        patch("personal_agent.service.auth.settings", mock_settings),
+        patch("personal_agent.gateway.chat_api.get_settings", return_value=mock_settings),
+    ):
+        app = FastAPI()
+        app.include_router(chat_router)  # NO _override_user — real dep fires
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.post(
+                "/chat",
+                data={"message": "Hello", "session_id": sid},
+            )
+    assert resp.status_code == 401
+
+
+def test_chat_404_when_session_owned_by_other_user() -> None:
+    """POST /chat returns 404 when session exists but belongs to another user.
+
+    repo.get(uuid, user_id=A) → None (ownership mismatch), repo.get(uuid)
+    → other_session (exists under user B). Endpoint must return 404 to
+    avoid confirming existence of other users' sessions, never INSERT.
+    """
+    sid = str(uuid4())
+    other_session = _make_session_model(session_id=sid)
+
+    repo_get = AsyncMock(side_effect=[None, other_session])
+
+    with (
+        patch(
+            "personal_agent.gateway.chat_api.get_settings",
+            return_value=MagicMock(anthropic_api_key="sk-test"),
+        ),
+        patch("personal_agent.gateway.chat_api.AsyncSessionLocal") as mock_session_local,
+        patch(
+            "personal_agent.service.repositories.session_repository.SessionRepository.get",
+            repo_get,
+        ),
+    ):
+        mock_db = AsyncMock()
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_session_local.return_value = mock_ctx
+
+        app = _build_app()
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.post(
+                "/chat",
+                data={"message": "Hello", "session_id": sid},
+                headers=_AUTH_HEADERS,
+            )
+
+    assert resp.status_code == 404
+    # Both scoped and unscoped lookups must have fired.
+    assert repo_get.await_count == 2
+    # First call scoped to the calling user, second unscoped (to detect
+    # cross-user attempt).
+    first_call_kwargs = repo_get.await_args_list[0].kwargs
+    assert first_call_kwargs.get("user_id") == _TEST_USER.user_id

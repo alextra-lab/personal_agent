@@ -21,9 +21,10 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import anthropic
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 
 from personal_agent.config.settings import get_settings
+from personal_agent.service.auth import RequestUser, get_request_user
 from personal_agent.service.database import AsyncSessionLocal
 from personal_agent.service.models import SessionModel
 from personal_agent.service.repositories.session_repository import SessionRepository
@@ -257,18 +258,26 @@ async def chat(
     message: str = Form(...),
     session_id: str = Form(...),
     profile: str = Form(default="cloud"),
+    request_user: RequestUser = Depends(get_request_user),  # noqa: B008
 ) -> dict[str, str]:
     """Accept a user message and begin streaming the assistant response.
 
-    Loads (or creates) the session from PostgreSQL, prepends conversation
-    history, launches a background streaming task, and returns immediately.
-    The response is delivered asynchronously via ``GET /stream/{session_id}``.
+    Loads (or creates) the session from PostgreSQL **scoped to the caller's
+    user_id**, prepends conversation history, launches a background
+    streaming task, and returns immediately. The response is delivered
+    asynchronously via ``GET /stream/{session_id}``.
 
     Args:
-        request: FastAPI request (unused; reserved for future auth/context).
+        request: FastAPI request (reserved for future context).
         message: User message text.
-        session_id: Client-generated session UUID.
+        session_id: Client-generated session UUID. Must belong to the
+            authenticated user; cross-user collisions return 404 (existence
+            of other users' sessions is never confirmed).
         profile: Execution profile (informational; cloud path only here).
+        request_user: Resolved user identity (injected by FastAPI from CF
+            Access header). Closes the cross-user data leak: a holder of
+            the bearer token cannot read or create sessions owned by
+            another user.
 
     Returns:
         ``{"session_id": ..., "trace_id": ..., "status": "streaming"}`` on success.
@@ -276,6 +285,8 @@ async def chat(
     Raises:
         HTTPException: 503 if the Anthropic API key is not configured.
         HTTPException: 422 if ``session_id`` is not a valid UUID.
+        HTTPException: 404 if ``session_id`` already exists under a
+            different user (do not confirm existence cross-user).
     """
     trace_id = str(uuid4())
     settings = get_settings()
@@ -297,11 +308,25 @@ async def chat(
     # --- Load or create session ------------------------------------------
     async with AsyncSessionLocal() as db:
         repo = SessionRepository(db)
-        session = await repo.get(session_uuid)
+        # Scoped read: returns None if session belongs to another user.
+        session = await repo.get(session_uuid, user_id=request_user.user_id)
         if not session:
+            # Disambiguate "doesn't exist" from "owned by someone else": if
+            # an unscoped lookup finds a row, the requester is trying to
+            # impersonate — return 404 (not 403) to avoid confirming.
+            other = await repo.get(session_uuid)
+            if other is not None:
+                log.warning(
+                    "chat.session_cross_user_attempt",
+                    trace_id=trace_id,
+                    session_id=session_id,
+                    requester_user_id=str(request_user.user_id),
+                )
+                raise HTTPException(status_code=404, detail="Session not found")
             now = datetime.now(timezone.utc)
             session = SessionModel(
                 session_id=session_uuid,
+                user_id=request_user.user_id,
                 created_at=now,
                 last_active_at=now,
                 mode="NORMAL",
@@ -316,6 +341,7 @@ async def chat(
                 "chat.session_created",
                 trace_id=trace_id,
                 session_id=session_id,
+                user_id=str(request_user.user_id),
             )
 
         # Build prior messages: strip to wire format only (role + content).

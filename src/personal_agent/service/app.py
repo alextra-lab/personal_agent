@@ -1583,38 +1583,69 @@ async def inference_status() -> dict[str, Any]:
 
 
 @app.get("/memory/interests")
-async def get_user_interests(limit: int = 20) -> dict[str, Any]:
-    """Get user interest profile (frequently mentioned entities).
+async def get_user_interests(
+    limit: int = 20,
+    request_user: RequestUser = Depends(get_request_user),  # noqa: B008
+) -> dict[str, Any]:
+    """Get the caller's interest profile (frequently mentioned entities).
+
+    Scoped to the authenticated user via visibility filter (FRE-229).
+    Closes the cross-user data leak hotfix — previously this endpoint
+    returned entities across all users.
 
     Args:
-        limit: Maximum number of entities to return
+        limit: Maximum number of entities to return.
+        request_user: Resolved user identity (injected by FastAPI from
+            the CF Access header).
 
     Returns:
-        List of entities sorted by mention frequency
+        List of entities sorted by mention frequency, scoped to the caller.
     """
     if not memory_service or not memory_service.connected:
         raise HTTPException(status_code=503, detail="Memory service not available")
 
-    entities = await memory_service.get_user_interests(limit=limit)
+    entities = await memory_service.get_user_interests(
+        limit=limit,
+        user_id=request_user.user_id,
+        authenticated=True,
+    )
     return {"entities": [e.model_dump() for e in entities]}
 
 
 @app.post("/memory/query")
-async def query_memory(query: dict[str, Any]) -> dict[str, Any]:
-    """Query memory graph for related conversations and entities.
+async def query_memory(
+    query: dict[str, Any],
+    request_user: RequestUser = Depends(get_request_user),  # noqa: B008
+) -> dict[str, Any]:
+    """Query memory graph for the caller's conversations and entities.
+
+    Scoped to the authenticated user via the visibility filter (FRE-229).
+    The ``user_id`` field in the query body is overwritten with the
+    authenticated identity to prevent a PWA-side modification from
+    requesting another user's data.
 
     Args:
-        query: Query parameters (entity_names, entity_types, limit, etc.)
+        query: Query parameters (entity_names, entity_types, limit, etc.).
+            Any caller-supplied ``user_id`` is ignored.
+        request_user: Resolved user identity (injected by FastAPI).
 
     Returns:
-        Memory query results with conversations and entities
+        Memory query results with conversations and entities, scoped to
+        the caller.
     """
     if not memory_service or not memory_service.connected:
         raise HTTPException(status_code=503, detail="Memory service not available")
 
     from personal_agent.memory.models import MemoryQuery
 
-    memory_query = MemoryQuery(**query)
+    # Strip any caller-supplied user_id / authenticated flag — these come
+    # from the verified identity only, never from the request body.
+    safe_query = {k: v for k, v in query.items() if k not in ("user_id", "authenticated")}
+    memory_query = MemoryQuery(
+        **safe_query,
+        user_id=request_user.user_id,
+        authenticated=True,
+    )
     result = await memory_service.query_memory(
         memory_query,
         feedback_key=query.get("session_id"),

@@ -76,7 +76,12 @@ class Orchestrator:
         # Query current mode from brainstem if not provided
         if mode is None:
             mode = get_current_mode()
-            log.debug("mode_queried_from_brainstem", mode=mode.value)
+            log.debug(
+                "mode_queried_from_brainstem",
+                mode=mode.value,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
 
         # Default to CHAT channel if not provided
         if channel is None:

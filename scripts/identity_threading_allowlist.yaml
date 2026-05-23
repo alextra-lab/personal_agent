@@ -340,3 +340,55 @@
   line: 700
   pattern: cypher_merge
   reason: "Dynamic Cypher build \u2014 originating_trace_id/session_id/extractor_model written via conditional set_clauses; covered by test_create_entity_writes_originating_identity_and_extractor"
+- path: src/personal_agent/orchestrator/executor.py
+  line: 551
+  pattern: log
+  reason: "MCP gateway init lifecycle \u2014 runs at startup, no request context"
+- path: src/personal_agent/orchestrator/executor.py
+  line: 568
+  pattern: log
+  reason: "MCP gateway adapter reuse \u2014 startup lifecycle, no request context"
+- path: src/personal_agent/orchestrator/executor.py
+  line: 578
+  pattern: log
+  reason: "MCP gateway init failure \u2014 startup lifecycle, no request context"
+- path: src/personal_agent/orchestrator/executor.py
+  line: 592
+  pattern: log
+  reason: "MCP gateway shutdown \u2014 lifecycle, no request context"
+- path: src/personal_agent/orchestrator/executor.py
+  line: 374
+  pattern: log
+  reason: "_validate_and_fix_conversation_roles \u2014 pure validator, no request context"
+- path: src/personal_agent/orchestrator/executor.py
+  line: 404
+  pattern: log
+  reason: "_validate_and_fix_conversation_roles \u2014 pure validator, no request context"
+- path: src/personal_agent/orchestrator/context_window.py
+  line: 340
+  pattern: log
+  reason: "_evict_old_tool_errors \u2014 pure helper, no request context"
+- path: src/personal_agent/orchestrator/compression_manager.py
+  line: 55
+  pattern: log
+  reason: "get_summary getter \u2014 has session_id only, called from non-request paths"
+- path: src/personal_agent/orchestrator/skills.py
+  line: 125
+  pattern: log
+  reason: "_load_all_skills startup loader \u2014 no request context"
+- path: src/personal_agent/orchestrator/skills.py
+  line: 128
+  pattern: log
+  reason: "_load_all_skills startup loader \u2014 no request context"
+- path: src/personal_agent/orchestrator/skills.py
+  line: 133
+  pattern: log
+  reason: "_load_all_skills startup loader \u2014 no request context"
+- path: src/personal_agent/orchestrator/skills.py
+  line: 214
+  pattern: log
+  reason: "assemble_skill_index \u2014 pure formatter, no request context"
+- path: src/personal_agent/orchestrator/skills.py
+  line: 340
+  pattern: log
+  reason: "get_skill_block \u2014 pure getter, no request context"

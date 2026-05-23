@@ -43,7 +43,7 @@ Wave D implementation (endpoint abstraction, compose unification, test parity) r
 |--------|----------|------|------|
 | [FRE-375](https://linear.app/frenchforest/issue/FRE-375) | **Urgent** | Opus | Isolate test/eval scripts from production memory + log substrate. 87% of last-7d Neo4j churn is eval-harness pollution. **Blocks FRE-374.** |
 | [FRE-374](https://linear.app/frenchforest/issue/FRE-374) | **Urgent** | Opus | Cross-fact constraint layer for memory pipeline (description provenance, relationship consolidation, render fallback, replay from Postgres). **Blocked by FRE-375.** |
-| [FRE-369](https://linear.app/frenchforest/issue/FRE-369) | Medium | Sonnet | User-upload UX in PWA with presigned PUT to R2. Spec: ADR-0069 + ADR-0070. **Unblocked** by FRE-227 ship 2026-05-17. |
+| [FRE-369](https://linear.app/frenchforest/issue/FRE-369) | Medium | Sonnet | User-upload UX in PWA with presigned PUT to R2 (multimodal images/files in chat). Spec: ADR-0069 + ADR-0070. **Hold until after 2026-05-30 joinability gate closes** — adds new substrate writes that could complicate the gate. Run sequence: FRE-377 → May-30 gate → FRE-374 replay → FRE-369. |
 | [FRE-314](https://linear.app/frenchforest/issue/FRE-314) | Medium | Sonnet | `feedback_history/` retention policy in DataLifecycleManager |
 | [FRE-349](https://linear.app/frenchforest/issue/FRE-349) | Medium | Opus | Surface actionable Insights in agent context (G3 from FRE-346) |
 

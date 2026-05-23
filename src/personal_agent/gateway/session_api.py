@@ -1,11 +1,10 @@
 """Session REST endpoints for the Seshat API Gateway.
 
 Exposes PostgreSQL session data over HTTP under ``/sessions/*``.  All
-endpoints require the ``sessions:read`` scope.
-
-The router delegates to :class:`~personal_agent.service.repositories.session_repository.SessionRepository`
-via a :class:`~sqlalchemy.ext.asyncio.AsyncSession` obtained from the app's
-session factory stored in ``request.app.state.db_session_factory``.
+endpoints require the ``sessions:read`` scope **and** a verified
+``Cf-Access-Authenticated-User-Email`` header. Session rows are scoped to
+the resolved user_id so a holder of the bearer token cannot read another
+user's data — closes the cross-user data leak fixed in this hotfix.
 """
 
 from collections.abc import AsyncGenerator
@@ -19,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from personal_agent.gateway.auth import TokenInfo, require_scope
 from personal_agent.gateway.errors import not_found, service_unavailable
 from personal_agent.gateway.rate_limiting import get_rate_limiter
+from personal_agent.service.auth import _CF_EMAIL_HEADER, _get_user_with_display_name
 from personal_agent.telemetry.trace import SystemTraceContext
 
 log = structlog.get_logger(__name__)
@@ -51,6 +51,38 @@ async def _get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
+async def _require_request_user_id(request: Request, db: AsyncSession) -> UUID:
+    """Resolve the authenticated user's UUID from CF Access headers.
+
+    The gateway router's bearer token authorizes *access* to the endpoint
+    family; this helper additionally pins each request to one user so the
+    bearer-token holder cannot enumerate other users' sessions. Mirrors
+    :func:`personal_agent.service.auth.get_request_user` but returns just
+    the ``user_id`` (no full ``RequestUser``) so the gateway router stays
+    free of FastAPI-only types.
+
+    Args:
+        request: Incoming FastAPI request.
+        db: Active async SQLAlchemy session for the users-table lookup.
+
+    Returns:
+        Stable ``user_id`` UUID for the requester.
+
+    Raises:
+        HTTPException(401): When the ``Cf-Access-Authenticated-User-Email``
+            header is absent. The gateway never falls back to a default
+            owner — token-only callers are rejected outright.
+    """
+    email = request.headers.get(_CF_EMAIL_HEADER)
+    if not email:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required (missing CF Access user header)",
+        )
+    user_id, _ = await _get_user_with_display_name(db, email)
+    return UUID(str(user_id))
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -77,16 +109,18 @@ async def list_sessions(
     get_rate_limiter().check(token)
     from personal_agent.service.repositories.session_repository import SessionRepository
 
+    user_id = await _require_request_user_id(request, db)
     ctx = SystemTraceContext.new("session_api")
     log.info(
         "gateway_sessions_list",
         limit=limit,
         token_name=token.name,
+        user_id=str(user_id),
         trace_id=ctx.trace_id,
     )
 
     repo = SessionRepository(db)
-    sessions = await repo.list_recent(limit)
+    sessions = await repo.list_recent(limit, user_id=user_id)
     return [_session_to_dict(s) for s in sessions]
 
 
@@ -115,11 +149,13 @@ async def get_session(
     get_rate_limiter().check(token)
     from personal_agent.service.repositories.session_repository import SessionRepository
 
+    user_id = await _require_request_user_id(request, db)
     ctx = SystemTraceContext.new("session_api", session_id=session_id)
     log.info(
         "gateway_sessions_get",
         session_id=session_id,
         token_name=token.name,
+        user_id=str(user_id),
         trace_id=ctx.trace_id,
     )
 
@@ -136,7 +172,9 @@ async def get_session(
         ) from exc
 
     repo = SessionRepository(db)
-    session = await repo.get(uuid)
+    # 404 (not 403) on ownership mismatch — do not confirm existence of
+    # other users' sessions.
+    session = await repo.get(uuid, user_id=user_id)
     if session is None:
         raise not_found("session")
     return _session_to_dict(session)
@@ -169,12 +207,14 @@ async def get_session_messages(
     get_rate_limiter().check(token)
     from personal_agent.service.repositories.session_repository import SessionRepository
 
+    user_id = await _require_request_user_id(request, db)
     ctx = SystemTraceContext.new("session_api", session_id=session_id)
     log.info(
         "gateway_sessions_get_messages",
         session_id=session_id,
         limit=limit,
         token_name=token.name,
+        user_id=str(user_id),
         trace_id=ctx.trace_id,
     )
 
@@ -191,7 +231,7 @@ async def get_session_messages(
         ) from exc
 
     repo = SessionRepository(db)
-    session = await repo.get(uuid)
+    session = await repo.get(uuid, user_id=user_id)
     if session is None:
         raise not_found("session")
 

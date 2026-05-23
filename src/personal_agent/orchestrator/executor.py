@@ -37,11 +37,12 @@ from personal_agent.security import sanitize_error_message
 from personal_agent.telemetry import (
     LLM_STEP_COMPLETED,
     MODEL_CALL_ERROR,
-    MODEL_CALL_STARTED,
     ORCHESTRATOR_FATAL_ERROR,
     REPLY_READY,
     STATE_TRANSITION,
     STEP_EXECUTED,
+    STEP_PLANNING_COMPLETED,
+    STEP_PLANNING_STARTED,
     TASK_COMPLETED,
     TASK_FAILED,
     TASK_STARTED,
@@ -1637,9 +1638,11 @@ async def step_llm_call(
 
     step_start_time = time.time()
     log.info(
-        MODEL_CALL_STARTED,
+        STEP_PLANNING_STARTED,
         trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
         span_id=span_id,
+        parent_span_id=trace_ctx.parent_span_id,
         model_role=model_role.value,
         channel=ctx.channel.value,
     )
@@ -2031,6 +2034,22 @@ async def step_llm_call(
             )
         ctx.messages.append(assistant_message)
 
+        # ADR-0074 §I3: emit STEP_PLANNING_COMPLETED on every success exit so
+        # the planning event pairs cleanly. Status indicates branch taken.
+        step_planning_duration_ms = int((time.time() - step_start_time) * 1000)
+        log.info(
+            STEP_PLANNING_COMPLETED,
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            span_id=span_id,
+            parent_span_id=trace_ctx.parent_span_id,
+            model_role=model_role.value,
+            channel=ctx.channel.value,
+            duration_ms=step_planning_duration_ms,
+            status="success",
+            next_state="tool_execution" if response_tool_calls else "synthesis",
+        )
+
         # If tool calls present, transition to tool execution
         if response_tool_calls:
             return TaskState.TOOL_EXECUTION
@@ -2068,6 +2087,20 @@ async def step_llm_call(
             },
         }
         ctx.steps.append(error_step)
+        # ADR-0074 §I3: emit STEP_PLANNING_COMPLETED on error path so traces
+        # have a matching completion for every started event.
+        log.info(
+            STEP_PLANNING_COMPLETED,
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            span_id=span_id,
+            parent_span_id=trace_ctx.parent_span_id,
+            model_role=model_role.value,
+            channel=ctx.channel.value,
+            duration_ms=duration_ms,
+            status="error",
+            error_type=type(e).__name__,
+        )
         return TaskState.FAILED
 
 

@@ -336,6 +336,8 @@ class LinearClient:
         labels: list[str],
         state: str,
         project: str,
+        *,
+        trace_id: str | None = None,
     ) -> str | None:
         """Create a Linear issue. Returns human identifier (e.g. FF-123) or None.
 
@@ -347,6 +349,7 @@ class LinearClient:
             labels: Label display names to apply.
             state: Workflow state name (e.g. ``Needs Approval``).
             project: Project name; skipped silently if not found.
+            trace_id: Originating request trace_id for log correlation (ADR-0074 §I3).
 
         Returns:
             Human issue identifier (e.g. ``FF-123``) or None on failure.
@@ -369,7 +372,7 @@ class LinearClient:
             if project_id:
                 issue_input["projectId"] = project_id
             else:
-                log.warning("linear_project_not_found", project=project)
+                log.warning("linear_project_not_found", project=project, trace_id=trace_id)
 
         data = await self._call(
             """
@@ -384,7 +387,12 @@ class LinearClient:
         issue = (data.get("issueCreate") or {}).get("issue") or {}
         ident = issue.get("identifier") or issue.get("id")
         if ident:
-            log.info("linear_issue_created", identifier=ident, title=title[:80])
+            log.info(
+                "linear_issue_created",
+                identifier=ident,
+                title=title[:80],
+                trace_id=trace_id,
+            )
         return str(ident) if ident else None
 
     async def get_issue(self, issue_id: str, include_relations: bool = False) -> dict[str, Any]:
@@ -496,12 +504,15 @@ class LinearClient:
         nodes = issues_data.get("nodes") or []
         return [_normalize_issue_node(n) for n in nodes if isinstance(n, dict)]
 
-    async def count_non_archived_issues(self, team: str, page_limit: int = 250) -> int:
+    async def count_non_archived_issues(
+        self, team: str, page_limit: int = 250, *, trace_id: str | None = None
+    ) -> int:
         """Count non-archived issues for a team (paginated).
 
         Args:
             team: Team name.
             page_limit: Issues to fetch per page (max 250).
+            trace_id: Originating request trace_id for log correlation (ADR-0074 §I3).
 
         Returns:
             Total issue count (capped at 10 000).
@@ -553,7 +564,7 @@ class LinearClient:
             if not nodes:
                 break
             if total > 10000:
-                log.warning("linear_issue_count_truncated", counted=total)
+                log.warning("linear_issue_count_truncated", counted=total, trace_id=trace_id)
                 break
 
         return total
@@ -675,6 +686,7 @@ class LinearClient:
         *,
         parent: str | None = None,
         is_group: bool = False,
+        trace_id: str | None = None,
     ) -> None:
         """Create an issue label (workspace or team-scoped via parent).
 
@@ -683,6 +695,7 @@ class LinearClient:
             color: Hex color string (e.g. ``#95A2B3``).
             parent: Parent label name to make this a child label.
             is_group: Whether this label is a group container.
+            trace_id: Originating request trace_id for log correlation (ADR-0074 §I3).
         """
         team_id = await self._team_id(settings.linear_team_name)
         label_input: dict[str, Any] = {
@@ -708,7 +721,7 @@ class LinearClient:
         new_lbl = (data.get("issueLabelCreate") or {}).get("issueLabel") or {}
         if new_lbl.get("id"):
             _lc_label_ids[name] = str(new_lbl["id"])
-        log.info("linear_label_created", name=name)
+        log.info("linear_label_created", name=name, trace_id=trace_id)
 
     async def ensure_feedback_labels(self, team_name: str | None = None) -> None:
         """Create AgentFeedback taxonomy labels if missing (idempotent).

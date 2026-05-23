@@ -183,12 +183,21 @@ class MCPClientWrapper:
             log.error("mcp_list_tools_failed", error=str(e), exc_info=True)
             raise
 
-    async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        trace_id: str | None = None,
+    ) -> Any:
         """Call MCP tool.
 
         Args:
             name: Tool name (MCP server name, NOT prefixed with mcp_)
             arguments: Tool arguments.
+            trace_id: Optional trace identifier for telemetry correlation
+                (ADR-0074 §I3). ``None`` is allowed for background/startup
+                callers; runtime tool dispatch should always thread it.
 
         Returns:
             Tool result (parsed from MCP content).
@@ -200,41 +209,48 @@ class MCPClientWrapper:
             raise RuntimeError("MCP client not connected - use async with context manager")
 
         try:
-            log.info("mcp_tool_calling", tool=name, arguments=arguments)
+            log.info("mcp_tool_calling", tool=name, arguments=arguments, trace_id=trace_id)
 
             # Call without explicit timeout - let the SDK/gateway handle it
             # asyncio.wait_for causes anyio cancel scope conflicts with the MCP SDK
             result = await self.session.call_tool(name, arguments)
 
-            log.info("mcp_tool_response_received", tool=name)
+            log.info("mcp_tool_response_received", tool=name, trace_id=trace_id)
 
             # Check if tool returned an error
             if result.isError:
                 error_msg = self._extract_error_message(result)
-                log.error("mcp_tool_returned_error", tool=name, error=error_msg)
+                log.error("mcp_tool_returned_error", tool=name, error=error_msg, trace_id=trace_id)
                 raise RuntimeError(f"MCP tool '{name}' returned error: {error_msg}")
 
             # Check structuredContent first (some tools use this)
             if result.structuredContent:
-                log.debug("mcp_tool_structured_content", tool=name)
+                log.debug("mcp_tool_structured_content", tool=name, trace_id=trace_id)
                 return result.structuredContent
 
             # Parse MCP content (can be text, blob, or resource)
             if not result.content:
-                log.warning("mcp_tool_empty_content", tool=name)
+                log.warning("mcp_tool_empty_content", tool=name, trace_id=trace_id)
                 return {}
 
             # Handle different content types
             parsed_result = self._parse_mcp_content(result.content)
 
-            log.debug("mcp_tool_called", tool=name, result_type=type(parsed_result).__name__)
+            log.debug(
+                "mcp_tool_called",
+                tool=name,
+                result_type=type(parsed_result).__name__,
+                trace_id=trace_id,
+            )
             return parsed_result
 
         except RuntimeError:
             # Re-raise RuntimeError (tool errors) as-is
             raise
         except Exception as e:
-            log.error("mcp_tool_call_failed", tool=name, error=str(e), exc_info=True)
+            log.error(
+                "mcp_tool_call_failed", tool=name, error=str(e), exc_info=True, trace_id=trace_id
+            )
             raise
 
     def _extract_error_message(self, result: Any) -> str:

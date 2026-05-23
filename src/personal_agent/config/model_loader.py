@@ -112,13 +112,22 @@ def load_model_config(config_path: Path | str | None = None) -> ModelConfig:
     return _load_model_config_at_path(str(config_path))
 
 
-def resolve_active_attribution() -> tuple[str | None, str]:
+def resolve_active_attribution(
+    *,
+    trace_id: str | None = None,
+) -> tuple[str | None, str]:
     """Resolve the active primary model id and its config path string.
 
     ADR-0074 (FRE-376) requires every new session and every assistant
     message to carry the model attribution that was in effect when the row
     was written. This helper centralises the lookup so the service layer
     and the Redis event consumer both produce identical attribution.
+
+    Args:
+        trace_id: Originating chat trace, threaded through for log
+            correlation on the warning path (ADR-0074 §I3). Optional because
+            this helper is also called from startup smoke checks where no
+            trace exists.
 
     Returns:
         ``(primary_model_id, model_config_path_str)`` — ``primary_model_id``
@@ -138,6 +147,7 @@ def resolve_active_attribution() -> tuple[str | None, str]:
             "model_attribution_resolve_failed",
             error=str(exc),
             config_path=config_path_str,
+            trace_id=trace_id,
         )
         primary_id = None
     return primary_id, config_path_str

@@ -118,7 +118,11 @@ class ElasticsearchLogger:
             Document ID if successful, None if failed
         """
         if not self.client:
-            log.warning("elasticsearch_not_connected", event=event_type)
+            log.warning(
+                "elasticsearch_not_connected",
+                event=event_type,
+                trace_id=str(trace_id) if trace_id else None,
+            )
             return None
 
         doc = {
@@ -133,7 +137,12 @@ class ElasticsearchLogger:
             result = await self.client.index(index=self._get_index_name(), document=doc)
             return str(result["_id"])
         except Exception as e:
-            log.error("elasticsearch_log_failed", event=event_type, error=str(e))
+            log.error(
+                "elasticsearch_log_failed",
+                event=event_type,
+                error=str(e),
+                trace_id=str(trace_id) if trace_id else None,
+            )
             return None
 
     async def log_batch(self, events: list[tuple[str, dict[str, Any], UUID | None]]) -> int:
@@ -223,7 +232,11 @@ class ElasticsearchLogger:
             )
             return [hit["_source"] for hit in result["hits"]["hits"]]
         except Exception as e:
-            log.error("elasticsearch_search_failed", error=str(e))
+            log.error(
+                "elasticsearch_search_failed",
+                error=str(e),
+                trace_id=str(trace_id) if trace_id else None,
+            )
             return []
 
     async def index_request_trace(
@@ -347,6 +360,7 @@ class ElasticsearchLogger:
                         event="request_trace_step",
                         sequence=entry.get("sequence"),
                         error=str(step_e),
+                        trace_id=trace_id,
                     )
 
             return doc_id
@@ -356,6 +370,7 @@ class ElasticsearchLogger:
                 index=index_name,
                 event="request_trace",
                 error=str(e),
+                trace_id=trace_id,
             )
             return None
 
@@ -382,7 +397,11 @@ class ElasticsearchLogger:
             Document ID if successful, None otherwise.
         """
         if not self.client:
-            log.warning("elasticsearch_not_connected", event="request_latency_breakdown")
+            log.warning(
+                "elasticsearch_not_connected",
+                event="request_latency_breakdown",
+                trace_id=trace_id,
+            )
             return None
         if not breakdown:
             return None
@@ -455,6 +474,7 @@ class ElasticsearchLogger:
                         event="request_latency_phase",
                         phase=phase_name,
                         error=str(flat_e),
+                        trace_id=trace_id,
                     )
 
             return doc_id
@@ -464,5 +484,6 @@ class ElasticsearchLogger:
                 index=index_name,
                 event="request_latency_breakdown",
                 error=str(e),
+                trace_id=trace_id,
             )
             return None

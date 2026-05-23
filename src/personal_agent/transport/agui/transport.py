@@ -215,6 +215,7 @@ class AGUITransport:
             "transport.approval_request_queued",
             request_id=request_id,
             session_id=session_id,
+            trace_id=trace_id,
             tool=tool,
             risk_level=risk_level,
             timeout_seconds=timeout_seconds,
@@ -225,6 +226,7 @@ class AGUITransport:
             "transport.approval_decision_received",
             request_id=request_id,
             session_id=session_id,
+            trace_id=trace_id,
             tool=tool,
             decision=decision.decision,
         )

@@ -120,6 +120,25 @@ def _generate_entry_id(date: datetime | None = None, trace_id: str | None = None
     return f"CL-{timestamp_str}-{trace_prefix}{next_num:03d}"
 
 
+def _trace_id_from_entry(entry: CaptainLogEntry) -> str | None:
+    """Extract the originating trace_id from a Captain's Log entry, if any.
+
+    Args:
+        entry: The Captain's Log entry to inspect.
+
+    Returns:
+        The first telemetry-ref trace_id when present and a string; ``None``
+        otherwise (including when the field carries an unawaited coroutine
+        from a DSPy-in-to_thread reflection).
+    """
+    if not entry.telemetry_refs:
+        return None
+    raw = entry.telemetry_refs[0].trace_id
+    if isinstance(raw, str) and not getattr(raw, "__await__", None):
+        return raw
+    return None
+
+
 def _sanitize_filename(title: str) -> str:
     """Sanitize title for use in filename.
 
@@ -230,6 +249,7 @@ class CaptainLogManager:
                     "captain_log_entry_event_publish_failed",
                     entry_id=entry_id,
                     error=str(exc),
+                    trace_id=trace_id,
                 )
 
         try:
@@ -269,11 +289,14 @@ class CaptainLogManager:
             if entry.proposed_change and entry.proposed_change.fingerprint
             else None
         )
-        if fingerprint and is_fingerprint_suppressed(fingerprint):
+        if fingerprint and is_fingerprint_suppressed(
+            fingerprint, trace_id=_trace_id_from_entry(entry)
+        ):
             log.info(
                 "captains_log_proposal_suppressed",
                 fingerprint=fingerprint,
                 reason="rejected_via_feedback",
+                trace_id=_trace_id_from_entry(entry),
             )
             return None
 
@@ -306,6 +329,7 @@ class CaptainLogManager:
             entry_type=entry.type.value,
             title=entry.title,
             file_path=str(file_path),
+            trace_id=_trace_id_from_entry(entry),
         )
 
         if entry.type in {CaptainLogEntryType.REFLECTION, CaptainLogEntryType.CONFIG_PROPOSAL}:
@@ -384,6 +408,7 @@ class CaptainLogManager:
             existing_entry_id=data.get("entry_id"),
             fingerprint=pc.get("fingerprint"),
             seen_count=pc["seen_count"],
+            trace_id=_trace_id_from_entry(new_entry),
         )
 
         # Re-index the updated doc
@@ -414,7 +439,11 @@ class CaptainLogManager:
         return self.save_entry(entry, es_handler=es_handler)
 
     def commit_to_git(
-        self, entry_id: str, message: str | None = None, file_path: pathlib.Path | None = None
+        self,
+        entry_id: str,
+        message: str | None = None,
+        file_path: pathlib.Path | None = None,
+        trace_id: str | None = None,
     ) -> bool:
         """Commit a Captain's Log entry to git.
 
@@ -422,6 +451,7 @@ class CaptainLogManager:
             entry_id: Entry ID to commit.
             message: Optional commit message (defaults to "Captain's Log: [title]").
             file_path: Optional path to entry file (will search if not provided).
+            trace_id: Originating request trace_id for log correlation (ADR-0074 §I3).
 
         Returns:
             True if commit succeeded, False otherwise.
@@ -434,6 +464,7 @@ class CaptainLogManager:
                     "captains_log_file_not_found",
                     entry_id=entry_id,
                     log_dir=str(self.log_dir),
+                    trace_id=trace_id,
                 )
                 return False
             file_path = matching_files[0]
@@ -452,6 +483,7 @@ class CaptainLogManager:
                     "captains_log_read_title_failed",
                     entry_id=entry_id,
                     error=str(e),
+                    trace_id=trace_id,
                 )
                 message = f"Captain's Log: {entry_id}"
 
@@ -469,6 +501,7 @@ class CaptainLogManager:
                 "captains_log_git_not_available",
                 entry_id=entry_id,
                 reason="Not in git repository or git not available",
+                trace_id=trace_id,
             )
             return False
 
@@ -496,6 +529,7 @@ class CaptainLogManager:
                 CAPTAINS_LOG_ENTRY_COMMITTED,
                 entry_id=entry_id,
                 commit_message=message,
+                trace_id=trace_id,
             )
             return True
 
@@ -504,12 +538,14 @@ class CaptainLogManager:
                 "captains_log_commit_failed",
                 entry_id=entry_id,
                 error=str(e),
+                trace_id=trace_id,
             )
             return False
         except subprocess.TimeoutExpired:
             log.warning(
                 "captains_log_commit_timeout",
                 entry_id=entry_id,
+                trace_id=trace_id,
             )
             return False
 
@@ -557,6 +593,6 @@ class CaptainLogManager:
         file_path = self.write_entry(entry)
 
         if auto_commit and file_path is not None:
-            self.commit_to_git(entry_id, file_path=file_path)
+            self.commit_to_git(entry_id, file_path=file_path, trace_id=trace_id)
 
         return entry

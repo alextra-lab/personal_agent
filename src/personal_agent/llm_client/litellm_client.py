@@ -309,7 +309,7 @@ class LiteLLMClient:
         except Exception as e:
             # Refund the reservation so the counter doesn't leak headroom.
             try:
-                await gate.refund(reservation_id)
+                await gate.refund(reservation_id, trace_id=trace_id)
             except Exception as refund_exc:  # noqa: BLE001
                 log.error(
                     "litellm_refund_after_failure_failed",
@@ -386,7 +386,7 @@ class LiteLLMClient:
         from decimal import Decimal as _Decimal  # noqa: PLC0415 — local alias
 
         try:
-            await gate.commit(reservation_id, _Decimal(str(cost)))
+            await gate.commit(reservation_id, _Decimal(str(cost)), trace_id=trace_id)
         except Exception as commit_exc:  # noqa: BLE001
             # If the commit fails (DB hiccup), we'd rather log loudly than
             # silently lose the actual-cost adjustment. The reaper will sweep

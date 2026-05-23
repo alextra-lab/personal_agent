@@ -365,6 +365,7 @@ def build_feedback_suppression_handler() -> Any:
         record_rejection_suppression(
             event.fingerprint,
             issue_identifier=event.issue_identifier,
+            trace_id=event.trace_id,
         )
         log.info(
             "feedback_suppression_updated",

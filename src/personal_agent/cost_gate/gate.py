@@ -194,6 +194,7 @@ class CostGate:
                         "cost_gate_reserve_uncapped",
                         role=role,
                         amount=str(amount),
+                        trace_id=str(trace_id) if trace_id else None,
                     )
                     return await self._insert_uncapped_reservation(
                         conn, role=role, amount=amount, trace_id=trace_id
@@ -231,6 +232,8 @@ class CostGate:
         self,
         reservation_id: ReservationId,
         actual_cost: Decimal,
+        *,
+        trace_id: UUID | str | None = None,
     ) -> None:
         """Settle a reservation with the actual post-call cost.
 
@@ -243,6 +246,10 @@ class CostGate:
             reservation_id: The UUID returned from ``reserve()``.
             actual_cost: Actual USD cost from ``litellm.completion_cost()``.
                 Must be non-negative.
+            trace_id: Originating chat trace; threaded through for log
+                correlation (ADR-0074 §I3). The trace is already recorded on
+                the reservation row at ``reserve()`` time, so this is purely
+                an observability hook.
 
         Raises:
             ValueError: If ``actual_cost`` is negative or the reservation is
@@ -314,9 +321,15 @@ class CostGate:
             actual_cost=str(actual_cost),
             reserved=str(reserved),
             delta=str(delta),
+            trace_id=str(trace_id) if trace_id else None,
         )
 
-    async def refund(self, reservation_id: ReservationId) -> None:
+    async def refund(
+        self,
+        reservation_id: ReservationId,
+        *,
+        trace_id: UUID | str | None = None,
+    ) -> None:
         """Refund a reservation in full.
 
         Decrements every counter the reservation incremented by the full
@@ -329,6 +342,10 @@ class CostGate:
 
         Args:
             reservation_id: The UUID returned from ``reserve()``.
+            trace_id: Originating chat trace; threaded through for log
+                correlation (ADR-0074 §I3). The trace is already recorded on
+                the reservation row at ``reserve()`` time, so this is purely
+                an observability hook.
 
         Raises:
             ValueError: If the reservation is unknown or already committed.
@@ -358,7 +375,10 @@ class CostGate:
                     )
                 if status in (ReservationStatus.REFUNDED.value, ReservationStatus.EXPIRED.value):
                     log.debug(
-                        "cost_gate_refund_noop", reservation_id=str(reservation_id), status=status
+                        "cost_gate_refund_noop",
+                        reservation_id=str(reservation_id),
+                        status=status,
+                        trace_id=str(trace_id) if trace_id else None,
                     )
                     return
 
@@ -393,6 +413,7 @@ class CostGate:
             "cost_gate_refunded",
             reservation_id=str(reservation_id),
             amount=str(amount),
+            trace_id=str(trace_id) if trace_id else None,
         )
 
     async def reap_stale(self) -> int:

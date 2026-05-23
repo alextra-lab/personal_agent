@@ -29,14 +29,19 @@ def suppression_file_path() -> pathlib.Path:
     return feedback_history_dir() / "suppressed_fingerprints.json"
 
 
-def _load_suppressions() -> dict[str, Any]:
+def _load_suppressions(trace_id: str | None = None) -> dict[str, Any]:
     path = suppression_file_path()
     if not path.is_file():
         return {}
     try:
         return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
     except Exception as exc:
-        log.warning("suppression_file_load_failed", path=str(path), error=str(exc))
+        log.warning(
+            "suppression_file_load_failed",
+            path=str(path),
+            error=str(exc),
+            trace_id=trace_id,
+        )
         return {}
 
 
@@ -47,12 +52,17 @@ def _atomic_write_json(path: pathlib.Path, data: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
-def is_fingerprint_suppressed(fingerprint: str) -> bool:
-    """Return True if fingerprint is under active rejection suppression."""
+def is_fingerprint_suppressed(fingerprint: str, *, trace_id: str | None = None) -> bool:
+    """Return True if fingerprint is under active rejection suppression.
+
+    Args:
+        fingerprint: Proposal fingerprint hex.
+        trace_id: Originating request trace_id for log correlation (ADR-0074 §I3).
+    """
     fp = fingerprint.lower().strip()
     if not fp:
         return False
-    data = _load_suppressions()
+    data = _load_suppressions(trace_id=trace_id)
     entry = data.get(fp)
     if not isinstance(entry, dict):
         return False
@@ -76,6 +86,7 @@ def record_rejection_suppression(
     *,
     issue_identifier: str,
     duration_days: int | None = None,
+    trace_id: str | None = None,
 ) -> None:
     """Append or update suppression entry for a rejected proposal fingerprint.
 
@@ -83,6 +94,7 @@ def record_rejection_suppression(
         fingerprint: Proposal fingerprint hex.
         issue_identifier: Linear human-readable id (e.g. FF-123).
         duration_days: Override suppression length (default from settings).
+        trace_id: Originating request trace_id for log correlation (ADR-0074 §I3).
     """
     fp = fingerprint.lower().strip()
     if not fp:
@@ -91,7 +103,7 @@ def record_rejection_suppression(
     now = datetime.now(timezone.utc)
     until = now + timedelta(days=days)
     path = suppression_file_path()
-    data = _load_suppressions()
+    data = _load_suppressions(trace_id=trace_id)
     data[fp] = {
         "suppressed_until": until.isoformat(),
         "reason": "Rejected via Linear feedback",
@@ -104,4 +116,5 @@ def record_rejection_suppression(
         fingerprint=fp,
         issue_id=issue_identifier,
         suppression_until=until.isoformat(),
+        trace_id=trace_id,
     )

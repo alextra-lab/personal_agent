@@ -63,16 +63,21 @@ cost_gate_reaper_task: asyncio.Task[None] | None = None
 _pending_append_tasks: dict[str, asyncio.Task[None]] = {}
 
 
-def _resolve_active_model_attribution() -> tuple[str | None, str]:
+def _resolve_active_model_attribution(
+    *,
+    trace_id: str | None = None,
+) -> tuple[str | None, str]:
     """Thin wrapper kept for clarity at call sites in this module.
 
     Delegates to :func:`personal_agent.config.model_loader.resolve_active_attribution`
     which is shared with the Redis session-writer consumer so both append
-    paths emit identical attribution (ADR-0074 / FRE-376).
+    paths emit identical attribution (ADR-0074 / FRE-376). The optional
+    ``trace_id`` is forwarded so the warning path correlates with the
+    originating chat turn (ADR-0074 §I3).
     """
     from personal_agent.config.model_loader import resolve_active_attribution
 
-    return resolve_active_attribution()
+    return resolve_active_attribution(trace_id=trace_id)
 
 
 async def _append_assistant_message_background(
@@ -86,7 +91,7 @@ async def _append_assistant_message_background(
     this task before loading session history.
     """
     sid = str(session_id)
-    primary_model_id, config_path_str = _resolve_active_model_attribution()
+    primary_model_id, config_path_str = _resolve_active_model_attribution(trace_id=trace_id)
     try:
         async with AsyncSessionLocal() as db:
             repo = SessionRepository(db)
@@ -169,7 +174,9 @@ async def _process_chat_stream_background(
                 # across turns without the client needing to track a separate DB ID.
                 from personal_agent.service.models import SessionModel
 
-                primary_model_id, config_path_str = _resolve_active_model_attribution()
+                primary_model_id, config_path_str = _resolve_active_model_attribution(
+                    trace_id=trace_id,
+                )
                 now = datetime.now(timezone.utc)
                 session = SessionModel(
                     session_id=session_uuid,
@@ -295,7 +302,9 @@ async def _process_chat_stream_background(
         await queue.put(TextDeltaEvent(text=response_content, session_id=session_id))
 
         try:
-            primary_model_id, config_path_str = _resolve_active_model_attribution()
+            primary_model_id, config_path_str = _resolve_active_model_attribution(
+                trace_id=trace_id,
+            )
             async with AsyncSessionLocal() as db:
                 repo = SessionRepository(db)
                 await repo.append_message(
@@ -1233,7 +1242,9 @@ async def chat(
             if not session:
                 raise HTTPException(status_code=404, detail="Session not found")
         else:
-            primary_model_id, config_path_str = _resolve_active_model_attribution()
+            primary_model_id, config_path_str = _resolve_active_model_attribution(
+                trace_id=trace_id,
+            )
             session = await repo.create(
                 SessionCreate(),
                 user_id=request_user.user_id,

@@ -13,7 +13,7 @@ from typing import Any
 
 from personal_agent.captains_log.capture import CAPTURES_INDEX_PREFIX, TaskCapture
 from personal_agent.captains_log.es_indexer import normalize_capture_doc_for_es
-from personal_agent.captains_log.manager import REFLECTIONS_INDEX_PREFIX
+from personal_agent.captains_log.manager import REFLECTIONS_INDEX_PREFIX, _trace_id_from_entry
 from personal_agent.captains_log.models import CaptainLogEntry, CaptainLogEntryType
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.events import (
@@ -244,6 +244,7 @@ async def run_backfill(
                     CAPTAINS_LOG_BACKFILL_CHECKPOINT_UPDATED,
                     kind="captures",
                     last_processed_path=rel,
+                    trace_id=capture.trace_id,
                 )
             else:
                 result.failed_count += 1
@@ -294,6 +295,7 @@ async def run_backfill(
                     CAPTAINS_LOG_BACKFILL_CHECKPOINT_UPDATED,
                     kind="reflections",
                     last_processed_path=rel,
+                    trace_id=_trace_id_from_entry(entry),
                 )
             else:
                 result.failed_count += 1

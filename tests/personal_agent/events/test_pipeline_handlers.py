@@ -10,11 +10,10 @@ test collection time.
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-from datetime import datetime, timezone
 
 from personal_agent.events.models import (
     CompactionQualityIncidentEvent,
@@ -31,7 +30,6 @@ from personal_agent.events.pipeline_handlers import (
     build_feedback_suppression_handler,
     build_promotion_captain_log_handler,
 )
-
 
 # ---------------------------------------------------------------------------
 # sys.modules stub helpers
@@ -75,9 +73,7 @@ def _captain_log_modules(manager_instance: MagicMock) -> dict[str, MagicMock]:
     mock_manager_mod.CaptainLogManager = MagicMock(return_value=manager_instance)
 
     mock_models_mod = MagicMock()
-    mock_models_mod.CaptainLogEntry = MagicMock(
-        side_effect=lambda **kw: MagicMock(**kw)
-    )
+    mock_models_mod.CaptainLogEntry = MagicMock(side_effect=lambda **kw: MagicMock(**kw))
     mock_models_mod.CaptainLogEntryType = MagicMock()
     mock_models_mod.CaptainLogStatus = MagicMock()
 
@@ -203,7 +199,9 @@ class TestConsolidationInsightsHandler:
                 "personal_agent.insights.engine",
                 MagicMock(InsightsEngine=MagicMock(return_value=mock_engine)),
             )
-            await handler(RequestCapturedEvent(trace_id="t", session_id="s", source_component="test"))
+            await handler(
+                RequestCapturedEvent(trace_id="t", session_id="s", source_component="test")
+            )
 
         mock_engine.analyze_patterns.assert_not_called()
 
@@ -253,7 +251,9 @@ class TestConsolidationInsightsHandler:
             mp.setitem(
                 sys.modules,
                 "personal_agent.config.settings",
-                MagicMock(get_settings=MagicMock(return_value=MagicMock(insights_wiring_enabled=True))),
+                MagicMock(
+                    get_settings=MagicMock(return_value=MagicMock(insights_wiring_enabled=True))
+                ),
             )
             await handler(_consolidation_event(captures_processed=3))
 
@@ -313,7 +313,9 @@ class TestConsolidationInsightsHandler:
             mp.setitem(
                 sys.modules,
                 "personal_agent.config.settings",
-                MagicMock(get_settings=MagicMock(return_value=MagicMock(insights_wiring_enabled=True))),
+                MagicMock(
+                    get_settings=MagicMock(return_value=MagicMock(insights_wiring_enabled=True))
+                ),
             )
             await handler(_consolidation_event(captures_processed=3))
 
@@ -368,7 +370,9 @@ class TestConsolidationInsightsHandler:
             mp.setitem(
                 sys.modules,
                 "personal_agent.config.settings",
-                MagicMock(get_settings=MagicMock(return_value=MagicMock(insights_wiring_enabled=True))),
+                MagicMock(
+                    get_settings=MagicMock(return_value=MagicMock(insights_wiring_enabled=True))
+                ),
             )
             await handler(_consolidation_event(captures_processed=3))
 
@@ -414,7 +418,9 @@ class TestConsolidationInsightsHandler:
             mp.setitem(
                 sys.modules,
                 "personal_agent.config.settings",
-                MagicMock(get_settings=MagicMock(return_value=MagicMock(insights_wiring_enabled=False))),
+                MagicMock(
+                    get_settings=MagicMock(return_value=MagicMock(insights_wiring_enabled=False))
+                ),
             )
             await handler(_consolidation_event(captures_processed=3))
 
@@ -455,7 +461,9 @@ class TestConsolidationPromotionHandler:
         with pytest.MonkeyPatch().context() as mp:
             for k, v in _promotion_modules(mock_pipeline).items():
                 mp.setitem(sys.modules, k, v)
-            await handler(RequestCapturedEvent(trace_id="t", session_id="s", source_component="test"))
+            await handler(
+                RequestCapturedEvent(trace_id="t", session_id="s", source_component="test")
+            )
 
         mock_pipeline.run.assert_not_called()
 
@@ -491,7 +499,9 @@ class TestPromotionCaptainLogHandler:
         with pytest.MonkeyPatch().context() as mp:
             for k, v in _captain_log_modules(mock_manager_instance).items():
                 mp.setitem(sys.modules, k, v)
-            await handler(RequestCapturedEvent(trace_id="t", session_id="s", source_component="test"))
+            await handler(
+                RequestCapturedEvent(trace_id="t", session_id="s", source_component="test")
+            )
 
         mock_manager_instance.save_entry.assert_not_called()
 
@@ -533,9 +543,7 @@ class TestCompactionQualityCaptainLogHandler:
         mock_manager_instance = MagicMock()
         mock_manager_instance.save_entry = MagicMock(return_value=None)
 
-        handler = build_compaction_quality_captain_log_handler(
-            manager=mock_manager_instance
-        )
+        handler = build_compaction_quality_captain_log_handler(manager=mock_manager_instance)
         await handler(_cq_event())
 
         mock_manager_instance.save_entry.assert_called_once()
@@ -556,14 +564,8 @@ class TestCompactionQualityCaptainLogHandler:
     @pytest.mark.asyncio
     async def test_ignores_wrong_event_type(self) -> None:
         mock_manager_instance = MagicMock()
-        handler = build_compaction_quality_captain_log_handler(
-            manager=mock_manager_instance
-        )
-        await handler(
-            RequestCapturedEvent(
-                trace_id="t", session_id="s", source_component="test"
-            )
-        )
+        handler = build_compaction_quality_captain_log_handler(manager=mock_manager_instance)
+        await handler(RequestCapturedEvent(trace_id="t", session_id="s", source_component="test"))
         mock_manager_instance.save_entry.assert_not_called()
 
 
@@ -607,7 +609,7 @@ class TestFeedbackSuppressionHandler:
                 mp.setitem(sys.modules, k, v)
             await handler(_feedback_event(label="Rejected", fingerprint="fp-xyz"))
 
-        mock_suppress.assert_called_once_with("fp-xyz", issue_identifier="FRE-10")
+        mock_suppress.assert_called_once_with("fp-xyz", issue_identifier="FRE-10", trace_id=None)
 
     @pytest.mark.asyncio
     async def test_skips_non_rejected_labels(self) -> None:
@@ -644,6 +646,8 @@ class TestFeedbackSuppressionHandler:
         with pytest.MonkeyPatch().context() as mp:
             for k, v in _suppression_modules(mock_suppress).items():
                 mp.setitem(sys.modules, k, v)
-            await handler(RequestCapturedEvent(trace_id="t", session_id="s", source_component="test"))
+            await handler(
+                RequestCapturedEvent(trace_id="t", session_id="s", source_component="test")
+            )
 
         mock_suppress.assert_not_called()

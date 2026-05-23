@@ -120,6 +120,19 @@ def schedule_es_index(
     if index_name.startswith(_cap_prefix):
         document = normalize_capture_doc_for_es(document)
 
+    # Extract trace_id from the document for log correlation (ADR-0074 §I3).
+    # Captures store trace_id at top level; reflections nest it under telemetry_refs[0].
+    raw_tid = document.get("trace_id")
+    if not isinstance(raw_tid, str):
+        refs = document.get("telemetry_refs")
+        if isinstance(refs, list) and refs:
+            first = refs[0]
+            if isinstance(first, dict):
+                cand = first.get("trace_id")
+                if isinstance(cand, str):
+                    raw_tid = cand
+    doc_trace_id: str | None = raw_tid if isinstance(raw_tid, str) else None
+
     async def _index() -> None:
         try:
             await indexer(index_name, document, doc_id)
@@ -128,6 +141,7 @@ def schedule_es_index(
                 "captains_log_es_index_failed",
                 index=index_name,
                 error=str(e),
+                trace_id=doc_trace_id,
             )
 
     try:

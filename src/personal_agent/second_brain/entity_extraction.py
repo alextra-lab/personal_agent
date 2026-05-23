@@ -161,6 +161,7 @@ async def extract_entities_and_relationships(
     assistant_response: str,
     *,
     trace_id: UUID | str | None = None,
+    session_id: str | None = None,
     attempt_number: int | None = None,
 ) -> dict[str, Any]:
     """Extract entities and relationships from conversation.
@@ -174,6 +175,10 @@ async def extract_entities_and_relationships(
         assistant_response: Assistant's response.
         trace_id: Originating capture's trace_id, threaded through to
             structured logs for join-with-chat-request (FRE-307 D6).
+        session_id: Originating capture's session_id. Threaded into the
+            ``SystemTraceContext`` so the cost record carries the same
+            session identity as the chat turn that produced the capture
+            (ADR-0074 §I4 — avoids ``cost_record_missing_identity``).
         attempt_number: Sequential retry counter per trace_id (FRE-307);
             the consolidator computes this and passes it through so log
             lines are aggregable in Kibana ("median attempts to success").
@@ -227,6 +232,7 @@ async def extract_entities_and_relationships(
                 role=ModelRole.PRIMARY,
                 messages=[{"role": "user", "content": prompt}],
                 system_prompt=_EXTRACTION_SYSTEM_PROMPT,
+                trace_ctx=SystemTraceContext.new("entity_extraction", session_id=session_id),
             )
             content = cloud_response["content"]
             model_used = model_def.id if model_def else entity_extraction_role
@@ -266,7 +272,7 @@ async def extract_entities_and_relationships(
                     timeout_s=float(settings.entity_extraction_timeout_seconds),
                     priority=InferencePriority.BACKGROUND,
                     priority_timeout=60.0,
-                    trace_ctx=SystemTraceContext.new("entity_extraction"),
+                    trace_ctx=SystemTraceContext.new("entity_extraction", session_id=session_id),
                 )
             except (LLMTimeout, InferenceSlotTimeout) as e:
                 log.warning(

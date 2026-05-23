@@ -432,6 +432,7 @@ class SecondBrainConsolidator:
                 capture.user_message,
                 extraction_response,
                 trace_id=capture.trace_id,
+                session_id=capture.session_id,
                 attempt_number=attempt_number,
             )
         except BudgetDenied as budget_exc:

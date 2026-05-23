@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from personal_agent.service.auth import RequestUser, get_request_user
+from personal_agent.telemetry.trace import SystemTraceContext
 
 log = structlog.get_logger(__name__)
 
@@ -50,6 +51,10 @@ async def post_card_click(
 ) -> None:
     """Record an artifact card-click event for ADR-0070 D8 measurement."""
     user_id = request_user.user_id
+    ctx = SystemTraceContext.new(
+        "telemetry_card_click",
+        session_id=str(event.session_id) if event.session_id else None,
+    )
 
     try:
         log.info(
@@ -58,6 +63,7 @@ async def post_card_click(
             session_id=str(event.session_id) if event.session_id else None,
             user_id=str(user_id) if user_id else None,
             surface=event.surface,
+            trace_id=ctx.trace_id,
         )
     except Exception:  # noqa: BLE001
         pass

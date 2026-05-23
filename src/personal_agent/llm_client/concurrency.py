@@ -263,6 +263,7 @@ class InferenceConcurrencyController:
         role: str,
         priority: InferencePriority = InferencePriority.USER_FACING,
         timeout: float | None = None,
+        trace_id: str | None = None,
     ) -> AsyncIterator[None]:
         """Context manager to acquire an inference slot with priority.
 
@@ -273,6 +274,9 @@ class InferenceConcurrencyController:
             role: Model role name.
             priority: Request priority tier.
             timeout: Max seconds to wait for a slot. None waits forever.
+            trace_id: Originating request trace_id, threaded onto wait/timeout
+                logs for §I3 identity threading. Defaults to ``None`` when the
+                caller has no request context.
 
         Yields:
             None when slot is acquired.
@@ -328,6 +332,7 @@ class InferenceConcurrencyController:
                     priority=priority.name,
                     wait_ms=wait_ms,
                     endpoint=endpoint_key,
+                    trace_id=trace_id,
                 )
 
             yield
@@ -339,6 +344,7 @@ class InferenceConcurrencyController:
                 priority=priority.name,
                 timeout=timeout,
                 endpoint=endpoint_key,
+                trace_id=trace_id,
             )
             raise
 

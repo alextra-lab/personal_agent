@@ -14,11 +14,10 @@ from uuid import uuid4
 import pytest
 
 from personal_agent.events import (
+    STREAM_MEMORY_ACCESSED,
     AccessContext,
     MemoryAccessedEvent,
-    STREAM_MEMORY_ACCESSED,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -49,7 +48,7 @@ class TestQueryMemoryEventPublishing:
     @pytest.mark.asyncio
     async def test_publishes_event_when_freshness_enabled(self) -> None:
         """query_memory publishes MemoryAccessedEvent when freshness_enabled=True."""
-        from personal_agent.memory.models import MemoryQuery, MemoryQueryResult
+        from personal_agent.memory.models import MemoryQuery
         from personal_agent.memory.service import MemoryService
 
         service = MemoryService()  # fre-375-allow: unit test with mocked driver, no real connection
@@ -452,9 +451,10 @@ class TestConsolidatorAccessContext:
     @pytest.mark.asyncio
     async def test_consolidation_event_has_correct_payload(self) -> None:
         """MemoryAccessedEvent from consolidator uses CONSOLIDATION context and entity IDs."""
+        from datetime import datetime, timezone
+
         from personal_agent.captains_log.capture import TaskCapture
         from personal_agent.second_brain.consolidator import SecondBrainConsolidator
-        from datetime import datetime, timezone
 
         mock_service = AsyncMock()
         mock_service.connected = True
@@ -550,16 +550,20 @@ class TestConsolidatorAccessContext:
         assert stream == STREAM_MEMORY_ACCESSED
         assert event.access_context == AccessContext.CONSOLIDATION
         assert event.query_type == "consolidation_traversal"
-        assert event.trace_id == "consolidation"
+        # FRE-376 Phase 3 (ADR-0074 §I4): consolidator mints a SystemTraceContext
+        # per run rather than emitting the literal "consolidation" sentinel.
+        assert event.trace_id  # non-empty minted trace id
+        assert event.trace_id != "consolidation"
         assert set(event.entity_ids) == {"entity-1", "entity-2"}
         assert event.relationship_ids == ["discuss-rel-1"]
 
     @pytest.mark.asyncio
     async def test_consolidation_suppresses_when_freshness_disabled(self) -> None:
         """consolidate_recent_captures does NOT publish MemoryAccessedEvent when freshness_enabled=False."""
+        from datetime import datetime, timezone
+
         from personal_agent.captains_log.capture import TaskCapture
         from personal_agent.second_brain.consolidator import SecondBrainConsolidator
-        from datetime import datetime, timezone
 
         mock_service = AsyncMock()
         mock_service.connected = True

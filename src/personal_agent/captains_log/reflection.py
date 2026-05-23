@@ -443,7 +443,7 @@ async def generate_reflection_entry(
                 "LLM returned empty response (no content, reasoning_trace, or reasoning_content)"
             )
 
-        reflection_data = _parse_reflection_response(content)
+        reflection_data = _parse_reflection_response(content, trace_id=trace_id)
 
         # Extract metrics deterministically (ADR-0014) - NO LLM INVOLVED
         # This overrides any metrics the LLM might have generated in the JSON
@@ -639,11 +639,12 @@ def _summarize_telemetry(
     return "\n".join(summary_parts)
 
 
-def _parse_reflection_response(content: str) -> dict[str, Any]:
+def _parse_reflection_response(content: str, *, trace_id: str | None = None) -> dict[str, Any]:
     """Parse LLM reflection response.
 
     Args:
         content: LLM response content (should be JSON).
+        trace_id: Originating request trace_id for log correlation (ADR-0074 §I3).
 
     Returns:
         Parsed reflection data dictionary.
@@ -661,7 +662,12 @@ def _parse_reflection_response(content: str) -> dict[str, Any]:
         data = json.loads(content)
         return cast(dict[str, Any], data)
     except (json.JSONDecodeError, IndexError) as e:
-        log.warning("reflection_parse_failed", error=str(e), content=content[:200])
+        log.warning(
+            "reflection_parse_failed",
+            error=str(e),
+            content=content[:200],
+            trace_id=trace_id,
+        )
         raise ValueError(f"Failed to parse reflection response: {e}") from e
 
 

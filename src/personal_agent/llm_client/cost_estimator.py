@@ -86,6 +86,7 @@ def estimate_reservation_for_call(
     messages: Sequence[Mapping[str, Any]],
     max_tokens: int | None,
     config: BudgetConfig,
+    trace_id: str | None = None,
 ) -> Decimal:
     """Convenience wrapper that pulls token count + pricing from litellm.
 
@@ -99,6 +100,9 @@ def estimate_reservation_for_call(
         messages: OpenAI-format messages the call will send.
         max_tokens: Caller's ``max_tokens`` cap.
         config: Loaded ``BudgetConfig``.
+        trace_id: Originating request trace_id, threaded onto warning logs for
+            §I3 identity threading. Defaults to ``None`` for callers without
+            a request context (rare — all production call paths have one).
 
     Returns:
         Reservation amount in USD.
@@ -112,6 +116,7 @@ def estimate_reservation_for_call(
             "cost_estimator_token_counter_failed",
             model=model,
             error=str(exc),
+            trace_id=trace_id,
         )
         # Fall back to a generous default; the gate's safety_factor still
         # guards against runaway estimates.
@@ -133,6 +138,7 @@ def estimate_reservation_for_call(
             "cost_estimator_pricing_unknown",
             model=model,
             note="reservation will be 0; gate cannot deny on cost",
+            trace_id=trace_id,
         )
 
     return estimate_reservation(

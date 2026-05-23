@@ -82,7 +82,9 @@ class ModeManager:
         """
         return self.current_mode
 
-    def evaluate_transitions(self, sensor_data: dict[str, Any]) -> None:
+    def evaluate_transitions(
+        self, sensor_data: dict[str, Any], *, trace_id: str | None = None
+    ) -> None:
         """Evaluate sensor data and transition modes if needed.
 
         Checks all transition rules against current sensor data and
@@ -91,13 +93,17 @@ class ModeManager:
         Args:
             sensor_data: Dictionary of sensor metrics keyed by metric name.
                 Example: {"perf_system_cpu_load": 90.0, "safety_tool_high_risk_calls": 3}
+            trace_id: Trace identifier of the triggering event (ADR-0074 §I3).
+                Threaded onto rule-validation warnings and the downstream
+                ``transition_to`` call so structured logs stay correlated
+                with the mode-controller event that drove the evaluation.
         """
         # Check all transition rules
         for rule_name, rule in self.governance_config.transition_rules.items():
             # Parse source and target mode from rule name (e.g., "NORMAL_to_ALERT")
             parts = rule_name.split("_to_")
             if len(parts) != 2:
-                log.warning("invalid_transition_rule_name", rule_name=rule_name)
+                log.warning("invalid_transition_rule_name", rule_name=rule_name, trace_id=trace_id)
                 continue
 
             source_mode_str, target_mode_str = parts
@@ -110,6 +116,7 @@ class ModeManager:
                     rule_name=rule_name,
                     source=source_mode_str,
                     target=target_mode_str,
+                    trace_id=trace_id,
                 )
                 continue
 
@@ -118,18 +125,27 @@ class ModeManager:
                 continue
 
             # Check if transition conditions are met
-            if self._check_transition_rule(rule, sensor_data):
+            if self._check_transition_rule(rule, sensor_data, trace_id=trace_id):
                 # Transition to new mode
                 reason = f"Transition rule '{rule_name}' conditions met"
-                self.transition_to(target_mode, reason, sensor_data)
+                self.transition_to(target_mode, reason, sensor_data, trace_id=trace_id)
                 return  # Only one transition per evaluation
 
-    def _check_transition_rule(self, rule: TransitionRule, sensor_data: dict[str, Any]) -> bool:
+    def _check_transition_rule(
+        self,
+        rule: TransitionRule,
+        sensor_data: dict[str, Any],
+        *,
+        trace_id: str | None = None,
+    ) -> bool:
         """Check if a transition rule's conditions are met.
 
         Args:
             rule: Transition rule to check.
             sensor_data: Current sensor data.
+            trace_id: Trace identifier of the triggering evaluation
+                (ADR-0074 §I3). Threaded onto the ``unknown_transition_logic``
+                warning when the rule's ``logic`` field is misconfigured.
 
         Returns:
             True if rule conditions are met, False otherwise.
@@ -144,7 +160,9 @@ class ModeManager:
                 continue
 
             # Evaluate condition based on operator
-            result = self._evaluate_condition(condition.operator, metric_value, condition.value)
+            result = self._evaluate_condition(
+                condition.operator, metric_value, condition.value, trace_id=trace_id
+            )
             condition_results.append(result)
 
         # Apply logic (any vs all)
@@ -153,11 +171,16 @@ class ModeManager:
         elif rule.logic == "all":
             return all(condition_results)
         else:
-            log.warning("unknown_transition_logic", logic=rule.logic)
+            log.warning("unknown_transition_logic", logic=rule.logic, trace_id=trace_id)
             return False
 
     def _evaluate_condition(
-        self, operator: str, metric_value: float | int, threshold: float | int
+        self,
+        operator: str,
+        metric_value: float | int,
+        threshold: float | int,
+        *,
+        trace_id: str | None = None,
     ) -> bool:
         """Evaluate a single condition.
 
@@ -165,6 +188,9 @@ class ModeManager:
             operator: Comparison operator (>, <, ==, >=, <=).
             metric_value: Current metric value.
             threshold: Threshold value to compare against.
+            trace_id: Trace identifier of the triggering evaluation
+                (ADR-0074 §I3). Threaded onto the ``unknown_operator``
+                warning when ``operator`` is unrecognised.
 
         Returns:
             True if condition is met, False otherwise.
@@ -181,11 +207,16 @@ class ModeManager:
             case "<=":
                 return metric_value <= threshold
             case _:
-                log.warning("unknown_operator", operator=operator)
+                log.warning("unknown_operator", operator=operator, trace_id=trace_id)
                 return False
 
     def transition_to(
-        self, new_mode: Mode, reason: str, sensor_data: dict[str, Any] | None = None
+        self,
+        new_mode: Mode,
+        reason: str,
+        sensor_data: dict[str, Any] | None = None,
+        *,
+        trace_id: str | None = None,
     ) -> None:
         """Transition to a new operational mode.
 
@@ -196,6 +227,9 @@ class ModeManager:
             new_mode: Target mode to transition to.
             reason: Human-readable reason for the transition.
             sensor_data: Optional sensor data that triggered the transition.
+            trace_id: Trace identifier of the triggering evaluation
+                (ADR-0074 §I3). Threaded onto every structlog emission and
+                the deferred bus-publish failure handler.
         """
         if new_mode == self.current_mode:
             # Already in this mode, no-op
@@ -208,6 +242,7 @@ class ModeManager:
                 from_mode=self.current_mode.value,
                 to_mode=new_mode.value,
                 reason=reason,
+                trace_id=trace_id,
             )
             return
 
@@ -231,6 +266,7 @@ class ModeManager:
             to_mode=new_mode.value,
             reason=reason,
             sensor_data=sensor_data or {},
+            trace_id=trace_id,
         )
 
         # Dual-write: publish ModeTransitionEvent on stream:mode.transition (ADR-0055)
@@ -250,7 +286,11 @@ class ModeManager:
                         ),
                     )
                 except Exception:
-                    log.warning("mode_transition_bus_publish_failed", new_mode=new_mode.value)
+                    log.warning(
+                        "mode_transition_bus_publish_failed",
+                        new_mode=new_mode.value,
+                        trace_id=trace_id,
+                    )
 
             try:
                 # Preferred path: schedule on the already-running loop (async context)

@@ -215,12 +215,17 @@ async def test_approval_ui_disabled_warning(governance_config) -> None:
             )
 
     assert result.allowed is True
-    mock_log.warning.assert_called_once_with(
-        "approval_ui_disabled_proceeding",
-        tool_name="bash",
-        mode="NORMAL",
-        message="Approval required but AGENT_APPROVAL_UI_ENABLED=false — proceeding without prompt",
+    # FRE-376 Phase 3 (ADR-0074 §I3): log carries trace_id from trace_ctx.
+    mock_log.warning.assert_called_once()
+    call_args = mock_log.warning.call_args
+    assert call_args.args[0] == "approval_ui_disabled_proceeding"
+    assert call_args.kwargs["tool_name"] == "bash"
+    assert call_args.kwargs["mode"] == "NORMAL"
+    assert (
+        call_args.kwargs["message"]
+        == "Approval required but AGENT_APPROVAL_UI_ENABLED=false — proceeding without prompt"
     )
+    assert "trace_id" in call_args.kwargs
 
 
 def test_get_default_registry() -> None:

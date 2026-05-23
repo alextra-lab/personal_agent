@@ -117,7 +117,7 @@ def configure_dspy_lm(
         log.info(
             "dspy_lm_configured",
             role=role_key,
-            model_id=model_id,
+            model=model_id,
             provider=model_def.provider,
             is_cloud=True,
             timeout_s=effective_timeout,
@@ -144,7 +144,7 @@ def configure_dspy_lm(
     log.info(
         "dspy_lm_configured",
         role=role_key,
-        model_id=model_id,
+        model=model_id,
         base_url=effective_base_url,
         is_cloud=False,
         timeout_s=effective_timeout,

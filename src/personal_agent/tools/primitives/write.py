@@ -73,7 +73,9 @@ write_tool = ToolDefinition(
 # ---------------------------------------------------------------------------
 
 
-def _is_unattended_path(resolved: Path, tool_name: str = "write") -> bool:
+def _is_unattended_path(
+    resolved: Path, tool_name: str = "write", *, trace_id: str | None = None
+) -> bool:
     """Check whether *resolved* is under any ``unattended_paths`` for *tool_name*.
 
     Scratch/unattended paths (e.g. ``/tmp/**``) allow ``write`` to proceed
@@ -82,6 +84,8 @@ def _is_unattended_path(resolved: Path, tool_name: str = "write") -> bool:
     Args:
         resolved: Fully resolved absolute path.
         tool_name: Key to look up in ``governance_config.tools``.
+        trace_id: Originating request trace_id, threaded onto the
+            governance-load failure log for §I3 identity threading.
 
     Returns:
         True when the path is within an unattended scratch area.
@@ -89,7 +93,7 @@ def _is_unattended_path(resolved: Path, tool_name: str = "write") -> bool:
     try:
         governance = load_governance_config()
     except Exception as exc:  # noqa: BLE001
-        log.warning("write_unattended_check_error", error=str(exc))
+        log.warning("write_unattended_check_error", error=str(exc), trace_id=trace_id)
         return False
 
     policy = governance.tools.get(tool_name)
@@ -170,7 +174,7 @@ async def write_executor(
     )
 
     # 3. Path governance
-    governance_error = _check_path_governance(resolved, tool_name="write")
+    governance_error = _check_path_governance(resolved, tool_name="write", trace_id=trace_id)
     if governance_error is not None:
         log.warning(
             "write_path_rejected",
@@ -181,7 +185,7 @@ async def write_executor(
         return governance_error
 
     # 4. Scratch-dir / unattended detection
-    unattended = _is_unattended_path(resolved, tool_name="write")
+    unattended = _is_unattended_path(resolved, tool_name="write", trace_id=trace_id)
 
     # 5. Create parent directories
     try:

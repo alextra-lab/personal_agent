@@ -20,8 +20,6 @@ import litellm
 import structlog
 
 from personal_agent.llm_client.telemetry import (
-    emit_legacy_litellm_complete,
-    emit_legacy_litellm_start,
     emit_model_call_completed,
     emit_model_call_started,
 )
@@ -269,6 +267,7 @@ class LiteLLMClient:
             messages=api_messages,
             max_tokens=effective_max_tokens,
             config=budget_config,
+            trace_id=trace_ctx.trace_id,
         )
         try:
             reservation_id = await gate.reserve(
@@ -306,24 +305,12 @@ class LiteLLMClient:
                 "max_tokens": effective_max_tokens,
             },
         )
-        # Back-compat: emit the deprecated event name too so existing
-        # Kibana queries keep working through one release cycle.
-        emit_legacy_litellm_start(
-            log=log,
-            role=role.value,
-            model=self._litellm_model,
-            trace_ctx=trace_ctx,
-            budget_role=self.budget_role,
-            reservation_amount=str(reservation_amount),
-            max_tokens=effective_max_tokens,
-        )
-
         try:
             response = await litellm.acompletion(**litellm_kwargs)
         except Exception as e:
             # Refund the reservation so the counter doesn't leak headroom.
             try:
-                await gate.refund(reservation_id)
+                await gate.refund(reservation_id, trace_id=trace_id)
             except Exception as refund_exc:  # noqa: BLE001
                 log.error(
                     "litellm_refund_after_failure_failed",
@@ -400,7 +387,7 @@ class LiteLLMClient:
         from decimal import Decimal as _Decimal  # noqa: PLC0415 — local alias
 
         try:
-            await gate.commit(reservation_id, _Decimal(str(cost)))
+            await gate.commit(reservation_id, _Decimal(str(cost)), trace_id=trace_id)
         except Exception as commit_exc:  # noqa: BLE001
             # If the commit fails (DB hiccup), we'd rather log loudly than
             # silently lose the actual-cost adjustment. The reaper will sweep
@@ -483,25 +470,6 @@ class LiteLLMClient:
                 "cache_creation_input_tokens": _cache_creation,
             },
         )
-        # Back-compat: emit the deprecated event name too so existing
-        # Kibana queries keep working through one release cycle.
-        emit_legacy_litellm_complete(
-            log=log,
-            role=role.value,
-            model=self._litellm_model,
-            endpoint=self.provider,
-            trace_ctx=trace_ctx,
-            latency_ms=latency_ms,
-            elapsed_s=round(elapsed, 2),
-            input_tokens=_input_tokens,
-            output_tokens=_output_tokens,
-            total_tokens=_total_tokens,
-            cost_usd=_cost_usd,
-            tool_calls=len(tool_calls),
-            cache_read_tokens=_cache_read,
-            cache_creation_input_tokens=_cache_creation,
-        )
-
         await cost_tracker.disconnect()
 
         return LLMResponseType(

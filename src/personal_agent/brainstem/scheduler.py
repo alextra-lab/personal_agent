@@ -24,6 +24,7 @@ from personal_agent.second_brain.quality_monitor import ConsolidationQualityMoni
 from personal_agent.telemetry import SENSOR_POLL, get_logger
 from personal_agent.telemetry.lifecycle_manager import DataLifecycleManager
 from personal_agent.telemetry.queries import TelemetryQueries
+from personal_agent.telemetry.trace import SystemTraceContext
 
 if TYPE_CHECKING:
     from elasticsearch import AsyncElasticsearch
@@ -32,6 +33,26 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 settings = get_settings()
+
+
+def _new_scheduler_trace_id(source: str) -> str:
+    """Mint a system-scoped trace id for one scheduler operation (ADR-0074 §I3).
+
+    Each logical scheduler operation (consolidation tick, lifecycle iteration,
+    quality-monitor run, feedback poll, backfill) mints its own trace id so
+    structured logs and downstream bus events stay correlated within the
+    operation while remaining distinguishable from organic user traffic via
+    the ``system:<source>`` ``kind`` field.
+
+    Args:
+        source: Short identifier of the scheduler operation, e.g.
+            ``"scheduler.consolidation"`` or ``"scheduler.lifecycle"``.
+
+    Returns:
+        Newly-minted UUID trace id.
+    """
+    return SystemTraceContext.new(source).trace_id
+
 
 # Lifecycle schedule (Phase 2.3)
 LIFECYCLE_CHECK_INTERVAL_SECONDS = 60  # Check every minute whether to run tasks
@@ -128,18 +149,20 @@ class BrainstemScheduler:
 
     async def start(self) -> None:
         """Start the scheduler background task."""
+        start_trace_id = _new_scheduler_trace_id("scheduler.lifecycle")
         if self.running:
-            log.warning("scheduler_already_running")
+            log.warning("scheduler_already_running", trace_id=start_trace_id)
             return
 
         self.running = True
-        log.info("brainstem_scheduler_started")
+        log.info("brainstem_scheduler_started", trace_id=start_trace_id)
 
         # Data lifecycle loop (hourly disk check, daily archive, weekly purge)
         self._lifecycle_task = asyncio.create_task(self._lifecycle_loop())
 
     async def stop(self) -> None:
         """Stop the scheduler."""
+        stop_trace_id = _new_scheduler_trace_id("scheduler.lifecycle")
         self.running = False
         pending_tasks = [
             task for task in (self._lifecycle_task,) if task is not None and not task.done()
@@ -153,7 +176,7 @@ class BrainstemScheduler:
         queries = getattr(self.quality_monitor, "_queries", None)
         if isinstance(queries, TelemetryQueries):
             await queries.disconnect()
-        log.info("brainstem_scheduler_stopped")
+        log.info("brainstem_scheduler_stopped", trace_id=stop_trace_id)
 
     @property
     def active_request_count(self) -> int:
@@ -200,10 +223,10 @@ class BrainstemScheduler:
             session_id=session_id,
         )
 
-        if await self._should_consolidate():
-            await self._trigger_consolidation()
+        if await self._should_consolidate(trace_id=trace_id):
+            await self._trigger_consolidation(trace_id=trace_id)
 
-    async def _should_consolidate(self) -> bool:
+    async def _should_consolidate(self, *, trace_id: str | None = None) -> bool:
         """Check if consolidation should be triggered.
 
         Two layers of gating:
@@ -223,6 +246,11 @@ class BrainstemScheduler:
         ``AGENT_SECOND_BRAIN_RESOURCE_GATING_ENABLED=false`` and only the
         universal guards apply. See ADR-0041 §Update 2026-05-14 (FRE-326).
 
+        Args:
+            trace_id: Trace identifier of the enclosing operation (ADR-0074
+                §I3). Threaded from ``on_request_captured`` (request trace)
+                or minted by ``_trigger_consolidation`` callers.
+
         Returns:
             True if conditions are met for consolidation.
         """
@@ -230,6 +258,7 @@ class BrainstemScheduler:
             log.debug(
                 "consolidation_skipped_active_requests",
                 active_request_count=self._active_request_count,
+                trace_id=trace_id,
             )
             return False
 
@@ -256,7 +285,7 @@ class BrainstemScheduler:
             if self.metrics_daemon is not None:
                 latest_sample = self.metrics_daemon.get_latest()
                 if latest_sample is None:
-                    log.debug("consolidation_skipped_no_metrics_daemon_sample")
+                    log.debug("consolidation_skipped_no_metrics_daemon_sample", trace_id=trace_id)
                     return False
                 metrics = latest_sample.metrics
             else:
@@ -275,6 +304,7 @@ class BrainstemScheduler:
                     gpu_load=gpu_load,
                     disk_usage=metrics.get("perf_system_disk_usage_percent"),
                     component="scheduler",
+                    trace_id=trace_id,
                 )
 
             if cpu_load > self.cpu_threshold:
@@ -282,6 +312,7 @@ class BrainstemScheduler:
                     "consolidation_skipped_cpu_high",
                     cpu_load=cpu_load,
                     threshold=self.cpu_threshold,
+                    trace_id=trace_id,
                 )
                 return False
 
@@ -290,6 +321,7 @@ class BrainstemScheduler:
                     "consolidation_skipped_memory_high",
                     memory_used=memory_used,
                     threshold=self.memory_threshold,
+                    trace_id=trace_id,
                 )
                 return False
 
@@ -299,12 +331,19 @@ class BrainstemScheduler:
             log.warning(
                 "consolidation_check_failed",
                 error=str(e),
+                trace_id=trace_id,
             )
             return False
 
-    async def _trigger_consolidation(self) -> None:
-        """Trigger second brain consolidation and publish consolidation.completed."""
-        log.info("consolidation_triggered")
+    async def _trigger_consolidation(self, *, trace_id: str | None = None) -> None:
+        """Trigger second brain consolidation and publish consolidation.completed.
+
+        Args:
+            trace_id: Trace identifier of the enclosing operation
+                (ADR-0074 §I3). Threaded from ``on_request_captured`` or
+                minted by ad-hoc callers.
+        """
+        log.info("consolidation_triggered", trace_id=trace_id)
 
         try:
             if not self.consolidator:
@@ -327,23 +366,30 @@ class BrainstemScheduler:
             log.info(
                 "consolidation_completed",
                 **result,
+                trace_id=trace_id,
             )
 
             # Publish consolidation.completed event (Phase 3, ADR-0041)
-            await self._publish_consolidation_completed(result)
+            await self._publish_consolidation_completed(result, trace_id=trace_id)
 
         except Exception as e:
             log.error(
                 "consolidation_failed",
                 error=str(e),
                 exc_info=True,
+                trace_id=trace_id,
             )
 
-    async def _publish_consolidation_completed(self, result: dict[str, Any]) -> None:
+    async def _publish_consolidation_completed(
+        self, result: dict[str, Any], *, trace_id: str | None = None
+    ) -> None:
         """Publish ``consolidation.completed`` to trigger insights and promotion consumers.
 
         Args:
             result: Summary dict returned by ``consolidate_recent_captures``.
+            trace_id: Trace identifier of the enclosing consolidation
+                operation (ADR-0074 §I3). Threaded onto bus-publish status
+                logs.
         """
         from personal_agent.events.bus import get_event_bus
         from personal_agent.events.models import (
@@ -362,13 +408,19 @@ class BrainstemScheduler:
             log.debug(
                 "consolidation_completed_event_emitted",
                 captures_processed=event.captures_processed,
+                trace_id=trace_id,
             )
         except Exception as exc:
-            log.warning("consolidation_completed_event_publish_failed", error=str(exc))
+            log.warning(
+                "consolidation_completed_event_publish_failed",
+                error=str(exc),
+                trace_id=trace_id,
+            )
 
     async def _lifecycle_loop(self) -> None:
         """Run data lifecycle tasks: hourly disk check, daily 2AM archive, weekly Sunday 3AM purge."""
         while self.running:
+            iteration_trace_id = _new_scheduler_trace_id("scheduler.lifecycle")
             try:
                 await asyncio.sleep(LIFECYCLE_CHECK_INTERVAL_SECONDS)
 
@@ -398,6 +450,7 @@ class BrainstemScheduler:
                             "captains_log_backfill_failed",
                             error=str(backfill_err),
                             exc_info=True,
+                            trace_id=iteration_trace_id,
                         )
 
                 # Daily at 2 AM UTC: archive old data
@@ -479,14 +532,21 @@ class BrainstemScheduler:
                         feedback_events = await self.feedback_poller.check_for_feedback()
                         if feedback_events:
                             await self.feedback_poller.process_feedback(feedback_events)
-                            await self._publish_feedback_events(feedback_events)
+                            await self._publish_feedback_events(
+                                feedback_events, trace_id=iteration_trace_id
+                            )
                         self._last_feedback_date = today
-                        log.info("feedback_polling_completed", events_count=len(feedback_events))
+                        log.info(
+                            "feedback_polling_completed",
+                            events_count=len(feedback_events),
+                            trace_id=iteration_trace_id,
+                        )
                     except Exception as poll_err:
                         log.warning(
                             "feedback_polling_failed",
                             error=str(poll_err),
                             exc_info=True,
+                            trace_id=iteration_trace_id,
                         )
 
                 # Daily quality monitoring (FRE-32)
@@ -497,7 +557,7 @@ class BrainstemScheduler:
                         or self._last_quality_check_date != today
                     )
                 ):
-                    await self._run_quality_monitoring()
+                    await self._run_quality_monitoring(trace_id=iteration_trace_id)
                     self._last_quality_check_date = today
 
                 # Daily skill routing threshold monitor (FRE-335 / ADR-0066 D2)
@@ -516,6 +576,7 @@ class BrainstemScheduler:
                             "skill_routing_threshold_monitor_failed",
                             error=str(exc),
                             exc_info=True,
+                            trace_id=iteration_trace_id,
                         )
                     self._last_skill_routing_threshold_date = today
 
@@ -526,13 +587,18 @@ class BrainstemScheduler:
                     "lifecycle_loop_error",
                     error=str(e),
                     exc_info=True,
+                    trace_id=iteration_trace_id,
                 )
 
-    async def _publish_feedback_events(self, feedback_events: list[Any]) -> None:
+    async def _publish_feedback_events(
+        self, feedback_events: list[Any], *, trace_id: str | None = None
+    ) -> None:
         """Publish ``feedback.received`` events for each processed feedback label.
 
         Args:
             feedback_events: List of ``FeedbackEvent`` dataclasses from the poller.
+            trace_id: Trace identifier of the enclosing scheduler iteration
+                (ADR-0074 §I3).
         """
         from personal_agent.captains_log.linear_client import (
             extract_issue_identifier_from_description,
@@ -566,40 +632,66 @@ class BrainstemScheduler:
                     issue_identifier=fe.issue_identifier,
                     label=fe.label,
                     error=str(exc),
+                    trace_id=trace_id,
                 )
 
-    async def _run_quality_monitoring(self) -> None:
-        """Run quality monitor checks without breaking scheduler loops."""
+    async def _run_quality_monitoring(self, *, trace_id: str | None = None) -> None:
+        """Run quality monitor checks without breaking scheduler loops.
+
+        Args:
+            trace_id: Trace identifier of the enclosing scheduler iteration
+                (ADR-0074 §I3); when ``None`` a quality-monitor-scoped trace
+                is minted so the run log line is still correlated.
+        """
+        trace_id = trace_id or _new_scheduler_trace_id("scheduler.quality_monitor")
         try:
             await self.quality_monitor.check_entity_extraction_quality(
-                days=self.quality_monitor_anomaly_window_days
+                days=self.quality_monitor_anomaly_window_days, trace_id=trace_id
             )
         except Exception as e:
-            log.warning("quality_monitor_entity_check_failed", error=str(e), exc_info=True)
+            log.warning(
+                "quality_monitor_entity_check_failed",
+                error=str(e),
+                exc_info=True,
+                trace_id=trace_id,
+            )
 
         try:
-            await self.quality_monitor.check_graph_health()
+            await self.quality_monitor.check_graph_health(trace_id=trace_id)
         except Exception as e:
-            log.warning("quality_monitor_graph_check_failed", error=str(e), exc_info=True)
+            log.warning(
+                "quality_monitor_graph_check_failed",
+                error=str(e),
+                exc_info=True,
+                trace_id=trace_id,
+            )
 
         anomalies_count = 0
         try:
             anomalies = await self.quality_monitor.detect_anomalies(
-                days=self.quality_monitor_anomaly_window_days
+                days=self.quality_monitor_anomaly_window_days, trace_id=trace_id
             )
             anomalies_count = len(anomalies)
             if anomalies and settings.graph_quality_stream_enabled:
-                await self._emit_graph_quality_anomalies(anomalies)
+                await self._emit_graph_quality_anomalies(anomalies, trace_id=trace_id)
         except Exception as e:
-            log.warning("quality_monitor_anomaly_check_failed", error=str(e), exc_info=True)
+            log.warning(
+                "quality_monitor_anomaly_check_failed",
+                error=str(e),
+                exc_info=True,
+                trace_id=trace_id,
+            )
 
         log.info(
             "quality_monitor_run_completed",
             anomalies_count=anomalies_count,
             days=self.quality_monitor_anomaly_window_days,
+            trace_id=trace_id,
         )
 
-    async def _emit_graph_quality_anomalies(self, anomalies: list[Any]) -> None:
+    async def _emit_graph_quality_anomalies(
+        self, anomalies: list[Any], *, trace_id: str | None = None
+    ) -> None:
         """Dual-write each anomaly to JSONL and publish a bus event (ADR-0060 §D8 Stream 8).
 
         Follows ADR-0054 D4 ordering: durable append first, bus publish second.
@@ -607,6 +699,10 @@ class BrainstemScheduler:
 
         Args:
             anomalies: List of ``Anomaly`` objects from ``detect_anomalies()``.
+            trace_id: Trace identifier of the enclosing quality-monitor run
+                (ADR-0074 §I3). Stamped onto the per-anomaly ``GraphQualityAnomaly``
+                records and bus events so downstream insights consumers can
+                join on the same trace.
         """
         import dataclasses
         import json
@@ -621,17 +717,18 @@ class BrainstemScheduler:
         from personal_agent.second_brain.quality_monitor import GraphQualityAnomaly
 
         today = date.today().isoformat()
-        trace_id = f"quality-monitor-{today}"
         output_dir = Path("telemetry/graph_quality")
         output_dir.mkdir(parents=True, exist_ok=True)
         jsonl_path = output_dir / f"GQ-{today}.jsonl"
         bus = get_event_bus()
 
+        # ADR-0074 §I4: ensure a non-None trace_id for the typed event.
+        effective_trace_id = trace_id or _new_scheduler_trace_id("graph_quality_anomaly")
         for anomaly in anomalies:
             fp = pattern_fingerprint("graph_quality", anomaly.anomaly_type, anomaly.message)
             gqa = GraphQualityAnomaly(
                 fingerprint=fp,
-                trace_id=trace_id,
+                trace_id=effective_trace_id,
                 anomaly_type=anomaly.anomaly_type,
                 severity=anomaly.severity,
                 message=anomaly.message,
@@ -651,6 +748,7 @@ class BrainstemScheduler:
                     fingerprint=fp,
                     anomaly_type=anomaly.anomaly_type,
                     error=str(exc),
+                    trace_id=trace_id,
                 )
                 continue  # Skip bus publish if durable write failed
 
@@ -673,6 +771,7 @@ class BrainstemScheduler:
                     fingerprint=fp,
                     anomaly_type=gqa.anomaly_type,
                     severity=gqa.severity,
+                    trace_id=trace_id,
                 )
             except Exception as exc:
                 log.warning(
@@ -680,4 +779,5 @@ class BrainstemScheduler:
                     fingerprint=fp,
                     anomaly_type=anomaly.anomaly_type,
                     error=str(exc),
+                    trace_id=trace_id,
                 )

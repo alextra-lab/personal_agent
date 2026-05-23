@@ -7,16 +7,14 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from personal_agent.gateway.app import _KnowledgeGraphAdapter, create_gateway_router
-from personal_agent.gateway.auth import _DEV_TOKEN, TokenInfo
 from personal_agent.memory.models import Entity, EntityNode, MemoryQueryResult, Relationship
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -197,7 +195,6 @@ def test_get_relationships_returns_list() -> None:
 @pytest.mark.asyncio
 async def test_kg_adapter_search_uses_query_memory() -> None:
     """_KnowledgeGraphAdapter.search uses query_memory and filters by name."""
-    from personal_agent.memory.models import MemoryQuery
     from personal_agent.telemetry.trace import TraceContext
 
     mock_service = AsyncMock()
@@ -226,4 +223,10 @@ async def test_kg_adapter_store_fact_calls_create_entity() -> None:
 
     result = await adapter.store_fact(fact, ctx)
     assert result == "Madrid"
-    mock_service.create_entity.assert_awaited_once_with(fact, visibility="public")
+    # ADR-0074 §I5: store_fact threads ctx.trace_id / ctx.session_id as origination.
+    mock_service.create_entity.assert_awaited_once_with(
+        fact,
+        visibility="public",
+        originating_trace_id=ctx.trace_id,
+        originating_session_id=ctx.session_id,
+    )

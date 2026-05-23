@@ -47,7 +47,9 @@ def build_session_writer_handler() -> Any:
         # We resolve it here rather than threading it onto RequestCompletedEvent
         # to keep the event schema stable for downstream consumers; the
         # active-config lookup runs in-process and is cached.
-        primary_model_id, config_path_str = resolve_active_attribution()
+        primary_model_id, config_path_str = resolve_active_attribution(
+            trace_id=event.trace_id,
+        )
         try:
             async with AsyncSessionLocal() as db:
                 repo = SessionRepository(db)

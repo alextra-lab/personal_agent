@@ -185,8 +185,17 @@ class R2ArtifactStore:
         content: bytes,
         content_type: str,
         metadata: Mapping[str, str] | None = None,
+        trace_id: str | None = None,
     ) -> None:
         """Upload bytes to R2 at ``r2_key`` with the given content-type.
+
+        Args:
+            r2_key: Destination object key in the bucket.
+            content: Bytes to upload.
+            content_type: MIME type to set on the object.
+            metadata: Optional R2 user metadata to attach.
+            trace_id: Originating request trace_id, threaded onto failure logs
+                for §I3 identity threading.
 
         Raises:
             ArtifactStoreError: On ``ClientError`` / ``BotoCoreError``.
@@ -206,11 +215,17 @@ class R2ArtifactStore:
                 bucket=self._bucket,
                 r2_key=r2_key,
                 error=str(exc),
+                trace_id=trace_id,
             )
             raise ArtifactStoreError(f"R2 put failed for {r2_key}: {exc}") from exc
 
-    async def get(self, r2_key: str) -> bytes:
+    async def get(self, r2_key: str, *, trace_id: str | None = None) -> bytes:
         """Fetch the bytes at ``r2_key`` from R2.
+
+        Args:
+            r2_key: Object key to fetch from the bucket.
+            trace_id: Originating request trace_id, threaded onto failure logs
+                for §I3 identity threading.
 
         Raises:
             ArtifactStoreError: On ``ClientError`` / ``BotoCoreError``.
@@ -233,13 +248,19 @@ class R2ArtifactStore:
                 bucket=self._bucket,
                 r2_key=r2_key,
                 error=str(exc),
+                trace_id=trace_id,
             )
             raise ArtifactStoreError(f"R2 get failed for {r2_key}: {exc}") from exc
 
-    async def delete(self, r2_key: str) -> None:
+    async def delete(self, r2_key: str, *, trace_id: str | None = None) -> None:
         """Delete the object at ``r2_key`` from R2.
 
         Idempotent — deleting a non-existent key is not an error.
+
+        Args:
+            r2_key: Object key to delete.
+            trace_id: Originating request trace_id, threaded onto failure logs
+                for §I3 identity threading.
         """
         client = await self._get_client()
         try:
@@ -250,6 +271,7 @@ class R2ArtifactStore:
                 bucket=self._bucket,
                 r2_key=r2_key,
                 error=str(exc),
+                trace_id=trace_id,
             )
             raise ArtifactStoreError(f"R2 delete failed for {r2_key}: {exc}") from exc
 
@@ -260,12 +282,21 @@ class R2ArtifactStore:
         content_type: str,
         max_size: int,
         expires_in: int = 900,
+        trace_id: str | None = None,
     ) -> str:
         """Mint a presigned PUT URL the browser can upload to directly.
 
         Used by FRE-369's user-upload flow. The presigned URL embeds the
         bucket, key, expected content-type, and a content-length cap so a
         misbehaving client cannot exfiltrate or oversize-bomb the bucket.
+
+        Args:
+            r2_key: Destination object key.
+            content_type: Required MIME type the uploader must use.
+            max_size: Content-length cap embedded in the URL.
+            expires_in: URL lifetime in seconds.
+            trace_id: Originating request trace_id, threaded onto failure logs
+                for §I3 identity threading.
 
         Raises:
             ArtifactStoreError: On ``ClientError`` / ``BotoCoreError``.
@@ -290,6 +321,7 @@ class R2ArtifactStore:
                 bucket=self._bucket,
                 r2_key=r2_key,
                 error=str(exc),
+                trace_id=trace_id,
             )
             raise ArtifactStoreError(f"R2 presign failed for {r2_key}: {exc}") from exc
 

@@ -297,7 +297,7 @@ async def notes_write_executor(
         if prior is not None:
             revision_of = prior[0]
             try:
-                existing = (await store.get(prior[1])).decode("utf-8")
+                existing = (await store.get(prior[1], trace_id=trace_id)).decode("utf-8")
             except UnicodeDecodeError as exc:
                 raise ToolExecutionError(
                     f"prior note {prior[0]} is not valid utf-8; refusing to append."
@@ -327,6 +327,7 @@ async def notes_write_executor(
         r2_key=r2_key,
         content=final_bytes,
         content_type=_NOTE_CONTENT_TYPE,
+        trace_id=trace_id,
     )
 
     async with AsyncSessionLocal() as session:

@@ -207,6 +207,7 @@ async def _check_permissions(
                 tool_name=tool_name,
                 mode=mode_str,
                 message="Approval required but session_id is empty; skipping interactive approval",
+                trace_id=trace_ctx.trace_id,
             )
         elif settings.approval_ui_enabled and transport is not None:
             # Perform interactive approval round-trip via the PWA.
@@ -234,6 +235,7 @@ async def _check_permissions(
                 tool_name=tool_name,
                 mode=mode_str,
                 message="Approval required but AGENT_APPROVAL_UI_ENABLED=false — proceeding without prompt",
+                trace_id=trace_ctx.trace_id,
             )
             # Allow the call when approval UI is explicitly disabled.
 

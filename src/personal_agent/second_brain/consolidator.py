@@ -33,8 +33,14 @@ from personal_agent.second_brain.attempts import (
 from personal_agent.second_brain.entity_extraction import extract_entities_and_relationships
 from personal_agent.second_brain.session_summary import generate_session_summary
 from personal_agent.telemetry import get_logger
+from personal_agent.telemetry.trace import SystemTraceContext
 
 log = get_logger(__name__)
+
+
+def _new_consolidation_trace_id() -> str:
+    """Mint a system-scoped trace id for a consolidation run (ADR-0074 §I3)."""
+    return SystemTraceContext.new("consolidation").trace_id
 
 
 class SecondBrainConsolidator:
@@ -85,7 +91,8 @@ class SecondBrainConsolidator:
         Returns:
             Summary dict with processing results
         """
-        log.info("consolidation_started", days=days, limit=limit)
+        run_trace_id = _new_consolidation_trace_id()
+        log.info("consolidation_started", days=days, limit=limit, trace_id=run_trace_id)
 
         # Read recent captures
         end_date = datetime.now(timezone.utc)
@@ -93,7 +100,7 @@ class SecondBrainConsolidator:
         captures = read_captures(start_date=start_date, end_date=end_date, limit=limit)
 
         if not captures:
-            log.info("no_captures_to_consolidate", days=days)
+            log.info("no_captures_to_consolidate", days=days, trace_id=run_trace_id)
             return {
                 "captures_processed": 0,
                 "captures_skipped": 0,
@@ -110,6 +117,7 @@ class SecondBrainConsolidator:
             "captures_found",
             count=len(captures),
             extraction_model=entity_extraction_role,
+            trace_id=run_trace_id,
         )
 
         # Ensure memory service is connected
@@ -131,12 +139,15 @@ class SecondBrainConsolidator:
                     "consolidation_paused_request_active",
                     capture_num=i,
                     remaining=len(captures) - i + 1,
+                    trace_id=run_trace_id,
                 )
                 while should_pause():
                     await asyncio.sleep(1.0)
-                log.info("consolidation_resumed", capture_num=i)
+                log.info("consolidation_resumed", capture_num=i, trace_id=run_trace_id)
             try:
-                if await self.memory_service.turn_exists(capture.trace_id):
+                if await self.memory_service.turn_exists(
+                    capture.trace_id, trace_id=capture.trace_id
+                ):
                     captures_skipped += 1
                     log.debug(
                         "consolidation_skipped_already_consolidated",
@@ -150,7 +161,9 @@ class SecondBrainConsolidator:
                     total=len(captures),
                     trace_id=capture.trace_id,
                 )
-                result = await self._process_capture(capture)
+                result = await self._process_capture(
+                    capture, extractor_model=entity_extraction_role
+                )
                 if result.get("turns_created"):
                     turns_created += result["turns_created"]
                     if capture.session_id:
@@ -164,6 +177,7 @@ class SecondBrainConsolidator:
                     capture_num=i,
                     entities=result.get("entities_created", 0),
                     relationships=result.get("relationships_created", 0),
+                    trace_id=capture.trace_id,
                 )
             except Exception as e:
                 log.error(
@@ -176,7 +190,9 @@ class SecondBrainConsolidator:
                 )
 
         # Build Session nodes for every session that received new turns this run
-        sessions_created = await self._consolidate_sessions(captures, sessions_with_new_turns)
+        sessions_created = await self._consolidate_sessions(
+            captures, sessions_with_new_turns, trace_id=run_trace_id
+        )
 
         # Promote qualifying entities from episodic → semantic memory
         entities_promoted = 0
@@ -188,7 +204,7 @@ class SecondBrainConsolidator:
                 promotion_result = await run_promotion_pipeline(
                     service=self.memory_service,
                     candidates=candidates,
-                    trace_id="consolidation",
+                    trace_id=run_trace_id,
                 )
                 entities_promoted = promotion_result.promoted_count
 
@@ -206,6 +222,7 @@ class SecondBrainConsolidator:
             "consolidation_completed",
             **summary,
             extraction_model=entity_extraction_role,
+            trace_id=run_trace_id,
         )
 
         _settings = get_settings()
@@ -215,7 +232,7 @@ class SecondBrainConsolidator:
         if all_entity_ids:
             entities_updated_event = MemoryEntitiesUpdatedEvent(
                 entity_ids=all_entity_ids,
-                consolidation_id="consolidation",
+                consolidation_id=run_trace_id,
                 source_component="second_brain.consolidator",
             )
             try:
@@ -225,6 +242,7 @@ class SecondBrainConsolidator:
                     "memory_entities_updated_event_publish_failed",
                     error=str(e),
                     event_id=entities_updated_event.event_id,
+                    trace_id=run_trace_id,
                 )
 
         # Publish memory accessed event for consolidation traversal (Phase 4 / ADR-0042)
@@ -235,7 +253,7 @@ class SecondBrainConsolidator:
                 relationship_ids=rel_ids_deduped,
                 access_context=AccessContext.CONSOLIDATION,
                 query_type="consolidation_traversal",
-                trace_id="consolidation",
+                trace_id=run_trace_id,
                 source_component="second_brain.consolidator",
             )
             try:
@@ -244,12 +262,14 @@ class SecondBrainConsolidator:
                     "consolidation_memory_access_event_published",
                     entity_count=len(all_entity_ids),
                     relationship_count=len(rel_ids_deduped),
+                    trace_id=run_trace_id,
                 )
             except Exception as e:
                 log.warning(
                     "memory_access_event_publish_failed",
                     error=str(e),
                     event_id=accessed_event.event_id,
+                    trace_id=run_trace_id,
                 )
 
         return summary
@@ -258,6 +278,8 @@ class SecondBrainConsolidator:
         self,
         all_captures: list[TaskCapture],
         sessions_with_new_turns: set[str],
+        *,
+        trace_id: str,
     ) -> int:
         """Create or update Session nodes for sessions that received new turns.
 
@@ -269,6 +291,9 @@ class SecondBrainConsolidator:
         Args:
             all_captures: All captures from this consolidation run.
             sessions_with_new_turns: session_ids that had at least one new turn.
+            trace_id: Trace identifier of the enclosing consolidation run
+                (ADR-0074 §I3). Threaded through to summary generation,
+                session/turn MERGE calls, and structured logs.
 
         Returns:
             Number of sessions created/updated.
@@ -293,7 +318,7 @@ class SecondBrainConsolidator:
                 # Returns None on any failure (budget, timeout, model error) so consolidation
                 # never blocks; the next pass retries.
                 summary = await generate_session_summary(
-                    ordered, session_id=session_id, trace_id="consolidation"
+                    ordered, session_id=session_id, trace_id=trace_id
                 )
 
                 session_node = SessionNode(
@@ -304,16 +329,19 @@ class SecondBrainConsolidator:
                     dominant_entities=[],  # Populated by link_session_turns via graph query
                     session_summary=summary,
                 )
-                created = await self.memory_service.create_session(session_node)
+                created = await self.memory_service.create_session(session_node, trace_id=trace_id)
                 if created:
-                    linked = await self.memory_service.link_session_turns(session_id)
+                    linked = await self.memory_service.link_session_turns(
+                        session_id, trace_id=trace_id
+                    )
                     # Refresh dominant_entities from graph after linking
-                    await self._update_session_dominant_entities(session_id)
+                    await self._update_session_dominant_entities(session_id, trace_id=trace_id)
                     sessions_created += 1
                     log.debug(
                         "session_consolidated",
                         session_id=session_id,
                         turns_linked=linked,
+                        trace_id=trace_id,
                     )
             except Exception as e:
                 log.error(
@@ -321,15 +349,18 @@ class SecondBrainConsolidator:
                     session_id=session_id,
                     error=str(e),
                     exc_info=True,
+                    trace_id=trace_id,
                 )
 
         return sessions_created
 
-    async def _update_session_dominant_entities(self, session_id: str) -> None:
+    async def _update_session_dominant_entities(self, session_id: str, *, trace_id: str) -> None:
         """Update Session.dominant_entities from the top entities discussed in its turns.
 
         Args:
             session_id: Session to update.
+            trace_id: Trace identifier of the enclosing consolidation run
+                (ADR-0074 §I3).
         """
         if not self.memory_service.connected or not self.memory_service.driver:
             return
@@ -353,13 +384,23 @@ class SecondBrainConsolidator:
                         dominant=dominant,
                     )
         except Exception as e:
-            log.warning("update_dominant_entities_failed", session_id=session_id, error=str(e))
+            log.warning(
+                "update_dominant_entities_failed",
+                session_id=session_id,
+                error=str(e),
+                trace_id=trace_id,
+            )
 
-    async def _process_capture(self, capture: TaskCapture) -> dict[str, Any]:
+    async def _process_capture(
+        self, capture: TaskCapture, *, extractor_model: str | None = None
+    ) -> dict[str, Any]:
         """Process a single capture: extract entities and update graph.
 
         Args:
             capture: Task capture to process
+            extractor_model: Identifier of the entity-extraction model role used
+                for this consolidation pass (ADR-0074 §I5). Threaded onto each
+                ``:Entity`` node as ``extractor_model``.
 
         Returns:
             Processing result summary with entity_ids for events.
@@ -484,7 +525,7 @@ class SecondBrainConsolidator:
 
         relationship_element_ids: list[str] = list(
             await self.memory_service.fetch_turn_discusses_relationship_element_ids(
-                capture.trace_id
+                capture.trace_id, trace_id=capture.trace_id
             )
         )
 
@@ -498,7 +539,13 @@ class SecondBrainConsolidator:
                 description=entity_data.get("description"),
                 properties=entity_data.get("properties", {}),
             )
-            entity_id = await self.memory_service.create_entity(entity, visibility=visibility)
+            entity_id = await self.memory_service.create_entity(
+                entity,
+                visibility=visibility,
+                originating_trace_id=capture.trace_id,
+                originating_session_id=capture.session_id,
+                extractor_model=extractor_model,
+            )
             if entity_id:
                 entities_created += 1
                 entity_ids.append(entity_id)
@@ -514,7 +561,7 @@ class SecondBrainConsolidator:
                 properties=rel_data.get("properties", {}),
             )
             rel_eid = await self.memory_service.create_relationship(
-                relationship, visibility=visibility
+                relationship, visibility=visibility, trace_id=capture.trace_id
             )
             if rel_eid:
                 relationships_created += 1

@@ -195,6 +195,7 @@ class LocalLLMClient:
             role=role.value,
             priority=priority,
             timeout=priority_timeout,
+            trace_id=trace_ctx.trace_id,
         ):
             return await self._do_request(
                 role=role,
@@ -272,11 +273,12 @@ class LocalLLMClient:
         if tools and strategy != ToolCallingStrategy.NATIVE:
             log.warning(
                 "tools_filtered_by_strategy",
-                model_id=model_id,
+                model=model_id,
                 role=role.value,
                 tools_count=len(tools),
                 strategy=strategy.value,
                 reason="Tools stripped — model strategy is not NATIVE",
+                trace_id=trace_ctx.trace_id,
             )
             tools = None
             tool_choice = None
@@ -582,7 +584,7 @@ class LocalLLMClient:
         log.error(
             MODEL_CALL_ERROR,
             role=role.value,
-            model_id=model_id,
+            model=model_id,
             endpoint=current_endpoint,
             error_type=error_type,
             error=str(last_error) if last_error else "Unknown error",

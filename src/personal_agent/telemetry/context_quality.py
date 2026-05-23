@@ -160,6 +160,7 @@ async def record_incident(
             "context_quality_incident_durable_write_failed",
             fingerprint=incident.fingerprint,
             session_id=incident.session_id,
+            trace_id=incident.trace_id,
             error=str(exc),
         )
         raise
@@ -200,6 +201,7 @@ async def record_incident(
             "context_quality_incident_publish_failed",
             fingerprint=incident.fingerprint,
             session_id=incident.session_id,
+            trace_id=incident.trace_id,
             error=str(exc),
         )
 
@@ -228,6 +230,7 @@ def schedule_record_incident(
             log.warning(
                 "context_quality_incident_sync_record_failed",
                 fingerprint=incident.fingerprint,
+                trace_id=incident.trace_id,
                 error=str(exc),
             )
         return

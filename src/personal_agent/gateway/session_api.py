@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from personal_agent.gateway.auth import TokenInfo, require_scope
 from personal_agent.gateway.errors import not_found, service_unavailable
 from personal_agent.gateway.rate_limiting import get_rate_limiter
+from personal_agent.telemetry.trace import SystemTraceContext
 
 log = structlog.get_logger(__name__)
 
@@ -76,7 +77,13 @@ async def list_sessions(
     get_rate_limiter().check(token)
     from personal_agent.service.repositories.session_repository import SessionRepository
 
-    log.info("gateway_sessions_list", limit=limit, token_name=token.name)
+    ctx = SystemTraceContext.new("session_api")
+    log.info(
+        "gateway_sessions_list",
+        limit=limit,
+        token_name=token.name,
+        trace_id=ctx.trace_id,
+    )
 
     repo = SessionRepository(db)
     sessions = await repo.list_recent(limit)
@@ -108,7 +115,13 @@ async def get_session(
     get_rate_limiter().check(token)
     from personal_agent.service.repositories.session_repository import SessionRepository
 
-    log.info("gateway_sessions_get", session_id=session_id, token_name=token.name)
+    ctx = SystemTraceContext.new("session_api", session_id=session_id)
+    log.info(
+        "gateway_sessions_get",
+        session_id=session_id,
+        token_name=token.name,
+        trace_id=ctx.trace_id,
+    )
 
     try:
         uuid = UUID(session_id)
@@ -156,11 +169,13 @@ async def get_session_messages(
     get_rate_limiter().check(token)
     from personal_agent.service.repositories.session_repository import SessionRepository
 
+    ctx = SystemTraceContext.new("session_api", session_id=session_id)
     log.info(
         "gateway_sessions_get_messages",
         session_id=session_id,
         limit=limit,
         token_name=token.name,
+        trace_id=ctx.trace_id,
     )
 
     try:

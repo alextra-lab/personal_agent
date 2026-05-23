@@ -113,7 +113,13 @@ async def search_knowledge(
     kg = _get_kg(request)
     ctx = SystemTraceContext.new("knowledge_api")
 
-    log.info("gateway_knowledge_search", query=q, limit=limit, token_name=token.name)
+    log.info(
+        "gateway_knowledge_search",
+        query=q,
+        limit=limit,
+        token_name=token.name,
+        trace_id=ctx.trace_id,
+    )
 
     results: Sequence[EntityNode] = await kg.search(q, limit, ctx)
     return [r.model_dump() for r in results]
@@ -140,8 +146,14 @@ async def get_entity(
     """
     get_rate_limiter().check(token)
     kg = _get_kg(request)
+    ctx = SystemTraceContext.new("knowledge_api")
 
-    log.info("gateway_knowledge_get_entity", entity_id=entity_id, token_name=token.name)
+    log.info(
+        "gateway_knowledge_get_entity",
+        entity_id=entity_id,
+        token_name=token.name,
+        trace_id=ctx.trace_id,
+    )
 
     entity: EntityNode | None = await kg.get_entity(entity_id)
     if entity is None:
@@ -174,6 +186,7 @@ async def store_entity(
         entity=body.entity,
         entity_type=body.entity_type,
         token_name=token.name,
+        trace_id=ctx.trace_id,
     )
 
     fact = Entity(
@@ -203,11 +216,13 @@ async def get_entity_relationships(
     """
     get_rate_limiter().check(token)
     kg = _get_kg(request)
+    ctx = SystemTraceContext.new("knowledge_api")
 
     log.info(
         "gateway_knowledge_get_relationships",
         entity_id=entity_id,
         token_name=token.name,
+        trace_id=ctx.trace_id,
     )
 
     relationships: Sequence[Relationship] = await kg.get_relationships(entity_id)

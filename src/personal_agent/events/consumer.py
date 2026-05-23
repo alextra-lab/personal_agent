@@ -175,6 +175,7 @@ class ConsumerRunner:
                     event_type=event.event_type,
                     event_id=event.event_id,
                     message_id=message_id,
+                    trace_id=event.trace_id,
                 )
                 return
             except BudgetDenied as exc:
@@ -195,6 +196,7 @@ class ConsumerRunner:
                     denial_reason=exc.denial_reason,
                     cap=str(exc.cap),
                     spend=str(exc.current_spend),
+                    trace_id=event.trace_id,
                 )
                 await self._bus.ack(sub.stream, sub.group, message_id)
                 return
@@ -209,6 +211,7 @@ class ConsumerRunner:
                     attempt=attempt,
                     max_retries=max_retries,
                     error=str(exc),
+                    trace_id=event.trace_id,
                 )
                 if attempt >= max_retries:
                     await self._bus.dead_letter(

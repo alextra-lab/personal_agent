@@ -198,13 +198,15 @@ async def extract_entities_and_relationships(
         assistant_response=assistant_response,
     )
 
+    trace_id_str = str(trace_id) if trace_id else None
     log.info(
         "entity_extraction_started",
         entity_extraction_role=entity_extraction_role,
         provider=provider,
-        model_id=model_def.id if model_def else None,
+        model=model_def.id if model_def else None,
         user_msg_len=len(user_message),
         assistant_msg_len=len(assistant_response),
+        trace_id=trace_id_str,
     )
 
     try:
@@ -216,8 +218,9 @@ async def extract_entities_and_relationships(
             cloud_client = get_llm_client(role_name=entity_extraction_role)
             log.debug(
                 "entity_extraction_using_cloud",
-                model_id=model_def.id if model_def else None,
+                model=model_def.id if model_def else None,
                 provider=provider,
+                trace_id=trace_id_str,
             )
 
             cloud_response = await cloud_client.respond(
@@ -237,6 +240,7 @@ async def extract_entities_and_relationships(
                 entity_extraction_role=entity_extraction_role,
                 role=model_role.value,
                 max_tokens=10000,
+                trace_id=trace_id_str,
             )
 
             # Add system prompt to messages
@@ -271,6 +275,7 @@ async def extract_entities_and_relationships(
                     error_type=type(e).__name__,
                     timeout_seconds=settings.entity_extraction_timeout_seconds,
                     message="Returning empty entities to avoid blocking consolidation.",
+                    trace_id=trace_id_str,
                 )
                 return _default_extraction_result(user_message)
 
@@ -282,12 +287,13 @@ async def extract_entities_and_relationships(
                 "entity_extraction_llm_response_received",
                 model=model_used,
                 response_len=len(content),
-                prompt_tokens=llm_response.get("usage", {}).get("prompt_tokens"),
-                completion_tokens=llm_response.get("usage", {}).get("completion_tokens"),
+                input_tokens=llm_response.get("usage", {}).get("prompt_tokens"),
+                output_tokens=llm_response.get("usage", {}).get("completion_tokens"),
+                trace_id=trace_id_str,
             )
 
         if not content:
-            log.warning("extraction_empty_response", model=model_used)
+            log.warning("extraction_empty_response", model=model_used, trace_id=trace_id_str)
             return _default_extraction_result(user_message)
 
         # Parse JSON response.
@@ -320,6 +326,7 @@ async def extract_entities_and_relationships(
                 likely_truncated=truncated,
                 content_preview=content[:200],
                 content_tail=content[-100:] if truncated else None,
+                trace_id=trace_id_str,
             )
             return _default_extraction_result(user_message)
 
@@ -337,6 +344,7 @@ async def extract_entities_and_relationships(
             entities_found=len(entity_names),
             relationships_found=len(result.get("relationships", [])),
             model_used=model_used,
+            trace_id=trace_id_str,
         )
 
         return {

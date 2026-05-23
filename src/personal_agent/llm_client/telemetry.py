@@ -13,10 +13,12 @@ The Phase 2 parity test imports those frozensets directly and asserts that
 both clients emit a superset — adding a new required field there forces
 every model client to populate it.
 
-Back-compat aliases (``model_id``, ``prompt_tokens``, ``completion_tokens``,
-the legacy ``litellm_request_*`` event names) are written here as
-double-emits. They will be removed in Phase 3 cleanup once downstream Kibana
-dashboards and reflection queries are migrated to the canonical names.
+FRE-376 Phase 3 (this revision): the back-compat aliases (``model_id``,
+``prompt_tokens``, ``completion_tokens``, ``tokens``, ``cache_write_tokens``)
+and the legacy ``litellm_request_*`` event names have been removed. Consumers
+must read the canonical names (``model``, ``input_tokens``, ``output_tokens``,
+``total_tokens``, ``cache_creation_input_tokens``) and filter on
+``event:model_call_completed`` / ``event:model_call_started``.
 """
 
 from __future__ import annotations
@@ -81,8 +83,6 @@ def emit_model_call_started(
         "model": model,
         "role": role,
         "endpoint": endpoint,
-        # Back-compat alias for one release cycle (Phase 3 removes).
-        "model_id": model,
         **_identity_fields(trace_ctx=trace_ctx, span_id=span_id),
     }
     if extra:
@@ -132,85 +132,8 @@ def emit_model_call_completed(
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
         "cache_read_tokens": cache_read_tokens,
-        # Back-compat aliases for one release cycle (Phase 3 removes).
-        "model_id": model,
-        "prompt_tokens": input_tokens,
-        "completion_tokens": output_tokens,
         **_identity_fields(trace_ctx=trace_ctx, span_id=span_id),
     }
     if extra:
         payload.update(extra)
     log.info(MODEL_CALL_COMPLETED, **payload)
-
-
-def emit_legacy_litellm_start(
-    *,
-    log: structlog.stdlib.BoundLogger,
-    role: str,
-    model: str,
-    trace_ctx: TraceContext,
-    budget_role: str,
-    reservation_amount: str,
-    max_tokens: int | None,
-) -> None:
-    """Emit the deprecated ``litellm_request_start`` event for back-compat.
-
-    Kept alongside :func:`emit_model_call_started` so Kibana dashboards and
-    queries that currently filter on ``event:litellm_request_start`` keep
-    working through one release cycle. Phase 3 will drop this once consumers
-    migrate to the canonical event name.
-    """
-    log.info(
-        "litellm_request_start",
-        model=model,
-        trace_id=trace_ctx.trace_id,
-        session_id=trace_ctx.session_id,
-        role=role,
-        budget_role=budget_role,
-        reservation_amount=reservation_amount,
-        max_tokens=max_tokens,
-    )
-
-
-def emit_legacy_litellm_complete(
-    *,
-    log: structlog.stdlib.BoundLogger,
-    role: str,
-    model: str,
-    endpoint: str,
-    trace_ctx: TraceContext,
-    latency_ms: int,
-    elapsed_s: float,
-    input_tokens: int | None,
-    output_tokens: int | None,
-    total_tokens: int | None,
-    cost_usd: float | None,
-    tool_calls: int,
-    cache_read_tokens: int | None,
-    cache_creation_input_tokens: int | None,
-) -> None:
-    """Emit the deprecated ``litellm_request_complete`` event for back-compat.
-
-    Mirrors the field shape that was previously emitted inline in
-    :meth:`LiteLLMClient.respond`. Kept until Phase 3 cleanup migrates
-    consumers to ``model_call_completed``.
-    """
-    log.info(
-        "litellm_request_complete",
-        model=model,
-        trace_id=trace_ctx.trace_id,
-        session_id=trace_ctx.session_id,
-        role=role,
-        endpoint=endpoint,
-        latency_ms=latency_ms,
-        elapsed_s=elapsed_s,
-        completion_tokens=output_tokens,
-        prompt_tokens=input_tokens,
-        total_tokens=total_tokens,
-        tokens=total_tokens,
-        cost_usd=cost_usd,
-        tool_calls=tool_calls,
-        cache_read_tokens=cache_read_tokens,
-        cache_creation_input_tokens=cache_creation_input_tokens,
-        cache_write_tokens=cache_creation_input_tokens,
-    )

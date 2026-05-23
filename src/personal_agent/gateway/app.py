@@ -249,12 +249,19 @@ class _KnowledgeGraphAdapter:
 
         Args:
             fact: :class:`~personal_agent.memory.models.Entity` to store.
-            ctx: Trace context.
+            ctx: Trace context. ``trace_id`` and ``session_id`` are written as
+                origination on the new node (ADR-0074 §I5). No ``extractor_model``
+                — gateway ``store_fact`` is user-provided facts, not extraction.
 
         Returns:
             Entity identifier string.
         """
-        entity_id: str = await self._service.create_entity(fact, visibility="public")
+        entity_id: str = await self._service.create_entity(
+            fact,
+            visibility="public",
+            originating_trace_id=getattr(ctx, "trace_id", None),
+            originating_session_id=getattr(ctx, "session_id", None),
+        )
         return entity_id
 
     async def get_relationships(self, entity_id: str) -> list[Any]:

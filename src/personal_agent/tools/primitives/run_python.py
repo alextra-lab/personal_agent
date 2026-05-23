@@ -172,6 +172,7 @@ async def run_python_executor(
         timeout_seconds=timeout_seconds,
         network=network,
         scratch_host_path=scratch_dir,
+        trace_id=trace_id,
     )
 
     # ------------------------------------------------------------------

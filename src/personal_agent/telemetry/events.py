@@ -36,6 +36,16 @@ MODEL_CALL_COMPLETED = "model_call_completed"
 MODEL_CALL_ERROR = "model_call_error"
 HISTORY_SANITISED = "history_sanitised"
 
+# ADR-0074 / FRE-376 Phase 3: orchestrator step-planning boundary.
+# Distinct from MODEL_CALL_* (which the model clients emit with the full
+# canonical shape). Before Phase 3, the orchestrator also emitted
+# MODEL_CALL_STARTED with a thinner (model_role, channel) shape — same event
+# name, two different payloads, ambiguous Kibana queries. The split makes
+# model_call_* exclusively client-side and step_planning_* exclusively
+# orchestrator-side.
+STEP_PLANNING_STARTED = "step_planning_started"
+STEP_PLANNING_COMPLETED = "step_planning_completed"
+
 # ADR-0074 / FRE-376 Phase 2 (I2): both LocalLLMClient and LiteLLMClient emit
 # the canonical `model_call_started` / `model_call_completed` events with the
 # field sets below. These frozensets are imported by the parity test as the

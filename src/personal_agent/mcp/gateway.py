@@ -12,6 +12,7 @@ from personal_agent.mcp.linear_issue_args import normalize_save_issue_arguments
 from personal_agent.mcp.types import mcp_tool_to_definition
 from personal_agent.mcp_server_allowlist import mcp_tool_matches_enabled_server
 from personal_agent.telemetry import get_logger
+from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.registry import ToolRegistry
 
 log = get_logger(__name__)
@@ -220,10 +221,13 @@ class MCPGatewayAdapter:
             Async executor function.
         """
 
-        async def executor(**kwargs: Any) -> str | dict[str, Any]:
+        async def executor(ctx: TraceContext | None = None, **kwargs: Any) -> str | dict[str, Any]:
             """Execute MCP tool via persistent gateway session.
 
             Args:
+                ctx: Trace context injected by :mod:`tools.executor` when the
+                    executor is invoked through the tool registry (ADR-0074 §I3).
+                    ``None`` outside the registry dispatch path.
                 **kwargs: Tool arguments.
 
             Returns:
@@ -235,6 +239,7 @@ class MCPGatewayAdapter:
             if not self.client:
                 raise RuntimeError("MCP gateway not connected")
 
+            trace_id = ctx.trace_id if ctx is not None else None
             try:
                 call_args = kwargs
                 if mcp_tool_name == "save_issue":
@@ -248,8 +253,9 @@ class MCPGatewayAdapter:
                             "mcp_save_issue_team_normalized",
                             original_team=kwargs.get("team"),
                             team=call_args.get("team"),
+                            trace_id=trace_id,
                         )
-                result = await self.client.call_tool(mcp_tool_name, call_args)
+                result = await self.client.call_tool(mcp_tool_name, call_args, trace_id=trace_id)
                 if not result:
                     return {}
                 # MCP tools may return lists when multiple content items
@@ -262,13 +268,23 @@ class MCPGatewayAdapter:
 
             except Exception as e:
                 log.error(
-                    "mcp_tool_execution_failed", tool=mcp_tool_name, error=str(e), exc_info=True
+                    "mcp_tool_execution_failed",
+                    tool=mcp_tool_name,
+                    error=str(e),
+                    exc_info=True,
+                    trace_id=trace_id,
                 )
                 raise RuntimeError(f"MCP tool '{mcp_tool_name}' failed: {e}") from e
 
         return executor
 
-    async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        trace_id: str | None = None,
+    ) -> Any:
         """Invoke an MCP tool by name (raw gateway session).
 
         Used by background jobs (e.g. LinearClient) that need MCP without going
@@ -277,6 +293,9 @@ class MCPGatewayAdapter:
         Args:
             name: MCP tool name as returned by the gateway (e.g. ``save_issue``).
             arguments: Tool arguments per the MCP tool schema.
+            trace_id: Optional trace identifier for telemetry correlation
+                (ADR-0074 §I3). ``None`` is acceptable for background jobs that
+                operate outside a request turn.
 
         Returns:
             Parsed tool result (structured content or JSON-decoded text).
@@ -299,11 +318,18 @@ class MCPGatewayAdapter:
                         "mcp_save_issue_team_normalized",
                         original_team=arguments.get("team"),
                         team=call_args.get("team"),
+                        trace_id=trace_id,
                     )
-            result = await self.client.call_tool(name, call_args)
+            result = await self.client.call_tool(name, call_args, trace_id=trace_id)
             return result if result else {}
         except Exception as e:
-            log.error("mcp_gateway_call_tool_failed", tool=name, error=str(e), exc_info=True)
+            log.error(
+                "mcp_gateway_call_tool_failed",
+                tool=name,
+                error=str(e),
+                exc_info=True,
+                trace_id=trace_id,
+            )
             raise RuntimeError(f"MCP tool '{name}' failed: {e}") from e
 
     async def shutdown(self) -> None:

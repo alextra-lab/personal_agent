@@ -45,6 +45,7 @@ from personal_agent.service.cf_access_jwt import (
 )
 from personal_agent.service.database import get_db_session
 from personal_agent.service.models import ArtifactModel
+from personal_agent.telemetry.trace import SystemTraceContext
 
 log = structlog.get_logger(__name__)
 settings = get_settings()
@@ -147,6 +148,7 @@ async def resolve_artifact(
     from a plaintext forwarded header.
     """
     _verify_internal_token(request)
+    ctx = SystemTraceContext.new("artifact_resolve")
 
     verifier = get_verifier()
     if verifier is None:
@@ -156,6 +158,7 @@ async def resolve_artifact(
             "artifact_resolve_misconfigured",
             artifact_id=str(artifact_id),
             reason="cf_access_team_domain or cf_access_aud unset",
+            trace_id=ctx.trace_id,
         )
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
 
@@ -163,7 +166,11 @@ async def resolve_artifact(
         "cf-access-jwt-assertion"
     )
     if not jwt_token:
-        log.info("artifact_resolve_missing_jwt", artifact_id=str(artifact_id))
+        log.info(
+            "artifact_resolve_missing_jwt",
+            artifact_id=str(artifact_id),
+            trace_id=ctx.trace_id,
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
     try:
@@ -174,6 +181,7 @@ async def resolve_artifact(
             "artifact_resolve_jwt_invalid",
             artifact_id=str(artifact_id),
             error_class=type(exc).__name__,
+            trace_id=ctx.trace_id,
         )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED) from exc
 
@@ -200,6 +208,7 @@ async def resolve_artifact(
             "artifact_resolve_not_found",
             artifact_id=str(artifact_id),
             user_id=str(user_id),
+            trace_id=ctx.trace_id,
         )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 

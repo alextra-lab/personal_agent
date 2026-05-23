@@ -33,6 +33,25 @@ from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
 
+
+def _trace_id_from_entry(entry: CaptainLogEntry) -> str | None:
+    """Extract the originating trace_id from a Captain's Log entry, if any.
+
+    Args:
+        entry: The Captain's Log entry to inspect.
+
+    Returns:
+        The first telemetry-ref trace_id when present and a string; ``None``
+        otherwise.
+    """
+    if not entry.telemetry_refs:
+        return None
+    raw = entry.telemetry_refs[0].trace_id
+    if isinstance(raw, str) and not getattr(raw, "__await__", None):
+        return raw
+    return None
+
+
 LinearIssueCreator = Callable[
     [str, str, str, int, list[str], str, str],
     Coroutine[Any, Any, str | None],
@@ -287,6 +306,7 @@ class PromotionPipeline:
                             "promotion_linear_dedup_query_failed",
                             entry_id=entry.entry_id,
                             error=str(dup_exc),
+                            trace_id=_trace_id_from_entry(entry),
                         )
                         existing_id = None
                     if existing_id:
@@ -294,6 +314,7 @@ class PromotionPipeline:
                             "promotion_linear_duplicate_linked",
                             entry_id=entry.entry_id,
                             linear_issue_id=existing_id,
+                            trace_id=_trace_id_from_entry(entry),
                         )
                         self._mark_promoted(entry, existing_id)
                         promoted.append(
@@ -310,6 +331,7 @@ class PromotionPipeline:
                     "promotion_linear_create_failed",
                     entry_id=entry.entry_id,
                     error=str(exc),
+                    trace_id=_trace_id_from_entry(entry),
                 )
 
         log.info(
@@ -351,6 +373,9 @@ class PromotionPipeline:
             )
             for e in all_entries
         }
+        entry_trace: dict[str, str | None] = {
+            e.entry_id: _trace_id_from_entry(e) for e in all_entries
+        }
         for record in promoted:
             entry_id = record.get("entry_id", "")
             linear_issue_id = record.get("linear_issue_id", "")
@@ -369,6 +394,7 @@ class PromotionPipeline:
                     entry_id=entry_id,
                     linear_issue_id=linear_issue_id,
                     error=str(exc),
+                    trace_id=entry_trace.get(entry_id),
                 )
 
     async def _existing_linear_issue_for_fingerprint(self, fingerprint: str) -> str | None:
@@ -416,6 +442,7 @@ class PromotionPipeline:
                 entry_id=entry.entry_id,
                 title=title,
                 priority=priority,
+                trace_id=_trace_id_from_entry(entry),
             )
             return None
 
@@ -439,6 +466,7 @@ class PromotionPipeline:
                     scope=pc.scope.value if pc.scope else None,
                     seen_count=pc.seen_count,
                     priority=priority,
+                    trace_id=_trace_id_from_entry(entry),
                 )
             return linear_id
         except Exception as exc:
@@ -446,6 +474,7 @@ class PromotionPipeline:
                 "promotion_linear_create_failed",
                 entry_id=entry.entry_id,
                 error=str(exc),
+                trace_id=_trace_id_from_entry(entry),
             )
             return None
 
@@ -467,10 +496,12 @@ class PromotionPipeline:
                     entry_id=entry.entry_id,
                     linear_issue_id=linear_issue_id,
                     file=str(json_file),
+                    trace_id=_trace_id_from_entry(entry),
                 )
             except Exception as exc:
                 log.warning(
                     "promotion_mark_approved_failed",
                     entry_id=entry.entry_id,
                     error=str(exc),
+                    trace_id=_trace_id_from_entry(entry),
                 )

@@ -17,3 +17,10 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: check-identity-threaded
+        name: ADR-0074 §I3/§I5 identity threading (log/bus.publish/Cypher MERGE)
+        entry: uv run python scripts/check_identity_threaded.py
+        language: system
+        files: ^src/personal_agent/.*\.py$
+        pass_filenames: false
+        args: [src/personal_agent/]

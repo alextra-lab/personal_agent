@@ -7,8 +7,15 @@ from typing import Any, Literal
 
 from personal_agent.memory.service import MemoryService
 from personal_agent.telemetry import TelemetryQueries, get_logger
+from personal_agent.telemetry.trace import SystemTraceContext
 
 log = get_logger(__name__)
+
+
+def _new_qm_trace_id() -> str:
+    """Mint a system-scoped trace id for a quality-monitor run (ADR-0074 §I3)."""
+    return SystemTraceContext.new("quality_monitor").trace_id
+
 
 ENTITY_RATIO_TARGET = (0.5, 2.0)
 RELATIONSHIP_DENSITY_TARGET = (1.0, 3.0)
@@ -164,15 +171,22 @@ class ConsolidationQualityMonitor:
         self._memory_service = memory_service or MemoryService()
         self._queries = telemetry_queries or TelemetryQueries()
 
-    async def check_entity_extraction_quality(self, days: int = 7) -> QualityReport:
+    async def check_entity_extraction_quality(
+        self, days: int = 7, *, trace_id: str | None = None
+    ) -> QualityReport:
         """Analyze extraction quality against FRE-23 targets.
 
         Args:
             days: Window for extraction telemetry.
+            trace_id: Optional caller-supplied trace id (ADR-0074 §I3).
+                When ``None`` the method mints a system-scoped trace via
+                :func:`_new_qm_trace_id` so the report log line is still
+                correlated.
 
         Returns:
             Entity extraction quality report.
         """
+        trace_id = trace_id or _new_qm_trace_id()
         conversation_count = int(
             await self._run_scalar_query("MATCH (c:Conversation) RETURN count(c) AS value")
         )
@@ -219,15 +233,21 @@ class ConsolidationQualityMonitor:
             extraction_failure_rate=round(report.extraction_failure_rate, 4),
             conversations=report.conversations,
             entities=report.entities,
+            trace_id=trace_id,
         )
         return report
 
-    async def check_graph_health(self) -> GraphHealthReport:
+    async def check_graph_health(self, *, trace_id: str | None = None) -> GraphHealthReport:
         """Analyze graph structure and topology quality.
+
+        Args:
+            trace_id: Optional caller-supplied trace id (ADR-0074 §I3). When
+                ``None`` a system-scoped trace is minted.
 
         Returns:
             Graph health report.
         """
+        trace_id = trace_id or _new_qm_trace_id()
         total_nodes = int(await self._run_scalar_query("MATCH (n) RETURN count(n) AS value"))
         entity_nodes = int(
             await self._run_scalar_query("MATCH (e:Entity) RETURN count(e) AS value")
@@ -311,20 +331,28 @@ class ConsolidationQualityMonitor:
             max_temporal_gap_hours=round(report.max_temporal_gap_hours, 2),
             empty_description_entity_count=report.empty_description_entity_count,
             redundant_relationship_pairs=report.redundant_relationship_pairs,
+            trace_id=trace_id,
         )
         return report
 
-    async def detect_anomalies(self, days: int = 7) -> list[Anomaly]:
+    async def detect_anomalies(
+        self, days: int = 7, *, trace_id: str | None = None
+    ) -> list[Anomaly]:
         """Detect quality anomalies from current metrics and recent trends.
 
         Args:
             days: Trend window for spike detection.
+            trace_id: Optional caller-supplied trace id (ADR-0074 §I3). When
+                ``None`` a system-scoped trace is minted and threaded into
+                the dependent ``check_entity_extraction_quality`` /
+                ``check_graph_health`` calls.
 
         Returns:
             List of anomalies, empty if healthy.
         """
-        quality = await self.check_entity_extraction_quality(days=days)
-        graph = await self.check_graph_health()
+        trace_id = trace_id or _new_qm_trace_id()
+        quality = await self.check_entity_extraction_quality(days=days, trace_id=trace_id)
+        graph = await self.check_graph_health(trace_id=trace_id)
         anomalies: list[Anomaly] = []
 
         anomalies.extend(
@@ -415,7 +443,12 @@ class ConsolidationQualityMonitor:
         if spike is not None:
             anomalies.append(spike)
 
-        log.info("quality_monitor_anomalies_detected", count=len(anomalies), days=days)
+        log.info(
+            "quality_monitor_anomalies_detected",
+            count=len(anomalies),
+            days=days,
+            trace_id=trace_id,
+        )
         return anomalies
 
     async def _run_scalar_query(self, query: str, **params: Any) -> float:

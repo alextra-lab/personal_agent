@@ -41,6 +41,7 @@ from personal_agent.service.repositories.session_repository import SessionReposi
 from personal_agent.telemetry import add_elasticsearch_handler, get_logger
 from personal_agent.telemetry.es_handler import ElasticsearchHandler
 from personal_agent.telemetry.request_timer import RequestTimer
+from personal_agent.telemetry.trace import SystemTraceContext
 from personal_agent.transport.agui.endpoint import get_event_queue
 from personal_agent.transport.events import TextDeltaEvent
 
@@ -63,16 +64,21 @@ cost_gate_reaper_task: asyncio.Task[None] | None = None
 _pending_append_tasks: dict[str, asyncio.Task[None]] = {}
 
 
-def _resolve_active_model_attribution() -> tuple[str | None, str]:
+def _resolve_active_model_attribution(
+    *,
+    trace_id: str | None = None,
+) -> tuple[str | None, str]:
     """Thin wrapper kept for clarity at call sites in this module.
 
     Delegates to :func:`personal_agent.config.model_loader.resolve_active_attribution`
     which is shared with the Redis session-writer consumer so both append
-    paths emit identical attribution (ADR-0074 / FRE-376).
+    paths emit identical attribution (ADR-0074 / FRE-376). The optional
+    ``trace_id`` is forwarded so the warning path correlates with the
+    originating chat turn (ADR-0074 §I3).
     """
     from personal_agent.config.model_loader import resolve_active_attribution
 
-    return resolve_active_attribution()
+    return resolve_active_attribution(trace_id=trace_id)
 
 
 async def _append_assistant_message_background(
@@ -86,7 +92,7 @@ async def _append_assistant_message_background(
     this task before loading session history.
     """
     sid = str(session_id)
-    primary_model_id, config_path_str = _resolve_active_model_attribution()
+    primary_model_id, config_path_str = _resolve_active_model_attribution(trace_id=trace_id)
     try:
         async with AsyncSessionLocal() as db:
             repo = SessionRepository(db)
@@ -169,7 +175,9 @@ async def _process_chat_stream_background(
                 # across turns without the client needing to track a separate DB ID.
                 from personal_agent.service.models import SessionModel
 
-                primary_model_id, config_path_str = _resolve_active_model_attribution()
+                primary_model_id, config_path_str = _resolve_active_model_attribution(
+                    trace_id=trace_id,
+                )
                 now = datetime.now(timezone.utc)
                 session = SessionModel(
                     session_id=session_uuid,
@@ -295,7 +303,9 @@ async def _process_chat_stream_background(
         await queue.put(TextDeltaEvent(text=response_content, session_id=session_id))
 
         try:
-            primary_model_id, config_path_str = _resolve_active_model_attribution()
+            primary_model_id, config_path_str = _resolve_active_model_attribution(
+                trace_id=trace_id,
+            )
             async with AsyncSessionLocal() as db:
                 repo = SessionRepository(db)
                 await repo.append_message(
@@ -327,6 +337,7 @@ async def _process_chat_stream_background(
             session_id=session_id,
             error_id=bg_error_id,
             error=sanitize_error_message(e),
+            trace_id=trace_id,
             exc_info=True,
         )
         # Do not include exception details in the SSE stream to avoid
@@ -1014,6 +1025,7 @@ async def _budget_denied_handler(_request: _Request, exc: _BudgetDenied) -> _JSO
     fixed by ADR-0065: previously the cap-exceeded ValueError was swallowed
     and rendered as an empty assistant turn.
     """
+    _bd_ctx = SystemTraceContext.new("budget_denied_handler")
     log.warning(
         "http_budget_denied",
         role=exc.role,
@@ -1021,6 +1033,7 @@ async def _budget_denied_handler(_request: _Request, exc: _BudgetDenied) -> _JSO
         current_spend=str(exc.current_spend),
         cap=str(exc.cap),
         denial_reason=exc.denial_reason,
+        trace_id=_bd_ctx.trace_id,
     )
     return _JSONResponse(
         status_code=503,
@@ -1120,6 +1133,7 @@ async def create_session(
         model_config_path=config_path_str,
     )
 
+    _sc_ctx = SystemTraceContext.new("create_session", session_id=str(session.session_id))
     log.info(
         "session_created",
         session_id=str(session.session_id),
@@ -1128,6 +1142,7 @@ async def create_session(
         user_id=str(request_user.user_id),
         primary_model_at_creation=primary_model_id,
         model_config_path=config_path_str,
+        trace_id=_sc_ctx.trace_id,
     )
 
     return SessionResponse.model_validate(session)
@@ -1233,7 +1248,9 @@ async def chat(
             if not session:
                 raise HTTPException(status_code=404, detail="Session not found")
         else:
-            primary_model_id, config_path_str = _resolve_active_model_attribution()
+            primary_model_id, config_path_str = _resolve_active_model_attribution(
+                trace_id=trace_id,
+            )
             session = await repo.create(
                 SessionCreate(),
                 user_id=request_user.user_id,
@@ -1381,6 +1398,7 @@ async def chat(
             error_id=error_id,
             error=sanitize_error_message(e),
             error_type=type(e).__name__,
+            trace_id=trace_id,
             exc_info=True,
         )
         # Do not include exception details in the HTTP response to avoid
@@ -1505,7 +1523,13 @@ async def chat_stream_endpoint(
         )
     )
 
-    log.info("chat_stream.launched", session_id=session_id, profile=profile)
+    _cs_ctx = SystemTraceContext.new("chat_stream_launch", session_id=session_id)
+    log.info(
+        "chat_stream.launched",
+        session_id=session_id,
+        profile=profile,
+        trace_id=_cs_ctx.trace_id,
+    )
     return {"session_id": session_id, "status": "streaming"}
 
 
@@ -1532,6 +1556,7 @@ async def inference_status() -> dict[str, Any]:
         headers["CF-Access-Client-Id"] = settings.cf_access_client_id
         headers["CF-Access-Client-Secret"] = settings.cf_access_client_secret
 
+    _inf_ctx = SystemTraceContext.new("inference_status_probe")
     start = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
@@ -1545,6 +1570,7 @@ async def inference_status() -> dict[str, Any]:
                 "inference_tunnel_auth_failed",
                 status=403,
                 hint="Rotate CF_ACCESS_CLIENT_ID/SECRET via terraform apply",
+                trace_id=_inf_ctx.trace_id,
             )
         return {"local": "down", "latency_ms": None}
     except Exception:

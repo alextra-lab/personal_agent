@@ -46,12 +46,16 @@ def _matches_any(path: str, patterns: list[str]) -> bool:
 def _check_path_governance(
     resolved: Path,
     tool_name: str,
+    *,
+    trace_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Validate *resolved* against allowed_paths / forbidden_paths for *tool_name*.
 
     Args:
         resolved: Fully resolved absolute path.
         tool_name: Key to look up in ``governance_config.tools``.
+        trace_id: Originating request trace_id, threaded onto the
+            governance-load failure log for §I3 identity threading.
 
     Returns:
         An error dict (with ``success=False``) when the path is rejected,
@@ -60,7 +64,7 @@ def _check_path_governance(
     try:
         governance = load_governance_config()
     except Exception as exc:  # noqa: BLE001 — surface as tool error
-        log.warning("governance_load_error", tool=tool_name, error=str(exc))
+        log.warning("governance_load_error", tool=tool_name, error=str(exc), trace_id=trace_id)
         return None  # fail open: let the executor proceed
 
     policy = governance.tools.get(tool_name)

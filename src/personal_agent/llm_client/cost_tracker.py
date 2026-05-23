@@ -90,7 +90,11 @@ class CostTrackerService:
             )
 
         if not self.pool:
-            log.warning("cost_tracker_not_connected", provider=provider)
+            log.warning(
+                "cost_tracker_not_connected",
+                provider=provider,
+                trace_id=str(trace_id),
+            )
             return None
 
         try:
@@ -130,7 +134,13 @@ class CostTrackerService:
                 return cast(int | None, record_id)
 
         except Exception as e:
-            log.error("cost_recording_failed", error=str(e), exc_info=True, provider=provider)
+            log.error(
+                "cost_recording_failed",
+                error=str(e),
+                exc_info=True,
+                provider=provider,
+                trace_id=str(trace_id),
+            )
             return None
 
     async def get_total_cost(self, provider: str | None = None) -> float:

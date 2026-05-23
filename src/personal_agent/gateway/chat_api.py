@@ -192,7 +192,7 @@ async def _refund_reservation_safe(reservation_id: UUID, trace_id: str) -> None:
 
         gate = get_default_gate_or_none()
         if gate is not None:
-            await gate.refund(reservation_id)
+            await gate.refund(reservation_id, trace_id=trace_id)
     except Exception as exc:
         log.error(
             "chat.refund_failed",
@@ -236,7 +236,7 @@ async def _commit_reservation_safe(
                 _Decimal(input_tokens) * input_price + _Decimal(output_tokens) * output_price
             ).quantize(_Decimal("0.000001"))
 
-        await gate.commit(reservation_id, actual_cost)
+        await gate.commit(reservation_id, actual_cost, trace_id=trace_id)
     except Exception as exc:
         log.error(
             "chat.commit_failed",
@@ -372,6 +372,7 @@ async def chat(
                 messages=anthropic_messages,
                 max_tokens=_MAX_TOKENS,
                 config=load_budget_config(),
+                trace_id=trace_id,
             )
             reservation_id = await gate.reserve(
                 role="main_inference",

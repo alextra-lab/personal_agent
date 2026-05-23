@@ -51,7 +51,13 @@ class _FakeStore:
         self._payloads[key] = payload
 
     async def put(
-        self, *, r2_key: str, content: bytes, content_type: str, metadata: Any = None
+        self,
+        *,
+        r2_key: str,
+        content: bytes,
+        content_type: str,
+        metadata: Any = None,
+        trace_id: str | None = None,
     ) -> None:
         self.put_calls.append(
             {
@@ -59,11 +65,12 @@ class _FakeStore:
                 "content": content,
                 "content_type": content_type,
                 "metadata": metadata,
+                "trace_id": trace_id,
             }
         )
         self._payloads[r2_key] = content
 
-    async def get(self, r2_key: str) -> bytes:
+    async def get(self, r2_key: str, *, trace_id: str | None = None) -> bytes:
         self.get_calls.append(r2_key)
         return self._payloads.get(r2_key, b"")
 
@@ -208,10 +215,12 @@ async def test_artifact_write_postgres_insert_carries_artifact_type(
         ctx=_ctx(),
     )
 
-    insert_sql, insert_params = next(
-        c for c in session.calls if "INSERT INTO artifacts" in c[0]
+    insert_sql, insert_params = next(c for c in session.calls if "INSERT INTO artifacts" in c[0])
+    assert (
+        "'artifact'" in insert_sql
+        or insert_params.get("type_") == "artifact"
+        or "artifact" in str(insert_params)
     )
-    assert "'artifact'" in insert_sql or insert_params.get("type_") == "artifact" or "artifact" in str(insert_params)
     assert "agent" in insert_sql or "agent" in str(insert_params)
 
 
@@ -233,9 +242,7 @@ async def test_artifact_write_embedding_is_pgvector_literal(
         ctx=_ctx(),
     )
 
-    insert_sql, insert_params = next(
-        c for c in session.calls if "INSERT INTO artifacts" in c[0]
-    )
+    insert_sql, insert_params = next(c for c in session.calls if "INSERT INTO artifacts" in c[0])
     emb_value = insert_params.get("embedding")
     assert isinstance(emb_value, str)
     assert emb_value.startswith("[") and emb_value.endswith("]")
@@ -465,9 +472,7 @@ async def test_artifact_list_requires_user_id(
     _install_fakes(monkeypatch, store=_FakeStore())
 
     with pytest.raises(ToolExecutionError, match="user_id"):
-        await artifact_tools.artifact_list_executor(
-            ctx=SimpleNamespace(trace_id="t")
-        )
+        await artifact_tools.artifact_list_executor(ctx=SimpleNamespace(trace_id="t"))
 
 
 @pytest.mark.asyncio
@@ -573,9 +578,7 @@ async def test_artifact_read_small_html_returns_content_inline(
         )
     )
 
-    out = await artifact_tools.artifact_read_executor(
-        artifact_id=str(art_id), ctx=_ctx()
-    )
+    out = await artifact_tools.artifact_read_executor(artifact_id=str(art_id), ctx=_ctx())
 
     assert out["content"] == "<h1>Hello</h1>"
     assert store.get_calls == [r2_key]
@@ -610,9 +613,7 @@ async def test_artifact_read_large_artifact_omits_content(
         )
     )
 
-    out = await artifact_tools.artifact_read_executor(
-        artifact_id=str(art_id), ctx=_ctx()
-    )
+    out = await artifact_tools.artifact_read_executor(artifact_id=str(art_id), ctx=_ctx())
 
     assert "content" not in out or out.get("content") is None
     assert store.get_calls == []
@@ -648,9 +649,7 @@ async def test_artifact_read_binary_content_type_omits_content(
         )
     )
 
-    out = await artifact_tools.artifact_read_executor(
-        artifact_id=str(art_id), ctx=_ctx()
-    )
+    out = await artifact_tools.artifact_read_executor(artifact_id=str(art_id), ctx=_ctx())
 
     # R2 must not be fetched for binary types
     assert store.get_calls == []
@@ -667,9 +666,7 @@ async def test_artifact_read_cross_user_raises_toolexec_error(
     session.enqueue(SimpleNamespace(first=lambda: None))
 
     with pytest.raises(ToolExecutionError, match="not found"):
-        await artifact_tools.artifact_read_executor(
-            artifact_id=str(uuid4()), ctx=_ctx()
-        )
+        await artifact_tools.artifact_read_executor(artifact_id=str(uuid4()), ctx=_ctx())
 
 
 @pytest.mark.asyncio
@@ -679,9 +676,7 @@ async def test_artifact_read_invalid_uuid_raises(
     _install_fakes(monkeypatch, store=_FakeStore())
 
     with pytest.raises(ToolExecutionError):
-        await artifact_tools.artifact_read_executor(
-            artifact_id="not-a-uuid", ctx=_ctx()
-        )
+        await artifact_tools.artifact_read_executor(artifact_id="not-a-uuid", ctx=_ctx())
 
 
 @pytest.mark.asyncio

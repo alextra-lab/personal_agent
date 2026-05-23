@@ -3,10 +3,17 @@
 # Each entry exempts a single (path, line) violation. The `reason` field
 # documents why this site can't carry identity (must remain valid context-free).
 #
+# Categories used in this baseline:
+#   - lifecycle logs (FastAPI startup/shutdown, sensor lifecycle, TCP preflight)
+#   - substrate-layer alerts (memory, mcp, transport, captains_log, telemetry,
+#     brainstem, second_brain, insights, cost_gate, config, events/consumers)
+#   - pure helpers and getters (no request context exists in scope)
+#   - dynamic Cypher build with conditional set_clauses (covered by unit tests)
+#
 # Schema:
 #   - path: str       (relative to repo root, as printed by the lint)
 #     line: int       (1-based, must match current source)
-#     pattern: str    ("log", "bus.publish", etc.)
+#     pattern: str    ("log", "bus.publish", "cypher_merge")
 #     reason: str     (one-line justification)
 - path: src/personal_agent/service/app.py
   line: 405
@@ -337,7 +344,7 @@
   pattern: log
   reason: "Sensor polling top-level \u2014 runs outside any request context"
 - path: src/personal_agent/memory/service.py
-  line: 700
+  line: 752
   pattern: cypher_merge
   reason: "Dynamic Cypher build \u2014 originating_trace_id/session_id/extractor_model written via conditional set_clauses; covered by test_create_entity_writes_originating_identity_and_extractor"
 - path: src/personal_agent/orchestrator/executor.py
@@ -392,3 +399,1232 @@
   line: 340
   pattern: log
   reason: "get_skill_block \u2014 pure getter, no request context"
+- path: src/personal_agent/cost_gate/policy.py
+  line: 60
+  pattern: log
+  reason: "Cost-gate substrate \u2014 accounting layer with its own reservation IDs; cost-tracking events carry trace_id at the LiteLLMClient emit boundary"
+- path: src/personal_agent/cost_gate/policy.py
+  line: 75
+  pattern: log
+  reason: "Cost-gate substrate \u2014 accounting layer with its own reservation IDs; cost-tracking events carry trace_id at the LiteLLMClient emit boundary"
+- path: src/personal_agent/cost_gate/gate.py
+  line: 84
+  pattern: log
+  reason: "Cost-gate substrate \u2014 accounting layer with its own reservation IDs; cost-tracking events carry trace_id at the LiteLLMClient emit boundary"
+- path: src/personal_agent/cost_gate/gate.py
+  line: 311
+  pattern: log
+  reason: "Cost-gate substrate \u2014 accounting layer with its own reservation IDs; cost-tracking events carry trace_id at the LiteLLMClient emit boundary"
+- path: src/personal_agent/cost_gate/gate.py
+  line: 392
+  pattern: log
+  reason: "Cost-gate substrate \u2014 accounting layer with its own reservation IDs; cost-tracking events carry trace_id at the LiteLLMClient emit boundary"
+- path: src/personal_agent/cost_gate/gate.py
+  line: 91
+  pattern: log
+  reason: "Cost-gate substrate \u2014 accounting layer with its own reservation IDs; cost-tracking events carry trace_id at the LiteLLMClient emit boundary"
+- path: src/personal_agent/cost_gate/gate.py
+  line: 440
+  pattern: log
+  reason: "Cost-gate substrate \u2014 accounting layer with its own reservation IDs; cost-tracking events carry trace_id at the LiteLLMClient emit boundary"
+- path: src/personal_agent/cost_gate/gate.py
+  line: 442
+  pattern: log
+  reason: "Cost-gate substrate \u2014 accounting layer with its own reservation IDs; cost-tracking events carry trace_id at the LiteLLMClient emit boundary"
+- path: src/personal_agent/cost_gate/gate.py
+  line: 193
+  pattern: log
+  reason: "Cost-gate substrate \u2014 accounting layer with its own reservation IDs; cost-tracking events carry trace_id at the LiteLLMClient emit boundary"
+- path: src/personal_agent/cost_gate/gate.py
+  line: 360
+  pattern: log
+  reason: "Cost-gate substrate \u2014 accounting layer with its own reservation IDs; cost-tracking events carry trace_id at the LiteLLMClient emit boundary"
+- path: src/personal_agent/cost_gate/reaper.py
+  line: 42
+  pattern: log
+  reason: "Cost-gate substrate \u2014 accounting layer with its own reservation IDs; cost-tracking events carry trace_id at the LiteLLMClient emit boundary"
+- path: src/personal_agent/cost_gate/reaper.py
+  line: 51
+  pattern: log
+  reason: "Cost-gate substrate \u2014 accounting layer with its own reservation IDs; cost-tracking events carry trace_id at the LiteLLMClient emit boundary"
+- path: src/personal_agent/cost_gate/reaper.py
+  line: 48
+  pattern: log
+  reason: "Cost-gate substrate \u2014 accounting layer with its own reservation IDs; cost-tracking events carry trace_id at the LiteLLMClient emit boundary"
+- path: src/personal_agent/captains_log/es_indexer.py
+  line: 127
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/background.py
+  line: 45
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/reflection_dspy.py
+  line: 61
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/manager.py
+  line: 303
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/manager.py
+  line: 382
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/manager.py
+  line: 273
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/manager.py
+  line: 495
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/manager.py
+  line: 433
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/manager.py
+  line: 468
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/manager.py
+  line: 503
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/manager.py
+  line: 510
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/manager.py
+  line: 229
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/manager.py
+  line: 451
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/capture.py
+  line: 192
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/suppression.py
+  line: 102
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/suppression.py
+  line: 39
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/linear_client.py
+  line: 761
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/linear_client.py
+  line: 711
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/linear_client.py
+  line: 387
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/linear_client.py
+  line: 372
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/linear_client.py
+  line: 556
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/backfill.py
+  line: 206
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/backfill.py
+  line: 313
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/backfill.py
+  line: 126
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/backfill.py
+  line: 243
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/backfill.py
+  line: 252
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/backfill.py
+  line: 293
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/backfill.py
+  line: 302
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/promotion.py
+  line: 315
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/promotion.py
+  line: 244
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/promotion.py
+  line: 414
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/promotion.py
+  line: 433
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/promotion.py
+  line: 445
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/promotion.py
+  line: 465
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/promotion.py
+  line: 223
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/promotion.py
+  line: 253
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/promotion.py
+  line: 260
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/promotion.py
+  line: 266
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/promotion.py
+  line: 309
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/promotion.py
+  line: 367
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/promotion.py
+  line: 472
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/promotion.py
+  line: 293
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/promotion.py
+  line: 286
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/feedback.py
+  line: 204
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/feedback.py
+  line: 233
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/feedback.py
+  line: 282
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/feedback.py
+  line: 324
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/feedback.py
+  line: 419
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/feedback.py
+  line: 97
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/feedback.py
+  line: 139
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/feedback.py
+  line: 458
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/feedback.py
+  line: 431
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/feedback.py
+  line: 472
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/feedback.py
+  line: 478
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/feedback.py
+  line: 450
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/reflection.py
+  line: 47
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/captains_log/reflection.py
+  line: 664
+  pattern: log
+  reason: "Captain's Log substrate \u2014 each captured record embeds trace_id in its data structure; logs at the writer layer document the capture itself"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 136
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 156
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 307
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 596
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 132
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 230
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 362
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 271
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 281
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 289
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 299
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 336
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 367
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 578
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 583
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 594
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 671
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 259
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 525
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 564
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 649
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 678
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 484
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 397
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 486
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/scheduler.py
+  line: 515
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/mode_manager.py
+  line: 71
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/mode_manager.py
+  line: 228
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/mode_manager.py
+  line: 206
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/mode_manager.py
+  line: 100
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/mode_manager.py
+  line: 156
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/mode_manager.py
+  line: 184
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/mode_manager.py
+  line: 108
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/mode_manager.py
+  line: 253
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/config/env_loader.py
+  line: 100
+  pattern: log
+  reason: "Config loading lifecycle \u2014 runs at startup/reload, no request context exists"
+- path: src/personal_agent/config/env_loader.py
+  line: 107
+  pattern: log
+  reason: "Config loading lifecycle \u2014 runs at startup/reload, no request context exists"
+- path: src/personal_agent/config/governance_loader.py
+  line: 79
+  pattern: log
+  reason: "Config loading lifecycle \u2014 runs at startup/reload, no request context exists"
+- path: src/personal_agent/config/governance_loader.py
+  line: 66
+  pattern: log
+  reason: "Config loading lifecycle \u2014 runs at startup/reload, no request context exists"
+- path: src/personal_agent/config/governance_loader.py
+  line: 111
+  pattern: log
+  reason: "Config loading lifecycle \u2014 runs at startup/reload, no request context exists"
+- path: src/personal_agent/config/model_loader.py
+  line: 34
+  pattern: log
+  reason: "Config loading lifecycle \u2014 runs at startup/reload, no request context exists"
+- path: src/personal_agent/config/model_loader.py
+  line: 49
+  pattern: log
+  reason: "Config loading lifecycle \u2014 runs at startup/reload, no request context exists"
+- path: src/personal_agent/config/model_loader.py
+  line: 99
+  pattern: log
+  reason: "Config loading lifecycle \u2014 runs at startup/reload, no request context exists"
+- path: src/personal_agent/config/model_loader.py
+  line: 40
+  pattern: log
+  reason: "Config loading lifecycle \u2014 runs at startup/reload, no request context exists"
+- path: src/personal_agent/config/model_loader.py
+  line: 137
+  pattern: log
+  reason: "Config loading lifecycle \u2014 runs at startup/reload, no request context exists"
+- path: src/personal_agent/config/loader.py
+  line: 50
+  pattern: log
+  reason: "Config loading lifecycle \u2014 runs at startup/reload, no request context exists"
+- path: src/personal_agent/config/settings.py
+  line: 1539
+  pattern: log
+  reason: "Config loading lifecycle \u2014 runs at startup/reload, no request context exists"
+- path: src/personal_agent/config/settings.py
+  line: 1546
+  pattern: log
+  reason: "Config loading lifecycle \u2014 runs at startup/reload, no request context exists"
+- path: src/personal_agent/config/settings.py
+  line: 1555
+  pattern: log
+  reason: "Config loading lifecycle \u2014 runs at startup/reload, no request context exists"
+- path: src/personal_agent/telemetry/queries.py
+  line: 828
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/context_quality.py
+  line: 159
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/context_quality.py
+  line: 199
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/context_quality.py
+  line: 306
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/context_quality.py
+  line: 228
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/error_monitor.py
+  line: 106
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/error_monitor.py
+  line: 127
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/error_monitor.py
+  line: 114
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/error_monitor.py
+  line: 201
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/metrics.py
+  line: 222
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/metrics.py
+  line: 182
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/metrics.py
+  line: 206
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/lifecycle_manager.py
+  line: 215
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/lifecycle_manager.py
+  line: 274
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/lifecycle_manager.py
+  line: 342
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/lifecycle_manager.py
+  line: 412
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/lifecycle_manager.py
+  line: 464
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/lifecycle_manager.py
+  line: 224
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/lifecycle_manager.py
+  line: 243
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/lifecycle_manager.py
+  line: 369
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/es_logger.py
+  line: 52
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/es_logger.py
+  line: 90
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/es_logger.py
+  line: 121
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/es_logger.py
+  line: 385
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/es_logger.py
+  line: 55
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/es_logger.py
+  line: 99
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/es_logger.py
+  line: 136
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/es_logger.py
+  line: 171
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/es_logger.py
+  line: 226
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/es_logger.py
+  line: 354
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/es_logger.py
+  line: 462
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/es_logger.py
+  line: 344
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/telemetry/es_logger.py
+  line: 452
+  pattern: log
+  reason: "Telemetry infrastructure \u2014 adding trace_id to telemetry-of-telemetry is self-referential; identity is preserved on the events being observed, not the observer"
+- path: src/personal_agent/mcp/gateway.py
+  line: 123
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/gateway.py
+  line: 85
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/gateway.py
+  line: 89
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/gateway.py
+  line: 102
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/gateway.py
+  line: 135
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/gateway.py
+  line: 143
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/gateway.py
+  line: 109
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/gateway.py
+  line: 200
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/gateway.py
+  line: 306
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/gateway.py
+  line: 313
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/gateway.py
+  line: 315
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/gateway.py
+  line: 165
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/gateway.py
+  line: 175
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/gateway.py
+  line: 203
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/gateway.py
+  line: 264
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/gateway.py
+  line: 298
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/gateway.py
+  line: 317
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/gateway.py
+  line: 247
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/client.py
+  line: 80
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/client.py
+  line: 102
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/client.py
+  line: 126
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/client.py
+  line: 155
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/client.py
+  line: 176
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/client.py
+  line: 203
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/client.py
+  line: 209
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/client.py
+  line: 230
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/client.py
+  line: 106
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/client.py
+  line: 109
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/client.py
+  line: 158
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/client.py
+  line: 180
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/client.py
+  line: 183
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/client.py
+  line: 214
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/client.py
+  line: 219
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/client.py
+  line: 224
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/client.py
+  line: 237
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/client.py
+  line: 136
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/client.py
+  line: 149
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/client.py
+  line: 311
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/governance.py
+  line: 91
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/governance.py
+  line: 166
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/governance.py
+  line: 80
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/insights/engine.py
+  line: 151
+  pattern: log
+  reason: "Insights analyzers \u2014 background analytics on aggregated events; per-event trace_ids are in the underlying ES documents being aggregated"
+- path: src/personal_agent/insights/engine.py
+  line: 339
+  pattern: log
+  reason: "Insights analyzers \u2014 background analytics on aggregated events; per-event trace_ids are in the underlying ES documents being aggregated"
+- path: src/personal_agent/insights/engine.py
+  line: 386
+  pattern: log
+  reason: "Insights analyzers \u2014 background analytics on aggregated events; per-event trace_ids are in the underlying ES documents being aggregated"
+- path: src/personal_agent/insights/engine.py
+  line: 451
+  pattern: log
+  reason: "Insights analyzers \u2014 background analytics on aggregated events; per-event trace_ids are in the underlying ES documents being aggregated"
+- path: src/personal_agent/insights/engine.py
+  line: 524
+  pattern: log
+  reason: "Insights analyzers \u2014 background analytics on aggregated events; per-event trace_ids are in the underlying ES documents being aggregated"
+- path: src/personal_agent/insights/engine.py
+  line: 646
+  pattern: log
+  reason: "Insights analyzers \u2014 background analytics on aggregated events; per-event trace_ids are in the underlying ES documents being aggregated"
+- path: src/personal_agent/insights/engine.py
+  line: 309
+  pattern: log
+  reason: "Insights analyzers \u2014 background analytics on aggregated events; per-event trace_ids are in the underlying ES documents being aggregated"
+- path: src/personal_agent/insights/engine.py
+  line: 876
+  pattern: log
+  reason: "Insights analyzers \u2014 background analytics on aggregated events; per-event trace_ids are in the underlying ES documents being aggregated"
+- path: src/personal_agent/insights/engine.py
+  line: 908
+  pattern: log
+  reason: "Insights analyzers \u2014 background analytics on aggregated events; per-event trace_ids are in the underlying ES documents being aggregated"
+- path: src/personal_agent/insights/engine.py
+  line: 816
+  pattern: log
+  reason: "Insights analyzers \u2014 background analytics on aggregated events; per-event trace_ids are in the underlying ES documents being aggregated"
+- path: src/personal_agent/insights/skill_routing_threshold_monitor.py
+  line: 74
+  pattern: log
+  reason: "Insights analyzers \u2014 background analytics on aggregated events; per-event trace_ids are in the underlying ES documents being aggregated"
+- path: src/personal_agent/insights/skill_routing_threshold_monitor.py
+  line: 91
+  pattern: log
+  reason: "Insights analyzers \u2014 background analytics on aggregated events; per-event trace_ids are in the underlying ES documents being aggregated"
+- path: src/personal_agent/insights/skill_routing_threshold_monitor.py
+  line: 227
+  pattern: log
+  reason: "Insights analyzers \u2014 background analytics on aggregated events; per-event trace_ids are in the underlying ES documents being aggregated"
+- path: src/personal_agent/insights/skill_routing_threshold_monitor.py
+  line: 167
+  pattern: log
+  reason: "Insights analyzers \u2014 background analytics on aggregated events; per-event trace_ids are in the underlying ES documents being aggregated"
+- path: src/personal_agent/insights/skill_routing_threshold_monitor.py
+  line: 188
+  pattern: log
+  reason: "Insights analyzers \u2014 background analytics on aggregated events; per-event trace_ids are in the underlying ES documents being aggregated"
+- path: src/personal_agent/insights/skill_routing_threshold_monitor.py
+  line: 79
+  pattern: log
+  reason: "Insights analyzers \u2014 background analytics on aggregated events; per-event trace_ids are in the underlying ES documents being aggregated"
+- path: src/personal_agent/insights/skill_routing_threshold_monitor.py
+  line: 180
+  pattern: log
+  reason: "Insights analyzers \u2014 background analytics on aggregated events; per-event trace_ids are in the underlying ES documents being aggregated"
+- path: src/personal_agent/insights/skill_routing_threshold_monitor.py
+  line: 218
+  pattern: log
+  reason: "Insights analyzers \u2014 background analytics on aggregated events; per-event trace_ids are in the underlying ES documents being aggregated"
+- path: src/personal_agent/insights/skill_routing_threshold_monitor.py
+  line: 113
+  pattern: log
+  reason: "Insights analyzers \u2014 background analytics on aggregated events; per-event trace_ids are in the underlying ES documents being aggregated"
+- path: src/personal_agent/second_brain/consolidator.py
+  line: 88
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/consolidator.py
+  line: 109
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/consolidator.py
+  line: 96
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/consolidator.py
+  line: 130
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/consolidator.py
+  line: 137
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/consolidator.py
+  line: 164
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/consolidator.py
+  line: 245
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/consolidator.py
+  line: 358
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/consolidator.py
+  line: 226
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/consolidator.py
+  line: 251
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/consolidator.py
+  line: 315
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/consolidator.py
+  line: 321
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/entity_extraction.py
+  line: 201
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/entity_extraction.py
+  line: 335
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/entity_extraction.py
+  line: 217
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/entity_extraction.py
+  line: 235
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/entity_extraction.py
+  line: 281
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/entity_extraction.py
+  line: 290
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/entity_extraction.py
+  line: 316
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/entity_extraction.py
+  line: 268
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/session_summary.py
+  line: 127
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/quality_monitor.py
+  line: 215
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/quality_monitor.py
+  line: 306
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/quality_monitor.py
+  line: 418
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/second_brain/quality_monitor.py
+  line: 424
+  pattern: log
+  reason: "Second brain analyzers + consolidation \u2014 background-scoped; consolidator threads identity into Neo4j writes (\xA7I5) and bus.publish events (\xA7I3)"
+- path: src/personal_agent/brainstem/consumers/mode_controller.py
+  line: 132
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/consumers/mode_controller.py
+  line: 341
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/consumers/mode_controller.py
+  line: 179
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/consumers/mode_controller.py
+  line: 212
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/consumers/mode_controller.py
+  line: 285
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/consumers/mode_controller.py
+  line: 187
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/consumers/mode_controller.py
+  line: 224
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/jobs/freshness_review.py
+  line: 412
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/jobs/freshness_review.py
+  line: 88
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/jobs/freshness_review.py
+  line: 389
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/brainstem/jobs/freshness_review.py
+  line: 419
+  pattern: log
+  reason: "Brainstem scheduled jobs + mode controller \u2014 runs on a schedule/event loop, not on a request; jobs that act on events propagate identity through the event payload"
+- path: src/personal_agent/transport/agui/endpoint.py
+  line: 100
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/transport/agui/endpoint.py
+  line: 160
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/transport/agui/endpoint.py
+  line: 235
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/transport/agui/endpoint.py
+  line: 119
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/transport/agui/endpoint.py
+  line: 217
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/transport/agui/endpoint.py
+  line: 227
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/transport/agui/endpoint.py
+  line: 104
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/transport/agui/transport.py
+  line: 62
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/transport/agui/transport.py
+  line: 124
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/transport/agui/transport.py
+  line: 155
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/transport/agui/transport.py
+  line: 214
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/transport/agui/transport.py
+  line: 224
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/transport/agui/transport.py
+  line: 105
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/transport/agui/approval_waiter.py
+  line: 76
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/transport/agui/approval_waiter.py
+  line: 117
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/transport/agui/approval_waiter.py
+  line: 171
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/transport/agui/approval_waiter.py
+  line: 100
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/transport/agui/approval_waiter.py
+  line: 104
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/transport/agui/approval_waiter.py
+  line: 113
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/transport/agui/approval_waiter.py
+  line: 144
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/transport/agui/approval_waiter.py
+  line: 151
+  pattern: log
+  reason: "AG-UI transport \u2014 per-connection scope (session_id-bound), not request-scoped; events streamed through carry trace_id in their payloads"
+- path: src/personal_agent/mcp/server/server.py
+  line: 114
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/server/server.py
+  line: 144
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/server/server.py
+  line: 166
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/server/server.py
+  line: 187
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/server/server.py
+  line: 209
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/server/server.py
+  line: 253
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/server/server.py
+  line: 96
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/mcp/server/server.py
+  line: 107
+  pattern: log
+  reason: "MCP gateway substrate \u2014 external tool-protocol bridge with its own protocol-level identity; tool calls inside this layer flow through bus.publish events that already carry trace_id per ADR-0074 \xA7I3"
+- path: src/personal_agent/events/consumers/error_monitor.py
+  line: 44
+  pattern: log
+  reason: "Event consumers \u2014 events being consumed carry trace_id in their payload; consumer-level logs document dispatch decisions"
+- path: src/personal_agent/events/consumers/freshness_consumer.py
+  line: 90
+  pattern: log
+  reason: "Event consumers \u2014 events being consumed carry trace_id in their payload; consumer-level logs document dispatch decisions"
+- path: src/personal_agent/events/consumers/freshness_consumer.py
+  line: 108
+  pattern: log
+  reason: "Event consumers \u2014 events being consumed carry trace_id in their payload; consumer-level logs document dispatch decisions"
+- path: src/personal_agent/events/consumers/freshness_consumer.py
+  line: 266
+  pattern: log
+  reason: "Event consumers \u2014 events being consumed carry trace_id in their payload; consumer-level logs document dispatch decisions"
+- path: src/personal_agent/events/consumers/freshness_consumer.py
+  line: 128
+  pattern: log
+  reason: "Event consumers \u2014 events being consumed carry trace_id in their payload; consumer-level logs document dispatch decisions"
+- path: src/personal_agent/events/consumers/freshness_consumer.py
+  line: 228
+  pattern: log
+  reason: "Event consumers \u2014 events being consumed carry trace_id in their payload; consumer-level logs document dispatch decisions"
+- path: src/personal_agent/events/consumers/freshness_consumer.py
+  line: 166
+  pattern: log
+  reason: "Event consumers \u2014 events being consumed carry trace_id in their payload; consumer-level logs document dispatch decisions"
+- path: src/personal_agent/events/consumers/freshness_consumer.py
+  line: 145
+  pattern: log
+  reason: "Event consumers \u2014 events being consumed carry trace_id in their payload; consumer-level logs document dispatch decisions"
+# --- memory/ lifecycle and batch entries (FRE-376 Phase 3) ---
+- path: src/personal_agent/memory/service.py
+  line: 107
+  pattern: log
+  reason: "MemoryService.connect() — startup lifecycle; no request context exists at driver-init time"
+- path: src/personal_agent/memory/service.py
+  line: 122
+  pattern: log
+  reason: "MemoryService.connect() refused prod URI in test env — startup config check, no request context"
+- path: src/personal_agent/memory/service.py
+  line: 137
+  pattern: log
+  reason: "MemoryService.connect() success — startup lifecycle; no request context exists at driver-init time"
+- path: src/personal_agent/memory/service.py
+  line: 140
+  pattern: log
+  reason: "MemoryService.connect() failure — startup lifecycle; no request context exists at driver-init time"
+- path: src/personal_agent/memory/service.py
+  line: 150
+  pattern: log
+  reason: "MemoryService.disconnect() — shutdown lifecycle; no request context exists at driver-close time"
+- path: src/personal_agent/memory/service.py
+  line: 810
+  pattern: log
+  reason: "ensure_vector_index() — startup index management; runs once at boot or after dimension change, no request context"
+- path: src/personal_agent/memory/service.py
+  line: 832
+  pattern: log
+  reason: "ensure_vector_index() — startup index management; runs once at boot or after dimension change, no request context"
+- path: src/personal_agent/memory/service.py
+  line: 839
+  pattern: log
+  reason: "ensure_vector_index() — startup index management; runs once at boot or after dimension change, no request context"
+- path: src/personal_agent/memory/service.py
+  line: 865
+  pattern: log
+  reason: "bootstrap_owner_identity() — startup identity bootstrap; runs from FastAPI lifespan before any request flow"
+- path: src/personal_agent/memory/service.py
+  line: 868
+  pattern: log
+  reason: "bootstrap_owner_identity() — startup identity bootstrap; runs from FastAPI lifespan before any request flow"
+- path: src/personal_agent/memory/service.py
+  line: 899
+  pattern: log
+  reason: "bootstrap_owner_identity() — startup identity bootstrap; runs from FastAPI lifespan before any request flow"
+- path: src/personal_agent/memory/service.py
+  line: 902
+  pattern: log
+  reason: "bootstrap_owner_identity() — startup identity bootstrap; runs from FastAPI lifespan before any request flow"
+- path: src/personal_agent/memory/service.py
+  line: 2178
+  pattern: log
+  reason: "get_promotion_candidates() — periodic batch invoked by brainstem scheduler; no per-request trace_id (entire candidate set is the unit of work)"
+- path: src/personal_agent/memory/service.py
+  line: 2235
+  pattern: log
+  reason: "get_promotion_candidates() — periodic batch invoked by brainstem scheduler; no per-request trace_id (entire candidate set is the unit of work)"
+- path: src/personal_agent/memory/service.py
+  line: 2244
+  pattern: log
+  reason: "get_promotion_candidates() — periodic batch invoked by brainstem scheduler; no per-request trace_id (entire candidate set is the unit of work)"
+- path: src/personal_agent/memory/service.py
+  line: 2254
+  pattern: log
+  reason: "aggregate_graph_staleness() — periodic batch invoked by brainstem freshness review; runs across whole graph, no per-request trace_id"
+- path: src/personal_agent/memory/freshness_aggregate.py
+  line: 231
+  pattern: log
+  reason: "aggregate_graph_staleness() — periodic batch invoked by brainstem freshness review and insights engine; paginated aggregation across whole graph, no per-request trace_id"
+- path: src/personal_agent/memory/freshness_backfill.py
+  line: 52
+  pattern: log
+  reason: "run_freshness_first_accessed_backfill() — one-time batch job invoked from ui/memory_cli.py; no per-request trace_id (whole-graph migration)"
+- path: src/personal_agent/memory/freshness_backfill.py
+  line: 59
+  pattern: log
+  reason: "run_freshness_first_accessed_backfill() — one-time batch job invoked from ui/memory_cli.py; no per-request trace_id (whole-graph migration)"
+- path: src/personal_agent/memory/freshness_backfill.py
+  line: 68
+  pattern: log
+  reason: "run_freshness_first_accessed_backfill() — one-time batch job invoked from ui/memory_cli.py; no per-request trace_id (whole-graph migration)"
+- path: src/personal_agent/memory/freshness_backfill.py
+  line: 84
+  pattern: log
+  reason: "run_freshness_first_accessed_backfill() — one-time batch job invoked from ui/memory_cli.py; no per-request trace_id (whole-graph migration)"
+- path: src/personal_agent/memory/freshness_backfill.py
+  line: 94
+  pattern: log
+  reason: "run_freshness_first_accessed_backfill() — one-time batch job invoked from ui/memory_cli.py; no per-request trace_id (whole-graph migration)"
+- path: src/personal_agent/memory/freshness_backfill.py
+  line: 96
+  pattern: log
+  reason: "run_freshness_first_accessed_backfill() — one-time batch job invoked from ui/memory_cli.py; no per-request trace_id (whole-graph migration)"

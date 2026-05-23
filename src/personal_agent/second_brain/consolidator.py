@@ -136,7 +136,9 @@ class SecondBrainConsolidator:
                     await asyncio.sleep(1.0)
                 log.info("consolidation_resumed", capture_num=i)
             try:
-                if await self.memory_service.turn_exists(capture.trace_id):
+                if await self.memory_service.turn_exists(
+                    capture.trace_id, trace_id=capture.trace_id
+                ):
                     captures_skipped += 1
                     log.debug(
                         "consolidation_skipped_already_consolidated",
@@ -306,9 +308,13 @@ class SecondBrainConsolidator:
                     dominant_entities=[],  # Populated by link_session_turns via graph query
                     session_summary=summary,
                 )
-                created = await self.memory_service.create_session(session_node)
+                created = await self.memory_service.create_session(
+                    session_node, trace_id="consolidation"
+                )
                 if created:
-                    linked = await self.memory_service.link_session_turns(session_id)
+                    linked = await self.memory_service.link_session_turns(
+                        session_id, trace_id="consolidation"
+                    )
                     # Refresh dominant_entities from graph after linking
                     await self._update_session_dominant_entities(session_id)
                     sessions_created += 1
@@ -491,7 +497,7 @@ class SecondBrainConsolidator:
 
         relationship_element_ids: list[str] = list(
             await self.memory_service.fetch_turn_discusses_relationship_element_ids(
-                capture.trace_id
+                capture.trace_id, trace_id=capture.trace_id
             )
         )
 
@@ -527,7 +533,7 @@ class SecondBrainConsolidator:
                 properties=rel_data.get("properties", {}),
             )
             rel_eid = await self.memory_service.create_relationship(
-                relationship, visibility=visibility
+                relationship, visibility=visibility, trace_id=capture.trace_id
             )
             if rel_eid:
                 relationships_created += 1

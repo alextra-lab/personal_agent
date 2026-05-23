@@ -152,7 +152,7 @@ class MemoryServiceAdapter:
 
         # Dedup check
         if hasattr(self._service, "turn_exists"):
-            exists = await self._service.turn_exists(episode.turn_id)
+            exists = await self._service.turn_exists(episode.turn_id, trace_id=trace_id)
             if exists:
                 logger.debug(
                     "store_episode_dedup_skip",
@@ -268,6 +268,7 @@ class MemoryServiceAdapter:
                 current_session_id,
                 user_id=user_id,
                 authenticated=authenticated,
+                trace_id=trace_id,
             )
             merged = set(session_entity_names) | set(db_entities)
 

@@ -149,15 +149,19 @@ class MemoryService:
             self.connected = False
             log.info("neo4j_disconnected")
 
-    async def turn_exists(self, turn_id: str) -> bool:
+    async def turn_exists(self, turn_id: str, trace_id: str | None = None) -> bool:
         """Check if a Turn node already exists (i.e. already consolidated).
 
         Args:
             turn_id: Turn ID (equals trace_id for the originating request).
+            trace_id: Optional request trace identifier for log correlation
+                (ADR-0074 §I3). Defaults to ``turn_id`` when omitted because
+                Turn IDs are themselves trace IDs for consolidation flows.
 
         Returns:
             True if a Turn node with this id exists, False otherwise.
         """
+        effective_trace_id = trace_id if trace_id is not None else turn_id
         if not self.connected or not self.driver:
             return False
         try:
@@ -169,7 +173,7 @@ class MemoryService:
                 record = await result.single()
                 return record is not None
         except Exception as e:
-            log.warning("turn_exists_check_failed", error=str(e))
+            log.warning("turn_exists_check_failed", error=str(e), trace_id=effective_trace_id)
             return False
 
     async def conversation_exists(self, conversation_id: str) -> bool:
@@ -188,6 +192,7 @@ class MemoryService:
         session_id: str,
         user_id: UUID | None = None,
         authenticated: bool = False,
+        trace_id: str | None = None,
     ) -> list[str]:
         """Return distinct Entity names linked to turns in the given session.
 
@@ -195,6 +200,8 @@ class MemoryService:
             session_id: Session identifier (matches ``Turn.session_id``).
             user_id: Authenticated user UUID for visibility scoping (FRE-229).
             authenticated: Whether the request carries a verified identity (FRE-229).
+            trace_id: Optional request trace identifier for log correlation
+                (ADR-0074 §I3).
 
         Returns:
             Sorted entity names; empty if unavailable or on error.
@@ -223,6 +230,7 @@ class MemoryService:
                 "fetch_session_discussed_entity_names_failed",
                 session_id=session_id,
                 error=str(e),
+                trace_id=trace_id,
             )
             return []
 
@@ -354,11 +362,17 @@ class MemoryService:
             conversation, "conversation_id", None
         )
         if not turn_id:
-            log.warning("create_conversation_missing_id")
+            log.warning(
+                "create_conversation_missing_id",
+                trace_id=getattr(conversation, "trace_id", None),
+            )
             return False
 
         if not self.connected or not self.driver:
-            log.warning("neo4j_not_connected")
+            log.warning(
+                "neo4j_not_connected",
+                trace_id=getattr(conversation, "trace_id", None),
+            )
             return False
 
         try:
@@ -456,23 +470,36 @@ class MemoryService:
                     turn_id=turn_id,
                     session_id=conversation.session_id,
                     entity_count=len(conversation.key_entities),
+                    trace_id=conversation.trace_id,
                 )
                 return True
         except Exception as e:
-            log.error("turn_creation_failed", error=str(e), exc_info=True)
+            log.error(
+                "turn_creation_failed",
+                error=str(e),
+                exc_info=True,
+                trace_id=getattr(conversation, "trace_id", None),
+            )
             return False
 
-    async def create_session(self, session_node: SessionNode) -> bool:
+    async def create_session(self, session_node: SessionNode, trace_id: str | None = None) -> bool:
         """Create or update a Session node in the graph.
 
         Args:
             session_node: Session to create or update.
+            trace_id: Optional request trace identifier for log correlation
+                (ADR-0074 §I3). Callers should pass the consolidation/request
+                trace_id when available; ``None`` is acceptable for batch flows.
 
         Returns:
             True if successful, False otherwise.
         """
         if not self.connected or not self.driver:
-            log.warning("neo4j_not_connected")
+            log.warning(
+                "neo4j_not_connected",
+                trace_id=trace_id,
+                session_id=session_node.session_id,
+            )
             return False
 
         try:
@@ -497,13 +524,20 @@ class MemoryService:
                     "session_created",
                     session_id=session_node.session_id,
                     turn_count=session_node.turn_count,
+                    trace_id=trace_id,
                 )
                 return True
         except Exception as e:
-            log.error("session_creation_failed", error=str(e), exc_info=True)
+            log.error(
+                "session_creation_failed",
+                error=str(e),
+                exc_info=True,
+                trace_id=trace_id,
+                session_id=session_node.session_id,
+            )
             return False
 
-    async def link_session_turns(self, session_id: str) -> int:
+    async def link_session_turns(self, session_id: str, trace_id: str | None = None) -> int:
         """Wire all Turn nodes for a session into an ordered sequence.
 
         Creates:
@@ -513,12 +547,14 @@ class MemoryService:
 
         Args:
             session_id: Session ID to link.
+            trace_id: Optional request trace identifier for log correlation
+                (ADR-0074 §I3).
 
         Returns:
             Number of turns linked.
         """
         if not self.connected or not self.driver:
-            log.warning("neo4j_not_connected")
+            log.warning("neo4j_not_connected", trace_id=trace_id, session_id=session_id)
             return 0
 
         try:
@@ -570,10 +606,21 @@ class MemoryService:
                 )
                 record = await result.single()
                 count: int = record["cnt"] if record else 0
-                log.info("session_turns_linked", session_id=session_id, turn_count=count)
+                log.info(
+                    "session_turns_linked",
+                    session_id=session_id,
+                    turn_count=count,
+                    trace_id=trace_id,
+                )
                 return count
         except Exception as e:
-            log.error("link_session_turns_failed", error=str(e), exc_info=True)
+            log.error(
+                "link_session_turns_failed",
+                error=str(e),
+                exc_info=True,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
             return 0
 
     async def create_entity(
@@ -604,7 +651,11 @@ class MemoryService:
             Entity ID (name-based, may be canonical name if deduplicated).
         """
         if not self.connected or not self.driver:
-            log.warning("neo4j_not_connected")
+            log.warning(
+                "neo4j_not_connected",
+                trace_id=originating_trace_id,
+                session_id=originating_session_id,
+            )
             return ""
 
         try:
@@ -640,6 +691,7 @@ class MemoryService:
                             original_name=entity.name,
                             canonical_name=effective_name,
                             similarity=dedup_result.similarity_score,
+                            trace_id=originating_trace_id,
                         )
 
                 # MERGE using effective_name
@@ -706,10 +758,20 @@ class MemoryService:
                 result = await session.run(query, **params)
                 record = await result.single()
                 entity_id: str = record["entity_id"] if record else effective_name
-                log.info("entity_created", entity_id=entity_id, entity_type=entity.entity_type)
+                log.info(
+                    "entity_created",
+                    entity_id=entity_id,
+                    entity_type=entity.entity_type,
+                    trace_id=originating_trace_id,
+                )
                 return entity_id
         except Exception as e:
-            log.error("entity_creation_failed", error=str(e), exc_info=True)
+            log.error(
+                "entity_creation_failed",
+                error=str(e),
+                exc_info=True,
+                trace_id=originating_trace_id,
+            )
             return ""
 
     async def ensure_vector_index(self) -> bool:
@@ -845,6 +907,7 @@ class MemoryService:
         user_id: UUID,
         email: str,
         display_name: str | None,
+        trace_id: str | None = None,
     ) -> dict[str, str]:
         """Ensure a :Person node exists for an authenticated user and return its facts.
 
@@ -857,6 +920,8 @@ class MemoryService:
             email: User's CF Access email.
             display_name: User's display_name from the users table (nullable);
                 falls back to the local-part of their email.
+            trace_id: Optional request trace identifier for log correlation
+                (ADR-0074 §I3).
 
         Returns:
             Dict of known facts (name, location, pronouns, role, languages)
@@ -891,7 +956,12 @@ class MemoryService:
                 raw: dict[str, Any] = record["facts"] or {}
                 return {k: v for k, v in raw.items() if v is not None}
         except Exception as e:
-            log.warning("user_person_provision_failed", error=str(e))
+            log.warning(
+                "user_person_provision_failed",
+                error=str(e),
+                trace_id=trace_id,
+                user_id=user_id_str,
+            )
             return {}
 
     async def update_person_name_if_default(
@@ -899,6 +969,7 @@ class MemoryService:
         user_id: UUID,
         current_default: str,
         new_name: str,
+        trace_id: str | None = None,
     ) -> bool:
         """Overwrite :Person.name only when it still equals the default email local-part.
 
@@ -909,6 +980,8 @@ class MemoryService:
             user_id: User's UUID (anchors the :Person node).
             current_default: The email local-part that signals "never enriched".
             new_name: The configured display name to write.
+            trace_id: Optional request trace identifier for log correlation
+                (ADR-0074 §I3).
 
         Returns:
             True when the name was updated, False otherwise (node missing, already
@@ -933,11 +1006,19 @@ class MemoryService:
                 record = await result.single()
                 return bool(record and record["updated"] > 0)
         except Exception as e:
-            log.warning("person_name_update_failed", user_id=str(user_id), error=str(e))
+            log.warning(
+                "person_name_update_failed",
+                user_id=str(user_id),
+                error=str(e),
+                trace_id=trace_id,
+            )
             return False
 
     async def create_relationship(
-        self, relationship: Relationship, visibility: str = "public"
+        self,
+        relationship: Relationship,
+        visibility: str = "public",
+        trace_id: str | None = None,
     ) -> str | None:
         """Create a relationship between nodes.
 
@@ -945,12 +1026,14 @@ class MemoryService:
             relationship: Relationship to create
             visibility: Visibility scope for the relationship (FRE-229). Stored as a
                 property on the relationship edge.
+            trace_id: Optional request trace identifier for log correlation
+                (ADR-0074 §I3).
 
         Returns:
             Neo4j ``elementId(rel)`` on success, or ``None`` on failure.
         """
         if not self.connected or not self.driver:
-            log.warning("neo4j_not_connected")
+            log.warning("neo4j_not_connected", trace_id=trace_id)
             return None
 
         try:
@@ -997,17 +1080,28 @@ class MemoryService:
                     target=relationship.target_id,
                     type=relationship.relationship_type,
                     element_id=eid_str,
+                    trace_id=trace_id,
                 )
                 return eid_str
         except Exception as e:
-            log.error("relationship_creation_failed", error=str(e), exc_info=True)
+            log.error(
+                "relationship_creation_failed",
+                error=str(e),
+                exc_info=True,
+                trace_id=trace_id,
+            )
             return None
 
-    async def fetch_turn_discusses_relationship_element_ids(self, turn_id: str) -> list[str]:
+    async def fetch_turn_discusses_relationship_element_ids(
+        self, turn_id: str, trace_id: str | None = None
+    ) -> list[str]:
         """Return ``elementId`` values for ``DISCUSSES`` edges from a turn.
 
         Args:
             turn_id: Turn node ``turn_id`` (typically trace id).
+            trace_id: Optional request trace identifier for log correlation
+                (ADR-0074 §I3); defaults to ``turn_id`` when omitted because
+                Turn IDs are themselves trace IDs in the consolidation path.
 
         Returns:
             Distinct relationship element ids, or empty list if unavailable.
@@ -1033,6 +1127,7 @@ class MemoryService:
                 "fetch_turn_discusses_rel_ids_failed",
                 turn_id=turn_id,
                 error=str(e),
+                trace_id=trace_id if trace_id is not None else turn_id,
             )
             return []
 
@@ -1107,7 +1202,7 @@ class MemoryService:
         effective_authenticated = authenticated or query.authenticated
 
         if not self.connected or not self.driver:
-            log.warning("neo4j_not_connected")
+            log.warning("neo4j_not_connected", trace_id=trace_id, session_id=session_id)
             return MemoryQueryResult()
 
         vis_frag, vis_params = _build_visibility_filter(
@@ -1231,6 +1326,7 @@ class MemoryService:
                             "vector_search_failed",
                             error=str(vec_exc),
                             query_text_length=len(query_text),
+                            trace_id=trace_id,
                         )
 
                 # Build vector_scores dict for relevance calculation
@@ -1263,6 +1359,7 @@ class MemoryService:
                         log.warning(
                             "reranker_integration_failed",
                             error=str(rerank_exc),
+                            trace_id=trace_id,
                         )
 
                 # Calculate plausibility/relevance scores
@@ -1271,6 +1368,7 @@ class MemoryService:
                     query,
                     vector_scores=vector_scores,
                     reranker_scores=reranker_scores,
+                    trace_id=trace_id,
                 )
 
                 accessed_entity_ids = list(query.entity_names or [])
@@ -1288,6 +1386,8 @@ class MemoryService:
                     "memory_query_completed",
                     query_params=cypher_parts,
                     result_count=len(conversations),
+                    trace_id=trace_id,
+                    session_id=session_id,
                 )
 
                 self._log_query_quality_metrics(
@@ -1295,6 +1395,7 @@ class MemoryService:
                     relevance_scores=relevance_scores,
                     feedback_key=feedback_key,
                     query_text=query_text,
+                    trace_id=trace_id,
                 )
 
                 result = MemoryQueryResult(
@@ -1334,7 +1435,13 @@ class MemoryService:
                 return result
 
         except Exception as e:
-            log.error("memory_query_failed", error=str(e), exc_info=True)
+            log.error(
+                "memory_query_failed",
+                error=str(e),
+                exc_info=True,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
             return MemoryQueryResult()
 
     async def query_memory_broad(
@@ -1492,7 +1599,13 @@ class MemoryService:
                 return payload
 
         except Exception as e:
-            log.error("query_memory_broad_failed", error=str(e), exc_info=True)
+            log.error(
+                "query_memory_broad_failed",
+                error=str(e),
+                exc_info=True,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
             return {"entities": [], "sessions": [], "turns_summary": []}
 
     def _log_query_quality_metrics(
@@ -1501,6 +1614,7 @@ class MemoryService:
         relevance_scores: dict[str, float],
         feedback_key: str | None,
         query_text: str | None,
+        trace_id: str | None = None,
     ) -> None:
         """Emit memory query quality metrics and implicit feedback signal."""
         result_count = len(relevance_scores)
@@ -1526,6 +1640,7 @@ class MemoryService:
             recency_days=query.recency_days,
             implicit_rephrase_detected=implicit_rephrase,
             previous_result_count=(previous_state or {}).get("result_count"),
+            trace_id=trace_id,
         )
         self._query_feedback_by_key[state_key] = {
             "signature": query_signature,
@@ -1585,6 +1700,7 @@ class MemoryService:
         query: MemoryQuery,
         vector_scores: dict[str, float] | None = None,
         reranker_scores: dict[str, float] | None = None,
+        trace_id: str | None = None,
     ) -> dict[str, float]:
         """Calculate relevance/plausibility scores for conversations.
 
@@ -1623,6 +1739,8 @@ class MemoryService:
                 score (0-1) from vector index search.
             reranker_scores: Optional dict mapping turn_id to normalized reranker
                 relevance score (0-1) from cross-attention reranking.
+            trace_id: Optional request trace identifier for log correlation
+                (ADR-0074 §I3) on intermediate fetch-failure warnings.
 
         Returns:
             Dict mapping conversation_id to relevance score (0.0-1.0).
@@ -1672,7 +1790,7 @@ class MemoryService:
                         # Normalize to 0-1 (cap at 100 mentions)
                         entity_importance[name] = min(mentions / 100.0, 1.0)
             except Exception as e:
-                log.warning("entity_importance_fetch_failed", error=str(e))
+                log.warning("entity_importance_fetch_failed", error=str(e), trace_id=trace_id)
 
         # Fetch freshness data when access tracking is enabled (ADR-0042 Step 5)
         # entity_name -> freshness score in [0.0, 1.0]
@@ -1717,7 +1835,7 @@ class MemoryService:
                         )
                         freshness_scores[record["name"]] = fs
             except Exception as e:
-                log.warning("freshness_scores_fetch_failed", error=str(e))
+                log.warning("freshness_scores_fetch_failed", error=str(e), trace_id=trace_id)
 
         # Determine weight scheme based on available signals
         use_vector = bool(_vector_scores)
@@ -1880,6 +1998,7 @@ class MemoryService:
         limit: int = 20,
         user_id: UUID | None = None,
         authenticated: bool = False,
+        trace_id: str | None = None,
     ) -> list[EntityNode]:
         """Get entities the user frequently mentions (interest profile).
 
@@ -1887,12 +2006,14 @@ class MemoryService:
             limit: Maximum number of entities to return
             user_id: Authenticated user UUID for visibility scoping (FRE-229).
             authenticated: Whether the request carries a verified identity (FRE-229).
+            trace_id: Optional request trace identifier for log correlation
+                (ADR-0074 §I3).
 
         Returns:
             List of entities sorted by mention frequency
         """
         if not self.connected or not self.driver:
-            log.warning("neo4j_not_connected")
+            log.warning("neo4j_not_connected", trace_id=trace_id)
             return []
 
         vis_frag, vis_params = _build_visibility_filter("e", user_id, authenticated)
@@ -1955,10 +2076,15 @@ class MemoryService:
                         )
                     )
 
-                log.info("user_interests_retrieved", count=len(entities))
+                log.info("user_interests_retrieved", count=len(entities), trace_id=trace_id)
                 return entities
         except Exception as e:
-            log.error("user_interests_query_failed", error=str(e), exc_info=True)
+            log.error(
+                "user_interests_query_failed",
+                error=str(e),
+                exc_info=True,
+                trace_id=trace_id,
+            )
             return []
 
     async def promote_entity(

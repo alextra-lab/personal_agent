@@ -439,11 +439,17 @@ async def route_skills(
     ]
 
     try:
+        from personal_agent.telemetry.trace import SystemTraceContext, TraceContext
+
+        skill_ctx: TraceContext = (
+            TraceContext(trace_id=trace_id) if trace_id else SystemTraceContext.new("skill_routing")
+        )
         response = await routing_client.respond(
             role=ModelRole.PRIMARY,
             messages=messages,
             max_tokens=256,
             temperature=0.0,
+            trace_ctx=skill_ctx,
         )
     except KeyError as exc:
         # Misconfiguration (e.g. missing budget_role in budget.yaml) — surface

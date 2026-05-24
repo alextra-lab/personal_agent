@@ -158,6 +158,9 @@ Expansion paths:
 | `observability/` | Joinability probe and infrastructure monitors (ADR-0074) |
 | `storage/` | Object store wrappers for artifact byte persistence (ADR-0069) |
 | `ui/` | `service_cli.py` — the `uv run agent` entrypoint; connects to :9000 |
+| `gateway/` | Seshat API Gateway — standalone FastAPI app over storage only (Neo4j, Postgres, ES); mountable as a router in local mode or run standalone on :9001 |
+| `storage/` | R2-backed artifact store (ADR-0069); async S3-protocol wrapper for Cloudflare R2; owns key layout and artifact lifecycle |
+| `cost_gate/` | Atomic Postgres budget reservation gate (ADR-0065); transactional reserve/commit/refund lifecycle replacing advisory checks in `LiteLLMClient` |
 
 ### Tool integration tiers (ADR-0028)
 
@@ -202,6 +205,6 @@ Full coding standards in `.claude/CLAUDE.md` § Coding Standards. Quick summary:
 - Async for all I/O; pass `TraceContext` through call chains
 - Test markers: `integration` (requires live LLM), `requires_llm_server`, `evaluation` (100+ calls) — unit tests carry no marker
 
-### Evaluation status (as of 2026-05-24)
+### Current status (as of 2026-05-24)
 
-Slices 1 & 2 implemented and running. Currently in **evaluation phase** — building real usage traces before implementing Slice 3 (proactive memory, programmatic delegation, self-improvement). See `docs/plans/MASTER_PLAN.md` for current priorities.
+Waves A–C, E (partial: FRE-227 artifact substrate shipped), G (partial), J complete. FRE-350 post-deploy eval gate earliest 2026-05-24; FRE-328 naming-stability decision 2026-05-26. See `docs/plans/MASTER_PLAN.md` for the current wave sequence.

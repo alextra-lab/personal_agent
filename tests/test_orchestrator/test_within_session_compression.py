@@ -54,7 +54,11 @@ class TestPrePassToolOutputs:
 
     def test_preserves_assistant_messages(self) -> None:
         big_args = "x" * 5000
-        msg = _msg("assistant", "thought", tool_calls=[{"id": "x", "function": {"name": "f", "arguments": big_args}}])
+        msg = _msg(
+            "assistant",
+            "thought",
+            tool_calls=[{"id": "x", "function": {"name": "f", "arguments": big_args}}],
+        )
         out, count = _pre_pass_tool_outputs([msg], threshold_tokens=100)
         assert count == 0
         assert out[0] is msg
@@ -146,7 +150,11 @@ class TestExtractTail:
     def test_pulls_in_assistant_for_tool_pair(self) -> None:
         messages = [
             _msg("user", "ask"),
-            _msg("assistant", "", tool_calls=[{"id": "tc-1", "function": {"name": "f", "arguments": "{}"}}]),
+            _msg(
+                "assistant",
+                "",
+                tool_calls=[{"id": "tc-1", "function": {"name": "f", "arguments": "{}"}}],
+            ),
             _msg("tool", "result", tool_call_id="tc-1"),
         ]
         # Tail floor of 1 token + 1 turn would normally only pull the tool msg.
@@ -205,9 +213,7 @@ class TestCompressInPlace:
                 _msg(
                     "assistant",
                     f"step {i}",
-                    tool_calls=[
-                        {"id": f"tc-{i}", "function": {"name": "es", "arguments": "{}"}}
-                    ],
+                    tool_calls=[{"id": f"tc-{i}", "function": {"name": "es", "arguments": "{}"}}],
                 )
             )
             messages.append(_msg("tool", "x" * 8000, tool_call_id=f"tc-{i}"))
@@ -215,7 +221,9 @@ class TestCompressInPlace:
 
         prefix_before = compute_prefix_hash(messages[0])
 
-        async def fake_compress_turns(msgs: list, trace_id: str = "") -> str:
+        async def fake_compress_turns(
+            msgs: list, trace_id: str = "", session_id: str | None = None
+        ) -> str:
             return "## Conversation Summary\n- Decisions: ran multiple es queries"
 
         with patch(
@@ -263,15 +271,15 @@ class TestCompressInPlace:
                 _msg(
                     "assistant",
                     f"step {i}",
-                    tool_calls=[
-                        {"id": f"tc-{i}", "function": {"name": "f", "arguments": "{}"}}
-                    ],
+                    tool_calls=[{"id": f"tc-{i}", "function": {"name": "f", "arguments": "{}"}}],
                 )
             )
             messages.append(_msg("tool", "z" * 8000, tool_call_id=f"tc-{i}"))
         messages.append(_msg("user", "follow up"))
 
-        async def fake_compress_turns(msgs: list, trace_id: str = "") -> str:
+        async def fake_compress_turns(
+            msgs: list, trace_id: str = "", session_id: str | None = None
+        ) -> str:
             return FALLBACK_MARKER
 
         with patch(
@@ -291,8 +299,7 @@ class TestCompressInPlace:
 
         # No summary inserted; pre-passed middle survives instead.
         assert not any(
-            isinstance(m.get("content"), str)
-            and m["content"].startswith("## Conversation Summary")
+            isinstance(m.get("content"), str) and m["content"].startswith("## Conversation Summary")
             for m in compressed
         )
         assert record.summariser_called is False

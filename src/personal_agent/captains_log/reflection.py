@@ -388,7 +388,7 @@ async def generate_reflection_entry(
             temperature=0.3,  # Lower temperature for structured output
             max_tokens=3000,  # Increased for reasoning models with thinking process
             reasoning_effort="medium",  # LM Studio /v1/responses: minimal/low/medium/high
-            trace_ctx=SystemTraceContext.new("captains_log_reflection"),
+            trace_ctx=SystemTraceContext.new("captains_log_reflection", session_id=session_id),
             priority=InferencePriority.BACKGROUND,
             priority_timeout=30.0,
         )

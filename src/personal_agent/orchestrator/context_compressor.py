@@ -129,6 +129,7 @@ Anti-patterns to avoid:
 async def compress_turns(
     evicted_messages: list[dict[str, Any]],
     trace_id: str = "",
+    session_id: str | None = None,
 ) -> str:
     """Compress evicted conversation turns into a structured summary.
 
@@ -139,6 +140,7 @@ async def compress_turns(
     Args:
         evicted_messages: Messages being evicted from the context window.
         trace_id: Request trace identifier for telemetry.
+        session_id: Originating session id for cost attribution (ADR-0074).
 
     Returns:
         Structured summary string, or the fallback marker on failure.
@@ -166,9 +168,9 @@ async def compress_turns(
         from personal_agent.telemetry.trace import SystemTraceContext, TraceContext
 
         compress_ctx: TraceContext = (
-            TraceContext(trace_id=trace_id)
+            TraceContext(trace_id=trace_id, session_id=session_id)
             if trace_id
-            else SystemTraceContext.new("context_compressor")
+            else SystemTraceContext.new("context_compressor", session_id=session_id)
         )
         client = get_llm_client(role_name="compressor")
         response = await client.respond(
@@ -352,6 +354,7 @@ async def summarize_middle(
     middle: list[dict[str, Any]],
     *,
     trace_id: str = "",
+    session_id: str | None = None,
 ) -> tuple[str, int]:
     """Run the LLM compressor on *middle* and return ``(summary, duration_ms)``.
 
@@ -363,6 +366,7 @@ async def summarize_middle(
     Args:
         middle: Middle-band messages (already pre-passed) to summarise.
         trace_id: Request trace identifier for telemetry.
+        session_id: Originating session id for cost attribution (ADR-0074).
 
     Returns:
         Tuple of ``(summary, duration_ms)``.  ``duration_ms`` is 0 when the
@@ -372,7 +376,7 @@ async def summarize_middle(
     if not middle:
         return FALLBACK_MARKER, 0
     started = time.monotonic()
-    summary = await compress_turns(middle, trace_id=trace_id)
+    summary = await compress_turns(middle, trace_id=trace_id, session_id=session_id)
     duration_ms = int(round((time.monotonic() - started) * 1000))
     if summary == FALLBACK_MARKER:
         return summary, 0

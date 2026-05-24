@@ -104,6 +104,7 @@ class ExpansionController:
         trace_id: str,
         messages: list[dict[str, Any]],
         constraints: dict[str, Any] | None = None,  # TODO: wire into planner prompt
+        session_id: str | None = None,
     ) -> ExpansionResult:
         """Run the full expansion pipeline.
 
@@ -114,6 +115,7 @@ class ExpansionController:
             trace_id: Request trace identifier.
             messages: Conversation context for sub-agents.
             constraints: Optional expansion constraints from gateway.
+            session_id: Originating session id for cost attribution (ADR-0074).
 
         Returns:
             ExpansionResult with plan, sub-agent results, and synthesis context.
@@ -129,6 +131,7 @@ class ExpansionController:
             trace_id=trace_id,
             timeout_s=settings.planner_timeout_seconds,
             result=result,
+            session_id=session_id,
         )
         result.plan = plan
 
@@ -151,6 +154,7 @@ class ExpansionController:
             trace_id=trace_id,
             messages=messages,
             result=result,
+            session_id=session_id,
         )
         result.sub_agent_results = sub_results
 
@@ -193,6 +197,7 @@ class ExpansionController:
         trace_id: str,
         timeout_s: float,
         result: ExpansionResult,
+        session_id: str | None = None,
     ) -> ExpansionPlan:
         """Phase 1: Get a plan from the LLM or fallback planner.
 
@@ -203,6 +208,7 @@ class ExpansionController:
             trace_id: Request trace identifier.
             timeout_s: Planner timeout in seconds.
             result: ExpansionResult to append phase data to.
+            session_id: Originating session id for cost attribution (ADR-0074).
 
         Returns:
             An ExpansionPlan — either LLM-generated or fallback.
@@ -228,7 +234,7 @@ class ExpansionController:
                     messages=planner_messages,
                     max_tokens=1024,
                     response_format={"type": "json_object"},
-                    trace_ctx=TraceContext(trace_id=trace_id),
+                    trace_ctx=TraceContext(trace_id=trace_id, session_id=session_id),
                 ),
                 timeout=timeout_s,
             )
@@ -306,6 +312,7 @@ class ExpansionController:
         trace_id: str,
         messages: list[dict[str, Any]],
         result: ExpansionResult,
+        session_id: str | None = None,
     ) -> list[SubAgentResult]:
         """Phase 2: Dispatch sub-agents in parallel.
 
@@ -315,6 +322,7 @@ class ExpansionController:
             trace_id: Request trace identifier.
             messages: Conversation context window slice for sub-agents.
             result: ExpansionResult to append phase data to.
+            session_id: Originating session id for cost attribution (ADR-0074).
 
         Returns:
             List of SubAgentResult from all dispatched sub-agents.
@@ -350,6 +358,7 @@ class ExpansionController:
                             spec=spec,
                             llm_client=llm_client,
                             trace_id=trace_id,
+                            session_id=session_id,
                         )
                         for spec in specs
                     ],

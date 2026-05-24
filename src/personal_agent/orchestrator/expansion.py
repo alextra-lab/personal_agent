@@ -80,6 +80,7 @@ async def execute_hybrid(
     specs: Sequence[SubAgentSpec],
     trace_id: str,
     max_concurrent: int | None = None,
+    session_id: str | None = None,
 ) -> list[SubAgentResult]:
     """Execute sub-agents concurrently within the expansion budget.
 
@@ -94,6 +95,7 @@ async def execute_hybrid(
         specs: Sub-agent specifications from decomposition planning.
         trace_id: Parent request trace identifier.
         max_concurrent: Max concurrent sub-agents (None = config default).
+        session_id: Originating session id for cost attribution (ADR-0074).
 
     Returns:
         List of SubAgentResults in the same order as specs.
@@ -119,6 +121,7 @@ async def execute_hybrid(
                 spec=spec,
                 llm_client=sub_agent_client,
                 trace_id=trace_id,
+                session_id=session_id,
             )
 
     tasks = [_run_with_semaphore(spec) for spec in specs]

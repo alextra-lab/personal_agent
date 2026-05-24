@@ -1128,6 +1128,7 @@ async def step_init(
                     trace_id=ctx.trace_id,
                     messages=ctx.messages,
                     constraints=ctx.expansion_constraints,
+                    session_id=ctx.session_id,
                 )
 
                 ctx.expansion_plan = expansion_result.plan
@@ -1540,6 +1541,7 @@ async def step_llm_call(
                     routing_client=_routing_client,
                     cap_tokens=settings.skill_index_max_tokens,
                     trace_id=ctx.trace_id,
+                    session_id=ctx.session_id,
                 )
                 _routing_latency_ms = int((time.time() - _routing_start) * 1000)
                 # Pre-load returned skill bodies — primary agent sees them already in scope
@@ -1963,6 +1965,7 @@ async def step_llm_call(
                     specs=specs,
                     trace_id=ctx.trace_id,
                     max_concurrent=max_sub,
+                    session_id=ctx.session_id,
                 )
                 ctx.sub_agent_results = results
 

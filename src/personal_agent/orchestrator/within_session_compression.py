@@ -277,7 +277,9 @@ async def compress_in_place(
     if pre_passed:
         from personal_agent.orchestrator.context_compressor import FALLBACK_MARKER
 
-        summary_text, duration_ms = await summarize_middle(pre_passed, trace_id=trace_id)
+        summary_text, duration_ms = await summarize_middle(
+            pre_passed, trace_id=trace_id, session_id=session_id
+        )
         summariser_duration_ms = duration_ms
         if summary_text and summary_text != FALLBACK_MARKER:
             summary = summary_text

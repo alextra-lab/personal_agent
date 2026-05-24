@@ -394,6 +394,7 @@ async def route_skills(
     routing_client: Any,
     cap_tokens: int = 2048,
     trace_id: str | None = None,
+    session_id: str | None = None,
 ) -> list[str]:
     r"""Ask the routing model which skills are relevant to *user_message*.
 
@@ -415,6 +416,7 @@ async def route_skills(
             ``skill_routing_call_misconfigured``, ``skill_routing_call_failed``)
             so they can be correlated with the dispatch event the executor
             emits. Pass ``ctx.trace_id`` from the calling step.
+        session_id: Originating session id for cost attribution (ADR-0074).
 
     Returns:
         List of skill names from the loaded skill set that the router judged
@@ -442,7 +444,9 @@ async def route_skills(
         from personal_agent.telemetry.trace import SystemTraceContext, TraceContext
 
         skill_ctx: TraceContext = (
-            TraceContext(trace_id=trace_id) if trace_id else SystemTraceContext.new("skill_routing")
+            TraceContext(trace_id=trace_id, session_id=session_id)
+            if trace_id
+            else SystemTraceContext.new("skill_routing", session_id=session_id)
         )
         response = await routing_client.respond(
             role=ModelRole.PRIMARY,

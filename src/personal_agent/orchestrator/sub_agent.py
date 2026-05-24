@@ -38,6 +38,7 @@ async def run_sub_agent(
     llm_client: Any,
     trace_id: str,
     concurrency_controller: Any | None = None,
+    session_id: str | None = None,
 ) -> SubAgentResult:
     """Execute a single sub-agent inference call.
 
@@ -46,6 +47,7 @@ async def run_sub_agent(
         llm_client: LLM client instance (LocalLLMClient or LiteLLMClient).
         trace_id: Parent request trace identifier.
         concurrency_controller: Optional concurrency controller for slot management.
+        session_id: Originating session id for cost attribution (ADR-0074).
 
     Returns:
         SubAgentResult with summary, metrics, and success status.
@@ -92,6 +94,7 @@ async def run_sub_agent(
                 spec=spec,
                 trace_id=trace_id,
                 task_id=task_id,
+                session_id=session_id,
             )
         else:
             # Default: single inference call
@@ -103,7 +106,7 @@ async def run_sub_agent(
                         role=spec.model_role,
                         messages=messages,
                         max_tokens=spec.max_tokens,
-                        trace_ctx=TraceContext(trace_id=trace_id),
+                        trace_ctx=TraceContext(trace_id=trace_id, session_id=session_id),
                     ),
                     timeout=spec.timeout_seconds,
                 )
@@ -171,6 +174,7 @@ async def _run_tooled_loop(
     trace_id: str,
     task_id: str,
     max_iterations: int = 3,
+    session_id: str | None = None,
 ) -> str:
     """Run a mini tool-use loop for TOOLED_SEQUENTIAL sub-agents.
 
@@ -185,6 +189,7 @@ async def _run_tooled_loop(
         trace_id: Trace identifier.
         task_id: Sub-agent task identifier.
         max_iterations: Max tool-use rounds before forcing final answer.
+        session_id: Originating session id for cost attribution (ADR-0074).
 
     Returns:
         Final response content string.
@@ -197,7 +202,7 @@ async def _run_tooled_loop(
                 role=spec.model_role,
                 messages=messages,
                 max_tokens=spec.max_tokens,
-                trace_ctx=TraceContext(trace_id=trace_id),
+                trace_ctx=TraceContext(trace_id=trace_id, session_id=session_id),
             ),
             timeout=spec.timeout_seconds,
         )

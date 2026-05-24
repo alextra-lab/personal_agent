@@ -237,15 +237,20 @@ export async function resumeInterrupt(opts: ResumeOptions): Promise<void> {
  * @throws Error when the backend returns a non-2xx status.
  */
 export async function postApprovalDecision(
-  // _sessionId is accepted for call-site symmetry with resumeInterrupt but is
-  // not used in the URL — the backend derives ownership from the auth token.
-  _sessionId: string,
+  // FRE-378: sessionId is required in the body. The waiter is registered
+  // keyed by session_id; the backend verifies that the caller owns this
+  // session (via CF Access user_id → SessionRepository.get scoped query)
+  // before passing it to resolve_approval.
+  sessionId: string,
   requestId: string,
   decision: 'approve' | 'deny',
   reason?: string,
 ): Promise<void> {
 
-  const body: Record<string, unknown> = { decision };
+  const body: Record<string, unknown> = {
+    session_id: sessionId,
+    decision,
+  };
   if (reason !== undefined) {
     body['reason'] = reason;
   }

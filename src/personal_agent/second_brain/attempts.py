@@ -38,6 +38,7 @@ ConsolidationOutcome = Literal[
     "budget_denied",
     "model_error",
     "extraction_returned_fallback",
+    "extraction_capped",  # FRE-380: max retries exhausted; stub Turn written
     "transient_failure",
     "dead_letter",
 ]

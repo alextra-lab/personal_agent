@@ -738,6 +738,19 @@ class AppConfig(BaseSettings):
         description="Enable automated retention, archive, and purge",
     )
 
+    # Consolidator retry cap (FRE-380, Stage 1 of Turn/extraction decoupling)
+    consolidator_max_extraction_attempts: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description=(
+            "Max entity-extraction attempts per capture before the consolidator "
+            "writes a stub Turn (joinable but entity-less) and stops retrying. "
+            "Closes the captures-without-Turn orphan accumulation when extraction "
+            "is broken for extended periods."
+        ),
+    )
+
     # Joinability probe (ADR-0074 Phase 5 / FRE-376)
     joinability_probe_enabled: bool = Field(
         default=True,

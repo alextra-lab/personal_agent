@@ -103,20 +103,30 @@ class GatewayKnowledgeGraphClient:
         resp.raise_for_status()
         return [EntityNode(**item) for item in resp.json()]
 
-    async def get_entity(self, entity_id: str) -> EntityNode | None:
+    async def get_entity(self, entity_id: str, ctx: TraceContext) -> EntityNode | None:
         """Retrieve a single entity by its identifier.
 
         Args:
             entity_id: Unique entity identifier.
+            ctx: Trace context (FRE-379). ``trace_id`` is forwarded as
+                ``X-Trace-Id``; the gateway server scopes the response by
+                the caller's CF Access identity.
 
         Returns:
-            ``EntityNode`` if found, ``None`` on 404.
+            ``EntityNode`` if found and visible to the caller, ``None`` on 404.
 
         Raises:
             httpx.HTTPStatusError: On non-2xx/404 responses.
         """
-        log.debug("gateway_client_get_entity", entity_id=entity_id)
-        resp = await self._client.get(f"/api/v1/knowledge/entities/{entity_id}")
+        log.debug(
+            "gateway_client_get_entity",
+            entity_id=entity_id,
+            trace_id=ctx.trace_id,
+        )
+        resp = await self._client.get(
+            f"/api/v1/knowledge/entities/{entity_id}",
+            headers={"X-Trace-Id": ctx.trace_id},
+        )
         if resp.status_code == 404:
             return None
         resp.raise_for_status()
@@ -155,20 +165,30 @@ class GatewayKnowledgeGraphClient:
         data: dict[str, Any] = resp.json()
         return str(data.get("id", fact.name))
 
-    async def get_relationships(self, entity_id: str) -> Sequence[Relationship]:
+    async def get_relationships(self, entity_id: str, ctx: TraceContext) -> Sequence[Relationship]:
         """Retrieve all direct relationships for an entity.
 
         Args:
             entity_id: Unique entity identifier.
+            ctx: Trace context (FRE-379). ``trace_id`` is forwarded as
+                ``X-Trace-Id``; the gateway server scopes the response by
+                the caller's CF Access identity.
 
         Returns:
-            Sequence of ``Relationship`` objects.
+            Sequence of ``Relationship`` objects visible to the caller.
 
         Raises:
             httpx.HTTPStatusError: On non-2xx responses.
         """
-        log.debug("gateway_client_get_relationships", entity_id=entity_id)
-        resp = await self._client.get(f"/api/v1/knowledge/entities/{entity_id}/relationships")
+        log.debug(
+            "gateway_client_get_relationships",
+            entity_id=entity_id,
+            trace_id=ctx.trace_id,
+        )
+        resp = await self._client.get(
+            f"/api/v1/knowledge/entities/{entity_id}/relationships",
+            headers={"X-Trace-Id": ctx.trace_id},
+        )
         resp.raise_for_status()
         return [Relationship(**r) for r in resp.json()]
 

@@ -201,24 +201,36 @@ class _KnowledgeGraphAdapter:
 
         Delegates to :meth:`~personal_agent.memory.service.MemoryService.get_user_interests`
         and filters by name prefix/substring as a lightweight stand-in until
-        a dedicated full-text search method exists.
+        a dedicated full-text search method exists. FRE-379: scopes results
+        by ``ctx.user_id`` so private KG entries stay per-user while
+        public/group entries flow freely (FRE-229 visibility filter).
 
         Args:
             query: Free-text search string.
             limit: Maximum results.
-            ctx: Trace context (unused here; passed for interface compatibility).
+            ctx: Trace context. ``ctx.user_id`` and ``authenticated=True``
+                are threaded into the underlying :class:`MemoryQuery`.
 
         Returns:
             List of :class:`~personal_agent.memory.models.EntityNode` instances.
         """
         from personal_agent.memory.models import EntityNode, MemoryQuery
 
-        mq = MemoryQuery(entity_names=[query], limit=limit)
+        user_id = getattr(ctx, "user_id", None)
+        is_authenticated = user_id is not None
+        mq = MemoryQuery(
+            entity_names=[query],
+            limit=limit,
+            user_id=user_id,
+            authenticated=is_authenticated,
+        )
         result = await self._service.query_memory(mq)
         entities: list[EntityNode] = list(result.entities)
         if not entities:
-            # Fallback: fetch interests and filter by name
-            all_entities: list[EntityNode] = await self._service.get_user_interests(limit=200)
+            # Fallback: fetch interests scoped to the caller and filter.
+            all_entities: list[EntityNode] = await self._service.get_user_interests(
+                limit=200, user_id=user_id, authenticated=is_authenticated
+            )
             q_lower = query.lower()
             entities = [
                 e
@@ -227,18 +239,25 @@ class _KnowledgeGraphAdapter:
             ][:limit]
         return list(entities[:limit])
 
-    async def get_entity(self, entity_id: str) -> Any | None:
-        """Retrieve a single entity by name/ID.
+    async def get_entity(self, entity_id: str, ctx: Any) -> Any | None:
+        """Retrieve a single entity by name/ID, scoped by caller (FRE-379).
 
         Args:
             entity_id: Entity name used as identifier in Neo4j.
+            ctx: Trace context; ``user_id`` controls visibility filtering.
 
         Returns:
             :class:`~personal_agent.memory.models.EntityNode` or ``None``.
         """
         from personal_agent.memory.models import MemoryQuery
 
-        mq = MemoryQuery(entity_names=[entity_id], limit=1)
+        user_id = getattr(ctx, "user_id", None)
+        mq = MemoryQuery(
+            entity_names=[entity_id],
+            limit=1,
+            user_id=user_id,
+            authenticated=user_id is not None,
+        )
         result = await self._service.query_memory(mq)
         if result.entities:
             return result.entities[0]
@@ -264,18 +283,25 @@ class _KnowledgeGraphAdapter:
         )
         return entity_id
 
-    async def get_relationships(self, entity_id: str) -> list[Any]:
-        """Retrieve all direct relationships for an entity.
+    async def get_relationships(self, entity_id: str, ctx: Any) -> list[Any]:
+        """Retrieve all direct relationships for an entity, scoped by caller (FRE-379).
 
         Args:
             entity_id: Entity name/ID.
+            ctx: Trace context; ``user_id`` controls visibility filtering.
 
         Returns:
             List of :class:`~personal_agent.memory.models.Relationship` objects.
         """
         from personal_agent.memory.models import MemoryQuery
 
-        mq = MemoryQuery(entity_names=[entity_id], limit=50)
+        user_id = getattr(ctx, "user_id", None)
+        mq = MemoryQuery(
+            entity_names=[entity_id],
+            limit=50,
+            user_id=user_id,
+            authenticated=user_id is not None,
+        )
         result = await self._service.query_memory(mq)
         return list(result.relationships)
 

@@ -461,10 +461,19 @@ class SecondBrainConsolidator:
                 "relationship_element_ids": [],
             }
 
-        # If extraction fell back (LLM error/crash), skip writing to Neo4j entirely.
-        # A fallback result has summary == user_message and empty entities. Writing a
-        # Conversation node here would permanently block future retries via
-        # conversation_exists(), so we bail early and let the next consolidation run retry.
+        # If extraction fell back (LLM error/crash), the historical behavior was to
+        # skip writing to Neo4j entirely — preserving the chance to retry on the next
+        # consolidation tick (writing a Conversation node would permanently block
+        # retries via conversation_exists()).
+        #
+        # FRE-380 (Stage 1): the unconditional skip becomes joinability-fatal when
+        # extraction is broken for extended periods (cf. the 2026-05-23 trace_ctx
+        # regression which bled for 17h). After `settings.consolidator_max_extraction_
+        # attempts` failures, we instead write a *stub Turn* — full message content,
+        # origination identity (§I5), empty `key_entities`, and a properties marker.
+        # The capture becomes joinable; the LLM-derived semantic enrichment is
+        # accepted as lost. Stage 2 (FRE-381) will decouple Turn creation from
+        # extraction entirely.
         summary = extraction_result.get("summary", "")
         is_fallback = (
             not extraction_result.get("entities")
@@ -472,6 +481,57 @@ class SecondBrainConsolidator:
         )
         if is_fallback:
             time_since_first = (datetime.now(timezone.utc) - attempt_started_at).total_seconds()
+            _settings = get_settings()
+            max_attempts = getattr(_settings, "consolidator_max_extraction_attempts", 5)
+            if attempt_number >= max_attempts:
+                # Cap reached — write a stub Turn and stop retrying.
+                await record_consolidation_attempt(
+                    trace_id=capture.trace_id,
+                    role="entity_extraction",
+                    started_at=attempt_started_at,
+                    outcome="extraction_capped",
+                )
+                log.warning(
+                    "consolidation_extraction_capped",
+                    trace_id=capture.trace_id,
+                    attempt_number=attempt_number,
+                    max_attempts=max_attempts,
+                    previous_failure_count=previous_failures,
+                    time_since_first_attempt_seconds=time_since_first,
+                    reason="exhausted extraction retries; writing stub Turn for joinability",
+                )
+
+                stub_summary = (capture.user_message or "").strip()[:200] or "(empty)"
+                stub_turn = TurnNode(
+                    turn_id=capture.trace_id,
+                    trace_id=capture.trace_id,
+                    session_id=capture.session_id,
+                    timestamp=capture.timestamp,
+                    summary=stub_summary,
+                    user_message=capture.user_message,
+                    assistant_response=capture.assistant_response,
+                    key_entities=[],
+                    properties={
+                        "tools_used": capture.tools_used,
+                        "duration_ms": capture.duration_ms,
+                        "outcome": capture.outcome,
+                        "extraction_outcome": "capped_after_retries",
+                        "extraction_attempts": attempt_number,
+                    },
+                )
+                # No `_entity_data` attached — entities list is intentionally empty.
+                await self.memory_service.create_conversation(
+                    stub_turn, user_id=capture.user_id, visibility="group"
+                )
+                return {
+                    "turns_created": 1,
+                    "entities_created": 0,
+                    "relationships_created": 0,
+                    "entity_ids": [],
+                    "relationship_element_ids": [],
+                }
+
+            # Below cap — original retry path.
             await record_consolidation_attempt(
                 trace_id=capture.trace_id,
                 role="entity_extraction",
@@ -484,6 +544,7 @@ class SecondBrainConsolidator:
                 attempt_number=attempt_number,
                 previous_failure_count=previous_failures,
                 time_since_first_attempt_seconds=time_since_first,
+                max_attempts=max_attempts,
                 denial_reason=None,
                 reason="extraction returned fallback result; will retry next run",
             )

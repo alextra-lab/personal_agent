@@ -56,14 +56,20 @@ class KnowledgeGraphProtocol(Protocol):
         """
         ...
 
-    async def get_entity(self, entity_id: str) -> EntityNode | None:
+    async def get_entity(self, entity_id: str, ctx: TraceContext) -> EntityNode | None:
         """Retrieve a single entity by its identifier.
+
+        FRE-379: ``ctx`` is required so the implementation can scope the
+        result by ``ctx.user_id`` against the FRE-229 visibility filter —
+        private KG entries (``visibility="private:<user_id>"``) are only
+        returned to their owner; public/group entries to everyone.
 
         Args:
             entity_id: Unique entity identifier.
+            ctx: Trace context. ``user_id`` is the per-user visibility key.
 
         Returns:
-            The EntityNode if found, None otherwise.
+            The EntityNode if found and visible to the caller, None otherwise.
         """
         ...
 
@@ -79,14 +85,18 @@ class KnowledgeGraphProtocol(Protocol):
         """
         ...
 
-    async def get_relationships(self, entity_id: str) -> Sequence[Relationship]:
+    async def get_relationships(self, entity_id: str, ctx: TraceContext) -> Sequence[Relationship]:
         """Retrieve all direct relationships for an entity.
+
+        FRE-379: ``ctx`` is required for per-user visibility scoping
+        (see :meth:`get_entity`).
 
         Args:
             entity_id: Unique entity identifier.
+            ctx: Trace context. ``user_id`` is the per-user visibility key.
 
         Returns:
-            Sequence of Relationship objects connected to the entity.
+            Sequence of Relationship objects visible to the caller.
         """
         ...
 

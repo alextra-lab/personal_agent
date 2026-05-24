@@ -153,6 +153,10 @@ Expansion paths:
 | `second_brain/` | Entity extraction, quality monitoring, consolidation (called by brainstem) |
 | `transport/` | AG-UI protocol endpoint for streaming events to UI |
 | `delegation/` | Protocol adapters for structured delegation handoffs |
+| `gateway/` | Versioned REST API for external clients — knowledge, sessions, observations, chat (FRE-206) |
+| `cost_gate/` | Atomic Postgres-backed cost reservation and budget enforcement (ADR-0065) |
+| `observability/` | Joinability probe and infrastructure monitors (ADR-0074) |
+| `storage/` | Object store wrappers for artifact byte persistence (ADR-0069) |
 | `ui/` | `service_cli.py` — the `uv run agent` entrypoint; connects to :9000 |
 
 ### Tool integration tiers (ADR-0028)
@@ -192,13 +196,12 @@ Promotion pipeline: episodic interactions → entity extraction (qwen3-8b) → s
 
 ### Key conventions
 
-- **Never** `os.getenv()` — always `settings.<field>`
-- **Never** `print()` — always `structlog` with `trace_id`
-- **Never** bare `except:` — use `personal_agent.exceptions`
+Full coding standards in `.claude/CLAUDE.md` § Coding Standards. Quick summary:
+
+- **Never** `os.getenv()` / `print()` / bare `except:` — see `.claude/CLAUDE.md` for details
 - Async for all I/O; pass `TraceContext` through call chains
-- Public API functions: Google-style docstrings, full type hints with modern syntax (`str | None`, not `Optional[str]`)
 - Test markers: `integration` (requires live LLM), `requires_llm_server`, `evaluation` (100+ calls) — unit tests carry no marker
 
-### Evaluation status (as of 2026-05-14)
+### Evaluation status (as of 2026-05-24)
 
 Slices 1 & 2 implemented and running. Currently in **evaluation phase** — building real usage traces before implementing Slice 3 (proactive memory, programmatic delegation, self-improvement). See `docs/plans/MASTER_PLAN.md` for current priorities.

@@ -1,6 +1,6 @@
 # Claude Code Configuration for Personal Agent
 
-> Last updated: 2026-05-14
+> Last updated: 2026-05-24
 
 Project-specific rules, policies, and non-obvious patterns. Architecture and commands live in the root `CLAUDE.md`.
 
@@ -154,16 +154,17 @@ cd <path-to-primary-repo-clone> && git merge <branch> --no-edit && git push orig
 
 **Service Won't Start:**
 ```bash
-docker-compose ps
-docker-compose logs postgres && docker-compose logs elasticsearch
-docker-compose down && ./scripts/init-services.sh
+make ps
+make logs SERVICE=postgres && make logs SERVICE=elasticsearch
+make down && make up
 ```
 
 **Port conflicts**: Personal Agent `:9000` · SLM Server `:8000` · check with `lsof -i :9000`
 
 **Database:**
 ```bash
-docker-compose exec postgres psql -U agent -d personal_agent
+make shell SERVICE=postgres
+# then: psql -U agent -d personal_agent
 ```
 
 **Elasticsearch:**
@@ -186,42 +187,21 @@ curl http://localhost:9200/_cluster/health
 
 ---
 
-## Do / Don't
+## Pre-Merge Checklist
 
-### ✅ DO
-
-- Check Linear issue status before implementing (must be Approved)
-- Use structured logging with `trace_id`
-- Write tests before implementation code
-- Google-style docstrings on all public APIs
-- Verify with `make mypy` and `make ruff-check` before claiming done
-- Use `personal_agent.config.settings` for all config access
-- Use Tier 1/2 for new tools; justify before choosing Tier 3 (MCP)
-
-### ❌ DON'T
-
-- Implement unapproved Linear issues
-- Use `print()`, `os.getenv()`, or bare `except:`
-- Skip type hints on public APIs
-- Create files at root that belong in `docs/`
-- Claim work complete without `make test` + `make mypy` + `make ruff-check`
-- Launch more than one pytest process at a time (hook `.claude/hooks/check-pytest-lock.sh` enforces this)
-- Write Alembic migrations — schema changes go in `docker/postgres/init.sql` + `docker/postgres/migrations/`
-
----
-
-## Final Checklist
-
-- [ ] Issue is Approved
+- [ ] Issue is `Approved` in Linear
 - [ ] Type hints on all public APIs
-- [ ] Google-style docstrings
+- [ ] Google-style docstrings on public classes/functions
 - [ ] No `print()`, `os.getenv()`, bare `except:`
-- [ ] `trace_id` in all logs
+- [ ] `trace_id` in all structlog calls
 - [ ] `make test` passes
 - [ ] `make mypy` passes
 - [ ] `make ruff-check` + `make ruff-format` clean
-- [ ] Files placed per file organization rules
+- [ ] Files placed per file organization rules (§2)
 - [ ] ADRs/specs linked in commit message and PR
+- [ ] No Alembic migrations — schema changes go in `docker/postgres/init.sql` + `docker/postgres/migrations/`
+- [ ] One pytest process at a time (`.claude/hooks/check-pytest-lock.sh` enforces)
+- [ ] New tools use Tier 1/2; Tier 3 (MCP) requires ADR justification
 
 ---
 

@@ -95,12 +95,15 @@ async def run_sub_agent(
             )
         else:
             # Default: single inference call
+            from personal_agent.telemetry.trace import TraceContext
+
             response_content = str(
                 await asyncio.wait_for(
                     llm_client.respond(
                         role=spec.model_role,
                         messages=messages,
                         max_tokens=spec.max_tokens,
+                        trace_ctx=TraceContext(trace_id=trace_id),
                     ),
                     timeout=spec.timeout_seconds,
                 )
@@ -186,12 +189,15 @@ async def _run_tooled_loop(
     Returns:
         Final response content string.
     """
+    from personal_agent.telemetry.trace import TraceContext
+
     for iteration in range(max_iterations):
         response = await asyncio.wait_for(
             llm_client.respond(
                 role=spec.model_role,
                 messages=messages,
                 max_tokens=spec.max_tokens,
+                trace_ctx=TraceContext(trace_id=trace_id),
             ),
             timeout=spec.timeout_seconds,
         )

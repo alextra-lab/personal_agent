@@ -154,6 +154,7 @@ async def generate_session_summary(
                 role=ModelRole.PRIMARY,
                 messages=[{"role": "user", "content": prompt}],
                 system_prompt=_SUMMARY_SYSTEM_PROMPT,
+                trace_ctx=SystemTraceContext.new("session_summary", session_id=session_id),
             )
             content = response.get("content", "") or ""
             model_used = model_def.id if model_def else role_name
@@ -177,7 +178,7 @@ async def generate_session_summary(
                     timeout_s=60.0,
                     priority=InferencePriority.BACKGROUND,
                     priority_timeout=60.0,
-                    trace_ctx=SystemTraceContext.new("session_summary"),
+                    trace_ctx=SystemTraceContext.new("session_summary", session_id=session_id),
                 )
             except (LLMTimeout, InferenceSlotTimeout) as e:
                 log.warning(

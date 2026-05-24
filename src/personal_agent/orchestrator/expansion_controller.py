@@ -220,12 +220,15 @@ class ExpansionController:
                 },
             ]
 
+            from personal_agent.telemetry.trace import TraceContext
+
             raw_response = await asyncio.wait_for(
                 llm_client.respond(
                     role=ModelRole.SUB_AGENT,
                     messages=planner_messages,
                     max_tokens=1024,
                     response_format={"type": "json_object"},
+                    trace_ctx=TraceContext(trace_id=trace_id),
                 ),
                 timeout=timeout_s,
             )

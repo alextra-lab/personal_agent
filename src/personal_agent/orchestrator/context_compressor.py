@@ -163,6 +163,13 @@ async def compress_turns(
     formatted = _format_messages_for_compression(evicted_messages)
 
     try:
+        from personal_agent.telemetry.trace import SystemTraceContext, TraceContext
+
+        compress_ctx: TraceContext = (
+            TraceContext(trace_id=trace_id)
+            if trace_id
+            else SystemTraceContext.new("context_compressor")
+        )
         client = get_llm_client(role_name="compressor")
         response = await client.respond(
             role=ModelRole.COMPRESSOR,
@@ -173,6 +180,7 @@ async def compress_turns(
             max_tokens=512,
             temperature=0.2,
             timeout_s=25.0,
+            trace_ctx=compress_ctx,
         )
 
         summary = str(response.get("content", "")).strip()

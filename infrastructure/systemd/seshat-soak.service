@@ -1,0 +1,27 @@
+[Unit]
+Description=FRE-380 Stage 1 daily soak measurement (feeds FRE-381 design)
+Documentation=https://linear.app/frenchforest/issue/FRE-380
+# Don't run unless ES/PG/Neo4j are reachable. If any are down the script
+# still completes (it reports "unreachable") but we delay startup briefly
+# in case the gateway restarted at boot time.
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=debian
+Group=debian
+WorkingDirectory=/opt/seshat
+
+# Direct stdout to a dated file under telemetry/soak/. mkdir -p in case
+# the directory doesn't exist yet on first run.
+ExecStartPre=/bin/mkdir -p /opt/seshat/telemetry/soak
+ExecStart=/bin/bash -c '/opt/seshat/scripts/soak/fre-380-stage1-soak.sh > /opt/seshat/telemetry/soak/soak-$(date -u +%%Y%%m%%d).txt 2>&1'
+
+# Surface the output via journald too — `journalctl -u seshat-soak` shows
+# the most recent run regardless of which dated file it's in.
+StandardOutput=journal
+StandardError=journal
+
+# Cleanup: keep last 30 days of soak output files.
+ExecStartPost=/usr/bin/find /opt/seshat/telemetry/soak -name 'soak-*.txt' -mtime +30 -delete

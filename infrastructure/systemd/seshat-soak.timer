@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily trigger for seshat-soak.service (FRE-380 measurement)
+
+[Timer]
+# Fire at 09:00 UTC every day.
+OnCalendar=*-*-* 09:00:00
+# If the VPS was down at 09:00, run as soon as it comes back up.
+Persistent=true
+# Small random delay to avoid stampeding if many timers fire at once.
+RandomizedDelaySec=60
+Unit=seshat-soak.service
+
+[Install]
+WantedBy=timers.target

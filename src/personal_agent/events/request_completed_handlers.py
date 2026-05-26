@@ -24,6 +24,8 @@ def build_request_trace_es_handler(es_handler: ElasticsearchHandler | None) -> A
     async def handler(event: EventBase) -> None:
         if not isinstance(event, RequestCompletedEvent):
             return
+        if event.eval_mode:
+            return
         if not es_handler or not getattr(es_handler, "_connected", False):
             return
         await es_handler.es_logger.index_request_trace_from_snapshot(

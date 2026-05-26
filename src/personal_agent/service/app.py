@@ -1448,6 +1448,7 @@ async def chat(
                     trace_summary=timer.to_trace_summary(),
                     trace_breakdown=timer.to_breakdown(),
                     source_component="service.app",
+                    eval_mode=(channel.upper() == "EVAL"),
                 ),
             )
         except Exception:

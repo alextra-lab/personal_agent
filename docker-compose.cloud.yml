@@ -330,10 +330,10 @@ services:
     volumes:
       # Docker socket — allows run-gateway.sh to spawn docker/mcp-gateway container
       - /var/run/docker.sock:/var/run/docker.sock
-      # Persist Captain's Log captures across container restarts/redeployments.
-      # Without this, every deploy wipes the capture history and the consolidation
-      # pipeline has nothing to process until new captures accumulate.
-      - seshat_captures_cloud:/app/telemetry/captains_log/captures
+      # Persist Captain's Log (CL-*.json reflections + captures/) across restarts.
+      # The parent mount covers both reflection files and the captures/ subdirectory.
+      # seshat_captures_cloud (legacy, captures/ only) superseded by this volume.
+      - seshat_captains_log_cloud:/app/telemetry/captains_log
       # ADR-0054: feedback_history/ and poller state must survive container restarts.
       # feedback_history_dir() → /app/telemetry/feedback_history (disk-durable records)
       # poller_state_path()   → /app/telemetry/feedback_poller_state.json (at-most-once dedup)
@@ -472,7 +472,13 @@ volumes:
   caddy_config:
     driver: local
 
-  # Captain's Log captures (persisted across container restarts)
+  # Captain's Log — full directory (CL-*.json reflections + captures/)
+  # Supersedes seshat_captures_cloud which only covered the captures/ subdirectory.
+  seshat_captains_log_cloud:
+    driver: local
+
+  # Captain's Log captures legacy volume — kept for reference/rollback.
+  # Not mounted; superseded by seshat_captains_log_cloud.
   seshat_captures_cloud:
     driver: local
 

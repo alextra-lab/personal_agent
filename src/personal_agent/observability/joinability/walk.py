@@ -28,6 +28,10 @@ from personal_agent.observability.joinability.result import (
 )
 from personal_agent.telemetry import get_logger
 
+# Loggers whose traceless ES events are expected and out of scope for the gate.
+# SSE transport events carry session_id for correlation but have no LLM trace.
+_TRACELESS_EXCLUDED_LOGGERS: frozenset[str] = frozenset({"personal_agent.transport.agui.endpoint"})
+
 if TYPE_CHECKING:
     import asyncpg  # type: ignore[import-untyped]
     import redis.asyncio as aioredis
@@ -573,7 +577,17 @@ class JoinabilityWalk:
                 aggs={
                     "by_trace": {"terms": {"field": "trace_id", "size": 200}},
                     "no_trace_id": {
-                        "filter": {"bool": {"must_not": [{"exists": {"field": "trace_id"}}]}}
+                        "filter": {
+                            "bool": {
+                                "must_not": [
+                                    {"exists": {"field": "trace_id"}},
+                                    *[
+                                        {"term": {"logger": lg}}
+                                        for lg in sorted(_TRACELESS_EXCLUDED_LOGGERS)
+                                    ],
+                                ]
+                            }
+                        }
                     },
                 },
                 ignore_unavailable=True,

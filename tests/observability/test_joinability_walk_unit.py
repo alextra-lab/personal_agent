@@ -386,3 +386,46 @@ async def test_metadata_propagates(ctx: Any) -> None:
     assert doc.random_seed == 98765
     assert doc.kind == "system:joinability_probe"
     assert doc.trace_id == ctx.trace_id
+
+
+# ---------------------------------------------------------------------------
+# Tests — transport-layer traceless events excluded from gate (FRE-376 fix)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_es_query_excludes_transport_logger(ctx: Any) -> None:
+    """The no_trace_id ES aggregation must exclude agui.endpoint events.
+
+    SSE connection lifecycle events (sse.client_connected, sse.stream_ended,
+    etc.) log with session_id but no trace_id — they are not LLM calls and
+    have no trace to attach to.  Including them in the traceless count causes
+    every active user session to red the joinability gate.
+
+    This test pins the fix: the walk's ES query must filter out
+    personal_agent.transport.agui.endpoint from the no_trace_id bucket.
+    """
+    es = MagicMock()
+    es.search = AsyncMock(
+        return_value={
+            "hits": {"total": {"value": 8}},
+            "aggregations": {
+                "by_trace": {"buckets": [{"key": TRACE_A}, {"key": TRACE_B}]},
+                "no_trace_id": {"doc_count": 0},
+            },
+        }
+    )
+    walk = _build_walk(pg_pool=_green_pg(), es=es, ctx=ctx)
+    await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+
+    # Inspect the ES search call for agent-logs (not captures/reflections).
+    agent_log_call = next(
+        c for c in es.search.call_args_list if "agent-logs" in str(c.kwargs.get("index", ""))
+    )
+    no_trace_filter = str(
+        agent_log_call.kwargs.get("aggs", {}).get("no_trace_id", {}).get("filter", {})
+    )
+    assert "personal_agent.transport.agui.endpoint" in no_trace_filter, (
+        "Walk ES query does not exclude agui.endpoint from the no_trace_id count — "
+        "SSE lifecycle events will falsely red the joinability gate on every session."
+    )

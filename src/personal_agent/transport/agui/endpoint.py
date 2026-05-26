@@ -97,11 +97,11 @@ async def _event_generator(
         SSE-formatted strings (``"data: {...}\n\n"`` or keepalive comments).
     """
     queue = get_event_queue(session_id)
-    log.info("sse.client_connected", session_id=session_id)
+    log.debug("sse.client_connected", session_id=session_id)
     try:
         while True:
             if await request.is_disconnected():
-                log.info("sse.client_disconnected", session_id=session_id)
+                log.debug("sse.client_disconnected", session_id=session_id)
                 break
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=30.0)
@@ -116,7 +116,7 @@ async def _event_generator(
             yield f"data: {serialize_event(event)}\n\n"
     finally:
         cleanup_session(session_id)
-        log.info("sse.stream_ended", session_id=session_id)
+        log.debug("sse.stream_ended", session_id=session_id)
 
 
 @router.get("/stream/{session_id}")
@@ -157,7 +157,7 @@ async def stream_session(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    log.info("sse.stream_requested", session_id=session_id, user_id=str(request_user.user_id))
+    log.debug("sse.stream_requested", session_id=session_id, user_id=str(request_user.user_id))
     return StreamingResponse(
         _event_generator(session_id, request),
         media_type="text/event-stream",

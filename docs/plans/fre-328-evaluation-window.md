@@ -1,8 +1,9 @@
 # FRE-328 — Evaluation Window
 
-**Status**: parked, capturing data passively
+**Status**: gate reset — collecting clean data under new taxonomy
 **Opened**: 2026-05-12
-**Review gate**: **2026-05-26** (two weeks of natural usage)
+**First review gate**: 2026-05-26 — dataset invalidated (186 events, all eval-polluted; FRE-387 eval isolation not yet shipped when data was collected)
+**Gate reset**: 2026-05-26 — agent-noun taxonomy deployed (direction 2 chosen); new review gate **2026-06-09**
 **Owner**: lextra
 
 ---
@@ -96,7 +97,29 @@ Output: a short decision doc choosing one of the directions below (or
 
 ---
 
-## Candidate directions (decide on 2026-05-26)
+## Decision — 2026-05-26
+
+Dataset was fully invalidated: all 186 events came from eval sessions
+(`channel=EVAL`), because FRE-387 eval isolation had not shipped yet.
+Genuine signals extracted (non-Slack): `health-check`, `system-diagnostics`,
+`bash-batch-run` — all plausible but too few to act on.
+
+**Direction chosen: #2 — constrained naming via DSPy prompt.**
+
+Switched from imperative-verb format (`{domain}-{verb}`) to agent-noun
+format (`{domain}-{noun}`) matching Claude marketplace naming convention
+(analysis of 425+ published skills).  Noun list:
+`fetcher, runner, sender, writer, monitor, checker, scanner, analyzer,
+summarizer, generator, creator, tracker, detector, validator, notifier`.
+
+Deployed in commit `59f2a2d`, rebuilt gateway 2026-05-26 21:40 UTC.
+FRE-387 (eval isolation) shipped same session — future data will be clean.
+
+New review gate: **2026-06-09**.
+
+---
+
+## Candidate directions (decide on 2026-06-09)
 
 Documented now so we don't re-derive them in two weeks.
 

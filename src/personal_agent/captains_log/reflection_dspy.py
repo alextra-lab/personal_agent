@@ -58,6 +58,7 @@ def _ensure_str(value: Any, default: str = "") -> str:
     if value is None:
         return default
     if inspect.iscoroutine(value):
+        value.close()  # suppress "RuntimeWarning: coroutine was never awaited"
         log.warning(
             "reflection_field_was_coroutine",
             field_type=type(value).__name__,
@@ -415,8 +416,10 @@ def generate_reflection_dspy(
 
             log.info(
                 "dspy_reflection_generated",
-                has_rationale=bool(result.rationale),
-                has_proposed_change=bool(result.proposed_change_what.strip()),
+                has_rationale=bool(_ensure_str(getattr(result, "rationale", ""))),
+                has_proposed_change=bool(
+                    _ensure_str(getattr(result, "proposed_change_what", "")).strip()
+                ),
                 metrics_count=len(string_metrics),
                 trace_id=trace_id,
                 component="reflection_dspy",
@@ -427,8 +430,12 @@ def generate_reflection_dspy(
         proposed_change_what = _ensure_str(getattr(result, "proposed_change_what", ""))
         proposed_change = None
         if proposed_change_what and proposed_change_what.strip():
-            category = _parse_enum(ChangeCategory, getattr(result, "proposed_change_category", ""))
-            scope = _parse_enum(ChangeScope, getattr(result, "proposed_change_scope", ""))
+            category = _parse_enum(
+                ChangeCategory, _ensure_str(getattr(result, "proposed_change_category", ""))
+            )
+            scope = _parse_enum(
+                ChangeScope, _ensure_str(getattr(result, "proposed_change_scope", ""))
+            )
 
             fingerprint = None
             if category and scope:

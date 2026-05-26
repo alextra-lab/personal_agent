@@ -12,15 +12,14 @@ import httpx
 import pytest
 
 import personal_agent.tools.linear as lm
-from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.telemetry.trace import TraceContext
+from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.linear import (
     create_linear_issue_executor,
     create_linear_issue_tool,
     find_linear_issues_executor,
     find_linear_issues_tool,
 )
-
 
 _CTX = TraceContext.new_trace()
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -512,7 +511,7 @@ async def test_create_issue_uses_configured_label_id_not_name_lookup() -> None:
     responses = [
         _teams_response(),
         _states_response(),
-        _labels_response(),           # fetched once for agent-filed resolution
+        _labels_response(),  # fetched once for agent-filed resolution
         _label_create_response("agent-filed"),
     ]
     with patch("personal_agent.tools.linear.settings") as ms:
@@ -550,3 +549,97 @@ async def test_create_issue_raises_when_personal_agent_label_id_not_configured()
             mock_cls.return_value = _mock_http_client(responses)
             with pytest.raises(ToolExecutionError, match="PersonalAgent label ID not configured"):
                 await create_linear_issue_executor(title="T", description="D", ctx=_CTX)
+
+
+# ── Eval isolation tests ───────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_eval_mode_blocks_issue_creation() -> None:
+    """create_linear_issue raises in eval sessions before any HTTP call."""
+    eval_ctx = TraceContext(trace_id="test-trace", eval_mode=True)
+    with patch("personal_agent.tools.linear.settings") as ms:
+        ms.linear_api_key = "lin_api_test"
+        ms.linear_agent_rate_limit_per_day = 10
+        with pytest.raises(ToolExecutionError, match="disabled in evaluation sessions"):
+            await create_linear_issue_executor(title="T", description="D", ctx=eval_ctx)
+
+
+@pytest.mark.asyncio
+async def test_eval_mode_false_allows_creation() -> None:
+    """eval_mode=False (default) does not block issue creation."""
+    _clear_caches()
+    non_eval_ctx = TraceContext(trace_id="test-trace", eval_mode=False)
+    responses = [
+        _teams_response(),
+        _states_response(),
+        _labels_response([{"id": "lbl-af", "name": "agent-filed"}]),
+        _issue_search_response([]),  # dedup check returns empty
+        _issue_create_response(),
+    ]
+    with patch("personal_agent.tools.linear.settings") as ms:
+        ms.linear_api_key = "lin_api_test"
+        ms.linear_agent_rate_limit_per_day = 10
+        ms.linear_personal_agent_label_id = "lbl-pa"
+        with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value = _mock_http_client(responses)
+            result = await create_linear_issue_executor(
+                title="Valid issue", description="body", ctx=non_eval_ctx
+            )
+    assert result["identifier"] == "FRE-999"
+    assert result["dry_run"] is False
+
+
+# ── Dedup check tests ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_dedup_blocks_when_similar_issue_exists() -> None:
+    """create_linear_issue raises ToolExecutionError when a similar issue exists."""
+    _clear_caches()
+    existing = [
+        {
+            "identifier": "FRE-123",
+            "title": "Existing similar issue",
+            "url": "https://linear.app/frenchforest/issue/FRE-123",
+        }
+    ]
+    responses = [
+        _teams_response(),
+        _states_response(),
+        _labels_response([{"id": "lbl-af", "name": "agent-filed"}]),
+        _issue_search_response(existing),  # dedup returns a match
+    ]
+    with patch("personal_agent.tools.linear.settings") as ms:
+        ms.linear_api_key = "lin_api_test"
+        ms.linear_agent_rate_limit_per_day = 10
+        ms.linear_personal_agent_label_id = "lbl-pa"
+        with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value = _mock_http_client(responses)
+            with pytest.raises(ToolExecutionError, match="Duplicate.*FRE-123"):
+                await create_linear_issue_executor(
+                    title="Existing similar issue", description="body", ctx=_CTX
+                )
+
+
+@pytest.mark.asyncio
+async def test_dedup_passes_when_no_similar_issue() -> None:
+    """create_linear_issue proceeds when dedup check finds no matches."""
+    _clear_caches()
+    responses = [
+        _teams_response(),
+        _states_response(),
+        _labels_response([{"id": "lbl-af", "name": "agent-filed"}]),
+        _issue_search_response([]),  # dedup returns empty
+        _issue_create_response(),
+    ]
+    with patch("personal_agent.tools.linear.settings") as ms:
+        ms.linear_api_key = "lin_api_test"
+        ms.linear_agent_rate_limit_per_day = 10
+        ms.linear_personal_agent_label_id = "lbl-pa"
+        with patch("personal_agent.tools.linear.httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value = _mock_http_client(responses)
+            result = await create_linear_issue_executor(
+                title="Brand new issue", description="body", ctx=_CTX
+            )
+    assert result["identifier"] == "FRE-999"

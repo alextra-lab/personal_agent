@@ -51,6 +51,7 @@ class TraceContext:
     user_id: UUID | None = None
     session_id: str | None = None
     kind: str = "user"
+    eval_mode: bool = False
 
     @classmethod
     def new_trace(
@@ -94,6 +95,7 @@ class TraceContext:
             user_id=self.user_id,
             session_id=self.session_id,
             kind=self.kind,
+            eval_mode=self.eval_mode,
         ), span_id
 
     @property

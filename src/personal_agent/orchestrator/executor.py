@@ -729,6 +729,7 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
         trace_id=ctx.trace_id,
         user_id=ctx.user_id,
         session_id=ctx.session_id,
+        eval_mode=ctx.eval_mode,
     )
 
     log.info(

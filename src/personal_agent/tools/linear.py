@@ -46,7 +46,10 @@ create_linear_issue_tool = ToolDefinition(
         "Create a Linear issue from agent log analysis, error detection, or self-reflection. "
         "Issues land in 'Needs Approval' state with 'PersonalAgent' and 'agent-filed' labels — "
         "they require human approval before implementation. "
-        "Use find_linear_issues first to avoid duplicates. "
+        "REQUIRED: call find_linear_issues with the proposed title before creating — if a matching "
+        "issue exists, do NOT create a duplicate. "
+        "Only file issues about components that exist in this project (src/personal_agent/). "
+        "Do not reference files, frameworks, or paths from other projects. "
         "Set dry_run=true to preview the payload without creating the issue."
     ),
     category="network",
@@ -428,6 +431,12 @@ async def create_linear_issue_executor(
     if not settings.linear_api_key:
         raise ToolExecutionError("Linear API key not configured. Set AGENT_LINEAR_API_KEY in .env.")
 
+    if ctx.eval_mode:
+        raise ToolExecutionError(
+            "Issue creation is disabled in evaluation sessions. "
+            "This avoids filing tickets about synthetic eval prompts."
+        )
+
     project_key = project or "__unassigned__"
     if not dry_run:
         _check_rate_limit(project_key)
@@ -452,6 +461,15 @@ async def create_linear_issue_executor(
         trace_id=trace_id,
     )
 
+    # Prepend machine-readable attribution so every agent-filed issue is traceable
+    user_id_str = str(ctx.user_id) if ctx.user_id else "unknown"
+    session_str = ctx.session_id or "unknown"
+    attribution_comment = (
+        f"<!-- filed-by: user_id={user_id_str} session={session_str} -->\n"
+        f"**Filed by session:** `{session_str[:8]}` (user `{user_id_str[:8]}`)\n\n"
+    )
+    description = attribution_comment + description
+
     issue_input: dict[str, Any] = {
         "teamId": team_id,
         "title": title,
@@ -471,6 +489,29 @@ async def create_linear_issue_executor(
     if dry_run:
         log.info("linear_create_issue_dry_run", trace_id=trace_id, title=title[:80])
         return {"dry_run": True, "payload": issue_input, "title": title}
+
+    # Dedup check: refuse if a similar title already exists in non-cancelled issues
+    dedup_data = await _gql(
+        """query($filter: IssueFilter) {
+          issues(filter: $filter, first: 5) {
+            nodes { identifier title url }
+          }
+        }""",
+        {
+            "filter": {
+                "title": {"containsIgnoreCase": title},
+                "team": {"name": {"eq": _TEAM_NAME}},
+                "state": {"type": {"nin": ["cancelled", "duplicate"]}},
+            }
+        },
+    )
+    existing = (dedup_data.get("issues") or {}).get("nodes") or []
+    if existing:
+        ids = ", ".join(n.get("identifier", "?") for n in existing)
+        raise ToolExecutionError(
+            f"Duplicate: similar issue(s) already exist: {ids}. "
+            "Use find_linear_issues to review before creating a new issue."
+        )
 
     data = await _gql(
         """

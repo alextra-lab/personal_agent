@@ -192,6 +192,8 @@ class ExecutionContext:
     # Gateway output (Cognitive Architecture Redesign v2)
     gateway_output: GatewayOutput | None = None  # From request_gateway pipeline
 
+    eval_mode: bool = False  # True when request came from an eval/benchmark harness channel
+
     # FRE-229: owning user UUID — passed from the authenticated request for TaskCapture
     user_id: UUID | None = None
     # FRE-213: user email + display name for the operator stanza (ADR-0052)

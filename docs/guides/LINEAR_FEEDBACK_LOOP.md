@@ -44,6 +44,33 @@ Copy commented defaults from `.env.example` into `.env` and uncomment to overrid
 - Poller state: `telemetry/feedback_poller_state.json` (gitignored).
 - Feedback history: under `telemetry/feedback_history/` (gitignored).
 
+## Giving feedback on agent-filed issues
+
+The agent creates issues two ways:
+1. **Promotion pipeline** — `CL-*.json` entries promoted automatically once `seen_count ≥ 3` and age ≥ 7 days. Label: `Improvement`.
+2. **Direct tool call** — agent calls `create_linear_issue` during a conversation. Label: `agent-filed`.
+
+**AgentFeedback labels work on ALL `PersonalAgent` issues**, including both types above. The `FeedbackPoller` queries by `label="PersonalAgent"`, which covers the union.
+
+### How to give feedback
+
+Apply an `AgentFeedback/*` label to the issue in Linear. Do not leave a comment — comments are human-readable but not yet machine-processed (Phase 3 work, FRE-183).
+
+| Label | What happens |
+|-------|-------------|
+| `AgentFeedback/Approved` | Agent may proceed with this change if/when implemented |
+| `AgentFeedback/Rejected` | Entry suppressed for `AGENT_FEEDBACK_SUPPRESSION_DAYS` days |
+| `AgentFeedback/Deepen` | Agent generates a more detailed proposal (up to `AGENT_FEEDBACK_MAX_REEVALUATIONS` times) |
+| `AgentFeedback/Too Vague` | Same as Deepen — triggers a more specific proposal |
+| `AgentFeedback/Duplicate` | Entry suppressed; poller links it to the canonical issue |
+| `AgentFeedback/Defer` | Entry suppressed for `AGENT_FEEDBACK_DEFER_REVISIT_DAYS` days |
+
+### Triage tips
+
+- Use Linear's **filter by label** to see all pending agent proposals: filter `label = PersonalAgent` + `state = Needs Approval`.
+- Bulk-label from mobile: Linear's iOS app supports label editing on individual issues.
+- If an issue is clearly wrong (eval artifact, fictional project), apply `AgentFeedback/Rejected` — or cancel it directly.
+
 ## Normative design
 
 - Spec: [SELF_IMPROVEMENT_FEEDBACK_LOOP_SPEC.md](../specs/SELF_IMPROVEMENT_FEEDBACK_LOOP_SPEC.md)

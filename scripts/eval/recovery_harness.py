@@ -160,7 +160,7 @@ async def call_chat(
     local-loopback diagnostic calls — the same trust model as production
     where CF Access stamps the header in front of the service.
     """
-    params = {"message": message, "profile": profile}
+    params = {"message": message, "profile": profile, "channel": "EVAL"}
     if session_id is not None:
         params["session_id"] = session_id
     if skill_routing_mode:
@@ -572,8 +572,13 @@ async def run_prompt(
                 session_id = None
             started_at = datetime.now(timezone.utc)
             response_text, session_id, trace_id = await call_chat(
-                client, chat_url, turn.message, session_id, auth_email,
-                profile=profile, skill_routing_mode=skill_routing_mode,
+                client,
+                chat_url,
+                turn.message,
+                session_id,
+                auth_email,
+                profile=profile,
+                skill_routing_mode=skill_routing_mode,
             )
             finished_at = datetime.now(timezone.utc)
             log.info(
@@ -582,9 +587,7 @@ async def run_prompt(
                 session_id=session_id,
                 trace_id=trace_id,
             )
-            await _wait_for_trace_complete(
-                queries, trace_id, started_at, hard_timeout=hard_timeout
-            )
+            await _wait_for_trace_complete(queries, trace_id, started_at, hard_timeout=hard_timeout)
             polled_at = datetime.now(timezone.utc)
             es_hits = await fetch_trace_logs(
                 queries,
@@ -655,7 +658,9 @@ async def run_harness(
             raise ValueError(f"No prompt with id={only_prompt!r} in {prompts_path}")
 
     queries = TelemetryQueries()
-    memory_service = MemoryService()  # fre-375-allow: read-only MemoryService, post-FRE-375 settings-driven
+    memory_service = (
+        MemoryService()
+    )  # fre-375-allow: read-only MemoryService, post-FRE-375 settings-driven
     try:
         await memory_service.connect()
         prompt_results: dict[str, list[TurnResult]] = {}
@@ -741,7 +746,7 @@ def parse_args() -> argparse.Namespace:
         "--skill-routing-mode",
         default=None,
         help="Override skill_routing_mode per-request (keyword|hybrid|model_decided). "
-             "Allows running different eval cells without gateway restarts.",
+        "Allows running different eval cells without gateway restarts.",
     )
     parser.add_argument(
         "--es-wait-seconds",

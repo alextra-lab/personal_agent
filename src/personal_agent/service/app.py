@@ -1204,6 +1204,7 @@ async def chat(
     session_id: str | None = None,
     profile: str = "local",
     skill_routing_mode: str | None = None,
+    channel: str = "CHAT",
     request_user: RequestUser = Depends(get_request_user),  # noqa: B008
     db: AsyncSession = Depends(get_db_session),  # noqa: B008
 ) -> dict[str, str]:
@@ -1216,6 +1217,8 @@ async def chat(
         session_id: Optional existing session ID (creates new if not provided)
         profile: Model profile to use (default: "local")
         skill_routing_mode: Override skill routing mode if provided
+        channel: Request channel — pass "EVAL" from eval/benchmark harnesses to
+            prevent side-effecting tools (e.g. create_linear_issue) from executing.
         request_user: Resolved user identity (injected by FastAPI)
         db: Database session (injected by FastAPI)
 
@@ -1387,6 +1390,7 @@ async def chat(
             user_id=request_user.user_id,
             user_email=request_user.email,
             user_display_name=request_user.display_name,
+            eval_mode=(channel.upper() == "EVAL"),
         )
 
         response_content = result.get("reply", "No response generated")

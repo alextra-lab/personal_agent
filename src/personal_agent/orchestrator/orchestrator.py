@@ -47,6 +47,7 @@ class Orchestrator:
         user_id: UUID | None = None,
         user_email: str | None = None,
         user_display_name: str | None = None,
+        eval_mode: bool = False,
     ) -> OrchestratorResult:
         """Top-level entrypoint for a single user turn.
 
@@ -69,6 +70,8 @@ class Orchestrator:
                 visibility scoping of written memory nodes (FRE-229).
             user_email: CF Access email of the connected user (FRE-213).
             user_display_name: Display name from the users table, if set (FRE-213).
+            eval_mode: When True, side-effecting tools (e.g. create_linear_issue)
+                refuse to execute. Set by the /chat endpoint when channel=EVAL.
 
         Returns:
             OrchestratorResult with reply, steps, and trace_id.
@@ -114,6 +117,7 @@ class Orchestrator:
             user_id=user_id,
             user_email=user_email,
             user_display_name=user_display_name,
+            eval_mode=eval_mode,
         )
 
         # Execute task

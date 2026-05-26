@@ -158,10 +158,12 @@ try:
         # FRE-328 follow-up — capability gap recognition during reflection
         missing_skill_names: str = dspy.OutputField(
             desc=(
-                "Comma-separated list of kebab-case skill names you wished existed during this "
-                "task — names that would have made the work materially easier if a skill doc "
-                "existed for them. Empty string when nothing was missing. Pick short, specific "
-                "names: 'slack-notify' not 'a way to send slack'. Maximum 3 names."
+                "Skills you needed but didn't have. "
+                "Format: {domain}-{noun}. "
+                "Nouns: fetcher, runner, sender, writer, monitor, checker, scanner, "
+                "analyzer, summarizer, generator, creator, tracker, detector, validator, notifier. "
+                "Same gap = same name every time. "
+                "Max 3, comma-separated. Empty string if nothing was missing."
             )
         )
 

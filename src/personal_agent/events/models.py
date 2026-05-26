@@ -227,6 +227,7 @@ class RequestCompletedEvent(EventBase):
     assistant_response: str
     trace_summary: dict[str, Any]
     trace_breakdown: list[dict[str, Any]]
+    eval_mode: bool = False
 
 
 # ---------------------------------------------------------------------------

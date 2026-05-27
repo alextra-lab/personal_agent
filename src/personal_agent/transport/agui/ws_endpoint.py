@@ -374,54 +374,36 @@ async def _sender(conn: _ConnectionState, last_seq: int) -> None:
     queue = conn.outbound_queue
     session_id = conn.session_id
 
-    # Snapshot queue before replay
-    snapshot: list[dict[str, Any]] = []
-    while not queue.empty():
-        try:
-            item = queue.get_nowait()
-            if item is not None:
-                snapshot.append(item)
-        except asyncio.QueueEmpty:
-            break
+    # Replay from Postgres only on reconnect (last_seq > 0).
+    # Fresh connections (last_seq == 0) skip replay — events arrive via the
+    # live queue. This avoids duplicates caused by fire-and-forget Postgres
+    # writes that complete before the replay query runs.
+    if last_seq > 0:
+        async with AsyncSessionLocal() as db:
+            buf = SessionEventBuffer(db)
 
-    # Replay from Postgres
-    max_replayed_seq = last_seq
-    async with AsyncSessionLocal() as db:
-        buf = SessionEventBuffer(db)
+            oldest = await buf.oldest_available_seq(UUID(session_id))
+            if oldest is not None and last_seq < oldest:
+                gap_msg = json.dumps(
+                    {
+                        "type": "REPLAY_GAP",
+                        "seq": None,
+                        "oldest_available_seq": oldest,
+                    }
+                )
+                try:
+                    await ws.send_text(gap_msg)
+                except RuntimeError:
+                    return
+                log.info("ws.replay_gap", session_id=session_id, last_seq=last_seq, oldest=oldest)
 
-        # Check for REPLAY_GAP
-        oldest = await buf.oldest_available_seq(UUID(session_id))
-        if oldest is not None and last_seq > 0 and last_seq < oldest:
-            gap_msg = json.dumps(
-                {
-                    "type": "REPLAY_GAP",
-                    "seq": None,
-                    "oldest_available_seq": oldest,
-                }
-            )
+            events = await buf.replay(UUID(session_id), after_seq=last_seq)
+
+        for evt in events:
+            payload = evt["payload"]
+            payload["seq"] = evt["seq"]
             try:
-                await ws.send_text(gap_msg)
-            except RuntimeError:
-                return
-            log.info("ws.replay_gap", session_id=session_id, last_seq=last_seq, oldest=oldest)
-
-        events = await buf.replay(UUID(session_id), after_seq=last_seq)
-
-    for evt in events:
-        payload = evt["payload"]
-        payload["seq"] = evt["seq"]
-        try:
-            await ws.send_text(json.dumps(payload, default=str))
-        except RuntimeError:
-            return
-        max_replayed_seq = max(max_replayed_seq, evt["seq"])
-
-    # Deduplicate snapshot against replayed events
-    for item in snapshot:
-        item_seq = item.get("seq", 0)
-        if item_seq > max_replayed_seq:
-            try:
-                await ws.send_text(json.dumps(item, default=str))
+                await ws.send_text(json.dumps(payload, default=str))
             except RuntimeError:
                 return
 

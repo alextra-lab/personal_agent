@@ -131,11 +131,11 @@ models:
     id: "claude-sonnet-4-6"
     provider: "anthropic"
     provider_type: "cloud"
-    max_tokens: 8192
+    max_tokens: 32768
     context_length: 200000
     min_concurrency: 1
     max_concurrency: 10
-    default_timeout: 60
+    default_timeout: 180
 
   claude_haiku:
     # Anthropic Claude Haiku — fast, low-cost sub-agent model for cloud profile

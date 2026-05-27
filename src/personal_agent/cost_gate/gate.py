@@ -48,10 +48,10 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger(__name__)
 
-# Reservations live for 90 seconds — longer than the worst-case LLM call
-# (Sonnet default_timeout: 60) so commits land before reaping. The reaper
-# sweeps every 30s, so a crashed caller's headroom returns within ≤120s.
-RESERVATION_TTL_SECONDS = 90
+# Reservations live for 180 seconds — longer than the worst-case LLM call
+# (Sonnet default_timeout: 180) so commits land before reaping. The reaper
+# sweeps every 30s, so a crashed caller's headroom returns within ≤210s.
+RESERVATION_TTL_SECONDS = 180
 
 
 class CostGate:

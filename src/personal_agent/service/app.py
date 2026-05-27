@@ -36,6 +36,7 @@ from personal_agent.service.auth import (
     upsert_display_name_for_email,
 )
 from personal_agent.service.database import AsyncSessionLocal, get_db_session, init_db
+from personal_agent.service.idempotency import get_deduplicator
 from personal_agent.service.models import SessionCreate, SessionResponse, SessionUpdate
 from personal_agent.service.repositories.session_repository import SessionRepository
 from personal_agent.telemetry import add_elasticsearch_handler, get_logger
@@ -129,8 +130,10 @@ async def _process_chat_stream_background(
     message: str,
     profile_name: str,
     user_id: UUID,
+    trace_id: str,
     user_email: str | None = None,
     user_display_name: str | None = None,
+    client_msg_id: str | None = None,
 ) -> None:
     """Run the full orchestrator pipeline and push the result to the SSE queue.
 
@@ -142,13 +145,15 @@ async def _process_chat_stream_background(
         message: User's message text.
         profile_name: Execution profile name (e.g. ``"local"``, ``"cloud"``).
         user_id: Authenticated user UUID — used for session ownership scoping.
+        trace_id: Pre-generated trace ID (from the endpoint, used for dedup record).
         user_email: CF Access email of the connected user (FRE-213).
         user_display_name: Display name from the users table, if set (FRE-213).
+        client_msg_id: Client-provided idempotency key (FRE-392); used to release
+            the dedup entry when the task completes so retries work immediately.
     """
     from personal_agent.config.profile import load_profile, set_current_profile
 
     queue = get_event_queue(session_id)
-    trace_id = str(uuid4())
 
     try:
         # Wire execution profile so LLM factory dispatches to the correct model.
@@ -368,6 +373,9 @@ async def _process_chat_stream_background(
             queue.put_nowait(None)
         except asyncio.QueueFull:
             pass
+        # Release the dedup entry so the user can immediately retry on error
+        # without waiting for TTL expiry (FRE-392).
+        get_deduplicator().release(session_id, message, client_msg_id=client_msg_id)
 
 
 def _parse_db_host_port(database_url: str) -> tuple[str, int]:
@@ -964,11 +972,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     ws_cleanup_task = asyncio.create_task(_ws_event_cleanup_loop())
 
+    # Message dedup entry cleanup task (FRE-392)
+    async def _dedup_cleanup_loop() -> None:
+        while True:
+            await asyncio.sleep(60)
+            try:
+                get_deduplicator().cleanup_expired()
+            except Exception:
+                log.exception("dedup_cleanup_failed")
+
+    dedup_cleanup_task = asyncio.create_task(_dedup_cleanup_loop())
+
     yield
 
     # Shutdown
     log.info("service_shutting_down")
     ws_cleanup_task.cancel()
+    dedup_cleanup_task.cancel()
 
     # Stop event bus consumers first (before scheduler)
     if consumer_runner is not None:
@@ -1268,6 +1288,20 @@ async def chat(
         entry="service",
         message_length=len(message),
     )
+
+    # Idempotency guard: reject duplicate submissions within the TTL window
+    # (FRE-392).  Only meaningful when a session_id is provided — new-session
+    # requests always get a fresh session UUID so they can never collide.
+    if session_id:
+        dedup = get_deduplicator().check_and_record(session_id, message, trace_id)
+        if dedup.is_duplicate:
+            log.info(
+                "chat.deduplicated",
+                session_id=session_id,
+                original_trace_id=dedup.original_trace_id,
+            )
+            raise HTTPException(status_code=409, detail="Message already being processed")
+
     repo = SessionRepository(db)
 
     # --- Phase: session_db_lookup ---
@@ -1443,6 +1477,9 @@ async def chat(
     finally:
         if scheduler and request_started:
             scheduler.notify_request_end()
+        # Release the dedup entry so retries work immediately (FRE-392).
+        if session_id:
+            get_deduplicator().release(session_id, message)
 
     # --- Emit timing breakdown (before response so timer reflects time-to-reply) ---
     breakdown = timer.to_breakdown()
@@ -1560,14 +1597,14 @@ async def chat_stream_endpoint(
     message: str = Form(...),
     session_id: str = Form(...),
     profile: str = Form(default="local"),
+    client_msg_id: str | None = Form(default=None),
     request_user: RequestUser = Depends(get_request_user),  # noqa: B008
 ) -> dict[str, str]:
     """AG-UI fire-and-forget chat endpoint for the PWA.
 
     Accepts a user message via form data, launches the full Seshat orchestrator
     pipeline as a background task, and returns immediately.  The client should
-    connect to ``GET /stream/{session_id}`` to receive ``TEXT_DELTA`` events as
-    the model generates its reply.
+    connect to ``GET /ws/{session_id}`` to receive events as the model replies.
 
     The execution profile is resolved inside the background task so the
     LLM client factory dispatches to the correct cloud or local model.
@@ -1576,11 +1613,15 @@ async def chat_stream_endpoint(
         message: User message text.
         session_id: Client-generated session UUID.
         profile: Execution profile name (e.g. ``"local"``, ``"cloud"``).
+        client_msg_id: Optional client-generated idempotency key (UUID v4).
+            When provided, duplicate submissions within the TTL window are
+            detected and silently ignored (FRE-392).
         request_user: Resolved user identity (injected by FastAPI).
 
     Returns:
         ``{"session_id": ..., "status": "streaming"}`` once the background
-        task is launched.
+        task is launched, or the same dict with ``"deduplicated": "true"``
+        when the request was recognised as a duplicate.
 
     Raises:
         HTTPException: 422 if ``session_id`` is not a valid UUID v4.
@@ -1590,23 +1631,37 @@ async def chat_stream_endpoint(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="session_id must be a valid UUID v4") from exc
 
+    trace_id = str(uuid4())
+
+    dedup = get_deduplicator().check_and_record(
+        session_id, message, trace_id, client_msg_id=client_msg_id
+    )
+    if dedup.is_duplicate:
+        log.info(
+            "chat_stream.deduplicated",
+            session_id=session_id,
+            original_trace_id=dedup.original_trace_id,
+        )
+        return {"session_id": session_id, "status": "streaming", "deduplicated": "true"}
+
     asyncio.create_task(
         _process_chat_stream_background(
             session_id=session_id,
             message=message,
             profile_name=profile,
             user_id=request_user.user_id,
+            trace_id=trace_id,
             user_email=request_user.email,
             user_display_name=request_user.display_name,
+            client_msg_id=client_msg_id,
         )
     )
 
-    _cs_ctx = SystemTraceContext.new("chat_stream_launch", session_id=session_id)
     log.info(
         "chat_stream.launched",
         session_id=session_id,
         profile=profile,
-        trace_id=_cs_ctx.trace_id,
+        trace_id=trace_id,
     )
     return {"session_id": session_id, "status": "streaming"}
 

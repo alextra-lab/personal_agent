@@ -47,6 +47,8 @@ export interface SendMessageOptions {
   message: string;
   sessionId: string;
   profile?: string;
+  /** Client-generated idempotency key (UUID v4) — deduplicated server-side (FRE-392). */
+  clientMsgId?: string;
 }
 
 /**
@@ -93,7 +95,12 @@ export class BudgetDeniedError extends Error {
  * @throws Error for any other non-2xx response.
  */
 export async function sendChatMessage(opts: SendMessageOptions): Promise<void> {
-  const { message, sessionId, profile = 'local' } = opts;
+  const { message, sessionId, profile = 'local', clientMsgId } = opts;
+
+  const params: Record<string, string> = { message, session_id: sessionId, profile };
+  if (clientMsgId) {
+    params['client_msg_id'] = clientMsgId;
+  }
 
   const resp = await fetch(`${SESHAT_API}/chat/stream`, {
     method: 'POST',
@@ -101,11 +108,7 @@ export async function sendChatMessage(opts: SendMessageOptions): Promise<void> {
       'Content-Type': 'application/x-www-form-urlencoded',
       ...authHeaders(),
     },
-    body: new URLSearchParams({
-      message,
-      session_id: sessionId,
-      profile,
-    }),
+    body: new URLSearchParams(params),
   });
 
   if (!resp.ok) {

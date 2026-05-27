@@ -58,7 +58,7 @@ class SessionEventBuffer:
         result = await self._db.execute(
             text(
                 "INSERT INTO session_events (session_id, event_type, payload, created_at) "
-                "VALUES (:sid, :etype, :payload::jsonb, NOW()) "
+                "VALUES (:sid, :etype, CAST(:payload AS jsonb), NOW()) "
                 "RETURNING seq"
             ),
             {

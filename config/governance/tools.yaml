@@ -1228,6 +1228,19 @@ tools:
     loop_max_per_signature: 3
     loop_max_consecutive: 5
 
+  # ADR-0077: plan a rich HTML artifact and delegate HTML generation to a
+  # sub-agent. Timeout covers sub-agent inference (~60s) + R2 upload + Postgres.
+  artifact_draft:
+    category: "artifact_write"
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED"]
+    risk_level: "medium"
+    requires_approval: false
+    requires_approval_in_modes: ["ALERT", "DEGRADED"]
+    timeout_seconds: 120
+    rate_limit_per_hour: 20
+    loop_max_per_signature: 3
+    loop_max_consecutive: 3
+
   # FRE-368: read-only listing of the calling user's artifacts. No approval.
   artifact_list:
     category: "memory_read"

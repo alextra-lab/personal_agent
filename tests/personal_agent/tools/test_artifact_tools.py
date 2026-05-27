@@ -1,4 +1,4 @@
-"""Unit tests for artifact_write / artifact_list / artifact_read tools (FRE-368).
+"""Unit tests for artifact_write / artifact_list / artifact_read / artifact_draft tools.
 
 These tests mock the three side-effect surfaces (identical pattern to
 test_notes_tools.py):
@@ -10,11 +10,14 @@ test_notes_tools.py):
 * ``AsyncSessionLocal`` — replaced with a stub that captures SQL calls and
   returns canned rows.
 
+artifact_draft tests additionally mock ``get_llm_client`` (ADR-0077).
+
 End-to-end DB-backed round-trip lives in the integration suite.
 """
 
 from __future__ import annotations
 
+import asyncio  # noqa: F401 — used by _HangingClient in draft timeout test
 import base64
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -689,3 +692,412 @@ async def test_artifact_read_requires_user_id(
         await artifact_tools.artifact_read_executor(
             artifact_id=str(uuid4()), ctx=SimpleNamespace(trace_id="t")
         )
+
+
+# ---------------------------------------------------------------------------
+# artifact_draft — fakes and helpers (ADR-0077)
+# ---------------------------------------------------------------------------
+
+_VALID_HTML = (
+    "<!DOCTYPE html><html><head><style>:root{--color-primary:#000}</style>"
+    "</head><body><main><h1>Test</h1></main></body></html>"
+)
+
+
+class _FakeSubAgentClient:
+    """Mock LLM client for sub-agent inference in artifact_draft tests."""
+
+    def __init__(self, html_content: str = _VALID_HTML) -> None:
+        self.html_content = html_content
+        self.respond_calls: list[dict[str, Any]] = []
+
+    async def respond(self, **kwargs: Any) -> dict[str, Any]:
+        self.respond_calls.append(kwargs)
+        return {
+            "role": "assistant",
+            "content": self.html_content,
+            "tool_calls": [],
+            "reasoning_trace": None,
+            "usage": {"prompt_tokens": 100, "completion_tokens": 500},
+            "response_id": None,
+            "raw": {},
+        }
+
+
+def _install_draft_fakes(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    html_content: str = _VALID_HTML,
+) -> tuple[_FakeStore, _FakeSubAgentClient]:
+    """Install fakes for artifact_draft tests: R2/DB/embedding + sub-agent client."""
+    store = _FakeStore()
+    _install_fakes(monkeypatch, store=store)
+    client = _FakeSubAgentClient(html_content=html_content)
+    monkeypatch.setattr(
+        "personal_agent.llm_client.factory.get_llm_client",
+        lambda role_name="primary": client,
+    )
+    return store, client
+
+
+# ---------------------------------------------------------------------------
+# artifact_draft — happy paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_returns_expected_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Result includes artifact_write keys plus draft-specific metadata."""
+    _install_draft_fakes(monkeypatch)
+
+    out = await artifact_tools.artifact_draft_executor(
+        slug="report",
+        title="Test Report",
+        summary="A test",
+        plan="Section 1: Introduction. Section 2: Data.",
+        ctx=_ctx(),
+    )
+
+    assert "artifact_id" in out
+    assert out["public_url"].startswith("https://artifacts.test/")
+    assert out["slug"] == "report"
+    assert out["content_type"] == "text/html; charset=utf-8"
+    assert out["size_bytes"] > 0
+    assert out["title"] == "Test Report"
+    assert out["summary"] == "A test"
+    assert out["generation_method"] == "draft"
+    assert isinstance(out["sub_agent_duration_ms"], int)
+    assert out["task_id"].startswith("draft-")
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_chains_to_artifact_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R2 store receives the sub-agent HTML and Postgres INSERT fires."""
+    store, _client = _install_draft_fakes(monkeypatch)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="chained",
+        title="Chained",
+        summary="s",
+        plan="Build a table.",
+        ctx=_ctx(),
+    )
+
+    assert len(store.put_calls) == 1
+    assert store.put_calls[0]["content_type"] == "text/html; charset=utf-8"
+    assert b"<!DOCTYPE html>" in store.put_calls[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_content_type_is_always_html(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """artifact_draft always produces text/html; charset=utf-8."""
+    store, _client = _install_draft_fakes(monkeypatch)
+
+    out = await artifact_tools.artifact_draft_executor(
+        slug="always-html",
+        title="T",
+        summary="S",
+        plan="Make a chart.",
+        ctx=_ctx(),
+    )
+
+    assert out["content_type"] == "text/html; charset=utf-8"
+    assert store.put_calls[0]["r2_key"].endswith(".html")
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_strips_markdown_fences(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Markdown code fences wrapping the HTML are stripped before write."""
+    fenced_html = f"```html\n{_VALID_HTML}\n```"
+    store, _client = _install_draft_fakes(monkeypatch, html_content=fenced_html)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="fenced",
+        title="T",
+        summary="S",
+        plan="Build a page.",
+        ctx=_ctx(),
+    )
+
+    written = store.put_calls[0]["content"].decode("utf-8")
+    assert not written.startswith("```")
+    assert written.startswith("<!DOCTYPE html>")
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_passes_tags_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tags propagate to artifact_write_executor."""
+    _install_draft_fakes(monkeypatch)
+
+    out = await artifact_tools.artifact_draft_executor(
+        slug="tagged",
+        title="T",
+        summary="S",
+        plan="Build it.",
+        tags=["report", "q3"],
+        ctx=_ctx(),
+    )
+
+    assert out["slug"] == "tagged"
+
+
+# ---------------------------------------------------------------------------
+# artifact_draft — observability (D8)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_passes_trace_ctx_to_respond(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """respond() receives a TraceContext child span with matching trace_id and session_id."""
+    from personal_agent.telemetry.trace import TraceContext
+
+    _store, client = _install_draft_fakes(monkeypatch)
+
+    user_id = uuid4()
+    session_id = str(uuid4())
+    ctx = TraceContext(
+        trace_id="trace-abc",
+        session_id=session_id,
+        user_id=user_id,
+    )
+
+    await artifact_tools.artifact_draft_executor(
+        slug="trace-test",
+        title="T",
+        summary="S",
+        plan="Plan content here.",
+        ctx=ctx,
+    )
+
+    assert len(client.respond_calls) == 1
+    call = client.respond_calls[0]
+    child_ctx = call["trace_ctx"]
+    assert child_ctx.trace_id == "trace-abc"
+    assert child_ctx.session_id == session_id
+    assert child_ctx.parent_span_id is not None  # child span was created
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_passes_timeout_to_respond(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """respond() receives timeout_s matching the draft timeout constant."""
+    _store, client = _install_draft_fakes(monkeypatch)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="timeout-test",
+        title="T",
+        summary="S",
+        plan="A plan.",
+        ctx=_ctx(),
+    )
+
+    call = client.respond_calls[0]
+    assert call["timeout_s"] == artifact_tools._DRAFT_TIMEOUT_S
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_calls_respond_with_correct_max_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """respond() receives max_tokens=16384 for HTML generation."""
+    _store, client = _install_draft_fakes(monkeypatch)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="tokens-test",
+        title="T",
+        summary="S",
+        plan="A plan.",
+        ctx=_ctx(),
+    )
+
+    call = client.respond_calls[0]
+    assert call["max_tokens"] == 16384
+
+
+# ---------------------------------------------------------------------------
+# artifact_draft — input validation (D9)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_empty_plan_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_draft_fakes(monkeypatch)
+
+    with pytest.raises(ToolExecutionError, match="plan"):
+        await artifact_tools.artifact_draft_executor(
+            slug="x", title="T", summary="S", plan="", ctx=_ctx()
+        )
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_oversized_plan_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_draft_fakes(monkeypatch)
+
+    with pytest.raises(ToolExecutionError, match="8000"):
+        await artifact_tools.artifact_draft_executor(
+            slug="x",
+            title="T",
+            summary="S",
+            plan="x" * 8001,
+            ctx=_ctx(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_requires_user_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing user_id propagates from artifact_write_executor."""
+    _install_draft_fakes(monkeypatch)
+
+    with pytest.raises(ToolExecutionError, match="user_id"):
+        await artifact_tools.artifact_draft_executor(
+            slug="x",
+            title="T",
+            summary="S",
+            plan="A plan.",
+            ctx=SimpleNamespace(trace_id="t"),
+        )
+
+
+# ---------------------------------------------------------------------------
+# artifact_draft — output validation (D9)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_rejects_missing_doctype(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_draft_fakes(
+        monkeypatch,
+        html_content="<html><head><title>Test</title></head><body><h1>No doctype here</h1></body></html>",
+    )
+
+    with pytest.raises(ToolExecutionError, match="DOCTYPE"):
+        await artifact_tools.artifact_draft_executor(
+            slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+        )
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_rejects_script_tags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bad_html = "<!DOCTYPE html><html><head></head><body><script>alert(1)</script></body></html>"
+    _install_draft_fakes(monkeypatch, html_content=bad_html)
+
+    with pytest.raises(ToolExecutionError, match="script"):
+        await artifact_tools.artifact_draft_executor(
+            slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+        )
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_rejects_event_handlers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bad_html = (
+        '<!DOCTYPE html><html><head></head><body><div onclick="evil()">click</div></body></html>'
+    )
+    _install_draft_fakes(monkeypatch, html_content=bad_html)
+
+    with pytest.raises(ToolExecutionError, match="event handler"):
+        await artifact_tools.artifact_draft_executor(
+            slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+        )
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_subagent_empty_html_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_draft_fakes(monkeypatch, html_content="")
+
+    with pytest.raises(ToolExecutionError, match="trivially small"):
+        await artifact_tools.artifact_draft_executor(
+            slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+        )
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_subagent_timeout_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sub-agent timeout surfaces as ToolExecutionError."""
+    store = _FakeStore()
+    _install_fakes(monkeypatch, store=store)
+
+    class _HangingClient:
+        async def respond(self, **kwargs: Any) -> dict[str, Any]:
+            await asyncio.sleep(999)
+            return {"content": ""}  # never reached
+
+    monkeypatch.setattr(
+        "personal_agent.llm_client.factory.get_llm_client",
+        lambda role_name="primary": _HangingClient(),
+    )
+    # Temporarily reduce timeout for test speed
+    monkeypatch.setattr(artifact_tools, "_DRAFT_TIMEOUT_S", 0.1)
+
+    with pytest.raises(ToolExecutionError, match="timed out"):
+        await artifact_tools.artifact_draft_executor(
+            slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+        )
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_subagent_exception_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Arbitrary sub-agent exception surfaces as ToolExecutionError with fallback guidance."""
+    store = _FakeStore()
+    _install_fakes(monkeypatch, store=store)
+
+    class _FailingClient:
+        async def respond(self, **kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError("GPU OOM")
+
+    monkeypatch.setattr(
+        "personal_agent.llm_client.factory.get_llm_client",
+        lambda role_name="primary": _FailingClient(),
+    )
+
+    with pytest.raises(ToolExecutionError, match="artifact_write directly"):
+        await artifact_tools.artifact_draft_executor(
+            slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+        )
+
+
+# ---------------------------------------------------------------------------
+# artifact_draft — static assertions
+# ---------------------------------------------------------------------------
+
+
+def test_system_prompt_prohibits_scripts() -> None:
+    """The HTML generation system prompt must prohibit script tags."""
+    prompt = artifact_tools._HTML_GENERATION_SYSTEM_PROMPT
+    assert "No <script>" in prompt or "no <script>" in prompt.lower()
+    assert "event handler" in prompt.lower() or "onclick" in prompt.lower()
+
+
+def test_artifact_draft_tool_category_is_artifact_write() -> None:
+    """Governance category matches artifact_write for consistent policy."""
+    assert artifact_tools.artifact_draft_tool.category == "artifact_write"

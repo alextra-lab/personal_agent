@@ -32,6 +32,8 @@ Replace the SSE transport with a WebSocket transport. A single persistent WS con
 
 **Connection:** `GET /ws/{session_id}` — upgraded to WebSocket.
 
+**Transport security:** WSS (`wss://`) is required in all environments. The Cloudflare Tunnel terminates TLS at the edge and proxies over plain WS internally (same pattern as the existing Neo4j WebSocket split), so the FastAPI app listens on `ws://` locally but all external traffic is `wss://`. The PWA client always constructs the URL from `NEXT_PUBLIC_SESHAT_URL`, which is `https://` in production — the client upgrades `https://` → `wss://` automatically. Plain `ws://` connections from external origins are rejected by the Cloudflare WAF. Local dev (`localhost`) is the only context where `ws://` is permissible.
+
 On connect, client sends one `CONNECT` message:
 ```json
 {"type": "CONNECT", "last_seq": 0}
@@ -173,7 +175,8 @@ The `seq` counter is per-session, starting at 1. The server tracks the current s
 | Criterion | Verification |
 |---|---|
 | SSE endpoint removed | `GET /stream/{session_id}` returns 404 |
-| WS endpoint responds | `wscat -c ws://localhost:9000/ws/{session_id}` connects and receives `DONE` after a chat turn |
+| WS endpoint responds | `wscat -c ws://localhost:9000/ws/{session_id}` connects and receives `DONE` after a chat turn (local dev only) |
+| WSS enforced externally | Production PWA connects via `wss://`; Cloudflare WAF blocks plain `ws://` from external origins |
 | Reconnect replay | Disconnect mid-turn; reconnect with `last_seq: N`; all missed events arrive in order |
 | Approval round-trip | Tool approval card in PWA; decision sent via WS; executor receives it and continues |
 | `litellm_commit_failed` gone | No expired-reservation errors after gate.py TTL fix + rebuild |

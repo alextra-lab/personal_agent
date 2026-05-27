@@ -66,8 +66,10 @@ Wave D implementation (endpoint abstraction, compose unification, test parity) r
 | Ticket | Priority | Tier | What |
 |--------|----------|------|------|
 | [FRE-381](https://linear.app/frenchforest/issue/FRE-381) | Medium | Sonnet | **Stage 2** of consolidator decoupling — fully invert Turn-creation vs entity-extraction dependency. Replaces `turn_exists()` with `turn_lacks_entities()` predicate. Adds `extractor_model` to `TurnNode` (schema change). Requires ADR-0074 §I5 amendment for staged `extractor_model`. Codex returned REQUEST CHANGES with detailed adjustments; ticket carries them. **Blocked-by FRE-380 ✅ + May-30 gate.** |
-| [FRE-389](https://linear.app/frenchforest/issue/FRE-389) | High | Opus | **ADR-0076**: Adaptive Constraint Governance Protocol. `ConstraintPauseEvent` + inline `DecisionCard` replacing silent `force_synthesis_from_limit`. User preferences table. Wires `ContextBudgetMeter`. **Depends on FRE-388 ✅ (WS transport).** |
+| [FRE-389](https://linear.app/frenchforest/issue/FRE-389) | High | Opus | **ADR-0076**: Adaptive Constraint Governance Protocol. `ConstraintPauseEvent` + `DecisionCard` + `TurnStatusBar` + Send→Stop button + user preferences. Codex-reviewed 2026-05-27; revised with 11 fixes (waiter race, `CONSTRAINT_RESOLVED` event, `ConstraintDecision` type, preference schema, `USER_CANCEL`, compression site disambiguation, telemetry, no-WS fallback). **Depends on FRE-388 ✅; concurrent with FRE-392.** |
 | [FRE-390](https://linear.app/frenchforest/issue/FRE-390) | Low | Sonnet | Eval harness skips transport layer — no automated coverage for WS delivery. End-to-end transport eval needed. |
+| [FRE-391](https://linear.app/frenchforest/issue/FRE-391) | Medium | Opus | Dynamic `max_tokens` based on tool/task context — addresses root cause of artifact truncation loop. Infrastructure exists in `budget.yaml` `default_output_tokens`. |
+| [FRE-392](https://linear.app/frenchforest/issue/FRE-392) | Medium | Sonnet | WS transport duplicate message delivery on reconnect — idempotency guard at transport/orchestrator entry point. Found during ADR-0077 e2e verification. **Should ship before or with FRE-389.** |
 
 ---
 
@@ -85,7 +87,8 @@ FRE-346 ✅ → FRE-347 ✅ → FRE-348 ✅ → FRE-349 (G3, unblocked)
 ADR-0068 ✅ (FRE-351/352/353/354/355/356 all done)
 FRE-302 ✅ → FRE-311 (budget auto-tuning, parked pending data)
 FRE-375 (test/prod isolation) → FRE-374 (memory integration ADR + replay)
-FRE-388 (WS transport, ADR-0075) → FRE-389 (constraint governance, ADR-0076)
+FRE-388 (WS transport, ADR-0075) → FRE-392 (WS dedup, concurrent) + FRE-389 (constraint governance, ADR-0076)
+FRE-391 (dynamic max_tokens) — independent of FRE-389 but addresses root cause of the motivating example
 ```
 
 ---

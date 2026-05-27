@@ -45,24 +45,15 @@ log = get_logger(__name__)
 
 
 async def _push_event(event: InternalEvent, session_id: str) -> None:
-    """Serialize, persist to Postgres, attach seq, and enqueue for WS delivery.
+    """Enqueue for live WS delivery, fire-and-forget Postgres persistence.
 
-    Events are always written to Postgres (durable path).  If the
-    in-memory queue is full (dead/slow client), the queue put is skipped
-    and the event will be delivered on reconnect via replay.
+    The live WS path gets the event immediately (no DB round-trip).
+    Postgres write runs concurrently for reconnect replay durability.
     """
     envelope = to_agui_event(event)
     event_type = envelope["type"]
 
-    async with AsyncSessionLocal() as db:
-        buf = SessionEventBuffer(db)
-        seq = await buf.append(
-            session_id=UUID(session_id),
-            event_type=event_type,
-            payload=envelope,
-        )
-
-    envelope["seq"] = seq
+    # Deliver to live WS immediately — no blocking on DB.
     queue = get_event_queue(session_id)
     try:
         queue.put_nowait(envelope)
@@ -71,7 +62,26 @@ async def _push_event(event: InternalEvent, session_id: str) -> None:
             "transport.queue_full",
             session_id=session_id,
             event_type=event_type,
-            seq=seq,
+        )
+
+    # Fire-and-forget Postgres write for reconnect replay.
+    asyncio.create_task(_persist_event(session_id, event_type, envelope))
+
+
+async def _persist_event(session_id: str, event_type: str, envelope: dict[str, Any]) -> None:
+    """Background task: write event to session_events and patch seq."""
+    try:
+        async with AsyncSessionLocal() as db:
+            buf = SessionEventBuffer(db)
+            seq = await buf.append(
+                session_id=UUID(session_id),
+                event_type=event_type,
+                payload=envelope,
+            )
+        envelope["seq"] = seq
+    except Exception:
+        log.exception(
+            "transport.persist_event_failed", session_id=session_id, event_type=event_type
         )
 
 

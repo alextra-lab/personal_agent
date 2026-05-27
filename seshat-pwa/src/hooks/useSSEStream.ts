@@ -255,8 +255,11 @@ export function useSSEStream(): UseSSEStreamReturn {
       );
 
       // 2. Send the message (triggers backend processing).
+      // Generate a per-send idempotency key so the server can deduplicate
+      // a second POST that might arrive if the WS reconnects mid-request (FRE-392).
+      const clientMsgId = generateUUID();
       try {
-        await sendChatMessage({ message: text, sessionId, profile });
+        await sendChatMessage({ message: text, sessionId, profile, clientMsgId });
       } catch (err) {
         setIsStreaming(false);
         streamRef.current?.close();

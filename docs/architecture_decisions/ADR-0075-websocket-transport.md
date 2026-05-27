@@ -2,7 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-05-27
-**Issue:** TBD (create Linear issue from this ADR)
+**Issue:** FRE-388
 **Supersedes:** ADR-0046 (AG-UI SSE transport)
 **Related:** ADR-0049 (UITransportProtocol), ADR-0076 (adaptive constraint governance)
 

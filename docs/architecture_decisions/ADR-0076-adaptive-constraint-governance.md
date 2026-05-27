@@ -2,7 +2,7 @@
 
 **Status:** Proposed
 **Date:** 2026-05-27
-**Issue:** TBD (create Linear issue from this ADR)
+**Issue:** FRE-389
 **Supersedes:** —
 **Related:** ADR-0075 (WebSocket transport), ADR-0046 (AG-UI transport), ADR-0033 (model taxonomy)
 **Depends on:** ADR-0075 Phase 1 complete

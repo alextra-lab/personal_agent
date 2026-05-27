@@ -3,6 +3,9 @@
 ``artifact_write`` writes human-facing rich content (HTML reports, charts,
 comparison tables, generated documents) to R2 and records an ``artifacts``
 row (type='artifact') with an optional pgvector embedding for future search.
+``artifact_draft`` separates planning from HTML generation: the primary model
+provides a structured plan, a sub-agent generates the HTML, then the executor
+chains to ``artifact_write_executor`` (ADR-0077).
 ``artifact_list`` lists the calling user's artifacts from Postgres.
 ``artifact_read`` fetches a single artifact's metadata (and, for small
 textual artifacts, its content inline) so the agent can revise a prior
@@ -13,6 +16,7 @@ Architectural anchors
 * ADR-0069 — R2-backed artifact substrate. Layout / identity / SDK choice.
 * ADR-0070 — Output Channel Model. Artifact cards are Tier 3. This module
   is the agent side of the experimental rig (D8 measurement data).
+* ADR-0077 — Artifact Draft. Plan/generate split via sub-agent.
 * ADR-0064 — Cloudflare Access user identity. ``user_id`` is the FK.
 * FRE-227 — substrate implementation (R2ArtifactStore, build_r2_key, schema).
 """
@@ -20,6 +24,7 @@ Architectural anchors
 from __future__ import annotations
 
 import base64
+import re  # noqa: F401 — used by _SCRIPT_TAG_RE / _EVENT_HANDLER_RE at module level
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -88,12 +93,13 @@ _TEXTUAL_CONTENT_TYPES: frozenset[str] = frozenset(
 artifact_write_tool = ToolDefinition(
     name="artifact_write",
     description=(
-        "Persist a human-facing artifact (HTML report, chart, comparison "
-        "table, generated document) to the R2 substrate. Returns a stable "
-        "public URL the user can open in a browser. Use for content the "
-        "user will revisit, share, or bookmark; use notes_write for "
-        "agent-internal durable notes. The chat reply should reference the "
-        "returned public_url — the PWA renders it as an inline card."
+        "Persist a pre-rendered artifact (CSV, JSON, markdown, SVG, PNG, or "
+        "pre-built HTML) to the R2 substrate. Returns a stable public URL. "
+        "For generating NEW HTML documents, prefer artifact_draft instead — "
+        "it delegates HTML generation to a fast sub-agent and saves tokens. "
+        "Use artifact_write directly only when you already have the final "
+        "content (e.g. CSV export, JSON data, image, or pre-existing HTML). "
+        "Use notes_write for agent-internal durable notes."
     ),
     category="artifact_write",
     parameters=[
@@ -625,3 +631,360 @@ async def artifact_read_executor(
     )
 
     return output
+
+
+# ---------------------------------------------------------------------------
+# artifact_draft — plan/generate split via sub-agent (ADR-0077)
+# ---------------------------------------------------------------------------
+
+_MAX_PLAN_CHARS = 8000
+_MIN_HTML_LENGTH = 50
+_DRAFT_TIMEOUT_S = 120.0
+_DRAFT_MAX_TOKENS = 16384
+
+_SCRIPT_TAG_RE = re.compile(r"<\s*script", re.IGNORECASE)
+_EVENT_HANDLER_RE = re.compile(r"\bon\w+\s*=", re.IGNORECASE)
+
+_HTML_GENERATION_SYSTEM_PROMPT = """\
+You are an HTML document generator. You receive a structured plan and produce \
+a complete, standalone HTML document.
+
+REQUIREMENTS:
+- Output ONLY the HTML document. No explanation, no markdown fences, no preamble.
+- Start with <!DOCTYPE html> and end with </html>.
+- Define a complete design system in a <style> block in <head>:
+  * CSS custom properties for colors: --color-primary, --color-secondary, \
+--color-accent, --color-bg, --color-surface, --color-text, --color-muted.
+  * Spacing scale: --spacing-1 through --spacing-8 (0.25rem increments).
+  * Typography: --font-sans, --font-mono; size classes from text-xs to text-3xl.
+  * Utility classes: flex, grid, gap-1 through gap-6, p-1 through p-8, \
+m-1 through m-8, text-center, text-left, text-right, font-bold, font-medium, \
+rounded, rounded-lg, shadow, shadow-lg, hidden, w-full.
+  * No external CDN links — the document must be fully self-contained.
+- SECURITY: No <script> tags whatsoever. No inline event handlers \
+(onclick, onload, onerror, onmouseover, etc.). No external fetches, no \
+iframes, no form actions. The document renders in a sandboxed iframe.
+- Use semantic HTML5 elements: header, main, section, article, footer, \
+nav, aside, figure, figcaption.
+- Responsive: use CSS media queries (@media) for mobile/tablet/desktop.
+- Accessibility: heading hierarchy (h1 > h2 > h3), alt text on images, \
+ARIA labels where helpful, sufficient color contrast.
+- For data tables: <table> with <thead>/<tbody>, striped rows via \
+nth-child, sticky header if many rows.
+- For metrics/KPIs: card layout with large number and small label beneath.
+- For comparison layouts: CSS grid with equal-width columns.
+- Maximum document size: aim for under 200KB of HTML text.\
+"""
+
+
+artifact_draft_tool = ToolDefinition(
+    name="artifact_draft",
+    description=(
+        "Plan a rich HTML artifact and delegate HTML generation to a fast "
+        "sub-agent. Use this instead of artifact_write when creating HTML "
+        "documents — provide a structured plan with content, data, and style "
+        "guidance; the sub-agent generates the final HTML. For non-HTML "
+        "artifacts (CSV, JSON, markdown, images), use artifact_write directly."
+    ),
+    category="artifact_write",
+    parameters=[
+        ToolParameter(
+            name="slug",
+            type="string",
+            description=(
+                "Short kebab-case handle (alnum start, then alnum/./_ /-,"
+                " max 64 chars). E.g. 'q3-spend-report'."
+            ),
+            required=True,
+        ),
+        ToolParameter(
+            name="title",
+            type="string",
+            description="Human-readable title for the artifact and inline card.",
+            required=True,
+        ),
+        ToolParameter(
+            name="summary",
+            type="string",
+            description=(
+                "One-sentence summary shown in the inline card (ADR-0070 D5). "
+                "Keep it under ~120 characters."
+            ),
+            required=True,
+        ),
+        ToolParameter(
+            name="plan",
+            type="string",
+            description=(
+                "Structured content plan for the HTML artifact. Include: "
+                "(1) document structure and sections, "
+                "(2) all data and content to render (tables, lists, text, metrics), "
+                "(3) style guidance (color palette, emphasis, layout preferences), "
+                "(4) any specific patterns to use (cards, grids, callouts). "
+                "The sub-agent generates HTML from this plan. Be specific about "
+                "content and data. Do not write HTML yourself. Max ~8000 chars."
+            ),
+            required=True,
+        ),
+        ToolParameter(
+            name="tags",
+            type="array",
+            description="Optional free-form tags for future artifact_list filtering.",
+            required=False,
+            default=None,
+            json_schema={"type": "array", "items": {"type": "string"}},
+        ),
+    ],
+    risk_level="medium",
+    allowed_modes=["NORMAL", "ALERT", "DEGRADED"],
+    requires_approval=False,
+    requires_sandbox=False,
+    timeout_seconds=120,
+    rate_limit_per_hour=20,
+)
+
+
+def _validate_html_output(html: str) -> None:
+    """Validate sub-agent HTML before persisting (ADR-0077 D9, ADR-0070 D7).
+
+    Raises:
+        ToolExecutionError: On any validation failure.
+    """
+    if len(html) < _MIN_HTML_LENGTH:
+        raise ToolExecutionError(
+            f"HTML generation produced trivially small output ({len(html)} chars). "
+            "Refine the plan or use artifact_write directly."
+        )
+    if "<!doctype html>" not in html[:200].lower():
+        raise ToolExecutionError(
+            "Generated HTML is missing <!DOCTYPE html> declaration. "
+            "Refine the plan or use artifact_write directly."
+        )
+    if "</html>" not in html[-200:].lower():
+        raise ToolExecutionError(
+            "Generated HTML is missing closing </html> tag. "
+            "Refine the plan or use artifact_write directly."
+        )
+    if _SCRIPT_TAG_RE.search(html):
+        raise ToolExecutionError(
+            "Generated HTML contains <script> tags, which are prohibited "
+            "(ADR-0070 D7 sandbox). Refine the plan or use artifact_write directly."
+        )
+    if _EVENT_HANDLER_RE.search(html):
+        raise ToolExecutionError(
+            "Generated HTML contains inline event handlers (onclick, onload, etc.), "
+            "which are prohibited (ADR-0070 D7 sandbox). Refine the plan or use "
+            "artifact_write directly."
+        )
+
+
+def _strip_code_fences(text: str) -> str:
+    """Strip markdown code fences that instruct models sometimes wrap around output."""
+    stripped = text.strip()
+    if stripped.startswith("```html"):
+        stripped = stripped[7:].strip()
+    elif stripped.startswith("```"):
+        stripped = stripped[3:].strip()
+    if stripped.endswith("```"):
+        stripped = stripped[:-3].strip()
+    return stripped
+
+
+async def artifact_draft_executor(
+    slug: str,
+    title: str,
+    summary: str,
+    plan: str,
+    tags: list[str] | None = None,
+    ctx: Any = None,
+) -> dict[str, Any]:
+    """Plan an HTML artifact and delegate generation to a sub-agent.
+
+    The primary model provides a structured plan; a sub-agent (instruct mode,
+    thinking disabled) generates the HTML. The generated HTML is validated
+    and persisted via ``artifact_write_executor``.
+
+    Args:
+        slug: Human-readable kebab-case handle.
+        title: Display title for the artifact and inline card.
+        summary: One-sentence summary for inline card.
+        plan: Structured content plan describing sections, data, style.
+        tags: Optional free-form tags.
+        ctx: Orchestrator ``TraceContext`` with ``user_id`` / ``session_id`` /
+            ``trace_id``.
+
+    Returns:
+        Same dict as ``artifact_write_executor``, plus ``generation_method``,
+        ``sub_agent_duration_ms``, and ``task_id``.
+
+    Raises:
+        ToolExecutionError: On missing identity, empty/oversized plan,
+            sub-agent failure, HTML validation failure, or any
+            ``artifact_write_executor`` error.
+    """
+    import asyncio  # noqa: PLC0415
+    import time  # noqa: PLC0415
+
+    from personal_agent.llm_client.factory import get_llm_client  # noqa: PLC0415
+    from personal_agent.llm_client.types import ModelRole  # noqa: PLC0415
+    from personal_agent.telemetry.trace import TraceContext  # noqa: PLC0415
+
+    # --- Input validation ---
+    if not plan or not plan.strip():
+        raise ToolExecutionError("plan is required and cannot be empty.")
+    if len(plan) > _MAX_PLAN_CHARS:
+        raise ToolExecutionError(
+            f"plan exceeds the {_MAX_PLAN_CHARS}-character limit ({len(plan)} chars). "
+            "Trim the plan or split into multiple artifacts."
+        )
+
+    trace_id: str = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
+    session_id: str | None = getattr(ctx, "session_id", None) if ctx else None
+    task_id = f"draft-{uuid4().hex[:12]}"
+
+    log.info(
+        "artifact_draft_start",
+        trace_id=trace_id,
+        session_id=session_id,
+        slug=slug,
+        plan_length=len(plan),
+        task_id=task_id,
+    )
+
+    # --- Create child span for sub-agent inference (ADR-0074 joinability) ---
+    if isinstance(ctx, TraceContext):
+        child_ctx, span_id = ctx.new_span()
+    else:
+        span_id = str(uuid4())
+        child_ctx = TraceContext(
+            trace_id=trace_id,
+            parent_span_id=span_id,
+            session_id=session_id,
+        )
+
+    # --- Acquire sub-agent client (profile-driven: D2) ---
+    sub_agent_client = get_llm_client(role_name="sub_agent")
+
+    user_prompt = (
+        f"Title: {title}\n"
+        f"Summary: {summary}\n\n"
+        f"Plan:\n{plan}\n\n"
+        "Generate the complete HTML document now."
+    )
+
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": _HTML_GENERATION_SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    log.info(
+        "artifact_draft_sub_agent_start",
+        trace_id=trace_id,
+        session_id=session_id,
+        span_id=span_id,
+        task_id=task_id,
+        model_role=ModelRole.SUB_AGENT.value,
+        max_tokens=_DRAFT_MAX_TOKENS,
+        timeout_s=_DRAFT_TIMEOUT_S,
+    )
+
+    # --- Sub-agent inference ---
+    start_ms = int(time.monotonic() * 1000)
+    try:
+        response = await asyncio.wait_for(
+            sub_agent_client.respond(
+                role=ModelRole.SUB_AGENT,
+                messages=messages,
+                max_tokens=_DRAFT_MAX_TOKENS,
+                trace_ctx=child_ctx,
+                timeout_s=_DRAFT_TIMEOUT_S,
+            ),
+            timeout=_DRAFT_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError as exc:
+        duration_ms = int(time.monotonic() * 1000) - start_ms
+        log.warning(
+            "artifact_draft_sub_agent_complete",
+            trace_id=trace_id,
+            session_id=session_id,
+            span_id=span_id,
+            task_id=task_id,
+            success=False,
+            duration_ms=duration_ms,
+            error="timeout",
+        )
+        raise ToolExecutionError(
+            f"HTML generation sub-agent timed out after {_DRAFT_TIMEOUT_S}s. "
+            "Try simplifying the plan or use artifact_write directly."
+        ) from exc
+    except Exception as exc:
+        duration_ms = int(time.monotonic() * 1000) - start_ms
+        log.warning(
+            "artifact_draft_sub_agent_complete",
+            trace_id=trace_id,
+            session_id=session_id,
+            span_id=span_id,
+            task_id=task_id,
+            success=False,
+            duration_ms=duration_ms,
+            error=str(exc),
+        )
+        raise ToolExecutionError(
+            f"HTML generation sub-agent failed: {exc}. Use artifact_write directly as fallback."
+        ) from exc
+
+    sub_agent_duration_ms = int(time.monotonic() * 1000) - start_ms
+
+    # --- Extract content from LLMResponse ---
+    html_content: str = response.get("content", "") if isinstance(response, dict) else str(response)
+    html_content = _strip_code_fences(html_content)
+
+    log.info(
+        "artifact_draft_sub_agent_complete",
+        trace_id=trace_id,
+        session_id=session_id,
+        span_id=span_id,
+        task_id=task_id,
+        success=True,
+        duration_ms=sub_agent_duration_ms,
+        html_length=len(html_content),
+    )
+
+    # --- Validate HTML output (ADR-0077 D9, ADR-0070 D7) ---
+    _validate_html_output(html_content)
+
+    log.info(
+        "artifact_draft_html_validated",
+        trace_id=trace_id,
+        session_id=session_id,
+        html_length=len(html_content),
+        has_doctype=True,
+    )
+
+    # --- Chain to artifact_write_executor (D3: direct call, no governance re-check) ---
+    result = await artifact_write_executor(
+        slug=slug,
+        content_type="text/html; charset=utf-8",
+        content=html_content,
+        title=title,
+        summary=summary,
+        tags=tags,
+        ctx=ctx,
+    )
+
+    result["generation_method"] = "draft"
+    result["sub_agent_duration_ms"] = sub_agent_duration_ms
+    result["task_id"] = task_id
+
+    log.info(
+        "artifact_draft_completed",
+        trace_id=trace_id,
+        session_id=session_id,
+        artifact_id=result.get("artifact_id"),
+        slug=slug,
+        size_bytes=result.get("size_bytes"),
+        sub_agent_duration_ms=sub_agent_duration_ms,
+        task_id=task_id,
+    )
+
+    return result

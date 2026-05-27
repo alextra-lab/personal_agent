@@ -75,7 +75,7 @@ models:
     # toolchain (no MLX), better quality.
     # Sampling per the Qwen3.6 card "Instruct (Non-Thinking) Mode" preset.
     id: "unsloth/qwen3.6-35-A3B-subagent"
-    context_length: 16384       # Bounded for focused sub-tasks (was 32768)
+    context_length: 32768       # Bumped for artifact HTML generation (ADR-0077); was 16384
     quantization: "8bit"
     min_concurrency: 1
     max_concurrency: 3

@@ -10,6 +10,8 @@ This module provides:
 import structlog
 
 from personal_agent.tools.artifact_tools import (
+    artifact_draft_executor,
+    artifact_draft_tool,
     artifact_list_executor,
     artifact_list_tool,
     artifact_read_executor,
@@ -120,6 +122,8 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
         registry.register(artifact_write_tool, artifact_write_executor)
         registry.register(artifact_list_tool, artifact_list_executor)
         registry.register(artifact_read_tool, artifact_read_executor)
+        # ADR-0077 — artifact_draft: plan/generate split via sub-agent.
+        registry.register(artifact_draft_tool, artifact_draft_executor)
         log.info("artifact_tools_registered", bucket=settings.r2_bucket_name)
     else:
         log.warning("notes_tools_skipped_unconfigured")

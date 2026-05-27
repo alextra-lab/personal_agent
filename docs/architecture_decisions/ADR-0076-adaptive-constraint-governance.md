@@ -169,8 +169,7 @@ executor approaches limit
     → check user_constraint_preferences for this (user_id, constraint)
     → if preference is set and != 'always_pause':
         apply preferred_action silently
-        emit ConstraintResolvedEvent(resolution="preference_applied")
-        log constraint_preference_applied
+        log constraint_preference_applied (structlog only, no event persisted)
         continue
     → else:
         1. register asyncio.Event waiter for request_id  ← BEFORE pushing event
@@ -310,12 +309,14 @@ async def _maybe_pause_for_constraint(
     await self._emit_constraint_resolved(
         request_id=request_id, constraint=constraint,
         action_id=action_id, resolution=resolution,
-        session_id=session_id,
+        session_id=session_id, trace_id=trace_id,
     )
 
     # 4. Save preference if requested (any action, including defaults)
     if remember:
-        await self._save_constraint_preference(user_id, constraint, action_id)
+        await self._save_constraint_preference(
+            user_id, constraint, action_id, session_id=session_id,
+        )
 
     return action_id
 ```
@@ -324,6 +325,13 @@ async def _maybe_pause_for_constraint(
 - **Preference-applied path does NOT emit `ConstraintResolvedEvent`** — there was no `CONSTRAINT_PAUSE` to resolve. The structlog `constraint_preference_applied` event is the telemetry record. This avoids the `request_id: None` type mismatch.
 - **`remember` saves any action**, including the default. Users who want "Finish now" every time can persist that.
 - **`register_and_push_constraint` takes `WaiterMetadata`** — stored in `conn.waiter_metadata[request_id]` for decision validation in the WS receiver.
+- **`_save_constraint_preference` takes `session_id`** — populates `source_session_id` in the preference table for audit trail.
+
+**`register_and_push_constraint` lifecycle:**
+- When no active WS connection exists: registers waiter → waiter immediately resolves with `connection_lost` (existing `register_waiter` behavior at `ws_endpoint.py:101`). The `ConstraintPauseEvent` is NOT persisted to `session_events` (no point replaying an event the user never saw). Only the structlog `constraint_no_ws_default_applied` event is the record.
+- When WS is active: registers waiter + metadata → pushes event to queue + Postgres → awaits resolution.
+
+**WaiterMetadata cleanup:** Metadata entries are cleaned up alongside their waiters — `_cancel_all_waiters()` clears `conn.waiter_metadata` alongside `conn.waiters` and `conn.waiter_timeouts`. Individual resolution also removes the metadata entry for the resolved `request_id`.
 
 ### No-active-WS fallback
 

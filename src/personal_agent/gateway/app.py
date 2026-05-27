@@ -30,7 +30,7 @@ from personal_agent.gateway.knowledge_api import router as knowledge_router
 from personal_agent.gateway.observation_api import router as observation_router
 from personal_agent.gateway.session_api import router as session_router
 from personal_agent.telemetry import get_logger
-from personal_agent.transport.agui.endpoint import router as transport_router
+from personal_agent.transport.agui.ws_endpoint import ws_router as transport_router
 
 log = get_logger(__name__)
 

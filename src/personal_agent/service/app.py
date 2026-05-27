@@ -42,7 +42,7 @@ from personal_agent.telemetry import add_elasticsearch_handler, get_logger
 from personal_agent.telemetry.es_handler import ElasticsearchHandler
 from personal_agent.telemetry.request_timer import RequestTimer
 from personal_agent.telemetry.trace import SystemTraceContext
-from personal_agent.transport.agui.endpoint import get_event_queue
+from personal_agent.transport.agui.ws_endpoint import get_event_queue
 from personal_agent.transport.events import TextDeltaEvent
 
 log = get_logger(__name__)
@@ -299,8 +299,10 @@ async def _process_chat_stream_background(
             if scheduler and request_started:
                 scheduler.notify_request_end()
 
-        # Push full response to SSE queue then persist to DB.
-        await queue.put(TextDeltaEvent(text=response_content, session_id=session_id))
+        # Push full response via dual-write path (Postgres + WS queue).
+        from personal_agent.transport.agui.transport import _push_event  # noqa: E402
+
+        await _push_event(TextDeltaEvent(text=response_content, session_id=session_id), session_id)
 
         try:
             primary_model_id, config_path_str = _resolve_active_model_attribution(
@@ -340,16 +342,23 @@ async def _process_chat_stream_background(
             trace_id=trace_id,
             exc_info=True,
         )
-        # Do not include exception details in the SSE stream to avoid
+        # Do not include exception details in the stream to avoid
         # information exposure; full context is in the structured log.
-        await queue.put(
+        from personal_agent.transport.agui.transport import _push_event  # noqa: E402
+
+        await _push_event(
             TextDeltaEvent(
                 text=f"\n\n[An error occurred. Error ID: {bg_error_id}]",
                 session_id=session_id,
-            )
+            ),
+            session_id,
         )
     finally:
-        await queue.put(None)  # Always close the SSE stream.
+        # Push None sentinel to close the WebSocket stream.
+        try:
+            queue.put_nowait(None)
+        except asyncio.QueueFull:
+            pass
 
 
 def _parse_db_host_port(database_url: str) -> tuple[str, int]:
@@ -933,10 +942,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             )
             mcp_adapter = None
 
+    # WebSocket session_events cleanup task (ADR-0075 / FRE-388)
+    from personal_agent.transport.agui.ws_endpoint import run_event_cleanup  # noqa: E402
+
+    async def _ws_event_cleanup_loop() -> None:
+        while True:
+            await asyncio.sleep(3600)  # hourly
+            try:
+                await run_event_cleanup()
+            except Exception:
+                log.exception("ws_event_cleanup_failed")
+
+    ws_cleanup_task = asyncio.create_task(_ws_event_cleanup_loop())
+
     yield
 
     # Shutdown
     log.info("service_shutting_down")
+    ws_cleanup_task.cancel()
 
     # Stop event bus consumers first (before scheduler)
     if consumer_runner is not None:
@@ -1060,8 +1083,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# AG-UI transport — streaming SSE endpoint (ADR-0046, FRE-204)
-from personal_agent.transport.agui.endpoint import router as transport_router  # noqa: E402
+# AG-UI transport — WebSocket endpoint (ADR-0075, FRE-388)
+from personal_agent.transport.agui.ws_endpoint import ws_router as transport_router  # noqa: E402
 
 app.include_router(transport_router)
 
@@ -1478,6 +1501,47 @@ async def chat(
 
 
 # ============================================================================
+# WebSocket Ticket Endpoint (ADR-0075 / FRE-388)
+# ============================================================================
+
+
+@app.post("/api/ws-ticket")
+async def mint_ws_ticket_endpoint(
+    body: dict[str, str],
+    request_user: RequestUser = Depends(get_request_user),  # noqa: B008
+    db: AsyncSession = Depends(get_db_session),  # noqa: B008
+) -> dict[str, Any]:
+    """Mint a short-lived single-use WebSocket ticket.
+
+    The PWA calls this over HTTPS before opening a WebSocket connection.
+    The returned ticket is passed as a query parameter on the WS handshake,
+    avoiding the need to expose the real bearer token in the URL.
+
+    Args:
+        body: Must contain ``session_id`` (UUID string).
+        request_user: Authenticated user from HTTPS headers.
+        db: Database session for ownership verification.
+
+    Returns:
+        ``{"ticket": "...", "expires_in": 30}``
+    """
+    from personal_agent.service.ws_ticket import mint_ws_ticket  # noqa: E402
+
+    session_id_str = body.get("session_id", "")
+    try:
+        session_uuid = UUID(session_id_str)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="session_id must be a valid UUID") from exc
+
+    repo = SessionRepository(db)
+    session = await repo.get(session_uuid, user_id=request_user.user_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    ticket = mint_ws_ticket(request_user, session_uuid)
+    return {"ticket": ticket, "expires_in": settings.ws_ticket_ttl_seconds}
+
+
 # AG-UI Streaming Chat Endpoint (ADR-0046 / FRE-207)
 # ============================================================================
 

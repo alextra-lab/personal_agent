@@ -29,8 +29,10 @@ from personal_agent.observability.joinability.result import (
 from personal_agent.telemetry import get_logger
 
 # Loggers whose traceless ES events are expected and out of scope for the gate.
-# SSE transport events carry session_id for correlation but have no LLM trace.
-_TRACELESS_EXCLUDED_LOGGERS: frozenset[str] = frozenset({"personal_agent.transport.agui.endpoint"})
+# WS transport events carry session_id for correlation but have no LLM trace.
+_TRACELESS_EXCLUDED_LOGGERS: frozenset[str] = frozenset(
+    {"personal_agent.transport.agui.ws_endpoint"}
+)
 
 if TYPE_CHECKING:
     import asyncpg  # type: ignore[import-untyped]

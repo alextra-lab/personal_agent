@@ -334,6 +334,35 @@ class ArtifactModel(Base):
     created_at = Column(DateTime(timezone=True), nullable=False)
 
 
+# ============================================================================
+# WebSocket session event buffer (ADR-0075 / FRE-388)
+#
+# Durable, Postgres-sequenced buffer for AG-UI transport events.
+# On reconnect the client sends last_seq; server replays seq > last_seq.
+# ============================================================================
+
+
+class SessionEventModel(Base):
+    """SQLAlchemy model for the session_events table."""
+
+    __tablename__ = "session_events"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    session_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("sessions.session_id"),
+        nullable=False,
+    )
+    seq = Column(Integer, nullable=False)
+    event_type = Column(Text, nullable=False)
+    payload = Column(JSONB, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "seq", name="session_events_session_id_seq_key"),
+    )
+
+
 class ConsolidationAttemptModel(Base):
     """SQLAlchemy model for the consolidation_attempts table.
 

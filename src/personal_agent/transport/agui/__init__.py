@@ -1,4 +1,4 @@
-"""AG-UI transport implementation — SSE streaming endpoint and event adapter.
+"""AG-UI transport implementation — WebSocket endpoint and event adapter.
 
-See: docs/architecture_decisions/ADR-0046.md
+See: docs/architecture_decisions/ADR-0075-websocket-transport.md
 """

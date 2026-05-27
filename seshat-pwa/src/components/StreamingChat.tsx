@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 
 import Link from 'next/link';
 
-import { resumeInterrupt, getSessionMessages } from '@/lib/agui-client';
+import { getSessionMessages } from '@/lib/agui-client';
 import { generateUUID } from '@/lib/uuid';
 import type { ExecutionProfile } from '@/lib/types';
 import { useSSEStream } from '@/hooks/useSSEStream';
@@ -125,14 +125,9 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     sendMessage(text, sessionId, profile);
   };
 
-  const handleInterruptChoice = async (choice: string) => {
+  const handleInterruptChoice = (choice: string) => {
     if (!sessionId) return;
-    try {
-      await resumeInterrupt({ sessionId, choice });
-      resolveInterrupt(choice);
-    } catch {
-      // Stale stream — user can retry.
-    }
+    resolveInterrupt(choice);
   };
 
   const handleNewConversation = () => {

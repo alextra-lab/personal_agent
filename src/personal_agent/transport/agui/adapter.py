@@ -1,4 +1,4 @@
-"""Converts internal events to AG-UI wire format (JSON for SSE).
+"""Converts internal events to AG-UI wire format.
 
 The AG-UI adapter maps backend-agnostic :mod:`personal_agent.transport.events`
 types to the AG-UI protocol JSON envelope.  Each event type maps one-to-one
@@ -10,7 +10,7 @@ to an AG-UI event kind:
 * ``STATE_DELTA``    — agent state change
 * ``INTERRUPT``      — HITL approval request
 
-See: docs/architecture_decisions/ADR-0046.md
+See: docs/architecture_decisions/ADR-0075-websocket-transport.md
 """
 
 from __future__ import annotations
@@ -29,47 +29,46 @@ from personal_agent.transport.events import (
 )
 
 
-def to_agui_event(event: InternalEvent) -> dict[str, Any]:
+def to_agui_event(event: InternalEvent, *, seq: int | None = None) -> dict[str, Any]:
     """Convert an internal event to AG-UI wire format.
-
-    AG-UI event types:
-
-    * ``TEXT_DELTA``: streaming text
-    * ``TOOL_CALL_START``: tool invocation begun
-    * ``TOOL_CALL_END``: tool invocation complete
-    * ``STATE_DELTA``: agent state change
-    * ``INTERRUPT``: HITL approval request
 
     Args:
         event: Internal event to convert.
+        seq: Postgres-assigned sequence number for reconnect replay.
+            ``None`` for control messages (PONG, REPLAY_GAP).
 
     Returns:
-        Dict ready for JSON serialization as SSE data field.
+        Dict ready for JSON serialization as a WebSocket message.
 
     Examples:
         >>> from personal_agent.transport.events import TextDeltaEvent
-        >>> to_agui_event(TextDeltaEvent(text="hello", session_id="s1"))
-        {'type': 'TEXT_DELTA', 'data': {'text': 'hello'}, 'session_id': 's1'}
+        >>> to_agui_event(TextDeltaEvent(text="hello", session_id="s1"), seq=1)
+        {'type': 'TEXT_DELTA', 'data': {'text': 'hello'}, 'session_id': 's1', 'seq': 1}
     """
+    envelope: dict[str, Any]
     match event:
         case TextDeltaEvent(text=text, session_id=sid):
-            return {"type": "TEXT_DELTA", "data": {"text": text}, "session_id": sid}
+            envelope = {"type": "TEXT_DELTA", "data": {"text": text}, "session_id": sid}
         case ToolStartEvent(tool_name=name, args=args, session_id=sid):
-            return {
+            envelope = {
                 "type": "TOOL_CALL_START",
                 "data": {"tool_name": name, "args": dict(args)},
                 "session_id": sid,
             }
         case ToolEndEvent(tool_name=name, result_summary=summary, session_id=sid):
-            return {
+            envelope = {
                 "type": "TOOL_CALL_END",
                 "data": {"tool_name": name, "result": summary},
                 "session_id": sid,
             }
         case StateUpdateEvent(key=key, value=value, session_id=sid):
-            return {"type": "STATE_DELTA", "data": {"key": key, "value": value}, "session_id": sid}
+            envelope = {
+                "type": "STATE_DELTA",
+                "data": {"key": key, "value": value},
+                "session_id": sid,
+            }
         case InterruptEvent(context=ctx, options=opts, session_id=sid):
-            return {
+            envelope = {
                 "type": "INTERRUPT",
                 "data": {"context": ctx, "options": list(opts)},
                 "session_id": sid,
@@ -84,7 +83,7 @@ def to_agui_event(event: InternalEvent) -> dict[str, Any]:
             reason=reason,
             expires_at=expires_at,
         ):
-            return {
+            envelope = {
                 "type": "tool_approval_request",
                 "request_id": request_id,
                 "trace_id": trace_id,
@@ -97,12 +96,16 @@ def to_agui_event(event: InternalEvent) -> dict[str, Any]:
         case _:
             raise ValueError(f"Unhandled event type: {type(event).__name__}")
 
+    envelope["seq"] = seq
+    return envelope
 
-def serialize_event(event: InternalEvent) -> str:
-    """Serialize an internal event to JSON string for SSE data field.
+
+def serialize_event(event: InternalEvent, *, seq: int | None = None) -> str:
+    """Serialize an internal event to JSON string.
 
     Args:
         event: Internal event to serialize.
+        seq: Postgres-assigned sequence number.
 
     Returns:
         JSON-encoded string of the AG-UI envelope.
@@ -110,8 +113,8 @@ def serialize_event(event: InternalEvent) -> str:
     Examples:
         >>> from personal_agent.transport.events import TextDeltaEvent
         >>> import json
-        >>> raw = serialize_event(TextDeltaEvent(text="hi", session_id="s1"))
-        >>> json.loads(raw)["type"]
-        'TEXT_DELTA'
+        >>> raw = serialize_event(TextDeltaEvent(text="hi", session_id="s1"), seq=5)
+        >>> json.loads(raw)["seq"]
+        5
     """
-    return json.dumps(to_agui_event(event))
+    return json.dumps(to_agui_event(event, seq=seq))

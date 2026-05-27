@@ -354,7 +354,16 @@ async def _process_chat_stream_background(
             session_id,
         )
     finally:
-        # Push None sentinel to close the WebSocket stream.
+        # Persist DONE to Postgres (so reconnect replay delivers it) then
+        # push None sentinel to close the live WebSocket drain loop.
+        try:
+            from personal_agent.transport.agui.event_buffer import SessionEventBuffer  # noqa: E402
+
+            async with AsyncSessionLocal() as db:
+                buf = SessionEventBuffer(db)
+                await buf.append(UUID(session_id), "DONE", {"type": "DONE"})
+        except Exception:
+            pass
         try:
             queue.put_nowait(None)
         except asyncio.QueueFull:

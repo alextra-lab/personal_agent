@@ -191,7 +191,18 @@ async def _stream_to_queue(
                 final_message=final_message,
             )
     finally:
-        # Signal stream end regardless of success/failure.
+        # Persist DONE to Postgres (so reconnect replay delivers it) then
+        # push None sentinel to close the live WebSocket drain loop.
+        try:
+            from personal_agent.transport.agui.event_buffer import (
+                SessionEventBuffer,  # noqa: PLC0415
+            )
+
+            async with AsyncSessionLocal() as db:
+                buf = SessionEventBuffer(db)
+                await buf.append(UUID(session_id_str), "DONE", {"type": "DONE"})
+        except Exception:
+            pass
         try:
             queue.put_nowait(None)
         except asyncio.QueueFull:

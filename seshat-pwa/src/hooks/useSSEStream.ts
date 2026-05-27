@@ -233,11 +233,25 @@ export function useSSEStream(): UseSSEStreamReturn {
       setBudgetDenied(null);
       setActiveTools([]);
 
-      // 1. Send the message (triggers backend processing).
+      // 1. Connect WebSocket BEFORE sending the message so we don't miss
+      //    events from the background task. The old SSE flow had the same
+      //    ordering requirement.
+      streamRef.current = connectWebSocket(
+        sessionId,
+        handleEvent,
+        () => {
+          // WS error — connection may have dropped.
+          // Reconnect logic is handled inside connectWebSocket.
+        },
+      );
+
+      // 2. Send the message (triggers backend processing).
       try {
         await sendChatMessage({ message: text, sessionId, profile });
       } catch (err) {
         setIsStreaming(false);
+        streamRef.current?.close();
+        streamRef.current = null;
         if (err instanceof BudgetDeniedError) {
           setBudgetDenied(err);
           return;
@@ -253,16 +267,6 @@ export function useSSEStream(): UseSSEStreamReturn {
         ]);
         return;
       }
-
-      // 2. Connect to the WebSocket stream.
-      streamRef.current = connectWebSocket(
-        sessionId,
-        handleEvent,
-        () => {
-          // WS error — connection may have dropped.
-          // Reconnect logic is handled inside connectWebSocket.
-        },
-      );
     },
     [handleEvent],
   );

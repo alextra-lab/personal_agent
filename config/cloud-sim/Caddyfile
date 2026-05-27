@@ -16,7 +16,15 @@
 
 # Shared routing — gateway handles API paths, PWA handles everything else
 (routing) {
-	@backend path /api/* /chat /chat/stream /ws/* /docs /docs/* /openapi.json /redoc
+	@websocket {
+		path /ws/*
+		header Connection *Upgrade*
+		header Upgrade websocket
+	}
+	handle @websocket {
+		reverse_proxy seshat-gateway:9001
+	}
+	@backend path /api/* /chat /chat/stream /docs /docs/* /openapi.json /redoc
 	handle @backend {
 		reverse_proxy seshat-gateway:9001 {
 			header_up X-Forwarded-For {http.request.header.X-Forwarded-For}

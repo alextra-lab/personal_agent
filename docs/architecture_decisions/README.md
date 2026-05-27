@@ -101,6 +101,55 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0049](ADR-0049-application-modularity.md) | Application Modularity | Accepted | Protocol-based module boundaries, dependency injection, swappable components for self-hosting |
 | [ADR-0050](ADR-0050-remote-agent-harness-integration.md) | Remote Agent Harness Integration | Accepted | Seshat as MCP server for Claude Code/Codex/Cursor; bidirectional delegation with scoped access |
 
+### Event Bus & Observability Streams (ADR-0054 – ADR-0060)
+
+| ADR | Title | Status |
+|-----|-------|--------|
+| [ADR-0054](ADR-0054-feedback-stream-bus-convention.md) | Feedback Stream Bus Convention | Accepted |
+| [ADR-0055](ADR-0055-system-health-homeostasis-stream.md) | System Health & Homeostasis Stream | Proposed |
+| [ADR-0056](ADR-0056-error-pattern-monitoring.md) | Error Pattern Monitoring Stream | Accepted (Implemented) |
+| [ADR-0057](ADR-0057-insights-pattern-analysis.md) | Insights & Pattern Analysis Stream | Accepted (Implemented) |
+| [ADR-0058](ADR-0058-self-improvement-pipeline-stream.md) | Self-Improvement Pipeline Stream | Accepted (Implemented) |
+| [ADR-0059](ADR-0059-context-quality-stream.md) | Context Quality Stream | Accepted (Implemented) |
+| [ADR-0060](ADR-0060-knowledge-graph-quality-stream.md) | Knowledge Graph Quality Stream | Accepted |
+
+### Context, Tools & Governance (ADR-0061 – ADR-0068)
+
+| ADR | Title | Status |
+|-----|-------|--------|
+| [ADR-0061](ADR-0061-within-session-progressive-context-compression.md) | Within-Session Progressive Context Compression (head-middle-tail) | Accepted (Implemented) |
+| [ADR-0062](ADR-0062-tool-loop-gate.md) | Tool Loop Gate — Per-Tool FSM-Based Loop Detection | Accepted (Implemented) |
+| [ADR-0063](ADR-0063-primitive-tools-action-boundary-governance.md) | Primitive Tools & Action-Boundary Governance | Accepted (Implemented) |
+| [ADR-0064](ADR-0064-inbound-user-identity-cloudflare-access.md) | Inbound User Identity via Cloudflare Access | Accepted (Implemented) |
+| [ADR-0065](ADR-0065-cost-check-gate.md) | Cost Check Gate — Atomic Reservation, Layered Budgets, Retry Telemetry | Accepted |
+| [ADR-0066](ADR-0066-skill-routing-defaults-and-feedback-loop.md) | Skill Routing Defaults, Library-Size Threshold, and Missing-Skill Feedback Loop | Accepted |
+| [ADR-0067](ADR-0067-reflection-surfacing-in-context-assembly.md) | Reflection Surfacing in Context Assembly | Accepted |
+| [ADR-0067b](ADR-0067-skill-nudge-injection.md) | Skill Nudge Injection | Accepted |
+| [ADR-0068](ADR-0068-agent-self-telemetry-data-plane.md) | Agent Self-Telemetry Data Plane and Query Interface | Accepted |
+
+### Artifacts & Output (ADR-0069 – ADR-0070)
+
+| ADR | Title | Status |
+|-----|-------|--------|
+| [ADR-0069](ADR-0069-r2-backed-artifact-substrate.md) | R2-Backed Artifact Substrate | Implemented |
+| [ADR-0070](ADR-0070-output-channel-model-markdown-and-rich.md) | Output Channel Model — Markdown for Agents, Rich for Humans | Implemented |
+
+### Memory & Quality (ADR-0071 – ADR-0074)
+
+| ADR | Title | Status |
+|-----|-------|--------|
+| [ADR-0071](ADR-0071-two-source-one-gate-memory-model.md) | Two-Source One-Gate Memory Model | Proposed |
+| [ADR-0072](ADR-0072-test-prod-substrate-isolation.md) | Test/Eval Substrate Isolation | Accepted |
+| [ADR-0073](ADR-0073-cross-fact-constraint-layer.md) | Cross-Fact Constraint Layer for Memory Pipeline | Proposed |
+| [ADR-0074](ADR-0074-end-to-end-traceability.md) | End-to-End Traceability and Observability Joinability | Proposed |
+
+### Transport & Harness Governance (ADR-0075 – ADR-0076)
+
+| ADR | Title | Status |
+|-----|-------|--------|
+| [ADR-0075](ADR-0075-websocket-transport.md) | WebSocket Transport + Durable Channel | Proposed |
+| [ADR-0076](ADR-0076-adaptive-constraint-governance.md) | Adaptive Constraint Governance Protocol | Proposed |
+
 ### Supplementary
 
 | File | Description |

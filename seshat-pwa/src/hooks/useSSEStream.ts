@@ -160,16 +160,16 @@ export function useSSEStream(): UseSSEStreamReturn {
       }
 
       case 'tool_approval_request': {
-        // Extract tool_approval_request fields from the flat event envelope
-        // (ADR-0075: these fields are top-level, not under event.data).
+        // tool_approval_request fields are top-level in the envelope (not under data).
+        const e = event as unknown as Record<string, unknown>;
         const approvalData: ToolApprovalRequestData = {
-          request_id: event.request_id ?? (event.data as Record<string, string>).request_id ?? '',
-          trace_id: event.trace_id ?? (event.data as Record<string, string>).trace_id ?? '',
-          tool: event.tool ?? (event.data as Record<string, string>).tool ?? '',
-          args: event.args ?? (event.data as Record<string, unknown>).args ?? {},
-          risk_level: (event.risk_level ?? (event.data as Record<string, string>).risk_level ?? 'medium') as 'low' | 'medium' | 'high',
-          reason: event.reason ?? (event.data as Record<string, string>).reason ?? '',
-          expires_at: event.expires_at ?? (event.data as Record<string, string>).expires_at ?? '',
+          request_id: String(e.request_id ?? ''),
+          trace_id: String(e.trace_id ?? ''),
+          tool: String(e.tool ?? ''),
+          args: (e.args ?? {}) as Record<string, unknown>,
+          risk_level: (String(e.risk_level ?? 'medium')) as 'low' | 'medium' | 'high',
+          reason: String(e.reason ?? ''),
+          expires_at: String(e.expires_at ?? ''),
         };
         setPendingApproval(approvalData);
         break;

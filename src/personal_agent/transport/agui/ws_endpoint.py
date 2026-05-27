@@ -303,6 +303,14 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
     await websocket.accept()
     log.info("ws.connected", session_id=session_id, user_id=str(user.user_id))
 
+    last_seq = await _receive_connect(websocket, session_id)
+    if last_seq is None:
+        try:
+            await websocket.close(code=1008, reason="CONNECT required")
+        except Exception:
+            pass
+        return
+
     queue = get_event_queue(session_id)
     conn = _ConnectionState(
         websocket=websocket,
@@ -315,7 +323,7 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
     sender_task: asyncio.Task[None] | None = None
     receiver_task: asyncio.Task[None] | None = None
     try:
-        sender_task = asyncio.create_task(_sender(conn))
+        sender_task = asyncio.create_task(_sender(conn, last_seq))
         receiver_task = asyncio.create_task(_receiver(conn))
         done, pending = await asyncio.wait(
             {sender_task, receiver_task},
@@ -342,29 +350,29 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
 # ── Sender task ────────────────────────────────────────────────────────────
 
 
-async def _sender(conn: _ConnectionState) -> None:
-    """Drain the outbound queue and send events over the WebSocket.
-
-    Handles the CONNECT/replay handshake before switching to live drain.
-    """
-    ws = conn.websocket
-    queue = conn.outbound_queue
-    session_id = conn.session_id
-
-    # Wait for CONNECT message from client
+async def _receive_connect(ws: WebSocket, session_id: str) -> int | None:
+    """Read the required CONNECT message before starting concurrent WS tasks."""
     try:
         raw = await asyncio.wait_for(ws.receive_text(), timeout=10.0)
         msg = json.loads(raw)
     except (asyncio.TimeoutError, json.JSONDecodeError, WebSocketDisconnect):
         log.warning("ws.connect_handshake_failed", session_id=session_id)
-        return
+        return None
 
     if msg.get("type") != "CONNECT":
         log.warning("ws.expected_connect", session_id=session_id, got=msg.get("type"))
-        return
+        return None
 
     last_seq: int = msg.get("last_seq", 0)
     log.debug("ws.connect_received", session_id=session_id, last_seq=last_seq)
+    return last_seq
+
+
+async def _sender(conn: _ConnectionState, last_seq: int) -> None:
+    """Drain the outbound queue and send events over the WebSocket."""
+    ws = conn.websocket
+    queue = conn.outbound_queue
+    session_id = conn.session_id
 
     # Snapshot queue before replay
     snapshot: list[dict[str, Any]] = []

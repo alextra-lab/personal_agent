@@ -193,6 +193,8 @@ export function connectWebSocket(
   let closed = false;
   let backoffMs = 1000;
   let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+  let connecting = false;
+  let connectGeneration = 0;
 
   const seqKey = `seshat_last_seq_${sessionId}`;
 
@@ -214,9 +216,21 @@ export function connectWebSocket(
 
   async function connect(): Promise<void> {
     if (closed) return;
+    if (
+      connecting ||
+      ws?.readyState === WebSocket.CONNECTING ||
+      ws?.readyState === WebSocket.OPEN
+    ) {
+      return;
+    }
+
+    connecting = true;
+    const generation = ++connectGeneration;
 
     try {
       const ticket = await getWSTicket(sessionId);
+      if (closed || generation !== connectGeneration) return;
+
       const base = wsBaseUrl();
       const ticketParam = ticket ? `?ticket=${encodeURIComponent(ticket)}` : '';
       const url = `${base}/ws/${encodeURIComponent(sessionId)}${ticketParam}`;
@@ -224,6 +238,10 @@ export function connectWebSocket(
       ws = new WebSocket(url);
 
       ws.onopen = () => {
+        if (closed || generation !== connectGeneration) {
+          ws?.close();
+          return;
+        }
         backoffMs = 1000;
         const lastSeq = getLastSeq();
         ws?.send(JSON.stringify({ type: 'CONNECT', last_seq: lastSeq }));
@@ -241,6 +259,7 @@ export function connectWebSocket(
         try {
           const parsed = JSON.parse(ev.data as string) as AGUIEvent;
           if (parsed.seq != null) {
+            if (parsed.seq <= getLastSeq()) return;
             setLastSeq(parsed.seq);
           }
           onEvent(parsed);
@@ -251,6 +270,7 @@ export function connectWebSocket(
 
       ws.onclose = (ev: CloseEvent) => {
         cleanup();
+        if (generation !== connectGeneration) return;
         if (closed || ev.code === WS_CLOSE_SUPERSEDED) return;
         scheduleReconnect();
       };
@@ -262,13 +282,19 @@ export function connectWebSocket(
     } catch {
       // Ticket fetch or connection setup failed
       if (!closed) scheduleReconnect();
+    } finally {
+      if (generation === connectGeneration) {
+        connecting = false;
+      }
     }
   }
 
   function scheduleReconnect(): void {
     if (closed) return;
+    if (reconnectTimeout) return;
     const jitter = Math.random() * 500;
     reconnectTimeout = setTimeout(() => {
+      reconnectTimeout = null;
       void connect();
     }, backoffMs + jitter);
     backoffMs = Math.min(backoffMs * 2, 30000);
@@ -282,17 +308,19 @@ export function connectWebSocket(
   }
 
   // Page visibility integration
-  if (typeof document !== 'undefined') {
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') {
-        persistSeqOnHide();
-      } else if (document.visibilityState === 'visible' && !closed) {
-        // Reconnect on return from background
-        if (!ws || ws.readyState !== WebSocket.OPEN) {
-          void connect();
-        }
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === 'hidden') {
+      persistSeqOnHide();
+    } else if (document.visibilityState === 'visible' && !closed) {
+      // Reconnect on return from background
+      if (!ws || ws.readyState === WebSocket.CLOSED) {
+        void connect();
       }
-    });
+    }
+  };
+
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     window.addEventListener('pagehide', persistSeqOnHide);
   }
@@ -303,8 +331,15 @@ export function connectWebSocket(
   return {
     close: () => {
       closed = true;
+      connecting = false;
+      connectGeneration += 1;
       cleanup();
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      reconnectTimeout = null;
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+        window.removeEventListener('pagehide', persistSeqOnHide);
+      }
       if (ws) {
         ws.onclose = null;
         ws.close();

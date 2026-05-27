@@ -79,12 +79,18 @@ export function useSSEStream(): UseSSEStreamReturn {
   const streamRef = useRef<StreamConnection | null>(null);
   const currentContentRef = useRef<string>('');
   const currentSessionRef = useRef<string>('');
+  const maxHandledSeqRef = useRef<number>(0);
 
   // --------------------------------------------------------------------------
   // Event dispatch
   // --------------------------------------------------------------------------
 
   const handleEvent = useCallback((event: AGUIEvent) => {
+    if (event.seq != null) {
+      if (event.seq <= maxHandledSeqRef.current) return;
+      maxHandledSeqRef.current = event.seq;
+    }
+
     switch (event.type) {
       case 'TEXT_DELTA': {
         const { text } = event.data as { text: string };
@@ -216,6 +222,9 @@ export function useSSEStream(): UseSSEStreamReturn {
       streamRef.current?.close();
       streamRef.current = null;
 
+      if (currentSessionRef.current !== sessionId) {
+        maxHandledSeqRef.current = 0;
+      }
       currentContentRef.current = '';
       currentSessionRef.current = sessionId;
 
@@ -320,11 +329,13 @@ export function useSSEStream(): UseSSEStreamReturn {
   const clearMessages = useCallback(() => {
     setMessages([]);
     currentContentRef.current = '';
+    maxHandledSeqRef.current = 0;
   }, []);
 
   const seedMessages = useCallback((msgs: ChatMessage[]) => {
     setMessages(msgs);
     currentContentRef.current = '';
+    maxHandledSeqRef.current = 0;
   }, []);
 
   return {

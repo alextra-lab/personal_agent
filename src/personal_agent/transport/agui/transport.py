@@ -1,8 +1,8 @@
 """AG-UI implementation of UITransportProtocol.
 
-Pushes internal events to a bounded per-session asyncio.Queue and durably
-writes them to the Postgres ``session_events`` table via
-:class:`~personal_agent.transport.agui.event_buffer.SessionEventBuffer`.
+Durably writes internal events to the Postgres ``session_events`` table via
+:class:`~personal_agent.transport.agui.event_buffer.SessionEventBuffer`, then
+pushes the sequenced envelopes to a bounded per-session asyncio.Queue.
 The WebSocket endpoint in
 :mod:`personal_agent.transport.agui.ws_endpoint` drains the queue and
 streams events to the connected client; on reconnect, events are replayed
@@ -45,31 +45,10 @@ log = get_logger(__name__)
 
 
 async def _push_event(event: InternalEvent, session_id: str) -> None:
-    """Enqueue for live WS delivery, fire-and-forget Postgres persistence.
-
-    The live WS path gets the event immediately (no DB round-trip).
-    Postgres write runs concurrently for reconnect replay durability.
-    """
+    """Persist an event, then enqueue the sequenced envelope for live WS delivery."""
     envelope = to_agui_event(event)
     event_type = envelope["type"]
 
-    # Deliver to live WS immediately — no blocking on DB.
-    queue = get_event_queue(session_id)
-    try:
-        queue.put_nowait(envelope)
-    except asyncio.QueueFull:
-        log.warning(
-            "transport.queue_full",
-            session_id=session_id,
-            event_type=event_type,
-        )
-
-    # Fire-and-forget Postgres write for reconnect replay.
-    asyncio.create_task(_persist_event(session_id, event_type, envelope))
-
-
-async def _persist_event(session_id: str, event_type: str, envelope: dict[str, Any]) -> None:
-    """Background task: write event to session_events and patch seq."""
     try:
         async with AsyncSessionLocal() as db:
             buf = SessionEventBuffer(db)
@@ -83,14 +62,25 @@ async def _persist_event(session_id: str, event_type: str, envelope: dict[str, A
         log.exception(
             "transport.persist_event_failed", session_id=session_id, event_type=event_type
         )
+        return
+
+    queue = get_event_queue(session_id)
+    try:
+        queue.put_nowait(envelope)
+    except asyncio.QueueFull:
+        log.warning(
+            "transport.queue_full",
+            session_id=session_id,
+            event_type=event_type,
+        )
 
 
 class AGUITransport:
     """AG-UI streaming transport via WebSocket.
 
     Satisfies ``UITransportProtocol`` (structural typing).  Pushes typed
-    internal events through the dual-write path: Postgres for durability,
-    bounded asyncio.Queue for real-time delivery.
+    internal events through the sequenced dual-write path: Postgres for
+    durability, bounded asyncio.Queue for real-time delivery.
 
     Decision round-trips (tool approvals, constraint pauses, HITL interrupts)
     use the per-connection waiter registry in

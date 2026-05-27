@@ -339,7 +339,8 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
         log.exception("ws.handler_error", session_id=session_id)
     finally:
         _cancel_all_waiters(conn)
-        _active_connections.pop(session_id, None)
+        if _active_connections.get(session_id) is conn:
+            _active_connections.pop(session_id, None)
         try:
             await websocket.close()
         except Exception:
@@ -373,6 +374,7 @@ async def _sender(conn: _ConnectionState, last_seq: int) -> None:
     ws = conn.websocket
     queue = conn.outbound_queue
     session_id = conn.session_id
+    max_sent_seq = last_seq
 
     # Replay from Postgres only on reconnect (last_seq > 0).
     # Fresh connections (last_seq == 0) skip replay — events arrive via the
@@ -401,11 +403,15 @@ async def _sender(conn: _ConnectionState, last_seq: int) -> None:
 
         for evt in events:
             payload = evt["payload"]
-            payload["seq"] = evt["seq"]
+            seq = int(evt["seq"])
+            if seq <= max_sent_seq:
+                continue
+            payload["seq"] = seq
             try:
                 await ws.send_text(json.dumps(payload, default=str))
             except RuntimeError:
                 return
+            max_sent_seq = seq
 
     # Live drain loop
     while True:
@@ -419,6 +425,18 @@ async def _sender(conn: _ConnectionState, last_seq: int) -> None:
             except RuntimeError:
                 pass
             return
+        item_seq = item.get("seq")
+        if isinstance(item_seq, int):
+            if item_seq <= max_sent_seq:
+                log.debug(
+                    "ws.skip_duplicate_live_event",
+                    session_id=session_id,
+                    seq=item_seq,
+                    max_sent_seq=max_sent_seq,
+                    event_type=item.get("type"),
+                )
+                continue
+            max_sent_seq = item_seq
         try:
             await ws.send_text(json.dumps(item, default=str))
         except RuntimeError:

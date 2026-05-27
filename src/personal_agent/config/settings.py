@@ -67,7 +67,11 @@ class AppConfig(BaseSettings):
 
     # WebSocket transport (ADR-0075 / FRE-388)
     allowed_ws_origins: list[str] = Field(
-        default=["https://seshat.frenchforet.com", "http://localhost:3000"],
+        default=[
+            "https://seshat.frenchforet.com",
+            "https://agent.frenchforet.com",
+            "http://localhost:3000",
+        ],
         description="Allowed Origin headers for WebSocket upgrade requests (RFC 6455 §10.2).",
     )
     ws_ping_timeout_seconds: int = Field(

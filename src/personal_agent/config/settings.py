@@ -53,11 +53,15 @@ class AppConfig(BaseSettings):
     project_name: str = Field(default="Personal Local AI Collaborator", description="Project name")
     version: str = Field(default="0.1.0", description="Application version")
     cors_allowed_origins: list[str] = Field(
-        default=["http://localhost:3000"],
+        default=[
+            "http://localhost:3000",
+            "https://seshat.frenchforet.com",
+            "https://agent.frenchforet.com",
+        ],
         description=(
             "CORS allowed origins for the FastAPI service. "
-            "In production Caddy proxies PWA and backend through the same origin so this is unused. "
-            "Locally the Next.js dev server runs on :3000 while the backend is on :9000."
+            "Must include the production PWA origin for WebSocket upgrades — "
+            "Starlette CORSMiddleware silently drops WS connections with non-matching Origin."
         ),
     )
 

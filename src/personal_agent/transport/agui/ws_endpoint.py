@@ -266,13 +266,17 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
         session_id: Target session from the URL path.
     """
     # 1. Auth before accept
+    log.info("ws.handshake_started", session_id=session_id)
     user = await _authenticate_ws(websocket, session_id)
     if user is None:
+        log.warning("ws.auth_failed", session_id=session_id)
         await websocket.close(code=1008, reason="Unauthorized")
         return
 
     if not _validate_origin(websocket):
-        log.warning("ws.origin_rejected", origin=websocket.headers.get("origin", ""))
+        log.warning(
+            "ws.origin_rejected", session_id=session_id, origin=websocket.headers.get("origin", "")
+        )
         await websocket.close(code=1008, reason="Origin not allowed")
         return
 
@@ -281,6 +285,7 @@ async def ws_session(websocket: WebSocket, session_id: str) -> None:
         repo = SessionRepository(db)
         session = await repo.get(UUID(session_id), user_id=user.user_id)
     if session is None:
+        log.warning("ws.session_not_found", session_id=session_id, user_id=str(user.user_id))
         await websocket.close(code=1008, reason="Session not found")
         return
 

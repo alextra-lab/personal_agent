@@ -143,12 +143,13 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0073](ADR-0073-cross-fact-constraint-layer.md) | Cross-Fact Constraint Layer for Memory Pipeline | Proposed |
 | [ADR-0074](ADR-0074-end-to-end-traceability.md) | End-to-End Traceability and Observability Joinability | Proposed |
 
-### Transport & Harness Governance (ADR-0075 – ADR-0076)
+### Transport & Harness Governance (ADR-0075 – ADR-0077)
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| [ADR-0075](ADR-0075-websocket-transport.md) | WebSocket Transport + Durable Channel | Proposed |
-| [ADR-0076](ADR-0076-adaptive-constraint-governance.md) | Adaptive Constraint Governance Protocol | Proposed |
+| [ADR-0075](ADR-0075-websocket-transport.md) | WebSocket Transport + Durable Channel | Implemented (FRE-388, PR #83 + 8 hotfixes) |
+| [ADR-0076](ADR-0076-adaptive-constraint-governance.md) | Adaptive Constraint Governance Protocol | Proposed (Codex-reviewed, 3 passes) |
+| [ADR-0077](ADR-0077-artifact-draft-subagent-generation.md) | Artifact Draft — Sub-Agent HTML Generation | Implemented (PR #84) |
 
 ### Supplementary
 

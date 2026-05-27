@@ -3,18 +3,18 @@
  *
  * Provides helpers for interacting with the Seshat backend:
  * - Sending chat messages via POST /chat/stream
- * - Connecting to the AG-UI SSE stream at GET /stream/{session_id}
- * - Resuming HITL interrupts via POST /stream/{session_id}/resume
- * - Submitting tool-approval decisions via POST /approval/{request_id}
+ * - Connecting to the AG-UI WebSocket at GET /ws/{session_id}
+ * - Bidirectional decision round-trips (approvals, interrupts) over WS
+ * - Session history and artifact queries
  *
- * All requests include an Authorization header when NEXT_PUBLIC_GATEWAY_TOKEN
- * is set (production). In local dev (token absent) the header is omitted and
- * the gateway's auth-disabled fast-path allows the request through.
+ * All HTTPS requests include an Authorization header when
+ * NEXT_PUBLIC_GATEWAY_TOKEN is set (production).  WebSocket connections
+ * use a short-lived single-use ticket minted via POST /api/ws-ticket.
+ *
+ * See: docs/architecture_decisions/ADR-0075-websocket-transport.md
  */
 
-import { fetchEventSource } from '@microsoft/fetch-event-source';
-
-import type { AGUIEvent } from './types';
+import type { AGUIEvent, ClientMessage } from './types';
 
 /** Base URL for the Seshat backend. Defaults to localhost in dev. */
 export const SESHAT_API =
@@ -32,6 +32,13 @@ function authHeaders(): Record<string, string> {
   return GATEWAY_TOKEN ? { Authorization: `Bearer ${GATEWAY_TOKEN}` } : {};
 }
 
+/** Derive WebSocket URL from the HTTP base URL. */
+function wsBaseUrl(): string {
+  const url = new URL(SESHAT_API);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  return url.origin;
+}
+
 // --------------------------------------------------------------------------
 // Chat message dispatch
 // --------------------------------------------------------------------------
@@ -46,9 +53,7 @@ export interface SendMessageOptions {
  * Structured Cost-Gate denial (ADR-0065 / FRE-306).
  *
  * Thrown by sendChatMessage when the backend returns 503 with the
- * documented `error: "budget_denied"` body — the PWA renders an explicit
- * error card showing cap / spend / reset_time rather than the empty
- * assistant turn that motivated the whole ADR.
+ * documented `error: "budget_denied"` body.
  */
 export class BudgetDeniedError extends Error {
   readonly role: string;
@@ -80,11 +85,11 @@ export class BudgetDeniedError extends Error {
 /**
  * Send a chat message to the Seshat backend.
  *
- * Uses form-encoded body to match the existing FastAPI /chat endpoint.
- * The backend emits events to the SSE stream identified by sessionId.
+ * Uses form-encoded body to match the existing FastAPI /chat/stream endpoint.
+ * The backend pushes events to the WS stream identified by sessionId.
  *
  * @throws BudgetDeniedError when the backend returns 503 with a
- *   `error: "budget_denied"` payload (rendered as the budget error card).
+ *   `error: "budget_denied"` payload.
  * @throws Error for any other non-2xx response.
  */
 export async function sendChatMessage(opts: SendMessageOptions): Promise<void> {
@@ -105,8 +110,6 @@ export async function sendChatMessage(opts: SendMessageOptions): Promise<void> {
 
   if (!resp.ok) {
     if (resp.status === 503) {
-      // Try to parse the BudgetDenied envelope. If parsing fails we fall
-      // through to the generic Error below.
       try {
         const body = await resp.json();
         if (body && body.error === 'budget_denied') {
@@ -114,7 +117,6 @@ export async function sendChatMessage(opts: SendMessageOptions): Promise<void> {
         }
       } catch (e) {
         if (e instanceof BudgetDeniedError) throw e;
-        // JSON parse error or unexpected shape — fall through.
       }
     }
     throw new Error(`Seshat /chat/stream returned ${resp.status}: ${resp.statusText}`);
@@ -122,154 +124,199 @@ export async function sendChatMessage(opts: SendMessageOptions): Promise<void> {
 }
 
 // --------------------------------------------------------------------------
-// SSE stream connection
+// WebSocket ticket
+// --------------------------------------------------------------------------
+
+/**
+ * Mint a short-lived single-use WebSocket ticket over HTTPS.
+ *
+ * In local dev (no GATEWAY_TOKEN) the server doesn't require a ticket,
+ * so we return an empty string.
+ */
+async function getWSTicket(sessionId: string): Promise<string> {
+  if (!GATEWAY_TOKEN) return '';
+
+  const resp = await fetch(`${SESHAT_API}/api/ws-ticket`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(),
+    },
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+
+  if (!resp.ok) {
+    throw new Error(`ws-ticket failed: ${resp.status} ${resp.statusText}`);
+  }
+  const body = await resp.json();
+  return body.ticket as string;
+}
+
+// --------------------------------------------------------------------------
+// WebSocket connection (ADR-0075)
 // --------------------------------------------------------------------------
 
 export type AGUIEventHandler = (event: AGUIEvent) => void;
 export type ErrorHandler = (error: Event) => void;
 
+/** Code 4001 = "Superseded by new connection" — do not reconnect. */
+const WS_CLOSE_SUPERSEDED = 4001;
+
 export interface StreamConnection {
-  /** Close the stream and stop receiving events. */
   close: () => void;
+  send: (msg: ClientMessage) => void;
 }
 
 /**
- * Connect to the AG-UI SSE stream for a session.
+ * Connect to the AG-UI WebSocket for a session.
  *
- * Uses fetch-event-source instead of the browser's EventSource so that
- * an Authorization header can be included. The StreamConnection interface
- * is identical to the previous EventSource-based implementation —
- * useSSEStream.ts needs no changes.
- *
- * Reconnection on transient network failures is handled automatically by
- * fetchEventSource. Deliberate close (via StreamConnection.close) and
- * server-side errors abort without retrying.
+ * Handles:
+ * - Ticket-based auth (mints a fresh ticket for each connection attempt)
+ * - CONNECT handshake with last_seq for reconnect replay
+ * - Application-level PING heartbeat every 25s
+ * - Exponential backoff reconnect with jitter (1s..30s)
+ * - localStorage persistence of last_seq
+ * - Page visibility integration (persist last_seq on pagehide)
  *
  * @param sessionId - Target session to stream.
  * @param onEvent   - Called for each AG-UI event received.
- * @param onError   - Called on stream error (before close).
- * @returns StreamConnection with a close() method.
+ * @param onError   - Called on connection errors.
+ * @returns StreamConnection with close() and send() methods.
  */
-export function connectToStream(
+export function connectWebSocket(
   sessionId: string,
   onEvent: AGUIEventHandler,
   onError?: ErrorHandler,
 ): StreamConnection {
-  const ctrl = new AbortController();
+  let ws: WebSocket | null = null;
+  let pingInterval: ReturnType<typeof setInterval> | null = null;
+  let closed = false;
+  let backoffMs = 1000;
+  let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 
-  fetchEventSource(`${SESHAT_API}/stream/${encodeURIComponent(sessionId)}`, {
-    headers: authHeaders(),
-    signal: ctrl.signal,
-    onmessage(ev) {
-      try {
-        const parsed = JSON.parse(ev.data) as AGUIEvent;
-        onEvent(parsed);
-      } catch {
-        // Malformed event — skip silently; structlog on backend will have trace.
+  const seqKey = `seshat_last_seq_${sessionId}`;
+
+  function getLastSeq(): number {
+    if (typeof localStorage === 'undefined') return 0;
+    const stored = localStorage.getItem(seqKey);
+    return stored ? parseInt(stored, 10) || 0 : 0;
+  }
+
+  function setLastSeq(seq: number): void {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(seqKey, String(seq));
+  }
+
+  function persistSeqOnHide(): void {
+    // last_seq is already persisted on each event; this is a safety net
+    // for iOS PWA suspension where the event loop may not run.
+  }
+
+  async function connect(): Promise<void> {
+    if (closed) return;
+
+    try {
+      const ticket = await getWSTicket(sessionId);
+      const base = wsBaseUrl();
+      const ticketParam = ticket ? `?ticket=${encodeURIComponent(ticket)}` : '';
+      const url = `${base}/ws/${encodeURIComponent(sessionId)}${ticketParam}`;
+
+      ws = new WebSocket(url);
+
+      ws.onopen = () => {
+        backoffMs = 1000;
+        const lastSeq = getLastSeq();
+        ws?.send(JSON.stringify({ type: 'CONNECT', last_seq: lastSeq }));
+
+        // Start PING heartbeat
+        if (pingInterval) clearInterval(pingInterval);
+        pingInterval = setInterval(() => {
+          if (ws?.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'PING' }));
+          }
+        }, 25000);
+      };
+
+      ws.onmessage = (ev: MessageEvent) => {
+        try {
+          const parsed = JSON.parse(ev.data as string) as AGUIEvent;
+          if (parsed.seq != null) {
+            setLastSeq(parsed.seq);
+          }
+          onEvent(parsed);
+        } catch {
+          // Malformed message — skip
+        }
+      };
+
+      ws.onclose = (ev: CloseEvent) => {
+        cleanup();
+        if (closed || ev.code === WS_CLOSE_SUPERSEDED) return;
+        scheduleReconnect();
+      };
+
+      ws.onerror = () => {
+        if (onError) onError(new Event('error'));
+      };
+
+    } catch {
+      // Ticket fetch or connection setup failed
+      if (!closed) scheduleReconnect();
+    }
+  }
+
+  function scheduleReconnect(): void {
+    if (closed) return;
+    const jitter = Math.random() * 500;
+    reconnectTimeout = setTimeout(() => {
+      void connect();
+    }, backoffMs + jitter);
+    backoffMs = Math.min(backoffMs * 2, 30000);
+  }
+
+  function cleanup(): void {
+    if (pingInterval) {
+      clearInterval(pingInterval);
+      pingInterval = null;
+    }
+  }
+
+  // Page visibility integration
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        persistSeqOnHide();
+      } else if (document.visibilityState === 'visible' && !closed) {
+        // Reconnect on return from background
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          void connect();
+        }
       }
-    },
-    onerror(err) {
-      if (onError) onError(new Event('error'));
-      // Rethrow to stop fetchEventSource's retry loop on errors.
-      throw err;
-    },
-  }).catch(() => {
-    // Swallow AbortError from ctrl.abort() and any onerror rethrows —
-    // they are already surfaced to the caller via onError.
-  });
+    });
+
+    window.addEventListener('pagehide', persistSeqOnHide);
+  }
+
+  // Start initial connection
+  void connect();
 
   return {
-    close: () => ctrl.abort(),
-  };
-}
-
-// --------------------------------------------------------------------------
-// HITL resume
-// --------------------------------------------------------------------------
-
-export interface ResumeOptions {
-  sessionId: string;
-  choice: string;
-}
-
-/**
- * Resume a HITL-interrupted session with the user's choice.
- *
- * The backend expects a POST to /stream/{session_id}/resume with a JSON body
- * containing the chosen option.
- *
- * @throws Error when the backend returns a non-2xx status.
- */
-export async function resumeInterrupt(opts: ResumeOptions): Promise<void> {
-  const { sessionId, choice } = opts;
-
-  const resp = await fetch(
-    `${SESHAT_API}/stream/${encodeURIComponent(sessionId)}/resume`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...authHeaders(),
-      },
-      body: JSON.stringify({ choice }),
+    close: () => {
+      closed = true;
+      cleanup();
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (ws) {
+        ws.onclose = null;
+        ws.close();
+        ws = null;
+      }
     },
-  );
-
-  if (!resp.ok) {
-    throw new Error(`Resume failed: ${resp.status} ${resp.statusText}`);
-  }
-}
-
-// --------------------------------------------------------------------------
-// Tool approval decisions
-// --------------------------------------------------------------------------
-
-/**
- * Submit an approve or deny decision for a pending tool-approval request.
- *
- * The backend endpoint is ``POST /approval/{request_id}``.  The agent is
- * blocking on this call and will proceed (or abort) once the decision lands.
- *
- * @param sessionId  - Current session (unused in the URL, kept for symmetry with resumeInterrupt).
- * @param requestId  - The ``request_id`` from the ``tool_approval_request`` SSE event.
- * @param decision   - ``'approve'`` or ``'deny'``.
- * @param reason     - Optional free-text rationale shown in backend logs.
- * @throws Error when the backend returns a non-2xx status.
- */
-export async function postApprovalDecision(
-  // FRE-378: sessionId is required in the body. The waiter is registered
-  // keyed by session_id; the backend verifies that the caller owns this
-  // session (via CF Access user_id → SessionRepository.get scoped query)
-  // before passing it to resolve_approval.
-  sessionId: string,
-  requestId: string,
-  decision: 'approve' | 'deny',
-  reason?: string,
-): Promise<void> {
-
-  const body: Record<string, unknown> = {
-    session_id: sessionId,
-    decision,
-  };
-  if (reason !== undefined) {
-    body['reason'] = reason;
-  }
-
-  const resp = await fetch(
-    `${SESHAT_API}/approval/${encodeURIComponent(requestId)}`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...authHeaders(),
-      },
-      body: JSON.stringify(body),
+    send: (msg: ClientMessage) => {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(msg));
+      }
     },
-  );
-
-  if (!resp.ok) {
-    throw new Error(`postApprovalDecision failed: ${resp.status} ${resp.statusText}`);
-  }
+  };
 }
 
 // --------------------------------------------------------------------------
@@ -390,8 +437,7 @@ export async function listArtifacts(
 /**
  * Fetch metadata for a single artifact by ID.
  *
- * Returns null when the artifact is not found (404) or belongs to another user,
- * so callers can fall back to rendering the plain URL without crashing.
+ * Returns null when the artifact is not found (404) or belongs to another user.
  *
  * @throws Error for non-2xx, non-404 responses.
  */
@@ -410,9 +456,7 @@ export async function getArtifactMetadata(
 /**
  * Fire-and-forget card-click telemetry for ADR-0070 D8 measurement.
  *
- * Never throws — telemetry must never break the user interaction that
- * triggered it. Uses sendBeacon when available (survives page unload on
- * iOS PWA); falls back to keepalive fetch.
+ * Never throws — telemetry must never break the user interaction.
  */
 export function postCardClick(
   artifactId: string,

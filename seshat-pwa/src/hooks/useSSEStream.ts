@@ -4,8 +4,8 @@ import { useState, useCallback, useRef } from 'react';
 
 import {
   BudgetDeniedError,
-  connectToStream,
-  postApprovalDecision,
+  connectWebSocket,
+  getSessionMessages,
   sendChatMessage,
   type StreamConnection,
 } from '@/lib/agui-client';
@@ -53,16 +53,18 @@ export interface UseSSEStreamReturn {
 // --------------------------------------------------------------------------
 
 /**
- * React hook that manages the full AG-UI streaming lifecycle.
+ * React hook that manages the full AG-UI streaming lifecycle over WebSocket.
  *
  * Handles:
  * - Sending user messages to the Seshat backend.
- * - Connecting to the AG-UI SSE stream.
+ * - Connecting to the AG-UI WebSocket (ADR-0075).
  * - Assembling streaming text deltas into assistant messages.
  * - Tracking tool call lifecycle (TOOL_CALL_START → TOOL_CALL_END).
  * - Surfacing context budget from STATE_DELTA events.
  * - Capturing HITL INTERRUPT events and providing a resolve callback.
- * - Cleaning up the EventSource on DONE or error.
+ * - Tool approval round-trips via WebSocket (replaces POST /approval).
+ * - Reconnect replay via seq numbers and localStorage persistence.
+ * - REPLAY_GAP fallback to full session history API.
  */
 export function useSSEStream(): UseSSEStreamReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -92,13 +94,11 @@ export function useSSEStream(): UseSSEStreamReturn {
         setMessages((prev) => {
           const last = prev[prev.length - 1];
           if (last?.role === 'assistant') {
-            // Update the in-progress assistant message.
             return [
               ...prev.slice(0, -1),
               { ...last, content: snapshot },
             ];
           }
-          // First delta for this turn — create the assistant message.
           return [
             ...prev,
             {
@@ -155,22 +155,50 @@ export function useSSEStream(): UseSSEStreamReturn {
           options,
           sessionId: event.session_id,
         });
-        // Pause streaming indicator — we're waiting for user input.
         setIsStreaming(false);
         break;
       }
 
       case 'tool_approval_request': {
-        // Agent is blocked waiting for a tool-approval decision.
-        // The stream remains open — do NOT set isStreaming=false here.
-        // The ApprovalModal will call handleApprovalDecision when resolved.
-        setPendingApproval(event.data as unknown as ToolApprovalRequestData);
+        // Extract tool_approval_request fields from the flat event envelope
+        // (ADR-0075: these fields are top-level, not under event.data).
+        const approvalData: ToolApprovalRequestData = {
+          request_id: event.request_id ?? (event.data as Record<string, string>).request_id ?? '',
+          trace_id: event.trace_id ?? (event.data as Record<string, string>).trace_id ?? '',
+          tool: event.tool ?? (event.data as Record<string, string>).tool ?? '',
+          args: event.args ?? (event.data as Record<string, unknown>).args ?? {},
+          risk_level: (event.risk_level ?? (event.data as Record<string, string>).risk_level ?? 'medium') as 'low' | 'medium' | 'high',
+          reason: event.reason ?? (event.data as Record<string, string>).reason ?? '',
+          expires_at: event.expires_at ?? (event.data as Record<string, string>).expires_at ?? '',
+        };
+        setPendingApproval(approvalData);
         break;
       }
 
+      case 'REPLAY_GAP': {
+        // Server indicates our last_seq is older than retained events.
+        // Fall back to fetching full conversation history via REST API.
+        const sessionId = currentSessionRef.current;
+        if (sessionId) {
+          void getSessionMessages(sessionId).then((serverMsgs) => {
+            const hydrated: ChatMessage[] = serverMsgs.map((m) => ({
+              id: generateUUID(),
+              role: m.role as 'user' | 'assistant',
+              content: m.content,
+              timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
+              traceId: m.trace_id,
+            }));
+            setMessages(hydrated);
+          });
+        }
+        break;
+      }
+
+      case 'PONG':
+        // No-op — confirms server liveness.
+        break;
+
       case 'DONE': {
-        streamRef.current?.close();
-        streamRef.current = null;
         setIsStreaming(false);
         setActiveTools([]);
         break;
@@ -211,12 +239,9 @@ export function useSSEStream(): UseSSEStreamReturn {
       } catch (err) {
         setIsStreaming(false);
         if (err instanceof BudgetDeniedError) {
-          // ADR-0065 / FRE-306: render an explicit error card, not an empty
-          // assistant turn. The card consumes `budgetDenied` from the hook.
           setBudgetDenied(err);
           return;
         }
-        // Append an error pseudo-message so the user can see what happened.
         setMessages((prev) => [
           ...prev,
           {
@@ -229,14 +254,13 @@ export function useSSEStream(): UseSSEStreamReturn {
         return;
       }
 
-      // 2. Connect to the SSE stream.
-      streamRef.current = connectToStream(
+      // 2. Connect to the WebSocket stream.
+      streamRef.current = connectWebSocket(
         sessionId,
         handleEvent,
         () => {
-          // SSE error — stream may have ended or backend restarted.
-          streamRef.current = null;
-          setIsStreaming(false);
+          // WS error — connection may have dropped.
+          // Reconnect logic is handled inside connectWebSocket.
         },
       );
     },
@@ -244,35 +268,41 @@ export function useSSEStream(): UseSSEStreamReturn {
   );
 
   const resolveInterrupt = useCallback((choice: string) => {
-    // The caller is responsible for calling resumeInterrupt() from agui-client
-    // with the session ID from pendingInterrupt before calling this.
+    // Send INTERRUPT_RESPONSE over WebSocket.
+    if (streamRef.current && pendingInterrupt) {
+      streamRef.current.send({
+        type: 'INTERRUPT_RESPONSE',
+        request_id: '', // Interrupts don't use request_id yet
+        choice,
+      });
+    }
     setPendingInterrupt(null);
     setIsStreaming(true);
-  }, []);
+  }, [pendingInterrupt]);
 
   /**
-   * Post an approve/deny decision for the current pendingApproval.
+   * Post an approve/deny decision for the current pendingApproval via WebSocket.
    *
-   * Clears pendingApproval immediately (optimistic) and sends the decision
-   * to the backend. Errors are logged to console but do not crash — the
-   * backend will auto-deny when the request expires.
+   * Clears pendingApproval immediately (optimistic). Errors are logged to
+   * console but do not crash — the backend will auto-deny when the request expires.
    */
   const handleApprovalDecision = useCallback(
     (decision: 'approve' | 'deny'): void => {
       if (pendingApproval === null) return;
 
       const { request_id } = pendingApproval;
-      const sessionId = currentSessionRef.current;
 
-      // Optimistically clear the modal so the user sees a response immediately.
+      // Optimistically clear the modal.
       setPendingApproval(null);
 
-      postApprovalDecision(sessionId, request_id, decision).catch((err: unknown) => {
-        console.error(
-          '[useSSEStream] postApprovalDecision failed',
-          { request_id, decision, error: err instanceof Error ? err.message : String(err) },
-        );
-      });
+      // Send decision over WebSocket instead of POST.
+      if (streamRef.current) {
+        streamRef.current.send({
+          type: 'APPROVAL_DECISION',
+          request_id,
+          decision,
+        });
+      }
     },
     [pendingApproval],
   );

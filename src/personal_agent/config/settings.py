@@ -61,6 +61,36 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # WebSocket transport (ADR-0075 / FRE-388)
+    allowed_ws_origins: list[str] = Field(
+        default=["https://seshat.frenchforet.com", "http://localhost:3000"],
+        description="Allowed Origin headers for WebSocket upgrade requests (RFC 6455 §10.2).",
+    )
+    ws_ping_timeout_seconds: int = Field(
+        default=60,
+        description="Close socket if no inbound message (including PING) within this window.",
+    )
+    ws_max_message_size: int = Field(
+        default=8192,
+        description="Maximum inbound WebSocket message size in bytes.",
+    )
+    ws_rate_limit_per_second: int = Field(
+        default=20,
+        description="Inbound message rate cap per connection; exceeding closes with 1008.",
+    )
+    ws_event_queue_size: int = Field(
+        default=500,
+        description="Bounded asyncio.Queue size per session; overflow events are Postgres-only.",
+    )
+    ws_event_ttl_hours: int = Field(
+        default=24,
+        description="session_events rows older than this are purged by the cleanup task.",
+    )
+    ws_ticket_ttl_seconds: int = Field(
+        default=30,
+        description="Lifetime of a single-use WebSocket ticket before it expires.",
+    )
+
     # Telemetry
     log_dir: Path = Field(default=Path("telemetry/logs"), description="Log directory path")
     log_level: str = Field(

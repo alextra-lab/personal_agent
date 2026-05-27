@@ -264,3 +264,27 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_tags
 CREATE INDEX IF NOT EXISTS idx_artifacts_session
     ON artifacts (session_id)
     WHERE session_id IS NOT NULL;
+
+
+-- ===========================================================================
+-- WebSocket session event buffer (ADR-0075 / FRE-388)
+--
+-- Durable, Postgres-sequenced buffer for AG-UI transport events.
+-- On reconnect the client sends last_seq; server replays seq > last_seq.
+-- A background cleanup task deletes rows older than 24 hours.
+-- ===========================================================================
+
+CREATE SEQUENCE IF NOT EXISTS session_events_seq;
+
+CREATE TABLE IF NOT EXISTS session_events (
+    id           BIGSERIAL PRIMARY KEY,
+    session_id   UUID NOT NULL REFERENCES sessions(session_id),
+    seq          INTEGER NOT NULL DEFAULT nextval('session_events_seq'),
+    event_type   TEXT NOT NULL,
+    payload      JSONB NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (session_id, seq)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_events_replay
+    ON session_events (session_id, seq);

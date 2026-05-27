@@ -3,10 +3,12 @@
  *
  * Backend source: src/personal_agent/transport/agui/adapter.py
  * Internal events: src/personal_agent/transport/events.py
+ *
+ * See: docs/architecture_decisions/ADR-0075-websocket-transport.md
  */
 
 // --------------------------------------------------------------------------
-// AG-UI event envelope
+// AG-UI event envelope (server → client)
 // --------------------------------------------------------------------------
 
 export type AGUIEventType =
@@ -16,12 +18,51 @@ export type AGUIEventType =
   | 'STATE_DELTA'
   | 'INTERRUPT'
   | 'tool_approval_request'
-  | 'DONE';
+  | 'DONE'
+  | 'PONG'
+  | 'REPLAY_GAP';
 
 export interface AGUIEvent {
   type: AGUIEventType;
   data: Record<string, unknown>;
   session_id: string;
+  /** Postgres-assigned sequence number for reconnect replay. Null for PONG/REPLAY_GAP. */
+  seq: number | null;
+  /** Present on REPLAY_GAP events — the oldest seq still available. */
+  oldest_available_seq?: number;
+  /** Present on tool_approval_request events. */
+  request_id?: string;
+  trace_id?: string;
+  tool?: string;
+  args?: Record<string, unknown>;
+  risk_level?: 'low' | 'medium' | 'high';
+  reason?: string;
+  expires_at?: string;
+}
+
+// --------------------------------------------------------------------------
+// Client → server messages
+// --------------------------------------------------------------------------
+
+export type ClientMessageType =
+  | 'CONNECT'
+  | 'PING'
+  | 'APPROVAL_DECISION'
+  | 'CONSTRAINT_DECISION'
+  | 'INTERRUPT_RESPONSE';
+
+export interface ClientMessage {
+  type: ClientMessageType;
+  /** Last received seq (CONNECT only). */
+  last_seq?: number;
+  /** Target request (APPROVAL_DECISION, CONSTRAINT_DECISION, INTERRUPT_RESPONSE). */
+  request_id?: string;
+  /** Decision value. */
+  decision?: string;
+  /** Choice value (INTERRUPT_RESPONSE). */
+  choice?: string;
+  /** Optional reason (APPROVAL_DECISION). */
+  reason?: string;
 }
 
 // --------------------------------------------------------------------------
@@ -66,7 +107,7 @@ export interface InterruptData {
  * tool_approval_request payload — primitive tool awaiting human approval.
  *
  * The agent has paused execution and will not proceed until the user
- * posts an ``approve`` or ``deny`` decision to POST /approval/{request_id}.
+ * sends an APPROVAL_DECISION message over the WebSocket connection.
  * The request expires at ``expires_at``; the UI should auto-deny on timeout.
  */
 export interface ToolApprovalRequestData {

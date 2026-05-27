@@ -29,7 +29,8 @@ from personal_agent.service.database import AsyncSessionLocal
 from personal_agent.service.models import SessionModel
 from personal_agent.service.repositories.session_repository import SessionRepository
 from personal_agent.telemetry import get_logger
-from personal_agent.transport.agui.endpoint import get_event_queue
+from personal_agent.transport.agui.transport import _push_event
+from personal_agent.transport.agui.ws_endpoint import get_event_queue
 from personal_agent.transport.events import TextDeltaEvent
 
 log = get_logger(__name__)
@@ -93,7 +94,9 @@ async def _stream_to_queue(
         ) as stream:
             async for text in stream.text_stream:
                 full_text += text
-                await queue.put(TextDeltaEvent(text=text, session_id=session_id_str))
+                await _push_event(
+                    TextDeltaEvent(text=text, session_id=session_id_str), session_id_str
+                )
             # Capture the final message so we can settle the reservation
             # against actual input/output token counts (not the estimate).
             try:
@@ -160,7 +163,10 @@ async def _stream_to_queue(
             status=getattr(exc, "status_code", None),
             error=str(exc),
         )
-        await queue.put(TextDeltaEvent(text=f"\n\n[API error: {exc}]", session_id=session_id_str))
+        await _push_event(
+            TextDeltaEvent(text=f"\n\n[API error: {exc}]", session_id=session_id_str),
+            session_id_str,
+        )
         if reservation_id is not None:
             await _refund_reservation_safe(reservation_id, trace_id)
     except Exception as exc:
@@ -170,7 +176,10 @@ async def _stream_to_queue(
             session_id=session_id_str,
             error=str(exc),
         )
-        await queue.put(TextDeltaEvent(text=f"\n\n[Error: {exc}]", session_id=session_id_str))
+        await _push_event(
+            TextDeltaEvent(text=f"\n\n[Error: {exc}]", session_id=session_id_str),
+            session_id_str,
+        )
         if reservation_id is not None:
             await _refund_reservation_safe(reservation_id, trace_id)
     else:
@@ -183,7 +192,10 @@ async def _stream_to_queue(
             )
     finally:
         # Signal stream end regardless of success/failure.
-        await queue.put(None)
+        try:
+            queue.put_nowait(None)
+        except asyncio.QueueFull:
+            pass
 
 
 async def _refund_reservation_safe(reservation_id: UUID, trace_id: str) -> None:

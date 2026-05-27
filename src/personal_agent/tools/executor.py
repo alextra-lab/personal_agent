@@ -212,7 +212,7 @@ async def _check_permissions(
         elif settings.approval_ui_enabled and transport is not None:
             # Perform interactive approval round-trip via the PWA.
             # Import here to avoid circular imports at module load time.
-            from personal_agent.transport.agui.approval_waiter import ApprovalDecision  # noqa: PLC0415, I001
+            from personal_agent.transport.agui.ws_endpoint import ApprovalDecision  # noqa: PLC0415, I001
 
             decision: ApprovalDecision = await transport.request_tool_approval(
                 request_id=str(uuid4()),

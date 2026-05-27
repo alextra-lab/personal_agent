@@ -395,15 +395,15 @@ async def test_metadata_propagates(ctx: Any) -> None:
 
 @pytest.mark.asyncio
 async def test_es_query_excludes_transport_logger(ctx: Any) -> None:
-    """The no_trace_id ES aggregation must exclude agui.endpoint events.
+    """The no_trace_id ES aggregation must exclude agui.ws_endpoint events.
 
-    SSE connection lifecycle events (sse.client_connected, sse.stream_ended,
+    WebSocket connection lifecycle events (ws.connected, ws.disconnected,
     etc.) log with session_id but no trace_id — they are not LLM calls and
     have no trace to attach to.  Including them in the traceless count causes
     every active user session to red the joinability gate.
 
     This test pins the fix: the walk's ES query must filter out
-    personal_agent.transport.agui.endpoint from the no_trace_id bucket.
+    personal_agent.transport.agui.ws_endpoint from the no_trace_id bucket.
     """
     es = MagicMock()
     es.search = AsyncMock(
@@ -425,7 +425,7 @@ async def test_es_query_excludes_transport_logger(ctx: Any) -> None:
     no_trace_filter = str(
         agent_log_call.kwargs.get("aggs", {}).get("no_trace_id", {}).get("filter", {})
     )
-    assert "personal_agent.transport.agui.endpoint" in no_trace_filter, (
-        "Walk ES query does not exclude agui.endpoint from the no_trace_id count — "
-        "SSE lifecycle events will falsely red the joinability gate on every session."
+    assert "personal_agent.transport.agui.ws_endpoint" in no_trace_filter, (
+        "Walk ES query does not exclude agui.ws_endpoint from the no_trace_id count — "
+        "WS lifecycle events will falsely red the joinability gate on every session."
     )

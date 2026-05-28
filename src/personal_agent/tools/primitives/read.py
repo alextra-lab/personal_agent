@@ -46,10 +46,12 @@ read_tool = ToolDefinition(
     name="read",
     description=(
         "Read a file's content from the filesystem. By default returns a truncated head "
-        "(first ~200 lines / ~8 KB) with truncated=true and a 'marker' explaining how to get "
-        "more: page with offset/limit, or run grep via the bash tool to jump straight to the "
-        "relevant section (cheaper than reading the whole file). "
-        "Use offset (1-based line number) and limit (number of lines) to read a specific range. "
+        "(first ~200 lines / ~8 KB) with truncated=true and a 'marker'. "
+        "To understand a large file, DO NOT read the whole thing and DO NOT answer from just the "
+        "head. Instead work in this order: (1) FIND what you need with grep via the bash tool "
+        '(grep -n "<keyword>" <path>) to get line numbers; (2) READ each line number with '
+        "offset=<line> limit=60; (3) REPEAT until you have gathered every relevant part, then "
+        "answer. Use offset (1-based line) and limit (line count) for a specific range. "
         "Use tail_lines to read the last N lines of a growing log file. "
         "Set max_bytes only for a deliberate large read when you truly need the whole file."
     ),
@@ -222,37 +224,47 @@ def _read_line_window(
     )
 
 
-def _build_read_marker(start: int, lines_returned: int, total: int, line_clipped: bool) -> str:
-    """Build the continuation marker shown when a head/range read is truncated.
+def _build_read_marker(
+    start: int, lines_returned: int, total: int, line_clipped: bool, path: str
+) -> str:
+    """Build the directive marker shown when a head/range read is truncated.
 
-    For a clean whole-line truncation the continuation offset is ``start + lines_returned`` — the
-    first line not fully returned — so paging re-reads any whole line the byte cap excluded. When
-    a single oversized line was clipped mid-line (``line_clipped``), that one line cannot be
-    completed by paging, so the marker instead tells the reader to raise ``max_bytes`` (or grep
-    within the line).
+    The marker is written in plain, imperative language so even a weak model follows the
+    grep-first workflow: locate the relevant lines with grep, then read only those windows with
+    ``offset``/``limit``, repeating until every needed part is gathered — instead of answering
+    from the head alone or dumping the whole file. For a clean whole-line truncation the
+    continuation offset is ``start + lines_returned``. When a single oversized line was clipped
+    mid-line (``line_clipped``), that line cannot be completed by paging, so the marker tells the
+    reader to raise ``max_bytes`` (or grep within the line).
 
     Args:
         start: 1-based line number the window started at.
         lines_returned: Number of lines actually returned in this window.
         total: Total number of lines in the file.
         line_clipped: Whether a single oversized line was clipped mid-line.
+        path: Resolved file path, embedded into the grep example so it is copy-pasteable.
 
     Returns:
-        A human/LLM-readable marker string nudging offset-paging, a larger ``max_bytes``, or a
-        grep-first lookup.
+        A plain-language, imperative marker string instructing the grep-first gather workflow.
     """
     next_offset = start + (lines_returned if lines_returned else 1)
     last = next_offset - 1
+    remaining = max(total - last, 0)
     if line_clipped:
         return (
-            f"Line {start} of {total} exceeds the byte cap and was clipped mid-line. "
-            f"Pass a larger max_bytes to read it in full, or grep within it "
-            f"(bash: grep -n <pattern> <path>). Pass offset={next_offset} to skip to the next line."
+            f"Line {start} of {total} is too long to show in one read (it was cut off). "
+            f"To see all of it: read again with a bigger max_bytes, or find what you need "
+            f'inside it with grep -> bash: grep -n "<keyword>" {path}. '
+            f"To skip past this line: read with offset={next_offset}."
         )
     return (
-        f"Showing lines {start}-{last} of {total}. "
-        f"Pass offset={next_offset} to continue, or grep the file first "
-        f"(bash: grep -n <pattern> <path>) to jump to the relevant section."
+        f"You have seen lines {start}-{last} of {total}. {remaining} more line(s) are NOT shown. "
+        f"Do NOT answer from only this part, and do NOT read the whole file. "
+        f"To get what you need, do this: "
+        f'1) FIND it -> bash: grep -n "<keyword>" {path} (gives you line numbers). '
+        f"2) READ each line number it returns -> read with offset=<that line> limit=60. "
+        f"3) REPEAT until you have every part you need, THEN answer. "
+        f"(Or to just keep reading in order: read with offset={next_offset}.)"
     )
 
 
@@ -451,7 +463,9 @@ async def read_executor(
 
     start = max(offset, 1)
     marker = (
-        _build_read_marker(start, lines_returned, total_lines, line_clipped) if truncated else None
+        _build_read_marker(start, lines_returned, total_lines, line_clipped, str(resolved))
+        if truncated
+        else None
     )
 
     log.info(

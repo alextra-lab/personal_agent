@@ -1098,6 +1098,102 @@ def test_system_prompt_prohibits_scripts() -> None:
     assert "event handler" in prompt.lower() or "onclick" in prompt.lower()
 
 
+def test_system_prompt_instructs_mermaid_markup() -> None:
+    """The system prompt must direct the model to use mermaid markup, not <script>."""
+    prompt = artifact_tools._HTML_GENERATION_SYSTEM_PROMPT
+    assert "mermaid" in prompt.lower()
+    assert '<pre class="mermaid">' in prompt or "pre class" in prompt.lower()
+
+
+# ---------------------------------------------------------------------------
+# Mermaid render helpers — unit tests (FRE-396)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_render_mermaid_blocks_replaces_with_svg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mermaid blocks are replaced with inline SVG when _render_mermaid_one succeeds."""
+    fake_svg = "<svg xmlns='http://www.w3.org/2000/svg'><text>diagram</text></svg>"
+
+    async def _fake_render_one(source: str, *, trace_id: str, session_id: object) -> str:
+        return f'<figure class="mermaid-diagram">{fake_svg}</figure>'
+
+    monkeypatch.setattr(artifact_tools, "_render_mermaid_one", _fake_render_one)
+
+    html = '<!DOCTYPE html><html><body><pre class="mermaid">graph TD; A-->B</pre></body></html>'
+    result = await artifact_tools._render_mermaid_blocks(html, trace_id="t", session_id=None)
+
+    assert "<svg" in result
+    assert '<pre class="mermaid">' not in result
+    assert "<script" not in result
+
+
+@pytest.mark.asyncio
+async def test_render_mermaid_blocks_no_blocks_is_noop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HTML without mermaid blocks is returned unchanged."""
+    called = []
+
+    async def _fake_render_one(source: str, *, trace_id: str, session_id: object) -> str:
+        called.append(source)
+        return source
+
+    monkeypatch.setattr(artifact_tools, "_render_mermaid_one", _fake_render_one)
+
+    html = "<!DOCTYPE html><html><body><p>no diagrams here</p></body></html>"
+    result = await artifact_tools._render_mermaid_blocks(html, trace_id="t", session_id=None)
+
+    assert result == html
+    assert called == []
+
+
+@pytest.mark.asyncio
+async def test_render_mermaid_one_mmdc_not_found_falls_back() -> None:
+    """When mmdc is not installed, _render_mermaid_one returns a <pre> fallback."""
+    source = "graph TD; A-->B"
+    result = await artifact_tools._render_mermaid_one(
+        source, trace_id="t", session_id=None, mmdc_cmd="__nonexistent_mmdc_binary__"
+    )
+
+    assert "graph TD" in result
+    assert "<script" not in result
+    assert "<pre>" in result or "<pre " in result
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_mermaid_rendered_to_svg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """artifact_draft stores SVG when sub-agent returns mermaid markup (FRE-396 AC1)."""
+    html_with_mermaid = (
+        "<!DOCTYPE html><html><head><style>:root{--color-primary:#000}</style></head>"
+        '<body><pre class="mermaid">graph TD; A-->B</pre></body></html>'
+    )
+    fake_svg = "<svg xmlns='http://www.w3.org/2000/svg'><text>diagram</text></svg>"
+
+    async def _fake_render_one(source: str, *, trace_id: str, session_id: object) -> str:
+        return f'<figure class="mermaid-diagram">{fake_svg}</figure>'
+
+    store, _client = _install_draft_fakes(monkeypatch, html_content=html_with_mermaid)
+    monkeypatch.setattr(artifact_tools, "_render_mermaid_one", _fake_render_one)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="fsm-diagram",
+        title="FSM Diagram",
+        summary="Finite State Machine visualization",
+        plan="Draw the FSM states and transitions.",
+        ctx=_ctx(),
+    )
+
+    written = store.put_calls[0]["content"].decode("utf-8")
+    assert "<svg" in written
+    assert '<pre class="mermaid">' not in written
+    assert "<script" not in written
+
+
 def test_artifact_draft_tool_category_is_artifact_write() -> None:
     """Governance category matches artifact_write for consistent policy."""
     assert artifact_tools.artifact_draft_tool.category == "artifact_write"

@@ -116,6 +116,8 @@ Following the Mermaid precedent (`securityLevel: 'strict'` in `MermaidBlock.tsx`
 - **Allows** rich documents: layouts, tables, SVG, callouts, color, embedded raster images, links
 - **Disallows** script execution, popups, navigation, cross-origin fetches
 
+**D7 amendment — Mermaid diagrams (FRE-396, 2026-05-28):** `artifact_draft` now supports Mermaid diagram markup. The sub-agent emits `<pre class="mermaid">…</pre>` blocks; the artifact pipeline converts them to static inline SVG server-side via `mmdc` before validation. The `<script>` ban and `sandbox=""` posture are unchanged — the output is always a script-free document. Render failures degrade gracefully to a `<pre>` fallback (never a crash).
+
 Interactive artifacts (sliders, calculators, mini-apps with JS) are **out of scope** for this ADR. If interactivity is later required, it must:
 
 - Be explicitly opted in via a fence-info marker (e.g., ` ```html interactive `) or artifact metadata flag (`interactive=true`)

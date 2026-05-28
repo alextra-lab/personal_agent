@@ -986,43 +986,58 @@ async def test_artifact_draft_requires_user_id(
 async def test_artifact_draft_rejects_missing_doctype(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from personal_agent.tools.executor import TerminalToolError
+
     _install_draft_fakes(
         monkeypatch,
         html_content="<html><head><title>Test</title></head><body><h1>No doctype here</h1></body></html>",
     )
 
-    with pytest.raises(ToolExecutionError, match="DOCTYPE"):
+    # Malformation (truncated/incomplete output) is recoverable — NOT terminal — so
+    # the model can retry. Only sandbox violations (script/handlers) are terminal.
+    with pytest.raises(ToolExecutionError, match="DOCTYPE") as exc_info:
         await artifact_tools.artifact_draft_executor(
             slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
         )
+    assert not isinstance(exc_info.value, TerminalToolError)
 
 
 @pytest.mark.asyncio
 async def test_artifact_draft_rejects_script_tags(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Script rejection is terminal (FRE-402) — short-circuit, don't loop to the model."""
+    from personal_agent.tools.executor import TerminalToolError
+
     bad_html = "<!DOCTYPE html><html><head></head><body><script>alert(1)</script></body></html>"
     _install_draft_fakes(monkeypatch, html_content=bad_html)
 
-    with pytest.raises(ToolExecutionError, match="script"):
+    with pytest.raises(TerminalToolError, match="script") as exc_info:
         await artifact_tools.artifact_draft_executor(
             slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
         )
+    assert exc_info.value.reason
+    assert exc_info.value.next_step
 
 
 @pytest.mark.asyncio
 async def test_artifact_draft_rejects_event_handlers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Inline-handler rejection is terminal (FRE-402)."""
+    from personal_agent.tools.executor import TerminalToolError
+
     bad_html = (
         '<!DOCTYPE html><html><head></head><body><div onclick="evil()">click</div></body></html>'
     )
     _install_draft_fakes(monkeypatch, html_content=bad_html)
 
-    with pytest.raises(ToolExecutionError, match="event handler"):
+    with pytest.raises(TerminalToolError, match="event handler") as exc_info:
         await artifact_tools.artifact_draft_executor(
             slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
         )
+    assert exc_info.value.reason
+    assert exc_info.value.next_step
 
 
 @pytest.mark.asyncio

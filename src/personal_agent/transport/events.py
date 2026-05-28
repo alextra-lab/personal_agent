@@ -205,7 +205,13 @@ class ClassifiedErrorEvent:
     session_id: str
     trace_id: str
     category: Literal[
-        "model_server", "timeout", "connection", "rate_limit", "budget_denied", "generic"
+        "model_server",
+        "timeout",
+        "connection",
+        "rate_limit",
+        "budget_denied",
+        "tool_failure",
+        "generic",
     ]
     reason: str
     next_step: str

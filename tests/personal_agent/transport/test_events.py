@@ -226,3 +226,16 @@ class TestClassifiedErrorEvent:
             partial=True,
         )
         assert event.partial is True
+
+    def test_tool_failure_category(self) -> None:
+        """FRE-402: tool_failure is a valid category for terminal tool failures."""
+        event = ClassifiedErrorEvent(
+            session_id="s",
+            trace_id="t",
+            category="tool_failure",
+            reason="The artifact generator timed out.",
+            next_step="Try a simpler artifact, or switch to Cloud.",
+            actions=["retry", "stop"],
+            partial=False,
+        )
+        assert event.category == "tool_failure"

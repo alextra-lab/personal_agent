@@ -229,8 +229,6 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
         )}
       </header>
 
-      {isStreaming && <TurnStatusBar status={turnStatus} />}
-
       {/* Message list */}
       <main className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
         {isLoadingHistory ? (
@@ -323,6 +321,10 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
 
       {/* Footer — safe-area bottom padding handled inside ChatInput */}
       <footer className="flex-shrink-0">
+        {/* Persistent turn-status bar, co-located with the input controls.
+            Stays visible after streaming ends (shows the last turn's metrics);
+            self-hides only until the first turn produces a turn_status. */}
+        <TurnStatusBar status={turnStatus} />
         <ToolIndicator tools={activeTools} />
         <ChatInput
           onSend={handleSend}

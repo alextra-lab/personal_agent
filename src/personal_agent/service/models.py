@@ -69,6 +69,18 @@ class SessionUpdate(BaseModel):
     messages: list[dict[str, Any]] | None = None
 
 
+class ConstraintPreferenceUpdate(BaseModel):
+    """Request to set a standing constraint governance preference (ADR-0076).
+
+    ``preferred_action`` must be the literal ``always_pause`` or a valid stable
+    ``action_id`` for the named constraint; the endpoint validates it against
+    the action-ID registry.
+    """
+
+    constraint_name: str
+    preferred_action: str
+
+
 class SessionResponse(BaseModel):
     """Session data returned by API."""
 
@@ -361,6 +373,29 @@ class SessionEventModel(Base):
     __table_args__ = (
         UniqueConstraint("session_id", "seq", name="session_events_session_id_seq_key"),
     )
+
+
+class UserConstraintPreferenceModel(Base):
+    """SQLAlchemy model for the user_constraint_preferences table (ADR-0076).
+
+    Standing per-user preferences for harness constraint pauses. A missing row
+    for a (user, constraint) pair means ``always_pause``. ``preferred_action``
+    holds a stable ``action_id`` (e.g. ``continue_10``) or the literal
+    ``always_pause`` — never a display label.
+    """
+
+    __tablename__ = "user_constraint_preferences"
+
+    user_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.user_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    constraint_name = Column(Text, primary_key=True)
+    preferred_action = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.now)
+    source_session_id = Column(PG_UUID(as_uuid=True), nullable=True)
 
 
 class ConsolidationAttemptModel(Base):

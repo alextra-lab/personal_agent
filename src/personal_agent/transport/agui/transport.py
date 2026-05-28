@@ -28,10 +28,15 @@ from personal_agent.transport.agui.adapter import to_agui_event
 from personal_agent.transport.agui.event_buffer import SessionEventBuffer
 from personal_agent.transport.agui.ws_endpoint import (
     ApprovalDecision,
+    WaiterMetadata,
     get_event_queue,
+    register_constraint_waiter,
     register_waiter,
 )
 from personal_agent.transport.events import (
+    CancelledEvent,
+    ConstraintPauseEvent,
+    ConstraintResolvedEvent,
     InternalEvent,
     InterruptEvent,
     StateUpdateEvent,
@@ -73,6 +78,87 @@ async def _push_event(event: InternalEvent, session_id: str) -> None:
             session_id=session_id,
             event_type=event_type,
         )
+
+
+async def register_and_push_constraint(
+    *,
+    session_id: str,
+    request_id: str,
+    event: ConstraintPauseEvent,
+    metadata: WaiterMetadata,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Register a constraint waiter, push the pause event, await the decision.
+
+    Registration happens before the push (race-free, ADR-0076). When no
+    WebSocket connection is active, the pause event is **not** persisted — a
+    client that will never see it should not get a replayed pause — and the
+    default option is returned with ``resolution="connection_lost"``.
+
+    Args:
+        session_id: Target session identifier.
+        request_id: Unique identifier for this pause round-trip.
+        event: The ``ConstraintPauseEvent`` to deliver once registered.
+        metadata: Waiter metadata (options, default) for validation/timeout.
+        timeout_seconds: Seconds before the default option auto-applies.
+
+    Returns:
+        Resolution payload dict with ``decision``, ``resolution``, and an
+        optional ``remember`` flag.
+    """
+
+    async def _push() -> None:
+        await _push_event(event, session_id)
+
+    return await register_constraint_waiter(
+        session_id=session_id,
+        request_id=request_id,
+        timeout_seconds=timeout_seconds,
+        metadata=metadata,
+        on_registered=_push,
+    )
+
+
+async def emit_constraint_resolved(
+    *,
+    request_id: str,
+    session_id: str,
+    constraint: str,
+    action_id: str,
+    resolution: str,
+) -> None:
+    """Persist + enqueue a ``CONSTRAINT_RESOLVED`` event (ADR-0076)."""
+    await _push_event(
+        ConstraintResolvedEvent(
+            request_id=request_id,
+            session_id=session_id,
+            constraint=constraint,
+            action_id=action_id,
+            resolution=resolution,  # type: ignore[arg-type]
+        ),
+        session_id,
+    )
+
+
+async def emit_cancelled(*, session_id: str, trace_id: str, reason: str = "user_cancel") -> None:
+    """Persist + enqueue a ``CANCELLED`` event (ADR-0076 Stop button)."""
+    await _push_event(
+        CancelledEvent(session_id=session_id, trace_id=trace_id, reason=reason),
+        session_id,
+    )
+
+
+async def emit_turn_status(*, session_id: str, value: Mapping[str, Any]) -> None:
+    """Persist + enqueue a ``turn_status`` STATE_DELTA event (ADR-0076).
+
+    Args:
+        session_id: Target session identifier.
+        value: Turn metrics payload (context tokens, tool iteration, cost).
+    """
+    await _push_event(
+        StateUpdateEvent(key="turn_status", value=dict(value), session_id=session_id),
+        session_id,
+    )
 
 
 class AGUITransport:
@@ -206,33 +292,37 @@ class AGUITransport:
         """
         expires_at = (datetime.now(UTC) + timedelta(seconds=timeout_seconds)).isoformat()
 
-        await _push_event(
-            ToolApprovalRequestEvent(
+        async def _push() -> None:
+            await _push_event(
+                ToolApprovalRequestEvent(
+                    request_id=request_id,
+                    trace_id=trace_id,
+                    session_id=session_id,
+                    tool=tool,
+                    args=args,
+                    risk_level=risk_level,
+                    reason=reason,
+                    expires_at=expires_at,
+                ),
+                session_id,
+            )
+            log.info(
+                "transport.approval_request_queued",
                 request_id=request_id,
-                trace_id=trace_id,
                 session_id=session_id,
+                trace_id=trace_id,
                 tool=tool,
-                args=args,
                 risk_level=risk_level,
-                reason=reason,
-                expires_at=expires_at,
-            ),
-            session_id,
-        )
-        log.info(
-            "transport.approval_request_queued",
-            request_id=request_id,
-            session_id=session_id,
-            trace_id=trace_id,
-            tool=tool,
-            risk_level=risk_level,
-            timeout_seconds=timeout_seconds,
-        )
+                timeout_seconds=timeout_seconds,
+            )
 
+        # Register the waiter BEFORE pushing the event so a fast client reply
+        # can never arrive before the waiter exists (ADR-0076 race fix).
         decision = await register_waiter(
             session_id=session_id,
             request_id=request_id,
             timeout_seconds=timeout_seconds,
+            on_registered=_push,
         )
         log.info(
             "transport.approval_decision_received",

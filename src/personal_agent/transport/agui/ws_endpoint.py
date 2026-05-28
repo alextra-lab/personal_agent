@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 from uuid import UUID
@@ -45,6 +46,24 @@ WS_CLOSE_SUPERSEDED = 4001
 
 
 @dataclass
+class WaiterMetadata:
+    """Metadata stored alongside a constraint waiter for decision validation.
+
+    Attributes:
+        constraint: Constraint name this waiter is pausing for.
+        options: Valid ``action_id`` values accepted from the client.
+        default_option: ``action_id`` applied on timeout, disconnect, or an
+            invalid incoming decision.
+        created_at: Monotonic time the waiter was registered.
+    """
+
+    constraint: str
+    options: list[str]
+    default_option: str
+    created_at: float
+
+
+@dataclass
 class _ConnectionState:
     """Mutable state for an active WebSocket connection."""
 
@@ -55,6 +74,8 @@ class _ConnectionState:
     waiters: dict[str, asyncio.Event] = field(default_factory=dict)
     waiter_payloads: dict[str, dict[str, Any]] = field(default_factory=dict)
     waiter_timeouts: dict[str, asyncio.Task[None]] = field(default_factory=dict)
+    waiter_metadata: dict[str, WaiterMetadata] = field(default_factory=dict)
+    cancel_requested: bool = False
 
 
 _active_connections: dict[str, _ConnectionState] = {}
@@ -63,6 +84,31 @@ _active_connections: dict[str, _ConnectionState] = {}
 def get_active_connection(session_id: str) -> _ConnectionState | None:
     """Return the active connection state for a session, if any."""
     return _active_connections.get(session_id)
+
+
+def is_cancel_requested(session_id: str) -> bool:
+    """Return whether the user requested cancellation for this session (ADR-0076).
+
+    Args:
+        session_id: Session to check.
+
+    Returns:
+        True if a ``USER_CANCEL`` was received on the active connection and not
+        yet cleared. False when no connection is active.
+    """
+    conn = _active_connections.get(session_id)
+    return conn is not None and conn.cancel_requested
+
+
+def clear_cancel_flag(session_id: str) -> None:
+    """Reset the cancellation flag at the start of a new turn (ADR-0076).
+
+    Args:
+        session_id: Session whose cancel flag should be cleared.
+    """
+    conn = _active_connections.get(session_id)
+    if conn is not None:
+        conn.cancel_requested = False
 
 
 # ── Decision waiter API (replaces approval_waiter.py) ──────────────────────
@@ -81,25 +127,57 @@ class ApprovalDecision:
     reason: str | None = None
 
 
+@dataclass(frozen=True)
+class ConstraintDecision:
+    """Result of a constraint pause round-trip (ADR-0076).
+
+    Separate from :class:`ApprovalDecision` because constraint decisions use
+    open-ended ``action_id`` values that vary per constraint type, plus a
+    ``remember`` flag for persisting a standing preference.
+
+    Attributes:
+        decision: The chosen ``action_id`` (validated against waiter options).
+        remember: True if the user asked to remember this choice.
+        request_id: Identifier of the pause round-trip.
+        resolution: How the decision was reached.
+    """
+
+    decision: str
+    remember: bool
+    request_id: str
+    resolution: Literal["user_choice", "timeout_default", "connection_lost", "user_cancel"]
+
+
 async def register_waiter(
     session_id: str,
     request_id: str,
     timeout_seconds: float,
     default_decision: str = "timeout",
+    on_registered: Callable[[], Awaitable[None]] | None = None,
 ) -> ApprovalDecision:
     """Register a decision waiter and block until resolved or timed out.
+
+    The waiter is registered **before** ``on_registered`` runs, closing the
+    race where a client responds to a pushed event before the waiter exists
+    (ADR-0076). Callers pass the event-push coroutine as ``on_registered`` so
+    the push happens only after the waiter is ready to receive the reply.
 
     Args:
         session_id: Session the waiter belongs to.
         request_id: Unique request identifier for the pending decision.
         timeout_seconds: Seconds before auto-resolving with *default_decision*.
         default_decision: Decision string to use on timeout.
+        on_registered: Optional coroutine run after registration (typically the
+            event push). For the no-connection case it still runs so the event
+            is persisted for replay, then a ``connection_lost`` decision returns.
 
     Returns:
         The resolved decision.
     """
     conn = _active_connections.get(session_id)
     if conn is None:
+        if on_registered is not None:
+            await on_registered()
         return ApprovalDecision(decision="connection_lost", reason="no active WS connection")
 
     event = asyncio.Event()
@@ -110,6 +188,9 @@ async def register_waiter(
         _waiter_timeout(session_id, request_id, timeout_seconds, default_decision),
     )
     conn.waiter_timeouts[request_id] = timeout_task
+
+    if on_registered is not None:
+        await on_registered()
 
     try:
         await event.wait()
@@ -145,6 +226,93 @@ async def _waiter_timeout(
         log.info("ws.waiter_timeout", request_id=request_id, session_id=session_id)
 
 
+async def register_constraint_waiter(
+    session_id: str,
+    request_id: str,
+    timeout_seconds: float,
+    metadata: WaiterMetadata,
+    on_registered: Callable[[], Awaitable[None]] | None = None,
+) -> dict[str, Any]:
+    """Register a constraint-pause waiter and block until resolved (ADR-0076).
+
+    Unlike :func:`register_waiter` (which wraps the result in an
+    :class:`ApprovalDecision`), this returns the raw resolution payload so the
+    caller can read ``decision`` (action_id), ``resolution``, and ``remember``.
+    The waiter is registered before ``on_registered`` runs (race-free push).
+
+    Args:
+        session_id: Session the waiter belongs to.
+        request_id: Unique identifier for this pause round-trip.
+        timeout_seconds: Seconds before auto-resolving with the default option.
+        metadata: Constraint metadata (options, default) used for validation
+            and timeout resolution.
+        on_registered: Optional coroutine run after registration (the pause
+            event push). Not invoked when no connection is active.
+
+    Returns:
+        Resolution payload dict with at least ``decision`` and ``resolution``.
+        When no WebSocket connection is active, returns immediately with
+        ``resolution="connection_lost"`` and the default option.
+    """
+    conn = _active_connections.get(session_id)
+    if conn is None:
+        return {"decision": metadata.default_option, "resolution": "connection_lost"}
+
+    event = asyncio.Event()
+    conn.waiters[request_id] = event
+    conn.waiter_payloads[request_id] = {}
+    conn.waiter_metadata[request_id] = metadata
+
+    timeout_task = asyncio.create_task(
+        _constraint_waiter_timeout(
+            session_id, request_id, timeout_seconds, metadata.default_option
+        ),
+    )
+    conn.waiter_timeouts[request_id] = timeout_task
+
+    if on_registered is not None:
+        await on_registered()
+
+    try:
+        await event.wait()
+    finally:
+        timeout_task.cancel()
+        conn.waiters.pop(request_id, None)
+        conn.waiter_timeouts.pop(request_id, None)
+        conn.waiter_metadata.pop(request_id, None)
+
+    payload = conn.waiter_payloads.pop(request_id, {})
+    payload.setdefault("decision", metadata.default_option)
+    payload.setdefault("resolution", "user_choice")
+    return payload
+
+
+async def _constraint_waiter_timeout(
+    session_id: str,
+    request_id: str,
+    timeout_seconds: float,
+    default_option: str,
+) -> None:
+    """Background task that resolves a constraint waiter on timeout."""
+    await asyncio.sleep(timeout_seconds)
+    conn = _active_connections.get(session_id)
+    if conn is None:
+        return
+    evt = conn.waiters.get(request_id)
+    if evt is not None and not evt.is_set():
+        conn.waiter_payloads[request_id] = {
+            "decision": default_option,
+            "resolution": "timeout_default",
+        }
+        evt.set()
+        log.info(
+            "ws.constraint_waiter_timeout",
+            request_id=request_id,
+            session_id=session_id,
+            default_option=default_option,
+        )
+
+
 def _resolve_waiter(conn: _ConnectionState, request_id: str, payload: dict[str, Any]) -> None:
     """Resolve a pending waiter with the given payload."""
     evt = conn.waiters.get(request_id)
@@ -164,19 +332,88 @@ def _resolve_waiter(conn: _ConnectionState, request_id: str, payload: dict[str, 
     )
 
 
+def _resolve_constraint_decision(
+    conn: _ConnectionState, request_id: str, msg: dict[str, Any]
+) -> None:
+    """Validate and resolve an incoming ``CONSTRAINT_DECISION`` (ADR-0076).
+
+    The decision's ``action_id`` is validated against the waiter's registered
+    options. An unknown action is logged and substituted with the default
+    option. Unknown/already-resolved request IDs are silently dropped by
+    :func:`_resolve_waiter` (idempotency).
+
+    Args:
+        conn: Active connection.
+        request_id: Pause round-trip identifier.
+        msg: Raw inbound message dict (``decision``, ``remember``).
+    """
+    meta = conn.waiter_metadata.get(request_id)
+    decision = str(msg.get("decision", ""))
+    remember = bool(msg.get("remember", False))
+
+    if meta is not None and decision not in meta.options:
+        log.warning(
+            "ws.constraint_decision_invalid_action",
+            request_id=request_id,
+            session_id=conn.session_id,
+            received=decision,
+            substituted=meta.default_option,
+            options=meta.options,
+        )
+        decision = meta.default_option
+
+    _resolve_waiter(
+        conn,
+        request_id,
+        {"decision": decision, "remember": remember, "resolution": "user_choice"},
+    )
+
+
+def _resolve_all_waiters_user_cancel(conn: _ConnectionState) -> list[str]:
+    """Resolve all pending waiters with ``user_cancel`` (ADR-0076 Stop button).
+
+    Each waiter is resolved with its registered default ``action_id`` and a
+    ``user_cancel`` resolution, so any executor awaiting a constraint decision
+    unblocks immediately and synthesizes from results gathered so far.
+
+    Args:
+        conn: Active connection whose waiters should be cancelled.
+
+    Returns:
+        The request IDs that were resolved (for telemetry).
+    """
+    resolved: list[str] = []
+    for request_id, evt in conn.waiters.items():
+        if evt.is_set():
+            continue
+        meta = conn.waiter_metadata.get(request_id)
+        default_option = meta.default_option if meta is not None else "timeout"
+        conn.waiter_payloads[request_id] = {
+            "decision": default_option,
+            "resolution": "user_cancel",
+        }
+        evt.set()
+        resolved.append(request_id)
+    return resolved
+
+
 def _cancel_all_waiters(conn: _ConnectionState) -> None:
     """Resolve all pending waiters with connection_lost."""
     for request_id, evt in conn.waiters.items():
         if not evt.is_set():
-            conn.waiter_payloads[request_id] = {
-                "decision": "connection_lost",
+            meta = conn.waiter_metadata.get(request_id)
+            payload: dict[str, Any] = {
+                "decision": meta.default_option if meta is not None else "connection_lost",
                 "reason": "WebSocket disconnected",
+                "resolution": "connection_lost",
             }
+            conn.waiter_payloads[request_id] = payload
             evt.set()
     for task in conn.waiter_timeouts.values():
         task.cancel()
     conn.waiters.clear()
     conn.waiter_timeouts.clear()
+    conn.waiter_metadata.clear()
 
 
 # ── Per-session event queues ───────────────────────────────────────────────
@@ -496,10 +733,22 @@ async def _receiver(conn: _ConnectionState) -> None:
                     conn.outbound_queue.put_nowait(pong)
                 except asyncio.QueueFull:
                     pass
-            case "APPROVAL_DECISION" | "CONSTRAINT_DECISION" | "INTERRUPT_RESPONSE":
+            case "APPROVAL_DECISION" | "INTERRUPT_RESPONSE":
                 request_id = msg.get("request_id", "")
                 if request_id:
                     _resolve_waiter(conn, request_id, msg)
+            case "CONSTRAINT_DECISION":
+                request_id = msg.get("request_id", "")
+                if request_id:
+                    _resolve_constraint_decision(conn, request_id, msg)
+            case "USER_CANCEL":
+                conn.cancel_requested = True
+                cancelled = _resolve_all_waiters_user_cancel(conn)
+                log.info(
+                    "user_cancel_received",
+                    session_id=conn.session_id,
+                    pending_constraint_request_ids=cancelled,
+                )
             case _:
                 log.debug("ws.unknown_message_type", msg_type=msg_type, session_id=conn.session_id)
 

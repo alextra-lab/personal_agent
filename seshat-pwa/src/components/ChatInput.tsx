@@ -10,6 +10,10 @@ interface ChatInputProps {
   placeholder?: string;
   profile: ExecutionProfile;
   onProfileChange: (profile: ExecutionProfile) => void;
+  /** While true the action button becomes a Stop control (ADR-0076). */
+  isStreaming?: boolean;
+  /** Invoked when the Stop button is tapped (sends USER_CANCEL). */
+  onStop?: () => void;
 }
 
 /**
@@ -28,6 +32,8 @@ export function ChatInput({
   placeholder = 'Message Seshat...',
   profile,
   onProfileChange,
+  isStreaming = false,
+  onStop,
 }: ChatInputProps) {
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -123,33 +129,52 @@ export function ChatInput({
         `}
       />
 
-      <button
-        type="submit"
-        disabled={!canSend}
-        aria-label="Send message"
-        className={`
-          flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center
-          transition-all duration-150
-          ${
-            canSend
-              ? 'bg-white hover:bg-slate-100 text-slate-900 cursor-pointer'
-              : 'bg-slate-700 text-slate-500 cursor-not-allowed'
-          }
-        `}
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 20 20"
-          fill="currentColor"
-          className="w-5 h-5"
+      {isStreaming ? (
+        <button
+          type="button"
+          onClick={() => onStop?.()}
+          aria-label="Stop generating"
+          className="flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center transition-all duration-150 bg-white hover:bg-slate-100 text-slate-900 cursor-pointer"
         >
-          <path
-            fillRule="evenodd"
-            d="M10 17a.75.75 0 01-.75-.75V5.612L5.29 9.77a.75.75 0 01-1.08-1.04l5.25-5.5a.75.75 0 011.08 0l5.25 5.5a.75.75 0 11-1.08 1.04L10.75 5.612V16.25A.75.75 0 0110 17z"
-            clipRule="evenodd"
-          />
-        </svg>
-      </button>
+          {/* Stop icon — filled square */}
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            className="w-4 h-4"
+          >
+            <rect x="5" y="5" width="10" height="10" rx="1.5" />
+          </svg>
+        </button>
+      ) : (
+        <button
+          type="submit"
+          disabled={!canSend}
+          aria-label="Send message"
+          className={`
+            flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center
+            transition-all duration-150
+            ${
+              canSend
+                ? 'bg-white hover:bg-slate-100 text-slate-900 cursor-pointer'
+                : 'bg-slate-700 text-slate-500 cursor-not-allowed'
+            }
+          `}
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            className="w-5 h-5"
+          >
+            <path
+              fillRule="evenodd"
+              d="M10 17a.75.75 0 01-.75-.75V5.612L5.29 9.77a.75.75 0 01-1.08-1.04l5.25-5.5a.75.75 0 011.08 0l5.25 5.5a.75.75 0 11-1.08 1.04L10.75 5.612V16.25A.75.75 0 0110 17z"
+              clipRule="evenodd"
+            />
+          </svg>
+        </button>
+      )}
     </form>
   );
 }

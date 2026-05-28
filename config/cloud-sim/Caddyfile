@@ -93,7 +93,7 @@ graph.frenchforet.com:80 {
 # harness logs happens in ES on span_id / trace_id. Path-allowlisted to slm-requests-*
 # indices only so a leaked CF Access token can't touch other indices. Full ES Security
 # (native auth / API keys) is the planned follow-up; this is the interim CF-only gate.
-es.frenchforet.com:80 {
+http://es.frenchforet.com:80 {
 	@allowed path_regexp ^/(slm-requests-[^/]+|_bulk)(/.*)?$
 	handle @allowed {
 		reverse_proxy elasticsearch:9200

@@ -918,7 +918,10 @@ def _validate_html_output(html: str) -> None:
     """Validate sub-agent HTML before persisting (ADR-0077 D9, ADR-0070 D7).
 
     Raises:
-        ToolExecutionError: On any validation failure.
+        TerminalToolError: On a sandbox violation (script tags or inline event
+            handlers) — non-recoverable, so the turn short-circuits (FRE-402).
+        ToolExecutionError: On recoverable malformation (too small, missing
+            DOCTYPE / closing tag) — the model may fix this on retry.
     """
     if len(html) < _MIN_HTML_LENGTH:
         raise ToolExecutionError(
@@ -935,16 +938,26 @@ def _validate_html_output(html: str) -> None:
             "Generated HTML is missing closing </html> tag. "
             "Refine the plan or use artifact_write directly."
         )
+    # FRE-402: sandbox violations are non-recoverable — the local model reliably
+    # re-emits scripts when asked for interactivity, so a retry just burns another
+    # slow reasoning + generation round-trip. Mark terminal so the turn short-circuits
+    # instead of looping back through the model. (Malformation cases above stay
+    # recoverable ToolExecutionError — truncated output can succeed on retry.)
     if _SCRIPT_TAG_RE.search(html):
-        raise ToolExecutionError(
-            "Generated HTML contains <script> tags, which are prohibited "
-            "(ADR-0070 D7 sandbox). Refine the plan or use artifact_write directly."
+        raise TerminalToolError(
+            "Generated HTML contains <script> tags, which are prohibited (ADR-0070 D7 sandbox).",
+            reason="The generated page used scripts, which the artifact sandbox blocks.",
+            next_step=(
+                "Ask for a static or CSS-only version (no JavaScript or CDN frameworks "
+                "like Tailwind), or switch to Cloud."
+            ),
         )
     if _EVENT_HANDLER_RE.search(html):
-        raise ToolExecutionError(
+        raise TerminalToolError(
             "Generated HTML contains inline event handlers (onclick, onload, etc.), "
-            "which are prohibited (ADR-0070 D7 sandbox). Refine the plan or use "
-            "artifact_write directly."
+            "which are prohibited (ADR-0070 D7 sandbox).",
+            reason="The generated page used inline event handlers, which the artifact sandbox blocks.",
+            next_step=("Ask for a static or CSS-only version (no JavaScript), or switch to Cloud."),
         )
 
 

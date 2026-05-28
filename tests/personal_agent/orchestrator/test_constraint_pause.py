@@ -15,7 +15,7 @@ _TRANSPORT = "personal_agent.transport.agui.transport"
 async def test_preference_applied_bypasses_pause(monkeypatch: pytest.MonkeyPatch) -> None:
     """A standing preference is applied without pushing a pause event (AC-7)."""
 
-    async def fake_load(user_id: object, constraint: str) -> str:
+    async def fake_load(user_id: object, constraint: str, **_kw: object) -> str:
         return "continue_10"
 
     pushed = {"called": False}
@@ -42,7 +42,7 @@ async def test_preference_applied_bypasses_pause(monkeypatch: pytest.MonkeyPatch
 async def test_no_ws_default_no_resolution_emitted(monkeypatch: pytest.MonkeyPatch) -> None:
     """connection_lost applies the default silently — no CONSTRAINT_RESOLVED (AC-13)."""
 
-    async def fake_load(user_id: object, constraint: str) -> None:
+    async def fake_load(user_id: object, constraint: str, **_kw: object) -> None:
         return None
 
     async def fake_push(**kwargs: object) -> dict[str, str]:
@@ -72,7 +72,7 @@ async def test_no_ws_default_no_resolution_emitted(monkeypatch: pytest.MonkeyPat
 async def test_user_choice_emits_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
     """A user decision returns its action_id and emits CONSTRAINT_RESOLVED (AC-3/4)."""
 
-    async def fake_load(user_id: object, constraint: str) -> None:
+    async def fake_load(user_id: object, constraint: str, **_kw: object) -> None:
         return None
 
     async def fake_push(**kwargs: object) -> dict[str, str]:
@@ -104,7 +104,7 @@ async def test_user_choice_emits_resolution(monkeypatch: pytest.MonkeyPatch) -> 
 async def test_remember_saves_preference(monkeypatch: pytest.MonkeyPatch) -> None:
     """remember=true persists the chosen action via _save_constraint_preference (AC-6)."""
 
-    async def fake_load(user_id: object, constraint: str) -> None:
+    async def fake_load(user_id: object, constraint: str, **_kw: object) -> None:
         return None
 
     async def fake_push(**kwargs: object) -> dict[str, object]:
@@ -116,7 +116,12 @@ async def test_remember_saves_preference(monkeypatch: pytest.MonkeyPatch) -> Non
     saved: list[tuple[str, str, str]] = []
 
     async def fake_save(
-        user_id: object, constraint_name: str, action_id: str, *, session_id: str
+        user_id: object,
+        constraint_name: str,
+        action_id: str,
+        *,
+        trace_id: str,
+        session_id: str,
     ) -> None:
         saved.append((constraint_name, action_id, session_id))
 

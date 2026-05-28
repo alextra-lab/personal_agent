@@ -162,12 +162,20 @@ async def _emit_turn_status(ctx: "ExecutionContext") -> None:
         log.debug("turn_status_emit_failed", trace_id=ctx.trace_id, session_id=ctx.session_id)
 
 
-async def _load_constraint_preference(user_id: UUID | None, constraint_name: str) -> str | None:
+async def _load_constraint_preference(
+    user_id: UUID | None,
+    constraint_name: str,
+    *,
+    trace_id: str,
+    session_id: str,
+) -> str | None:
     """Load a user's standing preference for a constraint, if any.
 
     Args:
         user_id: Owning user UUID, or None for headless/API usage.
         constraint_name: Constraint name (e.g. ``tool_iteration_limit``).
+        trace_id: Trace context identifier for telemetry correlation.
+        session_id: Active session identifier for telemetry correlation.
 
     Returns:
         The stored ``action_id`` / ``always_pause`` string, or None when no
@@ -185,7 +193,12 @@ async def _load_constraint_preference(user_id: UUID | None, constraint_name: str
             repo = ConstraintPreferencesRepository(db)
             return await repo.get_preferred_action(user_id, constraint_name)
     except Exception:
-        log.exception("constraint_preference_load_failed", constraint=constraint_name)
+        log.exception(
+            "constraint_preference_load_failed",
+            constraint=constraint_name,
+            trace_id=trace_id,
+            session_id=session_id,
+        )
         return None
 
 
@@ -194,6 +207,7 @@ async def _save_constraint_preference(
     constraint_name: str,
     action_id: str,
     *,
+    trace_id: str,
     session_id: str,
 ) -> None:
     """Persist a standing constraint preference (the "Remember this choice" path).
@@ -202,6 +216,7 @@ async def _save_constraint_preference(
         user_id: Owning user UUID, or None for headless/API usage (no-op).
         constraint_name: Constraint name the preference applies to.
         action_id: Stable ``action_id`` chosen by the user.
+        trace_id: Trace context identifier for telemetry correlation.
         session_id: Session where the preference was set (audit trail).
     """
     if user_id is None:
@@ -226,7 +241,12 @@ async def _save_constraint_preference(
                 source_session_id=source,
             )
     except Exception:
-        log.exception("constraint_preference_save_failed", constraint=constraint_name)
+        log.exception(
+            "constraint_preference_save_failed",
+            constraint=constraint_name,
+            trace_id=trace_id,
+            session_id=session_id,
+        )
 
 
 async def _maybe_pause_for_constraint(
@@ -272,7 +292,9 @@ async def _maybe_pause_for_constraint(
     default_id = default_action_id(constraint)
 
     # 1. Stored preference bypasses the pause entirely (telemetry-only record).
-    pref = await _load_constraint_preference(user_id, constraint)
+    pref = await _load_constraint_preference(
+        user_id, constraint, trace_id=trace_id, session_id=session_id
+    )
     if pref and pref != "always_pause":
         log.info(
             "constraint_preference_applied",
@@ -370,7 +392,9 @@ async def _maybe_pause_for_constraint(
         )
 
     if remember:
-        await _save_constraint_preference(user_id, constraint, action_id, session_id=session_id)
+        await _save_constraint_preference(
+            user_id, constraint, action_id, trace_id=trace_id, session_id=session_id
+        )
 
     return action_id
 

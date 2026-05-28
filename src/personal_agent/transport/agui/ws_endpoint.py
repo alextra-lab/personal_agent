@@ -317,10 +317,10 @@ def _resolve_waiter(conn: _ConnectionState, request_id: str, payload: dict[str, 
     """Resolve a pending waiter with the given payload."""
     evt = conn.waiters.get(request_id)
     if evt is None:
-        log.debug("ws.resolve_unknown_waiter", request_id=request_id)
+        log.debug("ws.resolve_unknown_waiter", request_id=request_id, session_id=conn.session_id)
         return
     if evt.is_set():
-        log.debug("ws.resolve_already_set", request_id=request_id)
+        log.debug("ws.resolve_already_set", request_id=request_id, session_id=conn.session_id)
         return
     conn.waiter_payloads[request_id] = payload
     evt.set()

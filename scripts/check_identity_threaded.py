@@ -25,6 +25,11 @@ import yaml  # type: ignore[import-untyped]
 
 LOG_METHODS = {"info", "debug", "warning", "error", "exception", "critical"}
 REQUIRED_LOG_KWARGS = frozenset({"trace_id"})
+# Identifiers whose presence in a function's scope means a trace_id is reachable:
+# the literal kwarg, or a TraceContext/ExecutionContext carrier that exposes
+# ``.trace_id``. A function holding any of these is request-scoped and its logs
+# must thread ``trace_id`` (ADR-0074 §I3).
+TRACE_CARRIERS = frozenset({"trace_id", "ctx", "trace_ctx", "trace_context"})
 REQUIRED_BUS_KWARGS = frozenset({"trace_id", "session_id"})
 ORIGIN_NODE_LABELS = ("Turn", "Entity", "Relationship", "DescriptionVersion")
 ORIGIN_PROPS = ("originating_trace_id", "originating_session_id")
@@ -75,6 +80,98 @@ def _is_log_call(call: ast.Call) -> bool:
         and isinstance(call.func.value, ast.Name)
         and call.func.value.id == "log"
     )
+
+
+def _walk_own_scope(node: ast.AST) -> Iterable[ast.AST]:
+    """Yield ``node`` and descendants, NOT descending into nested function bodies.
+
+    This isolates a function's *own* lexical scope: identifiers used inside a
+    nested ``def``/``async def``/``lambda`` belong to that inner scope, not the
+    enclosing one. The scope visitor pushes a frame per function, so closure
+    visibility is reconstructed by unioning the enclosing-frame stack.
+    """
+    yield node
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        yield from _walk_own_scope(child)
+
+
+def _own_identifiers(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """Identifiers reachable in ``fn``'s own scope (params + names/attrs used).
+
+    Includes parameter names and every ``Name.id`` / ``Attribute.attr`` used
+    directly in the body (so ``trace_id``, ``ctx.trace_id``, ``self.session_id``
+    all register). Nested function bodies are excluded — they get their own
+    frame. This drives scope classification: a request-scoped function naturally
+    has ``trace_id`` reachable; a connection/lifespan handler does not.
+    """
+    ids: set[str] = set()
+    a = fn.args
+    for arg in (*a.posonlyargs, *a.args, *a.kwonlyargs):
+        ids.add(arg.arg)
+    if a.vararg:
+        ids.add(a.vararg.arg)
+    if a.kwarg:
+        ids.add(a.kwarg.arg)
+    for stmt in fn.body:
+        for n in _walk_own_scope(stmt):
+            if isinstance(n, ast.Name):
+                ids.add(n.id)
+            elif isinstance(n, ast.Attribute):
+                ids.add(n.attr)
+    return ids
+
+
+class _LogScopeVisitor(ast.NodeVisitor):
+    """Scope-aware identity check for ``log.*`` calls (ADR-0074 §I3, FRE-393).
+
+    Deny-by-default, but the required key depends on what identity is reachable
+    in the enclosing function(s) — so the gate stays dynamic (new request-path
+    logs are flagged automatically) without false-positiving boot/connection
+    logs where no ``trace_id`` exists:
+
+      * ``trace_id`` reachable  → the log MUST pass ``trace_id`` (request scope).
+      * else ``session_id`` reachable → MUST pass ``session_id`` (or ``trace_id``)
+        — connection/lifespan scope, where a single trace does not exist.
+      * else → exempt (pure boot/module scope: no identity exists to thread).
+
+    ``**kwargs`` spread is treated as opaque-but-trusted (exempt), matching the
+    pre-existing behaviour.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._stack: list[set[str]] = []
+        self.violations: list[Violation] = []
+
+    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        self._stack.append(_own_identifiers(node))
+        self.generic_visit(node)
+        self._stack.pop()
+
+    visit_FunctionDef = _visit_function  # type: ignore[assignment]
+    visit_AsyncFunctionDef = _visit_function  # type: ignore[assignment]
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if _is_log_call(node):
+            kwargs = _kwarg_names(node)
+            if "<spread>" not in kwargs:
+                scope: set[str] = set()
+                for frame in self._stack:
+                    scope |= frame
+                if TRACE_CARRIERS & scope:
+                    if "trace_id" not in kwargs:
+                        self.violations.append(
+                            Violation(self.path, node.lineno, "log_missing_trace_id", "")
+                        )
+                elif "session_id" in scope:
+                    if not ({"session_id", "trace_id"} & kwargs):
+                        self.violations.append(
+                            Violation(self.path, node.lineno, "log_missing_session_id", "")
+                        )
+                # else: no identity reachable in scope → exempt (boot/module scope)
+        self.generic_visit(node)
 
 
 def _is_bus_publish(call: ast.Call) -> bool:
@@ -242,15 +339,16 @@ def lint_file(path: Path, allowlist: Iterable[dict[str, object]]) -> list[Violat
     tree = ast.parse(src)
     violations: list[Violation] = []
 
+    # Scope-aware log.* identity check (ADR-0074 §I3 / FRE-393).
+    log_visitor = _LogScopeVisitor(path)
+    log_visitor.visit(tree)
+    violations.extend(log_visitor.violations)
+
     visited_binops: set[int] = set()
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
-            if _is_log_call(node):
-                kwargs = _kwarg_names(node)
-                if "<spread>" not in kwargs and not REQUIRED_LOG_KWARGS.issubset(kwargs):
-                    violations.append(Violation(path, node.lineno, "log_missing_trace_id", ""))
-            elif _is_bus_publish(node):
+            if _is_bus_publish(node):
                 kwargs = _bus_publish_identity_kwargs(node, tree)
                 if "<spread>" not in kwargs and not REQUIRED_BUS_KWARGS.issubset(kwargs):
                     violations.append(

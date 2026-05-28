@@ -381,11 +381,16 @@ class LocalLLMClient:
                     current_endpoint.startswith("http://localhost")
                     or current_endpoint.startswith("http://127.0.0.1")
                 )
-                cf_headers: dict[str, str] = {}
+                request_headers: dict[str, str] = {
+                    "X-Trace-Id": str(trace_ctx.trace_id),
+                    "X-Span-Id": span_id,
+                }
+                if trace_ctx.session_id:
+                    request_headers["X-Session-Id"] = trace_ctx.session_id
                 if _SLM_TUNNEL_HOSTNAME in current_endpoint:
                     if settings.cf_access_client_id and settings.cf_access_client_secret:
-                        cf_headers[_CF_ACCESS_CLIENT_ID_HEADER] = settings.cf_access_client_id
-                        cf_headers[_CF_ACCESS_CLIENT_SECRET_HEADER] = (
+                        request_headers[_CF_ACCESS_CLIENT_ID_HEADER] = settings.cf_access_client_id
+                        request_headers[_CF_ACCESS_CLIENT_SECRET_HEADER] = (
                             settings.cf_access_client_secret
                         )
 
@@ -406,7 +411,7 @@ class LocalLLMClient:
                         "POST",
                         current_endpoint,
                         json=payload,
-                        headers=cf_headers or None,
+                        headers=request_headers,
                     ) as response:
                         response.raise_for_status()
                         async for line in response.aiter_lines():

@@ -299,6 +299,11 @@ joinability-probe:  ## Run one joinability probe walk against the current substr
 joinability-status: ## 7-day green-gate verdict from agent-monitors-joinability-* (exit 0 on green)
 	uv run python -m personal_agent.observability.joinability.status_cli $(ARGS)
 
+# ─── Prompt corpus ────────────────────────────────────────────────────────────
+
+render-prompt-corpus:
+	@uv run python scripts/render_prompt_corpus.py
+
 # ─── Code quality ─────────────────────────────────────────────────────────────
 
 mypy:

@@ -65,9 +65,7 @@ class TestGetSummary:
             side_effect=fake_compress,
         ):
             task = asyncio.create_task(
-                compression_manager._run_compression(
-                    "s1", [_msg("user", 100)], "t1", None
-                )
+                compression_manager._run_compression("s1", [_msg("user", 100)], "t1", None)
             )
             compression_manager._pending_tasks["s1"] = task
             await task
@@ -119,10 +117,12 @@ class TestMaybeTriggerCompression:
         target = int(max_tokens * threshold_ratio)
 
         per_msg_chars = 200
-        msg_count = (target * 4 // per_msg_chars) + 5
+        from personal_agent.llm_client.token_counter import estimate_tokens as _tok
+
+        tokens_per_msg = max(1, _tok("x" * per_msg_chars))
+        msg_count = (target // tokens_per_msg) + 5
         messages = [_msg("system", 40)] + [
-            _msg("user" if i % 2 == 0 else "assistant", per_msg_chars)
-            for i in range(msg_count)
+            _msg("user" if i % 2 == 0 else "assistant", per_msg_chars) for i in range(msg_count)
         ]
 
         fake_compress = AsyncMock(

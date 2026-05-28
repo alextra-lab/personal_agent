@@ -25,10 +25,7 @@ logger = structlog.get_logger(__name__)
 
 
 def estimate_tokens(text: str) -> int:
-    """Estimate token count from text using word-count approximation.
-
-    Uses word_count * 1.3 as a lightweight proxy for actual tokenisation.
-    Accuracy is sufficient for budget gating; no tokeniser dependency required.
+    """Estimate token count from text.
 
     Args:
         text: Any text string to estimate.
@@ -36,9 +33,9 @@ def estimate_tokens(text: str) -> int:
     Returns:
         Estimated token count (>= 0).
     """
-    if not text:
-        return 0
-    return int(len(text.split()) * 1.3)
+    from personal_agent.llm_client.token_counter import estimate_tokens as _count
+
+    return _count(text)
 
 
 def _total_context_tokens(

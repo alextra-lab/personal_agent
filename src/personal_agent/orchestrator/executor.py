@@ -2701,6 +2701,10 @@ async def _dispatch_tool_call(
             "loop_policy": loop_policy,
             "tool_layer_output": result.output,
             "tool_layer_error": result.error,
+            # FRE-402: tools mark non-recoverable failures via ToolResult.metadata.
+            "terminal": bool(result.metadata.get("terminal")),
+            "terminal_reason": result.metadata.get("terminal_reason"),
+            "terminal_next_step": result.metadata.get("terminal_next_step"),
         }
 
     except Exception as e:
@@ -2729,6 +2733,9 @@ async def _dispatch_tool_call(
             "loop_policy": loop_policy,
             "tool_layer_output": None,
             "tool_layer_error": str(e),
+            "terminal": False,
+            "terminal_reason": None,
+            "terminal_next_step": None,
         }
 
 
@@ -2985,6 +2992,8 @@ async def step_tool_execution(
     # invariants and ordering guarantees. Results are appended in allowed_plans order.
     _total_serial_ms = 0
     _max_dispatch_ms = 0
+    # FRE-402: first dispatched result that declared a non-recoverable failure.
+    terminal_failure: dict[str, Any] | None = None
     for i, raw in enumerate(raw_dispatch):
         plan = allowed_plans[i]
 
@@ -3012,6 +3021,11 @@ async def step_tool_execution(
             continue
 
         dr: dict[str, Any] = raw
+
+        # FRE-402: capture the first terminal (non-recoverable) tool failure so we
+        # can short-circuit after assembly instead of looping back to the model.
+        if terminal_failure is None and dr.get("terminal"):
+            terminal_failure = dr
 
         # Gate: record output for output-identity detection (success only)
         if dr["success"] and dr["output_hash"] is not None:
@@ -3111,6 +3125,36 @@ async def step_tool_execution(
         tool_count=len(tool_calls),
         duration_ms=duration_ms,
     )
+
+    # FRE-402: a tool declared a non-recoverable (terminal) failure — short-circuit
+    # the reasoning loop instead of routing the error back through the model (which
+    # would spend a full primary-model call to produce a "sorry, it failed" reply).
+    # Mirrors the step_llm_call failure path: set ctx.error + ctx.classified_error +
+    # ctx.final_reply and return FAILED; the shipped execute_task_safe then emits the
+    # RUN_ERROR event and surfaces the deterministic reply (FRE-398 machinery).
+    if terminal_failure is not None:
+        from personal_agent.error_classification import ClassifiedError
+        from personal_agent.tools.executor import ToolExecutionError
+
+        classified = ClassifiedError(
+            category="tool_failure",
+            reason=terminal_failure["terminal_reason"],
+            next_step=terminal_failure["terminal_next_step"],
+            actions=("retry", "stop"),
+        )
+        ctx.classified_error = classified
+        ctx.final_reply = f"{classified.reason} {classified.next_step}"
+        ctx.error = ToolExecutionError(
+            terminal_failure.get("tool_layer_error") or "terminal tool failure"
+        )
+        log.warning(
+            "tool_terminal_short_circuit",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            tool_name=terminal_failure["tool_name"],
+            error_category="tool_failure",
+        )
+        return TaskState.FAILED
 
     # Transition back to LLM_CALL for synthesis using the same model that made the tool call.
     last_llm_role: ModelRole | None = None

@@ -1041,7 +1041,9 @@ async def test_artifact_draft_subagent_empty_html_raises(
 async def test_artifact_draft_subagent_timeout_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Sub-agent timeout surfaces as ToolExecutionError."""
+    """Sub-agent timeout surfaces as a TerminalToolError with user-facing guidance (FRE-402)."""
+    from personal_agent.tools.executor import TerminalToolError
+
     store = _FakeStore()
     _install_fakes(monkeypatch, store=store)
 
@@ -1057,10 +1059,12 @@ async def test_artifact_draft_subagent_timeout_raises(
     # Temporarily reduce timeout for test speed
     monkeypatch.setattr(artifact_tools, "_DRAFT_TIMEOUT_S", 0.1)
 
-    with pytest.raises(ToolExecutionError, match="timed out"):
+    with pytest.raises(TerminalToolError, match="timed out") as exc_info:
         await artifact_tools.artifact_draft_executor(
             slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
         )
+    assert exc_info.value.reason
+    assert exc_info.value.next_step
 
 
 @pytest.mark.asyncio

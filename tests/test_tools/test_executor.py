@@ -127,6 +127,38 @@ async def test_execute_tool_executor_exception(execution_layer, trace_ctx) -> No
 
 
 @pytest.mark.asyncio
+async def test_execute_tool_terminal_failure_sets_metadata(execution_layer, trace_ctx) -> None:
+    """TerminalToolError is preserved as ToolResult.metadata for short-circuit (FRE-402)."""
+    from personal_agent.tools.executor import TerminalToolError
+
+    def terminal_executor() -> dict:
+        raise TerminalToolError(
+            "sub-agent timed out",
+            reason="The artifact generator timed out.",
+            next_step="Try a simpler artifact, or switch to Cloud.",
+        )
+
+    terminal_tool = ToolDefinition(
+        name="terminal_tool",
+        description="Terminal-failing tool",
+        category="read_only",
+        parameters=[],
+        risk_level="low",
+        allowed_modes=["NORMAL"],
+    )
+    execution_layer.registry.register(terminal_tool, terminal_executor)
+
+    result = await execution_layer.execute_tool("terminal_tool", {}, trace_ctx)
+
+    assert result.success is False
+    assert result.metadata.get("terminal") is True
+    assert result.metadata.get("terminal_reason") == "The artifact generator timed out."
+    assert (
+        result.metadata.get("terminal_next_step") == "Try a simpler artifact, or switch to Cloud."
+    )
+
+
+@pytest.mark.asyncio
 async def test_execute_tool_with_path_validation(
     execution_layer, governance_config, trace_ctx
 ) -> None:

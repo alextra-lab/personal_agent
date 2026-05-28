@@ -33,6 +33,7 @@ const CATEGORY_TITLES: Record<ClassifiedErrorData['category'], string> = {
   connection: 'Connection error',
   rate_limit: 'Rate limit reached',
   budget_denied: 'Budget cap reached',
+  tool_failure: 'Tool failed',
   generic: 'Turn failed',
 };
 

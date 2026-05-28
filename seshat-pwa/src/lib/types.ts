@@ -213,7 +213,14 @@ export interface TurnStatus {
  * Rendered by ClassifiedErrorCard; action ids wired in FRE-399.
  */
 export interface ClassifiedErrorData {
-  category: 'model_server' | 'timeout' | 'connection' | 'rate_limit' | 'budget_denied' | 'generic';
+  category:
+    | 'model_server'
+    | 'timeout'
+    | 'connection'
+    | 'rate_limit'
+    | 'budget_denied'
+    | 'tool_failure'
+    | 'generic';
   reason: string;
   next_step: string;
   /** Stable action ids: "retry", "switch_to_cloud", "stop". */

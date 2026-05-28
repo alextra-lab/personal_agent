@@ -51,6 +51,28 @@ class ToolExecutionError(Exception):
     pass
 
 
+class TerminalToolError(ToolExecutionError):
+    """A tool failure the model cannot recover from — short-circuit the turn.
+
+    Tools raise this (instead of :class:`ToolExecutionError`) when a failure is
+    non-recoverable, so the orchestrator can surface a classified error without a
+    recovery LLM round-trip (FRE-402). The ``reason`` and ``next_step`` are
+    user-facing strings carried into the :class:`ClassifiedError` shown in the PWA.
+    """
+
+    def __init__(self, message: str, *, reason: str, next_step: str) -> None:
+        """Initialize a terminal tool error.
+
+        Args:
+            message: Internal error message (used for logging and ``ToolResult.error``).
+            reason: User-facing explanation of what happened (no internals).
+            next_step: Concrete guidance for what the user can do next.
+        """
+        super().__init__(message)
+        self.reason = reason
+        self.next_step = next_step
+
+
 def _expand_path(path: str) -> str:
     """Expand path with environment variables.
 
@@ -456,10 +478,21 @@ class ToolExecutionLayer:
                 exc_info=True,
             )
 
+            # FRE-402: preserve terminality (and its user-facing guidance) through
+            # the flatten so the orchestrator can short-circuit the reasoning loop.
+            metadata: dict[str, Any] = {}
+            if isinstance(e, TerminalToolError):
+                metadata = {
+                    "terminal": True,
+                    "terminal_reason": e.reason,
+                    "terminal_next_step": e.next_step,
+                }
+
             return ToolResult(
                 tool_name=tool_name,
                 success=False,
                 output={},
                 error=str(e),
                 latency_ms=latency_ms,
+                metadata=metadata,
             )

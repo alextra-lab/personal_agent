@@ -41,7 +41,7 @@ from personal_agent.storage import (
     get_artifact_store,
 )
 from personal_agent.telemetry import get_logger
-from personal_agent.tools.executor import ToolExecutionError
+from personal_agent.tools.executor import TerminalToolError, ToolExecutionError
 from personal_agent.tools.types import ToolDefinition, ToolParameter
 
 log = get_logger(__name__)
@@ -1083,9 +1083,13 @@ async def artifact_draft_executor(
             duration_ms=duration_ms,
             error="timeout",
         )
-        raise ToolExecutionError(
-            f"HTML generation sub-agent timed out after {_DRAFT_TIMEOUT_S}s. "
-            "Try simplifying the plan or use artifact_write directly."
+        # FRE-402: a sub-agent timeout is non-recoverable for this turn — mark it
+        # terminal so the orchestrator surfaces it immediately instead of spending a
+        # full primary-model call to explain the failure.
+        raise TerminalToolError(
+            f"HTML generation sub-agent timed out after {_DRAFT_TIMEOUT_S}s.",
+            reason="The artifact generator timed out — the document was too complex to build in time.",
+            next_step="Try a simpler artifact, or switch to Cloud for more capacity.",
         ) from exc
     except Exception as exc:
         duration_ms = int(time.monotonic() * 1000) - start_ms

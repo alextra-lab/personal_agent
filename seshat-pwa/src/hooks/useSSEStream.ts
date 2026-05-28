@@ -304,7 +304,9 @@ export function useSSEStream(): UseSSEStreamReturn {
       setPendingConstraint(null);
       setResolvedConstraints([]);
       setCancelled(false);
-      setTurnStatus(null);
+      // Note: turnStatus is intentionally NOT reset here — the status bar stays
+      // visible between turns (showing the last turn's metrics) and is
+      // overwritten by the first turn_status of the new turn (ADR-0076).
 
       // 1. Connect WebSocket BEFORE sending the message so we don't miss
       //    events from the background task. The old SSE flow had the same

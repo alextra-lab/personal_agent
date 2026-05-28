@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v6-fre-389-decision-card';
+const CACHE_NAME = 'seshat-v7-fre-389-statusbar-footer';
 
 const PRECACHE_URLS = [
   '/',

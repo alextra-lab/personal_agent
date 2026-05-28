@@ -128,7 +128,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, activeTools]);
+  }, [messages, activeTools, pendingConstraint, classifiedError]);
 
   const handleSend = (text: string) => {
     if (!sessionId) return;

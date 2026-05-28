@@ -136,7 +136,7 @@ async def _feedback_llm_complete(role_key: str, system: str, user: str) -> str:
         text = (resp.get("content") or "").strip()
         return text or "(No model output.)"
     except Exception as exc:
-        log.warning("feedback_llm_failed", error=str(exc), exc_info=True)
+        log.warning("feedback_llm_failed", error=str(exc), trace_id=ctx.trace_id, exc_info=True)
         return f"*Model call failed ({type(exc).__name__}: {exc}). Please retry or use comments.*"
 
 

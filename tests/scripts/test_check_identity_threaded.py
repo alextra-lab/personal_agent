@@ -53,6 +53,95 @@ def test_log_info_with_trace_id_is_clean(tmp_path: Path) -> None:
     assert log_violations == []
 
 
+def test_connection_scope_requires_session_id(tmp_path: Path) -> None:
+    """A log in a connection-scope fn (session_id reachable, no trace) must carry session_id."""
+    src = tmp_path / "x.py"
+    src.write_text(
+        textwrap.dedent(
+            """
+            import structlog
+            log = structlog.get_logger(__name__)
+
+            async def ws_session(websocket, session_id) -> None:
+                log.info("ws.connected")
+            """
+        )
+    )
+    violations = lint_file(src, allowlist=[])
+    assert any(v.kind == "log_missing_session_id" for v in violations)
+
+
+def test_connection_scope_with_session_id_is_clean(tmp_path: Path) -> None:
+    src = tmp_path / "x.py"
+    src.write_text(
+        textwrap.dedent(
+            """
+            import structlog
+            log = structlog.get_logger(__name__)
+
+            async def ws_session(websocket, session_id) -> None:
+                log.info("ws.connected", session_id=session_id)
+            """
+        )
+    )
+    violations = lint_file(src, allowlist=[])
+    assert [v for v in violations if v.kind.startswith("log_missing")] == []
+
+
+def test_boot_scope_with_no_identity_is_exempt(tmp_path: Path) -> None:
+    """A lifespan/boot log with no identity reachable is exempt (no trace exists)."""
+    src = tmp_path / "x.py"
+    src.write_text(
+        textwrap.dedent(
+            """
+            import structlog
+            log = structlog.get_logger(__name__)
+
+            async def lifespan(app) -> None:
+                log.info("service_starting")
+            """
+        )
+    )
+    violations = lint_file(src, allowlist=[])
+    assert [v for v in violations if v.kind.startswith("log_missing")] == []
+
+
+def test_request_scope_via_trace_ctx_carrier_is_flagged(tmp_path: Path) -> None:
+    """A fn holding a trace_ctx carrier must thread trace_id even without .trace_id deref."""
+    src = tmp_path / "x.py"
+    src.write_text(
+        textwrap.dedent(
+            """
+            import structlog
+            log = structlog.get_logger(__name__)
+
+            async def step(trace_ctx) -> None:
+                log.info("did a thing", model="claude")
+            """
+        )
+    )
+    violations = lint_file(src, allowlist=[])
+    assert any(v.kind == "log_missing_trace_id" for v in violations)
+
+
+def test_trace_scope_takes_priority_over_session(tmp_path: Path) -> None:
+    """When both trace_id and session_id are reachable, trace_id is required (more specific)."""
+    src = tmp_path / "x.py"
+    src.write_text(
+        textwrap.dedent(
+            """
+            import structlog
+            log = structlog.get_logger(__name__)
+
+            async def handle(ctx, session_id) -> None:
+                log.info("did a thing", session_id=session_id)
+            """
+        )
+    )
+    violations = lint_file(src, allowlist=[])
+    assert any(v.kind == "log_missing_trace_id" for v in violations)
+
+
 def test_bus_publish_without_identity_is_flagged(tmp_path: Path) -> None:
     src = tmp_path / "x.py"
     src.write_text(

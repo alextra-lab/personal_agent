@@ -1357,6 +1357,7 @@ async def chat(
             log.info(
                 "chat.deduplicated",
                 session_id=session_id,
+                trace_id=trace_id,
                 original_trace_id=dedup.original_trace_id,
             )
             raise HTTPException(status_code=409, detail="Message already being processed")
@@ -1699,6 +1700,7 @@ async def chat_stream_endpoint(
         log.info(
             "chat_stream.deduplicated",
             session_id=session_id,
+            trace_id=trace_id,
             original_trace_id=dedup.original_trace_id,
         )
         return {"session_id": session_id, "status": "streaming", "deduplicated": "true"}

@@ -83,11 +83,15 @@ def consume_ws_ticket(ticket_id: str, session_id: UUID) -> RequestUser | None:
     """
     entry = _pending_tickets.pop(ticket_id, None)
     if entry is None:
-        log.debug("ws_ticket.not_found_or_reused", ticket_prefix=ticket_id[:8])
+        log.debug(
+            "ws_ticket.not_found_or_reused",
+            ticket_prefix=ticket_id[:8],
+            session_id=str(session_id),
+        )
         return None
 
     if time.monotonic() > entry.expires_at:
-        log.debug("ws_ticket.expired", ticket_prefix=ticket_id[:8])
+        log.debug("ws_ticket.expired", ticket_prefix=ticket_id[:8], session_id=str(session_id))
         return None
 
     if entry.session_id != session_id:
@@ -96,6 +100,7 @@ def consume_ws_ticket(ticket_id: str, session_id: UUID) -> RequestUser | None:
             ticket_prefix=ticket_id[:8],
             expected_session=str(entry.session_id),
             actual_session=str(session_id),
+            session_id=str(session_id),
         )
         return None
 

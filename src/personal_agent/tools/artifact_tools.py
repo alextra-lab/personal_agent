@@ -641,8 +641,32 @@ async def artifact_read_executor(
 
 _MAX_PLAN_CHARS = 8000
 _MIN_HTML_LENGTH = 50
-_DRAFT_TIMEOUT_S = 120.0
 _DRAFT_MAX_TOKENS = 16384
+
+
+def _draft_timeout_s() -> float:
+    """Request + wall-clock timeout for ``artifact_draft``'s HTML sub-agent.
+
+    Artifact generation runs on the sub-agent role but is a heavy, primary-class
+    job (a full HTML document), so it gets the **reasoning model's** (``primary``)
+    configured request timeout rather than the sub_agent fail-fast budget — the
+    builder should be allowed to run as long as a reasoning call. Resolved from the
+    active model config so it tracks the primary timeout instead of drifting; falls
+    back to the global LLM request timeout if ``primary`` can't be resolved.
+
+    Returns:
+        Timeout in seconds.
+    """
+    from personal_agent.config.model_loader import ModelConfigError, load_model_config
+
+    try:
+        primary = load_model_config().models.get("primary")
+    except ModelConfigError:
+        primary = None
+    if primary is not None and primary.default_timeout:
+        return float(primary.default_timeout)
+    return float(settings.llm_timeout_seconds)
+
 
 _SCRIPT_TAG_RE = re.compile(r"<\s*script", re.IGNORECASE)
 _EVENT_HANDLER_RE = re.compile(r"\bon\w+\s*=", re.IGNORECASE)
@@ -1060,6 +1084,7 @@ async def artifact_draft_executor(
         {"role": "user", "content": user_prompt},
     ]
 
+    draft_timeout = _draft_timeout_s()
     log.info(
         "artifact_draft_sub_agent_start",
         trace_id=trace_id,
@@ -1068,7 +1093,7 @@ async def artifact_draft_executor(
         task_id=task_id,
         model_role=ModelRole.SUB_AGENT.value,
         max_tokens=_DRAFT_MAX_TOKENS,
-        timeout_s=_DRAFT_TIMEOUT_S,
+        timeout_s=draft_timeout,
     )
 
     # --- Sub-agent inference ---
@@ -1080,9 +1105,9 @@ async def artifact_draft_executor(
                 messages=messages,
                 max_tokens=_DRAFT_MAX_TOKENS,
                 trace_ctx=child_ctx,
-                timeout_s=_DRAFT_TIMEOUT_S,
+                timeout_s=draft_timeout,
             ),
-            timeout=_DRAFT_TIMEOUT_S,
+            timeout=draft_timeout,
         )
     except asyncio.TimeoutError as exc:
         duration_ms = int(time.monotonic() * 1000) - start_ms
@@ -1100,7 +1125,7 @@ async def artifact_draft_executor(
         # terminal so the orchestrator surfaces it immediately instead of spending a
         # full primary-model call to explain the failure.
         raise TerminalToolError(
-            f"HTML generation sub-agent timed out after {_DRAFT_TIMEOUT_S}s.",
+            f"HTML generation sub-agent timed out after {draft_timeout}s.",
             reason="The artifact generator timed out — the document was too complex to build in time.",
             next_step="Try a simpler artifact, or switch to Cloud for more capacity.",
         ) from exc

@@ -18,6 +18,9 @@ export type AGUIEventType =
   | 'STATE_DELTA'
   | 'INTERRUPT'
   | 'tool_approval_request'
+  | 'CONSTRAINT_PAUSE'
+  | 'CONSTRAINT_RESOLVED'
+  | 'CANCELLED'
   | 'DONE'
   | 'PONG'
   | 'REPLAY_GAP';
@@ -49,6 +52,7 @@ export type ClientMessageType =
   | 'PING'
   | 'APPROVAL_DECISION'
   | 'CONSTRAINT_DECISION'
+  | 'USER_CANCEL'
   | 'INTERRUPT_RESPONSE';
 
 export interface ClientMessage {
@@ -57,12 +61,14 @@ export interface ClientMessage {
   last_seq?: number;
   /** Target request (APPROVAL_DECISION, CONSTRAINT_DECISION, INTERRUPT_RESPONSE). */
   request_id?: string;
-  /** Decision value. */
+  /** Decision value (APPROVAL_DECISION, or action_id for CONSTRAINT_DECISION). */
   decision?: string;
   /** Choice value (INTERRUPT_RESPONSE). */
   choice?: string;
   /** Optional reason (APPROVAL_DECISION). */
   reason?: string;
+  /** "Remember this choice" flag (CONSTRAINT_DECISION). */
+  remember?: boolean;
 }
 
 // --------------------------------------------------------------------------
@@ -153,4 +159,48 @@ export interface PendingInterrupt {
   context: string;
   options: string[];
   sessionId: string;
+}
+
+// --------------------------------------------------------------------------
+// Constraint governance (ADR-0076)
+// --------------------------------------------------------------------------
+
+/** CONSTRAINT_PAUSE payload — harness constraint about to fire. */
+export interface ConstraintPauseData {
+  constraint: string;
+  context: string;
+  /** Valid action_id values, mapped to labels via CONSTRAINT_ACTION_LABELS. */
+  options: string[];
+  default_option: string;
+  /** ISO-8601 UTC timestamp after which the default fires. */
+  expires_at: string;
+}
+
+/** CONSTRAINT_RESOLVED payload — a pause was resolved. */
+export interface ConstraintResolvedData {
+  constraint: string;
+  action_id: string;
+  resolution: 'user_choice' | 'timeout_default' | 'connection_lost' | 'user_cancel';
+}
+
+/** Pending constraint pause requiring a DecisionCard. */
+export interface PendingConstraint extends ConstraintPauseData {
+  request_id: string;
+}
+
+/** A constraint pause that has been resolved — rendered as a collapsed pill. */
+export interface ResolvedConstraint {
+  request_id: string;
+  constraint: string;
+  action_id: string;
+  resolution: ConstraintResolvedData['resolution'];
+}
+
+/** Live per-turn metrics for the status bar (STATE_DELTA key=turn_status). */
+export interface TurnStatus {
+  context_tokens: number;
+  context_max: number;
+  tool_iteration: number;
+  tool_iteration_max: number;
+  turn_cost_usd: number;
 }

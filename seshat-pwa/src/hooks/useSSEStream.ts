@@ -13,9 +13,14 @@ import { generateUUID } from '@/lib/uuid';
 import type {
   AGUIEvent,
   ChatMessage,
+  ConstraintPauseData,
+  ConstraintResolvedData,
+  PendingConstraint,
   PendingInterrupt,
+  ResolvedConstraint,
   ToolApprovalRequestData,
   ToolCall,
+  TurnStatus,
 } from '@/lib/types';
 
 // --------------------------------------------------------------------------
@@ -26,8 +31,14 @@ export interface UseSSEStreamReturn {
   messages: ChatMessage[];
   isStreaming: boolean;
   activeTools: ToolCall[];
-  /** Context window utilisation in [0, 1]; null until first STATE_DELTA. */
-  contextBudget: number | null;
+  /** Live per-turn metrics (ADR-0076); null until first turn_status STATE_DELTA. */
+  turnStatus: TurnStatus | null;
+  /** Active constraint pause awaiting a decision (ADR-0076); null when none. */
+  pendingConstraint: PendingConstraint | null;
+  /** Constraints resolved this turn, rendered as collapsed pills. */
+  resolvedConstraints: ResolvedConstraint[];
+  /** True after a CANCELLED event — renders the "Stopped by user" pill. */
+  cancelled: boolean;
   pendingInterrupt: PendingInterrupt | null;
   /** Pending tool-approval request; non-null while agent is waiting for a decision. */
   pendingApproval: ToolApprovalRequestData | null;
@@ -42,6 +53,10 @@ export interface UseSSEStreamReturn {
   resolveInterrupt: (choice: string) => void;
   /** Post an approve/deny decision for the current pendingApproval. */
   handleApprovalDecision: (decision: 'approve' | 'deny') => void;
+  /** Send a constraint decision (ADR-0076) and optimistically clear the card. */
+  sendConstraintDecision: (requestId: string, actionId: string, remember: boolean) => void;
+  /** Send a USER_CANCEL (Stop button) to halt the current turn. */
+  sendUserCancel: () => void;
   disconnect: () => void;
   clearMessages: () => void;
   /** Replace the message list with a server-hydrated history. */
@@ -70,7 +85,10 @@ export function useSSEStream(): UseSSEStreamReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeTools, setActiveTools] = useState<ToolCall[]>([]);
-  const [contextBudget, setContextBudget] = useState<number | null>(null);
+  const [turnStatus, setTurnStatus] = useState<TurnStatus | null>(null);
+  const [pendingConstraint, setPendingConstraint] = useState<PendingConstraint | null>(null);
+  const [resolvedConstraints, setResolvedConstraints] = useState<ResolvedConstraint[]>([]);
+  const [cancelled, setCancelled] = useState<boolean>(false);
   const [pendingInterrupt, setPendingInterrupt] = useState<PendingInterrupt | null>(null);
   const [pendingApproval, setPendingApproval] = useState<ToolApprovalRequestData | null>(null);
   const [budgetDenied, setBudgetDenied] = useState<BudgetDeniedError | null>(null);
@@ -145,9 +163,51 @@ export function useSSEStream(): UseSSEStreamReturn {
 
       case 'STATE_DELTA': {
         const { key, value } = event.data as { key: string; value: unknown };
-        if (key === 'context_window' && typeof value === 'number') {
-          setContextBudget(value);
+        if (key === 'turn_status' && value !== null && typeof value === 'object') {
+          setTurnStatus(value as TurnStatus);
         }
+        break;
+      }
+
+      case 'CONSTRAINT_PAUSE': {
+        const data = event.data as unknown as ConstraintPauseData;
+        setPendingConstraint({
+          request_id: String(event.request_id ?? ''),
+          constraint: data.constraint,
+          context: data.context,
+          options: data.options,
+          default_option: data.default_option,
+          expires_at: data.expires_at,
+        });
+        break;
+      }
+
+      case 'CONSTRAINT_RESOLVED': {
+        const data = event.data as unknown as ConstraintResolvedData;
+        const requestId = String(event.request_id ?? '');
+        // Collapse the active card (if it matches) into a resolved pill.
+        setPendingConstraint((prev) =>
+          prev && prev.request_id === requestId ? null : prev,
+        );
+        setResolvedConstraints((prev) => {
+          if (prev.some((r) => r.request_id === requestId)) return prev;
+          return [
+            ...prev,
+            {
+              request_id: requestId,
+              constraint: data.constraint,
+              action_id: data.action_id,
+              resolution: data.resolution,
+            },
+          ];
+        });
+        break;
+      }
+
+      case 'CANCELLED': {
+        setCancelled(true);
+        setPendingConstraint(null);
+        setIsStreaming(false);
         break;
       }
 
@@ -241,6 +301,10 @@ export function useSSEStream(): UseSSEStreamReturn {
       setPendingApproval(null);
       setBudgetDenied(null);
       setActiveTools([]);
+      setPendingConstraint(null);
+      setResolvedConstraints([]);
+      setCancelled(false);
+      setTurnStatus(null);
 
       // 1. Connect WebSocket BEFORE sending the message so we don't miss
       //    events from the background task. The old SSE flow had the same
@@ -323,6 +387,31 @@ export function useSSEStream(): UseSSEStreamReturn {
     [pendingApproval],
   );
 
+  /**
+   * Send a constraint decision (ADR-0076) over WebSocket and optimistically
+   * collapse the DecisionCard. The matching CONSTRAINT_RESOLVED event from the
+   * backend records the final pill; this just removes the interactive card.
+   */
+  const sendConstraintDecision = useCallback(
+    (requestId: string, actionId: string, remember: boolean): void => {
+      setPendingConstraint((prev) =>
+        prev && prev.request_id === requestId ? null : prev,
+      );
+      streamRef.current?.send({
+        type: 'CONSTRAINT_DECISION',
+        request_id: requestId,
+        decision: actionId,
+        remember,
+      });
+    },
+    [],
+  );
+
+  /** Send a USER_CANCEL (Stop button) to halt the current turn (ADR-0076). */
+  const sendUserCancel = useCallback((): void => {
+    streamRef.current?.send({ type: 'USER_CANCEL' });
+  }, []);
+
   const disconnect = useCallback(() => {
     streamRef.current?.close();
     streamRef.current = null;
@@ -345,13 +434,18 @@ export function useSSEStream(): UseSSEStreamReturn {
     messages,
     isStreaming,
     activeTools,
-    contextBudget,
+    turnStatus,
+    pendingConstraint,
+    resolvedConstraints,
+    cancelled,
     pendingInterrupt,
     pendingApproval,
     budgetDenied,
     sendMessage,
     resolveInterrupt,
     handleApprovalDecision,
+    sendConstraintDecision,
+    sendUserCancel,
     disconnect,
     clearMessages,
     seedMessages,

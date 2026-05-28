@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v5-fre-368-artifact-cards';
+const CACHE_NAME = 'seshat-v6-fre-389-decision-card';
 
 const PRECACHE_URLS = [
   '/',

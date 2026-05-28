@@ -10,13 +10,16 @@ import { generateUUID } from '@/lib/uuid';
 import type { ExecutionProfile } from '@/lib/types';
 import { useSSEStream } from '@/hooks/useSSEStream';
 
+import { resolutionLabel } from '@/lib/constraint-options';
+
 import { ApprovalModal } from './ApprovalModal';
 import { BudgetDeniedCard } from './BudgetDeniedCard';
 import { ChatInput } from './ChatInput';
 import { ChatMessage } from './ChatMessage';
-import { ContextBudgetMeter } from './ContextBudgetMeter';
+import { DecisionCard } from './DecisionCard';
 import { SessionList } from './SessionList';
 import { ToolIndicator } from './ToolIndicator';
+import { TurnStatusBar } from './TurnStatusBar';
 
 const PROFILE_STORAGE_KEY = 'seshat_profile';
 const LAST_SESSION_KEY = 'seshat_last_session_id';
@@ -72,13 +75,18 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     messages,
     isStreaming,
     activeTools,
-    contextBudget,
+    turnStatus,
+    pendingConstraint,
+    resolvedConstraints,
+    cancelled,
     pendingInterrupt,
     pendingApproval,
     budgetDenied,
     sendMessage,
     resolveInterrupt,
     handleApprovalDecision,
+    sendConstraintDecision,
+    sendUserCancel,
     seedMessages,
   } = useSSEStream();
 
@@ -221,7 +229,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
         )}
       </header>
 
-      {contextBudget !== null && <ContextBudgetMeter budget={contextBudget} />}
+      {isStreaming && <TurnStatusBar status={turnStatus} />}
 
       {/* Message list */}
       <main className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
@@ -258,6 +266,36 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
                 <BudgetDeniedCard error={budgetDenied} />
               </div>
             )}
+
+            {/* Resolved constraint pills (ADR-0076) */}
+            {resolvedConstraints.map((r) => (
+              <div key={r.request_id} className="px-4 py-1">
+                <span className="inline-block rounded-full bg-slate-800 border border-slate-700 px-3 py-1 text-xs text-slate-400">
+                  ▶ {resolutionLabel(r.constraint, r.action_id, r.resolution)}
+                </span>
+              </div>
+            ))}
+
+            {/* Active constraint decision card (ADR-0076) */}
+            {pendingConstraint && (
+              <div className="px-4 py-3">
+                <DecisionCard
+                  pending={pendingConstraint}
+                  onDecide={(actionId, remember) =>
+                    sendConstraintDecision(pendingConstraint.request_id, actionId, remember)
+                  }
+                />
+              </div>
+            )}
+
+            {/* Stopped-by-user pill (ADR-0076) */}
+            {cancelled && (
+              <div className="px-4 py-1">
+                <span className="inline-block rounded-full bg-slate-800 border border-slate-700 px-3 py-1 text-xs text-slate-400">
+                  ■ Stopped by user
+                </span>
+              </div>
+            )}
           </>
         )}
 
@@ -289,6 +327,8 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
         <ChatInput
           onSend={handleSend}
           disabled={isStreaming || pendingInterrupt !== null || pendingApproval !== null}
+          isStreaming={isStreaming}
+          onStop={sendUserCancel}
           profile={profile}
           onProfileChange={handleProfileChange}
         />

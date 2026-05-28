@@ -34,7 +34,6 @@ from personal_agent.orchestrator.types import (
     OrchestratorStep,
     TaskState,
 )
-from personal_agent.security import sanitize_error_message
 from personal_agent.telemetry import (
     LLM_STEP_COMPLETED,
     MODEL_CALL_ERROR,
@@ -133,6 +132,34 @@ async def _emit_turn_cancelled(*, session_id: str, trace_id: str) -> None:
     log.info("user_cancel_synthesis", trace_id=trace_id, session_id=session_id)
     await emit_cancelled(session_id=session_id, trace_id=trace_id)
     clear_cancel_flag(session_id)
+
+
+async def _emit_classified_error(ctx: "ExecutionContext", classified: "ClassifiedError") -> None:
+    """Push a ``RUN_ERROR`` event so the PWA renders the classified failure (FRE-398).
+
+    Best-effort: transport failures must never mask the real error or crash
+    the executor.
+
+    Args:
+        ctx: Execution context providing ``session_id`` and ``trace_id``.
+        classified: The structured error description to surface.
+    """
+    if not ctx.session_id:
+        return
+    try:
+        from personal_agent.transport.agui.transport import emit_classified_error
+
+        await emit_classified_error(
+            session_id=ctx.session_id,
+            trace_id=ctx.trace_id,
+            classified=classified,
+        )
+    except Exception:
+        log.debug(
+            "classified_error_emit_failed",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+        )
 
 
 async def _emit_turn_status(ctx: "ExecutionContext") -> None:
@@ -549,6 +576,7 @@ _tool_registry: ToolRegistry | None = None
 _tool_execution_layer: ToolExecutionLayer | None = None
 
 if TYPE_CHECKING:  # pragma: no cover
+    from personal_agent.error_classification import ClassifiedError
     from personal_agent.mcp.gateway import MCPGatewayAdapter
 
 _mcp_adapter: "MCPGatewayAdapter | None" = None
@@ -758,17 +786,23 @@ def _append_no_think_synthesis_nudge(messages: list[dict[str, Any]]) -> list[dic
     return out
 
 
-def _fallback_reply_from_tool_results(ctx: ExecutionContext) -> str:
-    """Build a safe, user-facing reply when the model fails to synthesize after tools."""
+def _fallback_reply_from_tool_results(ctx: ExecutionContext, *, lead: str | None = None) -> str:
+    """Build a safe, user-facing reply when the model fails to synthesize after tools.
+
+    Args:
+        ctx: Execution context whose ``tool_results`` list is inspected.
+        lead: Optional opening line; overrides the default "I reached my
+            tool-use limit…" text so callers can supply context-appropriate
+            framing (e.g. "The model call failed, but here's what I gathered:").
+    """
     if not ctx.tool_results:
         return (
             "I couldn't produce a final answer. Try rephrasing your request or being more specific."
         )
 
     last_results = ctx.tool_results[-3:]
-    lines: list[str] = [
-        "I reached my tool-use limit before completing a synthesis. Here are the latest tool results:"
-    ]
+    default_lead = "I reached my tool-use limit before completing a synthesis. Here are the latest tool results:"
+    lines: list[str] = [lead if lead is not None else default_lead]
     for r in last_results:
         tool_name = r.get("tool_name", "unknown_tool")
         success = r.get("success", False)
@@ -2411,19 +2445,36 @@ async def step_llm_call(
         log.error(
             MODEL_CALL_ERROR,
             trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
             span_id=span_id,
             duration_ms=duration_ms,
             error=str(e),
             error_type=type(e).__name__,
         )
         ctx.error = e
-        sanitized_error = sanitize_error_message(e)
+
+        # FRE-398: classify the error and salvage any gathered tool results.
+        from personal_agent.error_classification import classify_error, with_partial
+
+        classified = classify_error(e)
+        if ctx.tool_results:
+            ctx.final_reply = (
+                _fallback_reply_from_tool_results(
+                    ctx,
+                    lead="The model call failed before I could finish, but here's what I gathered:",
+                )
+                + f"\n\n---\n_{classified.reason} {classified.next_step}_"
+            )
+            classified = with_partial(classified)
+        ctx.classified_error = classified
+
         error_step: OrchestratorStep = {
             "type": "warning",
-            "description": f"LLM call failed: {sanitized_error}",
+            "description": f"LLM call failed: {classified.reason}",
             "metadata": {
-                "error": sanitized_error,
+                "error": classified.reason,
                 "error_type": type(e).__name__,
+                "error_category": classified.category,
                 "span_id": span_id,
             },
         }
@@ -2441,6 +2492,7 @@ async def step_llm_call(
             duration_ms=duration_ms,
             status="error",
             error_type=type(e).__name__,
+            error_category=classified.category,
         )
         return TaskState.FAILED
 
@@ -3140,22 +3192,34 @@ async def execute_task_safe(
         }
 
         if ctx.error:
-            sanitized_error = sanitize_error_message(ctx.error)
+            # FRE-398: use pre-classified error when available (set by step_llm_call);
+            # fall back to classifying here for errors that bypass that path.
+            from personal_agent.error_classification import classify_error
+
+            classified = ctx.classified_error or classify_error(ctx.error)
             log.warning(
                 TASK_FAILED,
                 trace_id=ctx.trace_id,
                 session_id=ctx.session_id,
-                error=sanitized_error,
+                error=classified.reason,
                 error_type=type(ctx.error).__name__,
+                error_category=classified.category,
             )
-            result["reply"] = "An error occurred while processing your request. Please try again."
+            if not ctx.final_reply:
+                # No partial work was salvaged — surface the classified message.
+                result["reply"] = f"{classified.reason} {classified.next_step}"
+            # else: result["reply"] already holds the salvaged partial reply (set above).
             result["steps"].append(
                 {
                     "type": "error",
-                    "description": "Task failed due to an internal error.",
-                    "metadata": {"error_type": type(ctx.error).__name__},
+                    "description": classified.reason,
+                    "metadata": {
+                        "error_type": type(ctx.error).__name__,
+                        "error_category": classified.category,
+                    },
                 }
             )
+            await _emit_classified_error(ctx, classified)
 
         # Trigger async context compression if threshold crossed (ADR-0038
         # + ADR-0061 §D1 soft trigger).  Bus threaded through so the
@@ -3191,14 +3255,17 @@ async def execute_task_safe(
             error_type=type(e).__name__,
             exc_info=True,
         )
-        # Keep details in logs, return only generic user-facing error content.
-        sanitized_error = sanitize_error_message(e)
+        # FRE-398: classify and surface a structured, actionable reply.
+        from personal_agent.error_classification import classify_error
+
+        classified = classify_error(e)
         log.error(
             TASK_FAILED,
             trace_id=ctx.trace_id,
             session_id=ctx.session_id,
-            error=sanitized_error,
+            error=classified.reason,
             error_type=type(e).__name__,
+            error_category=classified.category,
         )
         log.info(
             REPLY_READY,
@@ -3207,13 +3274,17 @@ async def execute_task_safe(
             reply_length=0,
             fatal_error=True,
         )
+        await _emit_classified_error(ctx, classified)
         return {
-            "reply": "An internal error occurred. Please try again.",
+            "reply": f"{classified.reason} {classified.next_step}",
             "steps": [
                 {
                     "type": "error",
-                    "description": "Task failed due to an internal error.",
-                    "metadata": {"error_type": type(e).__name__},
+                    "description": classified.reason,
+                    "metadata": {
+                        "error_type": type(e).__name__,
+                        "error_category": classified.category,
+                    },
                 }
             ],
             "trace_id": ctx.trace_id,

@@ -19,8 +19,11 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from personal_agent.error_classification import ClassifiedError
 
 from personal_agent.service.database import AsyncSessionLocal
 from personal_agent.telemetry import get_logger
@@ -35,6 +38,7 @@ from personal_agent.transport.agui.ws_endpoint import (
 )
 from personal_agent.transport.events import (
     CancelledEvent,
+    ClassifiedErrorEvent,
     ConstraintPauseEvent,
     ConstraintResolvedEvent,
     InternalEvent,
@@ -144,6 +148,33 @@ async def emit_cancelled(*, session_id: str, trace_id: str, reason: str = "user_
     """Persist + enqueue a ``CANCELLED`` event (ADR-0076 Stop button)."""
     await _push_event(
         CancelledEvent(session_id=session_id, trace_id=trace_id, reason=reason),
+        session_id,
+    )
+
+
+async def emit_classified_error(
+    *,
+    session_id: str,
+    trace_id: str,
+    classified: ClassifiedError,
+) -> None:
+    """Persist + enqueue a ``RUN_ERROR`` event (FRE-398).
+
+    Args:
+        session_id: Target session identifier.
+        trace_id: Trace context identifier for telemetry correlation.
+        classified: Structured error description from the classifier.
+    """
+    await _push_event(
+        ClassifiedErrorEvent(
+            session_id=session_id,
+            trace_id=trace_id,
+            category=classified.category,
+            reason=classified.reason,
+            next_step=classified.next_step,
+            actions=list(classified.actions),
+            partial=classified.partial,
+        ),
         session_id,
     )
 

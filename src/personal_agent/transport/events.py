@@ -182,6 +182,37 @@ class CancelledEvent:
     reason: str
 
 
+@dataclass(frozen=True)
+class ClassifiedErrorEvent:
+    """A turn failed with a classified, actionable error (FRE-398).
+
+    Pushed when a turn ends in failure so the PWA can render a distinct
+    error surface with guidance and optional action buttons.  One-way
+    (no client round-trip); the PWA renders the reason and next_step text,
+    and the ``actions`` list drives future button labels in PR2.
+
+    Attributes:
+        session_id: Target session identifier (used to route the event).
+        trace_id: Trace context identifier for telemetry correlation.
+        category: Machine-readable failure class (mirrors
+            :class:`~personal_agent.error_classification.ClassifiedError`).
+        reason: Human-readable explanation of what happened.
+        next_step: Concrete guidance for what the user can do next.
+        actions: Stable action ids for PWA buttons (e.g. ``retry``).
+        partial: ``True`` when a partial reply was salvaged from gathered work.
+    """
+
+    session_id: str
+    trace_id: str
+    category: Literal[
+        "model_server", "timeout", "connection", "rate_limit", "budget_denied", "generic"
+    ]
+    reason: str
+    next_step: str
+    actions: Sequence[str]
+    partial: bool
+
+
 # Discriminated union of all internal transport events.
 InternalEvent = (
     TextDeltaEvent
@@ -193,4 +224,5 @@ InternalEvent = (
     | ConstraintPauseEvent
     | ConstraintResolvedEvent
     | CancelledEvent
+    | ClassifiedErrorEvent
 )

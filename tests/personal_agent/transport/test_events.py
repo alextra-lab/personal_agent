@@ -1,11 +1,13 @@
 """Tests for transport layer internal event types."""
+
 from __future__ import annotations
 
 import pytest
 
 from personal_agent.transport.events import (
-    InterruptEvent,
+    ClassifiedErrorEvent,
     InternalEvent,
+    InterruptEvent,
     StateUpdateEvent,
     TextDeltaEvent,
     ToolEndEvent,
@@ -151,3 +153,76 @@ class TestInternalEventUnion:
                 case InterruptEvent():
                     matched.append("interrupt")
         assert matched == ["text", "tool_start", "tool_end", "state", "interrupt"]
+
+    def test_classified_error_is_internal_event(self) -> None:
+        event: InternalEvent = ClassifiedErrorEvent(
+            session_id="s",
+            trace_id="t",
+            category="timeout",
+            reason="timed out",
+            next_step="retry",
+            actions=["retry", "stop"],
+            partial=False,
+        )
+        assert isinstance(event, ClassifiedErrorEvent)
+
+    def test_classified_error_pattern_matching(self) -> None:
+        event: InternalEvent = ClassifiedErrorEvent(
+            session_id="s",
+            trace_id="t",
+            category="model_server",
+            reason="524",
+            next_step="retry",
+            actions=["retry"],
+            partial=True,
+        )
+        matched = []
+        match event:
+            case ClassifiedErrorEvent():
+                matched.append("classified_error")
+            case _:
+                matched.append("other")
+        assert matched == ["classified_error"]
+
+
+class TestClassifiedErrorEvent:
+    def test_creation(self) -> None:
+        event = ClassifiedErrorEvent(
+            session_id="s1",
+            trace_id="t1",
+            category="model_server",
+            reason="The local model server hit an error.",
+            next_step="Retry, switch to Cloud, or shorten the request.",
+            actions=["retry", "switch_to_cloud", "stop"],
+            partial=False,
+        )
+        assert event.session_id == "s1"
+        assert event.trace_id == "t1"
+        assert event.category == "model_server"
+        assert list(event.actions) == ["retry", "switch_to_cloud", "stop"]
+        assert event.partial is False
+
+    def test_frozen(self) -> None:
+        event = ClassifiedErrorEvent(
+            session_id="s",
+            trace_id="t",
+            category="timeout",
+            reason="r",
+            next_step="n",
+            actions=[],
+            partial=False,
+        )
+        with pytest.raises(Exception):
+            event.category = "generic"  # type: ignore[misc]
+
+    def test_partial_flag(self) -> None:
+        event = ClassifiedErrorEvent(
+            session_id="s",
+            trace_id="t",
+            category="timeout",
+            reason="r",
+            next_step="n",
+            actions=["retry"],
+            partial=True,
+        )
+        assert event.partial is True

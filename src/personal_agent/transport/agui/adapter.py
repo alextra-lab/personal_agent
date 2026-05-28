@@ -20,6 +20,7 @@ from typing import Any
 
 from personal_agent.transport.events import (
     CancelledEvent,
+    ClassifiedErrorEvent,
     ConstraintPauseEvent,
     ConstraintResolvedEvent,
     InternalEvent,
@@ -139,6 +140,27 @@ def to_agui_event(event: InternalEvent, *, seq: int | None = None) -> dict[str, 
                 "type": "CANCELLED",
                 "session_id": sid,
                 "data": {"reason": reason},
+            }
+        case ClassifiedErrorEvent(
+            session_id=sid,
+            trace_id=trace_id,
+            category=category,
+            reason=reason,
+            next_step=next_step,
+            actions=actions,
+            partial=partial,
+        ):
+            envelope = {
+                "type": "RUN_ERROR",
+                "session_id": sid,
+                "trace_id": trace_id,
+                "data": {
+                    "category": category,
+                    "reason": reason,
+                    "next_step": next_step,
+                    "actions": list(actions),
+                    "partial": partial,
+                },
             }
         case _:
             raise ValueError(f"Unhandled event type: {type(event).__name__}")

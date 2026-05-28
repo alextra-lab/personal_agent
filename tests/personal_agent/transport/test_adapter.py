@@ -1,12 +1,12 @@
 """Tests for the AG-UI adapter (event → wire format conversion)."""
+
 from __future__ import annotations
 
 import json
 
-import pytest
-
 from personal_agent.transport.agui.adapter import serialize_event, to_agui_event
 from personal_agent.transport.events import (
+    ClassifiedErrorEvent,
     InterruptEvent,
     StateUpdateEvent,
     TextDeltaEvent,
@@ -57,9 +57,7 @@ class TestToAguiEvent:
         assert result["data"]["value"] == 3
 
     def test_interrupt(self) -> None:
-        event = InterruptEvent(
-            context="Approve?", options=["approve", "reject"], session_id="s5"
-        )
+        event = InterruptEvent(context="Approve?", options=["approve", "reject"], session_id="s5")
         result = to_agui_event(event)
         assert result["type"] == "INTERRUPT"
         assert result["data"]["context"] == "Approve?"
@@ -89,9 +87,7 @@ class TestToAguiEvent:
             def __len__(self) -> int:
                 return len(self._d)
 
-        event = ToolStartEvent(
-            tool_name="t", args=FrozenMapping({"x": 1}), session_id="s"
-        )
+        event = ToolStartEvent(tool_name="t", args=FrozenMapping({"x": 1}), session_id="s")
         result = to_agui_event(event)
         assert result["data"]["args"] == {"x": 1}
         assert isinstance(result["data"]["args"], dict)
@@ -151,3 +147,62 @@ class TestSerializeEvent:
             parsed = json.loads(raw)
             assert "type" in parsed
             assert "session_id" in parsed
+
+
+class TestClassifiedErrorEventAdapter:
+    """RUN_ERROR wire envelope shape (FRE-398)."""
+
+    def _event(self, *, partial: bool = False) -> ClassifiedErrorEvent:
+        return ClassifiedErrorEvent(
+            session_id="s1",
+            trace_id="t1",
+            category="model_server",
+            reason="The local model server hit an error.",
+            next_step="Retry, switch to Cloud, or shorten the request.",
+            actions=["retry", "switch_to_cloud", "stop"],
+            partial=partial,
+        )
+
+    def test_wire_type(self) -> None:
+        env = to_agui_event(self._event())
+        assert env["type"] == "RUN_ERROR"
+
+    def test_session_id_at_top_level(self) -> None:
+        env = to_agui_event(self._event())
+        assert env["session_id"] == "s1"
+
+    def test_trace_id_at_top_level(self) -> None:
+        env = to_agui_event(self._event())
+        assert env["trace_id"] == "t1"
+
+    def test_data_contains_category(self) -> None:
+        env = to_agui_event(self._event())
+        assert env["data"]["category"] == "model_server"
+
+    def test_data_contains_reason(self) -> None:
+        env = to_agui_event(self._event())
+        assert env["data"]["reason"]
+
+    def test_data_contains_next_step(self) -> None:
+        env = to_agui_event(self._event())
+        assert env["data"]["next_step"]
+
+    def test_data_actions_is_list(self) -> None:
+        env = to_agui_event(self._event())
+        assert env["data"]["actions"] == ["retry", "switch_to_cloud", "stop"]
+
+    def test_data_partial_false(self) -> None:
+        env = to_agui_event(self._event(partial=False))
+        assert env["data"]["partial"] is False
+
+    def test_data_partial_true(self) -> None:
+        env = to_agui_event(self._event(partial=True))
+        assert env["data"]["partial"] is True
+
+    def test_serialize_round_trip(self) -> None:
+        import json
+
+        raw = serialize_event(self._event())
+        parsed = json.loads(raw)
+        assert parsed["type"] == "RUN_ERROR"
+        assert parsed["data"]["category"] == "model_server"

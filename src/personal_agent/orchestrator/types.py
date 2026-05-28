@@ -9,6 +9,8 @@ This module defines the data structures used throughout the orchestrator:
 - RoutingResult: Router decision output with format detection and parameters
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, TypedDict
@@ -20,6 +22,7 @@ from personal_agent.orchestrator.loop_gate import ToolLoopGate
 from personal_agent.request_gateway.types import GatewayOutput
 
 if TYPE_CHECKING:
+    from personal_agent.error_classification import ClassifiedError
     from personal_agent.orchestrator.channels import Channel
     from personal_agent.orchestrator.expansion_types import ExpansionPlan, PhaseResult
     from personal_agent.orchestrator.sub_agent_types import SubAgentResult
@@ -166,6 +169,7 @@ class ExecutionContext:
     tool_results: list[dict[str, Any]] = field(default_factory=list)
     final_reply: str | None = None
     error: Exception | None = None
+    classified_error: ClassifiedError | None = None
     steps: list["OrchestratorStep"] = field(default_factory=list)
     state: TaskState = TaskState.INIT
     metrics_summary: dict[str, Any] | None = None  # ADR-0012: Request-scoped metrics

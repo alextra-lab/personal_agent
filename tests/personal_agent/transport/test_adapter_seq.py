@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from personal_agent.transport.agui.adapter import serialize_event, to_agui_event
 from personal_agent.transport.events import (
+    ClassifiedErrorEvent,
     InterruptEvent,
     StateUpdateEvent,
     TextDeltaEvent,
@@ -82,3 +83,27 @@ class TestSerializeEventSeq:
         raw = serialize_event(event)
         parsed = json.loads(raw)
         assert parsed["seq"] is None
+
+
+class TestClassifiedErrorEventSeq:
+    """RUN_ERROR envelope passes seq through correctly (FRE-398)."""
+
+    def _event(self) -> ClassifiedErrorEvent:
+        return ClassifiedErrorEvent(
+            session_id="s1",
+            trace_id="t1",
+            category="timeout",
+            reason="timed out",
+            next_step="retry",
+            actions=["retry", "stop"],
+            partial=False,
+        )
+
+    def test_with_seq(self) -> None:
+        result = to_agui_event(self._event(), seq=55)
+        assert result["seq"] == 55
+        assert result["type"] == "RUN_ERROR"
+
+    def test_without_seq(self) -> None:
+        result = to_agui_event(self._event())
+        assert result["seq"] is None

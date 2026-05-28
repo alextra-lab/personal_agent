@@ -461,7 +461,7 @@ After this plan is approved I will file the following new Linear issue. It is **
 **Labels**: `Tier-3:Haiku`, `PersonalAgent`
 **Block / relation**: blocks FRE-227 closing (substrate cannot serve public URLs until this lands)
 
-**Body** (draft — targeted at the user's laptop Claude Code working against `~/Dev/personal_agent_secrets/infrastructure/terraform-cloudflare/`):
+**Body** (draft — targeted at the user's laptop Claude Code working against `../personal_agent_secrets/infrastructure/terraform-cloudflare/`):
 
 > Adds the cloud-side half of FRE-227 (R2 bucket, Worker, Cloudflare Access app, DNS) to the private secrets repo. Public-repo half ships in FRE-227 PR.
 >
@@ -486,7 +486,7 @@ After this plan is approved I will file the following new Linear issue. It is **
 > ### Apply steps
 >
 > ```bash
-> cd ~/Dev/personal_agent_secrets/infrastructure/terraform-cloudflare
+> cd ../personal_agent_secrets/infrastructure/terraform-cloudflare
 > terraform init -upgrade
 > terraform plan -out=fre-227.plan
 > # review the plan

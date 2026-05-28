@@ -16,6 +16,7 @@ import { ApprovalModal } from './ApprovalModal';
 import { BudgetDeniedCard } from './BudgetDeniedCard';
 import { ChatInput } from './ChatInput';
 import { ChatMessage } from './ChatMessage';
+import { ClassifiedErrorCard } from './ClassifiedErrorCard';
 import { DecisionCard } from './DecisionCard';
 import { SessionList } from './SessionList';
 import { ToolIndicator } from './ToolIndicator';
@@ -54,6 +55,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
 
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [lastUserMessage, setLastUserMessage] = useState<string>('');
 
   useEffect(() => {
     if (!isDrawerOpen) return;
@@ -82,6 +84,8 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     pendingInterrupt,
     pendingApproval,
     budgetDenied,
+    classifiedError,
+    dismissClassifiedError,
     sendMessage,
     resolveInterrupt,
     handleApprovalDecision,
@@ -128,8 +132,8 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
 
   const handleSend = (text: string) => {
     if (!sessionId) return;
-    // Persist last-known session ID so root / can redirect here on next visit.
     localStorage.setItem(LAST_SESSION_KEY, sessionId);
+    setLastUserMessage(text);
     sendMessage(text, sessionId, profile);
   };
 
@@ -262,6 +266,32 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
             {budgetDenied !== null && (
               <div className="px-4 py-3">
                 <BudgetDeniedCard error={budgetDenied} />
+              </div>
+            )}
+
+            {classifiedError !== null && (
+              <div className="px-4 py-3">
+                <ClassifiedErrorCard
+                  error={classifiedError}
+                  onRetry={
+                    lastUserMessage
+                      ? () => {
+                          dismissClassifiedError();
+                          handleSend(lastUserMessage);
+                        }
+                      : undefined
+                  }
+                  onSwitchToCloud={
+                    lastUserMessage
+                      ? () => {
+                          dismissClassifiedError();
+                          handleProfileChange('cloud');
+                          handleSend(lastUserMessage);
+                        }
+                      : undefined
+                  }
+                  onDismiss={dismissClassifiedError}
+                />
               </div>
             )}
 

@@ -13,6 +13,7 @@ import { generateUUID } from '@/lib/uuid';
 import type {
   AGUIEvent,
   ChatMessage,
+  ClassifiedErrorData,
   ConstraintPauseData,
   ConstraintResolvedData,
   PendingConstraint,
@@ -49,6 +50,14 @@ export interface UseSSEStreamReturn {
    * Cleared on the next sendMessage().
    */
   budgetDenied: BudgetDeniedError | null;
+  /**
+   * Classified turn failure from RUN_ERROR transport event (FRE-398). Non-null
+   * when the backend emitted a ClassifiedErrorEvent; renders ClassifiedErrorCard.
+   * Cleared on the next sendMessage() or when the user dismisses it.
+   */
+  classifiedError: ClassifiedErrorData | null;
+  /** Dismiss the ClassifiedErrorCard (user action or next send). */
+  dismissClassifiedError: () => void;
   sendMessage: (text: string, sessionId: string, profile?: string) => Promise<void>;
   resolveInterrupt: (choice: string) => void;
   /** Post an approve/deny decision for the current pendingApproval. */
@@ -92,6 +101,7 @@ export function useSSEStream(): UseSSEStreamReturn {
   const [pendingInterrupt, setPendingInterrupt] = useState<PendingInterrupt | null>(null);
   const [pendingApproval, setPendingApproval] = useState<ToolApprovalRequestData | null>(null);
   const [budgetDenied, setBudgetDenied] = useState<BudgetDeniedError | null>(null);
+  const [classifiedError, setClassifiedError] = useState<ClassifiedErrorData | null>(null);
 
   // Refs that survive re-renders without causing them.
   const streamRef = useRef<StreamConnection | null>(null);
@@ -211,6 +221,20 @@ export function useSSEStream(): UseSSEStreamReturn {
         break;
       }
 
+      case 'RUN_ERROR': {
+        const data = event.data as unknown as ClassifiedErrorData;
+        setClassifiedError({
+          category: data.category,
+          reason: data.reason,
+          next_step: data.next_step,
+          actions: Array.isArray(data.actions) ? data.actions : [],
+          partial: Boolean(data.partial),
+        });
+        setIsStreaming(false);
+        setActiveTools([]);
+        break;
+      }
+
       case 'INTERRUPT': {
         const { context, options } = event.data as {
           context: string;
@@ -300,6 +324,7 @@ export function useSSEStream(): UseSSEStreamReturn {
       setPendingInterrupt(null);
       setPendingApproval(null);
       setBudgetDenied(null);
+      setClassifiedError(null);
       setActiveTools([]);
       setPendingConstraint(null);
       setResolvedConstraints([]);
@@ -414,6 +439,10 @@ export function useSSEStream(): UseSSEStreamReturn {
     streamRef.current?.send({ type: 'USER_CANCEL' });
   }, []);
 
+  const dismissClassifiedError = useCallback((): void => {
+    setClassifiedError(null);
+  }, []);
+
   const disconnect = useCallback(() => {
     streamRef.current?.close();
     streamRef.current = null;
@@ -443,6 +472,8 @@ export function useSSEStream(): UseSSEStreamReturn {
     pendingInterrupt,
     pendingApproval,
     budgetDenied,
+    classifiedError,
+    dismissClassifiedError,
     sendMessage,
     resolveInterrupt,
     handleApprovalDecision,

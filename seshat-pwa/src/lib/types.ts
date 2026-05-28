@@ -21,6 +21,7 @@ export type AGUIEventType =
   | 'CONSTRAINT_PAUSE'
   | 'CONSTRAINT_RESOLVED'
   | 'CANCELLED'
+  | 'RUN_ERROR'
   | 'DONE'
   | 'PONG'
   | 'REPLAY_GAP';
@@ -203,4 +204,20 @@ export interface TurnStatus {
   tool_iteration: number;
   tool_iteration_max: number;
   turn_cost_usd: number;
+}
+
+/**
+ * RUN_ERROR payload — classified turn failure (FRE-398).
+ *
+ * Backend source: ClassifiedErrorEvent (transport/events.py).
+ * Rendered by ClassifiedErrorCard; action ids wired in FRE-399.
+ */
+export interface ClassifiedErrorData {
+  category: 'model_server' | 'timeout' | 'connection' | 'rate_limit' | 'budget_denied' | 'generic';
+  reason: string;
+  next_step: string;
+  /** Stable action ids: "retry", "switch_to_cloud", "stop". */
+  actions: string[];
+  /** True when partial tool-result synthesis was salvaged into the reply. */
+  partial: boolean;
 }

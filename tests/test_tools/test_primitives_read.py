@@ -3,6 +3,7 @@
 FRE-261 Step 3. FRE-355: tail_lines parameter.
 """
 
+import re
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -287,8 +288,13 @@ async def test_read_default_truncates_head() -> None:
         assert result["offset"] == 1
         assert result["content"].splitlines()[0] == "line1"
         assert result["content"].splitlines()[-1] == "line200"
-        assert "offset=201" in result["marker"]
-        assert "grep" in result["marker"]
+        # directive grep-first marker: imperative, names grep + the file path + continuation
+        marker = result["marker"]
+        assert "offset=201" in marker
+        assert "grep -n" in marker
+        assert str(test_file) in marker  # path embedded so the grep example is copy-pasteable
+        assert "Do NOT" in marker
+        assert "300 more" in marker  # remaining lines (500 total - 200 shown)
 
 
 @pytest.mark.asyncio
@@ -394,7 +400,9 @@ async def test_read_paging_across_byte_cap_no_loss() -> None:
         # Page 1: byte cap clips after a whole number of lines
         page1 = await read_executor(str(test_file), max_bytes=1000, ctx=_CTX)
         assert page1["truncated"] is True
-        next_offset = int(page1["marker"].split("offset=")[1].split()[0])
+        # The marker contains a literal "offset=<that line>" grep example plus the real numeric
+        # continuation offset; grab the numeric one.
+        next_offset = max(int(m) for m in re.findall(r"offset=(\d+)", page1["marker"]))
 
         # Page 2: continue from the marker offset, large cap to grab the rest
         page2 = await read_executor(

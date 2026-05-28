@@ -174,6 +174,74 @@ models:
             assert payload["messages"][0]["role"] == "system"
             assert payload["messages"][0]["content"] == "You are a helpful assistant."
 
+    @pytest.fixture
+    def tunnel_client(self, mock_model_config: Path) -> LocalLLMClient:
+        """Client pointing at the SLM Cloudflare tunnel hostname."""
+        return LocalLLMClient(
+            base_url="https://slm.frenchforet.com/v1",
+            timeout_seconds=30,
+            max_retries=1,
+            model_config_path=mock_model_config,
+        )
+
+    @pytest.mark.asyncio
+    async def test_respond_sends_trace_headers(self, client: LocalLLMClient) -> None:
+        """X-Trace-Id, X-Span-Id, and X-Session-Id are sent on every SLM call."""
+        mock_response = {
+            "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+        }
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.stream = MagicMock(return_value=_stream_mock_for_response(mock_response))
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            trace_ctx = TraceContext.new_trace(session_id="sess-abc")
+            await client.respond(
+                role=ModelRole.PRIMARY,
+                messages=[{"role": "user", "content": "hi"}],
+                trace_ctx=trace_ctx,
+            )
+
+            headers = mock_client.stream.call_args[1]["headers"]
+            assert headers["X-Trace-Id"] == str(trace_ctx.trace_id)
+            assert "X-Span-Id" in headers
+            assert headers["X-Session-Id"] == "sess-abc"
+            assert "CF-Access-Client-Id" not in headers
+
+    @pytest.mark.asyncio
+    async def test_respond_sends_cf_access_headers_with_trace_on_tunnel(
+        self, tunnel_client: LocalLLMClient
+    ) -> None:
+        """CF-Access headers coexist with trace headers on the tunnel hostname."""
+        mock_response = {
+            "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+        }
+        with (
+            patch("httpx.AsyncClient") as mock_client_class,
+            patch("personal_agent.llm_client.client.settings") as mock_settings,
+        ):
+            mock_settings.cf_access_client_id = "test-client-id"
+            mock_settings.cf_access_client_secret = "test-client-secret"
+            mock_client = AsyncMock()
+            mock_client.stream = MagicMock(return_value=_stream_mock_for_response(mock_response))
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            trace_ctx = TraceContext.new_trace(session_id="sess-xyz")
+            await tunnel_client.respond(
+                role=ModelRole.PRIMARY,
+                messages=[{"role": "user", "content": "hi"}],
+                trace_ctx=trace_ctx,
+            )
+
+            headers = mock_client.stream.call_args[1]["headers"]
+            assert headers["X-Trace-Id"] == str(trace_ctx.trace_id)
+            assert "X-Span-Id" in headers
+            assert headers["X-Session-Id"] == "sess-xyz"
+            assert headers["CF-Access-Client-Id"] == "test-client-id"
+            assert headers["CF-Access-Client-Secret"] == "test-client-secret"
+
     @pytest.mark.asyncio
     async def test_respond_with_tools(self, client: LocalLLMClient) -> None:
         """Test response with tool calls."""

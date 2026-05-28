@@ -101,13 +101,33 @@ import asyncio; from personal_agent.storage.artifact_store import get_artifact_s
 print(len(asyncio.run(get_artifact_store().get(\"<r2_key>\"))))"'
 ```
 
-### 4. Align the inference-server log (optional)
+### 4. Join the SLM request log (ES join on span_id)
 
-The SLM server logs `routing_request backend=… model_id=… port=…` per request. To map them to gateway calls:
+slm_server emits a `request_complete` event to `slm-requests-*` for every request,
+tagged with the harness's `X-Span-Id` / `X-Trace-Id` headers (FRE-411). Join on
+`span_id` for per-call granularity or `trace_id` for the whole turn:
 
-- **Normalise the clock.** The SLM box runs **UTC+2 (CEST)**; the gateway logs **UTC**. Subtract 2h from SLM timestamps before matching. (Fix at source: log UTC, and propagate `trace_id` as a request header so no time-matching is needed — see the SLM-log-ingestion follow-up.)
-- **Map by model/port:** primary → `…-A3B` on port `8502`; sub-agent → `…-A3B-subagent` on port `8503`.
-- **An extra SLM request inside one gateway call window = a client retry.**
+```bash
+TRACE=<trace_id>
+# All SLM request_complete docs for this turn
+curl -s -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+        -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+  "https://es.frenchforet.com/slm-requests-*/_search?q=trace_id:$TRACE&size=20" \
+  | python3 -c "
+import sys, json
+hits = json.load(sys.stdin)['hits']['hits']
+for h in hits:
+    s = h['_source']
+    print(s.get('ts','?'), 'span', s.get('span_id','?')[:8],
+          'in=%s out=%s' % (s.get('prompt_tokens'), s.get('completion_tokens')),
+          'prefill=%sms decode=%sms total=%sms' % (s.get('prefill_ms'), s.get('decode_ms'), s.get('total_ms')),
+          'cache=%s' % s.get('cache_reuse'))
+"
+```
+
+Cross-reference with step 1 (`model_call_completed`) using the shared `span_id`. A
+`cache_reuse > 0` value means the SLM reused a KV-cache prefix — prompt tokens were
+cheaper than they look in terms of compute. No timezone math: all times are UTC ISO-8601.
 
 ---
 
@@ -122,5 +142,9 @@ The SLM server logs `routing_request backend=… model_id=… port=…` per requ
 
 ## Caveats
 
-- The inference-server log lives on the **Mac SLM host, not in `/opt/seshat`** — §4 only works when that log is reachable or pasted in. Steps 1–3 are fully self-contained on the gateway VPS.
-- `input_tokens` (model tokenizer) and the status bar's `turn_status.context_tokens` (`estimate_messages_tokens` heuristic) differ by ~10–20%; same trend, different absolute.
+- §4 requires `es.frenchforet.com` to be reachable and slm_server to be running with
+  `SLM_ES_URL=https://es.frenchforet.com`. Steps 1–3 are fully self-contained on the gateway VPS.
+- `input_tokens` (model tokenizer) and the status bar's `turn_status.context_tokens`
+  (`estimate_messages_tokens` heuristic) differ by ~10–20%; same trend, different absolute.
+- UTC timestamp join (floor): if `span_id` is absent, match by `ts` within ±5s of the
+  gateway's `model_call_started` timestamp.

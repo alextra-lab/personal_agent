@@ -88,6 +88,23 @@ graph.frenchforet.com:80 {
 	}
 }
 
+# Cloudflare Tunnel — Elasticsearch write endpoint for slm_server telemetry (FRE-411).
+# slm_server (Mac) posts request_complete docs to es.frenchforet.com; the join with
+# harness logs happens in ES on span_id / trace_id. Path-allowlisted to slm-requests-*
+# indices only so a leaked CF Access token can't touch other indices. Full ES Security
+# (native auth / API keys) is the planned follow-up; this is the interim CF-only gate.
+es.frenchforet.com:80 {
+	@allowed path_regexp ^/(slm-requests-[^/]+|_bulk)(/.*)?$
+	handle @allowed {
+		reverse_proxy elasticsearch:9200
+	}
+	respond "Forbidden" 403
+	log {
+		output stdout
+		format json
+	}
+}
+
 # Cloudflare Tunnel — external agent API access
 # All paths route directly to the gateway.
 # TLS is terminated at the Cloudflare edge; traffic arrives here as plain HTTP.

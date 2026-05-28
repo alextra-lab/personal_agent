@@ -24,7 +24,9 @@ Architectural anchors
 from __future__ import annotations
 
 import base64
+import os
 import re  # noqa: F401 — used by _SCRIPT_TAG_RE / _EVENT_HANDLER_RE at module level
+import tempfile
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -644,6 +646,12 @@ _DRAFT_MAX_TOKENS = 16384
 
 _SCRIPT_TAG_RE = re.compile(r"<\s*script", re.IGNORECASE)
 _EVENT_HANDLER_RE = re.compile(r"\bon\w+\s*=", re.IGNORECASE)
+# Matches <pre class="mermaid">…</pre> and <div class="mermaid">…</div> (FRE-396).
+_MERMAID_BLOCK_RE = re.compile(
+    r'<(pre|div)\b[^>]*\bclass=["\'][^"\']*\bmermaid\b[^"\']*["\'][^>]*>(.*?)</\1>',
+    re.DOTALL | re.IGNORECASE,
+)
+_MERMAID_RENDER_TIMEOUT_S: float = 30.0
 
 _HTML_GENERATION_SYSTEM_PROMPT = """\
 You are an HTML document generator. You receive a structured plan and produce \
@@ -664,6 +672,10 @@ rounded, rounded-lg, shadow, shadow-lg, hidden, w-full.
 - SECURITY: No <script> tags whatsoever. No inline event handlers \
 (onclick, onload, onerror, onmouseover, etc.). No external fetches, no \
 iframes, no form actions. The document renders in a sandboxed iframe.
+- For diagrams and flowcharts, use <pre class="mermaid">…</pre> markup \
+with Mermaid syntax — the server renders these to static inline SVG \
+automatically. Never use <script>, CDN URLs, or the mermaid.js library. \
+Example: <pre class="mermaid">graph LR; A[Start] --> B[End];</pre>
 - Use semantic HTML5 elements: header, main, section, article, footer, \
 nav, aside, figure, figcaption.
 - Responsive: use CSS media queries (@media) for mobile/tablet/desktop.
@@ -742,6 +754,164 @@ artifact_draft_tool = ToolDefinition(
     timeout_seconds=120,
     rate_limit_per_hour=20,
 )
+
+
+def _mermaid_fallback(source: str) -> str:
+    """Return a script-free fallback for a Mermaid block that could not be rendered.
+
+    Args:
+        source: Raw Mermaid diagram source text.
+
+    Returns:
+        A ``<figure>`` containing the source in a ``<pre>`` with an explanatory
+        caption — passes ``_validate_html_output`` unchanged.
+    """
+    escaped = source.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return (
+        '<figure class="mermaid-diagram mermaid-fallback">'
+        f"<pre>{escaped}</pre>"
+        "<figcaption>Diagram could not be rendered — Mermaid source above.</figcaption>"
+        "</figure>"
+    )
+
+
+async def _render_mermaid_one(
+    source: str,
+    *,
+    trace_id: str,
+    session_id: str | None,
+    mmdc_cmd: str = "mmdc",
+) -> str:
+    """Render one Mermaid source string to an inline figure with SVG via mmdc.
+
+    Uses two temporary files (*.mmd input, *.svg output) so mmdc can write its
+    SVG without stdin/stdout negotiation.  On any failure the block degrades to
+    :func:`_mermaid_fallback` — the document still passes ``_validate_html_output``.
+
+    Args:
+        source: Raw Mermaid diagram source (content of the ``<pre>`` block).
+        trace_id: Caller trace id for structured logging.
+        session_id: Caller session id for structured logging.
+        mmdc_cmd: Path or name of the mmdc binary (override in tests).
+
+    Returns:
+        A ``<figure class="mermaid-diagram">`` wrapping inline SVG, or a
+        fallback ``<figure>`` when rendering fails.
+    """
+    import asyncio  # noqa: PLC0415
+
+    in_fd, in_path = tempfile.mkstemp(suffix=".mmd")
+    out_fd, out_path = tempfile.mkstemp(suffix=".svg")
+    try:
+        os.write(in_fd, source.encode())
+        os.close(in_fd)
+        os.close(out_fd)
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                mmdc_cmd,
+                "-i",
+                in_path,
+                "-o",
+                out_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            log.info(
+                "mermaid_render_skipped",
+                trace_id=trace_id,
+                session_id=session_id,
+                reason="mmdc_not_found",
+            )
+            return _mermaid_fallback(source)
+
+        try:
+            _stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=_MERMAID_RENDER_TIMEOUT_S
+            )
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            log.warning(
+                "mermaid_render_timeout",
+                trace_id=trace_id,
+                session_id=session_id,
+                timeout_s=_MERMAID_RENDER_TIMEOUT_S,
+            )
+            return _mermaid_fallback(source)
+
+        if proc.returncode != 0:
+            log.warning(
+                "mermaid_render_failed",
+                trace_id=trace_id,
+                session_id=session_id,
+                returncode=proc.returncode,
+                stderr=stderr.decode(errors="replace")[:200],
+            )
+            return _mermaid_fallback(source)
+
+        with open(out_path) as fh:
+            svg = fh.read()
+        # Strip leading XML declaration if mmdc emits one.
+        svg = re.sub(r"^\s*<\?xml[^?]*\?>\s*", "", svg, flags=re.IGNORECASE)
+        log.info(
+            "mermaid_render_ok",
+            trace_id=trace_id,
+            session_id=session_id,
+            svg_bytes=len(svg),
+        )
+        return f'<figure class="mermaid-diagram">{svg}</figure>'
+
+    finally:
+        for path in (in_path, out_path):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
+async def _render_mermaid_blocks(
+    html: str,
+    *,
+    trace_id: str,
+    session_id: str | None,
+) -> str:
+    """Replace all mermaid markup blocks with server-rendered inline SVG.
+
+    Extracts every ``<pre class="mermaid">`` block, renders each concurrently
+    via :func:`_render_mermaid_one`, then splices results back right-to-left so
+    original string positions stay valid.  HTML without mermaid blocks is
+    returned unchanged.
+
+    Args:
+        html: Full HTML document string from the sub-agent.
+        trace_id: Caller trace id for structured logging.
+        session_id: Caller session id for structured logging.
+
+    Returns:
+        HTML with all Mermaid blocks replaced by inline ``<figure>`` elements
+        (SVG on success, fallback ``<pre>`` on failure).
+    """
+    import asyncio  # noqa: PLC0415
+
+    matches = list(_MERMAID_BLOCK_RE.finditer(html))
+    if not matches:
+        return html
+
+    rendered = await asyncio.gather(
+        *[
+            _render_mermaid_one(m.group(2).strip(), trace_id=trace_id, session_id=session_id)
+            for m in matches
+        ]
+    )
+
+    result = html
+    for match, replacement in reversed(list(zip(matches, rendered, strict=True))):
+        result = result[: match.start()] + replacement + result[match.end() :]
+    return result
 
 
 def _validate_html_output(html: str) -> None:
@@ -948,6 +1118,11 @@ async def artifact_draft_executor(
         success=True,
         duration_ms=sub_agent_duration_ms,
         html_length=len(html_content),
+    )
+
+    # --- Render Mermaid blocks → inline SVG (FRE-396, ADR-0070 D7 amendment) ---
+    html_content = await _render_mermaid_blocks(
+        html_content, trace_id=trace_id, session_id=session_id
     )
 
     # --- Validate HTML output (ADR-0077 D9, ADR-0070 D7) ---

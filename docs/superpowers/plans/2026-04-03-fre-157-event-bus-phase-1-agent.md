@@ -33,7 +33,7 @@ Steps 1-3 and 9 and 13 are independent and can be done in parallel. Steps 4-8 ar
 
 ### Step 1: `docker-compose.yml` — Add Redis service
 
-**Location**: `/Users/Alex/Dev/personal_agent/docker-compose.yml`
+**Location**: `./docker-compose.yml`
 
 Add a `redis` service before the `volumes:` section (after the `searxng` service, around line 105). Add `redis_data` to the volumes section.
 
@@ -64,7 +64,7 @@ Add to `volumes:` section:
 
 ### Step 2: `pyproject.toml` — Add redis dependency
 
-**Location**: `/Users/Alex/Dev/personal_agent/pyproject.toml`
+**Location**: `./pyproject.toml`
 
 Add to `dependencies` list (around line 54, after the `litellm` entry):
 
@@ -78,7 +78,7 @@ The `hiredis` extra provides the C parser for ~10x faster protocol parsing.
 
 ### Step 3: `src/personal_agent/config/settings.py` — Add event bus config fields
 
-**Location**: `/Users/Alex/Dev/personal_agent/src/personal_agent/config/settings.py`
+**Location**: `./src/personal_agent/config/settings.py`
 
 Add six flat fields to `AppConfig` class. Place them in the "Feature flags" section (after `enable_memory_graph` around line 404), grouped with a comment block.
 
@@ -122,7 +122,7 @@ Add six flat fields to `AppConfig` class. Place them in the "Feature flags" sect
 
 ### Step 4: `src/personal_agent/events/models.py` — Event models (frozen Pydantic)
 
-**Location**: `/Users/Alex/Dev/personal_agent/src/personal_agent/events/models.py`
+**Location**: `./src/personal_agent/events/models.py`
 
 This file defines the base `Event` model and the `RequestCapturedEvent` for Phase 1. The models are frozen (immutable) and use discriminated unions via `event_type: Literal[...]`.
 
@@ -206,7 +206,7 @@ CG_CONSOLIDATOR = "cg:consolidator"
 
 ### Step 5: `src/personal_agent/events/bus.py` — EventBus protocol + NoOpBus + singleton
 
-**Location**: `/Users/Alex/Dev/personal_agent/src/personal_agent/events/bus.py`
+**Location**: `./src/personal_agent/events/bus.py`
 
 ```python
 """EventBus protocol and NoOp fallback (ADR-0041).
@@ -376,7 +376,7 @@ def get_event_bus() -> EventBus | NoOpBus:
 
 ### Step 6: `src/personal_agent/events/redis_backend.py` — RedisStreamBus
 
-**Location**: `/Users/Alex/Dev/personal_agent/src/personal_agent/events/redis_backend.py`
+**Location**: `./src/personal_agent/events/redis_backend.py`
 
 ```python
 """Redis Streams backend for the EventBus protocol (ADR-0041).
@@ -699,7 +699,7 @@ def get_default_consumer_name() -> str:
 
 ### Step 7: `src/personal_agent/events/consumer.py` — ConsumerRunner
 
-**Location**: `/Users/Alex/Dev/personal_agent/src/personal_agent/events/consumer.py`
+**Location**: `./src/personal_agent/events/consumer.py`
 
 ```python
 """Consumer runner for Redis Streams event bus (ADR-0041).
@@ -932,7 +932,7 @@ class ConsumerRunner:
 
 ### Step 8: `src/personal_agent/events/__init__.py` — Public API
 
-**Location**: `/Users/Alex/Dev/personal_agent/src/personal_agent/events/__init__.py`
+**Location**: `./src/personal_agent/events/__init__.py`
 
 ```python
 """Event bus module for async inter-component communication (ADR-0041).
@@ -980,7 +980,7 @@ __all__ = [
 
 ### Step 9: `src/personal_agent/telemetry/events.py` — Add event bus telemetry constants
 
-**Location**: `/Users/Alex/Dev/personal_agent/src/personal_agent/telemetry/events.py`
+**Location**: `./src/personal_agent/telemetry/events.py`
 
 Add at the end of the file (after line 93):
 
@@ -999,7 +999,7 @@ Also add these to `src/personal_agent/telemetry/__init__.py`'s imports and `__al
 
 ### Step 10: `src/personal_agent/brainstem/scheduler.py` — Add `on_request_captured()` method
 
-**Location**: `/Users/Alex/Dev/personal_agent/src/personal_agent/brainstem/scheduler.py`
+**Location**: `./src/personal_agent/brainstem/scheduler.py`
 
 Add a new public method `on_request_captured()` to `BrainstemScheduler`. This is the event handler that the consumer will call. It respects all existing resource gates.
 
@@ -1049,7 +1049,7 @@ Add this method after `record_request()` (after line 198):
 
 ### Step 11: `src/personal_agent/orchestrator/executor.py` — Publish `request.captured` event
 
-**Location**: `/Users/Alex/Dev/personal_agent/src/personal_agent/orchestrator/executor.py`
+**Location**: `./src/personal_agent/orchestrator/executor.py`
 
 After `write_capture(capture)` at line 630, inside the same `try` block, add the event publish call. The publish should be fire-and-forget (background task) to avoid adding latency to the user response.
 
@@ -1095,7 +1095,7 @@ Insert after line 630 (`write_capture(capture)`):
 
 ### Step 12: `src/personal_agent/service/app.py` — Wire event bus lifecycle
 
-**Location**: `/Users/Alex/Dev/personal_agent/src/personal_agent/service/app.py`
+**Location**: `./src/personal_agent/service/app.py`
 
 Three changes to the `lifespan()` function:
 
@@ -1215,7 +1215,7 @@ This placement ensures the event bus is available before the scheduler starts, s
 
 ### Step 13: `.env.example` — Add event bus config section
 
-**Location**: `/Users/Alex/Dev/personal_agent/.env.example`
+**Location**: `./.env.example`
 
 Add a new section after the "CAPTAIN'S LOG -> LINEAR FEEDBACK LOOP" section (around line 318):
 

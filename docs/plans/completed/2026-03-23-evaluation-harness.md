@@ -2724,7 +2724,7 @@ class TestTelemetryChecker:
 - [ ] **Step 2: Run unit tests**
 
 ```bash
-cd /Users/Alex/Dev/personal_agent/.claude/worktrees/heuristic-khayyam
+cd ./.claude/worktrees/heuristic-khayyam
 uv run pytest tests/evaluation/harness/test_unit.py -v
 ```
 
@@ -3049,7 +3049,7 @@ if __name__ == "__main__":
 - [ ] **Step 5: Run unit tests to verify no import errors**
 
 ```bash
-cd /Users/Alex/Dev/personal_agent/.claude/worktrees/heuristic-khayyam
+cd ./.claude/worktrees/heuristic-khayyam
 uv run pytest tests/evaluation/harness/test_unit.py -v
 ```
 
@@ -3058,7 +3058,7 @@ Expected: All tests PASS.
 - [ ] **Step 6: Verify CLI help works**
 
 ```bash
-cd /Users/Alex/Dev/personal_agent/.claude/worktrees/heuristic-khayyam
+cd ./.claude/worktrees/heuristic-khayyam
 uv run python -m tests.evaluation.harness.run --help
 ```
 

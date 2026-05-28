@@ -23,7 +23,7 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(re.escape(_MAC_USERS_PREFIX)), f"macOS absolute path under {_MAC_USERS_PREFIX!r}"),
     (re.compile("~" + "/Dev/"), "home-relative Dev/ layout"),
     (re.compile(_HOME_DEV + r"(?:/|$)"), "literal HOME env + /Dev/ segment path layout"),
-    (re.compile(r'(?i)(?:C:|\\\\)[/\\\\]Users[/\\\\]'), "Windows profile path under drive C"),
+    (re.compile(r"(?i)(?:C:|\\\\)[/\\\\]Users[/\\\\]"), "Windows profile path under drive C"),
     (
         # Exclude /home/user (test fixture) and XML-ish endings like /home/user<
         re.compile(r"/home/(?!user(?=[/>\"<\s]|$))"),
@@ -57,6 +57,7 @@ _TEXT_SUFFIXES: frozenset[str] = frozenset(
     }
 )
 
+
 def _git_ls_files(repo_root: Path) -> list[str]:
     result = subprocess.run(
         ["git", "-C", str(repo_root), "ls-files", "-z"],
@@ -84,7 +85,12 @@ def main() -> None:
     repo_root = Path(__file__).resolve().parent.parent
     violations: list[str] = []
 
+    # The checker itself necessarily contains the path patterns it scans for.
+    self_rel = Path(__file__).resolve().relative_to(repo_root).as_posix()
+
     for rel in _git_ls_files(repo_root):
+        if rel == self_rel:
+            continue
         if not _is_probably_text(rel):
             continue
         file_path = repo_root / rel

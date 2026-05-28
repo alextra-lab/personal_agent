@@ -43,7 +43,7 @@ This decides whether we're investigating an incident or a self-test. Run on **la
 
 1. **Confirm workers.dev URL state** — if `workers_dev` isn't explicitly `false`, the workers.dev URL is live:
    ```bash
-   cd ~/Dev/personal_agent_secrets/infrastructure/terraform-cloudflare
+   cd ../personal_agent_secrets/infrastructure/terraform-cloudflare
    terraform state show cloudflare_workers_script.artifacts_substrate \
      | grep -i workers_dev
    # If `workers_dev = false` is not present, the URL is enabled.
@@ -116,7 +116,7 @@ The same hardening should be ported to other inbound paths that consume `Cf-Acce
 ## Critical Files
 
 ### Read in Phase A (laptop)
-- `~/Dev/personal_agent_secrets/infrastructure/terraform-cloudflare/*.tf` (Worker, policy, app definitions)
+- `../personal_agent_secrets/infrastructure/terraform-cloudflare/*.tf` (Worker, policy, app definitions)
 - Cloudflare dashboard audit log
 
 ### Modified in Phase B
@@ -184,7 +184,7 @@ The goal is to localize the 404 to one of the three hypotheses without code chan
 ### Step 1 — Confirm the deployed Worker version
 
 ```bash
-cd ~/Dev/personal_agent_secrets/infrastructure/terraform-cloudflare
+cd ../personal_agent_secrets/infrastructure/terraform-cloudflare
 wrangler deployments list --name artifacts-substrate | head -5
 ```
 

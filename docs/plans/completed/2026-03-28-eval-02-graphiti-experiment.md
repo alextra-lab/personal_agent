@@ -442,7 +442,7 @@ def get_ground_truth() -> dict[str, Any]:
 
 Run:
 ```bash
-cd /Users/Alex/Dev/personal_agent
+cd .
 python -c "
 import sys; sys.path.insert(0, 'src')
 from scripts.experiment.data_loader import load_real_episodes, generate_synthetic_episodes, get_ground_truth
@@ -665,7 +665,7 @@ class ScenarioResult:
 
 Run:
 ```bash
-cd /Users/Alex/Dev/personal_agent
+cd .
 python -c "
 import sys; sys.path.insert(0, 'scripts')
 from experiment.metrics import TimingResult, DedupMetrics, CostTracker
@@ -1855,7 +1855,7 @@ chmod +x scripts/graphiti_experiment.py
 
 Run:
 ```bash
-cd /Users/Alex/Dev/personal_agent
+cd .
 python scripts/graphiti_experiment.py --help
 ```
 
@@ -1898,7 +1898,7 @@ Expected: Shows first 10 chars of the key (e.g., `sk-proj-xx`).
 
 Run:
 ```bash
-cd /Users/Alex/Dev/personal_agent
+cd .
 python scripts/graphiti_experiment.py \
   --llm openai \
   --scenarios 4 \
@@ -1945,7 +1945,7 @@ git commit -m "fix(eval-02): dry run fixes"
 
 Run:
 ```bash
-cd /Users/Alex/Dev/personal_agent
+cd .
 python scripts/graphiti_experiment.py \
   --llm openai \
   --episodes 50 \
@@ -1962,7 +1962,7 @@ Open `http://localhost:7475`, run: `MATCH (n) DETACH DELETE n`.
 
 Run:
 ```bash
-cd /Users/Alex/Dev/personal_agent
+cd .
 python scripts/graphiti_experiment.py \
   --llm anthropic \
   --episodes 50 \

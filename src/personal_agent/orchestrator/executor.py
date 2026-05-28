@@ -1807,9 +1807,9 @@ async def step_llm_call(
         system_prompt = (
             "## Deployment Context\n"
             "You are running inside a Docker container on a cloud VPS.\n"
-            "- App code is at `/app` — the host path `/opt/seshat` is the host mount point and is NOT accessible from here\n"
+            "- App code is at `/app` — the host's repo mount point is NOT accessible from here\n"
             "- Configuration is injected as environment variables at startup; there is no `.env` file inside the container\n"
-            "- Do NOT search for files at `/opt/seshat`, `/home/debian`, or other host paths — they do not exist inside the container\n"
+            "- Do NOT search for files at host filesystem paths (the host's repo checkout or home directory) — they do not exist inside the container\n"
             "- All backend services are reachable via Docker internal DNS:\n"
             "    postgres:5432  |  neo4j:7687 (bolt) / neo4j:7474 (HTTP)  |  elasticsearch:9200\n"
             "    redis:6379  |  embeddings:8503  |  reranker:8504"

@@ -40,7 +40,7 @@
 - [ ] **Step 1.1: Create the SearXNG config directory and settings file**
 
 ```bash
-mkdir -p /Users/Alex/Dev/personal_agent/docker/searxng
+mkdir -p ./docker/searxng
 ```
 
 Create `docker/searxng/settings.yml` with this exact content:
@@ -198,7 +198,7 @@ docker/searxng/uwsgi.ini
 - [ ] **Step 1.4: Verify docker-compose config is valid**
 
 ```bash
-cd /Users/Alex/Dev/personal_agent && docker compose config --quiet
+cd . && docker compose config --quiet
 ```
 
 Expected: exits 0 with no errors. If errors appear, check YAML indentation in docker-compose.yml.
@@ -206,7 +206,7 @@ Expected: exits 0 with no errors. If errors appear, check YAML indentation in do
 - [ ] **Step 1.5: Commit**
 
 ```bash
-cd /Users/Alex/Dev/personal_agent
+cd .
 git add docker/searxng/settings.yml docker-compose.yml .gitignore
 git commit -m "feat(infra): add SearXNG Docker service and config (ADR-0034)"
 ```
@@ -254,7 +254,7 @@ The env vars (auto-mapped by `env_prefix="AGENT_"`):
 - [ ] **Step 2.2: Verify settings load correctly**
 
 ```bash
-cd /Users/Alex/Dev/personal_agent
+cd .
 uv run python -c "
 from personal_agent.config import settings
 print('base_url:', settings.searxng_base_url)
@@ -575,7 +575,7 @@ async def test_web_search_blocked_in_lockdown_mode() -> None:
 - [ ] **Step 3.2: Run tests to verify they all FAIL (tool doesn't exist yet)**
 
 ```bash
-cd /Users/Alex/Dev/personal_agent
+cd .
 uv run pytest tests/test_tools/test_web_search.py -v 2>&1 | head -30
 ```
 
@@ -836,7 +836,7 @@ async def web_search_executor(
 - [ ] **Step 4.2: Run unit tests to verify they pass**
 
 ```bash
-cd /Users/Alex/Dev/personal_agent
+cd .
 uv run pytest tests/test_tools/test_web_search.py -v
 ```
 
@@ -921,7 +921,7 @@ With:
 - [ ] **Step 5.2: Verify `web_search` appears in the registry**
 
 ```bash
-cd /Users/Alex/Dev/personal_agent
+cd .
 uv run python -c "
 from personal_agent.tools import get_default_registry
 r = get_default_registry()
@@ -1015,7 +1015,7 @@ Replace it with:
 - [ ] **Step 6.5: Verify governance config loads without errors**
 
 ```bash
-cd /Users/Alex/Dev/personal_agent
+cd .
 uv run python -c "
 from personal_agent.config.governance_loader import load_governance_config
 gov = load_governance_config()
@@ -1122,7 +1122,7 @@ Replace with:
 - [ ] **Step 7.4: Verify prompts module imports without errors**
 
 ```bash
-cd /Users/Alex/Dev/personal_agent
+cd .
 uv run python -c "
 from personal_agent.orchestrator.prompts import (
     _TOOL_RULES,
@@ -1238,7 +1238,7 @@ def test_searxng_health_check() -> None:
 - [ ] **Step 8.2: Verify integration tests skip correctly (no Docker needed)**
 
 ```bash
-cd /Users/Alex/Dev/personal_agent
+cd .
 uv run pytest tests/test_tools/test_web_search_integration.py -v
 ```
 
@@ -1258,7 +1258,7 @@ git commit -m "test(tools): add integration tests for web_search / SearXNG (ADR-
 - [ ] **Step 9.1: Full mypy check**
 
 ```bash
-cd /Users/Alex/Dev/personal_agent
+cd .
 uv run mypy src/personal_agent/tools/web.py src/personal_agent/config/settings.py src/personal_agent/orchestrator/prompts.py src/personal_agent/tools/__init__.py
 ```
 

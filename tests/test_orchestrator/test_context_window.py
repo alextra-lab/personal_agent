@@ -59,9 +59,9 @@ def test_apply_context_window_uses_compressed_summary() -> None:
     messages = [_message("system", 80, suffix="-sys")]
     for index in range(30):
         role = "user" if index % 2 == 0 else "assistant"
-        messages.append(_message(role, 200, suffix=f"-{index}"))
+        messages.append(_message(role, 400, suffix=f"-{index}"))
 
-    # Budget of 800 forces truncation (31 msgs ~1520 tokens > 800).
+    # Budget of 800 forces truncation (31 msgs ~1560 tokens > 800).
     # Summary is short enough (~6 tokens) to fit alongside retained tail.
     summary = "Key facts from earlier"
     output = apply_context_window(
@@ -195,7 +195,12 @@ def test_apply_context_window_no_orphaned_tool_results_after_truncation() -> Non
         "content": "",
         "tool_calls": [{"id": "call_old", "function": {"name": "df", "arguments": "{}"}}],
     }
-    old_tool_result = {"role": "tool", "tool_call_id": "call_old", "name": "df", "content": "x" * 400}
+    old_tool_result = {
+        "role": "tool",
+        "tool_call_id": "call_old",
+        "name": "df",
+        "content": "x" * 400,
+    }
     # Newer user/assistant exchange
     new_user = {"role": "user", "content": "x" * 200}
     new_assistant = {"role": "assistant", "content": "x" * 200}
@@ -228,6 +233,14 @@ def test_estimate_message_tokens_includes_tool_calls() -> None:
     with_tools = {
         "role": "assistant",
         "content": "ok",
-        "tool_calls": [{"id": "call_1", "function": {"name": "run_sysdiag", "arguments": '{"command": "ps", "args": "aux"}'}}],
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "function": {
+                    "name": "run_sysdiag",
+                    "arguments": '{"command": "ps", "args": "aux"}',
+                },
+            }
+        ],
     }
     assert estimate_message_tokens(with_tools) > estimate_message_tokens(plain)

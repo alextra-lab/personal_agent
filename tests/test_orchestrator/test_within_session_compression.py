@@ -142,10 +142,11 @@ class TestExtractTail:
         assert tail == messages[-4:]
 
     def test_token_floor_dominates_when_messages_are_large(self) -> None:
-        messages = [_msg("user", "x" * 4000) for _ in range(6)]  # ~1000 tokens each
+        # "x" * 4000 = 500 tokens (tiktoken cl100k_base). 4 messages × 500 = 2000
+        # tokens cross the 2000-token floor; min_turns=2 is satisfied within that set.
+        messages = [_msg("user", "x" * 4000) for _ in range(6)]
         tail = wsc._extract_tail(messages, head_len=0, min_tokens=2000, min_turns=2)
-        # Walking back, two messages already cross the floor.
-        assert len(tail) == 2
+        assert len(tail) == 4
 
     def test_pulls_in_assistant_for_tool_pair(self) -> None:
         messages = [
@@ -182,8 +183,10 @@ class TestNeedsHardCompression:
         assert wsc.needs_hard_compression(messages, max_tokens=1000) is False
 
     def test_above_threshold_returns_true(self) -> None:
-        messages = [_msg("user", "x" * 4000)]  # ~1000 tokens
-        assert wsc.needs_hard_compression(messages, max_tokens=1000) is True
+        # "x" * 4000 = 500 tokens (tiktoken cl100k_base). max_tokens=500 puts us
+        # at 100% utilisation which exceeds any compression threshold ratio.
+        messages = [_msg("user", "x" * 4000)]
+        assert wsc.needs_hard_compression(messages, max_tokens=500) is True
 
     def test_disabled_flag_returns_false(self) -> None:
         messages = [_msg("user", "x" * 4000)]

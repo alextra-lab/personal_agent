@@ -1,10 +1,7 @@
 """Tests for Stage 7: Context Budget Management."""
 
-from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import patch
-
-import pytest
 
 from personal_agent.request_gateway.budget import apply_budget, estimate_tokens
 from personal_agent.request_gateway.types import AssembledContext
@@ -13,14 +10,13 @@ from personal_agent.telemetry.compaction import (
     get_dropped_entities,
 )
 from personal_agent.telemetry.context_quality import (
-    IncidentTracker,
     reset_incident_tracker,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _msg(role: str, content: str) -> dict[str, Any]:
     return {"role": role, "content": content}
@@ -44,17 +40,18 @@ def _context(
 # estimate_tokens
 # ---------------------------------------------------------------------------
 
+
 class TestEstimateTokens:
     def test_empty_string_returns_zero(self) -> None:
         assert estimate_tokens("") == 0
 
     def test_single_word(self) -> None:
-        # 1 word * 1.3 = int(1.3) = 1
         assert estimate_tokens("hello") == 1
 
     def test_ten_words(self) -> None:
+        # "word" is one cl100k_base token; 10 words = 10 tokens.
         text = " ".join(["word"] * 10)
-        assert estimate_tokens(text) == int(10 * 1.3)
+        assert estimate_tokens(text) == 10
 
     def test_proportional_to_word_count(self) -> None:
         short = estimate_tokens("one two three")
@@ -65,6 +62,7 @@ class TestEstimateTokens:
 # ---------------------------------------------------------------------------
 # apply_budget — under budget
 # ---------------------------------------------------------------------------
+
 
 class TestApplyBudgetUnderLimit:
     def test_under_budget_returns_unchanged(self) -> None:
@@ -85,13 +83,14 @@ class TestApplyBudgetUnderLimit:
 # apply_budget — Phase 1: history trimming
 # ---------------------------------------------------------------------------
 
+
 class TestApplyBudgetHistoryTrimming:
     def test_drops_oldest_history_when_over_budget(self) -> None:
         long_text = " ".join(["word"] * 500)
         messages = [
             _msg("system", "You are an assistant."),
-            _msg("user", long_text),      # old user message
-            _msg("assistant", long_text), # old assistant reply
+            _msg("user", long_text),  # old user message
+            _msg("assistant", long_text),  # old assistant reply
             _msg("user", "current question"),  # keep this
         ]
         ctx = _context(messages=messages)
@@ -124,9 +123,7 @@ class TestApplyBudgetHistoryTrimming:
         ctx = _context(messages=messages)
         result = apply_budget(ctx, max_tokens=5, trace_id="t1")
 
-        last_user = next(
-            (m for m in reversed(result.messages) if m["role"] == "user"), None
-        )
+        last_user = next((m for m in reversed(result.messages) if m["role"] == "user"), None)
         assert last_user is not None
         assert last_user["content"] == "current question"
 
@@ -134,6 +131,7 @@ class TestApplyBudgetHistoryTrimming:
 # ---------------------------------------------------------------------------
 # apply_budget — Phase 2: memory context dropped
 # ---------------------------------------------------------------------------
+
 
 class TestApplyBudgetMemoryDrop:
     def test_drops_memory_when_history_trim_not_enough(self) -> None:
@@ -163,6 +161,7 @@ class TestApplyBudgetMemoryDrop:
 # apply_budget — Phase 3: tool definitions dropped
 # ---------------------------------------------------------------------------
 
+
 class TestApplyBudgetToolDrop:
     def test_drops_tools_as_last_resort(self) -> None:
         long_text = " ".join(["word"] * 500)
@@ -189,6 +188,7 @@ class TestApplyBudgetToolDrop:
 # ---------------------------------------------------------------------------
 # Non-message fields preserved
 # ---------------------------------------------------------------------------
+
 
 class TestNonMessageFieldsPreserved:
     def test_skills_and_delegation_context_preserved(self) -> None:

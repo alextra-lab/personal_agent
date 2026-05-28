@@ -1360,3 +1360,15 @@
   line: 209
   pattern: log
   reason: "DomainGuard._refresh domain_guard_using_bundled_fallback — background fallback path, not per-request"
+- path: src/personal_agent/transport/agui/ws_endpoint.py
+  line: 308
+  pattern: log
+  reason: "ADR-0076 constraint waiter timeout — connection-scoped task, no TraceContext in scope"
+- path: src/personal_agent/transport/agui/ws_endpoint.py
+  line: 355
+  pattern: log
+  reason: "ADR-0076 invalid constraint action_id — WS receiver, no TraceContext in scope"
+- path: src/personal_agent/transport/agui/ws_endpoint.py
+  line: 747
+  pattern: log
+  reason: "ADR-0076 user_cancel_received — WS receiver, no TraceContext in scope"

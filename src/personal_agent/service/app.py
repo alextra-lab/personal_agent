@@ -37,7 +37,12 @@ from personal_agent.service.auth import (
 )
 from personal_agent.service.database import AsyncSessionLocal, get_db_session, init_db
 from personal_agent.service.idempotency import get_deduplicator
-from personal_agent.service.models import SessionCreate, SessionResponse, SessionUpdate
+from personal_agent.service.models import (
+    ConstraintPreferenceUpdate,
+    SessionCreate,
+    SessionResponse,
+    SessionUpdate,
+)
 from personal_agent.service.repositories.session_repository import SessionRepository
 from personal_agent.telemetry import add_elasticsearch_handler, get_logger
 from personal_agent.telemetry.es_handler import ElasticsearchHandler
@@ -1198,6 +1203,60 @@ async def create_session(
     )
 
     return SessionResponse.model_validate(session)
+
+
+@app.put("/api/v1/preferences/constraint")
+async def update_constraint_preference(
+    data: ConstraintPreferenceUpdate,
+    request_user: RequestUser = Depends(get_request_user),  # noqa: B008
+    db: AsyncSession = Depends(get_db_session),  # noqa: B008
+) -> dict[str, str]:
+    """Upsert a standing constraint governance preference (ADR-0076).
+
+    Validates ``preferred_action`` against the action-ID registry for the
+    named constraint, then upserts the preference for the authenticated user.
+
+    Args:
+        data: Constraint name and preferred action.
+        request_user: Authenticated user (CF Access).
+        db: Async database session.
+
+    Returns:
+        The stored constraint name and preferred action.
+
+    Raises:
+        HTTPException: 422 if the constraint or action is unknown.
+    """
+    from personal_agent.orchestrator.constraint_options import CONSTRAINT_OPTIONS, option_ids
+    from personal_agent.service.repositories.constraint_preferences_repository import (
+        ConstraintPreferencesRepository,
+    )
+
+    if data.constraint_name not in CONSTRAINT_OPTIONS:
+        raise HTTPException(status_code=422, detail=f"unknown constraint: {data.constraint_name}")
+    valid_actions = {"always_pause", *option_ids(data.constraint_name)}
+    if data.preferred_action not in valid_actions:
+        raise HTTPException(
+            status_code=422,
+            detail=f"invalid preferred_action for {data.constraint_name}: {data.preferred_action}",
+        )
+
+    repo = ConstraintPreferencesRepository(db)
+    await repo.upsert(
+        user_id=request_user.user_id,
+        constraint_name=data.constraint_name,
+        preferred_action=data.preferred_action,
+    )
+    log.info(
+        "constraint_preference_updated",
+        user_id=str(request_user.user_id),
+        constraint=data.constraint_name,
+        preferred_action=data.preferred_action,
+    )
+    return {
+        "constraint_name": data.constraint_name,
+        "preferred_action": data.preferred_action,
+    }
 
 
 @app.get("/sessions/{session_id}", response_model=SessionResponse)

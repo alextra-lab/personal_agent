@@ -288,3 +288,14 @@ CREATE TABLE IF NOT EXISTS session_events (
 
 CREATE INDEX IF NOT EXISTS idx_session_events_replay
     ON session_events (session_id, seq);
+
+-- User constraint governance preferences (ADR-0076 / FRE-389).
+CREATE TABLE IF NOT EXISTS user_constraint_preferences (
+    user_id           UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    constraint_name   TEXT NOT NULL,
+    preferred_action  TEXT NOT NULL,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    source_session_id UUID,
+    PRIMARY KEY (user_id, constraint_name)
+);

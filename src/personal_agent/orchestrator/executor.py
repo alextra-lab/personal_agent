@@ -8,8 +8,9 @@ import asyncio
 import json
 import time
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
+from uuid import UUID, uuid4
 
 from personal_agent.config import settings
 from personal_agent.config.env_loader import Environment
@@ -99,15 +100,279 @@ def _resolve_max_iterations(ctx: "ExecutionContext") -> int:
 
     Uses the per-TaskType limit from settings when the gateway classified a
     task type, falling back to the global orchestrator_max_tool_iterations.
-    Always respects the global ceiling as a hard upper bound.
+    The global value is the hard upper bound for the *base* ceiling; any
+    ``tool_iteration_bonus`` granted by a user "Continue" decision at a
+    constraint pause (ADR-0076) is added on top, since the user explicitly
+    opted to proceed past the original limit.
     """
     global_max = settings.orchestrator_max_tool_iterations
+    base = global_max
     if ctx.gateway_output is not None:
         task_type_val = ctx.gateway_output.intent.task_type.value
         by_type = settings.orchestrator_max_tool_iterations_by_task_type
         if task_type_val in by_type:
-            return min(by_type[task_type_val], global_max)
-    return global_max
+            base = min(by_type[task_type_val], global_max)
+    return base + ctx.tool_iteration_bonus
+
+
+# ── Constraint governance (ADR-0076 / FRE-389) ─────────────────────────────
+
+
+def _is_turn_cancelled(session_id: str) -> bool:
+    """Return whether the user requested cancellation for this session (ADR-0076)."""
+    from personal_agent.transport.agui.ws_endpoint import is_cancel_requested
+
+    return is_cancel_requested(session_id)
+
+
+async def _emit_turn_cancelled(*, session_id: str, trace_id: str) -> None:
+    """Emit a ``CANCELLED`` event and clear the cancel flag (ADR-0076)."""
+    from personal_agent.transport.agui.transport import emit_cancelled
+    from personal_agent.transport.agui.ws_endpoint import clear_cancel_flag
+
+    log.info("user_cancel_synthesis", trace_id=trace_id, session_id=session_id)
+    await emit_cancelled(session_id=session_id, trace_id=trace_id)
+    clear_cancel_flag(session_id)
+
+
+async def _emit_turn_status(ctx: "ExecutionContext") -> None:
+    """Push a live ``turn_status`` STATE_DELTA for the PWA status bar (ADR-0076).
+
+    Best-effort: a telemetry emission must never break the execution loop.
+
+    Args:
+        ctx: Execution context whose live metrics are reported.
+    """
+    if not ctx.session_id:
+        return
+    try:
+        from personal_agent.transport.agui.transport import emit_turn_status
+
+        await emit_turn_status(
+            session_id=ctx.session_id,
+            value={
+                "context_tokens": estimate_messages_tokens(ctx.messages),
+                "context_max": settings.context_window_max_tokens,
+                "tool_iteration": ctx.tool_iteration_count,
+                "tool_iteration_max": _resolve_max_iterations(ctx),
+                "turn_cost_usd": round(ctx.turn_cost_usd, 6),
+            },
+        )
+    except Exception:
+        log.debug("turn_status_emit_failed", trace_id=ctx.trace_id, session_id=ctx.session_id)
+
+
+async def _load_constraint_preference(user_id: UUID | None, constraint_name: str) -> str | None:
+    """Load a user's standing preference for a constraint, if any.
+
+    Args:
+        user_id: Owning user UUID, or None for headless/API usage.
+        constraint_name: Constraint name (e.g. ``tool_iteration_limit``).
+
+    Returns:
+        The stored ``action_id`` / ``always_pause`` string, or None when no
+        preference exists or the lookup fails.
+    """
+    if user_id is None:
+        return None
+    from personal_agent.service.database import AsyncSessionLocal
+    from personal_agent.service.repositories.constraint_preferences_repository import (
+        ConstraintPreferencesRepository,
+    )
+
+    try:
+        async with AsyncSessionLocal() as db:
+            repo = ConstraintPreferencesRepository(db)
+            return await repo.get_preferred_action(user_id, constraint_name)
+    except Exception:
+        log.exception("constraint_preference_load_failed", constraint=constraint_name)
+        return None
+
+
+async def _save_constraint_preference(
+    user_id: UUID | None,
+    constraint_name: str,
+    action_id: str,
+    *,
+    session_id: str,
+) -> None:
+    """Persist a standing constraint preference (the "Remember this choice" path).
+
+    Args:
+        user_id: Owning user UUID, or None for headless/API usage (no-op).
+        constraint_name: Constraint name the preference applies to.
+        action_id: Stable ``action_id`` chosen by the user.
+        session_id: Session where the preference was set (audit trail).
+    """
+    if user_id is None:
+        return
+    from personal_agent.service.database import AsyncSessionLocal
+    from personal_agent.service.repositories.constraint_preferences_repository import (
+        ConstraintPreferencesRepository,
+    )
+
+    source: UUID | None = None
+    try:
+        source = UUID(session_id)
+    except (ValueError, AttributeError):
+        source = None
+    try:
+        async with AsyncSessionLocal() as db:
+            repo = ConstraintPreferencesRepository(db)
+            await repo.upsert(
+                user_id=user_id,
+                constraint_name=constraint_name,
+                preferred_action=action_id,
+                source_session_id=source,
+            )
+    except Exception:
+        log.exception("constraint_preference_save_failed", constraint=constraint_name)
+
+
+async def _maybe_pause_for_constraint(
+    *,
+    session_id: str,
+    trace_id: str,
+    user_id: UUID | None,
+    constraint: str,
+    context: str,
+    timeout_seconds: float = 60.0,
+) -> str:
+    """Pause and ask the user, or apply a stored preference (ADR-0076).
+
+    Checks the user's standing preference first; if one is set (and not
+    ``always_pause``) it is applied silently. Otherwise a ``CONSTRAINT_PAUSE``
+    event is pushed over the WS transport and the executor blocks until the
+    user responds, the timeout fires, or the connection drops. When no WS
+    connection is active the safe default is applied without pausing.
+
+    Args:
+        session_id: Active session identifier.
+        trace_id: Trace context identifier for telemetry correlation.
+        user_id: Owning user UUID (None for headless usage).
+        constraint: Constraint name (must be a key of ``CONSTRAINT_OPTIONS``).
+        context: Human-readable description of the situation for the card.
+        timeout_seconds: Seconds before the default option auto-applies.
+
+    Returns:
+        The resolved ``action_id`` the executor should act on.
+    """
+    from personal_agent.orchestrator.constraint_options import (
+        default_action_id,
+        option_ids,
+    )
+    from personal_agent.transport.agui.transport import (
+        emit_constraint_resolved,
+        register_and_push_constraint,
+    )
+    from personal_agent.transport.agui.ws_endpoint import WaiterMetadata
+    from personal_agent.transport.events import ConstraintPauseEvent
+
+    opts = option_ids(constraint)
+    default_id = default_action_id(constraint)
+
+    # 1. Stored preference bypasses the pause entirely (telemetry-only record).
+    pref = await _load_constraint_preference(user_id, constraint)
+    if pref and pref != "always_pause":
+        log.info(
+            "constraint_preference_applied",
+            constraint=constraint,
+            preferred_action=pref,
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        return pref
+
+    # 2. Register the waiter, push the pause event, await the decision.
+    request_id = str(uuid4())
+    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=timeout_seconds)).isoformat()
+    log.info(
+        "constraint_pause_emitted",
+        constraint=constraint,
+        request_id=request_id,
+        options=opts,
+        trace_id=trace_id,
+        session_id=session_id,
+    )
+
+    payload = await register_and_push_constraint(
+        session_id=session_id,
+        request_id=request_id,
+        event=ConstraintPauseEvent(
+            request_id=request_id,
+            session_id=session_id,
+            trace_id=trace_id,
+            constraint=constraint,  # type: ignore[arg-type]
+            context=context,
+            options=opts,
+            default_option=default_id,
+            expires_at=expires_at,
+        ),
+        metadata=WaiterMetadata(
+            constraint=constraint,
+            options=opts,
+            default_option=default_id,
+            created_at=time.monotonic(),
+        ),
+        timeout_seconds=timeout_seconds,
+    )
+
+    action_id = str(payload.get("decision", default_id))
+    resolution = str(payload.get("resolution", "user_choice"))
+    remember = bool(payload.get("remember", False))
+
+    # No active WS connection: silent default, no resolution event persisted.
+    if resolution == "connection_lost":
+        log.info(
+            "constraint_no_ws_default_applied",
+            constraint=constraint,
+            default_option=default_id,
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        return default_id
+
+    log.info(
+        "constraint_decision_received",
+        constraint=constraint,
+        action_id=action_id,
+        resolution=resolution,
+        request_id=request_id,
+        trace_id=trace_id,
+        session_id=session_id,
+    )
+
+    await emit_constraint_resolved(
+        request_id=request_id,
+        session_id=session_id,
+        constraint=constraint,
+        action_id=action_id,
+        resolution=resolution,
+    )
+    log.info(
+        "constraint_resolved_emitted",
+        constraint=constraint,
+        action_id=action_id,
+        resolution=resolution,
+        request_id=request_id,
+        trace_id=trace_id,
+        session_id=session_id,
+    )
+
+    if resolution == "timeout_default":
+        log.info(
+            "constraint_timeout_applied",
+            constraint=constraint,
+            default_option=default_id,
+            request_id=request_id,
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+
+    if remember:
+        await _save_constraint_preference(user_id, constraint, action_id, session_id=session_id)
+
+    return action_id
 
 
 def _build_assistant_tool_calls(
@@ -733,6 +998,13 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
         session_id=ctx.session_id,
         eval_mode=ctx.eval_mode,
     )
+
+    # ADR-0076: clear any stale Stop-button flag from a prior turn so a new
+    # turn starts fresh (the flag lives on the connection, not the request).
+    if ctx.session_id:
+        from personal_agent.transport.agui.ws_endpoint import clear_cancel_flag
+
+        clear_cancel_flag(ctx.session_id)
 
     log.info(
         TASK_STARTED,
@@ -1427,37 +1699,62 @@ async def step_llm_call(
     )
 
     if ctx.session_id and needs_hard_compression(ctx.messages, settings.context_window_max_tokens):
-        try:
-            from personal_agent.events.bus import get_event_bus
-
-            _bus = get_event_bus()
-        except Exception:  # event-bus init failure must not block the loop
-            _bus = None
-        log.info(
-            "within_session_compression_hard_trigger",
-            trace_id=ctx.trace_id,
+        # ADR-0076: ask before silently summarising history. "Stop here"
+        # produces a final answer from current context; "Compress and continue"
+        # (the default) runs the existing within-session compression.
+        _max_tokens = settings.context_window_max_tokens
+        _tokens = estimate_messages_tokens(ctx.messages)
+        _pct = (100.0 * _tokens / _max_tokens) if _max_tokens else 0.0
+        _compress_action = await _maybe_pause_for_constraint(
             session_id=ctx.session_id,
-            messages=len(ctx.messages),
-            max_tokens=settings.context_window_max_tokens,
+            trace_id=ctx.trace_id,
+            user_id=ctx.user_id,
+            constraint="context_compression",
+            context=(
+                f"Context is at {_pct:.0f}% of the window "
+                f"({_tokens:,} / {_max_tokens:,} tokens). "
+                "Compressing will summarise older turns."
+            ),
         )
-        try:
-            ctx.messages, _ = await compress_in_place(
-                ctx.messages,
+        if _compress_action == "stop_here":
+            log.info(
+                "context_compression_declined",
                 trace_id=ctx.trace_id,
                 session_id=ctx.session_id,
-                trigger="hard",
-                bus=_bus,
             )
-        except Exception as exc:
-            # Pre-LLM compression must never crash the orchestrator: Stage 7
-            # at the next request boundary remains the safety net.
-            log.warning(
-                "within_session_compression_hard_failed",
+            ctx.force_synthesis_from_limit = True
+        else:
+            try:
+                from personal_agent.events.bus import get_event_bus
+
+                _bus = get_event_bus()
+            except Exception:  # event-bus init failure must not block the loop
+                _bus = None
+            log.info(
+                "within_session_compression_hard_trigger",
                 trace_id=ctx.trace_id,
                 session_id=ctx.session_id,
-                error=str(exc),
-                error_type=type(exc).__name__,
+                messages=len(ctx.messages),
+                max_tokens=settings.context_window_max_tokens,
             )
+            try:
+                ctx.messages, _ = await compress_in_place(
+                    ctx.messages,
+                    trace_id=ctx.trace_id,
+                    session_id=ctx.session_id,
+                    trigger="hard",
+                    bus=_bus,
+                )
+            except Exception as exc:
+                # Pre-LLM compression must never crash the orchestrator: Stage 7
+                # at the next request boundary remains the safety net.
+                log.warning(
+                    "within_session_compression_hard_failed",
+                    trace_id=ctx.trace_id,
+                    session_id=ctx.session_id,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
 
     # Determine which model to call
     if ctx.gateway_output is not None and ctx.selected_model_role is None:
@@ -1906,6 +2203,10 @@ async def step_llm_call(
         total_tokens = response.get("usage", {}).get("total_tokens", 0)
         prompt_tokens = response.get("usage", {}).get("prompt_tokens", 0)
         completion_tokens = response.get("usage", {}).get("completion_tokens", 0)
+
+        # ADR-0076: accumulate per-call cost and push a live turn_status update.
+        ctx.turn_cost_usd += float(response.get("cost_usd") or 0.0)
+        await _emit_turn_status(ctx)
 
         if timer:
             timer.end_span(
@@ -2378,6 +2679,13 @@ async def step_tool_execution(
     timer = ctx.request_timer
     step_start_time = time.time()
 
+    # ADR-0076: Stop button checkpoint — if the user cancelled mid-turn,
+    # synthesize from results gathered so far instead of running more tools.
+    if ctx.session_id and _is_turn_cancelled(ctx.session_id):
+        await _emit_turn_cancelled(session_id=ctx.session_id, trace_id=ctx.trace_id)
+        ctx.force_synthesis_from_limit = True
+        return TaskState.LLM_CALL
+
     tool_span_name: str | None = None
     if timer:
         tool_span_name = f"tool_execution:{ctx.tool_iteration_count + 1}"
@@ -2385,34 +2693,57 @@ async def step_tool_execution(
 
     # Loop governance: prevent infinite tool execution cycles
     ctx.tool_iteration_count += 1
+    # ADR-0076: push the freshly-incremented tool count to the status bar.
+    await _emit_turn_status(ctx)
     _max_iters = _resolve_max_iterations(ctx)
     if ctx.tool_iteration_count > _max_iters:
-        if timer and tool_span_name:
-            timer.end_span(
-                tool_span_name,
-                reason="iteration_limit",
-                iteration=ctx.tool_iteration_count,
-            )
         log.warning(
             "tool_iteration_limit_reached",
             trace_id=ctx.trace_id,
             iteration=ctx.tool_iteration_count,
             max_iterations=_max_iters,
         )
-        ctx.steps.append(
-            {
-                "type": "warning",
-                "description": "Tool loop limit reached; forcing LLM synthesis pass",
-                "metadata": {
-                    "iteration": ctx.tool_iteration_count,
-                    "max_iterations": _max_iters,
-                },
-            }
+        # ADR-0076: ask the user whether to continue past the limit or finish
+        # now, instead of silently forcing synthesis. Stored preferences and
+        # the no-WS fallback are handled inside the helper.
+        action_id = await _maybe_pause_for_constraint(
+            session_id=ctx.session_id,
+            trace_id=ctx.trace_id,
+            user_id=ctx.user_id,
+            constraint="tool_iteration_limit",
+            context=f"Reached {ctx.tool_iteration_count} tool calls on this turn.",
         )
-        # Route back to LLM_CALL with tools disabled so the model synthesizes
-        # from all gathered results rather than returning a useless fallback.
-        ctx.force_synthesis_from_limit = True
-        return TaskState.LLM_CALL
+        if action_id == "continue_10":
+            ctx.tool_iteration_bonus += 10
+            log.info(
+                "tool_iteration_limit_extended",
+                trace_id=ctx.trace_id,
+                session_id=ctx.session_id,
+                iteration=ctx.tool_iteration_count,
+                new_max=_resolve_max_iterations(ctx),
+            )
+            # Fall through to execute the pending tool calls under the raised limit.
+        else:
+            if timer and tool_span_name:
+                timer.end_span(
+                    tool_span_name,
+                    reason="iteration_limit",
+                    iteration=ctx.tool_iteration_count,
+                )
+            ctx.steps.append(
+                {
+                    "type": "warning",
+                    "description": "Tool loop limit reached; forcing LLM synthesis pass",
+                    "metadata": {
+                        "iteration": ctx.tool_iteration_count,
+                        "max_iterations": _max_iters,
+                    },
+                }
+            )
+            # Route back to LLM_CALL with tools disabled so the model synthesizes
+            # from all gathered results rather than returning a useless fallback.
+            ctx.force_synthesis_from_limit = True
+            return TaskState.LLM_CALL
 
     # Get tool execution layer
     try:

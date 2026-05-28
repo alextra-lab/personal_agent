@@ -19,6 +19,9 @@ import json
 from typing import Any
 
 from personal_agent.transport.events import (
+    CancelledEvent,
+    ConstraintPauseEvent,
+    ConstraintResolvedEvent,
     InternalEvent,
     InterruptEvent,
     StateUpdateEvent,
@@ -92,6 +95,50 @@ def to_agui_event(event: InternalEvent, *, seq: int | None = None) -> dict[str, 
                 "risk_level": risk_level,
                 "reason": reason,
                 "expires_at": expires_at,
+            }
+        case ConstraintPauseEvent(
+            request_id=request_id,
+            session_id=sid,
+            constraint=constraint,
+            context=ctx,
+            options=opts,
+            default_option=default_option,
+            expires_at=expires_at,
+        ):
+            envelope = {
+                "type": "CONSTRAINT_PAUSE",
+                "request_id": request_id,
+                "session_id": sid,
+                "data": {
+                    "constraint": constraint,
+                    "context": ctx,
+                    "options": list(opts),
+                    "default_option": default_option,
+                    "expires_at": expires_at,
+                },
+            }
+        case ConstraintResolvedEvent(
+            request_id=request_id,
+            session_id=sid,
+            constraint=constraint,
+            action_id=action_id,
+            resolution=resolution,
+        ):
+            envelope = {
+                "type": "CONSTRAINT_RESOLVED",
+                "request_id": request_id,
+                "session_id": sid,
+                "data": {
+                    "constraint": constraint,
+                    "action_id": action_id,
+                    "resolution": resolution,
+                },
+            }
+        case CancelledEvent(session_id=sid, reason=reason):
+            envelope = {
+                "type": "CANCELLED",
+                "session_id": sid,
+                "data": {"reason": reason},
             }
         case _:
             raise ValueError(f"Unhandled event type: {type(event).__name__}")

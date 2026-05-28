@@ -182,6 +182,12 @@ class ExecutionContext:
     loop_gate: ToolLoopGate = field(default_factory=ToolLoopGate)
     # Set True when the iteration limit fires so step_llm_call performs a no-tool synthesis pass
     force_synthesis_from_limit: bool = False
+    # ADR-0076: extra iterations granted when the user picks "Continue" at a
+    # tool_iteration_limit constraint pause. Added on top of the resolved max.
+    tool_iteration_bonus: int = 0
+    # ADR-0076: accumulated LLM spend for this turn (USD), surfaced live via the
+    # turn_status STATE_DELTA so the user sees cost as it accrues.
+    turn_cost_usd: float = 0.0
 
     # Memory enrichment (Phase 2.2)
     memory_context: list[dict[str, Any]] | None = None  # Retrieved conversations for context

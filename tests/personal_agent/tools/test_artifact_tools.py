@@ -905,7 +905,17 @@ async def test_artifact_draft_passes_timeout_to_respond(
     )
 
     call = client.respond_calls[0]
-    assert call["timeout_s"] == artifact_tools._DRAFT_TIMEOUT_S
+    assert call["timeout_s"] == artifact_tools._draft_timeout_s()
+
+
+@pytest.mark.asyncio
+async def test_draft_timeout_matches_primary_reasoning_model() -> None:
+    """artifact_draft's sub-agent timeout tracks the reasoning model (primary) budget."""
+    from personal_agent.config.model_loader import load_model_config
+
+    primary = load_model_config().models.get("primary")
+    assert primary is not None and primary.default_timeout
+    assert artifact_tools._draft_timeout_s() == float(primary.default_timeout)
 
 
 @pytest.mark.asyncio
@@ -1072,7 +1082,7 @@ async def test_artifact_draft_subagent_timeout_raises(
         lambda role_name="primary": _HangingClient(),
     )
     # Temporarily reduce timeout for test speed
-    monkeypatch.setattr(artifact_tools, "_DRAFT_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(artifact_tools, "_draft_timeout_s", lambda: 0.1)
 
     with pytest.raises(TerminalToolError, match="timed out") as exc_info:
         await artifact_tools.artifact_draft_executor(

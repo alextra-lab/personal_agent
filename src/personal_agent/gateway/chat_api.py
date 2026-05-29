@@ -16,6 +16,7 @@ This invariant prevents double-writes when ``gateway_mount_local=True``.
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
@@ -80,6 +81,7 @@ async def _stream_to_queue(
     """
     session_id_str = str(session_uuid)
     queue = get_event_queue(session_id_str)
+    start_time = time.time()
 
     # --- Stream from Anthropic --------------------------------------------
     full_text = ""
@@ -190,6 +192,15 @@ async def _stream_to_queue(
                 trace_id=trace_id,
                 final_message=final_message,
             )
+        # ADR-0078 D4 / FRE-405: close the gateway telemetry dark path. This
+        # call previously bypassed canonical telemetry entirely; emit the
+        # canonical model_call_completed so cost/cache/quality are attributable.
+        _emit_gateway_model_call_completed(
+            trace_id=trace_id,
+            session_id=session_id_str,
+            latency_ms=int((time.time() - start_time) * 1000),
+            final_message=final_message,
+        )
     finally:
         # Persist DONE to Postgres (so reconnect replay delivers it) then
         # push None sentinel to close the live WebSocket drain loop.
@@ -268,6 +279,65 @@ async def _commit_reservation_safe(
             reservation_id=str(reservation_id),
             error=str(exc),
         )
+
+
+def _emit_gateway_model_call_completed(
+    *,
+    trace_id: str,
+    session_id: str,
+    latency_ms: int,
+    final_message: Any,
+) -> None:
+    """Emit the canonical ``model_call_completed`` for the gateway chat path.
+
+    The gateway talks to the Anthropic SDK directly and historically bypassed
+    :mod:`personal_agent.llm_client.telemetry` entirely (ADR-0078 Context #3).
+    This stamps the call with ``callsite="gateway.chat"`` and the
+    ``gateway_persona`` component so the gateway path joins the rest of the
+    harness in ES. Best-effort: any failure is logged, never raised, so a
+    telemetry hiccup cannot break the user's stream.
+
+    Args:
+        trace_id: Correlation id for the request.
+        session_id: Session id string for identity threading.
+        latency_ms: Wall-clock latency of the streamed call.
+        final_message: Anthropic final message (carries ``usage``), or None.
+    """
+    try:
+        from personal_agent.llm_client.prompt_identity import derive_prompt_identity
+        from personal_agent.llm_client.telemetry import emit_model_call_completed
+        from personal_agent.telemetry.trace import TraceContext
+
+        usage = getattr(final_message, "usage", None)
+        input_tokens = int(getattr(usage, "input_tokens", 0) or 0) if usage else None
+        output_tokens = int(getattr(usage, "output_tokens", 0) or 0) if usage else None
+        total = (
+            (input_tokens or 0) + (output_tokens or 0)
+            if (input_tokens is not None or output_tokens is not None)
+            else None
+        )
+
+        identity = derive_prompt_identity(
+            "gateway.chat",
+            static_prefix=_SYSTEM_PROMPT,
+            full_prompt=_SYSTEM_PROMPT,
+            component_ids=("gateway_persona",),
+        )
+        emit_model_call_completed(
+            log=log,
+            role="primary",
+            model=f"anthropic/{_CLOUD_MODEL}",
+            endpoint="anthropic",
+            trace_ctx=TraceContext(trace_id=trace_id, session_id=session_id, profile="cloud"),
+            span_id=uuid4().hex,
+            latency_ms=latency_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            prompt_identity=identity,
+            total_tokens=total,
+        )
+    except Exception as exc:
+        log.error("chat.telemetry_emit_failed", trace_id=trace_id, error=str(exc))
 
 
 # ---------------------------------------------------------------------------

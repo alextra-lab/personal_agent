@@ -30,6 +30,7 @@ from personal_agent.telemetry.events import MODEL_CALL_COMPLETED, MODEL_CALL_STA
 if TYPE_CHECKING:
     import structlog.stdlib
 
+    from personal_agent.llm_client.prompt_identity import PromptIdentity
     from personal_agent.telemetry.trace import TraceContext
 
 
@@ -101,6 +102,7 @@ def emit_model_call_completed(
     latency_ms: int,
     input_tokens: int | None,
     output_tokens: int | None,
+    prompt_identity: PromptIdentity,
     total_tokens: int | None = None,
     cache_read_tokens: int | None = None,
     extra: dict[str, Any] | None = None,
@@ -117,6 +119,10 @@ def emit_model_call_completed(
         latency_ms: Wall-clock latency of the call in milliseconds.
         input_tokens: Prompt token count, when reported by the provider.
         output_tokens: Completion token count, when reported by the provider.
+        prompt_identity: Identity of the prompt sent on this call (ADR-0078 D1/D4).
+            Flattened into ``prompt_callsite`` / ``prompt_component_ids`` /
+            ``prompt_static_prefix_hash`` / ``prompt_dynamic_hash``. Callers that
+            lack a named composition derive a fallback so this is never absent.
         total_tokens: Provider-reported total (may differ from input+output
             when cache or reasoning tokens are counted separately).
         cache_read_tokens: Provider-specific cache-read token count.
@@ -132,6 +138,10 @@ def emit_model_call_completed(
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
         "cache_read_tokens": cache_read_tokens,
+        "prompt_callsite": prompt_identity.callsite,
+        "prompt_component_ids": list(prompt_identity.component_ids),
+        "prompt_static_prefix_hash": prompt_identity.static_prefix_hash,
+        "prompt_dynamic_hash": prompt_identity.dynamic_hash,
         **_identity_fields(trace_ctx=trace_ctx, span_id=span_id),
     }
     if extra:

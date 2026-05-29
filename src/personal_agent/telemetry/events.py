@@ -70,6 +70,12 @@ CANONICAL_MODEL_CALL_COMPLETED_FIELDS: frozenset[str] = (
             "input_tokens",
             "output_tokens",
             "total_tokens",
+            # Prompt identity (ADR-0078 D1/D4, FRE-405). Stamped on every call so
+            # cost/cache/quality are attributable to a named prompt composition.
+            "prompt_callsite",
+            "prompt_component_ids",
+            "prompt_static_prefix_hash",
+            "prompt_dynamic_hash",
         }
     )
 )

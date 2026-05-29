@@ -19,6 +19,10 @@ from uuid import UUID, uuid4
 import litellm
 import structlog
 
+from personal_agent.llm_client.prompt_identity import (
+    PromptIdentity,
+    derive_prompt_identity,
+)
 from personal_agent.llm_client.telemetry import (
     emit_model_call_completed,
     emit_model_call_started,
@@ -146,6 +150,7 @@ class LiteLLMClient:
         previous_response_id: str | None = None,
         priority: Any = None,
         priority_timeout: float | None = None,
+        prompt_identity: PromptIdentity | None = None,
         **kwargs: Any,
     ) -> LLMResponse:
         """Make an LLM call via LiteLLM to any cloud provider.
@@ -169,6 +174,9 @@ class LiteLLMClient:
             previous_response_id: Ignored for cloud providers (stateless API).
             priority: Ignored for cloud providers.
             priority_timeout: Ignored for cloud providers.
+            prompt_identity: Identity of the prompt sent on this call (ADR-0078
+                D1/D4). When None, a fallback is derived so the emitted
+                ``model_call_completed`` always carries prompt identity fields.
             **kwargs: Additional provider-specific parameters passed to litellm.
 
         Returns:
@@ -452,6 +460,11 @@ class LiteLLMClient:
         _total_tokens = usage.get("total_tokens")
         _cache_read = usage.get("cache_read_input_tokens")
         _cache_creation = usage.get("cache_creation_input_tokens")
+        _identity = prompt_identity or derive_prompt_identity(
+            f"role.{role.value}",
+            static_prefix=system_prompt or "",
+            full_prompt=system_prompt or "",
+        )
         emit_model_call_completed(
             log=log,
             role=role.value,
@@ -462,6 +475,7 @@ class LiteLLMClient:
             latency_ms=latency_ms,
             input_tokens=_input_tokens,
             output_tokens=_output_tokens,
+            prompt_identity=_identity,
             total_tokens=_total_tokens,
             cache_read_tokens=_cache_read,
             extra={

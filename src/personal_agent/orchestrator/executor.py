@@ -1903,6 +1903,13 @@ async def step_llm_call(
         else:
             system_prompt = ctx.operator_stanza
 
+    # Prompt-identity component presence flags (ADR-0078 D1, FRE-405). Set as the
+    # corresponding fragments are spliced in; consumed at the respond() call to
+    # build the orchestrator.primary PromptIdentity.
+    _skill_index_present = False
+    _decomposition_added = False
+    tool_awareness = ""
+
     # Phase B skill routing (FRE-skill-routing, ADR-0063 §D7).
     # Routing mode controls what gets injected:
     #   keyword       — keyword-matched skill bodies only (Phase A legacy behavior)
@@ -2033,6 +2040,7 @@ async def step_llm_call(
         _full_skill_injection = "\n\n".join(p for p in [_skill_injection, _nudge_block] if p)
 
         if _full_skill_injection:
+            _skill_index_present = True
             if system_prompt:
                 system_prompt = f"{system_prompt}\n\n{_full_skill_injection}"
             else:
@@ -2169,6 +2177,10 @@ async def step_llm_call(
                 reason="synthesizing" if is_synthesizing else "disabled",
             )
 
+        # Capture the cacheable prefix (everything before the DYNAMIC memory
+        # section) for the static_prefix_hash (ADR-0078 D4, FRE-405).
+        inner_system_before_memory = system_prompt or ""
+
         # Add memory context to system prompt (Phase 2.2, ADR-0025 broad recall)
         if ctx.memory_context and len(ctx.memory_context) > 0:
             if ctx.memory_context[0].get("type") in ("entity", "session"):
@@ -2234,6 +2246,7 @@ async def step_llm_call(
                 "Keep to 2-4 sub-tasks. After the sub-tasks complete, you will "
                 "synthesize their results into a final answer."
             )
+            _decomposition_added = True
             if system_prompt:
                 system_prompt = f"{system_prompt}{hybrid_prompt}"
             else:
@@ -2283,6 +2296,39 @@ async def step_llm_call(
             timer.start_span(llm_span_name)
 
         from personal_agent.llm_client.concurrency import InferencePriority
+        from personal_agent.llm_client.prompt_identity import derive_prompt_identity
+
+        # Build the orchestrator.primary PromptIdentity (ADR-0078 D1/D4, FRE-405).
+        # static_prefix is the literal cacheable prefix: tool_awareness (prepended)
+        # + the system body assembled before the DYNAMIC memory section. Post-memory
+        # STATIC fragments (tool rules, decomposition) are intentionally excluded —
+        # they are not in a cacheable prefix position under the current composer.
+        _static_prefix = (
+            f"{tool_awareness}\n\n{inner_system_before_memory}"
+            if tool_awareness
+            else inner_system_before_memory
+        )
+        _component_ids: list[str] = []
+        if tool_awareness:
+            _component_ids.append("tool_awareness")
+        if settings.environment == Environment.PRODUCTION:
+            _component_ids.append("deployment_context")
+        if ctx.operator_stanza:
+            _component_ids.append("operator_stanza")
+        if _skill_index_present:
+            _component_ids.append("skill_index")
+        if ctx.memory_context:
+            _component_ids.append("memory_section")
+        if tool_awareness:
+            _component_ids.append("tool_use_rules")
+        if _decomposition_added:
+            _component_ids.append("decomposition_instructions")
+        _prompt_identity = derive_prompt_identity(
+            "orchestrator.primary",
+            static_prefix=_static_prefix,
+            full_prompt=system_prompt or "",
+            component_ids=tuple(_component_ids),
+        )
 
         response = await llm_client.respond(
             role=model_role,
@@ -2293,6 +2339,7 @@ async def step_llm_call(
             previous_response_id=ctx.last_response_id,
             max_retries=max_retries_override,
             priority=InferencePriority.USER_FACING,
+            prompt_identity=_prompt_identity,
         )
 
         # Extract response content and tool calls

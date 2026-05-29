@@ -33,10 +33,23 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from personal_agent.llm_client.prompt_identity import derive_prompt_identity
 from personal_agent.llm_client.telemetry import (
     emit_model_call_completed,
     emit_model_call_started,
 )
+
+
+def _identity() -> Any:
+    """Minimal PromptIdentity for direct emit-helper contract tests."""
+    return derive_prompt_identity(
+        "orchestrator.primary",
+        static_prefix="static",
+        full_prompt="static\ndynamic",
+        component_ids=("operator_stanza",),
+    )
+
+
 from personal_agent.telemetry.events import (
     CANONICAL_MODEL_CALL_COMPLETED_FIELDS,
     CANONICAL_MODEL_CALL_STARTED_FIELDS,
@@ -107,6 +120,7 @@ class TestCanonicalEmitContract:
             input_tokens=100,
             output_tokens=50,
             total_tokens=150,
+            prompt_identity=_identity(),
         )
 
         log.info.assert_called_once()
@@ -117,6 +131,9 @@ class TestCanonicalEmitContract:
         assert kwargs["input_tokens"] == 100
         assert kwargs["output_tokens"] == 50
         assert kwargs["latency_ms"] == 125
+        assert kwargs["prompt_callsite"] == "orchestrator.primary"
+        assert kwargs["prompt_component_ids"] == ["operator_stanza"]
+        assert len(kwargs["prompt_static_prefix_hash"]) == 16
 
     def test_completed_helper_drops_legacy_token_aliases(self) -> None:
         """Phase 3 (ADR-0074): ``prompt_tokens`` / ``completion_tokens`` / ``model_id`` aliases removed."""
@@ -132,6 +149,7 @@ class TestCanonicalEmitContract:
             input_tokens=100,
             output_tokens=50,
             total_tokens=150,
+            prompt_identity=_identity(),
         )
         kwargs = log.info.call_args.kwargs
         for legacy in ("prompt_tokens", "completion_tokens", "model_id"):

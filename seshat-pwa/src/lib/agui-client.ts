@@ -14,7 +14,7 @@
  * See: docs/architecture_decisions/ADR-0075-websocket-transport.md
  */
 
-import type { AGUIEvent, ClientMessage } from './types';
+import type { AGUIEvent, ClientMessage, ExecutionProfile } from './types';
 
 /** Base URL for the Seshat backend. Defaults to localhost in dev. */
 export const SESHAT_API =
@@ -46,7 +46,6 @@ function wsBaseUrl(): string {
 export interface SendMessageOptions {
   message: string;
   sessionId: string;
-  profile?: string;
   /** Client-generated idempotency key (UUID v4) — deduplicated server-side (FRE-392). */
   clientMsgId?: string;
 }
@@ -95,9 +94,12 @@ export class BudgetDeniedError extends Error {
  * @throws Error for any other non-2xx response.
  */
 export async function sendChatMessage(opts: SendMessageOptions): Promise<void> {
-  const { message, sessionId, profile = 'local', clientMsgId } = opts;
+  // ADR-0079 / FRE-419: the execution profile is server-owned (resolved from
+  // the session row), so it is NOT sent per-message. The toggle writes it via
+  // setSessionProfile (PATCH); /chat/stream reads the stored value.
+  const { message, sessionId, clientMsgId } = opts;
 
-  const params: Record<string, string> = { message, session_id: sessionId, profile };
+  const params: Record<string, string> = { message, session_id: sessionId };
   if (clientMsgId) {
     params['client_msg_id'] = clientMsgId;
   }
@@ -361,13 +363,15 @@ export function connectWebSocket(
 // Session history
 // --------------------------------------------------------------------------
 
-/** Summary of a persisted session from GET /api/v1/sessions. */
+/** Summary of a persisted session from GET /api/v1/sessions(/:id). */
 export interface SessionSummary {
   session_id: string;
   created_at: string;
   last_active_at: string;
   mode: string;
   channel: string | null;
+  /** Server-authoritative execution profile (ADR-0079 / FRE-419). */
+  execution_profile: ExecutionProfile;
   message_count: number;
   title: string | null;
 }
@@ -419,6 +423,51 @@ export async function getSessionMessages(
   if (resp.status === 404) return [];
   if (!resp.ok) throw new Error(`getSessionMessages failed: ${resp.status}`);
   return resp.json() as Promise<ServerMessage[]>;
+}
+
+/**
+ * Fetch a single session, including its server-authoritative
+ * `execution_profile` (ADR-0079 / FRE-419). Used on mount to hydrate the
+ * profile pill from the server instead of client-only localStorage.
+ *
+ * @param sessionId - The session to fetch.
+ * @returns The session detail, or null when it does not exist yet (404).
+ * @throws Error when the backend returns a non-2xx, non-404 status.
+ */
+export async function getSession(sessionId: string): Promise<SessionSummary | null> {
+  const resp = await fetch(
+    `${SESHAT_API}/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+    { headers: authHeaders() },
+  );
+  if (resp.status === 404) return null;
+  if (!resp.ok) throw new Error(`getSession failed: ${resp.status}`);
+  return resp.json() as Promise<SessionSummary>;
+}
+
+/**
+ * Set a session's server-authoritative execution profile (ADR-0079 / FRE-419).
+ *
+ * This is the canonical write for the profile toggle: it persists the value
+ * on the session and triggers a `session_profile` STATE_DELTA to the active
+ * client. The displayed pill should reflect the server-confirmed value.
+ *
+ * @param sessionId - The session to update.
+ * @param profile   - The new execution profile.
+ * @throws Error when the backend returns a non-2xx status.
+ */
+export async function setSessionProfile(
+  sessionId: string,
+  profile: ExecutionProfile,
+): Promise<void> {
+  const resp = await fetch(
+    `${SESHAT_API}/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ profile }),
+    },
+  );
+  if (!resp.ok) throw new Error(`setSessionProfile failed: ${resp.status}`);
 }
 
 // --------------------------------------------------------------------------

@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v7-fre-389-statusbar-footer';
+const CACHE_NAME = 'seshat-v8-fre-419-profile-hydration';
 
 const PRECACHE_URLS = [
   '/',

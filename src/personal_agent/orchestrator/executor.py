@@ -753,6 +753,29 @@ def _validate_and_fix_conversation_roles(messages: list[dict[str, Any]]) -> list
     return result
 
 
+def _no_think_applies() -> bool:
+    """Whether the ``/no_think`` suffix should be injected for the active model.
+
+    ``/no_think`` is a Qwen control token (FRE-417); it is meaningless noise for
+    non-Qwen models such as cloud Sonnet, where it just pollutes the prompt.
+    Gate injection to the active primary model being a Qwen model. Defaults to
+    ``True`` when the model can't be resolved (preserves prior behaviour).
+
+    Returns:
+        True when the active primary model is a Qwen-family model.
+    """
+    try:
+        from personal_agent.config.model_loader import load_model_config
+        from personal_agent.config.profile import resolve_model_key
+
+        model_def = load_model_config().models.get(resolve_model_key("primary"))
+        if model_def is not None:
+            return "qwen" in model_def.id.lower()
+    except Exception:
+        log.debug("no_think_applies_resolve_failed")
+    return True
+
+
 def _append_no_think_to_last_user_message(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Append the configured no-think suffix to the last user message.
 
@@ -760,7 +783,7 @@ def _append_no_think_to_last_user_message(messages: list[dict[str, Any]]) -> lis
     The original message list is not mutated.
     """
     suffix = _normalize_no_think_suffix(settings.llm_no_think_suffix)
-    if not settings.llm_append_no_think_to_tool_prompts or not suffix:
+    if not settings.llm_append_no_think_to_tool_prompts or not suffix or not _no_think_applies():
         return messages
 
     out = deepcopy(messages)
@@ -791,7 +814,7 @@ def _append_no_think_synthesis_nudge(messages: list[dict[str, Any]]) -> list[dic
     conversation alternation rules required by strict models.
     """
     suffix = _normalize_no_think_suffix(settings.llm_no_think_suffix)
-    if not settings.llm_append_no_think_to_tool_prompts or not suffix:
+    if not settings.llm_append_no_think_to_tool_prompts or not suffix or not _no_think_applies():
         return messages
 
     out = deepcopy(messages)

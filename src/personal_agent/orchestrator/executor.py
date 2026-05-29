@@ -162,6 +162,29 @@ async def _emit_classified_error(ctx: "ExecutionContext", classified: "Classifie
         )
 
 
+def _resolve_context_max() -> int:
+    """Return the active primary model's context window for the status meter.
+
+    Resolves the profile-active primary model's ``context_length`` (e.g. 200K
+    for cloud Sonnet, 131K for local Qwen) so the PWA meter reflects the real
+    window instead of the static local budget (FRE-414). Falls back to the
+    configured budget when the model config can't be resolved.
+
+    Returns:
+        The active model's context length, or ``settings.context_window_max_tokens``.
+    """
+    try:
+        from personal_agent.config.model_loader import load_model_config
+        from personal_agent.config.profile import resolve_model_key
+
+        model_def = load_model_config().models.get(resolve_model_key("primary"))
+        if model_def is not None:
+            return model_def.context_length
+    except Exception:
+        log.debug("context_max_resolve_failed")
+    return settings.context_window_max_tokens
+
+
 async def _emit_turn_status(ctx: "ExecutionContext") -> None:
     """Push a live ``turn_status`` STATE_DELTA for the PWA status bar (ADR-0076).
 
@@ -179,7 +202,7 @@ async def _emit_turn_status(ctx: "ExecutionContext") -> None:
             session_id=ctx.session_id,
             value={
                 "context_tokens": estimate_messages_tokens(ctx.messages),
-                "context_max": settings.context_window_max_tokens,
+                "context_max": _resolve_context_max(),
                 "tool_iteration": ctx.tool_iteration_count,
                 "tool_iteration_max": _resolve_max_iterations(ctx),
                 "turn_cost_usd": round(ctx.turn_cost_usd, 6),

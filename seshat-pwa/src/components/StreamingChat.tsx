@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 
 import Link from 'next/link';
 
-import { getSessionMessages } from '@/lib/agui-client';
+import { getSession, getSessionMessages, setSessionProfile } from '@/lib/agui-client';
 import { generateUUID } from '@/lib/uuid';
 import type { ExecutionProfile } from '@/lib/types';
 import { useSSEStream } from '@/hooks/useSSEStream';
@@ -66,18 +66,34 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     return () => document.removeEventListener('keydown', handler);
   }, [isDrawerOpen]);
 
-  const handleProfileChange = useCallback((p: ExecutionProfile) => {
-    setProfile(p);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(PROFILE_STORAGE_KEY, p);
-    }
-  }, []);
+  const handleProfileChange = useCallback(
+    (p: ExecutionProfile) => {
+      const previous = profile;
+      // Optimistic update + fast-paint cache.
+      setProfile(p);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(PROFILE_STORAGE_KEY, p);
+      }
+      if (!sessionId) return;
+      // ADR-0079 / FRE-419: the toggle is a server-side write. Revert the pill
+      // if the write fails so the UI never diverges from the server.
+      void setSessionProfile(sessionId, p).catch((err) => {
+        console.error('Failed to set session profile; reverting', err);
+        setProfile(previous);
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(PROFILE_STORAGE_KEY, previous);
+        }
+      });
+    },
+    [sessionId, profile],
+  );
 
   const {
     messages,
     isStreaming,
     activeTools,
     turnStatus,
+    serverProfile,
     pendingConstraint,
     resolvedConstraints,
     cancelled,
@@ -93,6 +109,17 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     sendUserCancel,
     seedMessages,
   } = useSSEStream();
+
+  // Reconcile the pill when the server broadcasts a profile change to the
+  // active socket (ADR-0079 / FRE-419 — e.g. a change made elsewhere).
+  useEffect(() => {
+    if (serverProfile && serverProfile !== profile) {
+      setProfile(serverProfile);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(PROFILE_STORAGE_KEY, serverProfile);
+      }
+    }
+  }, [serverProfile, profile]);
 
   // Hydrate message history from the backend when the session changes.
   useEffect(() => {
@@ -120,6 +147,21 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
         if (!cancelled) setIsLoadingHistory(false);
       });
 
+    // ADR-0079 / FRE-419: hydrate the profile pill from the server (source of
+    // truth) so an iOS reload / second device can't leave it on the cached
+    // `local` default. 404 (new session) keeps the cached value.
+    getSession(sessionId)
+      .then((s) => {
+        if (cancelled || s === null) return;
+        setProfile(s.execution_profile);
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(PROFILE_STORAGE_KEY, s.execution_profile);
+        }
+      })
+      .catch(() => {
+        // Keep the cached pill on a transient fetch error.
+      });
+
     return () => {
       cancelled = true;
     };
@@ -134,7 +176,8 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     if (!sessionId) return;
     localStorage.setItem(LAST_SESSION_KEY, sessionId);
     setLastUserMessage(text);
-    sendMessage(text, sessionId, profile);
+    // ADR-0079 / FRE-419: profile is server-owned; not sent per message.
+    sendMessage(text, sessionId);
   };
 
   const handleInterruptChoice = (choice: string) => {

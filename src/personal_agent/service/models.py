@@ -58,6 +58,7 @@ class SessionCreate(BaseModel):
     channel: str | None = None
     mode: str = "NORMAL"
     metadata: dict[str, Any] = Field(default_factory=dict)
+    execution_profile: str | None = None
 
 
 class SessionUpdate(BaseModel):
@@ -67,6 +68,13 @@ class SessionUpdate(BaseModel):
     channel: str | None = None
     metadata: dict[str, Any] | None = None
     messages: list[dict[str, Any]] | None = None
+    execution_profile: str | None = None
+
+
+class SessionProfileUpdate(BaseModel):
+    """Request to change a session's server-owned execution profile (ADR-0079)."""
+
+    profile: str
 
 
 class ConstraintPreferenceUpdate(BaseModel):
@@ -93,6 +101,7 @@ class SessionResponse(BaseModel):
     messages: list[dict[str, Any]]
     primary_model_at_creation: str | None = None
     model_config_path: str | None = None
+    execution_profile: str = "local"
 
     class Config:  # noqa: D106
         """Pydantic configuration."""
@@ -190,6 +199,9 @@ class SessionModel(Base):
     # rows; populated for every new session by SessionRepository.create.
     primary_model_at_creation = Column(String(120), nullable=True)
     model_config_path = Column(String(255), nullable=True)
+    # ADR-0079 (FRE-416) — server-authoritative execution profile. Explicit
+    # stored value ('local' | 'cloud'); never a silent request-time fallback.
+    execution_profile = Column(String(50), nullable=False, default="local", server_default="local")
 
 
 class MetricModel(Base):

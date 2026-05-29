@@ -70,6 +70,8 @@ class SessionRepository:
             messages=[],
             primary_model_at_creation=primary_model_at_creation,
             model_config_path=model_config_path,
+            # ADR-0079: explicit stored profile; default 'local' when unset.
+            execution_profile=data.execution_profile or "local",
         )
         self.db.add(session)
         await self.db.commit()

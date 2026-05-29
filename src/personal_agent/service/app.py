@@ -200,6 +200,9 @@ async def _process_chat_stream_background(
                     messages=[],
                     primary_model_at_creation=primary_model_id,
                     model_config_path=config_path_str,
+                    # ADR-0079: persist the resolved profile on first turn so the
+                    # session row is the source of truth from creation onward.
+                    execution_profile=profile_name,
                 )
                 db.add(session)
                 await db.commit()
@@ -1652,11 +1655,69 @@ async def mint_ws_ticket_endpoint(
 # ============================================================================
 
 
+async def _resolve_session_profile(
+    session_id: str, supplied: str | None, user_id: UUID, *, trace_id: str
+) -> str:
+    """Resolve the server-authoritative execution profile for a turn (ADR-0079).
+
+    The session row is the source of truth:
+
+    - ``supplied is None`` → the session's stored ``execution_profile`` (or
+      ``"local"`` when no row exists yet). There is no path where a missing
+      value silently defaults — the stored value is always an explicit one.
+    - ``supplied`` provided → validated against known profiles (422 on
+      unknown), persisted to the session when it differs from the stored
+      value, and emitted as a ``session_profile`` STATE_DELTA to the active
+      client. This is the transitional request-time write path; the canonical
+      writer is ``PATCH /api/v1/sessions/{id}`` (see ADR-0079 §2-3).
+
+    Args:
+        session_id: Client-generated session UUID string.
+        supplied: Profile name from the request, or None when omitted.
+        user_id: Authenticated owner — scopes the read/write.
+        trace_id: Trace id for logging.
+
+    Returns:
+        The resolved profile name to run this turn with.
+
+    Raises:
+        HTTPException: 422 when ``supplied`` is not a known profile.
+    """
+    from personal_agent.config.profile import is_valid_profile
+    from personal_agent.transport.agui.transport import emit_session_profile
+
+    if supplied is not None and not is_valid_profile(supplied):
+        raise HTTPException(status_code=422, detail=f"unknown execution profile: {supplied}")
+
+    session_uuid = UUID(session_id)
+    async with AsyncSessionLocal() as db:
+        repo = SessionRepository(db)
+        session = await repo.get(session_uuid, user_id=user_id)
+        stored: str | None = str(session.execution_profile) if session is not None else None
+
+        if supplied is None:
+            return stored or "local"
+
+        if session is not None and stored != supplied:
+            await repo.update(
+                session_uuid, SessionUpdate(execution_profile=supplied), user_id=user_id
+            )
+            await emit_session_profile(session_id=session_id, profile=supplied)
+            log.info(
+                "chat_stream.profile_updated",
+                session_id=session_id,
+                profile=supplied,
+                previous=stored,
+                trace_id=trace_id,
+            )
+        return supplied
+
+
 @app.post("/chat/stream")
 async def chat_stream_endpoint(
     message: str = Form(...),
     session_id: str = Form(...),
-    profile: str = Form(default="local"),
+    profile: str | None = Form(default=None),
     client_msg_id: str | None = Form(default=None),
     request_user: RequestUser = Depends(get_request_user),  # noqa: B008
 ) -> dict[str, str]:
@@ -1666,25 +1727,29 @@ async def chat_stream_endpoint(
     pipeline as a background task, and returns immediately.  The client should
     connect to ``GET /ws/{session_id}`` to receive events as the model replies.
 
-    The execution profile is resolved inside the background task so the
-    LLM client factory dispatches to the correct cloud or local model.
+    The execution profile is **server-authoritative** (ADR-0079 / FRE-416):
+    when ``profile`` is omitted the session's stored profile is used (never a
+    silent ``local`` default); when provided it is validated, persisted, and
+    echoed back. The resolved profile is returned so the client can reconcile.
 
     Args:
         message: User message text.
         session_id: Client-generated session UUID.
-        profile: Execution profile name (e.g. ``"local"``, ``"cloud"``).
+        profile: Optional execution profile override (e.g. ``"local"``,
+            ``"cloud"``). Omitted → use the session's stored profile.
         client_msg_id: Optional client-generated idempotency key (UUID v4).
             When provided, duplicate submissions within the TTL window are
             detected and silently ignored (FRE-392).
         request_user: Resolved user identity (injected by FastAPI).
 
     Returns:
-        ``{"session_id": ..., "status": "streaming"}`` once the background
-        task is launched, or the same dict with ``"deduplicated": "true"``
-        when the request was recognised as a duplicate.
+        ``{"session_id": ..., "status": "streaming", "profile": <resolved>}``
+        once the background task is launched, or the dict with
+        ``"deduplicated": "true"`` when the request was a duplicate.
 
     Raises:
-        HTTPException: 422 if ``session_id`` is not a valid UUID v4.
+        HTTPException: 422 if ``session_id`` is not a valid UUID v4, or if
+            ``profile`` is supplied but not a known profile.
     """
     try:
         UUID(session_id)
@@ -1705,11 +1770,15 @@ async def chat_stream_endpoint(
         )
         return {"session_id": session_id, "status": "streaming", "deduplicated": "true"}
 
+    resolved_profile = await _resolve_session_profile(
+        session_id, profile, request_user.user_id, trace_id=trace_id
+    )
+
     asyncio.create_task(
         _process_chat_stream_background(
             session_id=session_id,
             message=message,
-            profile_name=profile,
+            profile_name=resolved_profile,
             user_id=request_user.user_id,
             trace_id=trace_id,
             user_email=request_user.email,
@@ -1721,10 +1790,11 @@ async def chat_stream_endpoint(
     log.info(
         "chat_stream.launched",
         session_id=session_id,
-        profile=profile,
+        profile=resolved_profile,
+        profile_supplied=profile,
         trace_id=trace_id,
     )
-    return {"session_id": session_id, "status": "streaming"}
+    return {"session_id": session_id, "status": "streaming", "profile": resolved_profile}
 
 
 # ============================================================================

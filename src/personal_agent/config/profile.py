@@ -124,11 +124,13 @@ class DelegationConfig(BaseModel):
 class ExecutionProfile(BaseModel):
     """Complete execution harness configuration.
 
-    Bound to a conversation at creation time. Determines which models,
-    providers, and cost constraints apply for the lifetime of that conversation.
+    Determines which models, providers, and cost constraints apply for a turn.
 
-    Profile selection is per-conversation, not per-request — switching profile
-    mid-conversation is not supported (ADR-0044 D2).
+    Profile is a server-owned, per-session value that MAY change between turns
+    (ADR-0079 / FRE-416 amends ADR-0044 D2, which originally bound the profile
+    at conversation creation). The session row is the source of truth; the
+    active profile for a turn is resolved from it (or an explicit request-time
+    override) and set via :func:`set_current_profile`.
 
     Attributes:
         name: Profile identifier (e.g. "local", "cloud").
@@ -208,3 +210,19 @@ def list_profiles(profiles_dir: str | Path = "config/profiles") -> list[str]:
     if not path.exists():
         return []
     return sorted(p.stem for p in path.glob("*.yaml"))
+
+
+def is_valid_profile(name: str, profiles_dir: str | Path = "config/profiles") -> bool:
+    """Return whether ``name`` is a known execution profile.
+
+    Used to reject unknown profile names at API boundaries with a 422 rather
+    than silently warning and continuing (ADR-0079 / FRE-416).
+
+    Args:
+        name: Candidate profile name.
+        profiles_dir: Directory to scan for YAML profile files.
+
+    Returns:
+        True when a ``<name>.yaml`` profile exists in ``profiles_dir``.
+    """
+    return name in set(list_profiles(profiles_dir))

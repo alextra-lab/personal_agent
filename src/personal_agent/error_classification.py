@@ -37,7 +37,7 @@ class ClassifiedError:
     partial: bool = False
 
 
-def classify_error(error: Exception) -> ClassifiedError:
+def classify_error(error: Exception, *, is_cloud: bool | None = None) -> ClassifiedError:
     """Classify an exception into a :class:`ClassifiedError`.
 
     Uses ``isinstance`` checks in priority order so subclasses of
@@ -46,8 +46,15 @@ def classify_error(error: Exception) -> ClassifiedError:
     :func:`~personal_agent.security.sanitize_error_message` so that sensitive
     details are stripped.
 
+    The copy and actions are **path-aware** (FRE-415): on the cloud path the
+    message does not say "local", and the ``switch_to_cloud`` action is omitted
+    (you are already on cloud). When ``is_cloud`` is not given it is resolved
+    from the active execution profile's ``provider_type``.
+
     Args:
         error: The exception that caused the turn to fail.
+        is_cloud: Whether the failing turn ran on the cloud path. ``None``
+            resolves it from the active profile.
 
     Returns:
         A :class:`ClassifiedError` with category, reason, next_step, and
@@ -61,20 +68,45 @@ def classify_error(error: Exception) -> ClassifiedError:
         LLMTimeout,
     )
 
+    if is_cloud is None:
+        from personal_agent.config.profile import get_current_profile
+
+        profile = get_current_profile()
+        is_cloud = profile is not None and profile.provider_type == "cloud"
+
+    # Cloud is already the escalation target, so never offer "switch to cloud".
+    retry_actions = ("retry", "stop") if is_cloud else ("retry", "switch_to_cloud", "stop")
+
     if isinstance(error, LLMServerError):
         return ClassifiedError(
             category="model_server",
-            reason="The local model server hit an error (it may have timed out on a large request).",
-            next_step="Retry, switch to Cloud, or shorten the request.",
-            actions=("retry", "switch_to_cloud", "stop"),
+            reason=(
+                "The cloud model provider returned an error (it may have timed out "
+                "on a large request)."
+                if is_cloud
+                else "The local model server hit an error (it may have timed out on a "
+                "large request)."
+            ),
+            next_step=(
+                "Retry or shorten the request."
+                if is_cloud
+                else "Retry, switch to Cloud, or shorten the request."
+            ),
+            actions=retry_actions,
         )
 
     if isinstance(error, LLMTimeout):
         return ClassifiedError(
             category="timeout",
-            reason="The local model timed out — the request was large.",
-            next_step="Retry, switch to Cloud, or shorten it.",
-            actions=("retry", "switch_to_cloud", "stop"),
+            reason=(
+                "The model timed out — the request was large."
+                if is_cloud
+                else "The local model timed out — the request was large."
+            ),
+            next_step=(
+                "Retry or shorten it." if is_cloud else "Retry, switch to Cloud, or shorten it."
+            ),
+            actions=retry_actions,
         )
 
     # InferenceSlotTimeout (concurrency.py) — slot contention is a timeout variant.
@@ -85,8 +117,10 @@ def classify_error(error: Exception) -> ClassifiedError:
             return ClassifiedError(
                 category="timeout",
                 reason="The model server was busy and the request timed out waiting for a slot.",
-                next_step="Retry in a moment or switch to Cloud.",
-                actions=("retry", "switch_to_cloud", "stop"),
+                next_step=(
+                    "Retry in a moment." if is_cloud else "Retry in a moment or switch to Cloud."
+                ),
+                actions=retry_actions,
             )
     except ImportError:
         pass
@@ -94,9 +128,17 @@ def classify_error(error: Exception) -> ClassifiedError:
     if isinstance(error, LLMConnectionError):
         return ClassifiedError(
             category="connection",
-            reason="Couldn't reach the local model server.",
-            next_step="Check the SLM server is running, then retry or switch to Cloud.",
-            actions=("retry", "switch_to_cloud", "stop"),
+            reason=(
+                "Couldn't reach the cloud model provider."
+                if is_cloud
+                else "Couldn't reach the local model server."
+            ),
+            next_step=(
+                "Retry in a moment."
+                if is_cloud
+                else "Check the SLM server is running, then retry or switch to Cloud."
+            ),
+            actions=retry_actions,
         )
 
     if isinstance(error, LLMRateLimit):

@@ -10,9 +10,9 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
-from personal_agent.error_classification import ClassifiedError, classify_error
 
 from personal_agent.cost_gate.types import BudgetDenied
+from personal_agent.error_classification import ClassifiedError, classify_error
 from personal_agent.llm_client.types import (
     LLMConnectionError,
     LLMInvalidResponse,
@@ -175,3 +175,55 @@ class TestClassifyGenericFallback:
         """LLMInvalidResponse is not a specific category — generic or model_server is acceptable."""
         result = classify_error(LLMInvalidResponse("unexpected format"))
         assert result.category in ("generic", "model_server", "connection")
+
+
+# ---------------------------------------------------------------------------
+# Path-aware copy + actions (FRE-415)
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyCloudPath:
+    """On the cloud path the copy is not "local" and switch_to_cloud is omitted."""
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            LLMServerError("530"),
+            LLMTimeout("timed out"),
+            LLMConnectionError("ECONNREFUSED"),
+        ],
+    )
+    def test_cloud_omits_switch_to_cloud(self, error: Exception) -> None:
+        result = classify_error(error, is_cloud=True)
+        assert "switch_to_cloud" not in result.actions
+        assert "retry" in result.actions
+        assert "local" not in (result.reason + " " + result.next_step).lower()
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            LLMServerError("530"),
+            LLMTimeout("timed out"),
+            LLMConnectionError("ECONNREFUSED"),
+        ],
+    )
+    def test_local_keeps_switch_to_cloud(self, error: Exception) -> None:
+        result = classify_error(error, is_cloud=False)
+        assert "switch_to_cloud" in result.actions
+
+    def test_resolves_is_cloud_from_active_profile(self) -> None:
+        """With no explicit flag, is_cloud is read from the active profile."""
+        from personal_agent.config.profile import (
+            _current_profile,
+            load_profile,
+            set_current_profile,
+        )
+
+        token = set_current_profile(load_profile("cloud"))
+        try:
+            result = classify_error(LLMServerError("530"))
+        finally:
+            _current_profile.reset(token)
+
+        assert "switch_to_cloud" not in result.actions
+        assert "local" not in result.reason.lower()

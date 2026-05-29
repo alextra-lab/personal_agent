@@ -151,13 +151,14 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0076](ADR-0076-adaptive-constraint-governance.md) | Adaptive Constraint Governance Protocol | Proposed (Codex-reviewed, 3 passes) |
 | [ADR-0077](ADR-0077-artifact-draft-subagent-generation.md) | Artifact Draft — Sub-Agent HTML Generation | Implemented (PR #84) |
 
-### Prompt, Profile & Thinking Governance (ADR-0078 – ADR-0080)
+### Prompt, Profile & Thinking Governance (ADR-0078 – ADR-0081)
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| [ADR-0078](ADR-0078-prompt-management-observability.md) | Prompt Management & Observability | Proposed |
+| [ADR-0078](ADR-0078-prompt-management-observability.md) | Prompt Management & Observability | Proposed (P0+P1 shipped — FRE-404/405) |
 | [ADR-0079](ADR-0079-session-execution-profile-ownership.md) | Server-Authoritative Session Execution Profile | Implemented (FRE-416 + FRE-419, PRs #102–#104) |
 | [ADR-0080](ADR-0080-thinking-control-policy.md) | Model-Aware Thinking-Control Policy | Implemented (FRE-417, PR #107) |
+| [ADR-0081](ADR-0081-cache-aware-context-layout-and-compaction.md) | Cache-Aware Context Layout & Compaction | Proposed |
 
 ### Supplementary
 

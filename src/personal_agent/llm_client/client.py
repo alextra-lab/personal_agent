@@ -27,6 +27,10 @@ from personal_agent.llm_client.concurrency import (
 )
 from personal_agent.llm_client.history_sanitiser import sanitise_messages
 from personal_agent.llm_client.models import ModelConfig, ModelDefinition
+from personal_agent.llm_client.prompt_identity import (
+    PromptIdentity,
+    derive_prompt_identity,
+)
 from personal_agent.llm_client.telemetry import (
     emit_model_call_completed,
     emit_model_call_started,
@@ -140,6 +144,7 @@ class LocalLLMClient:
         previous_response_id: str | None = None,
         priority: InferencePriority = InferencePriority.USER_FACING,
         priority_timeout: float | None = None,
+        prompt_identity: PromptIdentity | None = None,
         # TODO: Add governance hooks (Section 7 of spec)
         # mode: Mode | None = None,  # Current operational mode for constraint enforcement
         # governance_config: GovernanceConfig | None = None,  # Mode-aware limits
@@ -173,6 +178,9 @@ class LocalLLMClient:
                 when multiple requests compete for the same local endpoint.
             priority_timeout: Max seconds to wait for an inference slot. None waits
                 forever. Background tasks should set a finite timeout to skip gracefully.
+            prompt_identity: Identity of the prompt sent on this call (ADR-0078
+                D1/D4). When None, the client derives a fallback so the emitted
+                ``model_call_completed`` always carries prompt identity fields.
 
         Returns:
             LLMResponse with normalized structure.
@@ -212,6 +220,7 @@ class LocalLLMClient:
                 reasoning_effort=reasoning_effort,
                 trace_ctx=trace_ctx,
                 previous_response_id=previous_response_id,
+                prompt_identity=prompt_identity,
             )
 
     async def _do_request(
@@ -231,6 +240,7 @@ class LocalLLMClient:
         max_retries: int | None = None,
         reasoning_effort: str | None = None,
         previous_response_id: str | None = None,
+        prompt_identity: PromptIdentity | None = None,
     ) -> LLMResponse:
         """Execute the HTTP request with retries (called within concurrency slot)."""
         # Get model ID
@@ -494,6 +504,11 @@ class LocalLLMClient:
                     # and a prefix KV cache hit occurs — zero or absent means cache miss.
                     _timings = (llm_response.get("raw") or {}).get("timings") or {}
                     _cached = _timings.get("tokens_cached") or 0
+                    _identity = prompt_identity or derive_prompt_identity(
+                        f"role.{role.value}",
+                        static_prefix=system_prompt or "",
+                        full_prompt=system_prompt or "",
+                    )
                     emit_model_call_completed(
                         log=log,
                         role=role.value,
@@ -504,6 +519,7 @@ class LocalLLMClient:
                         latency_ms=duration_ms,
                         input_tokens=_pt,
                         output_tokens=_ct,
+                        prompt_identity=_identity,
                         total_tokens=_usage.get("total_tokens") or (_pt + _ct),
                         cache_read_tokens=_cached if _cached > 0 else None,
                         extra={

@@ -223,3 +223,54 @@ def test_chat_404_when_session_owned_by_other_user() -> None:
     # cross-user attempt).
     first_call_kwargs = repo_get.await_args_list[0].kwargs
     assert first_call_kwargs.get("user_id") == _TEST_USER.user_id
+
+
+# ---------------------------------------------------------------------------
+# Gateway telemetry dark-path closure (ADR-0078 D4 / FRE-405)
+# ---------------------------------------------------------------------------
+
+
+def test_gateway_emits_model_call_completed_with_identity() -> None:
+    """The gateway success path emits a canonical model_call_completed stamped
+    with callsite='gateway.chat' (was previously untelemetered)."""
+    from personal_agent.gateway.chat_api import _emit_gateway_model_call_completed
+
+    usage = MagicMock(input_tokens=120, output_tokens=45)
+    final_message = MagicMock(usage=usage)
+
+    with patch("personal_agent.llm_client.telemetry.emit_model_call_completed") as mock_emit:
+        _emit_gateway_model_call_completed(
+            trace_id="trace-xyz",
+            session_id="11111111-1111-1111-1111-111111111111",
+            latency_ms=987,
+            final_message=final_message,
+        )
+
+    mock_emit.assert_called_once()
+    kwargs = mock_emit.call_args.kwargs
+    identity = kwargs["prompt_identity"]
+    assert identity.callsite == "gateway.chat"
+    assert identity.component_ids == ("gateway_persona",)
+    assert kwargs["input_tokens"] == 120
+    assert kwargs["output_tokens"] == 45
+    assert kwargs["trace_ctx"].trace_id == "trace-xyz"
+    assert kwargs["trace_ctx"].session_id == "11111111-1111-1111-1111-111111111111"
+
+
+def test_gateway_emit_tolerates_missing_usage() -> None:
+    """No usage on the final message → emit still fires with None token counts."""
+    from personal_agent.gateway.chat_api import _emit_gateway_model_call_completed
+
+    with patch("personal_agent.llm_client.telemetry.emit_model_call_completed") as mock_emit:
+        _emit_gateway_model_call_completed(
+            trace_id="t",
+            session_id="s",
+            latency_ms=10,
+            final_message=None,
+        )
+
+    mock_emit.assert_called_once()
+    kwargs = mock_emit.call_args.kwargs
+    assert kwargs["input_tokens"] is None
+    assert kwargs["output_tokens"] is None
+    assert kwargs["prompt_identity"].callsite == "gateway.chat"

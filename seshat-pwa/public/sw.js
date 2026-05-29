@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v9-fre-419-new-session-fix';
+const CACHE_NAME = 'seshat-v10-fre-421-input-availability';
 
 const PRECACHE_URLS = [
   '/',

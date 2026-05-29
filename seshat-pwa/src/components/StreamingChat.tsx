@@ -402,7 +402,9 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
         <ToolIndicator tools={activeTools} />
         <ChatInput
           onSend={handleSend}
-          disabled={isStreaming || pendingInterrupt !== null || pendingApproval !== null}
+          // Block Send only while a decision is pending; streaming shows Stop,
+          // and the textarea stays writable so the user can compose ahead (FRE-421).
+          disabled={pendingInterrupt !== null || pendingApproval !== null}
           isStreaming={isStreaming}
           onStop={sendUserCancel}
           profile={profile}

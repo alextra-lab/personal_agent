@@ -1794,16 +1794,29 @@ _SLM_HEALTH_URL = "https://slm.frenchforet.com/health"
 
 
 @app.get("/api/inference/status")
-async def inference_status() -> dict[str, Any]:
-    """Probe the Mac SLM tunnel and return availability for the local profile.
+async def inference_status(profile: str = "local") -> dict[str, Any]:
+    """Report availability of the requested execution profile's inference path.
 
-    Makes a GET /health request to https://slm.frenchforet.com/health with
-    Cloudflare Access service token headers. Times out in 3 seconds.
+    - ``local`` (default): live-probes the Mac SLM tunnel
+      (``GET https://slm.frenchforet.com/health`` with CF Access headers, 3s
+      timeout). ``up`` when reachable, else ``down``.
+    - ``cloud``: reports ``up`` when the cloud provider is configured
+      (Anthropic API key present), else ``down``. This is a configuration
+      check, not a live provider ping — transient provider outages are not
+      detected here (that is FRE-399's failover concern).
+
+    The ``local`` key is retained in the response for backward compatibility.
+
+    Args:
+        profile: ``"local"`` or ``"cloud"``.
 
     Returns:
-        {"local": "up", "latency_ms": N} if reachable,
-        {"local": "down", "latency_ms": None} otherwise.
+        ``{"status": "up"|"down", "profile": <profile>, "latency_ms": N|None}``.
     """
+    if profile == "cloud":
+        status = "up" if settings.anthropic_api_key else "down"
+        return {"status": status, "profile": "cloud", "local": status, "latency_ms": None}
+
     headers: dict[str, str] = {}
     if settings.cf_access_client_id and settings.cf_access_client_secret:
         headers["CF-Access-Client-Id"] = settings.cf_access_client_id
@@ -1816,7 +1829,7 @@ async def inference_status() -> dict[str, Any]:
             resp = await client.get(_SLM_HEALTH_URL, headers=headers)
             resp.raise_for_status()
         latency_ms = int((time.monotonic() - start) * 1000)
-        return {"local": "up", "latency_ms": latency_ms}
+        return {"status": "up", "profile": "local", "local": "up", "latency_ms": latency_ms}
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 403:
             log.warning(
@@ -1825,9 +1838,9 @@ async def inference_status() -> dict[str, Any]:
                 hint="Rotate CF_ACCESS_CLIENT_ID/SECRET via terraform apply",
                 trace_id=_inf_ctx.trace_id,
             )
-        return {"local": "down", "latency_ms": None}
+        return {"status": "down", "profile": "local", "local": "down", "latency_ms": None}
     except Exception:
-        return {"local": "down", "latency_ms": None}
+        return {"status": "down", "profile": "local", "local": "down", "latency_ms": None}
 
 
 # ============================================================================

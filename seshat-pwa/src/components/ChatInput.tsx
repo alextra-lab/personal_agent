@@ -3,6 +3,7 @@
 import { useState, useRef, type KeyboardEvent, type FormEvent, type ClipboardEvent } from 'react';
 
 import type { ExecutionProfile } from '@/lib/types';
+import { useInferenceStatus } from '@/hooks/useInferenceStatus';
 
 interface ChatInputProps {
   onSend: (text: string) => void;
@@ -38,10 +39,18 @@ export function ChatInput({
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // Availability of the active path (FRE-421). Local live-probes the Mac SLM;
+  // cloud reports whether the provider is configured. When the active path is
+  // down, Send is blocked and we say so — the toggle stays usable to switch.
+  const inference = useInferenceStatus(profile);
+  const pathUnavailable = inference.status === 'down';
+  const activeLabel = profile === 'local' ? 'Local' : 'Cloud';
+  const otherLabel = profile === 'local' ? 'Cloud' : 'Local';
+
   const handleSubmit = (e?: FormEvent) => {
     e?.preventDefault();
     const trimmed = text.trim();
-    if (!trimmed || disabled) return;
+    if (!trimmed || disabled || pathUnavailable) return;
     onSend(trimmed);
     setText('');
     if (textareaRef.current) {
@@ -85,25 +94,41 @@ export function ChatInput({
     onProfileChange(profile === 'local' ? 'cloud' : 'local');
   };
 
-  const canSend = text.trim().length > 0 && !disabled;
+  const canSend = text.trim().length > 0 && !disabled && !pathUnavailable;
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="flex items-end gap-2 px-4 pt-3 border-t border-slate-800 bg-slate-900"
-      style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 0.5rem)' }}
-    >
-      {/* Compact model toggle — colored dot + label */}
+    <div className="border-t border-slate-800 bg-slate-900">
+      {/* Why Send is disabled — name the unavailable path + offer the switch. */}
+      {pathUnavailable && (
+        <button
+          type="button"
+          onClick={toggleProfile}
+          className="w-full px-4 pt-2 text-left text-xs text-amber-300/90 hover:text-amber-200 transition-colors"
+        >
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-red-500 mr-1.5 align-middle" />
+          {activeLabel} is currently unavailable. Tap to switch to {otherLabel}.
+        </button>
+      )}
+      <form
+        onSubmit={handleSubmit}
+        className="flex items-end gap-2 px-4 pt-3"
+        style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 0.5rem)' }}
+      >
+      {/* Compact model toggle — colored dot + label (always enabled so the user
+          can switch even while a turn streams or the active path is down). */}
       <button
         type="button"
         onClick={toggleProfile}
-        disabled={disabled}
-        className="flex-shrink-0 self-end mb-[9px] flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200 disabled:opacity-40 transition-colors whitespace-nowrap"
+        className="flex-shrink-0 self-end mb-[9px] flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200 transition-colors whitespace-nowrap"
         title={profile === 'local' ? 'Switch to Cloud (Claude Sonnet)' : 'Switch to Local (Qwen)'}
       >
         <span
           className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-            profile === 'local' ? 'bg-emerald-400' : 'bg-amber-400'
+            pathUnavailable
+              ? 'bg-red-500'
+              : profile === 'local'
+                ? 'bg-emerald-400'
+                : 'bg-amber-400'
           }`}
         />
         {profile === 'local' ? 'Local' : 'Cloud'}
@@ -115,8 +140,7 @@ export function ChatInput({
         onChange={handleChange}
         onKeyDown={handleKeyDown}
         onPaste={handlePaste}
-        placeholder={disabled ? 'Seshat is thinking...' : placeholder}
-        disabled={disabled}
+        placeholder={placeholder}
         rows={1}
         className={`
           flex-1 resize-none rounded-2xl px-4 py-3 text-sm
@@ -175,6 +199,7 @@ export function ChatInput({
           </svg>
         </button>
       )}
-    </form>
+      </form>
+    </div>
   );
 }

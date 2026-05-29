@@ -46,6 +46,13 @@ function wsBaseUrl(): string {
 export interface SendMessageOptions {
   message: string;
   sessionId: string;
+  /**
+   * The client's selected profile (the pill). Used by the server only to
+   * establish a brand-new session's profile; ignored for an existing session,
+   * whose stored value is authoritative (ADR-0079). Sending it ensures a new
+   * "Cloud" session is not silently created as `local`.
+   */
+  profile?: ExecutionProfile;
   /** Client-generated idempotency key (UUID v4) — deduplicated server-side (FRE-392). */
   clientMsgId?: string;
 }
@@ -94,12 +101,16 @@ export class BudgetDeniedError extends Error {
  * @throws Error for any other non-2xx response.
  */
 export async function sendChatMessage(opts: SendMessageOptions): Promise<void> {
-  // ADR-0079 / FRE-419: the execution profile is server-owned (resolved from
-  // the session row), so it is NOT sent per-message. The toggle writes it via
-  // setSessionProfile (PATCH); /chat/stream reads the stored value.
-  const { message, sessionId, clientMsgId } = opts;
+  // ADR-0079: the profile is server-owned. We still send the client's pill so
+  // a NEW session is established with the user's selection; the server ignores
+  // it for an existing session (stored value wins). The toggle is the canonical
+  // mutator via setSessionProfile (PATCH).
+  const { message, sessionId, profile, clientMsgId } = opts;
 
   const params: Record<string, string> = { message, session_id: sessionId };
+  if (profile) {
+    params['profile'] = profile;
+  }
   if (clientMsgId) {
     params['client_msg_id'] = clientMsgId;
   }

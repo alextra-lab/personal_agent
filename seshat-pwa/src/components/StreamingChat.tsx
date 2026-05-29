@@ -176,8 +176,9 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     if (!sessionId) return;
     localStorage.setItem(LAST_SESSION_KEY, sessionId);
     setLastUserMessage(text);
-    // ADR-0079 / FRE-419: profile is server-owned; not sent per message.
-    sendMessage(text, sessionId);
+    // ADR-0079: send the pill so a NEW session is established with the user's
+    // selection; the server ignores it for an existing session (stored wins).
+    sendMessage(text, sessionId, profile);
   };
 
   const handleInterruptChoice = (choice: string) => {

@@ -35,13 +35,16 @@ Add `execution_profile VARCHAR(50) NOT NULL DEFAULT 'local'` to the `sessions` t
 
 ### 2. Resolution at turn time
 
-`/chat/stream`'s `profile` field becomes **optional**:
-- **Absent** → the server reads the session's stored `execution_profile`. There is no code path where a missing value silently means `local` — this kills the original footgun.
-- **Present** → validated against `list_profiles()` (`config/profiles/*.yaml` → currently `local`, `cloud`); **422 on invalid** (replacing today's warn-and-continue); persisted and used for the turn. This is a **transitional** path for pre-PR2 clients that still send the field; the canonical writer is the PATCH endpoint (§3). PR2 stops sending the per-message field, after which `/chat/stream` is read-only with respect to profile.
+`/chat/stream`'s `profile` field is **optional** and resolution is asymmetric by session existence (validated against `list_profiles()` → currently `local`, `cloud`; **422 on invalid**):
 
-The resolved profile is **echoed** in the `/chat/stream` response and emitted as a state event (below) so the active client converges on what actually ran.
+- **Existing session** → always use the stored `execution_profile`. A supplied value is **advisory and ignored** — a stale/reloaded client cannot overwrite it, and the only mutator is the PATCH (§3). This is what keeps the original desync fixed.
+- **New session (no row yet)** → **adopt the supplied value** (the client's pill), falling back to `local` only when nothing was sent. The value is persisted when the background task creates the row.
 
-**Transitional caveat (Codex review):** while a present param still writes, a pre-PR2 client that sends a *stale/defaulted* value can set the wrong profile. This is the unavoidable PR1-only residue of the original client-side bug; it is fully closed only when PR2 (FRE-419) lands and removes the per-message field. Single-user, short-window risk — accepted, and the reason PR2 follows promptly.
+There is no path where a missing value silently means `local` for an *existing* session. The client therefore still sends its pill on `/chat/stream` (the only way the server can learn a brand-new session's intended profile); the server decides whether to honour it.
+
+> **Correction (post-deploy, 2026-05-29):** an earlier revision had the client stop sending the field entirely and the server fall back to `local` when the param was absent. For a **new** session (no stored row) this silently created every "Cloud" session as `local` — observed live immediately after the FRE-419 deploy. Fixed by the new-vs-existing rule above + the client resuming the pill send.
+
+The resolved profile is **echoed** in the `/chat/stream` response so the active client can reconcile.
 
 ### 3. The toggle is a write
 

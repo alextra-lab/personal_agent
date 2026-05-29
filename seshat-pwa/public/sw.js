@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v8-fre-419-profile-hydration';
+const CACHE_NAME = 'seshat-v9-fre-419-new-session-fix';
 
 const PRECACHE_URLS = [
   '/',

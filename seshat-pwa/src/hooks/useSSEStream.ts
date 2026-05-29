@@ -65,7 +65,7 @@ export interface UseSSEStreamReturn {
   classifiedError: ClassifiedErrorData | null;
   /** Dismiss the ClassifiedErrorCard (user action or next send). */
   dismissClassifiedError: () => void;
-  sendMessage: (text: string, sessionId: string) => Promise<void>;
+  sendMessage: (text: string, sessionId: string, profile: ExecutionProfile) => Promise<void>;
   resolveInterrupt: (choice: string) => void;
   /** Post an approve/deny decision for the current pendingApproval. */
   handleApprovalDecision: (decision: 'approve' | 'deny') => void;
@@ -313,7 +313,7 @@ export function useSSEStream(): UseSSEStreamReturn {
   // --------------------------------------------------------------------------
 
   const sendMessage = useCallback(
-    async (text: string, sessionId: string) => {
+    async (text: string, sessionId: string, profile: ExecutionProfile) => {
       // Close any existing stream.
       streamRef.current?.close();
       streamRef.current = null;
@@ -362,7 +362,7 @@ export function useSSEStream(): UseSSEStreamReturn {
       // a second POST that might arrive if the WS reconnects mid-request (FRE-392).
       const clientMsgId = generateUUID();
       try {
-        await sendChatMessage({ message: text, sessionId, clientMsgId });
+        await sendChatMessage({ message: text, sessionId, profile, clientMsgId });
       } catch (err) {
         setIsStreaming(false);
         streamRef.current?.close();

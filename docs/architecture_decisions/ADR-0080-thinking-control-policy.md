@@ -1,6 +1,6 @@
 # ADR-0080: Model-Aware Thinking-Control Policy
 
-**Status:** Proposed
+**Status:** Implemented (FRE-417, PR #107; the `/no_think` gate shipped — deferred items, suffix retirement + cloud thinking, tracked in FRE-418)
 **Date:** 2026-05-29
 **Issue:** FRE-417
 **Related:** ADR-0023 (thinking budget / disable_thinking), ADR-0079 (server-authoritative profile), ADR-0044 (execution profiles)

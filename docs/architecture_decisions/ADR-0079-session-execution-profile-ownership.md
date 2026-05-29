@@ -1,6 +1,6 @@
 # ADR-0079: Server-Authoritative Session Execution Profile
 
-**Status:** Proposed
+**Status:** Implemented (FRE-416 + FRE-419, PRs #102–#104; deployed + on-device verified 2026-05-29)
 **Date:** 2026-05-29
 **Issue:** FRE-416, FRE-419
 **Amends:** ADR-0044 D2 (profile bound at conversation creation — see "Mid-conversation switching" below)

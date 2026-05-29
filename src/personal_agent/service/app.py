@@ -1660,22 +1660,23 @@ async def _resolve_session_profile(
 ) -> str:
     """Resolve the server-authoritative execution profile for a turn (ADR-0079).
 
-    The session row is the source of truth:
+    The session row is the source of truth, with a single asymmetry so a
+    brand-new session can still honour the user's selection:
 
-    - ``supplied is None`` → the session's stored ``execution_profile`` (or
-      ``"local"`` when no row exists yet). There is no path where a missing
-      value silently defaults — the stored value is always an explicit one.
-    - ``supplied`` provided → validated against known profiles (422 on
-      unknown), persisted to the session when it differs from the stored
-      value, and emitted as a ``session_profile`` STATE_DELTA to the active
-      client. This is the transitional request-time write path; the canonical
-      writer is ``PATCH /api/v1/sessions/{id}`` (see ADR-0079 §2-3).
+    - **Existing session** → always use the stored ``execution_profile``. The
+      ``supplied`` value is advisory and **ignored** — a stale/reloaded client
+      cannot overwrite it, and the sole mutator is ``PATCH /api/v1/sessions/{id}``
+      (the toggle). This keeps the original cloud→local desync fixed.
+    - **New session (no row yet)** → adopt ``supplied`` (the client's pill),
+      falling back to ``"local"`` only when nothing was sent. The value is
+      persisted when the background task creates the row. Without this a new
+      "Cloud" session would silently run local (the FRE-419 regression).
 
     Args:
         session_id: Client-generated session UUID string.
         supplied: Profile name from the request, or None when omitted.
-        user_id: Authenticated owner — scopes the read/write.
-        trace_id: Trace id for logging.
+        user_id: Authenticated owner — scopes the read.
+        trace_id: Trace id for logging (reserved for callers).
 
     Returns:
         The resolved profile name to run this turn with.
@@ -1684,7 +1685,6 @@ async def _resolve_session_profile(
         HTTPException: 422 when ``supplied`` is not a known profile.
     """
     from personal_agent.config.profile import is_valid_profile
-    from personal_agent.transport.agui.transport import emit_session_profile
 
     if supplied is not None and not is_valid_profile(supplied):
         raise HTTPException(status_code=422, detail=f"unknown execution profile: {supplied}")
@@ -1693,24 +1693,13 @@ async def _resolve_session_profile(
     async with AsyncSessionLocal() as db:
         repo = SessionRepository(db)
         session = await repo.get(session_uuid, user_id=user_id)
-        stored: str | None = str(session.execution_profile) if session is not None else None
 
-        if supplied is None:
-            return stored or "local"
+    if session is not None:
+        # Existing session: stored value is authoritative; supplied is ignored.
+        return str(session.execution_profile)
 
-        if session is not None and stored != supplied:
-            await repo.update(
-                session_uuid, SessionUpdate(execution_profile=supplied), user_id=user_id
-            )
-            await emit_session_profile(session_id=session_id, profile=supplied)
-            log.info(
-                "chat_stream.profile_updated",
-                session_id=session_id,
-                profile=supplied,
-                previous=stored,
-                trace_id=trace_id,
-            )
-        return supplied
+    # New session: adopt the client's selection (persisted at row creation).
+    return supplied or "local"
 
 
 @app.post("/chat/stream")

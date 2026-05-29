@@ -1,8 +1,9 @@
-"""Tests for server-authoritative profile resolution in /chat/stream (ADR-0079 / FRE-416).
+"""Tests for server-authoritative profile resolution in /chat/stream (ADR-0079 / FRE-416/419).
 
 Covers ``_resolve_session_profile`` — the helper that resolves the execution
-profile for a turn from the session row, killing the silent ``local`` default
-and validating/persisting an explicit override.
+profile for a turn. Existing sessions use the stored value (supplied is
+ignored); a brand-new session adopts the client's supplied pill (so a new
+"Cloud" session is not silently created as ``local``).
 """
 
 from __future__ import annotations
@@ -20,7 +21,6 @@ from personal_agent.service.app import _resolve_session_profile
 _USER_ID = UUID("00000000-0000-0000-0000-000000000001")
 _GET = "personal_agent.service.repositories.session_repository.SessionRepository.get"
 _UPDATE = "personal_agent.service.repositories.session_repository.SessionRepository.update"
-_EMIT = "personal_agent.transport.agui.transport.emit_session_profile"
 _SESSIONLOCAL = "personal_agent.service.app.AsyncSessionLocal"
 
 
@@ -43,71 +43,64 @@ def _sessionlocal_factory(db: Any) -> Any:
 
 
 @pytest.mark.asyncio
-async def test_absent_param_uses_stored_profile() -> None:
-    """No supplied profile → the session's stored value (never silent local)."""
+async def test_existing_session_uses_stored_when_param_absent() -> None:
+    """Existing session, no supplied profile → the stored value (no silent local)."""
     stored = SimpleNamespace(execution_profile="cloud")
     with (
         patch(_SESSIONLOCAL, _sessionlocal_factory(object())),
         patch(_GET, new_callable=AsyncMock, return_value=stored),
         patch(_UPDATE, new_callable=AsyncMock) as update_mock,
-        patch(_EMIT, new_callable=AsyncMock) as emit_mock,
     ):
         resolved = await _resolve_session_profile(str(uuid4()), None, _USER_ID, trace_id="t")
 
     assert resolved == "cloud"
     update_mock.assert_not_awaited()
-    emit_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_absent_param_no_session_defaults_local() -> None:
-    """No supplied profile and no session row yet → explicit 'local'."""
+async def test_existing_session_ignores_supplied() -> None:
+    """Existing session: a supplied value is advisory and ignored (stored wins).
+
+    This is what keeps the original cloud→local desync fixed — a stale/reloaded
+    client cannot overwrite the stored profile via /chat/stream (PATCH only).
+    """
+    stored = SimpleNamespace(execution_profile="cloud")
+    with (
+        patch(_SESSIONLOCAL, _sessionlocal_factory(object())),
+        patch(_GET, new_callable=AsyncMock, return_value=stored),
+        patch(_UPDATE, new_callable=AsyncMock) as update_mock,
+    ):
+        resolved = await _resolve_session_profile(str(uuid4()), "local", _USER_ID, trace_id="t")
+
+    assert resolved == "cloud"
+    update_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_new_session_adopts_supplied() -> None:
+    """New session (no row) → adopt the client's supplied pill (FRE-419 fix)."""
     with (
         patch(_SESSIONLOCAL, _sessionlocal_factory(object())),
         patch(_GET, new_callable=AsyncMock, return_value=None),
         patch(_UPDATE, new_callable=AsyncMock) as update_mock,
-        patch(_EMIT, new_callable=AsyncMock),
-    ):
-        resolved = await _resolve_session_profile(str(uuid4()), None, _USER_ID, trace_id="t")
-
-    assert resolved == "local"
-    update_mock.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_explicit_change_persists_and_emits() -> None:
-    """A supplied profile differing from stored → persisted (scoped) + emitted."""
-    stored = SimpleNamespace(execution_profile="local")
-    sid = str(uuid4())
-    with (
-        patch(_SESSIONLOCAL, _sessionlocal_factory(object())),
-        patch(_GET, new_callable=AsyncMock, return_value=stored),
-        patch(_UPDATE, new_callable=AsyncMock) as update_mock,
-        patch(_EMIT, new_callable=AsyncMock) as emit_mock,
-    ):
-        resolved = await _resolve_session_profile(sid, "cloud", _USER_ID, trace_id="t")
-
-    assert resolved == "cloud"
-    update_mock.assert_awaited_once()
-    assert update_mock.await_args.kwargs.get("user_id") == _USER_ID
-    emit_mock.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_explicit_unchanged_does_not_write() -> None:
-    """A supplied profile equal to stored → no redundant write/emit."""
-    stored = SimpleNamespace(execution_profile="cloud")
-    with (
-        patch(_SESSIONLOCAL, _sessionlocal_factory(object())),
-        patch(_GET, new_callable=AsyncMock, return_value=stored),
-        patch(_UPDATE, new_callable=AsyncMock) as update_mock,
-        patch(_EMIT, new_callable=AsyncMock) as emit_mock,
     ):
         resolved = await _resolve_session_profile(str(uuid4()), "cloud", _USER_ID, trace_id="t")
 
     assert resolved == "cloud"
     update_mock.assert_not_awaited()
-    emit_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_new_session_no_param_defaults_local() -> None:
+    """New session with nothing supplied → explicit 'local' fallback."""
+    with (
+        patch(_SESSIONLOCAL, _sessionlocal_factory(object())),
+        patch(_GET, new_callable=AsyncMock, return_value=None),
+        patch(_UPDATE, new_callable=AsyncMock),
+    ):
+        resolved = await _resolve_session_profile(str(uuid4()), None, _USER_ID, trace_id="t")
+
+    assert resolved == "local"
 
 
 @pytest.mark.asyncio

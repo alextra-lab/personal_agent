@@ -1,0 +1,67 @@
+{
+  "index_patterns": ["slm-requests-*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.codec": "best_compression",
+      "index.refresh_interval": "5s"
+    },
+    "mappings": {
+      "dynamic": true,
+      "dynamic_templates": [
+        {
+          "ms_fields_as_float": {
+            "match_pattern": "regex",
+            "match": "^(.*_ms|.*_seconds|.*_latency|.*_duration|.*_per_second)$",
+            "match_mapping_type": "*",
+            "mapping": { "type": "float" }
+          }
+        },
+        {
+          "ids_keyword": {
+            "match": "*_id",
+            "match_mapping_type": "string",
+            "mapping": { "type": "keyword" }
+          }
+        },
+        {
+          "default_string_keyword": {
+            "match_mapping_type": "string",
+            "mapping": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        }
+      ],
+      "properties": {
+        "ts":                { "type": "date" },
+        "trace_id":          { "type": "keyword" },
+        "span_id":           { "type": "keyword" },
+        "session_id":        { "type": "keyword" },
+        "model_id":          { "type": "keyword" },
+        "backend":           { "type": "keyword" },
+        "port":              { "type": "integer" },
+        "status":            { "type": "integer" },
+        "prompt_tokens":     { "type": "long" },
+        "completion_tokens": { "type": "long" },
+        "prompt_n":          { "type": "long" },
+        "predicted_n":       { "type": "long" },
+        "cache_reuse":       { "type": "long" },
+        "cache_n":           { "type": "long" },
+        "cached_tokens":     { "type": "long" },
+        "draft_n":           { "type": "long" },
+        "draft_n_accepted":  { "type": "long" },
+        "prefill_ms":        { "type": "float" },
+        "decode_ms":         { "type": "float" },
+        "total_ms":          { "type": "float" }
+      }
+    }
+  },
+  "_meta": {
+    "description": "SLM inference request telemetry shipped by slm_server (FRE-411). One doc per backend call, joinable to agent-logs model_call_completed by span_id/trace_id. Join keys are keyword so exact-match term joins and Kibana filters behave (the slm_server shipper has no template of its own; this harness template owns the mapping).",
+    "managed_by": "scripts/setup-elasticsearch.sh"
+  }
+}

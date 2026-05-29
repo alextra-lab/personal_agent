@@ -92,7 +92,16 @@ put_resource "Index template: agent-monitors-joinability-template" \
   "/_index_template/agent-monitors-joinability-template" \
   "$PROJECT_ROOT/docker/elasticsearch/monitors-joinability-index-template.json"
 
-# 6. Initial write-alias index — only create if absent. The HEAD probe uses
+# 6. SLM request telemetry template (FRE-411). The slm_server shipper has no
+#    template of its own, so without this the daily slm-requests-* index gets
+#    default dynamic mapping (text join keys) and exact-match term joins on
+#    trace_id/span_id silently return nothing — the exact failure mode this
+#    script's header warns about.
+put_resource "Index template: slm-requests-template" \
+  "/_index_template/slm-requests-template" \
+  "$PROJECT_ROOT/docker/elasticsearch/slm-requests-index-template.json"
+
+# 7. Initial write-alias index — only create if absent. The HEAD probe uses
 #    `-f` so a 404 is reported as a non-fatal exit; we then PUT.
 echo "Bootstrap write-alias index: agent-logs-000001"
 if curl -fsS -I -o /dev/null "$ES_URL/agent-logs-000001" 2>/dev/null; then

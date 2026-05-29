@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 
 import { SESHAT_API } from '@/lib/agui-client';
+import type { ExecutionProfile } from '@/lib/types';
 
 export type InferenceStatus = 'unknown' | 'up' | 'down';
 
@@ -12,12 +13,16 @@ export interface InferenceStatusResult {
 }
 
 /**
- * Poll GET /api/inference/status every 60 seconds while the local profile is active.
+ * Poll GET /api/inference/status?profile=<profile> every 60 seconds for the
+ * given execution profile's inference path (FRE-421).
  *
- * Returns "unknown" until the first check completes, "up"/"down" thereafter.
- * Polling stops immediately when `active` becomes false.
+ * - `local` live-probes the Mac SLM tunnel.
+ * - `cloud` reports whether the cloud provider is configured.
+ *
+ * Pass `null` to stop polling. Returns "unknown" until the first check
+ * completes, "up"/"down" thereafter.
  */
-export function useInferenceStatus(active: boolean): InferenceStatusResult {
+export function useInferenceStatus(profile: ExecutionProfile | null): InferenceStatusResult {
   const [result, setResult] = useState<InferenceStatusResult>({
     status: 'unknown',
     latencyMs: null,
@@ -25,7 +30,7 @@ export function useInferenceStatus(active: boolean): InferenceStatusResult {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    if (!active) {
+    if (!profile) {
       if (intervalRef.current !== null) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
@@ -36,12 +41,12 @@ export function useInferenceStatus(active: boolean): InferenceStatusResult {
 
     const check = async () => {
       try {
-        const resp = await fetch(`${SESHAT_API}/api/inference/status`);
+        const resp = await fetch(`${SESHAT_API}/api/inference/status?profile=${profile}`);
         const data = (await resp.json()) as {
-          local: 'up' | 'down';
+          status: 'up' | 'down' | 'unknown';
           latency_ms: number | null;
         };
-        setResult({ status: data.local, latencyMs: data.latency_ms });
+        setResult({ status: data.status, latencyMs: data.latency_ms });
       } catch {
         setResult({ status: 'down', latencyMs: null });
       }
@@ -56,7 +61,7 @@ export function useInferenceStatus(active: boolean): InferenceStatusResult {
         intervalRef.current = null;
       }
     };
-  }, [active]);
+  }, [profile]);
 
   return result;
 }

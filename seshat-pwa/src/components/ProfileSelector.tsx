@@ -46,7 +46,7 @@ export function ProfileSelector({
   onSelect,
   disabled = false,
 }: ProfileSelectorProps) {
-  const inferenceStatus = useInferenceStatus(selected === 'local');
+  const inferenceStatus = useInferenceStatus(selected === 'local' ? 'local' : null);
 
   return (
     <div className="flex flex-col gap-3">

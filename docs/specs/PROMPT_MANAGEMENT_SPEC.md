@@ -47,7 +47,7 @@ The orchestrator prompt is assembled in `executor.py:1835–2244`. Assembly orde
 | `tool_use_rules` | `_TOOL_RULES` + `TOOL_USE_PROMPT_INJECTED` | STATIC | 2171–2194 |
 | `decomposition_instructions` | Task decomposition guidance | STATIC | 2176–2194 |
 
-**Cache erosion note (ADR-0078 D4):** `tool_awareness` is currently prepended at line 2171 rather than appended in static order. This means a SEMI_STATIC component is inserted *after* the DYNAMIC `memory_section` in the final string, breaking the stable-prefix invariant. P2 data will determine whether a composer redesign is warranted.
+**Cache erosion note (ADR-0078 D4, corrected 2026-05-29):** the assembly line ranges above are approximate; the actual splices are `executor.py:2193` (memory appended) and `executor.py:2218` (`f"{tool_awareness}\n\n{system_prompt}\n\n{tool_prompt}"`). The net effect is worse than "tool_awareness prepended": the **STATIC tool rules (~975 tok) are appended *after* the DYNAMIC `memory_section`**, so the largest static block sits past the dynamic break and cannot be part of a stable cacheable prefix. See §4 for how `static_prefix_hash` is defined against this reality. P2 data will determine whether a composer redesign is warranted.
 
 ---
 
@@ -188,13 +188,43 @@ When a new leaf prompt is added to the codebase, its entry must be added to the 
 
 ---
 
-## 4. `compute_prefix_hash` Fix
+## 4. Static / Dynamic Prefix Hashing  *(revised 2026-05-29)*
 
-**Current behavior** (`context_window.py:353`): hashes `output_messages[0]`, which is the system message *after* it has been inserted into the conversation array by `client.py:306`. This creates a circular dependency: the hash is computed after assembly, not before, and hashes the wrong value.
+**Earlier draft said "fix `compute_prefix_hash`". That is reversed.** A caller audit (Codex-confirmed) found `compute_prefix_hash(message: dict) -> str` is load-bearing for a *separate, tested* invariant — the head/system message is preserved byte-identical across compression & truncation (`test_kv_cache_stability.py`, `test_within_session_compression.py:225/251`). Changing its signature breaks ~8 real assertions. **Keep it as-is.**
 
-**Corrected behavior**: `compute_prefix_hash(system_prompt: str, component_ids: tuple[str, ...]) -> str` takes the assembled `system_prompt` string and the ordered list of component IDs. It hashes only the concatenation of STATIC and SEMI_STATIC components (identified by their position before `memory_section` in the assembly order). This produces a meaningful "stable prefix" hash that changes when the cacheable parts change and is stable when only dynamic content changes.
+**The actual assembly is worse than §1.2 first documented** (verified line-by-line in `executor.py`):
+- `executor.py:2193` — `system_prompt = f"{system_prompt}\n{memory_section}"` (DYNAMIC appended into the inner prompt).
+- `executor.py:2218` — `system_prompt = f"{tool_awareness}\n\n{system_prompt}\n\n{tool_prompt}"` (SEMI_STATIC `tool_awareness` prepended; STATIC `tool_prompt`/tool rules appended **after** the dynamic memory section).
 
-**Call site**: `executor.py` calls this function *after* assembling the static/semi-static components but *before* appending the dynamic memory section. The result becomes `PromptIdentity.static_prefix_hash`.
+So the final byte order is: `tool_awareness` → operator/skill/deployment → **`memory_section` (DYNAMIC, mid-string)** → tool rules (STATIC, ~975 tok) → decomposition (STATIC). There is **no single clean static-prefix boundary**, and the largest static block sits in the least cacheable position.
+
+**New design** — a dedicated module `src/personal_agent/llm_client/prompt_identity.py`:
+
+```python
+def _short_hash(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+def derive_prompt_identity(
+    callsite: str,
+    *,
+    static_prefix: str,
+    full_prompt: str,
+    component_ids: tuple[str, ...] = (),
+) -> PromptIdentity:
+    return PromptIdentity(
+        callsite=callsite,
+        component_ids=component_ids,
+        static_prefix_hash=_short_hash(static_prefix),
+        dynamic_hash=_short_hash(full_prompt),
+    )
+```
+
+- `static_prefix` = the **literal cacheable prefix**: the assembled bytes up to the first DYNAMIC component. In practice `f"{tool_awareness}\n\n{inner_system_before_memory}"` — captured at assembly time, before the `memory_section` append. By design this **excludes** the post-memory tool rules: those bytes are not in a stable-prefix position today, and pretending otherwise would hide the erosion P2 needs to see.
+- `full_prompt` = the complete assembled system prompt (all tiers).
+
+**Call site**: `executor.py` captures `inner_system_before_memory` (the system prompt value immediately before line 2193) and `tool_awareness` (line 2215), builds `static_prefix`, and constructs the `PromptIdentity` after the full prompt is assembled. Non-orchestrator callsites (compressor, entity extraction, gateway, etc.) that have no static/dynamic split pass `static_prefix = full_prompt = system_prompt`.
+
+**AC nuance**: `static_prefix_hash` changes when prefix-resident STATIC/SEMI_STATIC content changes and is stable when only `memory_section` changes. A change to the *post-memory* tool rules does **not** move it — correct, because those bytes aren't in the cacheable prefix under the current composer. The optional composer redesign (gated on P2 data) relocates them.
 
 ---
 

@@ -38,11 +38,11 @@ The harness contains two structurally distinct classes of prompt:
 
 1. **No prompt identity on any call**: `llm_client/telemetry.py` captures latency, tokens, cache hits, cost — but no prompt callsite, no component list, no hash. A/B comparison of prompt versions is impossible.
 
-2. **`compute_prefix_hash()` hashes the wrong object**: `context_window.py:353` hashes `output_messages[0]`, which is the *already-inserted* system message in the conversation array. The assembled `system_prompt` string is inserted separately by `client.py:306` — so `compute_prefix_hash` was intended to measure prefix stability but points at the wrong object. Half the caching instrumentation is inert.
+2. **No hash measures the *stable* prefix**: `context_window.py:353` defines `compute_prefix_hash(message)`, hashing `output_messages[0]` — the assembled system message *with the per-turn memory section already embedded*. That makes it useless as a cache-prefix signal (it changes every turn with memory). **Correction (2026-05-29):** this function is *not* simply "pointing at the wrong object" — it is also load-bearing for a distinct, separately-tested invariant (head/system message preserved byte-identical across compression & truncation cycles; see `test_kv_cache_stability.py`, `test_within_session_compression.py`). It must be kept. The real gap is that **no** hash isolates the STATIC+SEMI_STATIC cacheable prefix from the dynamic remainder. See D4 (revised).
 
 3. **Third untelemetered call path**: `gateway/chat_api.py` calls `anthropic.AsyncAnthropic().messages.stream()` directly at line 88–93, bypassing `llm_client/telemetry.py` entirely. It also carries a drifted persona (`_SYSTEM_PROMPT` at :39 — a minimal Seshat system message, unrelated to the orchestrator persona).
 
-4. **KV-cache prefix instability**: ADR-0038 orders orchestrator prompt assembly for prefix stability, but the tool-awareness block is prepended (not appended) late at `executor.py:2171` and memory content sits mid-prefix. The "stable prefix" invariant ADR-0038 assumed is not actually held. Cache erosion is an active risk, currently unmeasured.
+4. **KV-cache prefix instability — worse than first documented**: ADR-0038 orders orchestrator prompt assembly for prefix stability, but the actual assembly violates it badly. **Correction (2026-05-29, verified line-by-line):** the final system prompt is built by two f-string splices — `executor.py:2193` appends the DYNAMIC `memory_section` into `system_prompt`, then `executor.py:2218` wraps the whole thing as `f"{tool_awareness}\n\n{system_prompt}\n\n{tool_prompt}"`. The resulting byte order is `tool_awareness` (SEMI_STATIC) → operator/skill/deployment (SEMI_STATIC) → `memory_section` (**DYNAMIC, mid-string**) → `tool_prompt`/tool-use rules (**STATIC, ~975 tok, appended *after* the dynamic section**) → decomposition (STATIC). So STATIC content sits *after* DYNAMIC content; there is no single clean static-prefix boundary, and the largest static block (tool rules) is in the least cacheable position. The earlier note (tool-awareness "prepended late at 2171") understated this — the original §1.2 line-range table was also wrong (the splice is at 2218, not 2171–2194). Cache erosion is an active risk, currently unmeasured. P2 will quantify it; the optional composer redesign is the fix.
 
 5. **Token-counting divergence**: two independent heuristics: `words×1.3` in `request_gateway/budget.py:27`; `chars//4` in `orchestrator/context_window.py:15`. `tiktoken` is a transitive dependency but is never imported.
 
@@ -91,13 +91,16 @@ The corpus renderer is the **primary legibility surface**. It enables the core o
 
 **Assembled-prompt capture** (runtime, debug-gated): when the environment variable `AGENT_PROMPT_DEBUG=true` is set (never on by default), the full assembled system prompt for each call is written to a local debug file. Prompt text is **never persisted by default** — it contains personal memory content and user data. The debug path is for local development / iteration only; it is excluded from git (`.gitignore`) and never shipped to ES or the bus.
 
-### D4 — Telemetry stamping on all call paths, including the gateway fork; fix `compute_prefix_hash`
+### D4 — Telemetry stamping on all call paths, including the gateway fork; add static/dynamic prefix hashing (revised 2026-05-29)
 
 **Telemetry stamping**: `emit_model_call_completed()` in `llm_client/telemetry.py` gains a `prompt_identity: PromptIdentity` parameter. Both `LiteLLMClient` and `LocalLLMClient` pass it. The gateway path (`gateway/chat_api.py`) is wired through the canonical telemetry emit — it is the only call path that currently bypasses it. The gateway `_SYSTEM_PROMPT` persona is assigned `callsite="gateway.chat"` and a fixed `component_ids=["gateway_persona"]`.
 
-**Fix `compute_prefix_hash`**: `context_window.py:compute_prefix_hash()` is corrected to hash the assembled `system_prompt` string (before insertion into the message array), not `output_messages[0]`. The hash is computed over only the STATIC- and SEMI_STATIC-tier components to measure the actual cacheable prefix. This hash becomes the `static_prefix_hash` field in `PromptIdentity`.
+**Hashing — revised after caller analysis.** The original decision ("`compute_prefix_hash` becomes the implementation of `static_prefix_hash`; no new hash scheme") is **reversed**. `compute_prefix_hash(message)` is kept *intact* — it guards the head-preservation invariant (see Context #2) and changing its signature breaks ~8 real assertions. Instead, a **new module** `llm_client/prompt_identity.py` owns prompt-identity hashing:
+- `static_prefix_hash` = SHA-256[:16] of the **literal cacheable prefix** — the assembled bytes up to the first DYNAMIC component (`memory_section`). Given the broken assembly order (Context #4), this honestly captures `tool_awareness + operator/skill/deployment` and **excludes** the post-memory STATIC tool rules, *by design*: those bytes are not in a cacheable prefix position in the current composer. This makes the erosion measurable rather than hiding it.
+- `dynamic_hash` = SHA-256[:16] of the full assembled prompt (all tiers).
+- A shared `_short_hash(s: str) -> str` helper backs both; the executor computes the static prefix at assembly time (capturing `tool_awareness` + the inner system prompt *before* the `memory_section` append) and constructs the `PromptIdentity`.
 
-**No new hash scheme**: `compute_prefix_hash` becomes the implementation of `static_prefix_hash`. The `dynamic_hash` covers the full assembled prompt. Both are SHA-256 truncated to 16 hex characters (sufficient for collision resistance at this volume).
+**Consequence for the AC**: the P1 acceptance test asserts `static_prefix_hash` changes when prefix-resident STATIC/SEMI_STATIC content changes and is stable when only `memory_section` changes. A change to the *post-memory* tool rules will **not** move the hash — correct, because those bytes genuinely aren't in the stable prefix today. P2 surfaces this; the optional composer redesign relocates them.
 
 ### D5 — Per-turn 0–3 value rating carrying prompt identity, superseding FRE-267
 
@@ -181,7 +184,7 @@ One thumbs-up/down per session. Rejected on three axes: (a) too coarse to diagno
 - "I want to read our prompts" becomes `make render-prompt-corpus` — a 5-second local operation producing a single human-readable document.
 - Harness compression is now tractable: redundant tool guidance, persona drift, dead skills, and bloated few-shots are visible in a diff.
 - Every LLM call becomes attributable to a named prompt version. A/B analysis of prompt changes is a Kibana filter, not a code archaeology exercise.
-- `compute_prefix_hash` starts measuring what it was intended to measure; cache erosion becomes a metric with a dashboard.
+- A real `static_prefix_hash` (new `prompt_identity.py`, distinct from the retained `compute_prefix_hash`) measures the actual cacheable prefix; cache erosion — including the post-memory STATIC tool rules — becomes a metric with a dashboard.
 - The gateway call path joins the rest of the harness for cost tracking and observability — the third dark path closes.
 - Per-turn 0–3 ratings are the first user-sourced ground-truth labels; they become the join key for the self-improvement loop.
 - Token counting becomes consistent; budget enforcement and context window management agree.
@@ -204,7 +207,7 @@ One thumbs-up/down per session. Rejected on three axes: (a) too coarse to diagno
 ## Verification
 
 - P0: `scripts/render_prompt_corpus.py` runs without error; `docs/reference/PROMPT_CORPUS.md` renders every leaf prompt with source reference and token count; diff is human-readable; regenerating produces identical output on a clean working tree.
-- P1: `model_call_completed` events in ES carry `prompt_callsite`, `prompt_component_ids`, `static_prefix_hash`, `dynamic_hash`; gateway path events now appear in ES (zero-gap verification: no model calls in gateway logs without a matching ES event); `compute_prefix_hash` unit test shows hash changes when the static prefix components change.
+- P1: `model_call_completed` events in ES carry `prompt_callsite`, `prompt_component_ids`, `static_prefix_hash`, `dynamic_hash`; gateway path events now appear in ES (zero-gap verification: no model calls in gateway logs without a matching ES event); `derive_prompt_identity` unit test shows `static_prefix_hash` changes when prefix-resident STATIC/SEMI_STATIC content changes and is stable when only `memory_section` changes; `compute_prefix_hash` retained and its head-preservation tests still green.
 - P2: Kibana view shows per-`callsite` token/cache breakdown; a deliberately churned static prefix triggers the drift alert.
 - P3: `UserTurnRating` records persisted with `prompt_identity` tuple attached; PWA control visible per assistant message; bus event increments; end-to-end test: submit a 0 rating → event on `stream:user.feedback_received` → ES record with non-null `prompt_callsite`.
 - P4: A/B eval run reports mean rating per `static_prefix_hash` bucket.

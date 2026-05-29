@@ -46,7 +46,11 @@ def test_plain_text_response_aggregates() -> None:
         _make_chunk({"role": "assistant", "content": "Hello"}),
         _make_chunk({"content": ", "}),
         _make_chunk({"content": "world!"}),
-        _make_chunk({}, finish_reason="stop", usage={"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}),
+        _make_chunk(
+            {},
+            finish_reason="stop",
+            usage={"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        ),
     ]
     result = _aggregate_streaming_chunks(chunks)
     msg = result["choices"][0]["message"]
@@ -64,7 +68,11 @@ def test_aggregated_shape_round_trips_through_response_adapter() -> None:
     """
     chunks = [
         _make_chunk({"role": "assistant", "content": "answer"}),
-        _make_chunk({}, finish_reason="stop", usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}),
+        _make_chunk(
+            {},
+            finish_reason="stop",
+            usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        ),
     ]
     aggregated = _aggregate_streaming_chunks(chunks)
     llm_response = adapt_chat_completions_response(aggregated)
@@ -77,19 +85,25 @@ def test_single_tool_call_concatenates_argument_fragments() -> None:
     """Tool call arguments arrive as JSON fragments and must be joined in order."""
     chunks = [
         _make_chunk({"role": "assistant"}),
-        _make_chunk({
-            "tool_calls": [
-                {
-                    "index": 0,
-                    "id": "call_abc",
-                    "type": "function",
-                    "function": {"name": "bash", "arguments": ""},
-                }
-            ]
-        }),
+        _make_chunk(
+            {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": ""},
+                    }
+                ]
+            }
+        ),
         _make_chunk({"tool_calls": [{"index": 0, "function": {"arguments": '{"comm'}}]}),
         _make_chunk({"tool_calls": [{"index": 0, "function": {"arguments": 'and": "ls"}'}}]}),
-        _make_chunk({}, finish_reason="tool_calls", usage={"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18}),
+        _make_chunk(
+            {},
+            finish_reason="tool_calls",
+            usage={"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18},
+        ),
     ]
     result = _aggregate_streaming_chunks(chunks)
     tcs = result["choices"][0]["message"]["tool_calls"]
@@ -104,15 +118,33 @@ def test_parallel_tool_calls_indexed_separately() -> None:
     """Multiple tool calls identified by `index` accumulate independently even when interleaved."""
     chunks = [
         _make_chunk({"role": "assistant"}),
-        _make_chunk({"tool_calls": [
-            {"index": 0, "id": "call_0", "type": "function", "function": {"name": "bash", "arguments": ""}},
-            {"index": 1, "id": "call_1", "type": "function", "function": {"name": "bash", "arguments": ""}},
-        ]}),
+        _make_chunk(
+            {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_0",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": ""},
+                    },
+                    {
+                        "index": 1,
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": ""},
+                    },
+                ]
+            }
+        ),
         # Interleaved fragments
         _make_chunk({"tool_calls": [{"index": 1, "function": {"arguments": '{"x":1}'}}]}),
         _make_chunk({"tool_calls": [{"index": 0, "function": {"arguments": '{"y":'}}]}),
         _make_chunk({"tool_calls": [{"index": 0, "function": {"arguments": "2}"}}]}),
-        _make_chunk({}, finish_reason="tool_calls", usage={"prompt_tokens": 12, "completion_tokens": 10, "total_tokens": 22}),
+        _make_chunk(
+            {},
+            finish_reason="tool_calls",
+            usage={"prompt_tokens": 12, "completion_tokens": 10, "total_tokens": 22},
+        ),
     ]
     result = _aggregate_streaming_chunks(chunks)
     tcs = result["choices"][0]["message"]["tool_calls"]
@@ -131,7 +163,11 @@ def test_reasoning_content_accumulates() -> None:
         _make_chunk({"reasoning_content": "Step 1. "}),
         _make_chunk({"reasoning_content": "Step 2."}),
         _make_chunk({"content": "Done."}),
-        _make_chunk({}, finish_reason="stop", usage={"prompt_tokens": 1, "completion_tokens": 4, "total_tokens": 5}),
+        _make_chunk(
+            {},
+            finish_reason="stop",
+            usage={"prompt_tokens": 1, "completion_tokens": 4, "total_tokens": 5},
+        ),
     ]
     result = _aggregate_streaming_chunks(chunks)
     msg = result["choices"][0]["message"]
@@ -156,6 +192,32 @@ def test_usage_only_final_chunk_is_captured() -> None:
     assert result["usage"]["total_tokens"] == 12
 
 
+def test_cached_tokens_survives_aggregation_and_adapter() -> None:
+    """KV-cache reuse (prompt_tokens_details.cached_tokens) must survive the
+    streaming aggregator and the response adapter — the path the harness reads
+    for cache_read_tokens (FRE-405 follow-up).
+    """
+    chunks = [
+        _make_chunk({"role": "assistant", "content": "hi"}),
+        _make_chunk(
+            {},
+            finish_reason="stop",
+            usage={
+                "prompt_tokens": 37,
+                "completion_tokens": 2,
+                "total_tokens": 39,
+                "prompt_tokens_details": {"cached_tokens": 33},
+            },
+        ),
+    ]
+    aggregated = _aggregate_streaming_chunks(chunks)
+    assert aggregated["usage"]["prompt_tokens_details"]["cached_tokens"] == 33
+
+    llm_response = adapt_chat_completions_response(aggregated)
+    ptd = llm_response["usage"].get("prompt_tokens_details") or {}
+    assert ptd.get("cached_tokens") == 33
+
+
 def test_error_chunk_raises() -> None:
     """A chunk with a non-null `error` field is a server-side failure mid-stream."""
     chunks = [
@@ -170,9 +232,17 @@ def test_tool_call_without_index_field_falls_back_to_zero() -> None:
     """Some servers omit the `index` for single-tool responses; treat as index 0."""
     chunks = [
         _make_chunk({"role": "assistant"}),
-        _make_chunk({"tool_calls": [
-            {"id": "call_solo", "type": "function", "function": {"name": "fn", "arguments": "{}"}},
-        ]}),
+        _make_chunk(
+            {
+                "tool_calls": [
+                    {
+                        "id": "call_solo",
+                        "type": "function",
+                        "function": {"name": "fn", "arguments": "{}"},
+                    },
+                ]
+            }
+        ),
         _make_chunk({}, finish_reason="tool_calls"),
     ]
     result = _aggregate_streaming_chunks(chunks)

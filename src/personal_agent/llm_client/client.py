@@ -500,10 +500,14 @@ class LocalLLMClient:
                     _usage = llm_response["usage"]
                     _pt = _usage.get("prompt_tokens", 0)
                     _ct = _usage.get("completion_tokens", 0)
-                    # llama-server includes timings.tokens_cached when cache_prompt=true
-                    # and a prefix KV cache hit occurs — zero or absent means cache miss.
-                    _timings = (llm_response.get("raw") or {}).get("timings") or {}
-                    _cached = _timings.get("tokens_cached") or 0
+                    # KV-cache reuse via the OpenAI-standard
+                    # ``usage.prompt_tokens_details.cached_tokens`` (== llama-server's
+                    # ``timings.cache_n``). It survives streaming aggregation because the
+                    # ``usage`` block is preserved whole. The previous ``timings.tokens_cached``
+                    # read targeted a field llama-server never emits, so this was always
+                    # ``None`` (FRE-405 follow-up; verified live against llama-server 2026-05-29).
+                    _ptd = _usage.get("prompt_tokens_details") or {}
+                    _cached = _ptd.get("cached_tokens") or 0
                     _identity = prompt_identity or derive_prompt_identity(
                         f"role.{role.value}",
                         static_prefix=system_prompt or "",

@@ -46,6 +46,7 @@ def _make_session_model(
     channel: str = "CHAT",
     message_count: int = 2,
     messages: list[dict] | None = None,
+    execution_profile: str = "local",
 ) -> Any:
     """Build a minimal mock SessionModel.
 
@@ -56,6 +57,7 @@ def _make_session_model(
         message_count: Number of synthetic messages to generate when
             ``messages`` is not provided.
         messages: Explicit list of message dicts; overrides ``message_count``.
+        execution_profile: Server-owned execution profile (ADR-0079).
     """
     sid = session_id or str(uuid4())
     session = MagicMock()
@@ -64,6 +66,7 @@ def _make_session_model(
     session.last_active_at = datetime(2026, 1, 1, 10, 5, 0)
     session.mode = mode
     session.channel = channel
+    session.execution_profile = execution_profile
     if messages is not None:
         session.messages = messages
     else:
@@ -353,3 +356,101 @@ def test_list_sessions_truncates_title() -> None:
     # 60 chars + the single '…' character = 61 characters total
     assert len(data[0]["title"]) == 61
     assert data[0]["title"].endswith("…")
+
+
+# ---------------------------------------------------------------------------
+# Execution profile — GET field + PATCH (ADR-0079 / FRE-416)
+# ---------------------------------------------------------------------------
+
+_SESSION_GET = "personal_agent.service.repositories.session_repository.SessionRepository.get"
+_SESSION_UPDATE = "personal_agent.service.repositories.session_repository.SessionRepository.update"
+_EMIT_PROFILE = "personal_agent.transport.agui.transport.emit_session_profile"
+
+
+def test_get_session_includes_execution_profile() -> None:
+    """GET /sessions/{id} surfaces the server-owned execution profile."""
+    db_session = AsyncMock()
+    sid = str(uuid4())
+    session_model = _make_session_model(session_id=sid, execution_profile="cloud")
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_GET, new_callable=AsyncMock, return_value=session_model))
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get(f"/api/v1/sessions/{sid}", headers=_AUTH_HEADERS)
+
+    assert resp.status_code == 200
+    assert resp.json()["execution_profile"] == "cloud"
+
+
+def test_patch_session_profile_updates_and_emits() -> None:
+    """PATCH /sessions/{id} persists the profile (scoped) and emits a STATE_DELTA."""
+    db_session = AsyncMock()
+    sid = str(uuid4())
+    updated = _make_session_model(session_id=sid, execution_profile="cloud")
+    update_mock = AsyncMock(return_value=updated)
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_UPDATE, update_mock))
+        emit_mock = stack.enter_context(patch(_EMIT_PROFILE, new_callable=AsyncMock))
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.patch(
+                f"/api/v1/sessions/{sid}", json={"profile": "cloud"}, headers=_AUTH_HEADERS
+            )
+
+    assert resp.status_code == 200
+    assert resp.json()["execution_profile"] == "cloud"
+    update_mock.assert_awaited_once()
+    # Ownership invariant: write MUST be scoped to the resolved user_id.
+    assert update_mock.await_args.kwargs.get("user_id") == _TEST_USER_ID
+    emit_mock.assert_awaited_once()
+
+
+def test_patch_session_profile_invalid_name_422() -> None:
+    """PATCH /sessions/{id} rejects unknown profile names with 422."""
+    db_session = AsyncMock()
+    sid = str(uuid4())
+    app = _build_app_with_db_factory(db_session)
+
+    with _patched_user_resolver():
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.patch(
+                f"/api/v1/sessions/{sid}", json={"profile": "bogus"}, headers=_AUTH_HEADERS
+            )
+
+    assert resp.status_code == 422
+
+
+def test_patch_session_profile_404_when_other_user_owns_it() -> None:
+    """PATCH /sessions/{id} returns 404 when the scoped update touches no row."""
+    db_session = AsyncMock()
+    sid = str(uuid4())
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(patch(_SESSION_UPDATE, new_callable=AsyncMock, return_value=None))
+        stack.enter_context(patch(_EMIT_PROFILE, new_callable=AsyncMock))
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.patch(
+                f"/api/v1/sessions/{sid}", json={"profile": "cloud"}, headers=_AUTH_HEADERS
+            )
+
+    assert resp.status_code == 404
+
+
+def test_patch_session_profile_invalid_uuid_422() -> None:
+    """PATCH /sessions/{id} returns 422 for a non-UUID session_id."""
+    db_session = AsyncMock()
+    app = _build_app_with_db_factory(db_session)
+
+    with _patched_user_resolver():
+        with TestClient(app, raise_server_exceptions=False) as client:
+            resp = client.patch(
+                "/api/v1/sessions/not-a-uuid", json={"profile": "cloud"}, headers=_AUTH_HEADERS
+            )
+
+    assert resp.status_code == 422

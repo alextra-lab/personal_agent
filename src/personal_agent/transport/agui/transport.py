@@ -192,6 +192,23 @@ async def emit_turn_status(*, session_id: str, value: Mapping[str, Any]) -> None
     )
 
 
+async def emit_session_profile(*, session_id: str, profile: str) -> None:
+    """Persist + enqueue a ``session_profile`` STATE_DELTA event (ADR-0079).
+
+    Best-effort live notification to the active client that the session's
+    server-owned execution profile changed. Correctness does not depend on
+    delivery — other clients converge via hydration. See ADR-0079 §5-6.
+
+    Args:
+        session_id: Target session identifier.
+        profile: The session's resolved execution profile (e.g. ``"cloud"``).
+    """
+    await _push_event(
+        StateUpdateEvent(key="session_profile", value=profile, session_id=session_id),
+        session_id,
+    )
+
+
 class AGUITransport:
     """AG-UI streaming transport via WebSocket.
 

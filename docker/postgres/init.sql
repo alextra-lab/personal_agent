@@ -14,7 +14,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     metadata JSONB DEFAULT '{}',
     messages JSONB DEFAULT '[]',
     primary_model_at_creation VARCHAR(120),
-    model_config_path VARCHAR(255)
+    model_config_path VARCHAR(255),
+    -- Server-authoritative execution profile (ADR-0079 / FRE-416). Explicit
+    -- stored value; never a silent request-time fallback.
+    execution_profile VARCHAR(50) NOT NULL DEFAULT 'local'
 );
 
 CREATE INDEX idx_sessions_last_active ON sessions(last_active_at DESC);

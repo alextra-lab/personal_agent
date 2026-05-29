@@ -19,6 +19,7 @@ from personal_agent.gateway.auth import TokenInfo, require_scope
 from personal_agent.gateway.errors import not_found, service_unavailable
 from personal_agent.gateway.rate_limiting import get_rate_limiter
 from personal_agent.service.auth import _CF_EMAIL_HEADER, _get_user_with_display_name
+from personal_agent.service.models import SessionProfileUpdate
 from personal_agent.telemetry.trace import SystemTraceContext
 
 log = structlog.get_logger(__name__)
@@ -241,6 +242,88 @@ async def get_session_messages(
     return messages
 
 
+@router.patch("/{session_id}")
+async def update_session_profile(
+    request: Request,
+    session_id: str,
+    body: SessionProfileUpdate,
+    token: TokenInfo = Depends(require_scope("sessions:write")),  # noqa: B008
+    db: AsyncSession = Depends(_get_db),  # noqa: B008
+) -> dict[str, Any]:
+    """Set a session's server-owned execution profile (ADR-0079 / FRE-416).
+
+    The profile is the source of truth for which models run the session's
+    turns. This is the canonical write path used by the PWA profile toggle;
+    the change is persisted and emitted to the active client as a
+    ``session_profile`` STATE_DELTA. The write is scoped to the authenticated
+    user so a token holder cannot mutate another user's session.
+
+    Args:
+        request: FastAPI request (injected).
+        session_id: UUID string of the session.
+        body: New execution profile.
+        token: Validated bearer token with ``sessions:write`` scope.
+        db: Async SQLAlchemy session (injected).
+
+    Returns:
+        The updated session dict.
+
+    Raises:
+        HTTPException(422): When ``session_id`` is not a valid UUID or the
+            profile name is not a known profile.
+        HTTPException(404): When the session does not exist or is owned by
+            another user.
+    """
+    get_rate_limiter().check(token)
+    from personal_agent.config.profile import is_valid_profile
+    from personal_agent.service.models import SessionUpdate
+    from personal_agent.service.repositories.session_repository import SessionRepository
+    from personal_agent.transport.agui.transport import emit_session_profile
+
+    user_id = await _require_request_user_id(request, db)
+    ctx = SystemTraceContext.new("session_api", session_id=session_id)
+
+    try:
+        uuid = UUID(session_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "invalid_parameter",
+                "message": "session_id must be a valid UUID",
+                "status": 422,
+            },
+        ) from exc
+
+    if not is_valid_profile(body.profile):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "invalid_parameter",
+                "message": f"unknown execution profile: {body.profile}",
+                "status": 422,
+            },
+        )
+
+    repo = SessionRepository(db)
+    session = await repo.update(
+        uuid, SessionUpdate(execution_profile=body.profile), user_id=user_id
+    )
+    if session is None:
+        raise not_found("session")
+
+    await emit_session_profile(session_id=session_id, profile=body.profile)
+    log.info(
+        "gateway_sessions_set_profile",
+        session_id=session_id,
+        profile=body.profile,
+        token_name=token.name,
+        user_id=str(user_id),
+        trace_id=ctx.trace_id,
+    )
+    return _session_to_dict(session)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -280,6 +363,8 @@ def _session_to_dict(session: Any) -> dict[str, Any]:
         "last_active_at": session.last_active_at.isoformat() if session.last_active_at else None,
         "mode": session.mode,
         "channel": session.channel,
+        # ADR-0079: server-authoritative execution profile for PWA hydration.
+        "execution_profile": getattr(session, "execution_profile", "local") or "local",
         "message_count": len(msgs),
         "title": _extract_title(msgs),
     }

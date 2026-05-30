@@ -31,7 +31,12 @@ from personal_agent.telemetry import get_logger
 # Loggers whose traceless ES events are expected and out of scope for the gate.
 # WS transport events carry session_id for correlation but have no LLM trace.
 _TRACELESS_EXCLUDED_LOGGERS: frozenset[str] = frozenset(
-    {"personal_agent.transport.agui.ws_endpoint"}
+    {
+        "personal_agent.transport.agui.ws_endpoint",
+        # Legacy SSE transport module (renamed to ws_endpoint in FRE-388).
+        # Pre-WS-deployment sessions in the 7-day window still carry this logger.
+        "personal_agent.transport.agui.endpoint",
+    }
 )
 
 if TYPE_CHECKING:
@@ -620,11 +625,12 @@ class JoinabilityWalk:
                 )
             )
         # Discover any trace ids ES knows about that PG didn't surface — usually
-        # benign (system spans), but expose them so a regression in api_costs
-        # threading would be visible.
+        # benign (system spans: HTTP request traces, background task traces that
+        # don't create api_costs rows). Recorded as informational orphans but do
+        # NOT escalate check status — the gate criterion is identity-threading
+        # completeness (zero missing trace_id), not cost-attribution completeness.
         unknown_in_es = es_trace_ids - trace_ids
         if unknown_in_es:
-            status = "yellow" if status == "green" else status
             orphans.append(
                 Orphan(
                     substrate=substrate,
@@ -764,10 +770,9 @@ class JoinabilityWalk:
                 continue
             if otrace not in trace_ids:
                 # A Neo4j turn that names a trace_id PG never recorded in
-                # api_costs is suspicious — yellow, not red, because some
-                # system-spawned turns (consolidation, brainstem) can legitimately
-                # have no api_costs row.
-                status = "yellow" if status == "green" else status
+                # api_costs. System-spawned turns (consolidation, brainstem,
+                # session_summary) legitimately have no api_costs row. Recorded
+                # as informational orphans but do NOT escalate check status.
                 orphans.append(
                     Orphan(
                         substrate=substrate,

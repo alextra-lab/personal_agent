@@ -318,12 +318,15 @@ async def test_red_when_es_events_missing_trace_id(ctx: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tests — yellow when ES knows a trace_id PG does not (cross-substrate drift)
+# Tests — three_way_mismatch records orphan but does NOT yellow the outcome
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_yellow_when_es_has_extra_trace_ids(ctx: Any) -> None:
+async def test_green_with_informational_es_extra_trace_ids(ctx: Any) -> None:
+    # System spans (HTTP request traces, background-task traces) appear in ES
+    # but have no api_costs row. The orphan is recorded for diagnostics but
+    # must not prevent the probe from returning green.
     ghost_trace = "44444444-4444-4444-4444-444444444444"
     es = MagicMock()
     es.search = AsyncMock(
@@ -343,7 +346,7 @@ async def test_yellow_when_es_has_extra_trace_ids(ctx: Any) -> None:
     )
     walk = _build_walk(pg_pool=_green_pg(), es=es, ctx=ctx)
     doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
-    assert doc.outcome == "yellow"
+    assert doc.outcome == "green"
     drift = next(o for o in doc.orphans if o.kind == "three_way_mismatch")
     assert ghost_trace in drift.detail["trace_ids_only_in_es"]
 

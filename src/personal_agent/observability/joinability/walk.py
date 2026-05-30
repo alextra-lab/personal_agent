@@ -32,10 +32,15 @@ from personal_agent.telemetry import get_logger
 # WS transport events carry session_id for correlation but have no LLM trace.
 _TRACELESS_EXCLUDED_LOGGERS: frozenset[str] = frozenset(
     {
+        # WS transport — connection lifecycle events carry session_id for
+        # correlation but have no LLM trace to attach to.
         "personal_agent.transport.agui.ws_endpoint",
         # Legacy SSE transport module (renamed to ws_endpoint in FRE-388).
         # Pre-WS-deployment sessions in the 7-day window still carry this logger.
         "personal_agent.transport.agui.endpoint",
+        # WS ticket minting — pre-authentication transport event; fires on every
+        # WS connection before any LLM trace context exists.
+        "personal_agent.service.ws_ticket",
     }
 )
 

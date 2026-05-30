@@ -1,7 +1,8 @@
 # ADR-0074: End-to-End Traceability and Observability Joinability
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-05-22
+**Accepted:** 2026-05-30
 **Issue:** FRE-376
 **Supersedes:** —
 **Related:** ADR-0072 (test/prod substrate isolation), ADR-0073 (cross-fact constraint layer)

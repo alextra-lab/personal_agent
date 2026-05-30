@@ -21,8 +21,7 @@ interface ChatInputProps {
  * Chat input bar with textarea, inline model toggle, and send button.
  *
  * Behaviour:
- * - Desktop: Enter sends; Shift+Enter inserts newline.
- * - Mobile (touch device): Enter always inserts newline; send requires button tap.
+ * - Cmd+Enter (macOS) or Ctrl+Enter (Win/Linux) sends; Enter inserts a newline on every device.
  * - Paste is normalised to plain text.
  * - The textarea auto-grows up to 5 lines.
  * - Footer padding accounts for iOS home-indicator via safe-area-inset-bottom.
@@ -59,9 +58,8 @@ export function ChatInput({
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== 'Enter' || e.shiftKey) return;
-    const isTouchDevice = typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0;
-    if (isTouchDevice) return; // mobile Enter = newline, send via button only
+    if (e.key !== 'Enter') return;
+    if (!(e.metaKey || e.ctrlKey)) return;
     e.preventDefault();
     handleSubmit();
   };
@@ -175,6 +173,7 @@ export function ChatInput({
           type="submit"
           disabled={!canSend}
           aria-label="Send message"
+          title="Send (⌘+Enter)"
           className={`
             flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center
             transition-all duration-150

@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v10-fre-421-input-availability';
+const CACHE_NAME = 'seshat-v11-cmd-enter-send';
 
 const PRECACHE_URLS = [
   '/',

@@ -13,6 +13,7 @@ See: ADR-0035, Enhancement 2 (fuzzy entity deduplication)
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, cast
@@ -88,8 +89,13 @@ async def check_entity_duplicate(
             similarity_score=best["similarity"],
         )
 
-    # Above threshold — merge with canonical
+    # Above threshold — merge with canonical, subject to name-pattern guard.
     if best["similarity"] >= threshold:
+        # Guard: ALL_CAPS identifiers (FSM states, enum values, constants) must not
+        # merge with differently-cased names. They embed close to related error/event
+        # names but represent distinct concepts (FRE-412).
+        if _is_allcaps_identifier(name) != _is_allcaps_identifier(best["name"]):
+            return DedupResult(decision=DedupDecision.CREATE_NEW)
         logger.info(
             "entity_dedup_merge",
             proposed_name=name,
@@ -103,6 +109,18 @@ async def check_entity_duplicate(
         )
 
     return DedupResult(decision=DedupDecision.CREATE_NEW)
+
+
+def _is_allcaps_identifier(name: str) -> bool:
+    """Return True if name is an ALL_CAPS constant-style identifier.
+
+    Args:
+        name: Entity name to test.
+
+    Returns:
+        True when name matches the ALL_CAPS_WITH_UNDERSCORES pattern.
+    """
+    return bool(re.match(r"^[A-Z][A-Z0-9_]+$", name))
 
 
 async def _find_similar_entities(

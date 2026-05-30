@@ -458,7 +458,7 @@ class AppConfig(BaseSettings):
         description="Max items per embedding API call",
     )
     dedup_similarity_threshold: float = Field(
-        default=0.85,
+        default=0.92,
         description="Cosine similarity threshold for entity deduplication",
     )
     reranker_enabled: bool = Field(

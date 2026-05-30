@@ -83,6 +83,7 @@ async def _fetch_sessions(since_date: str, limit: int) -> list[dict[str, Any]]:
         List of dicts with keys: session_id, created_at, messages, metadata.
     """
     import asyncpg
+
     from personal_agent.config import get_settings
 
     settings = get_settings()
@@ -165,9 +166,9 @@ async def _replay_session(
     Returns:
         Dict with counts: turns_processed, entities_created, relationships_created, errors.
     """
-    from personal_agent.captains_log.capture import TaskCapture
-
     import json as _json
+
+    from personal_agent.captains_log.capture import TaskCapture
 
     session_id = str(session["session_id"])
     raw_metadata = session.get("metadata") or {}
@@ -185,10 +186,18 @@ async def _replay_session(
 
     pairs = _extract_message_pairs(session)
     if not pairs:
-        return {"turns_processed": 0, "entities_created": 0, "relationships_created": 0, "errors": 0}
+        return {
+            "turns_processed": 0,
+            "entities_created": 0,
+            "relationships_created": 0,
+            "errors": 0,
+        }
 
     counts: dict[str, int] = {
-        "turns_processed": 0, "entities_created": 0, "relationships_created": 0, "errors": 0
+        "turns_processed": 0,
+        "entities_created": 0,
+        "relationships_created": 0,
+        "errors": 0,
     }
 
     for user_msg, assistant_msg, ts in pairs:
@@ -255,18 +264,32 @@ async def main() -> None:
         neo4j_uri=settings.neo4j_uri,
     )
 
+    from personal_agent.cost_gate import CostGate, load_budget_config, set_default_gate
+
     memory_service = MemoryService()  # fre-375-allow: prod replay script, gated by --confirm-prod
     connected = await memory_service.connect()
     if not connected:
         log.error("replay_neo4j_connect_failed")
         sys.exit(1)
 
+    # Register a CostGate so LiteLLM calls can reserve and commit budget.
+    # Without this, every extraction call raises CostGateNotRegistered and the
+    # cost_tracker pool leaks a connection per call.
+    budget_config = load_budget_config()
+    cost_gate = CostGate(config=budget_config, db_url=settings.database_url)
+    await cost_gate.open()
+    set_default_gate(cost_gate)
+    log.info("replay_cost_gate_opened", roles=len(budget_config.roles))
+
     consolidator = SecondBrainConsolidator(memory_service=memory_service)
     sessions = await _fetch_sessions(args.since, args.limit)
     log.info("replay_sessions_fetched", count=len(sessions))
 
     total: dict[str, int] = {
-        "turns_processed": 0, "entities_created": 0, "relationships_created": 0, "errors": 0
+        "turns_processed": 0,
+        "entities_created": 0,
+        "relationships_created": 0,
+        "errors": 0,
     }
     for i, session in enumerate(sessions, 1):
         log.info(
@@ -280,6 +303,7 @@ async def main() -> None:
             total[k] += v
 
     await memory_service.disconnect()
+    await cost_gate.close()
     log.info("replay_complete", sessions_processed=len(sessions), **total)
 
 

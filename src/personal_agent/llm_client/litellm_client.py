@@ -292,6 +292,7 @@ class LiteLLMClient:
                 budget_role=self.budget_role,
                 reservation_amount=str(reservation_amount),
             )
+            await cost_tracker.disconnect()
             raise
 
         start_time = time.monotonic()
@@ -333,6 +334,7 @@ class LiteLLMClient:
                 error=str(e),
                 exc_info=True,
             )
+            await cost_tracker.disconnect()
             raise LLMClientError(f"LiteLLM call failed: {e}") from e
 
         elapsed = time.monotonic() - start_time

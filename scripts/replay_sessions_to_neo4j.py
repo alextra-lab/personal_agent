@@ -277,7 +277,7 @@ async def main() -> None:
     # cost_tracker pool leaks a connection per call.
     budget_config = load_budget_config()
     cost_gate = CostGate(config=budget_config, db_url=settings.database_url)
-    await cost_gate.open()
+    await cost_gate.connect()
     set_default_gate(cost_gate)
     log.info("replay_cost_gate_opened", roles=len(budget_config.roles))
 
@@ -303,7 +303,7 @@ async def main() -> None:
             total[k] += v
 
     await memory_service.disconnect()
-    await cost_gate.close()
+    await cost_gate.disconnect()
     log.info("replay_complete", sessions_processed=len(sessions), **total)
 
 

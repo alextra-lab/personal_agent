@@ -33,9 +33,11 @@ End-to-end workflow for shipping a Linear ticket on this project. Argument: a Li
 
 10. **Address review feedback** rigorously — see superpowers:receiving-code-review.
 
-## Post-merge (same session as merge — never deferred)
+> **Session boundary:** build and adr worktrees stop here. Push the branch and open the PR; master session handles merge, deploy, and post-deploy verification (steps 11–16).
 
-11. **Deploy** — `make deploy` (or env-specific target). Capture deploy output.
+## Post-merge (master session only — same session as merge, never deferred)
+
+11. **Deploy** — on VPS: `ENV=cloud make rebuild SERVICE=seshat-gateway`. Capture deploy output. (`make deploy` is Mac-only and fails on VPS.)
 12. **Live verification** — `curl` the relevant prod endpoint; paste status + response body. Do not claim done from "deploy exited 0" alone.
 13. **Conditional probe** — if the ticket touched a telemetry emit site, schema, cost recording, or memory write, run `scripts/monitors/joinability_probe.py` against prod and paste output (ADR-0074 §3.4).
 14. **Telemetry check** — confirm new log fields / ES events / metrics appear if applicable.

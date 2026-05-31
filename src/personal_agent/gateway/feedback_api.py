@@ -324,7 +324,7 @@ async def _verify_trace_session_ownership(
                 "bool": {
                     "filter": [
                         {"term": {"trace_id": trace_id}},
-                        {"term": {"event.keyword": "model_call_completed"}},
+                        {"term": {"event_type": "model_call_completed"}},
                     ]
                 }
             },
@@ -384,7 +384,7 @@ async def _lookup_prompt_identity(
                         "filter": [
                             {"term": {"trace_id": trace_id}},
                             {"term": {"session_id": session_id}},
-                            {"term": {"event.keyword": "model_call_completed"}},
+                            {"term": {"event_type": "model_call_completed"}},
                             {"exists": {"field": "prompt_static_prefix_hash"}},
                         ]
                     }

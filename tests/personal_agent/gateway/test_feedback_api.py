@@ -559,3 +559,93 @@ class TestFallbackIdentity:
             )
 
         assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Regression: ES query shape — event_type discriminator (FRE-407 architect fix)
+# ---------------------------------------------------------------------------
+
+
+class TestEsQueryShape:
+    """Pin the ES query body so a wrong field name cannot silently regress.
+
+    Context: the initial implementation used ``event.keyword`` as the
+    discriminator for model_call_completed events.  Live-cluster inspection
+    confirmed ``event.keyword`` → 0 docs; the correct field is ``event_type``.
+    These tests inspect the actual kwargs passed to the mocked ES client and
+    assert the filter uses ``event_type``, mirroring the spirit of
+    ``tests/observability/test_joinability_walk_unit.py::
+    test_es_query_excludes_transport_logger``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_lookup_prompt_identity_filters_on_event_type(self) -> None:
+        """_lookup_prompt_identity must filter on event_type, not event.keyword."""
+        from personal_agent.gateway.feedback_api import _lookup_prompt_identity
+
+        mock_es = MagicMock()
+        mock_es.search = AsyncMock(return_value=_es_identity_hit())
+
+        await _lookup_prompt_identity(
+            trace_id=_TRACE_ID,
+            session_id=_SESSION_ID,
+            es_client=mock_es,
+            ctx_trace_id="test-ctx",
+        )
+
+        assert mock_es.search.called, "ES search was not called"
+        call_kwargs = mock_es.search.call_args.kwargs
+        query_filters: list[dict] = call_kwargs.get("query", {}).get("bool", {}).get("filter", [])
+        term_fields = {
+            field
+            for f in query_filters
+            if isinstance(f, dict) and "term" in f
+            for field in f["term"]
+        }
+        assert "event_type" in term_fields, (
+            f"ES query does not filter on 'event_type' — found term fields: {term_fields}. "
+            "model_call_completed events have no 'event' field; the discriminator must be "
+            "'event_type' or every identity lookup silently returns nothing."
+        )
+        assert "event.keyword" not in term_fields and "event" not in term_fields, (
+            f"ES query still references stale 'event'/'event.keyword' field: {term_fields}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_verify_trace_session_ownership_filters_on_event_type(self) -> None:
+        """_verify_trace_session_ownership must filter on event_type, not event.keyword."""
+        from personal_agent.gateway.feedback_api import _verify_trace_session_ownership
+
+        mock_es = MagicMock()
+        mock_es.search = AsyncMock(
+            return_value={
+                "hits": {
+                    "total": {"value": 1},
+                    "hits": [{"_source": {"session_id": _SESSION_ID}}],
+                }
+            }
+        )
+
+        await _verify_trace_session_ownership(
+            trace_id=_TRACE_ID,
+            session_id=_SESSION_ID,
+            es_client=mock_es,
+            ctx_trace_id="test-ctx",
+        )
+
+        assert mock_es.search.called, "ES search was not called"
+        call_kwargs = mock_es.search.call_args.kwargs
+        query_filters: list[dict] = call_kwargs.get("query", {}).get("bool", {}).get("filter", [])
+        term_fields = {
+            field
+            for f in query_filters
+            if isinstance(f, dict) and "term" in f
+            for field in f["term"]
+        }
+        assert "event_type" in term_fields, (
+            f"ES query does not filter on 'event_type' — found term fields: {term_fields}. "
+            "Ownership check cannot verify trace→session mapping if it matches 0 docs."
+        )
+        assert "event.keyword" not in term_fields and "event" not in term_fields, (
+            f"ES query still references stale 'event'/'event.keyword' field: {term_fields}"
+        )

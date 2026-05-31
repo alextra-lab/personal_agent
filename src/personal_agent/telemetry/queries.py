@@ -634,7 +634,15 @@ class TelemetryQueries:
         return float(values.get("95.0", 0.0) or 0.0)
 
     async def get_low_rating_buckets(self, days: int) -> list[dict[str, Any]]:
-        """Aggregate mean user rating per prompt_callsite from user-turn-ratings-*.
+        """Aggregate explicit ratings + total turn counts per prompt_callsite (FRE-407).
+
+        Two parallel ES queries are executed:
+
+        1. ``user-turn-ratings-*`` — per-callsite sum and count of explicit user
+           ratings in the window (the existing aggregation).
+        2. ``agent-logs-*`` — cardinality of distinct ``trace_id`` per
+           ``prompt_callsite`` among ``model_call_completed`` events in the window.
+           This is the *population* of rateable turns for each callsite.
 
         The read-time join (ADR-0081 decision §6): ratings whose denormed
         ``prompt_callsite`` is null are joined to ``agent-logs-*`` at query time
@@ -646,16 +654,23 @@ class TelemetryQueries:
             days: Rolling look-back window in days.
 
         Returns:
-            List of dicts with keys ``callsite`` (str), ``mean_rating`` (float),
-            ``count`` (int) — one entry per distinct callsite with at least one
-            rating in the window.  Excludes the ``"unknown"`` bucket (callers
-            should not flag it).
+            List of dicts with keys:
+              - ``callsite`` (str): prompt callsite identifier.
+              - ``rated_sum`` (float): sum of explicit rating values.
+              - ``rated_count`` (int): number of explicit ratings received.
+              - ``total_turns`` (int): cardinality of distinct trace_ids with
+                ``model_call_completed`` for this callsite in the window.
+                Used by the consumer to compute the imputed mean.
+
+            One entry per distinct callsite appearing in either index.
+            Excludes the ``"unknown"`` bucket.
         """
         client = await self._get_client()
         now = datetime.now(timezone.utc)
         start = now - timedelta(days=days)
 
-        response = await client.search(
+        # --- Query 1: explicit ratings from user-turn-ratings-* ---
+        ratings_response = await client.search(
             index="user-turn-ratings-*",
             query={
                 "range": {
@@ -674,28 +689,90 @@ class TelemetryQueries:
                         "missing": "unknown",
                     },
                     "aggs": {
-                        "mean_rating": {"avg": {"field": "rating"}},
+                        "sum_rating": {"sum": {"field": "rating"}},
                     },
                 }
             },
         )
-        aggs = response.get("aggregations", {})
-        buckets = aggs.get("by_callsite", {}).get("buckets", [])
-        results: list[dict[str, Any]] = []
-        for bucket in buckets:
+
+        # --- Query 2: total completed turns per callsite from agent-logs-* ---
+        turns_response = await client.search(
+            index=f"{self._logs_index_prefix}-*",
+            query={
+                "bool": {
+                    "filter": [
+                        {"term": {"event_type": "model_call_completed"}},
+                        {
+                            "range": {
+                                "@timestamp": {
+                                    "gte": start.isoformat(),
+                                    "lte": now.isoformat(),
+                                }
+                            }
+                        },
+                    ]
+                }
+            },
+            size=0,
+            aggs={
+                "by_callsite": {
+                    "terms": {
+                        "field": "prompt_callsite",
+                        "size": 50,
+                        "missing": "unknown",
+                    },
+                    "aggs": {
+                        "distinct_traces": {"cardinality": {"field": "trace_id"}},
+                    },
+                }
+            },
+        )
+
+        # Build total_turns lookup: callsite → cardinality of distinct trace_ids
+        total_turns_by_callsite: dict[str, int] = {}
+        for bucket in (
+            turns_response.get("aggregations", {}).get("by_callsite", {}).get("buckets", [])
+        ):
             callsite = str(bucket.get("key", "") or "unknown")
-            count = int(bucket.get("doc_count", 0) or 0)
-            mean_val = bucket.get("mean_rating", {}).get("value")
-            if mean_val is None:
-                continue
-            mean_rating = float(mean_val)
+            total_turns_by_callsite[callsite] = int(
+                (bucket.get("distinct_traces") or {}).get("value", 0) or 0
+            )
+
+        # Merge explicit ratings with total_turns; build per-callsite result dicts
+        results: list[dict[str, Any]] = []
+        seen_callsites: set[str] = set()
+
+        for bucket in (
+            ratings_response.get("aggregations", {}).get("by_callsite", {}).get("buckets", [])
+        ):
+            callsite = str(bucket.get("key", "") or "unknown")
+            rated_count = int(bucket.get("doc_count", 0) or 0)
+            sum_val = (bucket.get("sum_rating") or {}).get("value")
+            rated_sum = float(sum_val) if sum_val is not None else 0.0
+            total_turns = total_turns_by_callsite.get(callsite, 0)
+            seen_callsites.add(callsite)
             results.append(
                 {
                     "callsite": callsite,
-                    "mean_rating": mean_rating,
-                    "count": count,
+                    "rated_sum": rated_sum,
+                    "rated_count": rated_count,
+                    "total_turns": total_turns,
                 }
             )
+
+        # Include callsites that appear only in agent-logs-* (zero ratings)
+        for callsite, total_turns in total_turns_by_callsite.items():
+            if callsite in seen_callsites:
+                continue
+            results.append(
+                {
+                    "callsite": callsite,
+                    "rated_sum": 0.0,
+                    "rated_count": 0,
+                    "total_turns": total_turns,
+                }
+            )
+
         return results
 
     async def get_error_patterns(

@@ -348,26 +348,47 @@ class InsightsEngine:
         return insights
 
     async def detect_low_rating_sessions(self, days: int = 7) -> list[Insight]:
-        """Flag prompt callsites whose mean user rating is below threshold (FRE-407).
+        """Flag prompt callsites whose imputed mean user rating is below threshold (FRE-407).
 
-        Aggregates per-callsite mean ratings from ``user-turn-ratings-*`` over
-        the trailing ``days`` window.  Ratings with null ``prompt_callsite`` are
-        bucketed as ``"unknown"`` by the ES aggregation and excluded here (they
-        lack identity; the read-time join in :meth:`TelemetryQueries.get_low_rating_buckets`
-        recovers late denorms, but genuinely identity-less turns are not flagged).
+        Uses an **imputed mean** so that un-rated completed turns are treated as
+        value 2 ("Meets expectation") — the same visual default shown in the PWA
+        control before the user clicks.  This prevents low-volume rating noise from
+        driving false positives while still detecting genuinely poor callsites.
 
-        Min-count floor: a callsite with fewer than 5 ratings in the window is
-        **never** flagged regardless of mean — avoids noise on low-volume callsites.
+        Imputation formula (per callsite, over the trailing ``days`` window):
+
+            imputed_mean = (rated_sum + 2 * (total_turns - rated_count)) / total_turns
+
+        where:
+          - ``rated_sum``   = sum of explicit rating values from ``user-turn-ratings-*``.
+          - ``rated_count`` = number of explicit ratings received.
+          - ``total_turns`` = cardinality of distinct ``trace_id`` in ``agent-logs-*``
+            with ``event_type=model_call_completed`` for this callsite (the population).
+
+        Expected no-op behaviour: callsites that receive *no* ratings (e.g.
+        ``role.primary``) get ``imputed_mean ≈ 2.0`` and are never flagged — correct.
+
+        Fallback: if a callsite has explicit ratings but ``total_turns`` is 0 (ES
+        index lag or missing data), the explicit mean is used instead.
+
+        Floor and threshold:
+          - Min-count floor is on **total_turns >= 5** (the population, not rated_count).
+            Low-population callsites are never flagged regardless of ratings.
+          - A callsite is flagged when ``imputed_mean < 1.5``.
+
+        Ratings with null ``prompt_callsite`` are bucketed as ``"unknown"`` and
+        excluded — they lack identity and are never raised as per-callsite flags.
 
         Args:
             days: Lookback window in days.
 
         Returns:
-            Insights for each callsite whose mean rating < 1.5 and count >= 5.
+            Insights for each callsite whose imputed_mean < 1.5 and total_turns >= 5.
             Empty when ES is unavailable or no callsite clears both gates.
         """
-        _MIN_RATING_COUNT = 5
+        _MIN_TOTAL_TURNS = 5
         _RATING_THRESHOLD = 1.5
+        _IMPUTED_DEFAULT = 2.0  # un-rated turns are treated as "Meets expectation"
 
         insights: list[Insight] = []
         log.info("low_rating_analysis_start", days=days)
@@ -379,39 +400,53 @@ class InsightsEngine:
 
         for bucket in buckets:
             callsite = str(bucket.get("callsite") or "")
-            count = int(bucket.get("count", 0) or 0)
-            mean_rating = float(bucket.get("mean_rating", 99.0) or 99.0)
+            rated_count = int(bucket.get("rated_count", 0) or 0)
+            rated_sum = float(bucket.get("rated_sum", 0.0) or 0.0)
+            total_turns = int(bucket.get("total_turns", 0) or 0)
 
             # Exclude identity-less turns — never raise a per-callsite flag.
             if callsite == "unknown" or not callsite:
                 continue
-            # Min-count floor: suppress noise on low-volume callsites.
-            if count < _MIN_RATING_COUNT:
-                continue
-            # Mean threshold: < 1.5 is consistently rated below "meets expectation".
-            if mean_rating >= _RATING_THRESHOLD:
+
+            # Min-count floor on population (total_turns), not explicit rated_count.
+            if total_turns < _MIN_TOTAL_TURNS:
                 continue
 
-            confidence = min(0.90, 0.65 + 0.05 * min(5, count - _MIN_RATING_COUNT))
+            # Imputed mean: un-rated turns contribute the visual default (2.0).
+            unrated = max(0, total_turns - rated_count)
+            imputed_mean = (rated_sum + _IMPUTED_DEFAULT * unrated) / total_turns
+
+            # Fallback to explicit mean if total_turns is 0 but ratings exist.
+            if total_turns == 0 and rated_count > 0:
+                imputed_mean = rated_sum / rated_count
+
+            # Flag when imputed mean is below "Meets expectation" threshold.
+            if imputed_mean >= _RATING_THRESHOLD:
+                continue
+
+            confidence = min(0.90, 0.65 + 0.05 * min(5, total_turns - _MIN_TOTAL_TURNS))
             insights.append(
                 Insight(
                     insight_type="low_rating",
                     pattern_kind="low_rating_callsite",
                     title=(
-                        f"Low user value rating for {callsite} "
-                        f"(mean={mean_rating:.2f}, n={count}, {days}d)"
+                        f"Low imputed value rating for {callsite} "
+                        f"(imputed_mean={imputed_mean:.2f}, rated={rated_count}/{total_turns}, "
+                        f"{days}d)"
                     ),
                     summary=(
-                        f"Callsite '{callsite}' has a mean user rating of "
-                        f"{mean_rating:.2f} across {count} rated turns over {days} days "
-                        f"— below the 1.5 threshold. Review prompt components or "
-                        f"response quality for this callsite."
+                        f"Callsite '{callsite}' has an imputed mean rating of "
+                        f"{imputed_mean:.2f} (treating {total_turns - rated_count} un-rated "
+                        f"turns as {_IMPUTED_DEFAULT}) across {total_turns} total turns over "
+                        f"{days} days — below the {_RATING_THRESHOLD} threshold. Review prompt "
+                        f"components or response quality for this callsite."
                     ),
                     confidence=confidence,
                     evidence={
                         "prompt_callsite": callsite,
-                        "mean_rating": round(mean_rating, 4),
-                        "count": count,
+                        "imputed_mean": round(imputed_mean, 4),
+                        "rated_count": rated_count,
+                        "total_turns": total_turns,
                         "window_days": days,
                         "threshold": _RATING_THRESHOLD,
                     },

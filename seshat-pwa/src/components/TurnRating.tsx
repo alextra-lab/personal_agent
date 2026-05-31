@@ -13,7 +13,12 @@
  *   3 — Wow             → emerald-400 (confirmed/good)
  *
  * Behaviour:
- *   - Optimistic select on click; reverts to previous value on network failure.
+ *   - Default displayed value is 2 ("Meets expectation", sky-400) — purely
+ *     visual; no network POST is issued on mount or render.
+ *   - A rating is sent ONLY on an explicit user click (including re-clicking
+ *     segment 2 to deliberately confirm a 2).
+ *   - Each turn's control independently defaults to 2 until clicked.
+ *   - Optimistic select on click; reverts to previous visual state on failure.
  *   - On confirmation a single animate-pulse fires then the state settles.
  *   - Re-rating is allowed: clicking a new segment re-POSTs and overwrites.
  *   - Never renders mid-stream; parent gates on `message.complete === true`.
@@ -57,12 +62,20 @@ interface TurnRatingProps {
  * focus-within:opacity-100 transition-opacity`. Placed beside the copy button
  * in the assistant message footer.
  *
+ * Default display: segment 2 ("Meets expectation", sky-400) renders filled
+ * before any interaction. This is purely visual — no POST is issued until
+ * the user explicitly clicks a segment. Un-clicked controls are treated as
+ * value 2 by the backend imputation metric (FRE-407).
+ *
  * Args:
  *   traceId:   Trace ID of the assistant turn to rate.
  *   sessionId: Owning session ID, forwarded to the rating endpoint.
  */
 export function TurnRating({ traceId, sessionId }: TurnRatingProps) {
-  /** null = no rating submitted yet; number = persisted score. */
+  /**
+   * null = no rating submitted yet (visually defaults to 2, not persisted).
+   * number = persisted score sent to the backend.
+   */
   const [persisted, setPersisted] = useState<number | null>(null);
   /** Optimistic selection while the request is in-flight. */
   const [optimistic, setOptimistic] = useState<number | null>(null);
@@ -70,7 +83,13 @@ export function TurnRating({ traceId, sessionId }: TurnRatingProps) {
   const [pulsing, setPulsing] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const currentRating = optimistic ?? persisted;
+  /**
+   * Visual rating: defaults to 2 before any click so the meter shows
+   * "Meets expectation" at rest. Actual persisted value is null until the
+   * user explicitly clicks.
+   */
+  const VISUAL_DEFAULT = 2;
+  const currentRating = optimistic ?? persisted ?? VISUAL_DEFAULT;
 
   const handleRate = useCallback(
     async (rating: number) => {

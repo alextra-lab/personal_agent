@@ -299,6 +299,9 @@ joinability-probe:  ## Run one joinability probe walk against the current substr
 joinability-status: ## 7-day green-gate verdict from agent-monitors-joinability-* (exit 0 on green)
 	uv run python -m personal_agent.observability.joinability.status_cli $(ARGS)
 
+cache-erosion-status: ## Jaccard prefix-hash stability for monitored callsites (exit 0 = stable)
+	uv run python -m scripts.monitors.cache_erosion_monitor $(ARGS)
+
 # ─── Prompt corpus ────────────────────────────────────────────────────────────
 
 render-prompt-corpus:

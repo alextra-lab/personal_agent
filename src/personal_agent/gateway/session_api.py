@@ -291,6 +291,10 @@ async def _attach_turn_ratings(
         if isinstance(tid, str) and isinstance(rating, int):
             by_trace[tid] = rating
     for m in messages:
+        # Only the assistant turn is rateable; the user message in the same turn
+        # shares the trace_id, so guard on role to avoid tagging it.
+        if m.get("role") != "assistant":
+            continue
         tid = m.get("trace_id")
         if isinstance(tid, str) and tid in by_trace:
             m["rating"] = by_trace[tid]

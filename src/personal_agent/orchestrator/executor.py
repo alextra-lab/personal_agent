@@ -206,6 +206,9 @@ async def _emit_turn_status(ctx: "ExecutionContext") -> None:
                 "tool_iteration": ctx.tool_iteration_count,
                 "tool_iteration_max": _resolve_max_iterations(ctx),
                 "turn_cost_usd": round(ctx.turn_cost_usd, 6),
+                # FRE-407: the client stamps this onto the assistant message so the
+                # rating control (which joins on trace_id) can render after DONE.
+                "trace_id": ctx.trace_id,
             },
         )
     except Exception:

@@ -116,6 +116,10 @@ export function useSSEStream(): UseSSEStreamReturn {
   const currentContentRef = useRef<string>('');
   const currentSessionRef = useRef<string>('');
   const maxHandledSeqRef = useRef<number>(0);
+  // FRE-407: the turn's trace_id arrives on the turn_status STATE_DELTA; we stash
+  // it here so the DONE handler can stamp it onto the completed assistant message
+  // (the rating control joins on trace_id).
+  const currentTurnTraceIdRef = useRef<string>('');
 
   // --------------------------------------------------------------------------
   // Event dispatch
@@ -183,6 +187,11 @@ export function useSSEStream(): UseSSEStreamReturn {
         const { key, value } = event.data as { key: string; value: unknown };
         if (key === 'turn_status' && value !== null && typeof value === 'object') {
           setTurnStatus(value as TurnStatus);
+          // FRE-407: capture the turn's trace_id for the DONE handler to stamp.
+          const tid = (value as { trace_id?: unknown }).trace_id;
+          if (typeof tid === 'string' && tid.length > 0) {
+            currentTurnTraceIdRef.current = tid;
+          }
         }
         // ADR-0079 / FRE-419: server-authoritative profile change → reconcile pill.
         if (key === 'session_profile' && (value === 'local' || value === 'cloud')) {
@@ -303,22 +312,22 @@ export function useSSEStream(): UseSSEStreamReturn {
       case 'DONE': {
         setIsStreaming(false);
         setActiveTools([]);
-        // Stamp trace_id + complete onto the last assistant message so
-        // TurnRating can render. event.trace_id is the join key for the
-        // user-turn-ratings-* index (FRE-407).
-        if (event.trace_id) {
-          const traceId = event.trace_id;
-          setMessages((prev) => {
-            const last = prev[prev.length - 1];
-            if (last?.role === 'assistant') {
-              return [
-                ...prev.slice(0, -1),
-                { ...last, traceId, complete: true },
-              ];
-            }
-            return prev;
-          });
-        }
+        // FRE-407: the turn is complete — mark the assistant message complete
+        // (unconditionally) and stamp its trace_id so TurnRating can render.
+        // trace_id arrives on the turn_status STATE_DELTA (stashed in the ref);
+        // fall back to event.trace_id if a future DONE payload carries it.
+        const doneTraceId = event.trace_id || currentTurnTraceIdRef.current || '';
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last?.role === 'assistant') {
+            return [
+              ...prev.slice(0, -1),
+              { ...last, traceId: doneTraceId || last.traceId, complete: true },
+            ];
+          }
+          return prev;
+        });
+        currentTurnTraceIdRef.current = '';
         break;
       }
     }

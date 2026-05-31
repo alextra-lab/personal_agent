@@ -495,5 +495,6 @@ class LiteLLMClient:
             reasoning_trace=None,
             usage=usage,
             response_id=response_id,
+            cost_usd=_cost_usd or 0.0,
             raw=response.model_dump() if hasattr(response, "model_dump") else {},
         )

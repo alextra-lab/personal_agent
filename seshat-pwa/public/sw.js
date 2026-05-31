@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v13-default-rating';
+const CACHE_NAME = 'seshat-v14-rating-render-cost';
 
 const PRECACHE_URLS = [
   '/',

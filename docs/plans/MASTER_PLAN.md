@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-05-30 — **FRE-374 purge→replay ✅** — 14,213 entities + 11,984 relationships, 0 errors. Probe results: recall 0/15 empty/misleading; empty-desc 24.6% (was 42%); redundant edge pairs 4.4% (was 9.3%). **FRE-376 ✅** — ADR-0074 → Accepted; retroactive 6/6 audit green; three probe-tool bugs fixed (`712222e`+`f0478cc`). **FRE-412 ✅** — dedup threshold 0.92 + ALL_CAPS guard. **Next: FRE-406 P2 (prompt cost/cache attribution).**
+> **Last updated**: 2026-05-31 — **FRE-406 P2 ✅ DONE** — ES template prompt_* explicit mapping, cache-erosion monitor (Jaccard ≥ 0.9, `make cache-erosion-status`), Kibana saved objects (per-callsite cost breakdown + hash stability view). Live result: orchestrator.primary jaccard=0.200 [ERODED] — confirms future-gate already crossed (cache-hit ≈ 0% on local SLM due to prefix churn). Composer-redesign follow-up ticket needed. FRE-403 EPIC stays In Progress (P3–P5 remain). Previously: **FRE-374 purge→replay ✅** — 14,213 entities + 11,984 relationships, 0 errors. Probe results: recall 0/15 empty/misleading; empty-desc 24.6% (was 42%); redundant edge pairs 4.4% (was 9.3%). **FRE-376 ✅** — ADR-0074 → Accepted; retroactive 6/6 audit green; three probe-tool bugs fixed (`712222e`+`f0478cc`). **FRE-412 ✅** — dedup threshold 0.92 + ALL_CAPS guard. **Next: FRE-406 P2 (prompt cost/cache attribution).**
 
 ---
 

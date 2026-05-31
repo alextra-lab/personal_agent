@@ -60,6 +60,7 @@ _DEV_TOKEN = TokenInfo(
             "sessions:write",
             "observations:read",
             "observations:write",
+            "feedback:write",  # FRE-407: per-turn user value rating
         ]
     ),
     rate_limit=100_000,

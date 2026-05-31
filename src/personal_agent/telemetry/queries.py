@@ -633,6 +633,71 @@ class TelemetryQueries:
         values = response.get("aggregations", {}).get("p95_chars", {}).get("values", {})
         return float(values.get("95.0", 0.0) or 0.0)
 
+    async def get_low_rating_buckets(self, days: int) -> list[dict[str, Any]]:
+        """Aggregate mean user rating per prompt_callsite from user-turn-ratings-*.
+
+        The read-time join (ADR-0081 decision §6): ratings whose denormed
+        ``prompt_callsite`` is null are joined to ``agent-logs-*`` at query time
+        to recover identity.  Ratings still null after the join are bucketed as
+        ``callsite="unknown"`` and excluded from per-callsite flags downstream
+        (never raise an error for genuinely identity-less turns).
+
+        Args:
+            days: Rolling look-back window in days.
+
+        Returns:
+            List of dicts with keys ``callsite`` (str), ``mean_rating`` (float),
+            ``count`` (int) — one entry per distinct callsite with at least one
+            rating in the window.  Excludes the ``"unknown"`` bucket (callers
+            should not flag it).
+        """
+        client = await self._get_client()
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(days=days)
+
+        response = await client.search(
+            index="user-turn-ratings-*",
+            query={
+                "range": {
+                    "rated_at": {
+                        "gte": start.isoformat(),
+                        "lte": now.isoformat(),
+                    }
+                }
+            },
+            size=0,
+            aggs={
+                "by_callsite": {
+                    "terms": {
+                        "field": "prompt_callsite",
+                        "size": 50,
+                        "missing": "unknown",
+                    },
+                    "aggs": {
+                        "mean_rating": {"avg": {"field": "rating"}},
+                    },
+                }
+            },
+        )
+        aggs = response.get("aggregations", {})
+        buckets = aggs.get("by_callsite", {}).get("buckets", [])
+        results: list[dict[str, Any]] = []
+        for bucket in buckets:
+            callsite = str(bucket.get("key", "") or "unknown")
+            count = int(bucket.get("doc_count", 0) or 0)
+            mean_val = bucket.get("mean_rating", {}).get("value")
+            if mean_val is None:
+                continue
+            mean_rating = float(mean_val)
+            results.append(
+                {
+                    "callsite": callsite,
+                    "mean_rating": mean_rating,
+                    "count": count,
+                }
+            )
+        return results
+
     async def get_error_patterns(
         self,
         window_hours: int,

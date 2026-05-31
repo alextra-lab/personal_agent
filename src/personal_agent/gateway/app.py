@@ -26,6 +26,7 @@ from fastapi import APIRouter, FastAPI, Request
 
 from personal_agent.config.settings import get_settings
 from personal_agent.gateway.chat_api import router as chat_router
+from personal_agent.gateway.feedback_api import router as feedback_router
 from personal_agent.gateway.knowledge_api import router as knowledge_router
 from personal_agent.gateway.observation_api import router as observation_router
 from personal_agent.gateway.session_api import router as session_router
@@ -85,6 +86,7 @@ def create_gateway_router() -> APIRouter:
     root.include_router(knowledge_router)
     root.include_router(session_router)
     root.include_router(observation_router)
+    root.include_router(feedback_router)
     root.include_router(_health_router)
     return root
 

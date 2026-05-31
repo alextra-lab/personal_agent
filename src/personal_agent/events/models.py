@@ -38,6 +38,9 @@ STREAM_PROMOTION_ISSUE_CREATED = "stream:promotion.issue_created"
 STREAM_FEEDBACK_RECEIVED = "stream:feedback.received"
 """Stream for feedback-received events (Phase 3)."""
 
+STREAM_USER_TURN_RATED = "stream:user.turn_rated"
+"""Stream for per-turn user value rating events (FRE-407)."""
+
 STREAM_MEMORY_ACCESSED = "stream:memory.accessed"
 """Stream for memory-accessed events (Phase 4)."""
 
@@ -288,6 +291,38 @@ class FeedbackReceivedEvent(EventBase):
     issue_identifier: str
     label: str
     fingerprint: str | None = None
+
+
+class UserTurnRatingEvent(EventBase):
+    """Published after a user rates an assistant turn (FRE-407).
+
+    Distinct from ``FeedbackReceivedEvent`` — that event is Linear-label-specific
+    (``issue_id`` / ``label`` / ``fingerprint``) and has live consumers that
+    must not be disrupted.  This event carries turn-level value signal.
+
+    Published to ``STREAM_USER_TURN_RATED``.  Only published when the rating
+    value *changes* — re-rating to the same score produces no event, preventing
+    double-counting downstream.
+
+    Consumed by ``cg:insights`` (``detect_low_rating_sessions``).
+
+    Attributes:
+        trace_id: UUID of the rated turn (join key — matches ``model_call_completed``).
+        session_id: Session that produced the rated turn.
+        rating: User value score — 0 (no value) through 3 (wow).
+        prompt_callsite: Dotted callsite of the primary reasoning call, e.g.
+            ``"orchestrator.primary"``.  Null when write-time identity lookup
+            missed (Insights consumer recovers via read-time join).
+        prompt_static_prefix_hash: Hash of the static prompt prefix.  Null when
+            write-time identity lookup missed.
+    """
+
+    event_type: Literal["user.turn_rated"] = "user.turn_rated"
+    trace_id: str
+    session_id: str
+    rating: int
+    prompt_callsite: str | None
+    prompt_static_prefix_hash: str | None
 
 
 # ---------------------------------------------------------------------------
@@ -860,6 +895,8 @@ def parse_stream_event(payload: dict[str, Any]) -> EventBase:
         return PromotionIssueCreatedEvent.model_validate(payload)
     if raw_type == "feedback.received":
         return FeedbackReceivedEvent.model_validate(payload)
+    if raw_type == "user.turn_rated":
+        return UserTurnRatingEvent.model_validate(payload)
     if raw_type == "memory.accessed":
         return MemoryAccessedEvent.model_validate(payload)
     if raw_type == "memory.entities_updated":

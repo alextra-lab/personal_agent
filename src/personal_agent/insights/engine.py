@@ -147,6 +147,9 @@ class InsightsEngine:
         missing_skill_insights = await self.detect_missing_skill_patterns(days=days)
         insights.extend(missing_skill_insights)
 
+        low_rating_insights = await self.detect_low_rating_sessions(days=days)
+        insights.extend(low_rating_insights)
+
         self._index_insights(insights=insights, days=days)
         log.info("insights_generated", days=days, count=len(insights))
         return insights
@@ -340,6 +343,85 @@ class InsightsEngine:
             "missing_skill_pattern_analysis_complete",
             buckets=len(buckets),
             insights=len(insights),
+            days=days,
+        )
+        return insights
+
+    async def detect_low_rating_sessions(self, days: int = 7) -> list[Insight]:
+        """Flag prompt callsites whose mean user rating is below threshold (FRE-407).
+
+        Aggregates per-callsite mean ratings from ``user-turn-ratings-*`` over
+        the trailing ``days`` window.  Ratings with null ``prompt_callsite`` are
+        bucketed as ``"unknown"`` by the ES aggregation and excluded here (they
+        lack identity; the read-time join in :meth:`TelemetryQueries.get_low_rating_buckets`
+        recovers late denorms, but genuinely identity-less turns are not flagged).
+
+        Min-count floor: a callsite with fewer than 5 ratings in the window is
+        **never** flagged regardless of mean — avoids noise on low-volume callsites.
+
+        Args:
+            days: Lookback window in days.
+
+        Returns:
+            Insights for each callsite whose mean rating < 1.5 and count >= 5.
+            Empty when ES is unavailable or no callsite clears both gates.
+        """
+        _MIN_RATING_COUNT = 5
+        _RATING_THRESHOLD = 1.5
+
+        insights: list[Insight] = []
+        log.info("low_rating_analysis_start", days=days)
+        try:
+            buckets = await self._queries.get_low_rating_buckets(days=days)
+        except Exception:
+            log.warning("low_rating_analysis_failed", exc_info=True)
+            return insights
+
+        for bucket in buckets:
+            callsite = str(bucket.get("callsite") or "")
+            count = int(bucket.get("count", 0) or 0)
+            mean_rating = float(bucket.get("mean_rating", 99.0) or 99.0)
+
+            # Exclude identity-less turns — never raise a per-callsite flag.
+            if callsite == "unknown" or not callsite:
+                continue
+            # Min-count floor: suppress noise on low-volume callsites.
+            if count < _MIN_RATING_COUNT:
+                continue
+            # Mean threshold: < 1.5 is consistently rated below "meets expectation".
+            if mean_rating >= _RATING_THRESHOLD:
+                continue
+
+            confidence = min(0.90, 0.65 + 0.05 * min(5, count - _MIN_RATING_COUNT))
+            insights.append(
+                Insight(
+                    insight_type="low_rating",
+                    pattern_kind="low_rating_callsite",
+                    title=(
+                        f"Low user value rating for {callsite} "
+                        f"(mean={mean_rating:.2f}, n={count}, {days}d)"
+                    ),
+                    summary=(
+                        f"Callsite '{callsite}' has a mean user rating of "
+                        f"{mean_rating:.2f} across {count} rated turns over {days} days "
+                        f"— below the 1.5 threshold. Review prompt components or "
+                        f"response quality for this callsite."
+                    ),
+                    confidence=confidence,
+                    evidence={
+                        "prompt_callsite": callsite,
+                        "mean_rating": round(mean_rating, 4),
+                        "count": count,
+                        "window_days": days,
+                        "threshold": _RATING_THRESHOLD,
+                    },
+                    actionable=True,
+                )
+            )
+
+        log.info(
+            "low_rating_analysis_complete",
+            insights_found=len(insights),
             days=days,
         )
         return insights
@@ -968,6 +1050,7 @@ def _category_for_insight_type(insight_type: str) -> ChangeCategory:
         "feedback_category": ChangeCategory.OBSERVABILITY,
         "delegation": ChangeCategory.RELIABILITY,
         "missing_skill": ChangeCategory.ARCHITECTURE,
+        "low_rating": ChangeCategory.PERFORMANCE,  # FRE-407: per-turn value signal
     }
     return mapping.get(insight_type, ChangeCategory.OBSERVABILITY)
 
@@ -988,5 +1071,6 @@ def _scope_for_insight_type(insight_type: str) -> ChangeScope:
         "feedback_category": ChangeScope.CAPTAINS_LOG,
         "delegation": ChangeScope.ORCHESTRATOR,
         "missing_skill": ChangeScope.TOOLS,
+        "low_rating": ChangeScope.ORCHESTRATOR,  # FRE-407: prompt quality is orchestrator-owned
     }
     return mapping.get(insight_type, ChangeScope.CROSS_CUTTING)

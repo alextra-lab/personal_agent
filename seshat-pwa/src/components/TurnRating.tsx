@@ -53,6 +53,12 @@ interface TurnRatingProps {
   traceId: string;
   /** Session that owns the turn — enforced server-side for ownership. */
   sessionId: string;
+  /**
+   * Previously-submitted 0–3 score, hydrated from history (FRE-426). When
+   * present the control renders solid (rated); when undefined it renders the
+   * faint unrated default.
+   */
+  initialRating?: number;
 }
 
 /**
@@ -71,12 +77,12 @@ interface TurnRatingProps {
  *   traceId:   Trace ID of the assistant turn to rate.
  *   sessionId: Owning session ID, forwarded to the rating endpoint.
  */
-export function TurnRating({ traceId, sessionId }: TurnRatingProps) {
+export function TurnRating({ traceId, sessionId, initialRating }: TurnRatingProps) {
   /**
    * null = no rating submitted yet (visually defaults to 2, not persisted).
-   * number = persisted score sent to the backend.
+   * number = persisted score (hydrated from history or set by the user).
    */
-  const [persisted, setPersisted] = useState<number | null>(null);
+  const [persisted, setPersisted] = useState<number | null>(initialRating ?? null);
   /** Optimistic selection while the request is in-flight. */
   const [optimistic, setOptimistic] = useState<number | null>(null);
   /** Drives the pulse animation on successful confirmation. */

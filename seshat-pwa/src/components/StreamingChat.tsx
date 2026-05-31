@@ -145,6 +145,9 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
             // rating control renders on every past assistant turn, not just the
             // live one (the DONE handler only stamps the most recent message).
             complete: true,
+            // FRE-426: seed the previously-submitted rating so a rated turn
+            // renders solid (vs faint default) across reloads.
+            rating: m.rating,
           })),
         );
       })

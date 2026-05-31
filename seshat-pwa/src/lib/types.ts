@@ -156,6 +156,12 @@ export interface ChatMessage {
    * Never set mid-stream; always false/absent for user messages.
    */
   complete?: boolean;
+  /**
+   * Previously-submitted 0–3 rating for this turn, hydrated from history
+   * (FRE-426). Undefined when the turn has not been rated. Seeds TurnRating
+   * so a rated turn renders solid (vs the faint default) across reloads.
+   */
+  rating?: number;
 }
 
 /** Execution profile — determines which model the backend uses. */

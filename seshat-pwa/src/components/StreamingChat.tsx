@@ -141,6 +141,10 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
             content: m.content,
             timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
             traceId: m.trace_id,
+            // FRE-407: hydrated history is already complete — mark it so the
+            // rating control renders on every past assistant turn, not just the
+            // live one (the DONE handler only stamps the most recent message).
+            complete: true,
           })),
         );
       })

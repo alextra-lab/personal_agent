@@ -298,6 +298,8 @@ export function useSSEStream(): UseSSEStreamReturn {
               content: m.content,
               timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
               traceId: m.trace_id,
+              // FRE-407: hydrated history is complete → rating control renders.
+              complete: true,
             }));
             setMessages(hydrated);
           });

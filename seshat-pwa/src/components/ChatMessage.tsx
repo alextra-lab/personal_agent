@@ -105,9 +105,13 @@ export function ChatMessage({ message, sessionId }: ChatMessageProps) {
         <span className="text-xs text-slate-600 ml-auto">
           {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </span>
-        {/* TurnRating — hover-reveal beside copy button, gated on completion (FRE-407). */}
+        {/* TurnRating — persistent beside copy button, gated on completion (FRE-407). */}
         {showRating && (
-          <TurnRating traceId={message.traceId!} sessionId={sessionId!} />
+          <TurnRating
+            traceId={message.traceId!}
+            sessionId={sessionId!}
+            initialRating={message.rating}
+          />
         )}
         <CopyButton content={message.content} />
       </div>

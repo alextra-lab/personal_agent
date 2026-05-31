@@ -239,7 +239,61 @@ async def get_session_messages(
     messages: list[dict[str, Any]] = list(session.messages or [])
     if limit > 0:
         messages = messages[-limit:]
+
+    # FRE-426: attach each assistant turn's stored rating so the PWA can render
+    # the rating control with the user's previously-submitted score (and the
+    # rated-vs-default visual state) across reloads.
+    es_client = getattr(request.app.state, "es_client", None)
+    await _attach_turn_ratings(messages, es_client, ctx_trace_id=ctx.trace_id)
     return messages
+
+
+async def _attach_turn_ratings(
+    messages: list[dict[str, Any]],
+    es_client: Any | None,
+    *,
+    ctx_trace_id: str,
+) -> None:
+    """Annotate assistant messages with their stored rating (FRE-426).
+
+    Joins ``user-turn-ratings-*`` by ``trace_id`` in a single query and sets
+    ``rating`` on each matching message. Best-effort: on ES miss/unavailable
+    the messages are returned unannotated (the control falls back to its
+    unrated default).
+
+    Args:
+        messages: Message dicts to annotate in place.
+        es_client: AsyncElasticsearch client from app state, or None.
+        ctx_trace_id: Request trace ID for log correlation.
+    """
+    if es_client is None:
+        return
+    trace_ids = [
+        str(m["trace_id"]) for m in messages if m.get("role") == "assistant" and m.get("trace_id")
+    ]
+    if not trace_ids:
+        return
+    try:
+        resp = await es_client.search(
+            index="user-turn-ratings-*",
+            query={"terms": {"trace_id": trace_ids}},
+            size=len(trace_ids),
+            _source=["trace_id", "rating"],
+        )
+    except Exception:
+        log.warning("session_messages_rating_join_failed", trace_id=ctx_trace_id)
+        return
+    by_trace: dict[str, int] = {}
+    for hit in resp.get("hits", {}).get("hits", []):
+        src = hit.get("_source", {})
+        tid = src.get("trace_id")
+        rating = src.get("rating")
+        if isinstance(tid, str) and isinstance(rating, int):
+            by_trace[tid] = rating
+    for m in messages:
+        tid = m.get("trace_id")
+        if isinstance(tid, str) and tid in by_trace:
+            m["rating"] = by_trace[tid]
 
 
 @router.patch("/{session_id}")

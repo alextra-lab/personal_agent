@@ -394,6 +394,8 @@ export interface ServerMessage {
   timestamp?: string;
   trace_id?: string;
   metadata?: Record<string, unknown>;
+  /** Previously-submitted 0–3 rating, joined from user-turn-ratings (FRE-426). */
+  rating?: number;
 }
 
 /**

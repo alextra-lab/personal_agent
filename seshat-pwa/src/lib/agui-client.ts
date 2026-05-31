@@ -385,6 +385,11 @@ export interface SessionSummary {
   execution_profile: ExecutionProfile;
   message_count: number;
   title: string | null;
+  /** Current context size + window for status-bar hydration (FRE-426). */
+  context_tokens?: number;
+  context_max?: number;
+  /** Accumulated session cost in USD for status-bar hydration (FRE-426). */
+  cost_usd?: number;
 }
 
 /** A single persisted message from GET /api/v1/sessions/{id}/messages. */

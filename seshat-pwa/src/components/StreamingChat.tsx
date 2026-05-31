@@ -112,6 +112,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     sendConstraintDecision,
     sendUserCancel,
     seedMessages,
+    seedTurnStatus,
   } = useSSEStream();
 
   // Reconcile the pill when the server broadcasts a profile change to the
@@ -168,6 +169,17 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
         if (typeof window !== 'undefined') {
           localStorage.setItem(PROFILE_STORAGE_KEY, s.execution_profile);
         }
+        // FRE-426: seed the status bar so context + cost show on mount/switch,
+        // before the first live turn_status. Corrected by the next turn.
+        if (s.context_tokens !== undefined && s.context_max !== undefined) {
+          seedTurnStatus({
+            context_tokens: s.context_tokens,
+            context_max: s.context_max,
+            tool_iteration: 0,
+            tool_iteration_max: 6,
+            turn_cost_usd: s.cost_usd ?? 0,
+          });
+        }
       })
       .catch(() => {
         // Keep the cached pill on a transient fetch error.
@@ -176,7 +188,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, seedMessages]);
+  }, [sessionId, seedMessages, seedTurnStatus]);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   useEffect(() => {

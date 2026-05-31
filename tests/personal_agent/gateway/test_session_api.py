@@ -159,6 +159,8 @@ def test_list_sessions_503_when_no_factory() -> None:
 def test_get_session_found() -> None:
     """GET /sessions/{id} returns 200 with session dict, scoped by user_id."""
     db_session = AsyncMock()
+    # FRE-426: get_session now sums api_costs via raw SQL — mock the cost query.
+    db_session.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=0.0)))
     sid = str(uuid4())
     session_model = _make_session_model(session_id=sid)
 
@@ -370,6 +372,8 @@ _EMIT_PROFILE = "personal_agent.transport.agui.transport.emit_session_profile"
 def test_get_session_includes_execution_profile() -> None:
     """GET /sessions/{id} surfaces the server-owned execution profile."""
     db_session = AsyncMock()
+    # FRE-426: get_session now sums api_costs via raw SQL — mock the cost query.
+    db_session.execute = AsyncMock(return_value=MagicMock(scalar=MagicMock(return_value=0.0)))
     sid = str(uuid4())
     session_model = _make_session_model(session_id=sid, execution_profile="cloud")
 

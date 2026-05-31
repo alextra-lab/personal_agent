@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v18-rating-hydrate';
+const CACHE_NAME = 'seshat-v19-status-hydrate';
 
 const PRECACHE_URLS = [
   '/',

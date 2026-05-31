@@ -77,6 +77,7 @@ export interface UseSSEStreamReturn {
   clearMessages: () => void;
   /** Replace the message list with a server-hydrated history. */
   seedMessages: (msgs: ChatMessage[]) => void;
+  seedTurnStatus: (status: TurnStatus) => void;
 }
 
 // --------------------------------------------------------------------------
@@ -500,6 +501,12 @@ export function useSSEStream(): UseSSEStreamReturn {
     maxHandledSeqRef.current = 0;
   }, []);
 
+  // FRE-426: seed the status bar from server state on mount/switch so the
+  // context + cost meters are populated before the first live turn_status.
+  const seedTurnStatus = useCallback((status: TurnStatus) => {
+    setTurnStatus(status);
+  }, []);
+
   return {
     messages,
     isStreaming,
@@ -522,5 +529,6 @@ export function useSSEStream(): UseSSEStreamReturn {
     disconnect,
     clearMessages,
     seedMessages,
+    seedTurnStatus,
   };
 }

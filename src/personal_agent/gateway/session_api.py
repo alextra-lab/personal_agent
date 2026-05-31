@@ -178,7 +178,28 @@ async def get_session(
     session = await repo.get(uuid, user_id=user_id)
     if session is None:
         raise not_found("session")
-    return _session_to_dict(session)
+
+    result = _session_to_dict(session)
+    # FRE-426: server-authoritative context + cost so the PWA status bar is
+    # populated on mount / session switch — before the first turn_status of the
+    # next turn (kills the "blank meters until I run a turn" gap).
+    from sqlalchemy import text as _sql_text  # noqa: PLC0415
+
+    from personal_agent.orchestrator.context_window import (  # noqa: PLC0415
+        estimate_messages_tokens,
+    )
+    from personal_agent.orchestrator.executor import _resolve_context_max  # noqa: PLC0415
+
+    result["context_tokens"] = estimate_messages_tokens(list(session.messages or []))
+    result["context_max"] = _resolve_context_max()
+    cost_scalar = (
+        await db.execute(
+            _sql_text("SELECT COALESCE(SUM(cost_usd), 0) FROM api_costs WHERE session_id = :sid"),
+            {"sid": uuid},
+        )
+    ).scalar()
+    result["cost_usd"] = float(cost_scalar or 0.0)
+    return result
 
 
 @router.get("/{session_id}/messages")

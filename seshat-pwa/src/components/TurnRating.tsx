@@ -58,9 +58,9 @@ interface TurnRatingProps {
 /**
  * Compact 4-segment value-rating meter.
  *
- * Follows the CopyButton hover-reveal pattern: `opacity-0 group-hover:opacity-100
- * focus-within:opacity-100 transition-opacity`. Placed beside the copy button
- * in the assistant message footer.
+ * Persistently visible in the assistant message footer (NOT hover-gated like
+ * the copy button) — the rating is a primary affordance the user engages every
+ * turn, and a hover-reveal made it invisible on resize and on touch devices.
  *
  * Default display: segment 2 ("Meets expectation", sky-400) renders filled
  * before any interaction. This is purely visual — no POST is issued until
@@ -121,7 +121,7 @@ export function TurnRating({ traceId, sessionId }: TurnRatingProps) {
 
   return (
     <div
-      className="opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity flex items-center gap-0.5"
+      className="flex items-center gap-0.5"
       aria-label="Rate this response"
     >
       {RATING_META.map((meta, index) => {

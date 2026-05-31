@@ -148,8 +148,14 @@ export interface ChatMessage {
   timestamp: Date;
   /** Tool calls associated with this assistant turn. */
   toolCalls?: ToolCall[];
-  /** Trace ID from the backend, populated when hydrating from history. */
+  /** Trace ID from the backend, populated on DONE event or when hydrating from history. */
   traceId?: string;
+  /**
+   * True once the DONE event has been received for this assistant turn.
+   * Gates rendering of post-completion controls (e.g. TurnRating).
+   * Never set mid-stream; always false/absent for user messages.
+   */
+  complete?: boolean;
 }
 
 /** Execution profile — determines which model the backend uses. */

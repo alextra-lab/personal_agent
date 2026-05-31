@@ -369,19 +369,27 @@ class DataLifecycleManager:
             log.debug("lifecycle_es_cleanup_skipped", reason="no_es_client")
             return ESCleanupResult(deleted_indices=[], deleted_count=0)
 
+        from datetime import timedelta
+
         settings = get_settings()
-        cutoff = datetime.now(timezone.utc) - policy.cold_duration
-        prefixes = [
-            settings.elasticsearch_index_prefix,  # agent-logs
-            "agent-captains-captures",
-            "agent-captains-reflections",
+        now = datetime.now(timezone.utc)
+        default_cutoff = now - policy.cold_duration
+        # Per-prefix cutoff overrides: user-turn-ratings keep 90 days of
+        # ground-truth labels (longer than operational logs). All other
+        # prefixes use the elasticsearch_logs retention policy cutoff.
+        prefix_cutoffs: list[tuple[str, datetime]] = [
+            (settings.elasticsearch_index_prefix, default_cutoff),  # agent-logs
+            ("agent-captains-captures", default_cutoff),
+            ("agent-captains-reflections", default_cutoff),
+            ("user-turn-ratings", now - timedelta(days=90)),  # FRE-407: 90-day retention
         ]
+        all_prefixes = [p for p, _ in prefix_cutoffs]
         deleted: list[str] = []
         errors: list[str] = []
 
         try:
             cat = await self._es_client.cat.indices(
-                index=",".join(f"{p}*" for p in prefixes), format="json"
+                index=",".join(f"{p}*" for p in all_prefixes), format="json"
             )
             for idx in cat:
                 index_name = idx.get("index", "")
@@ -399,7 +407,15 @@ class DataLifecycleManager:
                         break
                     except ValueError:
                         continue
-                if dt is None or dt >= cutoff:
+                if dt is None:
+                    continue
+                # Resolve the cutoff for this index by matching its prefix.
+                cutoff = default_cutoff
+                for prefix, prefix_cutoff in prefix_cutoffs:
+                    if index_name.startswith(prefix):
+                        cutoff = prefix_cutoff
+                        break
+                if dt >= cutoff:
                     continue
                 try:
                     await self._es_client.indices.delete(index=index_name)

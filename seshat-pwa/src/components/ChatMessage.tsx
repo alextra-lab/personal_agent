@@ -4,9 +4,12 @@ import { useState } from 'react';
 
 import type { ChatMessage as ChatMessageType, ToolCall } from '@/lib/types';
 import { MarkdownContent } from './MarkdownContent';
+import { TurnRating } from './TurnRating';
 
 interface ChatMessageProps {
   message: ChatMessageType;
+  /** Session ID forwarded to TurnRating for ownership scoping (FRE-407). */
+  sessionId?: string;
 }
 
 function ToolCallBadge({ tool }: { tool: ToolCall }) {
@@ -70,8 +73,18 @@ function CopyButton({ content }: { content: string }) {
  * User messages have a subtle background tint for visual distinction.
  * Assistant messages render markdown with syntax-highlighted code blocks.
  */
-export function ChatMessage({ message }: ChatMessageProps) {
+export function ChatMessage({ message, sessionId }: ChatMessageProps) {
   const isUser = message.role === 'user';
+
+  // Gate: show TurnRating only for completed assistant turns with a traceId.
+  // Never renders mid-stream (complete is only set on DONE) or for user messages.
+  const showRating =
+    !isUser &&
+    message.complete === true &&
+    typeof message.traceId === 'string' &&
+    message.traceId.length > 0 &&
+    typeof sessionId === 'string' &&
+    sessionId.length > 0;
 
   return (
     <div className={`group px-4 py-5 border-b border-slate-800/60 ${isUser ? 'bg-slate-800/40' : ''}`}>
@@ -92,6 +105,10 @@ export function ChatMessage({ message }: ChatMessageProps) {
         <span className="text-xs text-slate-600 ml-auto">
           {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </span>
+        {/* TurnRating — hover-reveal beside copy button, gated on completion (FRE-407). */}
+        {showRating && (
+          <TurnRating traceId={message.traceId!} sessionId={sessionId!} />
+        )}
         <CopyButton content={message.content} />
       </div>
 

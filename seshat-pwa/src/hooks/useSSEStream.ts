@@ -303,6 +303,22 @@ export function useSSEStream(): UseSSEStreamReturn {
       case 'DONE': {
         setIsStreaming(false);
         setActiveTools([]);
+        // Stamp trace_id + complete onto the last assistant message so
+        // TurnRating can render. event.trace_id is the join key for the
+        // user-turn-ratings-* index (FRE-407).
+        if (event.trace_id) {
+          const traceId = event.trace_id;
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            if (last?.role === 'assistant') {
+              return [
+                ...prev.slice(0, -1),
+                { ...last, traceId, complete: true },
+              ];
+            }
+            return prev;
+          });
+        }
         break;
       }
     }

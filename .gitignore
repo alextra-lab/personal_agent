@@ -52,6 +52,9 @@ telemetry/captains_log/es_backfill_checkpoint.json
 telemetry/feedback_history/
 telemetry/feedback_poller_state.json
 
+# FRE-407 per-turn rating audit logs (runtime NDJSON — must never be committed)
+telemetry/user_feedback/
+
 # FRE-380 daily soak measurement outputs (regeneratable; ephemeral)
 telemetry/soak/
 

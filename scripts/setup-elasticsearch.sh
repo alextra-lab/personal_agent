@@ -101,6 +101,14 @@ put_resource "Index template: slm-requests-template" \
   "/_index_template/slm-requests-template" \
   "$PROJECT_ROOT/docker/elasticsearch/slm-requests-index-template.json"
 
+# 7. Per-turn user value ratings template (FRE-407). dynamic:false keeps
+#    prompt_component_ids as keyword (array) so mean-by-component aggregations
+#    work. Retention: 90 days — ground-truth labels are worth keeping longer
+#    than operational logs. Re-rate overwrites the doc (doc_id=trace_id).
+put_resource "Index template: user-turn-ratings-template" \
+  "/_index_template/user-turn-ratings-template" \
+  "$PROJECT_ROOT/docker/elasticsearch/user-turn-ratings-index-template.json"
+
 # 7. Initial write-alias index — only create if absent. The HEAD probe uses
 #    `-f` so a 404 is reported as a non-fatal exit; we then PUT.
 echo "Bootstrap write-alias index: agent-logs-000001"

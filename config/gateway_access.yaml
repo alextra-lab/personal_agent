@@ -36,6 +36,7 @@ tokens:
       - sessions:read
       - sessions:write  # ADR-0079: PATCH session execution profile
       - observations:read
+      - feedback:write  # FRE-407: per-turn user value rating
     rate_limit: 200
 
   - name: external-agent

@@ -1,0 +1,30 @@
+{
+  "index_patterns": ["user-turn-ratings-*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.codec": "best_compression",
+      "index.refresh_interval": "5s"
+    },
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "trace_id":                  { "type": "keyword" },
+        "session_id":                { "type": "keyword" },
+        "rating":                    { "type": "integer" },
+        "prompt_callsite":           { "type": "keyword" },
+        "prompt_static_prefix_hash": { "type": "keyword" },
+        "prompt_dynamic_hash":       { "type": "keyword" },
+        "prompt_component_ids":      { "type": "keyword" },
+        "rated_at":                  { "type": "date" }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Per-turn user value ratings (FRE-407). One doc per assistant turn keyed on trace_id — re-rate overwrites. prompt_* fields are best-effort write-time denorms from agent-logs-* model_call_completed; nulls are recovered at read time by the Insights consumer. dynamic:false prevents prompt_component_ids from drifting to text. Retention: 90 days (ground-truth labels). Managed by scripts/setup-elasticsearch.sh.",
+    "managed_by": "scripts/setup-elasticsearch.sh",
+    "retention_days": 90
+  }
+}

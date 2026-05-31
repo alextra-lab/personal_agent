@@ -10,7 +10,7 @@ This module defines the core types used by the LLM clients:
 from enum import Enum
 from typing import Any
 
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 
 class ModelRole(str, Enum):
@@ -72,6 +72,9 @@ class LLMResponse(TypedDict):
         usage: Token usage information (prompt_tokens, completion_tokens, etc.).
         response_id: Response ID from /v1/responses API (for stateful conversation).
         raw: Raw response from the backend for debugging.
+        cost_usd: Per-call cost in USD. Populated on paid (cloud) calls so the
+            executor can accumulate ``turn_cost_usd`` for the live status bar;
+            omitted on self-hosted (free) local calls (read as 0.0 by callers).
     """
 
     role: str  # "assistant"
@@ -81,6 +84,7 @@ class LLMResponse(TypedDict):
     usage: dict[str, Any]
     response_id: str | None
     raw: dict[str, Any]
+    cost_usd: NotRequired[float]
 
 
 class LLMStreamEvent(TypedDict):

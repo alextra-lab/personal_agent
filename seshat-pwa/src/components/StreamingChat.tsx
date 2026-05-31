@@ -77,7 +77,11 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
       if (!sessionId) return;
       // ADR-0079 / FRE-419: the toggle is a server-side write. Revert the pill
       // if the write fails so the UI never diverges from the server.
-      void setSessionProfile(sessionId, p).catch((err) => {
+      void setSessionProfile(sessionId, p).catch((err: unknown) => {
+        // 404 = session not in DB yet (new session, no messages sent). The profile
+        // is already in localStorage and will be sent with the first message —
+        // no revert needed.
+        if (err instanceof Error && err.message.includes('404')) return;
         console.error('Failed to set session profile; reverting', err);
         setProfile(previous);
         if (typeof window !== 'undefined') {
@@ -290,7 +294,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
         ) : (
           <>
             {messages.map((msg) => (
-              <ChatMessage key={msg.id} message={msg} />
+              <ChatMessage key={msg.id} message={msg} sessionId={sessionId} />
             ))}
             {isStreaming && (
               <div className="px-4 py-5 border-b border-slate-800/60">

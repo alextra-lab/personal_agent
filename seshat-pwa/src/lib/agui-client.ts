@@ -28,7 +28,7 @@ export const SESHAT_API =
 const GATEWAY_TOKEN = process.env.NEXT_PUBLIC_GATEWAY_TOKEN ?? '';
 
 /** Returns auth headers when a token is configured; empty object otherwise. */
-function authHeaders(): Record<string, string> {
+export function authHeaders(): Record<string, string> {
   return GATEWAY_TOKEN ? { Authorization: `Bearer ${GATEWAY_TOKEN}` } : {};
 }
 

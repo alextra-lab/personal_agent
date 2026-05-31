@@ -90,6 +90,10 @@ export function TurnRating({ traceId, sessionId }: TurnRatingProps) {
    */
   const VISUAL_DEFAULT = 2;
   const currentRating = optimistic ?? persisted ?? VISUAL_DEFAULT;
+  // Distinguish "showing the default" from "the user actually rated this".
+  // Unrated → faint (light blue); explicitly rated → solid (darker). Gives the
+  // user a clear at-a-glance indicator of which turns they've scored.
+  const isExplicit = (optimistic ?? persisted) !== null;
 
   const handleRate = useCallback(
     async (rating: number) => {
@@ -121,8 +125,11 @@ export function TurnRating({ traceId, sessionId }: TurnRatingProps) {
 
   return (
     <div
-      className="flex items-center gap-0.5"
-      aria-label="Rate this response"
+      className={`flex items-center gap-0.5 transition-opacity ${
+        isExplicit ? 'opacity-100' : 'opacity-40 hover:opacity-70'
+      }`}
+      title={isExplicit ? 'You rated this turn — click to change' : 'Not yet rated — click to rate'}
+      aria-label={isExplicit ? 'Rated — change your rating' : 'Rate this response'}
     >
       {RATING_META.map((meta, index) => {
         const isFilled = currentRating !== null && index <= currentRating;

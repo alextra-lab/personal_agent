@@ -201,7 +201,7 @@ async def wait_for_trace(
         "query": {
             "bool": {
                 "must": [
-                    {"term": {"trace_id.keyword": trace_id}},
+                    {"term": {"trace_id": trace_id}},
                     {"term": {"event_type": "model_call_completed"}},
                 ]
             }
@@ -263,7 +263,7 @@ async def fetch_turn_metric(
         "query": {
             "bool": {
                 "must": [
-                    {"term": {"trace_id.keyword": trace_id}},
+                    {"term": {"trace_id": trace_id}},
                     {"term": {"event_type": "model_call_completed"}},
                     {"term": {"role": "primary"}},
                 ]
@@ -274,15 +274,27 @@ async def fetch_turn_metric(
     r = await _es_search(client, es_url, index, body)
     hits = [h["_source"] for h in r["hits"]["hits"]]
 
+    # Backend-aware "full-context" size: local reports the full prompt as
+    # input_tokens; Anthropic reports only the UNCACHED portion as input_tokens
+    # and the reused prefix as cache_read (cold prefixes show up as
+    # cache_creation). So a cross-turn cloud call has small input_tokens but large
+    # cache_read — key on the max of the three so we don't skip it for the tiny
+    # intent/router call.
+    def _context_size(s: dict[str, Any]) -> int:
+        return max(
+            s.get("input_tokens") or 0,
+            s.get("cache_read_tokens") or 0,
+            s.get("cache_creation_input_tokens") or 0,
+        )
+
     chosen: dict[str, Any] | None = None
     for src in hits:
-        tok = src.get("input_tokens") or 0
-        if tok >= min_prompt_tokens:
+        if _context_size(src) >= min_prompt_tokens:
             chosen = src
             break
     if chosen is None and hits:
         # No full-context call met the threshold; fall back to the largest.
-        chosen = max(hits, key=lambda s: s.get("input_tokens") or 0)
+        chosen = max(hits, key=_context_size)
 
     src = chosen or {}
     return TurnMetric(
@@ -386,8 +398,64 @@ def render_markdown(run_meta: dict[str, Any], metrics: list[TurnMetric]) -> str:
     return "\n".join(lines)
 
 
+async def reextract(args: argparse.Namespace) -> int:
+    """Re-extract metrics for an existing pass JSON without re-driving /chat.
+
+    Reads the trace ids from a prior result file and re-runs the (now-corrected)
+    ES extraction over the already-recorded traces, rewriting the .json/.md. Used
+    to recover a pass after a harness fix without spending more model calls.
+
+    Args:
+        args: Parsed CLI args; ``args.reextract`` is the source JSON path.
+
+    Returns:
+        Process exit code.
+    """
+    settings = get_settings()
+    es_url = settings.elasticsearch_url.rstrip("/")
+    index = f"{settings.elasticsearch_index_prefix}-*"
+    src = json.loads(Path(args.reextract).read_text())
+    run_meta = dict(src["meta"])
+    run_meta["reextracted_at"] = datetime.now(timezone.utc).isoformat()
+
+    all_metrics: list[TurnMetric] = []
+    async with httpx.AsyncClient() as es:
+        for m in src["metrics"]:
+            metric = await fetch_turn_metric(
+                es,
+                es_url,
+                index,
+                str(m["trace_id"]),
+                str(m["session_label"]),
+                int(m["turn_index"]),
+                str(m.get("session_id", "")),
+                args.min_prompt_tokens,
+            )
+            all_metrics.append(metric)
+            log.info(
+                "reextract_turn",
+                session=metric.session_label,
+                turn=metric.turn_index,
+                cache_read=metric.cache_read_tokens,
+                input_tokens=metric.input_tokens,
+                cache_create=metric.cache_creation_input_tokens,
+            )
+
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stem = f"{run_meta['run_id']}_{run_meta['arm']}_{run_meta['profile']}"
+    (out_dir / f"{stem}.json").write_text(
+        json.dumps({"meta": run_meta, "metrics": [asdict(m) for m in all_metrics]}, indent=2)
+    )
+    (out_dir / f"{stem}.md").write_text(render_markdown(run_meta, all_metrics))
+    log.info("reextract_written", out=str(out_dir / f"{stem}.md"), turns=len(all_metrics))
+    return 0
+
+
 async def amain(args: argparse.Namespace) -> int:
     """Drive the dataset and write the pass results."""
+    if args.reextract:
+        return await reextract(args)
     settings = get_settings()
     es_url = settings.elasticsearch_url.rstrip("/")
     index = f"{settings.elasticsearch_index_prefix}-*"
@@ -468,6 +536,12 @@ def main() -> int:
     )
     p.add_argument(
         "--trace-timeout-s", type=float, default=60.0, help="Per-turn ES indexing wait timeout."
+    )
+    p.add_argument(
+        "--reextract",
+        default=None,
+        help="Path to a prior pass JSON: re-run ES extraction over its trace ids "
+        "(no /chat traffic) and rewrite the result. For recovering a pass after a harness fix.",
     )
     args = p.parse_args()
     return asyncio.run(amain(args))

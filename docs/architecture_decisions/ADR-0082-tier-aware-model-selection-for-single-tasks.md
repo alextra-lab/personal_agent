@@ -53,20 +53,29 @@ The tier decision is made from the signals Stage 4 (intent → `TaskType`) and t
 |----------|-----------|------|-----------|
 | `CONVERSATIONAL` | any | **`sub_agent`** | chat/social — no reasoning or tools needed |
 | `MEMORY_RECALL` | any | **`sub_agent`** | retrieval + restatement; thinking adds latency, not quality |
-| `TOOL_USE` | simple | **`sub_agent`** | `sub_agent` has native function-calling; single-shot tool calls don't need thinking |
+| `TOOL_USE` | **gated** (see below) | `sub_agent` *only if* single-shot | the cell is **not** monolithic — needs a tool-depth gate that doesn't exist yet |
 | `ANALYSIS` / `PLANNING` | simple | `primary` *(conservative default)* | borderline; keep on thinking tier until eval says otherwise |
 | `ANALYSIS` / `PLANNING` | moderate+ | (already HYBRID/DECOMPOSE) | unchanged |
 | `SELF_IMPROVE` | any | `primary` | reflection quality matters |
 
-This is the **conservative** cut: it moves the two unambiguous non-thinking classes (`CONVERSATIONAL`, `MEMORY_RECALL`) plus simple `TOOL_USE` — roughly **the 83 %** — off the thinking tier, and leaves everything with reasoning value on `primary`. The exact boundaries are the open decision; the mapping is data-gated on the FRE-407 quality trace, not asserted.
+This is the **conservative** cut: it moves the two unambiguous non-thinking classes (`CONVERSATIONAL`, `MEMORY_RECALL`) — the bulk of the 83 % — off the thinking tier, and leaves everything with reasoning value on `primary`. The exact boundaries are the open decision; the mapping is data-gated on the FRE-407 quality trace, not asserted.
+
+**The `TOOL_USE` cell is the dangerous one and is deliberately left gated, not routed.** Stage 5 marks *all* `TOOL_USE` as `SINGLE` (`decomposition.py:102`) with **no distinction between a single-shot lookup and a multi-step tool investigation**, and the executor offers every mode-allowed tool on every non-synthesis turn regardless of task type (`executor.py:2142-2151`). So a blanket "`TOOL_USE` → `sub_agent`" would send arbitrarily deep, non-thinking tool loops to a thinking-disabled model — a real quality risk the mapping must not paper over. `TOOL_USE` → `sub_agent` is therefore **conditional on a tool-depth/complexity gate that does not exist today** (expected tool-call depth, multi-hop sub-goal detection). Designing that gate is an open decision of this ADR, not a deferred detail; **until it exists, `TOOL_USE` stays on `primary`.**
 
 ### D3 — Escalation path (instruct → thinking)
 
-`sub_agent` selection must be **reversible within the turn**, not a trap. Reuse the existing role-escalation muscle: if a `sub_agent`-routed turn (a) hits its tool-iteration limit without converging, (b) errors/times out, or (c) the model itself signals it needs to reason, escalate the *same* turn to `primary` and re-run. The instruct tier is the optimistic default; the thinking tier is the fallback. This bounds the worst case to "instruct attempt + primary attempt" and prevents quality regressions from a misclassification.
+`sub_agent` selection must be **reversible within the turn**, not a trap: if a `sub_agent`-routed turn (a) hits its tool-iteration limit without converging, (b) errors/times out, or (c) the model itself signals it needs to reason, escalate the *same* turn to `primary` and re-run. The instruct tier is the optimistic default; the thinking tier is the fallback, bounding the worst case to "instruct attempt + primary attempt."
 
-### D4 — Concurrency dividend
+**This is a non-trivial implementation dependency, not a config flag — call it out honestly.** There is no instruct→primary retry path in the executor today; a no-tool response goes straight to synthesis (`executor.py:2532`) and the loop preserves the last LLM role (`executor.py:3260`). A mid-turn model switch must, at minimum:
+- **Scope `ctx.last_response_id` per model.** It is set from the prior response (`executor.py:2357`) and fed into the next call (`executor.py:2347`); reusing a `sub_agent` response id against a `primary` call is unsafe and must be cleared/scoped on escalation.
+- **Gate synthesis and preserve partial tool state** so the escalated `primary` re-run sees the right conversation prefix without double-applying the instruct attempt's tool calls.
+- **Avoid cost-gate double-charging** for the two inferences in one turn (see Consequences — both tiers currently bill to one budget class).
 
-Routing the conversational/recall bulk to `sub_agent` (`max_concurrency: 3`) **unblocks the single `primary` slot** for turns that actually reason. This is a throughput win independent of the per-turn cost saving: fewer trivial turns queued head-of-line in front of reasoning turns. (Note the local SLM server's concurrency limits — ADR-0033, models.yaml — govern how much of this is realizable on the single-GPU host vs a cloud profile.)
+The exact re-run semantics (reuse vs discard the instruct partial) are an open decision; the point here is that D3 owns real state surgery and must be costed as such, not assumed cheap.
+
+### D4 — Concurrency dividend (cloud/multi-slot only — not the single-GPU default)
+
+Where the two tiers have **separate inference capacity**, routing the conversational/recall bulk to `sub_agent` (`max_concurrency: 3`) frees the single `primary` slot for turns that actually reason — a throughput win independent of the per-turn cost saving. **This does not hold on the single-GPU local host:** `primary` and `sub_agent` share one llama-server endpoint served single-threaded, so the dividend is near-zero locally and is real only on a cloud profile or a second local slot. Claim it conditionally, not by default (see Consequences).
 
 ---
 
@@ -76,6 +85,7 @@ Routing the conversational/recall bulk to `sub_agent` (`max_concurrency: 3`) **u
 - **Escalation triggers (D3).** Exact conditions for instruct→primary re-run, and whether a re-run reuses or discards the instruct partial. Tradeoff: aggressive escalation protects quality but erodes the cost win.
 - **Quality floor.** The non-negotiable: mean per-turn rating for any tier-routed class must not regress vs the all-primary baseline. Define the regression threshold before rollout.
 - **Interaction with skill routing.** With `prefer_primitives_enabled=ON`, `sub_agent` turns inherit the skill index (executor.py:2423-2432). Confirm the instruct tier uses `read_skill` / nudges as well as primary does, or the cost win trades against a capability loss.
+- **Governance guard interaction (must resolve before implementation).** When governance withholds expansion (ALERT/DEGRADED/LOCKDOWN/RECOVERY), Stage 5 forces `SINGLE` with reason `expansion_denied` (`decomposition.py:45`). A tier-selection axis that then routes that `SINGLE` work to `sub_agent` creates a path that invokes a second model *outside* the expansion guard that just fired. Decide explicitly: is tier-routing subject to the same `governance.expansion_permitted` gate as expansion, or independent of it? Defaulting to "gated by the same guard" is the safe call until argued otherwise.
 - **Rollout gating.** Flag-gated, class-by-class (start with `CONVERSATIONAL` only), measured on FRE-407 before widening — never a big-bang switch on a hot path.
 
 ---
@@ -83,8 +93,8 @@ Routing the conversational/recall bulk to `sub_agent` (`max_concurrency: 3`) **u
 ## Consequences
 
 **Positive**
-- ~83 % of turns become eligible for the cheaper, faster, non-thinking tier — the dominant cost/latency saving available on `SINGLE` traffic.
-- Frees the single `primary` GPU slot for turns that actually reason (throughput / head-of-line win).
+- A large share of turns (the `CONVERSATIONAL` + `MEMORY_RECALL` portion of the 83 %, plus gated `TOOL_USE`) becomes eligible for the cheaper, faster, non-thinking tier — the dominant cost/latency saving available on `SINGLE` traffic.
+- On a multi-slot / cloud profile, frees the single `primary` slot for turns that actually reason (throughput / head-of-line win — conditional, see D4).
 - Uses the `sub_agent` tier for exactly what ADR-0033 built it for; closes the "instruct model only reachable via expansion" gap.
 - Deterministic, reviewable, no new model call (D1).
 
@@ -92,7 +102,9 @@ Routing the conversational/recall bulk to `sub_agent` (`max_concurrency: 3`) **u
 - Misclassification risk: a reasoning task mis-tagged `CONVERSATIONAL` lands on the instruct tier. Mitigated by D3 escalation + the conservative D2 cut.
 - Escalation re-runs cost a second inference on the worst case — must stay rare or the win inverts.
 - Adds a routing axis to a hot path: must be flag-gated and measured (FRE-407), like every other change in this cost line.
-- The concurrency dividend is bounded by the single-GPU host; fully realized only on a multi-slot / cloud profile.
+- The concurrency dividend is **bounded by the single-GPU host and may be near-zero locally.** `primary` and `sub_agent` point at the same llama-server endpoint (`models.yaml`), which serves inference single-threaded; `sub_agent`'s `max_concurrency: 3` does nothing for one in-flight `SINGLE` request, and concurrent `SINGLE` dispatches still serialize on the backend. The throughput win (D4) is real only where the two tiers have separate inference capacity (a cloud profile, or a second local slot) — the ADR should not claim it for the single-GPU default.
+- **Cost-gate blindspot:** `primary` and `sub_agent` both map to the `main_inference` budget class (`cost_gate/__init__.py:90-91`), so the tier shift's cost saving is **invisible to budget reporting** unless cost-gate gains a per-tier breakdown. An efficiency change whose efficiency the cost gate can't see needs that reporting gap closed as part of the work — otherwise the win can't be measured where it's accounted.
+- **Double-charge exposure on escalation:** an instruct→primary re-run bills two `main_inference` inferences for one turn against the same budget class — another reason D3's re-run rate must stay bounded (and another reason to add per-tier cost visibility).
 
 ---
 

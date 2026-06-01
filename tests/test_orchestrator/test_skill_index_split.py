@@ -21,6 +21,23 @@ _BODY_MARKER = "## BODY_SENTINEL"
 _INDEX_DIRECTIVE = "<skill_index_directive>"
 
 
+@pytest.fixture(autouse=True)
+def _reset_executor_tool_registry() -> object:
+    """Reset the executor's module-level ``_tool_registry`` cache around each test.
+
+    These tests patch ``executor.get_default_registry`` to a MagicMock, and
+    ``step_llm_call`` caches its return into the module global ``_tool_registry``
+    (``executor.py`` ~line 2157). ``patch()`` restores the *function*, not the
+    assigned global, so without this reset the MagicMock leaks into later tests
+    and silently empties their tool set. Reset before and after for isolation.
+    """
+    import personal_agent.orchestrator.executor as _ex
+
+    _ex._tool_registry = None
+    yield
+    _ex._tool_registry = None
+
+
 def _make_minimal_ctx() -> object:
     from personal_agent.governance.models import Mode
     from personal_agent.orchestrator.channels import Channel

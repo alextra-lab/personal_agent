@@ -883,6 +883,102 @@ def _inline_volatile_into_last_user_message(
     return messages
 
 
+def _frozen_backend() -> str:
+    """Return the active backend (``"local"``/``"cloud"``) for the scheduler.
+
+    Defaults to ``"local"`` when the profile is unresolved — the conservative
+    choice, since local has the larger reset cost and the longer run cadence.
+    """
+    from personal_agent.config.profile import get_current_profile  # noqa: PLC0415
+
+    profile = get_current_profile()
+    return profile.provider_type if profile is not None else "local"
+
+
+def _derive_reset_inputs(messages: list[dict[str, Any]], backend: str) -> dict[str, Any]:
+    """Derive cache-reset scheduler inputs from the working history (ADR-0081 §D3).
+
+    The frozen layout's deterministic growth makes every term measurable. ``R``
+    (reset cost) and ``Δ_turn`` are first-order estimates tuned post-deploy per
+    the ADR; the ``min_run`` floor and the token ceiling are the hard operative
+    bounds, and ``Q_slope`` defaults to 0 (token-ceiling fallback) until an
+    FRE-407 trace is available to fit it.
+
+    Args:
+        messages: Current working history.
+        backend: ``"local"`` or ``"cloud"``.
+
+    Returns:
+        Keyword-argument mapping for
+        :func:`cache_reset_scheduler.should_reset`.
+    """
+    turns_held = sum(1 for m in messages if m.get("role") == "user")
+    accumulated = estimate_messages_tokens(messages)
+    delta_turn = accumulated / turns_held if turns_held else float(accumulated)
+    max_tokens = settings.context_window_max_tokens
+    if backend == "cloud":
+        min_run = settings.cache_reset_min_run_turns_cloud
+        # Cloud caches the frozen prefix; only the rewritten span re-creates.
+        reset_cost = max(delta_turn, 1.0)
+    else:
+        min_run = settings.cache_reset_min_run_turns_local
+        # Local pays a full re-prefill of the post-reset prefix (≈ tail floor).
+        reset_cost = float(int(settings.within_session_min_tail_ratio * max_tokens))
+    return {
+        "turns_since_reset": turns_held,
+        "accumulated_tokens": accumulated,
+        "accum_max_tokens": int(settings.cache_frozen_accum_max_ratio * max_tokens),
+        "min_run_turns": min_run,
+        "reset_cost_tokens": reset_cost,
+        "delta_turn_tokens": delta_turn,
+        "quality_token_weight": settings.cache_quality_token_weight,
+    }
+
+
+async def _maybe_frozen_reset(ctx: ExecutionContext) -> None:
+    """Fire a scheduled frozen-prefix reset when the scheduler decides to.
+
+    ADR-0081 §D3: when the run reaches the cost/quality optimum (or the token
+    ceiling), compact ``ctx.messages`` into ``[first user][assistant recap][K
+    verbatim turns]`` and stash the volatile salient highlights for this turn.
+    Strictly gated on ``cache_frozen_layout_enabled`` so the flag-off path is
+    byte-for-byte unchanged.
+
+    Args:
+        ctx: Execution context (``ctx.messages`` and ``ctx.salient_highlights``
+            are updated in place on a reset).
+    """
+    if not settings.cache_frozen_layout_enabled or not ctx.session_id:
+        return
+
+    from personal_agent.orchestrator.cache_reset_scheduler import should_reset  # noqa: PLC0415
+    from personal_agent.orchestrator.within_session_compression import (  # noqa: PLC0415
+        build_frozen_reset,
+    )
+
+    backend = _frozen_backend()
+    decision = should_reset(**_derive_reset_inputs(ctx.messages, backend))
+    if not decision.should_reset:
+        return
+
+    result = await build_frozen_reset(
+        ctx.messages,
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+    )
+    ctx.messages = result.messages
+    ctx.salient_highlights = result.salient_highlights
+    log.info(
+        "frozen_reset_fired",
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        backend=backend,
+        reason=decision.reason,
+        optimal_run_length=decision.optimal_run_length,
+        output_messages=len(result.messages),
+    )
+
+
 def _fallback_reply_from_tool_results(ctx: ExecutionContext, *, lead: str | None = None) -> str:
     """Build a safe, user-facing reply when the model fails to synthesize after tools.
 
@@ -1620,7 +1716,16 @@ async def step_init(
         timer.start_span("context_window")
     try:
         # Retrieve pre-computed compression summary if available (ADR-0038).
-        _summary = compression_manager.get_summary(ctx.session_id) if ctx.session_id else None
+        # ADR-0081 §D3 Decision 4: under the frozen layout the transient
+        # re-derivation (re-inserting a popped summary at a fixed index every
+        # turn) is itself a cache-buster and is removed — compaction becomes the
+        # scheduled reset below. apply_context_window then keeps only its pure
+        # truncation role.
+        _summary = (
+            compression_manager.get_summary(ctx.session_id)
+            if ctx.session_id and not settings.cache_frozen_layout_enabled
+            else None
+        )
 
         ctx.messages = apply_context_window(
             ctx.messages,
@@ -1630,6 +1735,13 @@ async def step_init(
             session_id=ctx.session_id,
             compressed_summary=_summary,
         )
+
+        # ADR-0081 §D3: cache-aware compaction scheduler. When the run reaches the
+        # cost/quality optimum (or the token ceiling), compact to a frozen reset
+        # that re-establishes a reusable prefix; otherwise hold (history stays a
+        # strict forward extension). No-op when the flag is off.
+        await _maybe_frozen_reset(ctx)
+
         estimated_tokens = estimate_messages_tokens(ctx.messages)
     finally:
         if timer:
@@ -2332,8 +2444,10 @@ async def step_llm_call(
             # message is not a user turn (e.g. post-tool synthesis, where the
             # current user query — already inlined on the tool-request call —
             # still carries the volatile earlier in the sequence).
+            # Order (ADR-0081 §D4/§D3): skill bodies + usage-directives → recalled
+            # memory → D3 salient highlights, the latter closest to the query.
             _volatile_block = "\n\n".join(
-                p for p in (_skill_bodies_tail, memory_section or "") if p
+                p for p in (_skill_bodies_tail, memory_section or "", ctx.salient_highlights) if p
             )
             ctx.messages = _inline_volatile_into_last_user_message(ctx.messages, _volatile_block)
         else:
@@ -3461,7 +3575,11 @@ async def execute_task_safe(
         # + ADR-0061 §D1 soft trigger).  Bus threaded through so the
         # within-session compression event lands on
         # ``stream:context.within_session_compressed``.
-        if ctx.session_id:
+        # ADR-0081 §D3 Decision 3: under the frozen layout the reactive 0.65 soft
+        # trigger is removed — the cache-aware scheduler (step_init) subsumes it;
+        # firing reactive compaction here would rewrite history off-schedule and
+        # break the forward-extension.
+        if ctx.session_id and not settings.cache_frozen_layout_enabled:
             try:
                 from personal_agent.events.bus import get_event_bus
 

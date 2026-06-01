@@ -835,6 +835,54 @@ def _append_no_think_synthesis_nudge(messages: list[dict[str, Any]]) -> list[dic
     return out
 
 
+_TURN_CONTEXT_OPEN = "<turn_context>"
+_TURN_CONTEXT_CLOSE = "</turn_context>"
+
+
+def _inline_volatile_into_last_user_message(
+    messages: list[dict[str, Any]], volatile_block: str
+) -> list[dict[str, Any]]:
+    """Inline per-turn volatile content into the last user message (ADR-0081 §D2).
+
+    Frozen append-only layout (FRE-434): per-turn volatile content (recalled
+    memory + selected skill bodies + D3 highlights) must ride the *current* user
+    turn rather than the system head, so prior turns replay byte-identically and
+    the local SLM can reuse its KV cache as a strict forward extension.
+
+    The block is wrapped in a single ``<turn_context>`` fence and prepended above
+    the existing user content. The function is pure (returns a new list, never
+    mutates the input) and byte-stable: an empty or whitespace-only block is a
+    no-op (no separator bytes leak onto the frozen side), and re-inlining an
+    already-wrapped message does not double-wrap.
+
+    Args:
+        messages: Working message list. Not mutated.
+        volatile_block: Pre-joined volatile content; empty when there is nothing
+            to inline this turn.
+
+    Returns:
+        A new message list with the block inlined into the last user message, or
+        the input list unchanged when there is nothing to inline, the last user
+        content is non-string, or no user message exists.
+    """
+    block = volatile_block.strip() if volatile_block else ""
+    if not block:
+        return messages
+    out = deepcopy(messages)
+    for i in range(len(out) - 1, -1, -1):
+        if out[i].get("role") != "user":
+            continue
+        content = out[i].get("content")
+        if not isinstance(content, str):
+            return messages
+        if content.lstrip().startswith(_TURN_CONTEXT_OPEN):
+            # Already wrapped this turn — never double-wrap (byte stability).
+            return out
+        out[i]["content"] = f"{_TURN_CONTEXT_OPEN}\n{block}\n{_TURN_CONTEXT_CLOSE}\n\n{content}"
+        return out
+    return messages
+
+
 def _fallback_reply_from_tool_results(ctx: ExecutionContext, *, lead: str | None = None) -> str:
     """Build a safe, user-facing reply when the model fails to synthesize after tools.
 
@@ -2269,20 +2317,40 @@ async def step_llm_call(
         # what the static_prefix_hash covers (ADR-0081 D1 + D4).
         inner_system_before_memory = system_prompt or ""
 
-        # VOLATILE tail (ADR-0081 D4 decided order):
-        #   selected skill bodies → <skill_usage_directives> → recalled memory.
-        # Appended after the capture, so none of it enters static_prefix_hash.
-        if _skill_bodies_tail:
-            if system_prompt:
-                system_prompt = f"{system_prompt}\n\n{_skill_bodies_tail}"
-            else:
-                system_prompt = _skill_bodies_tail
+        _frozen_layout = settings.cache_frozen_layout_enabled
+        if _frozen_layout:
+            # ADR-0081 §D2 (FRE-434): frozen append-only layout. Per-turn volatile
+            # (selected skill bodies + usage-directives + recalled memory; D3
+            # salient highlights join in PR2) rides the CURRENT user turn, not the
+            # system head. message[0] stays exactly inner_system_before_memory, so
+            # the wire prefix is byte-stable and prior turns replay as a strict
+            # forward extension — the property local KV reuse requires.
+            #
+            # The block is inlined into ctx.messages in place so the history
+            # persisted at end of turn (update_session) equals the wire form
+            # sent now. _inline_… is a no-op when the block is empty or the last
+            # message is not a user turn (e.g. post-tool synthesis, where the
+            # current user query — already inlined on the tool-request call —
+            # still carries the volatile earlier in the sequence).
+            _volatile_block = "\n\n".join(
+                p for p in (_skill_bodies_tail, memory_section or "") if p
+            )
+            ctx.messages = _inline_volatile_into_last_user_message(ctx.messages, _volatile_block)
+        else:
+            # D1/D4 head-layout (unchanged when the flag is off). VOLATILE tail
+            # order: selected skill bodies → <skill_usage_directives> → recalled
+            # memory; appended after the capture so none enters static_prefix_hash.
+            if _skill_bodies_tail:
+                if system_prompt:
+                    system_prompt = f"{system_prompt}\n\n{_skill_bodies_tail}"
+                else:
+                    system_prompt = _skill_bodies_tail
 
-        if memory_section:
-            if system_prompt:
-                system_prompt = f"{system_prompt}\n{memory_section}"
-            else:
-                system_prompt = memory_section
+            if memory_section:
+                if system_prompt:
+                    system_prompt = f"{system_prompt}\n{memory_section}"
+                else:
+                    system_prompt = memory_section
 
         # Call LocalLLMClient.respond()
         # Pass previous_response_id for stateful /v1/responses API

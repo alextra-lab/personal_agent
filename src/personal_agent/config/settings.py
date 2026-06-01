@@ -142,10 +142,13 @@ class AppConfig(BaseSettings):
         ),
     )
     llm_append_no_think_to_tool_prompts: bool = Field(
-        default=True,
+        default=False,
         description=(
             "If true, append llm_no_think_suffix to tool-request prompts and post-tool synthesis prompts "
-            "to reduce latency and reasoning verbosity."
+            "to reduce latency and reasoning verbosity. Default False (FRE-434): the primary now runs "
+            "with reasoning enabled and the sub-agent is an instruct variant, so /no_think is unnecessary; "
+            "it is also a byte-identity hazard for the ADR-0081 §D2 frozen layout (it rewrites the current "
+            "last user message each turn). Re-enable per deployment only if a no-think model is reintroduced."
         ),
     )
 
@@ -607,6 +610,19 @@ class AppConfig(BaseSettings):
         description=(
             "Minimum number of new messages between consecutive soft "
             "compressions for the same session (ADR-0061 §D1)."
+        ),
+    )
+
+    # Cache-aware frozen append-only layout (ADR-0081 §D2/D3, FRE-434)
+    cache_frozen_layout_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable the frozen append-only prompt layout (ADR-0081 §D2/D3). When "
+            "True, per-turn volatile content (recalled memory + selected skill "
+            "bodies + salient highlights) rides the current user turn instead of "
+            "the system head and is persisted byte-identically, so prior turns "
+            "replay as a strict forward extension and the local SLM reuses its KV "
+            "cache cross-turn. No-op when False (byte-for-byte the D1/D4 layout)."
         ),
     )
 

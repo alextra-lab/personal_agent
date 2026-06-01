@@ -38,9 +38,40 @@ log = structlog.get_logger(__name__)
 litellm.suppress_debug_info = True
 
 
+def _mark_message_cache_control(message: dict[str, Any]) -> bool:
+    """Attach an ephemeral cache_control breakpoint to a message's content.
+
+    Anthropic caches the prefix up to and including the last marked block. The
+    block must live inside a content list, so a string content is promoted to a
+    single text block first. Idempotent: a message already carrying a marker is
+    left unchanged.
+
+    Args:
+        message: A chat message dict (modified in-place).
+
+    Returns:
+        True if a marker was applied (or already present and markable), False
+        when the content shape cannot carry a marker (e.g. empty content).
+    """
+    content = message.get("content")
+    if isinstance(content, str) and content:
+        message["content"] = [
+            {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
+        ]
+        return True
+    if isinstance(content, list) and content:
+        last_block = content[-1]
+        if isinstance(last_block, dict):
+            last_block.setdefault("cache_control", {"type": "ephemeral"})
+            return True
+    return False
+
+
 def _apply_anthropic_cache_control(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None,
+    *,
+    frozen_layout: bool = False,
 ) -> None:
     """Attach Anthropic cache_control markers in-place for prompt caching.
 
@@ -49,12 +80,21 @@ def _apply_anthropic_cache_control(
     the static system prompt and the static tool list eliminates re-processing
     of ~4,200 tokens on every turn after the first.
 
+    Under the ADR-0081 §D2 frozen append-only layout (``frozen_layout=True``,
+    FRE-434), a third breakpoint is added on the **last frozen message before the
+    current user turn** (whose content carries this turn's volatile tail). Without
+    it the cloud backend re-reads the whole conversation history past the tool
+    block every turn and the frozen history is never banked as a cached prefix —
+    so this is what makes the cloud reuse asymmetry (cheap reset) actually hold.
+
     LiteLLM forwards cache_control blocks through to the Anthropic API
     transparently when present in message content.
 
     Args:
         messages: api_messages list (modified in-place). Must be pre-sanitised.
         tools: OpenAI-format tool definitions list, or None.
+        frozen_layout: When True, also mark the history-end breakpoint
+            (ADR-0081 §D2 point 4).
     """
     # Mark system message
     if messages and messages[0].get("role") == "system":
@@ -67,6 +107,23 @@ def _apply_anthropic_cache_control(
             last_block = sys_content[-1]
             if isinstance(last_block, dict) and "cache_control" not in last_block:
                 last_block["cache_control"] = {"type": "ephemeral"}
+
+    # ADR-0081 §D2 point 4: history-end breakpoint (frozen layout only). The
+    # current user turn is the last user message (it carries the volatile tail);
+    # everything before it is frozen history. Mark the nearest markable message
+    # immediately preceding that turn so the whole history is a cached prefix.
+    if frozen_layout and messages:
+        last_user_idx: int | None = None
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "user":
+                last_user_idx = i
+                break
+        if last_user_idx is not None:
+            for j in range(last_user_idx - 1, -1, -1):
+                if messages[j].get("role") == "system":
+                    break
+                if _mark_message_cache_control(messages[j]):
+                    break
 
     # Mark last tool definition (caches the whole tool list prefix)
     if tools:
@@ -247,7 +304,11 @@ class LiteLLMClient:
             litellm_kwargs.setdefault("extra_headers", {})["anthropic-beta"] = (
                 "prompt-caching-2024-07-31"
             )
-            _apply_anthropic_cache_control(api_messages, litellm_kwargs.get("tools"))
+            _apply_anthropic_cache_control(
+                api_messages,
+                litellm_kwargs.get("tools"),
+                frozen_layout=_settings.cache_frozen_layout_enabled,
+            )
             # Reflect updated messages (cache_control blocks mutated in-place)
             litellm_kwargs["messages"] = api_messages
 

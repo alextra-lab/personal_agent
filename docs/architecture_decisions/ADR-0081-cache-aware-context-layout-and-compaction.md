@@ -1,6 +1,6 @@
 # ADR-0081 — Cache-Aware Context Layout & Compaction
 
-**Status:** Proposed — 2026-05-29
+**Status:** Proposed — 2026-05-29 · D1 shipped (FRE-422, PR #120) · **D4 decided 2026-06-01** (skill-index split; owns the cache-GREEN gate D1 could not meet)
 **Related:** ADR-0038 (context compressor + prefix ordering), ADR-0061 (within-session head-middle-tail compression), ADR-0063 (skill routing / compact index), ADR-0074 (identity / joinability), ADR-0078 (prompt management & observability — this is its gated composer-redesign phase)
 
 ---
@@ -52,13 +52,64 @@ Compaction must produce a **stable, persisted, append-only** artifact, not a per
 
 This resolves the freeze-vs-freshness tension: the bulk narrative can stay frozen/cached *because* the highlights carry per-turn freshness in the already-volatile zone (so they cost nothing in cache terms). It also exploits the attention asymmetry — compress in the low-attention middle, reinforce salience in the high-attention tail. Highlights are derived as a strict subset of the narrative (single extraction) to avoid contradiction, and hard-bounded (token cap) so they don't erode the compression win.
 
-### D4 — Skill-index split + minimization (extends ADR-0063)
+### D4 — Skill-index split (decided; owns the cache-GREEN gate D1 could not meet)
 
-`skill_index` is the primary prefix-churn source (it is routed per turn, so its content varies). Split it:
-- **Stable, complete compact index** (id · purpose · when-applicable · version) → cached prefix (SEMI-STATIC).
-- **Per-turn selected skill bodies** → volatile tail (or `read_skill` on demand).
+**Status of this section:** Decided 2026-06-01, post-D1-deploy. D1 (FRE-422, PR #120, merged `2248a22`) moved `memory_section` to the volatile tail, but the post-deploy eval shows `make cache-erosion-status` for `orchestrator.primary` is **still RED**. The residual prefix churn is the skill block. The ADR-0081 "post-D1 residual" question — *is D4 worth resolving?* — is answered: **yes, D4 is required.** The open research questions D4 carried are resolved below.
 
-Separately, the index is now a permanent prefix resident, so its size/encoding matter for both tokens and attention dilution. A **minimization + format experiment** (compact-markdown vs JSON vs XML; field ablation) is scoped as its own work, gated on a labeled routing-eval set; the canonical index is stored structured (for tooling/versioning/hashing) and **deterministically rendered** to a lean model-facing form — never LLM-restructured (nondeterminism would churn the prefix).
+**Measured residual (ES `agent-logs-*`, `model_call_completed`, after the 07:34 D1 deploy):** a single session (`5af07bc0…`) of **23 `orchestrator.primary` turns produced 6 distinct `prompt_static_prefix_hash` values.** The cache gate needs exactly **1** across ≥5 same-session turns; post-D1 we have 6 across 23. The prefix is still eroding every few turns, and D1 — which only relocated memory — provably cannot account for it. The only remaining per-turn-varying bytes inside the captured prefix are the skill block's volatile fragments (below).
+
+#### The residual churn, located precisely
+
+After D1, the cacheable prefix is captured at `executor.py:2259` as `inner_system_before_memory` — everything assembled before the volatile `memory_section` tail. But the skill block is spliced into `system_prompt` *earlier* (`executor.py:2045-2050`), so it falls **inside** that captured prefix. And the skill block is not uniform in volatility. `_full_skill_injection` concatenates four fragments with two different volatility classes:
+
+| Fragment | Source | Volatility |
+|----------|--------|------------|
+| Compact skill index | `assemble_skill_index()` (`skills.py:191`) | **STABLE** — deterministic render of the loaded skill catalog; identical every turn until a skill is added/edited |
+| `<skill_index_directive>` | `assemble_skill_index_directive()` (`skills.py:249`) | **STABLE** — constant string |
+| Selected skill bodies | `_keyword_block` (hybrid) / `_preloaded_bodies` (model_decided) | **VOLATILE** — varies with the user query and `ctx.loaded_skills` |
+| `<skill_usage_directives>` | `assemble_skill_usage_directives(ctx.loaded_skills, …)` (`skills.py:264`) | **VOLATILE** — bullet set derived from per-turn `ctx.loaded_skills` |
+
+The two VOLATILE fragments sit inside the captured static prefix → `static_prefix_hash` changes every turn → cross-turn `cached_tokens` ≈ 0 → cache gate RED. This is structurally the *same* defect D1 fixed for memory, one layer up; D4 applies the same maneuver to the skill block.
+
+#### The split
+
+Resolve the standing "route-once vs split-index+late-bodies vs relocate-all" question in favor of **split**: it preserves per-turn routing adaptivity *and* caches the stable map. Concretely, partition `_full_skill_injection` at its volatility seam:
+
+- **Cached prefix (SEMI-STATIC), before the `inner_system_before_memory` capture:** the compact skill index + the constant `<skill_index_directive>`. These become permanent prefix residents and contribute to `static_prefix_hash`.
+- **Volatile tail, after the capture point (same band as `memory_section`, before the current query):** the selected skill bodies + the per-turn `<skill_usage_directives>`. These contribute to `dynamic_hash`, never to `static_prefix_hash`.
+
+Implementation shape (for the build worktree, not done here): split the single splice at `executor.py:2045-2050` into two — index + index-directive appended into `system_prompt` before the line-2259 capture; bodies + usage-directives deferred and appended into the volatile tail alongside `memory_section` (line 2262-2266). The `skill_index` entry in `_component_ids` (line 2326) stays; add a distinct volatile marker for the bodies so prompt identity attributes them to the dynamic side.
+
+#### Interaction with routing modes (ADR-0063 §D7, FRE-373) and `prefer_primitives_enabled`
+
+The entire skill block is gated behind `settings.prefer_primitives_enabled` (default `False`). When off, no skill content is injected and the prefix is already stable — **D4 is a no-op in that state.** When on, the split applies per routing mode (`settings.skill_routing_mode`, default `hybrid`):
+
+- **`hybrid` (production default):** index + `<skill_index_directive>` → cached prefix; `_keyword_block` bodies + `<skill_usage_directives>` → volatile tail. (Keyword bodies vary per query — the dominant residual today.)
+- **`model_decided`:** index + `<skill_index_directive>` → cached prefix; router-selected `_preloaded_bodies` + `<skill_usage_directives>` → volatile tail. The routing call itself runs once per request on a separate model (`skill_routing_model_key`, default `claude_haiku`) and never touches the primary prefix, so it is orthogonal to the split.
+- **`keyword` (legacy):** emits no index, only `get_skill_block()` bodies. Today those bodies churn the prefix; D4 relocates them to the volatile tail, so keyword mode also stops eroding the cache (it just has no cached catalog to gain).
+
+The split is invariant across modes: **any index → cached prefix; any bodies → volatile tail.**
+
+#### Target byte layout after D4
+
+Against the same bands D1 established:
+
+```
+[STATIC]      tool-use rules                                        ── cached, primacy
+[SEMI-STATIC] tool-awareness · deployment · operator stanza
+              · STABLE SKILL INDEX + <skill_index_directive>        ── cached
+              · decomposition-base (autonomous mode)
+‖ cache boundary ‖  ── static_prefix_hash covers everything above; nothing volatile precedes it
+[VOLATILE]    selected skill bodies + <skill_usage_directives>      ── per-turn
+              · recalled memory / D3 salient highlights             ── dynamic_hash
+              · current query                                       ── recency
+```
+
+The cache boundary moves up to sit immediately after the stable skill index. After D4 there is no volatile fragment left on the cached side of the boundary.
+
+#### Index format/size minimization — deferred sub-experiment (does NOT gate D4)
+
+The index is now a permanent prefix resident, so its size/encoding affect tokens and attention dilution. A **minimization + format experiment** (compact-markdown vs JSON vs XML; field ablation) remains scoped as its own follow-up, gated on a labeled routing-eval set (candidate for DSPy optimization). It is explicitly **not** on the critical path for the cache-GREEN gate — the split alone flips the gate; the format search only trims the now-cached cost. Invariant: the canonical index stays stored structured (for tooling/versioning/hashing) and is **deterministically rendered** to the model-facing form — never LLM-restructured, since nondeterministic rendering would re-introduce prefix churn.
 
 ### D5 — Tiered virtual context (cold-tier on-demand retrieval)
 
@@ -84,8 +135,8 @@ Every change is verified against the P1 instruments: `static_prefix_hash` must g
 
 ## Open decisions (researcher / data-gated)
 
-- **D4 skill handling:** route-once-per-session (stabilize) vs split-index+late-bodies vs relocate-all. Leaning split (preserves per-turn adaptivity *and* caches the map).
-- **D4 index format/size:** Pareto search (routing accuracy vs tokens) — needs a labeled routing-eval set; candidate for DSPy optimization.
+- **D4 skill handling:** ~~route-once-per-session vs split-index+late-bodies vs relocate-all~~ — **RESOLVED 2026-06-01: split** (stable index cached, per-turn bodies + usage-directives to the volatile tail). See §D4; owns the cache-GREEN gate D1 could not meet.
+- **D4 index format/size:** Pareto search (routing accuracy vs tokens) — needs a labeled routing-eval set; candidate for DSPy optimization. **Still open**, but de-risked: this is a follow-up cost-trim that does *not* gate the cache-GREEN result (§D4).
 - **D5 retrieval:** semantic-only vs hybrid; ranking; how much to auto-inject vs require an explicit tool call.
 - **Objective horizon:** maximize single-turn static prefix vs minimize *total* prefill across an N-turn horizon (dynamic content grows monotonically and will eventually dominate regardless of order — argues for the cold tier, D5).
 
@@ -116,3 +167,14 @@ These are posed to external CS/math reviewers; this ADR records the architecture
 - A deliberate skill/tool-desc edit shifts `static_prefix_hash` exactly once (drift signal), then re-stabilizes.
 - Post-compression forgot-fact error rate flat or improved with D3 highlights vs summary-only (A/B), at bounded token cost.
 - D5: a query needing a cold detail triggers `recall_session_history` and answers correctly without that detail being in-prompt.
+
+### D4-specific acceptance (the cache-GREEN gate D1 could not meet)
+
+D4 is **done** only when `orchestrator.primary` flips GREEN on the FRE-405/406/407 instruments:
+
+- **Prefix stability (FRE-405):** `prompt_static_prefix_hash` constant across ≥5 same-session turns — i.e. `distinct_prefixes == 1` for the session, vs the **6-across-23** measured post-D1.
+- **Erosion gate (FRE-406):** `make cache-erosion-status` for `orchestrator.primary` reports Jaccard ≥ 0.90 (`status=stable`), flipping the current RED.
+- **Real reuse:** cross-turn `cached_tokens > 0` on repeat-prefix turns (today ≈ 0); the stable skill index now sits in the cached region.
+- **Quality unchanged (FRE-407):** the per-turn rating trace stays flat or improves — moving skill bodies to the volatile tail (recency-adjacent) must not degrade routing/answer quality.
+
+**Verification-tooling prerequisite (FRE-406 amendment).** The cache-erosion monitor (`scripts/monitors/cache_erosion_monitor.py` / `compute_erosion_report`) currently windows on whole calendar days (`window_days`, `calendar_interval: "1d"`). A same-morning deploy + same-session verification (exactly the D4 case — the entire 23-turn dataset above lives inside one morning) is **invisible at day granularity**: it collapses into a single bucket and reports `insufficient_data`. The monitor must gain an **`--hours-ago` window** (sub-day range + an hour/turn-level bucketing) so D4 can be verified in the same session it deploys, per the "post-deploy steps run in the same session as deploy" rule. This is a small build-worktree change, tracked as an explicit sub-item on the D4 ticket; it gates D4's *verifiability*, not its implementation.

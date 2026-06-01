@@ -230,6 +230,11 @@ class ExecutionContext:
     # Model ID returned by the routing call (for telemetry breakdown across cells).
     skill_routing_model_id: str = ""
 
+    # --- ADR-0081 §D3 cache-aware compaction (FRE-434) ---
+    # Bounded salient highlights produced by the most recent frozen reset; ride
+    # the current turn's volatile block (regenerated on reset, never frozen).
+    salient_highlights: str = ""
+
 
 class OrchestratorStep(TypedDict):
     """Step metadata for observability.

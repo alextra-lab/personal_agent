@@ -625,6 +625,44 @@ class AppConfig(BaseSettings):
             "cache cross-turn. No-op when False (byte-for-byte the D1/D4 layout)."
         ),
     )
+    cache_reset_min_run_turns_local: int = Field(
+        default=12,
+        ge=1,
+        description=(
+            "Anti-thrash floor for the cache-aware compaction scheduler on the local "
+            "backend (ADR-0081 §D3): never fire a reset before this many turns. Local "
+            "resets are expensive (full re-prefill) so runs are allowed to grow longer."
+        ),
+    )
+    cache_reset_min_run_turns_cloud: int = Field(
+        default=4,
+        ge=1,
+        description=(
+            "Anti-thrash floor for the scheduler on the cloud backend (ADR-0081 §D3). "
+            "Cloud resets are cheap (only the rewritten span re-creates) so it may "
+            "compact tighter/sooner."
+        ),
+    )
+    cache_frozen_accum_max_ratio: float = Field(
+        default=0.50,
+        gt=0.0,
+        le=1.0,
+        description=(
+            "Hard token ceiling for accumulated frozen context as a fraction of "
+            "context_window_max_tokens (ADR-0081 §D3 Decision 2). Hitting it forces a "
+            "compaction reset regardless of the cost optimum, reserving headroom for "
+            "the system prefix, the current volatile, and generation."
+        ),
+    )
+    cache_quality_token_weight: float = Field(
+        default=4000.0,
+        ge=0.0,
+        description=(
+            "w_q (ADR-0081 §D3): token-equivalent of one FRE-407 quality point, used "
+            "in the scheduler's marginal hold cost c = Δ_turn + w_q·Q_slope. Tuned "
+            "post-deploy against the A/B harness."
+        ),
+    )
 
     # Database (Postgres)
     database_url: str = Field(

@@ -66,8 +66,8 @@ This is the **conservative** cut: it moves the two unambiguous non-thinking clas
 
 `sub_agent` selection must be **reversible within the turn**, not a trap: if a `sub_agent`-routed turn (a) hits its tool-iteration limit without converging, (b) errors/times out, or (c) the model itself signals it needs to reason, escalate the *same* turn to `primary` and re-run. The instruct tier is the optimistic default; the thinking tier is the fallback, bounding the worst case to "instruct attempt + primary attempt."
 
-**This is a non-trivial implementation dependency, not a config flag — call it out honestly.** There is no instruct→primary retry path in the executor today; a no-tool response goes straight to synthesis (`executor.py:2532`) and the loop preserves the last LLM role (`executor.py:3260`). A mid-turn model switch must, at minimum:
-- **Scope `ctx.last_response_id` per model.** It is set from the prior response (`executor.py:2357`) and fed into the next call (`executor.py:2347`); reusing a `sub_agent` response id against a `primary` call is unsafe and must be cleared/scoped on escalation.
+**This is a non-trivial implementation dependency, not a config flag — call it out honestly.** There is no instruct→primary retry path in the executor today; a no-tool response sets `ctx.final_reply` and proceeds to synthesis (`executor.py:2534`) and the loop preserves the last LLM role (`executor.py:3268`). A mid-turn model switch must, at minimum:
+- **Scope `ctx.last_response_id` per model.** It is set from the prior response (`executor.py:2359`) and fed into the next call (`executor.py:2347`); reusing a `sub_agent` response id against a `primary` call is unsafe and must be cleared/scoped on escalation.
 - **Gate synthesis and preserve partial tool state** so the escalated `primary` re-run sees the right conversation prefix without double-applying the instruct attempt's tool calls.
 - **Avoid cost-gate double-charging** for the two inferences in one turn (see Consequences — both tiers currently bill to one budget class).
 

@@ -175,6 +175,80 @@ async def test_partial_overlap_below_threshold_is_eroded() -> None:
 
 
 # ---------------------------------------------------------------------------
+# compute_erosion_report — hours-ago window mode (ADR-0081 D4)
+# ---------------------------------------------------------------------------
+
+
+def _build_mock_es_window(callsite: str, hashes: list[str], doc_count: int) -> MagicMock:
+    """Mock ES for the sub-day window agg (no by_day bucketing)."""
+    es = MagicMock()
+    es.search = AsyncMock(
+        return_value={
+            "aggregations": {
+                "by_callsite": {
+                    "buckets": [
+                        {
+                            "key": callsite,
+                            "doc_count": doc_count,
+                            "hashes": {"buckets": [{"key": h, "doc_count": 1} for h in hashes]},
+                        }
+                    ]
+                }
+            }
+        }
+    )
+    return es
+
+
+@pytest.mark.asyncio
+async def test_window_single_hash_is_stable() -> None:
+    """Exactly 1 distinct hash in the window → stable (the D4 gate)."""
+    es = _build_mock_es_window("orchestrator.primary", ["hash_a"], doc_count=23)
+    report = await compute_erosion_report(
+        es,
+        callsites=("orchestrator.primary",),
+        logs_prefix="agent-logs",
+        hours_ago=6,
+    )
+    assert not report.any_eroded
+    assert report.results[0].status == "stable"
+    assert report.results[0].jaccard == 1.0
+
+
+@pytest.mark.asyncio
+async def test_window_multiple_hashes_is_eroded() -> None:
+    """6 distinct hashes across the window → eroded, score 1/6 (post-D1 baseline)."""
+    es = _build_mock_es_window(
+        "orchestrator.primary",
+        [f"hash_{i}" for i in range(6)],
+        doc_count=23,
+    )
+    report = await compute_erosion_report(
+        es,
+        callsites=("orchestrator.primary",),
+        logs_prefix="agent-logs",
+        hours_ago=6,
+    )
+    assert report.any_eroded
+    assert report.results[0].status == "eroded"
+    assert report.results[0].jaccard == pytest.approx(1 / 6)
+
+
+@pytest.mark.asyncio
+async def test_window_no_calls_is_insufficient_data() -> None:
+    """No calls in the window → insufficient_data (not eroded)."""
+    es = _build_mock_es_window("orchestrator.primary", [], doc_count=0)
+    report = await compute_erosion_report(
+        es,
+        callsites=("orchestrator.primary",),
+        logs_prefix="agent-logs",
+        hours_ago=6,
+    )
+    assert not report.any_eroded
+    assert report.results[0].status == "insufficient_data"
+
+
+# ---------------------------------------------------------------------------
 # render_report
 # ---------------------------------------------------------------------------
 

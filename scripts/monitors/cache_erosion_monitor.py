@@ -39,6 +39,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Consecutive-day comparison window (default: 2).",
     )
     parser.add_argument(
+        "--hours-ago",
+        type=int,
+        default=None,
+        help=(
+            "Sub-day window: grade distinct-hash count over the last N hours "
+            "(gate: exactly 1) instead of consecutive-day Jaccard. Lets a "
+            "same-session deploy be verified (ADR-0081 D4)."
+        ),
+    )
+    parser.add_argument(
         "--callsites",
         nargs="+",
         default=list(MONITORED_CALLSITES),
@@ -69,6 +79,7 @@ async def _run(args: argparse.Namespace) -> int:
             callsites=tuple(args.callsites),
             window_days=args.window_days,
             threshold=args.threshold,
+            hours_ago=args.hours_ago,
         )
     finally:
         await es.close()

@@ -93,9 +93,20 @@ async def compute_erosion_report(
     callsites: tuple[str, ...] = MONITORED_CALLSITES,
     window_days: int = DEFAULT_WINDOW_DAYS,
     threshold: float = EROSION_THRESHOLD,
+    hours_ago: int | None = None,
     now: datetime | None = None,
 ) -> ErosionReport:
     """Compute the cache-erosion report for monitored callsites.
+
+    Two windowing modes:
+
+    * **Calendar-day (default):** compares the most recent consecutive-day hash
+      sets per callsite via Jaccard. Day granularity is blind to a same-morning,
+      same-session deploy (it collapses into one bucket).
+    * **Hours-ago (``hours_ago`` set, ADR-0081 D4):** aggregates *all* distinct
+      prefix hashes in the last *N* hours per callsite, with no day bucketing,
+      and grades on the distinct-hash count directly (gate: exactly 1). This is
+      what lets D4 be verified in the same session it deploys.
 
     Args:
         es: Connected AsyncElasticsearch client.
@@ -103,12 +114,25 @@ async def compute_erosion_report(
         callsites: Callsite identifiers to monitor.
         window_days: How many consecutive days to compare (must be >= 2).
         threshold: Jaccard similarity threshold; < threshold = eroded.
+        hours_ago: When set, use a sub-day window of the last *N* hours and grade
+            on distinct-hash count instead of consecutive-day Jaccard.
         now: Override current time for testing.
 
     Returns:
         :class:`ErosionReport` with per-callsite verdicts.
     """
     now = now or datetime.now(timezone.utc)
+
+    if hours_ago is not None:
+        return await _compute_window_report(
+            es,
+            logs_prefix=logs_prefix,
+            callsites=callsites,
+            hours_ago=hours_ago,
+            threshold=threshold,
+            now=now,
+        )
+
     start = (now - timedelta(days=window_days)).replace(hour=0, minute=0, second=0, microsecond=0)
 
     response = await es.search(
@@ -152,6 +176,82 @@ async def compute_erosion_report(
 
     day_hashes = _parse_day_hashes(dict(response))
     results = _compute_verdicts(day_hashes, callsites=callsites, threshold=threshold)
+    return ErosionReport(
+        computed_at=now,
+        results=results,
+        any_eroded=any(r.status == "eroded" for r in results),
+        threshold=threshold,
+    )
+
+
+async def _compute_window_report(
+    es: "AsyncElasticsearch",
+    *,
+    logs_prefix: str,
+    callsites: tuple[str, ...],
+    hours_ago: int,
+    threshold: float,
+    now: datetime,
+) -> ErosionReport:
+    """Compute a sub-day, distinct-hash-count erosion report (ADR-0081 D4).
+
+    Aggregates all distinct ``prompt_static_prefix_hash`` values in the last
+    *hours_ago* hours per callsite (no day bucketing) and grades on the distinct
+    count: exactly 1 = stable, >1 = eroded, 0 calls = insufficient_data.
+
+    Args:
+        es: Connected AsyncElasticsearch client.
+        logs_prefix: Index prefix for ``agent-logs-*``.
+        callsites: Callsite identifiers to monitor.
+        hours_ago: Window size in hours.
+        threshold: Echoed into the result for the dashboard.
+        now: Current time (window end).
+
+    Returns:
+        :class:`ErosionReport` with one verdict per callsite.
+    """
+    start = now - timedelta(hours=hours_ago)
+    response = await es.search(
+        index=f"{logs_prefix}-*",
+        size=0,
+        query={
+            "bool": {
+                "filter": [
+                    {"term": {"event_type": "model_call_completed"}},
+                    {"terms": {"prompt_callsite": list(callsites)}},
+                    {"exists": {"field": "prompt_static_prefix_hash"}},
+                    {"range": {"@timestamp": {"gte": start.isoformat()}}},
+                ]
+            }
+        },
+        aggs={
+            "by_callsite": {
+                "terms": {"field": "prompt_callsite", "size": len(callsites)},
+                "aggs": {"hashes": {"terms": {"field": "prompt_static_prefix_hash", "size": 1000}}},
+            }
+        },
+        ignore_unavailable=True,
+        allow_no_indices=True,
+    )
+
+    hashes_by_callsite: dict[str, frozenset[str]] = {}
+    counts_by_callsite: dict[str, int] = {}
+    for cs_bucket in (
+        dict(response).get("aggregations", {}).get("by_callsite", {}).get("buckets", [])
+    ):
+        callsite = cs_bucket["key"]
+        hashes_by_callsite[callsite] = frozenset(
+            b["key"] for b in cs_bucket.get("hashes", {}).get("buckets", [])
+        )
+        counts_by_callsite[callsite] = int(cs_bucket.get("doc_count", 0))
+
+    results = _compute_window_verdicts(
+        hashes_by_callsite,
+        counts_by_callsite,
+        callsites=callsites,
+        threshold=threshold,
+        window_day=now.date(),
+    )
     return ErosionReport(
         computed_at=now,
         results=results,
@@ -222,6 +322,59 @@ def _compute_verdicts(
                 hashes_b=b.hashes,
                 jaccard=jaccard,
                 status="eroded" if jaccard < threshold else "stable",
+                threshold=threshold,
+            )
+        )
+    return results
+
+
+def _compute_window_verdicts(
+    hashes_by_callsite: dict[str, frozenset[str]],
+    counts_by_callsite: dict[str, int],
+    *,
+    callsites: tuple[str, ...],
+    threshold: float,
+    window_day: date,
+) -> list[CallsiteResult]:
+    """Grade each callsite on distinct-hash count within a sub-day window.
+
+    The D4 cache gate is ``distinct_prefixes == 1`` across the session. A score
+    of ``1.0 / distinct`` maps that onto the existing Jaccard threshold: exactly
+    1 hash → 1.0 (stable); N hashes → 1/N (eroded for N >= 2 at threshold 0.9).
+
+    Args:
+        hashes_by_callsite: Distinct hash set per callsite in the window.
+        counts_by_callsite: Total call count per callsite in the window.
+        callsites: Callsites to report (in order).
+        threshold: Jaccard floor echoed into each result.
+        window_day: Date stamped onto the result for rendering.
+
+    Returns:
+        One :class:`CallsiteResult` per callsite.
+    """
+    results: list[CallsiteResult] = []
+    for callsite in callsites:
+        hashes = hashes_by_callsite.get(callsite, frozenset())
+        call_count = counts_by_callsite.get(callsite, 0)
+        distinct = len(hashes)
+        if call_count == 0 or distinct == 0:
+            status: Literal["stable", "eroded", "insufficient_data"] = "insufficient_data"
+            score = 1.0
+        elif distinct == 1:
+            status = "stable"
+            score = 1.0
+        else:
+            status = "eroded"
+            score = 1.0 / distinct
+        results.append(
+            CallsiteResult(
+                callsite=callsite,
+                day_a=window_day,
+                day_b=window_day,
+                hashes_a=hashes,
+                hashes_b=hashes,
+                jaccard=score,
+                status=status,
                 threshold=threshold,
             )
         )

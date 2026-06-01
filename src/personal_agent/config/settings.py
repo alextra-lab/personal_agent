@@ -1200,12 +1200,14 @@ class AppConfig(BaseSettings):
         ),
     )
     prefer_primitives_enabled: bool = Field(
-        default=False,
+        default=True,
         alias="AGENT_PREFER_PRIMITIVES",
         description=(
             "Inject skill library docs into system prompt and nudge the model to prefer "
-            "primitives over MCP tools. Enable AFTER pentest gate clears AND 6+ skill docs "
-            "are in docs/skills/. Requires AGENT_PRIMITIVE_TOOLS_ENABLED=true to be meaningful. "
+            "primitives over MCP tools. Default True since 2026-06-01 — this is the deployed "
+            "production behavior (pentest gate cleared, 6+ skill docs present), pinned here so "
+            "it no longer depends on a single line in the gitignored .env. "
+            "Requires AGENT_PRIMITIVE_TOOLS_ENABLED=true to be meaningful. "
             "Env var: AGENT_PREFER_PRIMITIVES"
         ),
     )

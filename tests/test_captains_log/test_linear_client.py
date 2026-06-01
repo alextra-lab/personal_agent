@@ -39,6 +39,13 @@ def _mock_err_resp(status: int = 400, text: str = "bad") -> MagicMock:
 
 
 @pytest.fixture(autouse=True)
+def fake_linear_api_key() -> Generator[None, None, None]:
+    """Seed a fake API key so _call() does not bail before reaching the httpx mock."""
+    with patch.object(lc_mod.settings, "linear_api_key", "fake-pat-for-tests"):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def reset_lc_caches() -> Generator[None, None, None]:
     """Pre-populate module-level caches so ID resolution skips API calls."""
     lc_mod._lc_team_id = "team-id-test"

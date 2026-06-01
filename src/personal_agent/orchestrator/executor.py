@@ -2272,17 +2272,27 @@ async def step_llm_call(
         # VOLATILE tail (ADR-0081 D4 decided order):
         #   selected skill bodies → <skill_usage_directives> → recalled memory.
         # Appended after the capture, so none of it enters static_prefix_hash.
+        volatile_tail_text = ""
         if _skill_bodies_tail:
-            if system_prompt:
-                system_prompt = f"{system_prompt}\n\n{_skill_bodies_tail}"
-            else:
-                system_prompt = _skill_bodies_tail
-
+            volatile_tail_text = _skill_bodies_tail
         if memory_section:
-            if system_prompt:
-                system_prompt = f"{system_prompt}\n{memory_section}"
+            if volatile_tail_text:
+                volatile_tail_text = f"{volatile_tail_text}\n{memory_section}"
             else:
-                system_prompt = memory_section
+                volatile_tail_text = memory_section
+
+        if not settings.cache_volatile_tail_layout:
+            if _skill_bodies_tail:
+                if system_prompt:
+                    system_prompt = f"{system_prompt}\n\n{_skill_bodies_tail}"
+                else:
+                    system_prompt = _skill_bodies_tail
+
+            if memory_section:
+                if system_prompt:
+                    system_prompt = f"{system_prompt}\n{memory_section}"
+                else:
+                    system_prompt = memory_section
 
         # Call LocalLLMClient.respond()
         # Pass previous_response_id for stateful /v1/responses API
@@ -2301,6 +2311,15 @@ async def step_llm_call(
 
         # Validate and fix conversation role alternation for strict models (e.g., Mistral).
         request_messages = _validate_and_fix_conversation_roles(request_messages)
+
+        if settings.cache_volatile_tail_layout and volatile_tail_text:
+            # FRE-433: keep the system prompt and real history as the stable prefix,
+            # then place per-turn memory/skill bodies at the message tail so KV
+            # caches can reuse the unchanged prefix across turns.
+            request_messages = [
+                *request_messages,
+                {"role": "user", "content": volatile_tail_text},
+            ]
 
         # Debug: log message roles for conversation validation
         message_roles = [msg.get("role", "unknown") for msg in request_messages]
@@ -2335,6 +2354,12 @@ async def step_llm_call(
         # tool rules (STATIC) → tool awareness (SEMI-STATIC) → base system body → decomposition.
         # The volatile memory tail is appended after this capture point.
         _static_prefix = inner_system_before_memory
+        _full_prompt_for_identity = system_prompt or ""
+        if settings.cache_volatile_tail_layout and volatile_tail_text:
+            if _full_prompt_for_identity:
+                _full_prompt_for_identity = f"{_full_prompt_for_identity}\n\n{volatile_tail_text}"
+            else:
+                _full_prompt_for_identity = volatile_tail_text
         _component_ids: list[str] = []
         if tool_awareness:
             _component_ids.append("tool_awareness")
@@ -2357,7 +2382,7 @@ async def step_llm_call(
         _prompt_identity = derive_prompt_identity(
             "orchestrator.primary",
             static_prefix=_static_prefix,
-            full_prompt=system_prompt or "",
+            full_prompt=_full_prompt_for_identity,
             component_ids=tuple(_component_ids),
         )
 

@@ -41,6 +41,7 @@ litellm.suppress_debug_info = True
 def _apply_anthropic_cache_control(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None,
+    volatile_tail_layout: bool = False,
 ) -> None:
     """Attach Anthropic cache_control markers in-place for prompt caching.
 
@@ -55,6 +56,8 @@ def _apply_anthropic_cache_control(
     Args:
         messages: api_messages list (modified in-place). Must be pre-sanitised.
         tools: OpenAI-format tool definitions list, or None.
+        volatile_tail_layout: When True, the final message is the per-turn
+            volatile tail and the previous message is the end of stable history.
     """
     # Mark system message
     if messages and messages[0].get("role") == "system":
@@ -65,6 +68,25 @@ def _apply_anthropic_cache_control(
             ]
         elif isinstance(sys_content, list) and sys_content:
             last_block = sys_content[-1]
+            if isinstance(last_block, dict) and "cache_control" not in last_block:
+                last_block["cache_control"] = {"type": "ephemeral"}
+
+    # FRE-433: with the volatile content relocated to the final message, mark
+    # the real history boundary immediately before it. The volatile tail itself
+    # remains unmarked because it changes every turn.
+    if volatile_tail_layout and len(messages) >= 2:
+        history_end_message = messages[-2]
+        history_end_content = history_end_message.get("content", "")
+        if isinstance(history_end_content, str):
+            history_end_message["content"] = [
+                {
+                    "type": "text",
+                    "text": history_end_content,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        elif isinstance(history_end_content, list) and history_end_content:
+            last_block = history_end_content[-1]
             if isinstance(last_block, dict) and "cache_control" not in last_block:
                 last_block["cache_control"] = {"type": "ephemeral"}
 
@@ -247,7 +269,11 @@ class LiteLLMClient:
             litellm_kwargs.setdefault("extra_headers", {})["anthropic-beta"] = (
                 "prompt-caching-2024-07-31"
             )
-            _apply_anthropic_cache_control(api_messages, litellm_kwargs.get("tools"))
+            _apply_anthropic_cache_control(
+                api_messages,
+                litellm_kwargs.get("tools"),
+                volatile_tail_layout=_settings.cache_volatile_tail_layout,
+            )
             # Reflect updated messages (cache_control blocks mutated in-place)
             litellm_kwargs["messages"] = api_messages
 

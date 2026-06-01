@@ -148,6 +148,14 @@ class AppConfig(BaseSettings):
             "to reduce latency and reasoning verbosity."
         ),
     )
+    cache_volatile_tail_layout: bool = Field(
+        default=False,
+        description=(
+            "When True, volatile prompt content (memory + skill bodies) is relocated from the "
+            "system message head to the tail of the message array to improve KV-cache reuse "
+            "(FRE-433)."
+        ),
+    )
 
     # Orchestrator
     orchestrator_max_concurrent_tasks: int = Field(

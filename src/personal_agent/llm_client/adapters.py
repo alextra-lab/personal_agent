@@ -650,8 +650,12 @@ def build_chat_completions_request(
     if extra_body:
         payload["extra_body"] = extra_body
 
-    # Enable KV-cache prefix reuse across requests (llama-server defaults to false).
-    # Confirmed safe via direct curl tests — tool calls parse correctly with this set.
+    # Enable KV-cache prefix reuse across requests. Current llama.cpp defaults this
+    # to true, but older builds defaulted false; set it explicitly so behavior is
+    # backend-version-independent. Confirmed safe via direct curl tests — tool calls
+    # parse correctly with this set. NB (FRE-433): this enables *within-turn* reuse;
+    # cross-turn reuse is governed by SLM-server slot config (--parallel,
+    # --slot-prompt-similarity, --cache-reuse), not by this flag.
     payload["cache_prompt"] = True
 
     return payload

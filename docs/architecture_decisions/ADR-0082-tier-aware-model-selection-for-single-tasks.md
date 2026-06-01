@@ -1,7 +1,7 @@
 # ADR-0082 — Tier-Aware Model Selection for SINGLE-Strategy Tasks
 
 **Status:** Proposed — 2026-06-01
-**Related:** ADR-0033 (multi-provider model taxonomy — defines the `primary` / `sub_agent` tiers), ADR-0063 (primitive tools & action-boundary governance — owns the gateway decomposition matrix), ADR-0023 (thinking-budget control), ADR-0078/0081 (prompt/cache work — the cost context this sits beside), FRE-407 (per-turn quality rating — the quality guardrail)
+**Related:** ADR-0033 (multi-provider model taxonomy — defines the `primary` / `sub_agent` tiers), ADR-0063 (primitive tools & action-boundary governance — owns the gateway decomposition matrix), ADR-0023 (thinking-budget control), ADR-0074 (identity / joinability — the emit-site discipline D5 inherits), ADR-0078/0081 (prompt/cache work — the cost context this sits beside), FRE-407 (per-turn quality rating — the quality guardrail)
 
 ---
 
@@ -77,6 +77,16 @@ The exact re-run semantics (reuse vs discard the instruct partial) are an open d
 
 Where the two tiers have **separate inference capacity**, routing the conversational/recall bulk to `sub_agent` (`max_concurrency: 3`) frees the single `primary` slot for turns that actually reason — a throughput win independent of the per-turn cost saving. **This does not hold on the single-GPU local host:** `primary` and `sub_agent` share one llama-server endpoint served single-threaded, so the dividend is near-zero locally and is real only on a cloud profile or a second local slot. Claim it conditionally, not by default (see Consequences).
 
+### D5 — Observability & joinability (ADR-0074) — required, not optional
+
+Every verification gate in this ADR (per-tier latency/cost, escalation rate, FRE-407 sliced by tier) is **only measurable if the tier decision and its consequences are emitted as joinable telemetry.** Per ADR-0074, every new emit site carries `session_id` + `trace_id` from `TraceContext`. This ADR adds three observability requirements that ship *with* the routing change, not after:
+
+1. **`tier_selected` gateway event** — the analog of `decomposition_assessed`. Emits `{tier, reason, task_type, complexity, session_id, trace_id}` at the point the tier is chosen, so routing decisions are queryable and joinable to the turn (the same way `decomposition_assessed` already lets us slice strategy×reason). The `model_tier` is also stamped on `GatewayOutput` (D1) and should appear on the existing `model_call_completed` event alongside `model_role` so cache/cost/quality can all be sliced by tier without a separate join.
+2. **`tier_escalated` event** — emitted on every instruct→primary re-run (D3), carrying `{from_tier, to_tier, escalation_reason, session_id, trace_id}` joined to the originating turn. Without it the "escalation rate below ceiling" gate is unmeasurable, and a silently-escalating misclassification would be invisible.
+3. **Per-tier cost attribution** — close the cost-gate blindspot named in Consequences: `model_call_completed` already carries `model_role`+`trace_id`+`session_id` (joinable), but cost-gate aggregates `primary` and `sub_agent` into one `main_inference` class (`cost_gate/__init__.py:90-91`). Add a per-tier cost dimension so the efficiency win is visible *where it is accounted*, not only inferable from raw call logs.
+
+**Acceptance:** `scripts/monitors/joinability_probe.py` shows **no orphans** for the new events post-deploy (the standard ADR-0074 §3.4 gate), and FRE-407 ratings are sliceable by `tier` (confirm `model_tier` is on, or joinable to, the `PromptIdentity` the ratings attach to). A tier-routing change that can't be joined back to cost and quality is not done.
+
 ---
 
 ## Open decisions (data-gated)
@@ -114,3 +124,4 @@ Where the two tiers have **separate inference capacity**, routing the conversati
 - **Quality (gate):** FRE-407 per-turn rating for each tier-routed class is **flat-or-up** vs the all-primary baseline. Any regression past the defined floor reverts that class.
 - **Escalation rate:** instruct→primary re-run rate stays below a set ceiling (else the mapping is too aggressive — retune D2).
 - **No expansion regression:** HYBRID/DECOMPOSE/DELEGATE rates and outcomes unchanged (this ADR touches only the `SINGLE` tier choice).
+- **Joinability (ADR-0074, gating):** `joinability_probe.py` reports no orphans for the new `tier_selected` / `tier_escalated` events; `model_tier` is present on `model_call_completed` and joinable to the FRE-407 `PromptIdentity` so cost, latency, and quality are all sliceable by tier (see D5). The cost/quality gates above are only valid once this holds.

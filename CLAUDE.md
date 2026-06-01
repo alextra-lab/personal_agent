@@ -205,6 +205,6 @@ Full coding standards in `.claude/CLAUDE.md` § Coding Standards. Quick summary:
 - Async for all I/O; pass `TraceContext` through call chains
 - Test markers: `integration` (requires live LLM), `requires_llm_server`, `evaluation` (100+ calls) — unit tests carry no marker
 
-### Current status (as of 2026-05-24)
+### Current status (as of 2026-06-01)
 
-Waves A–C, E (partial: FRE-227 artifact substrate shipped), G (partial), J complete. FRE-350 post-deploy eval gate earliest 2026-05-24; FRE-328 naming-stability decision 2026-05-26. See `docs/plans/MASTER_PLAN.md` for the current wave sequence.
+Waves A–C, E, J complete. Wave H (memory/context): FRE-375/374/376 ✅ — ADR-0074 Accepted; FRE-377 next. Wave I (prompt observability, FRE-403 EPIC): FRE-404/405/406/407 ✅ — FRE-408 (P4) next. ADR-0081 D1 ✅ (FRE-422, volatility-gradient prompt layout) deployed — the `orchestrator.primary` cache gate remains blocked on D4 (skill-index split). Waves D (deferred per FRE-214 §8.7), F, G partial. See `docs/plans/MASTER_PLAN.md` for the authoritative wave sequence and gate dates.

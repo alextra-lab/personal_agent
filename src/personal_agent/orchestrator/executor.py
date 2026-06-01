@@ -2180,37 +2180,35 @@ async def step_llm_call(
                 reason="synthesizing" if is_synthesizing else "disabled",
             )
 
-        # Capture the cacheable prefix (everything before the DYNAMIC memory
-        # section) for the static_prefix_hash (ADR-0078 D4, FRE-405).
-        inner_system_before_memory = system_prompt or ""
-
-        # Add memory context to system prompt (Phase 2.2, ADR-0025 broad recall)
+        # ADR-0081 D1: Volatility-gradient layout — build memory_section locally
+        # without injecting it yet; it will be appended last as the VOLATILE tail.
+        # This ensures the KV-cache boundary sits between the stable prefix and
+        # the per-turn dynamic content, fixing the cross-turn reuse ≈ 0 issue.
+        memory_section: str | None = None
         if ctx.memory_context and len(ctx.memory_context) > 0:
             if ctx.memory_context[0].get("type") in ("entity", "session"):
                 # Broad recall path — format as direct knowledge summary
                 entity_items = [m for m in ctx.memory_context if m.get("type") == "entity"]
-                memory_section = _render_memory_section(entity_items)
+                memory_section = _render_memory_section(entity_items) or None
             else:
                 # Task-assist path — inject conversation summaries
-                memory_section = "\n\n## Relevant Past Conversations\n"
-                memory_section += (
+                _ms = "\n\n## Relevant Past Conversations\n"
+                _ms += (
                     "The following past conversations may be relevant to the current request:\n\n"
                 )
                 for i, mem in enumerate(ctx.memory_context[:3], 1):  # Limit to top 3
-                    memory_section += (
+                    _ms += (
                         f"{i}. {mem.get('summary', mem.get('user_message', ''))[:150]}...\n"
                     )
                     if mem.get("key_entities"):
-                        memory_section += f"   Entities: {', '.join(mem['key_entities'][:5])}\n"
-                memory_section += "\nYou can reference these past conversations to provide more context-aware responses."
-
-            if system_prompt:
-                system_prompt = f"{system_prompt}\n{memory_section}"
-            else:
-                system_prompt = memory_section
+                        _ms += f"   Entities: {', '.join(mem['key_entities'][:5])}\n"
+                _ms += "\nYou can reference these past conversations to provide more context-aware responses."
+                memory_section = _ms
 
         # If we are passing tools (native or prompt-injected), include tool-use guidance
         # in the system prompt to reduce malformed tool calls and looping (ADR-0032).
+        # STATIC tool rules go FIRST (primacy + cached), then SEMI-STATIC tool awareness
+        # and the base system body. Memory (VOLATILE) is appended last — see below.
         if tools or _prompt_injected_tool_text:
             from personal_agent.orchestrator.prompts import (
                 TOOL_USE_NATIVE_PROMPT,
@@ -2229,10 +2227,11 @@ async def step_llm_call(
             # Add tool awareness so agent can answer questions about its capabilities
             tool_awareness = get_tool_awareness_prompt()
 
+            # tool_prompt (STATIC) first, tool_awareness (SEMI-STATIC) next, base last
             if system_prompt:
-                system_prompt = f"{tool_awareness}\n\n{system_prompt}\n\n{tool_prompt}"
+                system_prompt = f"{tool_prompt}\n\n{tool_awareness}\n\n{system_prompt}"
             else:
-                system_prompt = f"{tool_awareness}\n\n{tool_prompt}"
+                system_prompt = f"{tool_prompt}\n\n{tool_awareness}"
 
         # HYBRID decomposition prompt (autonomous mode only — enforced mode
         # uses the expansion controller which has already run by this point).
@@ -2254,6 +2253,17 @@ async def step_llm_call(
                 system_prompt = f"{system_prompt}{hybrid_prompt}"
             else:
                 system_prompt = hybrid_prompt.strip()
+
+        # Capture the cacheable prefix AFTER all STATIC/SEMI-STATIC assembly and
+        # BEFORE the VOLATILE memory tail — this is what the static_prefix_hash covers.
+        inner_system_before_memory = system_prompt or ""
+
+        # Append memory (VOLATILE) LAST — tail position nearest the user query (ADR-0081 D1).
+        if memory_section:
+            if system_prompt:
+                system_prompt = f"{system_prompt}\n{memory_section}"
+            else:
+                system_prompt = memory_section
 
         # Call LocalLLMClient.respond()
         # Pass previous_response_id for stateful /v1/responses API
@@ -2302,15 +2312,10 @@ async def step_llm_call(
         from personal_agent.llm_client.prompt_identity import derive_prompt_identity
 
         # Build the orchestrator.primary PromptIdentity (ADR-0078 D1/D4, FRE-405).
-        # static_prefix is the literal cacheable prefix: tool_awareness (prepended)
-        # + the system body assembled before the DYNAMIC memory section. Post-memory
-        # STATIC fragments (tool rules, decomposition) are intentionally excluded —
-        # they are not in a cacheable prefix position under the current composer.
-        _static_prefix = (
-            f"{tool_awareness}\n\n{inner_system_before_memory}"
-            if tool_awareness
-            else inner_system_before_memory
-        )
+        # After ADR-0081 D1, inner_system_before_memory IS the full cacheable prefix:
+        # tool rules (STATIC) → tool awareness (SEMI-STATIC) → base system body → decomposition.
+        # The volatile memory tail is appended after this capture point.
+        _static_prefix = inner_system_before_memory
         _component_ids: list[str] = []
         if tool_awareness:
             _component_ids.append("tool_awareness")

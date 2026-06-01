@@ -73,6 +73,7 @@ class TestSkillBlockFunctionalInjection:
         from personal_agent.config import settings
         from personal_agent.telemetry.trace import TraceContext
 
+        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
         monkeypatch.setattr(settings, "skill_routing_mode", "hybrid")
         monkeypatch.setattr(settings, "skill_routing_model_key", "")
 
@@ -200,6 +201,7 @@ class TestSkillNudgeInjection:
         from personal_agent.config import settings
         from personal_agent.telemetry.trace import TraceContext
 
+        monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
         monkeypatch.setattr(settings, "skill_routing_mode", "keyword")
         monkeypatch.setattr(settings, "skill_routing_model_key", "")
         monkeypatch.setattr(settings, "skill_nudge_enabled", True)

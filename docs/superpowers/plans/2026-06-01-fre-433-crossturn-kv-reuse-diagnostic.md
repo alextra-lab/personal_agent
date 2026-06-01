@@ -17,9 +17,13 @@ and the partial-reuse knob (`--cache-reuse`) is **architecturally unavailable fo
 head change at offset ~N invalidates the **entire** KV cache for the turn → `cache_reuse=0`, full
 ~8k re-prefill, every turn.
 
-**The fix is gateway-side and proven** (slm_server Test 3): move the per-turn volatile content to the
-**tail** of the message array (stable system + frozen history first). Turn-2 `prompt_n` drops
-**6799 → 277** and `cache_n` rises **0 → 6771** — ~24× less prefill — from reordering alone.
+**The fix is gateway-side**: move the per-turn volatile content out of the head to the **tail**, with
+the prior turns **frozen append-only** so each turn is a strict forward extension (slm_server Test 3:
+turn-2 `prompt_n` 6799→277, `cache_n` 0→6771). **The end-to-end A/B (see §A/B validation) refines
+this: the relayout *alone* fixes cloud but NOT local** — local additionally requires the frozen
+append-only history (ADR-0081 **D2/D3**), because the local whole-sequence slot only reuses an exact
+forward extension. Cloud reuse rose 13,916→17–20k; local stayed at 0 until the volatile block is
+frozen in place.
 
 **Both earlier leads were wrong and are retracted:** it is NOT inter-request slot eviction, and NOT
 `mmproj`/multimodal (the backend control reused *with* mmproj + spec-decode on). My initial
@@ -101,6 +105,50 @@ cached → backend reuses it, prefilling only the small new tail.
 - `cache_reuse > 0` (ES `cache_read_tokens > 0`) on the **first** model call of each new turn (now 0).
 - Turn ≥2 `prompt_n` drops from ~8k to a few hundred (just the new tail).
 - First-token latency drops from 9–35s toward ~1.5–4s — finally realizing D4's intended win.
+
+## A/B validation (2026-06-01) — relayout alone is cloud-only; local needs frozen append-only
+
+An end-to-end A/B ran the same multi-turn dataset (`scripts/eval/fre433_cache_ab/`) through the live
+gateway under two layouts × two backends. Arm B = branch `codex/fre-433-layout-tail-arm` +
+`AGENT_CACHE_VOLATILE_TAIL_LAYOUT=true` (volatile block relocated from the system head to a trailing
+message). Cross-turn `cache_read` on the first full-context call of turns ≥ 2:
+
+| arm | backend | cross-turn cache_read | cache_create/turn |
+|---|---|---|---|
+| A (head) | cloud (Sonnet) | 13,916 (constant) | ~1.9–7.4k |
+| A (head) | local (Qwen :8502) | 0 | — |
+| **B (tail)** | **cloud** | **17.3–20.2k** ✅ | **~0.1–2.2k** |
+| **B (tail)** | **local** | **0** ❌ | — |
+
+**Verdict: the relayout fixes cloud but NOT local.** Cloud reuse rises and re-creation collapses
+(and confirms it does *not* break Sonnet caching — it improves it). Local stays at 0.
+
+**Why — confirmed by the slm_server's exact raw-`:8502` Test 3 construction:**
+
+```
+GOOD (reuses): turn2 = [system STABLE][user VOL_V1+Q1][assistant g1][user VOL_V2+Q2]
+               prefix [STABLE][VOL_V1+Q1][g1] is BYTE-IDENTICAL to turn-1's cached KV
+               → strict forward extension → cache_n 6771, prompt_n 277
+```
+
+Two properties make local reuse work, and **arm B has only the first**:
+1. Volatile rides with its user turn (out of the system head). ✅ arm B does this.
+2. **Frozen append-only history** — a past turn's volatile block stays byte-identical in its original
+   position; only the newest turn gets fresh volatile. ❌ arm B appends an *ephemeral* trailing message
+   that is **not persisted into history**, so turn N's volatile sits in the cached slot between `userN`
+   and `assistantN`, and turn N+1 (which has `assistantN` there instead) **diverges mid-sequence** →
+   the whole-sequence local slot reuses 0. Cloud survives only because the cache breakpoint sits before
+   the tail.
+
+**Therefore the local fix = ADR-0081 D2/D3 (frozen append-only history)**, not the relayout alone.
+Test-3 method (for reproduction): raw `POST :8502/v1/chat/completions` (or `:8000` via router),
+`stream:true max_tokens:16 temperature:0`, metric `timings.cache_n`/`prompt_n` from the final SSE
+chunk, run turn 1 → ~1s pause → turn 2 (single slot retains turn-1 KV).
+
+**Tradeoff the ADR must settle:** freezing each turn's recalled memory + skill bodies into history buys
+the reuse but means they **accumulate** in-context (monotonic token growth + stale recall persisting),
+vs. today's fresh-per-turn recall. Codex's arm is a validated **cloud-only** partial — hold it pending
+the D2/D3 ADR, which subsumes it.
 
 ## Verification (mirror Test 3 in staging)
 ≥2-turn session sharing a prefix. **PASS** = `cache_n > 0` / `cache_read_tokens > 0` on the first call

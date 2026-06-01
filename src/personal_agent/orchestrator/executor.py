@@ -1913,6 +1913,13 @@ async def step_llm_call(
     _decomposition_added = False
     tool_awareness = ""
 
+    # ADR-0081 D4: the volatile skill-bodies block (selected bodies +
+    # <skill_usage_directives>). Assembled in the skill-routing block below but
+    # appended to the VOLATILE tail (after the static-prefix capture), alongside
+    # memory_section. Declared here so it survives into the try block regardless
+    # of whether the prefer_primitives_enabled path runs.
+    _skill_bodies_tail = ""
+
     # Phase B skill routing (FRE-skill-routing, ADR-0063 §D7).
     # Routing mode controls what gets injected:
     #   keyword       — keyword-matched skill bodies only (Phase A legacy behavior)
@@ -1991,72 +1998,77 @@ async def step_llm_call(
                     trace_id=ctx.trace_id,
                 )
 
-        _skill_injection: str = ""
+        # ADR-0081 D4: split the skill block at its volatility seam.
+        #   STABLE  → compact index + <skill_index_directive>  (cached prefix)
+        #   VOLATILE → selected bodies + <skill_usage_directives>  (volatile tail)
+        # Track the two classes in separate variables so the volatile fragments
+        # never enter the static-prefix capture.
+        _skill_index_text: str = ""  # STABLE — deterministic catalog render
+        _skill_bodies_text: str = ""  # VOLATILE — per-turn selected bodies
 
         _all_skills = get_all_skills()
 
         if _routing_mode == "model_decided":
-            # Build: skill index + bodies of any pre-loaded (router-selected) skills
-            _skill_index = assemble_skill_index(cap_tokens=settings.skill_index_max_tokens)
+            # Index (stable) + bodies of any pre-loaded (router-selected) skills.
+            _skill_index_text = assemble_skill_index(cap_tokens=settings.skill_index_max_tokens)
             _preloaded_bodies: list[str] = []
             if ctx.loaded_skills:
                 for _name in sorted(ctx.loaded_skills):
                     _doc = _all_skills.get(_name)
                     if _doc and _doc.body:
                         _preloaded_bodies.append(_doc.body)
-            parts = [p for p in [_skill_index, *_preloaded_bodies] if p]
-            _skill_injection = "\n\n".join(parts)
-            _has_index = bool(_skill_index)
-            _has_bodies = bool(ctx.loaded_skills)
+            _skill_bodies_text = "\n\n".join(p for p in _preloaded_bodies if p)
         elif _routing_mode == "hybrid":
-            _skill_index = assemble_skill_index(cap_tokens=settings.skill_index_max_tokens)
-            _keyword_block = get_skill_block(
+            _skill_index_text = assemble_skill_index(cap_tokens=settings.skill_index_max_tokens)
+            _skill_bodies_text = get_skill_block(
                 message=_user_message,
                 loaded_skills=ctx.loaded_skills,
             )
-            parts = [p for p in [_skill_index, _keyword_block] if p]
-            _skill_injection = "\n\n".join(parts)
-            _has_index = bool(_skill_index)
-            _has_bodies = bool(_keyword_block)
-        else:  # keyword (default / legacy)
-            _skill_injection = get_skill_block(message=_user_message)
-            _has_index = False
-            _has_bodies = bool(_skill_injection)
+        else:  # keyword (default / legacy) — bodies only, no index
+            _skill_bodies_text = get_skill_block(message=_user_message)
 
-        # FRE-337: Append deterministic directive blocks after all skill content.
-        # <skill_index_directive> fires whenever the compact index is present.
-        # <skill_usage_directives> fires only when ≥1 skill body is loaded.
-        # Both are gated by settings.skill_nudge_enabled.
-        # Per-skill nudge bullets use ctx.loaded_skills (explicitly tracked across all modes);
-        # keyword-matched bodies in hybrid/keyword mode trigger the wrapper but no bullets unless
-        # the skill was also explicitly tracked (read via read_skill or router).
-        _nudge_parts: list[str] = []
-        if settings.skill_nudge_enabled and _skill_injection:
+        _has_index = bool(_skill_index_text)
+        _has_bodies = bool(_skill_bodies_text)
+
+        # FRE-337: deterministic directive blocks, partitioned by volatility class.
+        # <skill_index_directive> is STABLE → rides the cached index block.
+        # <skill_usage_directives> is VOLATILE → rides the body block in the tail.
+        # Both gated by settings.skill_nudge_enabled.
+        _index_directive = ""
+        _usage_directives = ""
+        if settings.skill_nudge_enabled:
             if _has_index:
-                _nudge_parts.append(assemble_skill_index_directive())
+                _index_directive = assemble_skill_index_directive()
             if _has_bodies:
-                _nudge_parts.append(
-                    assemble_skill_usage_directives(list(ctx.loaded_skills), _all_skills)
+                _usage_directives = assemble_skill_usage_directives(
+                    list(ctx.loaded_skills), _all_skills
                 )
-        _nudge_block = "\n\n".join(p for p in _nudge_parts if p)
 
-        _full_skill_injection = "\n\n".join(p for p in [_skill_injection, _nudge_block] if p)
+        # Independent joiners (ADR-0081 D4 caution): the stable side must be
+        # byte-identical whether 0 or N bodies are selected, so build each block
+        # from its own fragments — the tail's presence never alters prefix bytes.
+        _skill_index_block = "\n\n".join(p for p in [_skill_index_text, _index_directive] if p)
+        _skill_bodies_tail = "\n\n".join(p for p in [_skill_bodies_text, _usage_directives] if p)
 
-        if _full_skill_injection:
-            _skill_index_present = True
+        # STABLE index → cached prefix (before the line-~2259 capture).
+        # _skill_index_present reflects ACTUAL index presence only (not bodies),
+        # so the skill_index component id is not falsely stamped in keyword mode.
+        _skill_index_present = _has_index
+        if _skill_index_block:
             if system_prompt:
-                system_prompt = f"{system_prompt}\n\n{_full_skill_injection}"
+                system_prompt = f"{system_prompt}\n\n{_skill_index_block}"
             else:
-                system_prompt = _full_skill_injection
+                system_prompt = _skill_index_block
 
         log.info(
             "skill_index_assembled",
             routing_mode=_routing_mode,
-            injected_chars=len(_skill_injection),
+            index_chars=len(_skill_index_text),
+            bodies_chars=len(_skill_bodies_text),
             loaded_skills_count=len(ctx.loaded_skills),
             skill_routing_model_key=ctx.skill_routing_model_id or None,
-            index_directive_emitted=_has_index and settings.skill_nudge_enabled,
-            usage_directives_emitted=_has_bodies and settings.skill_nudge_enabled,
+            index_directive_emitted=bool(_index_directive),
+            usage_directives_emitted=bool(_usage_directives),
             trace_id=ctx.trace_id,
         )
 
@@ -2197,9 +2209,7 @@ async def step_llm_call(
                     "The following past conversations may be relevant to the current request:\n\n"
                 )
                 for i, mem in enumerate(ctx.memory_context[:3], 1):  # Limit to top 3
-                    _ms += (
-                        f"{i}. {mem.get('summary', mem.get('user_message', ''))[:150]}...\n"
-                    )
+                    _ms += f"{i}. {mem.get('summary', mem.get('user_message', ''))[:150]}...\n"
                     if mem.get("key_entities"):
                         _ms += f"   Entities: {', '.join(mem['key_entities'][:5])}\n"
                 _ms += "\nYou can reference these past conversations to provide more context-aware responses."
@@ -2254,11 +2264,20 @@ async def step_llm_call(
             else:
                 system_prompt = hybrid_prompt.strip()
 
-        # Capture the cacheable prefix AFTER all STATIC/SEMI-STATIC assembly and
-        # BEFORE the VOLATILE memory tail — this is what the static_prefix_hash covers.
+        # Capture the cacheable prefix AFTER all STATIC/SEMI-STATIC assembly
+        # (incl. the stable skill index) and BEFORE the VOLATILE tail — this is
+        # what the static_prefix_hash covers (ADR-0081 D1 + D4).
         inner_system_before_memory = system_prompt or ""
 
-        # Append memory (VOLATILE) LAST — tail position nearest the user query (ADR-0081 D1).
+        # VOLATILE tail (ADR-0081 D4 decided order):
+        #   selected skill bodies → <skill_usage_directives> → recalled memory.
+        # Appended after the capture, so none of it enters static_prefix_hash.
+        if _skill_bodies_tail:
+            if system_prompt:
+                system_prompt = f"{system_prompt}\n\n{_skill_bodies_tail}"
+            else:
+                system_prompt = _skill_bodies_tail
+
         if memory_section:
             if system_prompt:
                 system_prompt = f"{system_prompt}\n{memory_section}"
@@ -2325,6 +2344,10 @@ async def step_llm_call(
             _component_ids.append("operator_stanza")
         if _skill_index_present:
             _component_ids.append("skill_index")
+        if _skill_bodies_tail:
+            # ADR-0081 D4: distinct VOLATILE marker — these bytes feed dynamic_hash,
+            # never static_prefix_hash (they are appended after the capture point).
+            _component_ids.append("skill_bodies")
         if ctx.memory_context:
             _component_ids.append("memory_section")
         if tool_awareness:

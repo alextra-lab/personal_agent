@@ -19,6 +19,7 @@ manager call sites can be exercised in tests with overridden settings.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -174,6 +175,148 @@ def _assemble_compressed(
         out.extend(pre_passed_middle)
     out.extend(tail)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Frozen-prefix re-establishment (ADR-0081 §D2 Decision 5 / §D3, FRE-434)
+# ---------------------------------------------------------------------------
+
+# Role of the persisted recap under the frozen layout. NOT "system": the
+# role-fixer keeps only the first system message and silently drops later ones
+# (executor._validate_and_fix_conversation_roles), so a system-role recap at
+# index 1+ would be deleted on the next dispatch. An assistant "context recap"
+# survives the role-fix in place.
+FROZEN_RECAP_ROLE = "assistant"
+
+
+@dataclass(frozen=True)
+class FrozenResetResult:
+    """Outcome of a scheduled frozen-prefix reset.
+
+    Attributes:
+        messages: The canonical post-reset history —
+            ``[first user][assistant recap][K verbatim tail turns]`` — persisted
+            into ``session.messages`` so the next turn forward-extends it.
+        salient_highlights: A bounded, volatile distillation of the narrative
+            that rides the *next* turn's volatile block (regenerated each turn,
+            never frozen). Empty when there is no narrative.
+        narrative: The cumulative frozen-recap text (also the recap message
+            content). Empty when the middle was empty.
+    """
+
+    messages: list[dict[str, Any]]
+    salient_highlights: str
+    narrative: str
+
+
+def _tail_starting_on_user(tail: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Trim leading non-user messages so the band starts on a user turn.
+
+    Keeps the ``[first user] → [assistant recap] → [user …]`` seam alternating
+    (ADR-0081 §D2 Decision 5). Returns an empty list if the tail has no user turn.
+    """
+    for i, msg in enumerate(tail):
+        if msg.get("role") == "user":
+            return tail[i:]
+    return []
+
+
+def _bound_highlights(narrative: str, max_chars: int) -> str:
+    """Return a hard-bounded distillation of *narrative* for the volatile tail.
+
+    Deterministic character-bound (a proxy for the token cap) so the highlights
+    cannot erode the compression win. A dedicated key-decision extraction is a
+    follow-up refinement (ADR-0081 §D3); the bound is the invariant that matters.
+    """
+    text = narrative.strip()
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip()
+
+
+async def build_frozen_reset(
+    messages: list[dict[str, Any]],
+    *,
+    trace_id: str,
+    session_id: str,
+    pre_pass_threshold_tokens: int | None = None,
+    min_tail_tokens: int | None = None,
+    min_tail_turns: int = 4,
+    salient_highlights_max_chars: int = 1200,
+) -> FrozenResetResult:
+    """Compact cold turns into a cumulative recap and re-establish a frozen prefix.
+
+    Per ADR-0081 §D2 Decision 5 / §D3 a scheduled reset produces the canonical
+    history ``[first user][assistant recap][last K verbatim turns]``. The recap
+    is **cumulative**: any prior recap sits in the middle band and is fed back into
+    the summariser, so no cold context is lost across successive resets. The turn
+    after the reset forward-extends this sequence, so local KV reuse resumes (the
+    sawtooth rising edge).
+
+    Args:
+        messages: Current working message list (system prompt is separate).
+        trace_id: Request trace identifier.
+        session_id: Session identifier.
+        pre_pass_threshold_tokens: Override for the deterministic pre-pass
+            threshold.
+        min_tail_tokens: Absolute tail floor; defaults to
+            ``within_session_min_tail_ratio · context_window_max_tokens``.
+        min_tail_turns: Minimum verbatim tail turns to keep.
+        salient_highlights_max_chars: Hard bound on the volatile highlights.
+
+    Returns:
+        A :class:`FrozenResetResult`.
+    """
+    threshold = (
+        pre_pass_threshold_tokens
+        if pre_pass_threshold_tokens is not None
+        else settings.within_session_pre_pass_threshold_tokens
+    )
+    tail_token_floor = (
+        min_tail_tokens
+        if min_tail_tokens is not None
+        else int(settings.within_session_min_tail_ratio * settings.context_window_max_tokens)
+    )
+
+    head = _extract_head(messages)
+    head_len = len(head)
+    tail = _extract_tail(messages, head_len, min_tokens=tail_token_floor, min_turns=min_tail_turns)
+    tail = _tail_starting_on_user(tail)
+    tail_idx_start = len(messages) - len(tail) if tail else len(messages)
+    middle = messages[head_len:tail_idx_start]
+
+    pre_passed, _replacements = _pre_pass_tool_outputs(middle, threshold_tokens=threshold)
+
+    narrative = ""
+    if pre_passed:
+        from personal_agent.orchestrator.context_compressor import FALLBACK_MARKER
+
+        summary_text, _duration_ms = await summarize_middle(
+            pre_passed, trace_id=trace_id, session_id=session_id
+        )
+        if summary_text and summary_text != FALLBACK_MARKER:
+            narrative = summary_text
+
+    out: list[dict[str, Any]] = list(head)
+    if narrative:
+        out.append({"role": FROZEN_RECAP_ROLE, "content": narrative})
+    out.extend(tail)
+
+    log.info(
+        "frozen_reset_built",
+        trace_id=trace_id,
+        session_id=session_id,
+        input_messages=len(messages),
+        output_messages=len(out),
+        kept_tail_turns=len(tail),
+        narrative_chars=len(narrative),
+    )
+
+    return FrozenResetResult(
+        messages=out,
+        salient_highlights=_bound_highlights(narrative, salient_highlights_max_chars),
+        narrative=narrative,
+    )
 
 
 def needs_hard_compression(messages: list[dict[str, Any]], max_tokens: int) -> bool:

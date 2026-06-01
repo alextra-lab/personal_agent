@@ -181,9 +181,19 @@ async def _es_search(
 
 
 async def wait_for_trace(
-    client: httpx.AsyncClient, es_url: str, index: str, trace_id: str, timeout_s: float
+    client: httpx.AsyncClient,
+    es_url: str,
+    index: str,
+    trace_id: str,
+    timeout_s: float,
+    min_prompt_tokens: int,
 ) -> bool:
-    """Poll ES until a ``model_call_completed`` exists for ``trace_id``.
+    """Poll ES until the turn's FULL-CONTEXT primary call is indexed.
+
+    Waiting for any ``model_call_completed`` races: the small intent/router call
+    indexes first, before the big full-context orchestrator call. So we wait until
+    a primary completed call whose context size (input OR cache_read OR
+    cache_creation) clears ``min_prompt_tokens`` is present.
 
     Args:
         client: Async HTTP client.
@@ -191,9 +201,10 @@ async def wait_for_trace(
         index: Index pattern to search.
         trace_id: Trace id to wait for.
         timeout_s: Hard polling timeout in seconds.
+        min_prompt_tokens: Full-context size threshold.
 
     Returns:
-        True if a completed model call was indexed before the timeout.
+        True if the full-context call was indexed before the timeout.
     """
     deadline = asyncio.get_event_loop().time() + timeout_s
     body = {
@@ -203,7 +214,14 @@ async def wait_for_trace(
                 "must": [
                     {"term": {"trace_id": trace_id}},
                     {"term": {"event_type": "model_call_completed"}},
-                ]
+                    {"term": {"role": "primary"}},
+                ],
+                "should": [
+                    {"range": {"input_tokens": {"gte": min_prompt_tokens}}},
+                    {"range": {"cache_read_tokens": {"gte": min_prompt_tokens}}},
+                    {"range": {"cache_creation_input_tokens": {"gte": min_prompt_tokens}}},
+                ],
+                "minimum_should_match": 1,
             }
         },
     }
@@ -340,9 +358,11 @@ async def run_session(
             session_id=session_id,
             trace_id=trace_id,
         )
-        ok = await wait_for_trace(es, es_url, index, trace_id, trace_timeout_s)
+        ok = await wait_for_trace(
+            es, es_url, index, trace_id, trace_timeout_s, min_prompt_tokens
+        )
         if not ok:
-            log.warning("trace_not_indexed", trace_id=trace_id, turn=turn_index)
+            log.warning("full_context_call_not_indexed", trace_id=trace_id, turn=turn_index)
         metric = await fetch_turn_metric(
             es,
             es_url,

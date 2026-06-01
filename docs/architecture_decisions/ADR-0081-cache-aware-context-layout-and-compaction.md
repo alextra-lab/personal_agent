@@ -69,7 +69,18 @@ After D1, the cacheable prefix is captured at `executor.py:2259` as `inner_syste
 | Selected skill bodies | `_keyword_block` (hybrid) / `_preloaded_bodies` (model_decided) | **VOLATILE** — varies with the user query and `ctx.loaded_skills` |
 | `<skill_usage_directives>` | `assemble_skill_usage_directives(ctx.loaded_skills, …)` (`skills.py:264`) | **VOLATILE** — bullet set derived from per-turn `ctx.loaded_skills` |
 
-The two VOLATILE fragments sit inside the captured static prefix → `static_prefix_hash` changes every turn → cross-turn `cached_tokens` ≈ 0 → cache gate RED. This is structurally the *same* defect D1 fixed for memory, one layer up; D4 applies the same maneuver to the skill block.
+The VOLATILE fragments sit inside the captured static prefix → `static_prefix_hash` changes every turn → cross-turn `cached_tokens` ≈ 0 → cache gate RED. This is structurally the *same* defect D1 fixed for memory, one layer up; D4 applies the same maneuver to the skill block. (Refinement from design review: `<skill_usage_directives>` churns only when `ctx.loaded_skills` changes — it returns empty when no body is loaded, `skills.py:280` — so it is volatile-when-present rather than every-turn. The selected-bodies fragment is the dominant per-turn churner.)
+
+#### Why the skill block — and not something else — is the churner (component-isolation evidence)
+
+The prefix could in principle be churned by *any* per-turn-varying fragment captured before line 2259, not just skills. A design-review pass (Codex) correctly flagged three other candidates inside the captured prefix: `operator_stanza` (memory-backed, could change on a mid-session memory write), the tool block (`tool_awareness` + prompt-injected tool defs, *skipped* on synthesis turns → a structurally different prefix), and the `decomposition_instructions` block (turn-state-dependent). If any of those were active across the 23-turn session, the split alone would reduce but not eliminate the hash count.
+
+The FRE-405 `prompt_component_ids` stamp lets us test this directly. Across all **6** distinct prefix hashes in the session, the component set is **identical**: `{deployment_context, operator_stanza, skill_index, tool_awareness, tool_use_rules, memory_section}`. Therefore:
+
+- **`decomposition_instructions` never appears** → the decomposition block was not active. Ruled out.
+- **`tool_awareness` + `tool_use_rules` appear in all 6** → no synthesis turns dropped the tool block; the tool fragments are structurally constant here. Ruled out.
+- The variation is in component *content*, not component *presence* — and the only captured-prefix component whose content varies **by construction** is `skill_index` (the hybrid keyword bodies track the user message). This is the confirmed churner D4 targets.
+- **Residual suspect — `operator_stanza`:** present every turn; architecturally provisioned once per session (`get_or_provision_user_person`), so expected constant, but the component-set view cannot *prove* its bytes never changed. It is carried as a named contingency in Verification: if the post-D4 hash count lands >1, `operator_stanza` is the next fragment to isolate (it would need the same before-capture/stable treatment, or its own volatile-tail relocation if it proves session-mutable). `memory_section` appears in the component list but, post-D1, is appended *after* the capture point — it is already on the volatile side and does not enter `static_prefix_hash`.
 
 #### The split
 
@@ -79,6 +90,12 @@ Resolve the standing "route-once vs split-index+late-bodies vs relocate-all" que
 - **Volatile tail, after the capture point (same band as `memory_section`, before the current query):** the selected skill bodies + the per-turn `<skill_usage_directives>`. These contribute to `dynamic_hash`, never to `static_prefix_hash`.
 
 Implementation shape (for the build worktree, not done here): split the single splice at `executor.py:2045-2050` into two — index + index-directive appended into `system_prompt` before the line-2259 capture; bodies + usage-directives deferred and appended into the volatile tail alongside `memory_section` (line 2262-2266). The `skill_index` entry in `_component_ids` (line 2326) stays; add a distinct volatile marker for the bodies so prompt identity attributes them to the dynamic side.
+
+**Volatile-tail ordering (decided):** `[stable prefix] ‖ selected skill bodies → <skill_usage_directives> → recalled memory / D3 highlights → current query`. The usage-directives sit adjacent to the bodies they reference ("follow the loaded skill bodies"); memory highlights stay nearest the query, preserving D3's stated placement ("just before the current query"). All tail fragments are recency-adjacent, so moving bodies off the cached side does not bury them in the low-attention middle.
+
+**Two implementation cautions (from design review), to carry into the build ticket:**
+- **Separator/empty-fragment symmetry (same bug class D1 fixed for empty-memory):** the volatile-tail join must filter empty fragments *and* emit separators identically whether 0 or N skill bodies are selected, so a "no volatile skills" turn and a "one volatile skill" turn cannot leave different separator/whitespace bytes on the **stable** side of the boundary. Build the stable prefix and the volatile tail with independent joiners; never let the tail's presence affect prefix bytes.
+- **`_skill_index_present` flag correctness:** today it is set from any `_full_skill_injection` (`executor.py:2045-2046`), including keyword-only mode where no index exists. After the split it must reflect *actual index presence* only, so the `skill_index` component id (which feeds `static_prefix_hash` attribution) is not falsely stamped on keyword-mode turns that carry only volatile bodies.
 
 #### Interaction with routing modes (ADR-0063 §D7, FRE-373) and `prefer_primitives_enabled`
 
@@ -109,7 +126,7 @@ The cache boundary moves up to sit immediately after the stable skill index. Aft
 
 #### Index format/size minimization — deferred sub-experiment (does NOT gate D4)
 
-The index is now a permanent prefix resident, so its size/encoding affect tokens and attention dilution. A **minimization + format experiment** (compact-markdown vs JSON vs XML; field ablation) remains scoped as its own follow-up, gated on a labeled routing-eval set (candidate for DSPy optimization). It is explicitly **not** on the critical path for the cache-GREEN gate — the split alone flips the gate; the format search only trims the now-cached cost. Invariant: the canonical index stays stored structured (for tooling/versioning/hashing) and is **deterministically rendered** to the model-facing form — never LLM-restructured, since nondeterministic rendering would re-introduce prefix churn.
+The index is now a permanent prefix resident, so its size/encoding affect tokens and attention dilution. A **minimization + format experiment** (compact-markdown vs JSON vs XML; field ablation) remains scoped as its own follow-up, gated on a labeled routing-eval set (candidate for DSPy optimization). It is explicitly **not** on the critical path for the cache-GREEN gate — the split removes the confirmed structural churner (subject to the `operator_stanza` contingency in Verification); the format search only trims the now-cached cost. Invariant: the canonical index stays stored structured (for tooling/versioning/hashing) and is **deterministically rendered** to the model-facing form — never LLM-restructured, since nondeterministic rendering would re-introduce prefix churn.
 
 ### D5 — Tiered virtual context (cold-tier on-demand retrieval)
 
@@ -176,5 +193,6 @@ D4 is **done** only when `orchestrator.primary` flips GREEN on the FRE-405/406/4
 - **Erosion gate (FRE-406):** `make cache-erosion-status` for `orchestrator.primary` reports Jaccard ≥ 0.90 (`status=stable`), flipping the current RED.
 - **Real reuse:** cross-turn `cached_tokens > 0` on repeat-prefix turns (today ≈ 0); the stable skill index now sits in the cached region.
 - **Quality unchanged (FRE-407):** the per-turn rating trace stays flat or improves — moving skill bodies to the volatile tail (recency-adjacent) must not degrade routing/answer quality.
+- **`operator_stanza` contingency (named residual, from design review):** the component-isolation evidence rules out decomposition and synthesis/tool variance but cannot prove `operator_stanza` bytes were constant across the session. If post-D4 the hash count lands **>1**, isolate `operator_stanza` next (group surviving hashes by component content; confirm whether a mid-session memory write mutated it). Do **not** mark D4 done on a partial drop (e.g. 6→2) — the gate is exactly 1.
 
 **Verification-tooling prerequisite (FRE-406 amendment).** The cache-erosion monitor (`scripts/monitors/cache_erosion_monitor.py` / `compute_erosion_report`) currently windows on whole calendar days (`window_days`, `calendar_interval: "1d"`). A same-morning deploy + same-session verification (exactly the D4 case — the entire 23-turn dataset above lives inside one morning) is **invisible at day granularity**: it collapses into a single bucket and reports `insufficient_data`. The monitor must gain an **`--hours-ago` window** (sub-day range + an hour/turn-level bucketing) so D4 can be verified in the same session it deploys, per the "post-deploy steps run in the same session as deploy" rule. This is a small build-worktree change, tracked as an explicit sub-item on the D4 ticket; it gates D4's *verifiability*, not its implementation.

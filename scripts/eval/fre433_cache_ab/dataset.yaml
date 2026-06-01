@@ -1,0 +1,48 @@
+# FRE-433 cache A/B exposure dataset.
+#
+# Purpose: expose cross-turn KV-cache reuse behaviour under two prompt layouts
+# (arm A = volatile block in the system HEAD, current; arm B = volatile block at
+# the message TAIL, AGENT_CACHE_VOLATILE_TAIL_LAYOUT=true).
+#
+# Design constraints (so the test actually exposes the bug):
+#   * Every session is multi-turn in ONE session_id, so a reusable cross-turn
+#     prefix exists.
+#   * Turn 2+ deliberately SHIFTS topic / entities so the per-turn volatile block
+#     (recalled memory + selected skill bodies) CHANGES — that is what poisons the
+#     system head under arm A. If the volatile block were identical turn-to-turn,
+#     both arms would look fine and the bug would hide.
+#   * Sessions are kept to <=4 turns so within-session compression does not fire
+#     (Codex arm explicitly does NOT reconcile compaction; out of A/B scope).
+#
+# Metric of interest: cache_read_tokens on the FIRST full-context model call of
+# turns >= 2 (cross-turn reuse). Arm A expectation ~0; arm B expectation > 0.
+
+sessions:
+  - label: topic_shift_mixed
+    note: each turn changes domain → maximal volatile churn (skills + recall)
+    turns:
+      - "Give me a concise overview of how the agent's memory promotion pipeline works."
+      - "Different topic now — what's a good approach to summarise a long set of meeting notes?"
+      - "Switch again: outline the steps to plan a three-day research sprint."
+      - "Last one: what are the trade-offs between REST and event-driven integration?"
+
+  - label: same_topic_followup
+    note: follow-ups on one topic; recall still varies per query
+    turns:
+      - "Explain what a knowledge graph is and why it's useful for an assistant."
+      - "How would entities and relationships be extracted from a conversation?"
+      - "What failure modes should I watch for in that extraction step?"
+
+  - label: skill_leaning
+    note: turns phrased to lean on different capabilities/skills per turn
+    turns:
+      - "Search for recent context on cache-aware prompt layout and summarise it."
+      - "Now write a short structured note capturing the key points."
+      - "Finally, draft a 3-item plan to validate the idea."
+
+  - label: conversational_plain
+    note: plain chat, minimal skill selection, recall still present
+    turns:
+      - "Hi — what kinds of things can you help me with?"
+      - "Interesting. What are you least good at?"
+      - "Got it. Summarise this short exchange in one sentence."

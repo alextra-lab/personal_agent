@@ -36,8 +36,10 @@ Reorder assembly so the byte order is monotone in mutation frequency:
 ‖ cache boundary ‖
 [FROZEN]      append-only narrative summary of cold history       ── cached (see D2)
 [VERBATIM]    recent tail (+ pinned, see D6)
-[VOLATILE]    recalled memory · salient highlights (D3) · current query   ── recency
+[VOLATILE]    recalled memory · selected skill bodies + usage-directives (D2/D4) · salient highlights (D3) · current query   ── recency
 ```
+
+*(This is the D1 conceptual gradient. D2 makes it concrete on the wire: the FROZEN/VOLATILE bands are not sub-regions of the system message but separate messages — frozen content rides past user turns, the current volatile inlines into the current user message. See the D2 wire diagram below.)*
 
 Fixes the `executor.py:2218` inversion: STATIC fragments move to the front; `memory_section` and conversation move after the boundary. The current query stays **last** (adjacent to generation).
 
@@ -64,13 +66,16 @@ Two properties are jointly necessary and individually insufficient: **(1)** vola
 ```
 [0] system   = [STATIC: tool-use rules] [SEMI-STATIC: tool-awareness · deployment · operator stanza
                · STABLE skill index + <skill_index_directive>] [decomposition-base]   ← byte-identical every turn
-‖ cloud cache_control breakpoint sits at the end of message[0] and after the last tool (litellm_client.py:60-75) ‖
+‖ cloud cache_control breakpoints: (a) end of message[0], (b) after the last tool — both on main today ‖
 [1..M] conversation history — each past user turn carries its OWN frozen volatile block
        (the recall + skill bodies + usage-directives that were live when that turn ran), then its assistant reply.
        These bytes never change again. ← frozen append-only
+‖ cloud cache_control breakpoint (c): on message[M], the last frozen turn — NEW, D2 point 4, not on main ‖
 [M+1] current user turn = [fresh volatile: recalled memory · selected skill bodies · <skill_usage_directives>
-       · D3 salient highlights] + [user query] (+ /no_think suffix)   ← the only new bytes this turn
+       · D3 salient highlights] inlined into the user content + [user query] (+ /no_think suffix)   ← the only new bytes this turn
 ```
+
+The three cloud breakpoints (a)+(b)+(c) realize the brief's "system + history-end + last-tool" placement; (c) is the one D2 adds (`litellm_client.py` `_apply_anthropic_cache_control` marks only (a)+(b) today). On local, breakpoints are irrelevant — reuse comes purely from the byte-identical forward extension.
 
 **What moves, concretely (build implements; anchors are current main):**
 
@@ -84,15 +89,17 @@ Two properties are jointly necessary and individually insufficient: **(1)** vola
 **Decision 5 — frozen-prefix re-establishment (post-reset sequence structure).** After a Part B reset at turn *N*, the persisted sequence is:
 
 ```
-[0] system  (unchanged — byte-identical; on cloud it stays cached behind the system+last-tool breakpoint)
+[0] system  (unchanged — byte-identical; on cloud it stays cached behind the system breakpoint)
 [1] first user turn  — preserved verbatim by _extract_head (the original task instruction; keep it, it aids grounding)
-[2] frozen_narrative  — one persisted system message: the cumulative narrative of cold turns 2…N−K
+[2] frozen_narrative  — persisted ASSISTANT recap message (NOT system, see role note): cumulative narrative of cold turns 2…N−K
 [3..K+2] the last K turns kept VERBATIM, each still carrying its own frozen volatile block
-   ‖ cloud history-end cache_control breakpoint here — after the last frozen message, before the volatile tail ‖
+   ‖ cloud history-end cache_control breakpoint here — on the last frozen message, before the volatile tail (D2 point 4) ‖
 [K+3] current user turn (volatile inlined into its content) + query     ← forward extension resumes here
 ```
 
-Note this is the structure `_extract_head` + `_assemble_compressed` actually yield (head = system **+ first user**, then summary, then K-turn tail) — see the Decision 4 amendment; the first user message is intentionally retained.
+**`frozen_narrative` role — pinned to `assistant`, NOT `system` (review fix; this was a latent self-contradiction).** The byte-identity invariant warns that `_validate_and_fix_conversation_roles` special-cases system messages — and inspection (`executor.py:663` `if system_msg is None: … continue`) shows it keeps only the **first** system message and **silently drops every later one**. A `system`-role narrative at index 2 would therefore be **deleted on the very next dispatch**, not merely reordered. So the persisted narrative is an **assistant** "context recap" message (semantically: the assistant's own summary of prior turns), which survives the role-fix in place. This requires `SUMMARY_ROLE` in `within_session_compression.py:46` (currently `"system"`) to be `"assistant"` on the persisted path. **Alternation caution for build:** the seam is `…[1] user → [2] assistant-recap → [3] tail-start…`; the K-turn tail must begin on a **user** message or the two assistants merge (role-fix duplicate-merge, `executor.py:700`). Constrain `_extract_tail` to start the kept band on a user-role turn so alternation holds across the seam.
+
+Note the rest of the structure is what `_extract_head` + `_assemble_compressed` yield (head = system **+ first user**, then summary, then K-turn tail) — see the Decision 4 amendment; the first user message is intentionally retained.
 
 Properties that make the next run reuse again:
 - The `frozen_narrative` message is **persisted into `session.messages`** (replacing the transient `compression_manager._summaries` mechanism, see Decision 4) so it replays byte-identically; it is itself frozen until the *next* reset.
@@ -119,26 +126,34 @@ This invariant is the same class of bug D1/D4 fought (empty-fragment separator c
 
 **Decision 3 — compaction-trigger model: fire at the cost/quality optimum, not a fixed token ratio.** Replace the reactive triggers — the soft `context_compression_threshold_ratio = 0.65` (`compression_manager.maybe_trigger_compression`, fired every eligible turn at `executor.py:3403`) and the hard `within_session_hard_threshold_ratio = 0.85` (`needs_hard_compression`, `executor.py:1808`) — with a scheduler that resets when the marginal cost of *holding* (not compacting) one more turn exceeds the amortized cost of *resetting*:
 
-The scheduler has a **closed-form optimal run length** (review fix — replaces the earlier hand-waved "L_current"). Model the cost of one run of length `L` turns as a renewal cost: one reset `R_backend` plus the accumulating per-turn hold cost. With a **linear** marginal hold cost `c` per turn (the staleness slope; justified below), total run cost `≈ R_backend + c·L²/2`, and **average cost per turn** `= R_backend/L + c·L/2`. Minimizing over `L`:
+The scheduler has a **closed-form optimal run length** (review fix — replaces the earlier hand-waved "L_current"). Model the cost of one run of length `L` turns as a renewal cost: one reset `R_backend` plus the accumulating per-turn hold cost. With a **linear** marginal hold cost `c` per turn (the staleness slope; justified below), total run cost `≈ R_backend + c·L²/2`, and **average cost per turn** `A(L) = R_backend/L + c·L/2`. `A'(L) = −R_backend/L² + c/2 = 0` ⇒
 
 ```
 L* = sqrt( 2 · R_backend / c )                          # optimal turns between resets (EOQ form)
-where
-  c          = marginal per-turn hold cost
-             = Q_slope · Δ_stale_per_turn  +  budget_penalty_slope        # quality + budget, per turn
-  Q_slope    = FRE-407 rating-points lost per 1k accumulated stale tokens  # fit online (units below)
-  Δ_stale_per_turn ≈ Δ_turn (tokens)                    # one turn's frozen volatile becomes "stale" next turn
-  R_backend  = backend-asymmetric one-time reset (re-prefill) cost in the SAME units as c·L   # see below
 
-equivalent online rule (no need to estimate L ahead of time):
-  reset at turn N of the run when   marginal_hold_cost(N) = c·N  ≥  R_backend / N
-  i.e. when N ≥ sqrt(R_backend / c)   (the discrete crossing; ~L* up to the renewal constant)
+equivalent online stopping rule (converges to L*, review-corrected constant):
+  reset at turn N of the run when   marginal_hold_cost(N) ≥ average reset contribution
+                                    c·N  ≥  2 · R_backend / N
+  ⇔ c·N²/2 ≥ R_backend ⇔ N ≥ sqrt(2·R_backend/c) = L*    # EXACTLY L*, not L*/√2
 ```
 
-The marginal rule is what build implements (it needs no forward horizon estimate — just compare the running `c·N` against `R_backend/N` each turn); `L*` is the analytic target it converges to. The determinism the frozen layout buys is what makes every term measurable:
+> **Review correction.** An earlier draft wrote the online rule as `c·N ≥ R_backend/N`, which crosses at `N ≥ sqrt(R_backend/c) = L*/√2` — a *different, tighter* policy that resets ~30 % too early. The correct marginal rule (reset when the next turn's hold cost exceeds the *current average reset contribution* `2R/N`, the derivative-consistent form) is `c·N ≥ 2·R_backend/N`, which crosses exactly at `L*`. Build implements this corrected form; it needs no forward horizon estimate — just compare running `c·N` against `2·R_backend/N` each turn.
+
+**Common unit (review fix — `R_backend` and `c·L` must be commensurable).** Both are expressed in **prefill-token-equivalents**, so the comparison is unit-clean:
+```
+R_backend            = reset re-prefill tokens          # cloud: rewritten span; local: full new prefix (see below)
+c (tokens/turn)      = w_q · Q_slope · (Δ_turn / 1000)  +  budget_penalty_tokens(N)
+  w_q                = quality→token weight: prefill-token-equivalents "worth" of one FRE-407 rating point
+                       (the single bridging knob; starter w_q = 4000 tok/point, env-overridable, tuned online)
+  Q_slope            = FRE-407 rating-points lost per 1k accumulated stale tokens   (starter 0.05 pts/1k-tok)
+  Δ_turn             = measured per-turn frozen increment (tokens)
+  budget_penalty_tokens(N) = 0 below 0.40·context_window, then rising linearly to dominate at the
+                       Decision-2 token ceiling (keeps the optimum inside the window)
+```
+With `w_q` fixed, `c` is in tokens/turn and `L* = sqrt(2·R_backend/c)` is dimensionless turns. `w_q` is the one weight an implementer must set; everything else is measured. The determinism the frozen layout buys is what makes every term measurable:
 - **Reuse savings** — monotonic in run length; banked prefill = `cached_tokens · prefill_cost_per_token` (local prefill is 92–96 % of turn latency, ~1050 tok/s — the dominant win). This is *why* we resist resetting; it is captured implicitly by amortizing `R_backend` over the run.
 - **`Δ_turn` (accumulation)** — frozen volatile grows by a **known, bounded per-turn increment** `Δ_turn ≈ recall + skill_bodies + usage_directives + highlights + query + reply`, so `total_tokens(N) ≈ total_tokens(N−1) + Δ_turn` is predictable and measurable from the persisted history.
-- **`Q_slope` (quality) — units and calibration.** Units: **FRE-407 mean-rating delta per 1 000 accumulated stale tokens** (e.g. ratings on the existing 1–5 trace → `Q_slope` in points/1k-tok). Fit online by regressing the per-turn FRE-407 rating against `stale_tokens(N)` across the A/B harness runs the scheduler already logs. **Starter constants until the fit lands** (conservative, env-overridable): `Q_slope = 0.05` points/1k-tok, `budget_penalty_slope` = 0 below 0.40·context-window then rising linearly to dominate at the Decision-2 token ceiling. These are explicit defaults, not placeholders — the scheduler logs predicted-vs-measured each turn and the slope self-corrects; if FRE-407 ratings are sparse/noisy the scheduler falls back to the token ceiling (Decision 2) alone.
+- **`Q_slope` / `w_q` — calibration.** Both feed `c` (formula above). Fit `Q_slope` online by regressing per-turn FRE-407 rating against `stale_tokens(N)` across the A/B harness runs the scheduler already logs; `w_q` is set so a rating point's token-equivalent matches how much prefill the team is willing to spend to avoid one point of quality loss (starter `4000` tok/point). The starter constants are explicit defaults, not placeholders — the scheduler logs predicted-vs-measured each turn and self-corrects; if FRE-407 ratings are sparse/noisy it falls back to the token ceiling (Decision 2) alone.
 
 **Backend-asymmetric reset cost (same formula, one backend-aware term `R_backend`):**
 - **Cloud:** with the D2 **history-end cache_control breakpoint** added (D2 point 4 — *not* on main today; without it cloud history isn't cached and this asymmetry collapses), the system+tools+frozen-history prefix stays cached across a reset; the reset re-creates only the rewritten/compacted span → **`R_cloud` small** → small `R/c` → reset **sooner**, compact **tighter/fresher**.
@@ -155,7 +170,7 @@ The operating bound is `reset_at = min(cost_optimum, token_ceiling, quality_ceil
 **Decision 4 — reconcile `within_session_compression`: it becomes the scheduled reset, not an ad-hoc rewrite.** Today `compress_in_place` (`within_session_compression.py`) rewrites history (head + LLM summary + tail) — which **is** a cache reset — and fires reactively (soft via `compression_manager`, hard mid-orchestration), while its output is **transient**: stored in `compression_manager._summaries`, re-inserted by `apply_context_window(compressed_summary=get_summary())` (`executor.py:1575-1584`) at a fixed position each turn, and **popped on read** (`compression_manager.get_summary`, one-shot). That transient re-derivation is itself a per-turn cache-buster (this ADR's Context #2). Under D2/D3:
 - `compress_in_place` is invoked **only** when the Decision-3 scheduler decides to reset — never reactively per turn.
 - Its output is **persisted into `session.messages`** as the canonical new history (Decision 5): the `frozen_narrative` becomes a real, durable message, not a re-inserted artifact. The `compression_manager._summaries` / `get_summary` / `apply_context_window(compressed_summary=…)` re-insertion path is **removed**; `apply_context_window` keeps only its pure truncation/`_sanitize_tool_pairs` role.
-- The **extraction + summarisation functions** (`_extract_head`, `_extract_tail`, `_pre_pass_tool_outputs`, `summarize_middle`) are reused as-is inside the reset — but the **assembly is not** (review fix). `_assemble_compressed` (`within_session_compression.py:152-176`) yields `head → summary → tail`, where `_extract_head` (`:54-79`) preserves the **system message(s) + the first user message** verbatim. That is exactly the Decision-5 post-reset structure — `[system][first user][frozen_narrative summary][last K tail turns]` — so the functions compose correctly, but two changes are required: (a) the `summary` becomes the **cumulative** `frozen_narrative` (previous narrative + new increment), not a fresh whole-history summary, so no cold context is lost across resets; (b) the assembled list is **persisted into `session.messages`** as the new canonical history, replacing the transient re-insertion path (above). The earlier draft's claim that the machinery is reused "verbatim" was wrong about assembly — flagged in review and corrected here. The `WithinSessionCompressionRecord` dual-write (ADR-0054 §D4) continues, with `trigger` extended to `"scheduled_reset"`.
+- The **extraction + summarisation functions** (`_extract_head`, `_extract_tail`, `_pre_pass_tool_outputs`, `summarize_middle`) are reused as-is inside the reset — but the **assembly is not** (review fix). `_assemble_compressed` (`within_session_compression.py:152-176`) yields `head → summary → tail`, where `_extract_head` (`:54-79`) preserves the **system message(s) + the first user message** verbatim. That is exactly the Decision-5 post-reset structure — `[system][first user][frozen_narrative summary][last K tail turns]` — so the functions compose correctly, but three changes are required: (a) the `summary` becomes the **cumulative** `frozen_narrative` (previous narrative + new increment), not a fresh whole-history summary, so no cold context is lost across resets; (b) the assembled list is **persisted into `session.messages`** as the new canonical history, replacing the transient re-insertion path (above); (c) `SUMMARY_ROLE` (`within_session_compression.py:46`) changes `"system"` → `"assistant"` on the persisted path, because the role-fix drops non-leading system messages (Decision 5 role note) — and `_extract_tail` is constrained to start the kept band on a user turn so the recap→tail seam stays alternating. The earlier draft's claim that the machinery is reused "verbatim" was wrong about assembly — flagged in review and corrected here. The `WithinSessionCompressionRecord` dual-write (ADR-0054 §D4) continues, with `trigger` extended to `"scheduled_reset"`.
 
 This makes the one rewrite event deliberate, persisted, and amortized — exactly the sawtooth Decision 5 re-establishes.
 
@@ -257,7 +272,7 @@ A message may be marked **pinned** → always retained, never compressed. Placem
 
 ### Measurement
 
-Every change is verified against the P1 instruments: `static_prefix_hash` must go **constant across same-session turns**; cross-turn `cache_n` / `cached_tokens` must rise from ~0; and a new **post-compression "forgot-an-earlier-fact" error rate** must not regress (the metric for D3/D5). No change ships without a before/after on these. **Local-truth caveat (FRE-433):** for the local backend, the authoritative reuse signal is the SLM-server `timings.cache_n` / `prompt_n` read on the turn's first full-context call — **not** the ES `cache_read_tokens` aggregate, which can mislead. A constant `static_prefix_hash` is *necessary but not sufficient* for local reuse: it hashes only a substring of message[0]; local reuse additionally requires the full wire sequence to be a byte-identical forward extension (D2).
+Every change is verified against the P1 instruments, **backend-aware** (the verifier differs by backend, per FRE-433): on **cloud**, `static_prefix_hash` constant + `cache_read`/`cache_creation` deltas; on **local**, the SLM `cache_n` / `prompt_n` directly (a constant `static_prefix_hash` is necessary but *not* sufficient locally). Both backends: cross-turn reuse must rise from ~0, and a new **post-compression "forgot-an-earlier-fact" error rate** must not regress (the metric for D3/D5). No change ships without a before/after on the backend-appropriate metric. **Local-truth caveat (FRE-433):** for the local backend, the authoritative reuse signal is the SLM-server `timings.cache_n` / `prompt_n` read on the turn's first full-context call — **not** the ES `cache_read_tokens` aggregate, which can mislead. A constant `static_prefix_hash` is *necessary but not sufficient* for local reuse: it hashes only a substring of message[0]; local reuse additionally requires the full wire sequence to be a byte-identical forward extension (D2).
 
 ---
 

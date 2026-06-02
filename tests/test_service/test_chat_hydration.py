@@ -26,7 +26,7 @@ async def test_chat_hydrates_prior_messages_before_current_turn(
         {"role": "assistant", "content": "Nice to meet you, Alex."},
     ]
 
-    session = SimpleNamespace(session_id=session_id, messages=prior_messages)
+    session = SimpleNamespace(session_id=session_id, messages=prior_messages, execution_profile="local")
     mock_repo = MagicMock()
     mock_repo.get = AsyncMock(return_value=session)
     mock_repo.create = AsyncMock(return_value=session)

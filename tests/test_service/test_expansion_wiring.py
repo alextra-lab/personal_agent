@@ -19,8 +19,8 @@ from personal_agent.service.auth import RequestUser
 _TEST_REQUEST_USER = RequestUser(user_id=uuid4(), email="test@example.com")
 
 
-def _make_session(messages: list | None = None) -> SimpleNamespace:
-    return SimpleNamespace(session_id=uuid4(), messages=messages or [])
+def _make_session(messages: list | None = None, execution_profile: str = "local") -> SimpleNamespace:
+    return SimpleNamespace(session_id=uuid4(), messages=messages or [], execution_profile=execution_profile)
 
 
 def _make_mock_repo(session: SimpleNamespace) -> MagicMock:

@@ -72,7 +72,7 @@ class TestGetCurrentModeCalledInChat:
         mock_compute.return_value = 0
         mock_pipeline.return_value = None
 
-        session = SimpleNamespace(session_id=uuid4(), messages=[])
+        session = SimpleNamespace(session_id=uuid4(), messages=[], execution_profile="local")
         repo = MagicMock()
         repo.get = AsyncMock(return_value=session)
         repo.create = AsyncMock(return_value=session)

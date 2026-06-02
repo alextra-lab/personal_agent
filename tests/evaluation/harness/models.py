@@ -199,6 +199,10 @@ class TurnResult:
     trace_id: str
     assertion_results: tuple[AssertionResult, ...]
     response_time_ms: float
+    prompt_callsite: str | None = None
+    prompt_static_prefix_hash: str | None = None
+    prompt_dynamic_hash: str | None = None
+    rating: int | None = None
 
 
 @dataclass  # NOT frozen: runner appends turns incrementally during execution

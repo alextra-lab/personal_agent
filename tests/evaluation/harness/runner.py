@@ -108,14 +108,18 @@ class EvaluationRunner:
         Returns:
             True if the agent responds within ``_RESPONSIVENESS_PROBE_TIMEOUT_S``.
         """
-        async with httpx.AsyncClient(timeout=_RESPONSIVENESS_PROBE_TIMEOUT_S, headers=self._headers) as client:
+        async with httpx.AsyncClient(
+            timeout=_RESPONSIVENESS_PROBE_TIMEOUT_S, headers=self._headers
+        ) as client:
             try:
                 resp = await client.post(
                     f"{self._agent_url}/chat",
                     params={"message": _RESPONSIVENESS_PROBE_MSG},
                 )
                 resp.raise_for_status()
-                log.info("inference_responsiveness_probe_ok", timeout_s=_RESPONSIVENESS_PROBE_TIMEOUT_S)
+                log.info(
+                    "inference_responsiveness_probe_ok", timeout_s=_RESPONSIVENESS_PROBE_TIMEOUT_S
+                )
                 return True
             except (httpx.ReadTimeout, httpx.ConnectTimeout):
                 log.error(
@@ -268,9 +272,7 @@ class EvaluationRunner:
                         session_index=sess_idx,
                         turn=global_turn_index,
                         trace_id=turn_result.trace_id,
-                        assertions_passed=sum(
-                            1 for a in turn_result.assertion_results if a.passed
-                        ),
+                        assertions_passed=sum(1 for a in turn_result.assertion_results if a.passed),
                         assertions_total=len(turn_result.assertion_results),
                         response_time_ms=turn_result.response_time_ms,
                     )
@@ -288,9 +290,7 @@ class EvaluationRunner:
         await self._run_post_path_assertions(path, result)
         return result
 
-    async def _run_post_path_assertions(
-        self, path: ConversationPath, result: PathResult
-    ) -> None:
+    async def _run_post_path_assertions(self, path: ConversationPath, result: PathResult) -> None:
         """Run post-path Neo4j assertions and finalize result."""
         if path.post_path_assertions and self._neo4j_checker:
             if path.post_path_delay_s > 0:
@@ -425,10 +425,20 @@ class EvaluationRunner:
         response_text = data.get("response", "")
         trace_id = data.get("trace_id", "")
 
+        # Fetch ES events — used for assertion checking and prompt_identity extraction
+        # (ADR-0078 P4). Skip only when trace_id is absent (e.g. timeout path).
+        events: list[dict[str, object]] = []
+        if trace_id:
+            events = await self._telemetry.fetch_events(trace_id)
+
+        # Extract prompt identity from model_call_completed events (FRE-408)
+        prompt_callsite, prompt_static_prefix_hash, prompt_dynamic_hash = (
+            self._telemetry.extract_prompt_identity(events)
+        )
+
         # Check telemetry assertions
         assertion_results: tuple[AssertionResult, ...] = ()
         if assertions:
-            events = await self._telemetry.fetch_events(trace_id)
             assertion_results = tuple(self._telemetry.check_assertions(events, assertions))
 
         return TurnResult(
@@ -438,4 +448,7 @@ class EvaluationRunner:
             trace_id=trace_id,
             assertion_results=assertion_results,
             response_time_ms=elapsed_ms,
+            prompt_callsite=prompt_callsite,
+            prompt_static_prefix_hash=prompt_static_prefix_hash,
+            prompt_dynamic_hash=prompt_dynamic_hash,
         )

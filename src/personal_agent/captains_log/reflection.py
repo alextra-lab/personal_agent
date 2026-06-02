@@ -29,6 +29,10 @@ from personal_agent.captains_log.models import (
     ProposedChange,
     TelemetryRef,
 )
+from personal_agent.captains_log.prompt_manifest import (
+    build_prompt_manifest,
+    load_mean_rating_lookup,
+)
 from personal_agent.config import settings
 from personal_agent.llm_client import LocalLLMClient, ModelRole
 from personal_agent.telemetry import get_logger
@@ -167,6 +171,9 @@ REFLECTION_PROMPT = """You are a personal AI agent analyzing your own task execu
 ## Telemetry Events
 {telemetry_summary}
 
+## Prompt Composition (this turn)
+{prompt_manifest}
+
 ## Your Task
 Analyze this task execution and generate a structured reflection entry with:
 
@@ -185,6 +192,9 @@ Focus on:
 - Tool effectiveness (did tool calls provide value or could LLM handle directly?)
 - Mode/governance interactions
 - Opportunities for optimization (caching, parallelization, reduced tool calls)
+- Prompt composition patterns (unused components, unstable static prefix hash, low/declining
+  callsite ratings); when proposing a prompt change, name the specific component_id from the
+  taxonomy and set scope to llm_client or orchestrator
 
 If this was a simple, successful task with no issues, keep the reflection lightweight.
 If there were errors, inefficiencies, or interesting patterns, provide deeper analysis.
@@ -258,6 +268,17 @@ async def generate_reflection_entry(
     trace_events = get_trace_events(trace_id)
     telemetry_summary = _summarize_telemetry(trace_events, metrics_summary)
 
+    # FRE-409: Build prompt-composition manifest from already-fetched trace events.
+    # The mean-rating lookup is best-effort; reflection proceeds even if ES is down.
+    mean_rating_lookup = await load_mean_rating_lookup(days=7, trace_id=trace_id)
+    prompt_manifest = build_prompt_manifest(trace_events, mean_rating_lookup=mean_rating_lookup)
+    log.info(
+        "reflection_prompt_manifest_built",
+        trace_id=trace_id,
+        manifest_available=prompt_manifest != "Prompt manifest: unavailable",
+        component="reflection",
+    )
+
     # Ensure final_state is a string (DSPy expects string, not None)
     effective_final_state = final_state or "UNKNOWN"
 
@@ -326,6 +347,7 @@ async def generate_reflection_entry(
                 task_type=task_type,
                 iteration_count=iteration_count,
                 max_iterations=max_iterations,
+                prompt_manifest=prompt_manifest,
             )
             log.info(
                 "dspy_reflection_succeeded",
@@ -377,6 +399,7 @@ async def generate_reflection_entry(
             final_state=effective_final_state,
             reply_length=reply_length,
             telemetry_summary=telemetry_summary,
+            prompt_manifest=prompt_manifest,
         )
 
         from personal_agent.llm_client.concurrency import InferencePriority

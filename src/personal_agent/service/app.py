@@ -1384,7 +1384,7 @@ async def chat(
                 trace_id=trace_id,
             )
             session = await repo.create(
-                SessionCreate(),
+                SessionCreate(execution_profile=profile),
                 user_id=request_user.user_id,
                 primary_model_at_creation=primary_model_id,
                 model_config_path=config_path_str,
@@ -1466,18 +1466,23 @@ async def chat(
         )
         gateway_output = None
 
-    # Activate execution profile (same as /chat/stream; selects LLM path + skill routing mode).
+    # Activate execution profile using the stored session value (ADR-0079).
+    # session.execution_profile is the server-authoritative source — for new
+    # sessions it was just persisted from the request profile; for existing
+    # sessions it is the DB-stored value (the session row is the source of
+    # truth, same policy as /chat/stream via _resolve_session_profile).
     from personal_agent.config.profile import (  # noqa: PLC0415
         load_profile,
         set_current_profile,
         set_skill_routing_mode,
     )
 
+    _effective_profile = str(session.execution_profile)
     try:
-        _chat_profile = load_profile(profile)
+        _chat_profile = load_profile(_effective_profile)
         set_current_profile(_chat_profile)
     except Exception:
-        log.warning("chat.unknown_profile", profile=profile, trace_id=trace_id)
+        log.warning("chat.unknown_profile", profile=_effective_profile, trace_id=trace_id)
 
     if skill_routing_mode:
         set_skill_routing_mode(skill_routing_mode)
@@ -1605,7 +1610,7 @@ async def chat(
         "session_id": str(session.session_id),
         "response": response_content,
         "trace_id": trace_id,
-        "profile": profile,
+        "profile": _effective_profile,
     }
 
 

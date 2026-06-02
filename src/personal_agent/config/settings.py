@@ -868,6 +868,50 @@ class AppConfig(BaseSettings):
         description="Elasticsearch index prefix for joinability probe result docs",
     )
 
+    # SLM health monitor (FRE-399 Layer 3 / ADR-0083)
+    slm_health_url: str = Field(
+        default="https://slm.frenchforet.com/health",
+        description=(
+            "URL of the Mac SLM server health endpoint, polled by the SLM-health monitor "
+            "and the /api/inference/status endpoint. The liveness-only response (today) "
+            "degrades gracefully; a richer response (from the Mac-side child ticket) "
+            "fills in GPU util, VRAM, queue depth, and model-loaded status."
+        ),
+    )
+    slm_health_probe_enabled: bool = Field(
+        default=True,
+        description="Enable the scheduled SLM-health probe (FRE-399 Layer 3 / ADR-0083)",
+    )
+    slm_health_probe_interval_seconds: float = Field(
+        default=300.0,
+        ge=30.0,
+        description="Seconds between SLM-health probe runs in the brainstem scheduler",
+    )
+    slm_health_index_prefix: str = Field(
+        default="agent-monitors-slm-health",
+        description="Elasticsearch index prefix for SLM-health snapshot docs",
+    )
+    slm_health_cache_ttl_seconds: float = Field(
+        default=45.0,
+        ge=5.0,
+        description=(
+            "Seconds a cached SLM-health snapshot stays fresh. Used by "
+            "/api/inference/status and the executor error-reason hint to read "
+            "the last known state without making a new network call."
+        ),
+    )
+    slm_gpu_util_degraded_pct: float = Field(
+        default=95.0,
+        ge=0.0,
+        le=100.0,
+        description="GPU utilisation %% at or above which the SLM is considered degraded",
+    )
+    slm_queue_depth_degraded: int = Field(
+        default=4,
+        ge=1,
+        description="Pending request queue depth at or above which the SLM is considered degraded",
+    )
+
     # Consolidation Quality Monitor (Phase 2.3, FRE-32)
     quality_monitor_enabled: bool = Field(
         default=True,

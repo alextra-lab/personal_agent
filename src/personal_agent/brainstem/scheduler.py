@@ -154,6 +154,13 @@ class BrainstemScheduler:
             settings, "joinability_probe_interval_seconds", 3600
         )
 
+        # SLM-health monitor (FRE-399 Layer 3 / ADR-0083)
+        self._last_slm_health_probe_run: datetime | None = None
+        self.slm_health_probe_enabled = getattr(settings, "slm_health_probe_enabled", True)
+        self.slm_health_probe_interval_seconds = getattr(
+            settings, "slm_health_probe_interval_seconds", 300.0
+        )
+
     async def start(self) -> None:
         """Start the scheduler background task."""
         start_trace_id = _new_scheduler_trace_id("scheduler.lifecycle")
@@ -482,6 +489,32 @@ class BrainstemScheduler:
                         log.warning(
                             "joinability_probe_failed",
                             error=str(probe_err),
+                            exc_info=True,
+                            trace_id=iteration_trace_id,
+                        )
+
+                # Every 5 min: SLM-health monitor (FRE-399 Layer 3 / ADR-0083)
+                if self.slm_health_probe_enabled and (
+                    self._last_slm_health_probe_run is None
+                    or (now - self._last_slm_health_probe_run).total_seconds()
+                    >= self.slm_health_probe_interval_seconds
+                ):
+                    try:
+                        from personal_agent.observability.slm_health.scheduler_runner import (
+                            run_scheduled_slm_health_probe,
+                        )
+
+                        await run_scheduled_slm_health_probe(
+                            es_client=cast(
+                                "AsyncElasticsearch | None",
+                                self.lifecycler._es_client,
+                            )
+                        )
+                        self._last_slm_health_probe_run = now
+                    except Exception as slm_probe_err:
+                        log.warning(
+                            "slm_health_probe_failed",
+                            error=str(slm_probe_err),
                             exc_info=True,
                             trace_id=iteration_trace_id,
                         )

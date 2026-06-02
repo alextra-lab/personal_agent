@@ -84,6 +84,7 @@ class TelemetryQueries:
         self._client_owned = es_client is None
         self._logs_index_prefix = settings.elasticsearch_index_prefix
         self._captures_index_prefix = f"{settings.captains_log_index_prefix}-captures"
+        self._reflections_index_prefix = f"{settings.captains_log_index_prefix}-reflections"
 
     async def _get_client(self) -> AsyncElasticsearch:
         """Get active Elasticsearch client, creating one if needed."""
@@ -774,6 +775,151 @@ class TelemetryQueries:
             )
 
         return results
+
+    async def get_mean_rating_by_callsite(self, days: int = 7) -> dict[str, tuple[float, int]]:
+        """Mean explicit user rating per prompt_callsite over the trailing window.
+
+        Aggregates ``user-turn-ratings-*`` by ``prompt_callsite`` (avg value +
+        doc count). Best-effort: returns an empty dict on any ES error.
+
+        Args:
+            days: Lookback window in days.
+
+        Returns:
+            Map of ``prompt_callsite`` → ``(mean_rating, sample_count)``.
+            Excludes the ``"unknown"`` (identity-less) bucket.
+        """
+        try:
+            client = await self._get_client()
+            now = datetime.now(timezone.utc)
+            start = now - timedelta(days=days)
+
+            response = await client.search(
+                index="user-turn-ratings-*",
+                query={
+                    "range": {
+                        "rated_at": {
+                            "gte": start.isoformat(),
+                            "lte": now.isoformat(),
+                        }
+                    }
+                },
+                size=0,
+                aggs={
+                    "by_callsite": {
+                        "terms": {
+                            "field": "prompt_callsite",
+                            "size": 50,
+                            "missing": "unknown",
+                        },
+                        "aggs": {
+                            "avg_rating": {"avg": {"field": "rating"}},
+                        },
+                    }
+                },
+            )
+
+            results: dict[str, tuple[float, int]] = {}
+            for bucket in (
+                response.get("aggregations", {}).get("by_callsite", {}).get("buckets", [])
+            ):
+                callsite = str(bucket.get("key", "") or "unknown")
+                if callsite == "unknown":
+                    continue
+                doc_count = int(bucket.get("doc_count", 0) or 0)
+                avg_val = (bucket.get("avg_rating") or {}).get("value")
+                mean_rating = float(avg_val) if avg_val is not None else 0.0
+                results[callsite] = (mean_rating, doc_count)
+
+            return results
+        except Exception:
+            log.warning(
+                "mean_rating_by_callsite_query_failed",
+                days=days,
+                exc_info=True,
+            )
+            return {}
+
+    async def get_prompt_composition_proposal_buckets(self, days: int = 7) -> list[dict[str, Any]]:
+        """Fetch recent Captain's Log reflection entries proposing prompt-component changes.
+
+        Scans ``{captains_log_index_prefix}-reflections-*`` for reflection entries whose
+        ``proposed_change.what`` is non-empty and ``proposed_change.scope`` is
+        ``llm_client`` or ``orchestrator``, then groups the matching docs in Python
+        by which ``PROMPT_COMPONENT_TAXONOMY`` token appears in the ``what`` text
+        (case-insensitive substring).
+
+        Best-effort: returns an empty list on any ES error.
+
+        Args:
+            days: Lookback window in days.
+
+        Returns:
+            List of dicts, one per qualifying component_id cluster::
+
+                {"component_id": str, "occurrences": int, "scope": str}
+
+            The ``scope`` field carries the most-recently seen scope hint for the
+            component cluster.  Returns an empty list when ES is unavailable or no
+            qualifying entries exist.
+        """
+        from personal_agent.llm_client.prompt_identity import PROMPT_COMPONENT_TAXONOMY
+
+        try:
+            client = await self._get_client()
+            now = datetime.now(timezone.utc)
+            start = now - timedelta(days=days)
+
+            response = await client.search(
+                index=f"{self._reflections_index_prefix}-*",
+                query={
+                    "bool": {
+                        "filter": [
+                            {
+                                "range": {
+                                    "timestamp": {"gte": start.isoformat(), "lte": now.isoformat()}
+                                }
+                            },
+                            {"exists": {"field": "proposed_change.what"}},
+                            {"terms": {"proposed_change.scope": ["llm_client", "orchestrator"]}},
+                        ]
+                    }
+                },
+                size=200,
+            )
+
+            # Group docs by which taxonomy component_id appears in proposed_change.what.
+            # A doc may match multiple components; count each match independently.
+            counts: dict[str, int] = {}
+            scope_hints: dict[str, str] = {}
+            for hit in (response.get("hits") or {}).get("hits", []):
+                source = hit.get("_source") or {}
+                pc = source.get("proposed_change") or {}
+                what_text = str(pc.get("what") or "").lower()
+                scope_text = str(pc.get("scope") or "")
+                if not what_text:
+                    continue
+                for component_id in PROMPT_COMPONENT_TAXONOMY:
+                    if component_id in what_text:
+                        counts[component_id] = counts.get(component_id, 0) + 1
+                        scope_hints[component_id] = scope_text
+
+            return [
+                {
+                    "component_id": component_id,
+                    "occurrences": occ,
+                    "scope": scope_hints.get(component_id, ""),
+                }
+                for component_id, occ in counts.items()
+            ]
+
+        except Exception:
+            log.warning(
+                "prompt_composition_proposal_buckets_query_failed",
+                days=days,
+                exc_info=True,
+            )
+            return []
 
     async def get_error_patterns(
         self,

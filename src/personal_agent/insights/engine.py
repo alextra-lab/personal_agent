@@ -37,6 +37,10 @@ INSIGHTS_INDEX_PREFIX = "agent-insights"
 MIN_MISSING_SKILL_REQUESTS = 3
 MIN_MISSING_SKILL_SESSIONS = 2
 
+# FRE-409: minimum occurrences before a prompt-component-change cluster is
+# promoted into a prompt_composition Insight (mirrors missing-skill / delegation).
+MIN_PROMPT_COMPOSITION_PROPOSALS = 2
+
 
 @dataclass(frozen=True)
 class Insight:
@@ -149,6 +153,9 @@ class InsightsEngine:
 
         low_rating_insights = await self.detect_low_rating_sessions(days=days)
         insights.extend(low_rating_insights)
+
+        prompt_composition_insights = await self.detect_prompt_composition_proposals(days=days)
+        insights.extend(prompt_composition_insights)
 
         self._index_insights(insights=insights, days=days)
         log.info("insights_generated", days=days, count=len(insights))
@@ -456,6 +463,83 @@ class InsightsEngine:
 
         log.info(
             "low_rating_analysis_complete",
+            insights_found=len(insights),
+            days=days,
+        )
+        return insights
+
+    async def detect_prompt_composition_proposals(self, days: int = 7) -> list[Insight]:
+        """Surface reflection-derived prompt-composition proposals (FRE-409).
+
+        Scans recent Captain's Log REFLECTION entries whose ``proposed_change``
+        targets a known prompt component (from ``PROMPT_COMPONENT_TAXONOMY``) with
+        scope ``llm_client`` or ``orchestrator``, emits one
+        ``Insight(insight_type="prompt_composition")`` per component_id that
+        clears the recurrence threshold.
+
+        The Insight flows through ``create_captain_log_proposals`` →
+        ``CONFIG_PROPOSAL`` → ADR-0030 promotion, tagged
+        ``insight_type="prompt_composition"``.
+
+        Args:
+            days: Lookback window in days.
+
+        Returns:
+            Prompt-composition insights; empty if none clear the threshold or ES
+            is unavailable.
+        """
+        try:
+            buckets = await self._queries.get_prompt_composition_proposal_buckets(days=days)
+        except Exception:
+            log.warning(
+                "prompt_composition_detector_failed",
+                days=days,
+                exc_info=True,
+            )
+            return []
+
+        insights: list[Insight] = []
+        for bucket in buckets:
+            component_id = str(bucket.get("component_id") or "")
+            occurrences = int(bucket.get("occurrences") or 0)
+            scope_hint = str(bucket.get("scope") or "")
+
+            if occurrences < MIN_PROMPT_COMPOSITION_PROPOSALS:
+                continue
+
+            # Confidence rises with occurrences, floored at the actionable gate (0.55),
+            # capped at 0.90 — mirrors missing-skill confidence formula.
+            confidence = min(0.90, 0.55 + 0.05 * min(7, occurrences))
+
+            title = (
+                f"Reflection proposes changing prompt component '{component_id}' "
+                f"({occurrences}x, {days}d)"
+            )
+            summary = (
+                f"Captain's Log reflections flagged prompt component '{component_id}' "
+                f"for a proposed change {occurrences} time(s) in the trailing {days}-day window. "
+                f"Scope hint: {scope_hint or 'unset'}. "
+                "Review whether this component should be trimmed, stabilised, or restructured."
+            )
+            insights.append(
+                Insight(
+                    insight_type="prompt_composition",
+                    pattern_kind="prompt_component_proposal",
+                    title=title,
+                    summary=summary,
+                    confidence=confidence,
+                    actionable=True,
+                    evidence={
+                        "component_id": component_id,
+                        "occurrences": occurrences,
+                        "window_days": days,
+                        "scope_hint": scope_hint,
+                    },
+                )
+            )
+
+        log.info(
+            "prompt_composition_analysis_complete",
             insights_found=len(insights),
             days=days,
         )
@@ -1086,6 +1170,7 @@ def _category_for_insight_type(insight_type: str) -> ChangeCategory:
         "delegation": ChangeCategory.RELIABILITY,
         "missing_skill": ChangeCategory.ARCHITECTURE,
         "low_rating": ChangeCategory.PERFORMANCE,  # FRE-407: per-turn value signal
+        "prompt_composition": ChangeCategory.PERFORMANCE,  # FRE-409: prompt-component quality
     }
     return mapping.get(insight_type, ChangeCategory.OBSERVABILITY)
 
@@ -1107,5 +1192,6 @@ def _scope_for_insight_type(insight_type: str) -> ChangeScope:
         "delegation": ChangeScope.ORCHESTRATOR,
         "missing_skill": ChangeScope.TOOLS,
         "low_rating": ChangeScope.ORCHESTRATOR,  # FRE-407: prompt quality is orchestrator-owned
+        "prompt_composition": ChangeScope.LLM_CLIENT,  # FRE-409: prompt identity is llm_client-owned
     }
     return mapping.get(insight_type, ChangeScope.CROSS_CUTTING)

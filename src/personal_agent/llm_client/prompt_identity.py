@@ -44,6 +44,27 @@ class PromptIdentity:
     component_ids: tuple[str, ...] = field(default_factory=tuple)
 
 
+PROMPT_COMPONENT_TAXONOMY: tuple[str, ...] = (
+    "tool_awareness",
+    "deployment_context",
+    "operator_stanza",
+    "skill_index",
+    "skill_bodies",
+    "memory_section",
+    "tool_use_rules",
+    "decomposition_instructions",
+)
+"""Ordered registry of prompt component IDs for callsite ``orchestrator.primary``.
+
+Single source of truth shared by the prompt-manifest builder (FRE-409) and the
+prompt-composition insights detector. Order mirrors assembly order in
+``orchestrator/executor.py``.  When the executor gains or removes a component,
+update both the executor append-block and this tuple; the sync-guard test
+(``tests/personal_agent/llm_client/test_prompt_identity_taxonomy.py``) will
+catch drift.
+"""
+
+
 def _short_hash(text: str) -> str:
     """Return the first 16 hex chars of the SHA-256 digest of ``text``.
 

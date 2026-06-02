@@ -109,6 +109,27 @@ try:
         had_errors: bool = dspy.InputField(
             desc="True when the trace contained at least one tool call failure or error event."
         )
+        # FRE-409 — prompt-composition self-reflection
+        prompt_manifest: str = dspy.InputField(
+            desc=(
+                "Snapshot of THIS turn's prompt composition: the ordered active component "
+                "IDs, the cacheable static prefix hash, and a recent quality signal for "
+                "the callsite (mean 0-3 rating over the trailing 7 days). "
+                "Use it to notice composition problems and, when warranted, propose a "
+                "prompt-composition change that names the specific component_id. "
+                "Patterns to watch for: "
+                "(1) A component that is always present yet never load-bearing — "
+                "e.g. skill_index present but no skill content matched — propose trimming it. "
+                "(2) A static prefix hash that changed recently — indicates cacheable prefix "
+                "instability that erodes KV-cache reuse — propose stabilising it. "
+                "(3) A declining or low mean rating for this callsite — suggest revisiting "
+                "the prompt components driving those turns. "
+                "When proposing a prompt change, name the component_id in "
+                "proposed_change_what and set proposed_change_scope to "
+                "'llm_client' or 'orchestrator'. "
+                "Empty string when no manifest is available — skip composition analysis."
+            )
+        )
 
         # Output fields (metrics removed - now deterministically extracted)
         rationale: str = dspy.OutputField(
@@ -280,6 +301,7 @@ def generate_reflection_dspy(
     task_type: str = "",
     iteration_count: int = 0,
     max_iterations: int = 0,
+    prompt_manifest: str = "",
 ) -> tuple[CaptainLogEntry, list[str]]:
     """Generate reflection using DSPy ChainOfThought with deterministic metrics extraction.
 
@@ -322,6 +344,9 @@ def generate_reflection_dspy(
         task_type: TaskType value for the capped request (e.g. "analysis").
         iteration_count: Tool iterations consumed before the cap fired.
         max_iterations: Effective iteration cap that was applied.
+        prompt_manifest: 3-line prompt-composition manifest built from trace
+            events (FRE-409).  Empty string when no manifest is available (best-
+            effort; reflection proceeds without composition context in that case).
 
     Returns:
         CaptainLogEntry with DSPy-generated reflection and deterministic metrics.
@@ -414,6 +439,7 @@ def generate_reflection_dspy(
                 metrics_summary=metrics_string,  # Pre-formatted, deterministic
                 failure_excerpt=failure_excerpt_json,
                 had_errors=had_errors,
+                prompt_manifest=prompt_manifest,
             )
 
             log.info(

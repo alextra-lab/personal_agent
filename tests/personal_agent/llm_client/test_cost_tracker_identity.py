@@ -95,16 +95,20 @@ async def test_record_api_call_threads_session_and_trace_into_insert() -> None:
     assert record_id == 42
     fetchval.assert_awaited_once()
     args = fetchval.await_args.args
-    # args[0] = SQL, args[1..] = parameters in INSERT column order.
+    # args[0] = SQL, args[1..] = parameters in INSERT column order:
+    # timestamp, provider, model, input_tokens, output_tokens, cost_usd,
+    # cache_read_input_tokens, cache_creation_input_tokens,
+    # trace_id, session_id, purpose, latency_ms
     sql = args[0]
     assert "session_id" in sql
-    # provider, model, input_tokens, output_tokens, cost_usd, trace_id, session_id
     assert args[2] == "openai"
     assert args[3] == "gpt-5.4-mini"
     assert args[4] == 100
     assert args[5] == 20
     assert args[6] == Decimal("0.0042")
-    assert args[7] == trace_id
-    assert args[8] == session_id
-    assert args[9] == "user_request"
-    assert args[10] == 350
+    assert args[7] is None  # cache_read_input_tokens (not an Anthropic call)
+    assert args[8] is None  # cache_creation_input_tokens
+    assert args[9] == trace_id
+    assert args[10] == session_id
+    assert args[11] == "user_request"
+    assert args[12] == 350

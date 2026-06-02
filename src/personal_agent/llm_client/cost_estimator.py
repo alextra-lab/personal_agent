@@ -17,6 +17,16 @@ Both calls fall back gracefully on unknown models so an unexpected model id
 doesn't crash the call path; in that case the reservation is computed from
 ``max_tokens`` worth of unknown-priced tokens (treated as zero — the gate
 still records the reservation for audit but won't deny based on cost).
+
+**Cache-tier pricing note (FRE-437):** Anthropic prompt caching has asymmetric
+per-token rates (cache_read ≈ 0.10× standard; cache_creation ≈ 1.25× standard).
+Pre-call, the KV-cache state on the server is unknown, so the reservation uses
+the uniform ``input_cost_per_token`` rate for all input tokens — this
+over-reserves on cache-heavy turns (by up to ~66% for high-reuse sessions, per
+FRE-437 analysis). The over-reservation is harmless: ``gate.commit()`` settles
+the actual cost computed by ``litellm.completion_cost()``, which correctly reads
+``cache_read_input_tokens`` / ``cache_creation_input_tokens`` from the response
+and applies the discounted/premium rates from ``litellm.model_cost``.
 """
 
 from __future__ import annotations

@@ -78,6 +78,8 @@ CREATE TABLE IF NOT EXISTS api_costs (
     input_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
     cost_usd DECIMAL(10, 6) NOT NULL DEFAULT 0,
+    cache_read_input_tokens INTEGER,         -- FRE-437: Anthropic cache-read tier (NULL = n/a)
+    cache_creation_input_tokens INTEGER,     -- FRE-437: Anthropic cache-creation tier (NULL = n/a)
     trace_id UUID NOT NULL,
     session_id UUID,
     purpose VARCHAR(50),  -- 'user_request', 'second_brain', 'entity_extraction'

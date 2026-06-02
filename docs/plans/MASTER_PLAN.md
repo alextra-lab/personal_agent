@@ -51,7 +51,7 @@ Four threads carved from the FRE-389 on-device review (2026-05-28). All **Approv
 ## Pending Verification
 
 - **FRE-377** (canonicalize TaskCapture token fields) — shipped + deployed + AC-1/2/3/4 verified (PR #135, merge `cf0f70f`). **AC-5 1-day soak: re-check ~2026-06-03** — ES `agent-captains-captures-*` mapping conflict-free + capture writes stay canonical/error-free over a day. Close on clean soak. Stays In Progress until then (dated gate, not drift).
-- **FRE-408** (P4 eval attribution) — shipped + pre-merge ACs verified (PR #136, merge `017debd`). Post-deploy AC **verified-by-equivalent** on 3 real `agent-logs-*` traces → `extract_prompt_identity` correct + **3 hash buckets** with stats. **Env-gated remainder:** the canonical `tests.evaluation.harness.run` smoke needs a live **local SLM** (Mac) — the VPS harness only drives the `local` profile and there's no SLM here. Close once the Mac smoke confirms ≥2 buckets (or owner accepts the equivalent).
+- **FRE-408** ✅ DONE (owner accepted real-telemetry equivalent — 3 buckets on real ES traces). Optional Mac harness smoke remains belt-and-suspenders, not blocking.
 
 ---
 

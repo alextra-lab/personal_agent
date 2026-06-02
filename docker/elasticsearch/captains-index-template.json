@@ -76,6 +76,9 @@
         "duration_ms": { "type": "float" },
         "memory_context_used": { "type": "boolean" },
         "memory_conversations_found": { "type": "integer" },
+        "input_tokens": { "type": "integer" },
+        "output_tokens": { "type": "integer" },
+        "total_tokens": { "type": "integer" },
         "proposed_change": {
           "properties": {
             "what": { "type": "text" },

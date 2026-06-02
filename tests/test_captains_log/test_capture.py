@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 from uuid import uuid4
 
+import orjson
+
 from personal_agent.captains_log.capture import (
     TaskCapture,
     write_capture,
@@ -46,6 +48,72 @@ def test_user_id_coercion() -> None:
     c2 = TaskCapture(**_base, user_id=_FakeUUID())
     assert isinstance(c2.user_id, StdUUID)
     orjson.dumps(c2.model_dump())
+
+
+_BASE: dict = dict(
+    trace_id="trace-tok",
+    session_id="session-tok",
+    timestamp=datetime(2026, 1, 15, 10, 0, 0, tzinfo=timezone.utc),
+    user_message="hi",
+    outcome="completed",
+    user_id=str(uuid4()),
+)
+
+
+class TestTokenFieldCanonicalization:
+    """FRE-377: TaskCapture uses input_tokens/output_tokens; legacy aliases still load."""
+
+    def test_canonical_keys_populate_fields(self) -> None:
+        """Constructing with canonical input_tokens/output_tokens works."""
+        c = TaskCapture(**_BASE, input_tokens=10, output_tokens=5)
+        assert c.input_tokens == 10
+        assert c.output_tokens == 5
+
+    def test_legacy_prompt_tokens_alias(self) -> None:
+        """Legacy prompt_tokens key populates canonical input_tokens."""
+        c = TaskCapture(**_BASE, prompt_tokens=42)
+        assert c.input_tokens == 42
+
+    def test_legacy_completion_tokens_alias(self) -> None:
+        """Legacy completion_tokens key populates canonical output_tokens."""
+        c = TaskCapture(**_BASE, completion_tokens=17)
+        assert c.output_tokens == 17
+
+    def test_legacy_json_deserialization(self) -> None:
+        """Legacy on-disk JSON with prompt_tokens/completion_tokens loads into canonical fields."""
+        raw = {
+            **_BASE,
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "total_tokens": 150,
+        }
+        c = TaskCapture(**raw)
+        assert c.input_tokens == 100
+        assert c.output_tokens == 50
+
+    def test_model_dump_emits_canonical_keys_not_legacy(self) -> None:
+        """model_dump() output contains input_tokens/output_tokens, not legacy names."""
+        c = TaskCapture(**_BASE, input_tokens=8, output_tokens=3)
+        dumped = c.model_dump()
+        assert "input_tokens" in dumped
+        assert "output_tokens" in dumped
+        assert "prompt_tokens" not in dumped
+        assert "completion_tokens" not in dumped
+
+    def test_model_dump_json_serializable(self) -> None:
+        """model_dump() result is JSON-serializable with canonical field names."""
+        c = TaskCapture(**_BASE, input_tokens=8, output_tokens=3)
+        payload = orjson.dumps(c.model_dump(mode="json")).decode()
+        assert '"input_tokens"' in payload
+        assert '"output_tokens"' in payload
+        assert '"prompt_tokens"' not in payload
+        assert '"completion_tokens"' not in payload
+
+    def test_defaults_are_zero(self) -> None:
+        """Token fields default to 0 when not supplied."""
+        c = TaskCapture(**_BASE)
+        assert c.input_tokens == 0
+        assert c.output_tokens == 0
 
 
 class TestWriteCapture:

@@ -7,9 +7,11 @@ from PathResult data.
 from __future__ import annotations
 
 import json
+import statistics as _stats
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import cast
 
 from tests.evaluation.harness.models import PathResult
 
@@ -52,6 +54,7 @@ def generate_json_report(
             ),
         },
         "by_category": _group_by_category(results),
+        "prompt_version_summary": _build_prompt_version_summary(results),
         "paths": [_serialize_path(r) for r in results],
     }
 
@@ -101,6 +104,10 @@ def generate_markdown_report(
     )
     lines.append(f"| Avg Response Time | {avg_ms:.0f} ms |")
     lines.append("")
+
+    # Prompt version summary (ADR-0078 P4 / FRE-408)
+    pv_rows = _build_prompt_version_summary(results)
+    lines.extend(_render_prompt_version_summary_md(pv_rows))
 
     # Results by category
     categories = _group_by_category(results)
@@ -165,6 +172,108 @@ def generate_markdown_report(
     return report_text
 
 
+def _build_prompt_version_summary(
+    results: Sequence[PathResult],
+) -> list[dict[str, object]]:
+    """Build per-static_prefix_hash rating statistics across all turns.
+
+    Groups turns by ``static_prefix_hash``, computes mean/median/p25/p75 for
+    any non-null ratings, and returns rows sorted descending by ``n_turns``.
+    Ratings are ``None`` until P3 (FRE-406) ships; the table is still rendered
+    so A/B prompt version buckets are visible in the eval report immediately.
+
+    Args:
+        results: PathResult list to aggregate.
+
+    Returns:
+        List of bucket dicts. Each dict has keys: ``static_prefix_hash``,
+        ``callsite``, ``n_turns``, ``n_rated``, ``mean_rating``,
+        ``median_rating``, ``p25``, ``p75``.
+    """
+    # hash -> (first_callsite_seen, list_of_ratings_or_None)
+    buckets: dict[str, tuple[str, list[int | None]]] = {}
+
+    for r in results:
+        for t in r.turns:
+            key = t.prompt_static_prefix_hash or "(unknown)"
+            callsite = t.prompt_callsite or "(unknown)"
+            if key not in buckets:
+                buckets[key] = (callsite, [])
+            buckets[key][1].append(t.rating)
+
+    rows: list[dict[str, object]] = []
+    for hash_key, (callsite, all_ratings) in buckets.items():
+        rated = [r for r in all_ratings if r is not None]
+        row: dict[str, object] = {
+            "static_prefix_hash": hash_key,
+            "callsite": callsite,
+            "n_turns": len(all_ratings),
+            "n_rated": len(rated),
+            "mean_rating": None,
+            "median_rating": None,
+            "p25": None,
+            "p75": None,
+        }
+        if rated:
+            row["mean_rating"] = round(_stats.mean(rated), 1)
+            row["median_rating"] = float(_stats.median(rated))
+            if len(rated) >= 2:
+                q = _stats.quantiles(rated, n=4)
+                row["p25"] = float(q[0])
+                row["p75"] = float(q[2])
+            else:
+                row["p25"] = float(rated[0])
+                row["p75"] = float(rated[0])
+        rows.append(row)
+
+    rows.sort(key=lambda x: cast(int, x["n_turns"]), reverse=True)
+    return rows
+
+
+def _render_prompt_version_summary_md(rows: list[dict[str, object]]) -> list[str]:
+    """Render the prompt version summary table as markdown lines.
+
+    Args:
+        rows: Output of _build_prompt_version_summary.
+
+    Returns:
+        Lines forming a markdown section.
+    """
+    lines: list[str] = ["## Prompt Version Summary", ""]
+    if not rows:
+        lines.append("_No prompt identity data recorded._")
+        lines.append("")
+        return lines
+
+    lines.append(
+        "| static_prefix_hash | callsite | n_turns | n_rated | mean | median | p25 | p75 |"
+    )
+    lines.append(
+        "|---------------------|----------|---------|---------|------|--------|-----|-----|"
+    )
+
+    def _fmt(v: object) -> str:
+        if v is None:
+            return "—"
+        if isinstance(v, float):
+            return f"{v:.1f}"
+        return str(v)
+
+    for row in rows:
+        lines.append(
+            f"| `{row['static_prefix_hash']}` "
+            f"| {row['callsite']} "
+            f"| {row['n_turns']} "
+            f"| {row['n_rated']} "
+            f"| {_fmt(row['mean_rating'])} "
+            f"| {_fmt(row['median_rating'])} "
+            f"| {_fmt(row['p25'])} "
+            f"| {_fmt(row['p75'])} |"
+        )
+    lines.append("")
+    return lines
+
+
 def _group_by_category(
     results: Sequence[PathResult],
 ) -> dict[str, dict[str, int]]:
@@ -211,6 +320,10 @@ def _serialize_path(r: PathResult) -> dict[str, object]:
                 "response_text": t.response_text[:500],
                 "trace_id": t.trace_id,
                 "response_time_ms": t.response_time_ms,
+                "prompt_callsite": t.prompt_callsite,
+                "prompt_static_prefix_hash": t.prompt_static_prefix_hash,
+                "prompt_dynamic_hash": t.prompt_dynamic_hash,
+                "rating": t.rating,
                 "assertions": [
                     {
                         "passed": a.passed,

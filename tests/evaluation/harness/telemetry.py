@@ -256,6 +256,44 @@ class TelemetryChecker:
                 ),
             )
 
+    def extract_prompt_identity(
+        self,
+        events: list[TelemetryEvent],
+    ) -> tuple[str | None, str | None, str | None]:
+        """Extract prompt identity fields from model_call_completed events.
+
+        Searches for a ``model_call_completed`` event (matched on either
+        ``event_type`` or ``event`` key). Prefers the ``orchestrator.primary``
+        callsite when multiple events are present; falls back to the last match.
+
+        Args:
+            events: Telemetry events fetched from ES for a given trace_id.
+
+        Returns:
+            Tuple of ``(prompt_callsite, prompt_static_prefix_hash,
+            prompt_dynamic_hash)``. Each element is ``None`` if no
+            ``model_call_completed`` event is found or the field is absent.
+        """
+        best: tuple[str | None, str | None, str | None] = (None, None, None)
+        for event in events:
+            if not (
+                event.get("event_type") == "model_call_completed"
+                or event.get("event") == "model_call_completed"
+            ):
+                continue
+            callsite = event.get("prompt_callsite")
+            sph = event.get("prompt_static_prefix_hash")
+            dyn = event.get("prompt_dynamic_hash")
+            candidate = (
+                str(callsite) if callsite else None,
+                str(sph) if sph else None,
+                str(dyn) if dyn else None,
+            )
+            best = candidate
+            if callsite == "orchestrator.primary":
+                return best
+        return best
+
     def _check_comparison(
         self,
         events: list[TelemetryEvent],

@@ -74,10 +74,19 @@ async def _drive(
     index_text: str,
     body_text: str,
 ) -> tuple[str, object]:
-    """Run step_llm_call once; return (system_prompt, prompt_identity)."""
+    """Run step_llm_call once; return (system_prompt, prompt_identity).
+
+    Pinned to the D1/D4 head layout (cache_frozen_layout_enabled=False): these
+    tests verify that the skill index and bodies land in the correct positions
+    within system_prompt. Under the frozen layout (default True since FRE-440)
+    volatile bodies ride the user turn, which is separately verified by
+    test_frozen_layout.py. Pin flag-off here so the D4 system_prompt ordering
+    invariants remain testable.
+    """
     from personal_agent.config import settings
     from personal_agent.telemetry.trace import TraceContext
 
+    monkeypatch.setattr(settings, "cache_frozen_layout_enabled", False)
     monkeypatch.setattr(settings, "prefer_primitives_enabled", True)
     monkeypatch.setattr(settings, "skill_routing_mode", routing_mode)
     monkeypatch.setattr(settings, "skill_routing_model_key", "")

@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from personal_agent.config import settings
 from personal_agent.governance.models import Mode
 from personal_agent.orchestrator import Channel
 from personal_agent.orchestrator.executor import execute_task_safe
@@ -49,12 +50,20 @@ def _make_mock_client() -> AsyncMock:
 
 @patch("personal_agent.llm_client.factory.get_llm_client")
 @pytest.mark.asyncio
-async def test_tool_prompt_before_memory_section(mock_client_class: MagicMock) -> None:
+async def test_tool_prompt_before_memory_section(
+    mock_client_class: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """tool_prompt (STATIC) must appear before memory_section (VOLATILE) in assembled prompt.
 
     ADR-0081 D1: the byte layout must be monotone in mutation frequency so the
     KV-cache boundary sits after the static prefix and before the volatile tail.
+
+    Pinned to the D1/D4 head layout (cache_frozen_layout_enabled=False): under the
+    frozen layout (FRE-434, default True as of FRE-440) volatile content rides the
+    user turn, not the system head, so the memory section would not appear in
+    system_prompt. This test intentionally verifies the head-layout invariant.
     """
+    monkeypatch.setattr(settings, "cache_frozen_layout_enabled", False)
     mock_client = _make_mock_client()
     mock_client_class.return_value = mock_client
 

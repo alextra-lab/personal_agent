@@ -615,14 +615,18 @@ class AppConfig(BaseSettings):
 
     # Cache-aware frozen append-only layout (ADR-0081 §D2/D3, FRE-434)
     cache_frozen_layout_enabled: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Enable the frozen append-only prompt layout (ADR-0081 §D2/D3). When "
             "True, per-turn volatile content (recalled memory + selected skill "
             "bodies + salient highlights) rides the current user turn instead of "
             "the system head and is persisted byte-identically, so prior turns "
             "replay as a strict forward extension and the local SLM reuses its KV "
-            "cache cross-turn. No-op when False (byte-for-byte the D1/D4 layout)."
+            "cache cross-turn. No-op when False (byte-for-byte the D1/D4 layout). "
+            "Default True since 2026-06-02 — this is the deployed production behavior "
+            "(FRE-434 shipped + verified + rolled out), pinned here so the rollout no "
+            "longer depends on a single line in the gitignored .env (FRE-440). Set "
+            "AGENT_CACHE_FROZEN_LAYOUT_ENABLED=false to revert to the head layout."
         ),
     )
     cache_reset_min_run_turns_local: int = Field(

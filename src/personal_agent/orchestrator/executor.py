@@ -2763,6 +2763,44 @@ async def step_llm_call(
         from personal_agent.error_classification import classify_error, with_partial
 
         classified = classify_error(e)
+
+        # FRE-399 Layer 3: enrich the classified error reason with the last
+        # known SLM health state when the SLM is degraded or down — converts
+        # "an error occurred" into "GPU pinned (98%)" / "model not loaded" etc.
+        # Best-effort: any exception here is swallowed silently.
+        try:
+            from personal_agent.config import settings as _s
+            from personal_agent.llm_client.types import LLMClientError, LLMRateLimit
+            from personal_agent.observability.slm_health import get_cached_snapshot
+
+            # Only enrich for transient local failures (not rate-limit, not cloud).
+            if (
+                isinstance(e, LLMClientError)
+                and not isinstance(e, LLMRateLimit)
+                and classified.category not in ("budget_denied",)
+            ):
+                _snap = get_cached_snapshot(ttl=_s.slm_health_cache_ttl_seconds)
+                if _snap is not None and _snap.status != "up":
+                    _reason = _snap.degrade_reason()
+                    if _reason:
+                        classified = classified.__class__(
+                            category=classified.category,
+                            reason=f"{classified.reason} [{_reason}]",
+                            next_step=classified.next_step,
+                            actions=classified.actions,
+                            partial=classified.partial,
+                        )
+                        log.info(
+                            "slm_health_reason_injected",
+                            slm_status=_snap.status,
+                            degrade_reason=_reason,
+                            trace_id=ctx.trace_id,
+                            session_id=ctx.session_id,
+                            component="executor",
+                        )
+        except Exception:  # noqa: BLE001
+            pass  # health hint is best-effort — never impair the error path
+
         if ctx.tool_results:
             ctx.final_reply = (
                 _fallback_reply_from_tool_results(

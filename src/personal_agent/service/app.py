@@ -1,14 +1,12 @@
 """FastAPI service application."""
 
 import asyncio
-import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, cast
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
-import httpx
 from fastapi import Depends, FastAPI, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1795,57 +1793,86 @@ async def chat_stream_endpoint(
 # Inference Availability (Mac SLM Tunnel)
 # ============================================================================
 
-_SLM_HEALTH_URL = "https://slm.frenchforet.com/health"
+
+def _cf_access_headers() -> dict[str, str]:
+    """Build Cloudflare Access service-token headers from settings.
+
+    Returns an empty dict when the CF Access credentials are not configured
+    (local-only or test deployments).
+
+    Returns:
+        A dict with ``CF-Access-Client-Id`` and ``CF-Access-Client-Secret``
+        when both settings are present, else an empty dict.
+    """
+    headers: dict[str, str] = {}
+    if settings.cf_access_client_id and settings.cf_access_client_secret:
+        headers["CF-Access-Client-Id"] = settings.cf_access_client_id
+        headers["CF-Access-Client-Secret"] = settings.cf_access_client_secret
+    return headers
 
 
 @app.get("/api/inference/status")
 async def inference_status(profile: str = "local") -> dict[str, Any]:
     """Report availability of the requested execution profile's inference path.
 
-    - ``local`` (default): live-probes the Mac SLM tunnel
-      (``GET https://slm.frenchforet.com/health`` with CF Access headers, 3s
-      timeout). ``up`` when reachable, else ``down``.
+    - ``local`` (default): live-probes the Mac SLM tunnel via
+      :func:`~personal_agent.observability.slm_health.probe.probe_slm_health`
+      and updates the process-global health cache. Returns backward-compatible
+      keys (``status`` / ``profile`` / ``local`` / ``latency_ms``) plus
+      optional enriched fields (``gpu_util_pct``, ``queue_depth``,
+      ``model_loaded``, ``degrade_reason``) when the SLM exposes them.
     - ``cloud``: reports ``up`` when the cloud provider is configured
-      (Anthropic API key present), else ``down``. This is a configuration
-      check, not a live provider ping — transient provider outages are not
-      detected here (that is FRE-399's failover concern).
+      (Anthropic API key present), else ``down``. Configuration check only —
+      live provider outages are not detected here.
 
-    The ``local`` key is retained in the response for backward compatibility.
+    The ``local`` key is retained for backward compatibility with the FRE-421
+    PWA availability pill.
 
     Args:
         profile: ``"local"`` or ``"cloud"``.
 
     Returns:
-        ``{"status": "up"|"down", "profile": <profile>, "latency_ms": N|None}``.
+        Dict with ``status``, ``profile``, ``local``, ``latency_ms`` (all
+        existing callers), plus optional enriched fields for new consumers.
     """
     if profile == "cloud":
         status = "up" if settings.anthropic_api_key else "down"
         return {"status": status, "profile": "cloud", "local": status, "latency_ms": None}
 
-    headers: dict[str, str] = {}
-    if settings.cf_access_client_id and settings.cf_access_client_secret:
-        headers["CF-Access-Client-Id"] = settings.cf_access_client_id
-        headers["CF-Access-Client-Secret"] = settings.cf_access_client_secret
+    from personal_agent.observability.slm_health import (
+        probe_slm_health,
+        set_cached_snapshot,
+    )
 
-    _inf_ctx = SystemTraceContext.new("inference_status_probe")
-    start = time.monotonic()
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            resp = await client.get(_SLM_HEALTH_URL, headers=headers)
-            resp.raise_for_status()
-        latency_ms = int((time.monotonic() - start) * 1000)
-        return {"status": "up", "profile": "local", "local": "up", "latency_ms": latency_ms}
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 403:
-            log.warning(
-                "inference_tunnel_auth_failed",
-                status=403,
-                hint="Rotate CF_ACCESS_CLIENT_ID/SECRET via terraform apply",
-                trace_id=_inf_ctx.trace_id,
-            )
-        return {"status": "down", "profile": "local", "local": "down", "latency_ms": None}
-    except Exception:
-        return {"status": "down", "profile": "local", "local": "down", "latency_ms": None}
+    inf_ctx = SystemTraceContext.new("inference_status_probe")
+    snapshot = await probe_slm_health(
+        url=settings.slm_health_url,
+        cf_headers=_cf_access_headers(),
+        timeout_s=3.0,
+        trace_id=inf_ctx.trace_id,
+        gpu_util_degraded_pct=settings.slm_gpu_util_degraded_pct,
+        queue_depth_degraded=settings.slm_queue_depth_degraded,
+    )
+    # Update process cache so the executor error-hint reads fresh state.
+    set_cached_snapshot(snapshot)
+
+    # Map "degraded" to "local" key value so the PWA pill can distinguish.
+    local_val = snapshot.status  # "up" | "degraded" | "down"
+    latency_ms = int(snapshot.probe_latency_ms) if snapshot.probe_latency_ms is not None else None
+
+    response: dict[str, Any] = {
+        # --- backward-compatible keys (FRE-421 PWA pill) ---
+        "status": snapshot.status,
+        "profile": "local",
+        "local": local_val,
+        "latency_ms": latency_ms,
+        # --- enriched fields (new consumers; None until Mac-side child ships) ---
+        "gpu_util_pct": snapshot.gpu_util_pct,
+        "queue_depth": snapshot.queue_depth,
+        "model_loaded": snapshot.model_loaded,
+        "degrade_reason": snapshot.degrade_reason(),
+    }
+    return response
 
 
 # ============================================================================

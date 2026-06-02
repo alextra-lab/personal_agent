@@ -45,11 +45,15 @@ def _extract_primary_model_call(
             event: Mapping[str, Any] = raw_event
             if not isinstance(event, Mapping):
                 continue
-            if event.get("event_type") != "model_call_completed":
+            # Log-file events use "event"; ES-shaped events use "event_type".
+            # Accept both so the manifest works whether fed from get_trace_events
+            # (local log source, "event" key) or from ES-shaped callers.
+            event_name = event.get("event") or event.get("event_type")
+            if event_name != "model_call_completed":
                 continue
             if not event.get("prompt_static_prefix_hash"):
                 continue
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # pragma: nocover
             continue
         candidate = event  # last identity-bearing event as fallback
         if event.get("prompt_callsite") == _PRIMARY_CALLSITE:

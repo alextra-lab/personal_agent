@@ -12,10 +12,16 @@ def _model_call_event(
     component_ids: list[str] | None = None,
     static_prefix_hash: str = "abc123def456abcd",
     dynamic_hash: str = "1122334455667788",
+    use_event_type_key: bool = False,
 ) -> dict[str, Any]:
-    """Build a synthetic model_call_completed trace event."""
+    """Build a synthetic model_call_completed trace event.
+
+    By default uses the "event" key that get_trace_events (local log source)
+    returns.  Pass use_event_type_key=True to simulate ES-shaped events.
+    """
+    event_key = "event_type" if use_event_type_key else "event"
     return {
-        "event_type": "model_call_completed",
+        event_key: "model_call_completed",
         "prompt_callsite": callsite,
         "prompt_component_ids": component_ids if component_ids is not None else ["tool_awareness", "skill_index"],
         "prompt_static_prefix_hash": static_prefix_hash,
@@ -161,11 +167,22 @@ class TestBuildPromptManifest:
         """model_call_completed without prompt_static_prefix_hash is not treated as identity."""
         from personal_agent.captains_log.prompt_manifest import build_prompt_manifest
 
+        # Use the real "event" key (log-file shape)
         events = [
-            {"event_type": "model_call_completed", "prompt_callsite": "orchestrator.primary"},
+            {"event": "model_call_completed", "prompt_callsite": "orchestrator.primary"},
         ]
         result = build_prompt_manifest(events)
         assert result == "Prompt manifest: unavailable"
+
+    def test_event_type_key_also_accepted(self) -> None:
+        """ES-shaped events with event_type= key (not event=) are also accepted."""
+        from personal_agent.captains_log.prompt_manifest import build_prompt_manifest
+
+        events = [_model_call_event(use_event_type_key=True)]
+        result = build_prompt_manifest(events)
+        # Should parse correctly — not "unavailable"
+        assert result != "Prompt manifest: unavailable"
+        assert "tool_awareness" in result
 
     def test_rating_precision_two_decimal_places(self) -> None:
         from personal_agent.captains_log.prompt_manifest import build_prompt_manifest

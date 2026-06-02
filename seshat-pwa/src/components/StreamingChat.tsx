@@ -251,7 +251,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
             {isStreaming && (
               <div className="px-4 py-5 border-b border-slate-800/60">
                 <div className="flex items-center gap-2.5 mb-2">
-                  <div className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 bg-orange-500/20 text-orange-400 border border-orange-500/30">
+                  <div className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 bg-gradient-to-br from-violet-500 to-violet-700 text-white border border-violet-300/60">
                     S
                   </div>
                   <span className="text-xs font-semibold text-slate-400">Seshat</span>

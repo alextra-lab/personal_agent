@@ -81,7 +81,7 @@ export function ChatMessage({ message }: ChatMessageProps) {
           className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 ${
             isUser
               ? 'bg-blue-600 text-white'
-              : 'bg-orange-500/20 text-orange-400 border border-orange-500/30'
+              : 'bg-gradient-to-br from-violet-500 to-violet-700 text-white border border-violet-300/60'
           }`}
         >
           {isUser ? 'Y' : 'S'}

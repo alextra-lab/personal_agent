@@ -90,7 +90,7 @@ export function ChatInput({
   return (
     <form
       onSubmit={handleSubmit}
-      className="flex items-end gap-2 px-4 pt-3 border-t border-slate-800 bg-slate-900"
+      className="flex items-center gap-2 px-4 pt-3 border-t border-slate-800 bg-slate-900"
       style={{ paddingBottom: 'max(env(safe-area-inset-bottom, 0px), 0.5rem)' }}
     >
       {/* Compact model toggle — colored dot + label */}
@@ -98,7 +98,7 @@ export function ChatInput({
         type="button"
         onClick={toggleProfile}
         disabled={disabled}
-        className="flex-shrink-0 self-end mb-[9px] flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200 disabled:opacity-40 transition-colors whitespace-nowrap"
+        className="flex-shrink-0 flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200 disabled:opacity-40 transition-colors whitespace-nowrap"
         title={profile === 'local' ? 'Switch to Cloud (Claude Sonnet)' : 'Switch to Local (Qwen)'}
       >
         <span

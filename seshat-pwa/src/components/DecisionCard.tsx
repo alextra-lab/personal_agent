@@ -50,10 +50,10 @@ export function DecisionCard({ pending, onDecide }: DecisionCardProps) {
     <div
       role="group"
       aria-label={title}
-      className="rounded-lg border border-sky-300 bg-sky-50 p-4 text-sky-900 dark:border-sky-700 dark:bg-sky-950 dark:text-sky-100"
+      className="rounded-lg border border-sky-300 bg-sky-50 p-4 text-sky-900 dark:border-sky-400/45 dark:bg-[#0a1b29] dark:text-slate-100"
     >
-      <div className="font-semibold">{title}</div>
-      <div className="mt-1 text-sm">{context}</div>
+      <div className="font-semibold dark:text-sky-50">{title}</div>
+      <div className="mt-1 text-sm dark:text-slate-300">{context}</div>
 
       <div className="mt-3 flex flex-wrap gap-2">
         {options.map((actionId, i) => (
@@ -83,7 +83,7 @@ export function DecisionCard({ pending, onDecide }: DecisionCardProps) {
       </label>
 
       <div className="mt-3" title={`Default applies in ${countdown}s`}>
-        <div className="h-1 w-full overflow-hidden rounded-full bg-sky-200 dark:bg-sky-900">
+        <div className="h-1 w-full overflow-hidden rounded-full bg-sky-200 dark:bg-sky-400/15">
           <div
             className="h-full rounded-full bg-sky-500 transition-all duration-1000 ease-linear"
             style={{ width: `${pct}%` }}

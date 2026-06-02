@@ -64,16 +64,16 @@ export function ClassifiedErrorCard({
   return (
     <div
       role="alert"
-      className="rounded-lg border border-rose-400 bg-rose-950/60 p-4 text-rose-100 dark:border-rose-600"
+      className="rounded-lg border border-red-500/30 bg-[#1b1416] p-4 text-slate-200"
     >
       <div className="flex items-start gap-2">
-        <span aria-hidden="true" className="mt-0.5 text-rose-400">⚠</span>
+        <span aria-hidden="true" className="mt-0.5 text-red-400">⚠</span>
         <div className="flex-1 min-w-0">
-          <div className="font-semibold text-rose-200">{title}</div>
-          <div className="mt-1 text-sm text-rose-100">{error.reason}</div>
-          <div className="mt-1 text-sm text-rose-300">{error.next_step}</div>
+          <div className="font-semibold text-slate-100">{title}</div>
+          <div className="mt-1 text-sm text-slate-300">{error.reason}</div>
+          <div className="mt-1 text-sm text-slate-400">{error.next_step}</div>
           {error.partial && (
-            <div className="mt-2 text-xs text-rose-400 italic">
+            <div className="mt-2 text-xs text-slate-500 italic">
               Partial results from this turn were salvaged above.
             </div>
           )}
@@ -89,8 +89,8 @@ export function ClassifiedErrorCard({
               onClick={() => handleAction(actionId)}
               className={
                 i === 0
-                  ? 'px-3 py-1.5 rounded-lg text-sm font-semibold bg-rose-600 text-white hover:bg-rose-500 transition-colors'
-                  : 'px-3 py-1.5 rounded-lg text-sm font-semibold border border-rose-500 text-rose-200 hover:bg-rose-900/50 transition-colors'
+                  ? 'px-3 py-1.5 rounded-lg text-sm font-semibold bg-[#9f2d22] text-red-100 hover:bg-[#b3362a] transition-colors'
+                  : 'px-3 py-1.5 rounded-lg text-sm font-semibold border border-slate-600 text-slate-300 hover:bg-slate-800 transition-colors'
               }
             >
               {ACTION_LABELS[actionId] ?? actionId}

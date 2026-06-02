@@ -31,54 +31,38 @@ class TestMemoryRecallHelpers:
 
     def test_extract_entity_type_hints_location(self) -> None:
         """Location keywords map to Location type."""
-        assert _extract_entity_type_hints("What locations have I asked about?") == [
-            "Location"
-        ]
-        assert _extract_entity_type_hints("places and cities I mentioned") == [
-            "Location"
-        ]
+        assert _extract_entity_type_hints("What locations have I asked about?") == ["Location"]
+        assert _extract_entity_type_hints("places and cities I mentioned") == ["Location"]
         assert _extract_entity_type_hints("Which country or city?") == ["Location"]
 
     def test_extract_entity_type_hints_person(self) -> None:
         """Person keywords map to Person type."""
-        assert _extract_entity_type_hints("What people have I discussed?") == [
-            "Person"
-        ]
+        assert _extract_entity_type_hints("What people have I discussed?") == ["Person"]
         assert _extract_entity_type_hints("someone I mentioned") == ["Person"]
 
     def test_extract_entity_type_hints_organization(self) -> None:
         """Organization keywords map to Organization type."""
-        assert _extract_entity_type_hints("What company have I asked about?") == [
-            "Organization"
-        ]
+        assert _extract_entity_type_hints("What company have I asked about?") == ["Organization"]
         assert _extract_entity_type_hints("org and companies") == ["Organization"]
 
     def test_extract_entity_type_hints_technology(self) -> None:
         """Technology keywords map to Technology type."""
-        assert _extract_entity_type_hints("What tools have I used recently?") == [
-            "Technology"
-        ]
+        assert _extract_entity_type_hints("What tools have I used recently?") == ["Technology"]
         assert _extract_entity_type_hints("technology and tools") == ["Technology"]
 
     def test_extract_entity_type_hints_topic(self) -> None:
         """Topic keywords map to Topic type."""
-        assert _extract_entity_type_hints("What topic have we covered?") == [
-            "Topic"
-        ]
+        assert _extract_entity_type_hints("What topic have we covered?") == ["Topic"]
         assert _extract_entity_type_hints("topics I asked about") == ["Topic"]
 
     def test_extract_entity_type_hints_concept(self) -> None:
         """Concept keywords map to Concept type."""
-        assert _extract_entity_type_hints("What concepts did I mention?") == [
-            "Concept"
-        ]
+        assert _extract_entity_type_hints("What concepts did I mention?") == ["Concept"]
         assert _extract_entity_type_hints("concept we discussed") == ["Concept"]
 
     def test_extract_entity_type_hints_multiple_types(self) -> None:
         """Multiple keywords yield deduplicated types."""
-        result = _extract_entity_type_hints(
-            "What locations and people have I asked about?"
-        )
+        result = _extract_entity_type_hints("What locations and people have I asked about?")
         assert set(result) == {"Location", "Person"}
         assert len(result) == 2
 
@@ -100,9 +84,7 @@ class TestMemoryRecallHelpers:
             "entities": [
                 {"name": "Crete", "type": "Location", "mentions": 3, "description": "Greek island"}
             ],
-            "sessions": [
-                {"session_id": "s1", "dominant_entities": ["Crete"], "turn_count": 5}
-            ],
+            "sessions": [{"session_id": "s1", "dominant_entities": ["Crete"], "turn_count": 5}],
             "turns_summary": [],
         }
         result = _format_broad_recall(broad)
@@ -124,7 +106,14 @@ async def test_execute_simple_task(mock_client_class) -> None:
     configure_mock_llm_client_model_configs(mock_client)
     mock_client_class.return_value = mock_client
     mock_client.respond.side_effect = [
-        {"role": "assistant", "content": "Hello! I'm doing well.", "tool_calls": [], "reasoning_trace": None, "usage": {"total_tokens": 20}, "raw": {}},
+        {
+            "role": "assistant",
+            "content": "Hello! I'm doing well.",
+            "tool_calls": [],
+            "reasoning_trace": None,
+            "usage": {"total_tokens": 20},
+            "raw": {},
+        },
     ]
     session_manager = SessionManager()
     session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
@@ -164,7 +153,14 @@ async def test_execute_task_with_code_channel(mock_client_class) -> None:
     mock_client = AsyncMock()
     configure_mock_llm_client_model_configs(mock_client)
     mock_client_class.return_value = mock_client
-    mock_client.respond.return_value = {"role": "assistant", "content": "Here is a function.", "tool_calls": [], "reasoning_trace": None, "usage": {"total_tokens": 30}, "raw": {}}
+    mock_client.respond.return_value = {
+        "role": "assistant",
+        "content": "Here is a function.",
+        "tool_calls": [],
+        "reasoning_trace": None,
+        "usage": {"total_tokens": 30},
+        "raw": {},
+    }
     session_manager = SessionManager()
     session_id = session_manager.create_session(Mode.NORMAL, Channel.CODE_TASK)
 
@@ -191,7 +187,14 @@ async def test_execute_task_updates_session(mock_client_class) -> None:
     mock_client = AsyncMock()
     configure_mock_llm_client_model_configs(mock_client)
     mock_client_class.return_value = mock_client
-    mock_client.respond.return_value = {"role": "assistant", "content": "Acknowledged.", "tool_calls": [], "reasoning_trace": None, "usage": {"total_tokens": 10}, "raw": {}}
+    mock_client.respond.return_value = {
+        "role": "assistant",
+        "content": "Acknowledged.",
+        "tool_calls": [],
+        "reasoning_trace": None,
+        "usage": {"total_tokens": 10},
+        "raw": {},
+    }
     session_manager = SessionManager()
     session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
 
@@ -211,10 +214,11 @@ async def test_execute_task_updates_session(mock_client_class) -> None:
     assert session is not None
     assert len(session.messages) > 0
 
-    # Should have user message
+    # Should have user message (content may carry inlined volatile context under
+    # the frozen layout, so check containment rather than exact equality).
     user_messages = [m for m in session.messages if m["role"] == "user"]
     assert len(user_messages) > 0
-    assert user_messages[0]["content"] == "Test message"
+    assert "Test message" in user_messages[0]["content"]
 
 
 @patch("personal_agent.llm_client.factory.get_llm_client")
@@ -224,7 +228,14 @@ async def test_execute_task_preserves_context(mock_client_class) -> None:
     mock_client = AsyncMock()
     configure_mock_llm_client_model_configs(mock_client)
     mock_client_class.return_value = mock_client
-    mock_client.respond.return_value = {"role": "assistant", "content": "OK", "tool_calls": [], "reasoning_trace": None, "usage": {"total_tokens": 5}, "raw": {}}
+    mock_client.respond.return_value = {
+        "role": "assistant",
+        "content": "OK",
+        "tool_calls": [],
+        "reasoning_trace": None,
+        "usage": {"total_tokens": 5},
+        "raw": {},
+    }
     session_manager = SessionManager()
     session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
 
@@ -258,7 +269,14 @@ async def test_execute_task_state_transitions(mock_client_class) -> None:
     mock_client = AsyncMock()
     configure_mock_llm_client_model_configs(mock_client)
     mock_client_class.return_value = mock_client
-    mock_client.respond.return_value = {"role": "assistant", "content": "Done.", "tool_calls": [], "reasoning_trace": None, "usage": {"total_tokens": 10}, "raw": {}}
+    mock_client.respond.return_value = {
+        "role": "assistant",
+        "content": "Done.",
+        "tool_calls": [],
+        "reasoning_trace": None,
+        "usage": {"total_tokens": 10},
+        "raw": {},
+    }
     session_manager = SessionManager()
     session_id = session_manager.create_session(Mode.NORMAL, Channel.CHAT)
 
@@ -291,7 +309,14 @@ async def test_execute_task_with_different_modes(mock_client_class) -> None:
     mock_client = AsyncMock()
     configure_mock_llm_client_model_configs(mock_client)
     mock_client_class.return_value = mock_client
-    mock_client.respond.return_value = {"role": "assistant", "content": "Response.", "tool_calls": [], "reasoning_trace": None, "usage": {"total_tokens": 10}, "raw": {}}
+    mock_client.respond.return_value = {
+        "role": "assistant",
+        "content": "Response.",
+        "tool_calls": [],
+        "reasoning_trace": None,
+        "usage": {"total_tokens": 10},
+        "raw": {},
+    }
     session_manager = SessionManager()
 
     for mode in [Mode.NORMAL, Mode.ALERT, Mode.DEGRADED]:
@@ -319,7 +344,14 @@ async def test_execute_task_error_handling(mock_client_class) -> None:
     mock_client = AsyncMock()
     configure_mock_llm_client_model_configs(mock_client)
     mock_client_class.return_value = mock_client
-    mock_client.respond.return_value = {"role": "assistant", "content": "OK", "tool_calls": [], "reasoning_trace": None, "usage": {"total_tokens": 5}, "raw": {}}
+    mock_client.respond.return_value = {
+        "role": "assistant",
+        "content": "OK",
+        "tool_calls": [],
+        "reasoning_trace": None,
+        "usage": {"total_tokens": 5},
+        "raw": {},
+    }
     session_manager = SessionManager()
 
     trace_ctx = TraceContext.new_trace()
@@ -832,14 +864,18 @@ class TestBuildAssistantToolCalls:
         """
         # Turn 0: server emits call_0, call_1
         turn0 = _build_assistant_tool_calls(
-            [{"id": "call_0", "name": "bash", "arguments": "{}"},
-             {"id": "call_1", "name": "bash", "arguments": "{}"}],
+            [
+                {"id": "call_0", "name": "bash", "arguments": "{}"},
+                {"id": "call_1", "name": "bash", "arguments": "{}"},
+            ],
             turn_id=0,
         )
         # Turn 1: server emits call_0, call_1 again (the bug)
         turn1 = _build_assistant_tool_calls(
-            [{"id": "call_0", "name": "bash", "arguments": "{}"},
-             {"id": "call_1", "name": "bash", "arguments": "{}"}],
+            [
+                {"id": "call_0", "name": "bash", "arguments": "{}"},
+                {"id": "call_1", "name": "bash", "arguments": "{}"},
+            ],
             turn_id=1,
         )
 
@@ -855,8 +891,7 @@ class TestBuildAssistantToolCalls:
         ]
         _, report = sanitise_messages(history)
         assert report.orphaned_results_stripped == 0, (
-            "Tool results should not be orphaned across turns when ids are "
-            "turn-prefixed."
+            "Tool results should not be orphaned across turns when ids are turn-prefixed."
         )
         assert report.orphaned_calls_stripped == 0
 
@@ -889,8 +924,16 @@ class TestRoleValidatorMergeBug:
                 "role": "assistant",
                 "content": "running checks",
                 "tool_calls": [
-                    {"id": "A1", "type": "function", "function": {"name": "bash", "arguments": "{}"}},
-                    {"id": "A2", "type": "function", "function": {"name": "bash", "arguments": "{}"}},
+                    {
+                        "id": "A1",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": "{}"},
+                    },
+                    {
+                        "id": "A2",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": "{}"},
+                    },
                 ],
             },
             {"role": "tool", "tool_call_id": "A1", "content": "result1"},
@@ -899,7 +942,11 @@ class TestRoleValidatorMergeBug:
                 "role": "assistant",
                 "content": "synthesis",
                 "tool_calls": [
-                    {"id": "B1", "type": "function", "function": {"name": "bash", "arguments": "{}"}},
+                    {
+                        "id": "B1",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": "{}"},
+                    },
                 ],
             },
         ]
@@ -947,7 +994,11 @@ class TestRoleValidatorMergeBug:
                 "role": "assistant",
                 "content": "and now act",
                 "tool_calls": [
-                    {"id": "X1", "type": "function", "function": {"name": "bash", "arguments": "{}"}},
+                    {
+                        "id": "X1",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": "{}"},
+                    },
                 ],
             },
         ]
@@ -974,7 +1025,11 @@ class TestRoleValidatorMergeBug:
                 "role": "assistant",
                 "content": "calling tool",
                 "tool_calls": [
-                    {"id": "T1", "type": "function", "function": {"name": "bash", "arguments": "{}"}},
+                    {
+                        "id": "T1",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": "{}"},
+                    },
                 ],
             },
             {"role": "tool", "tool_call_id": "T1", "content": "ok"},
@@ -995,7 +1050,11 @@ class TestRoleValidatorMergeBug:
                 "role": "assistant",
                 "content": "step1",
                 "tool_calls": [
-                    {"id": "R1", "type": "function", "function": {"name": "bash", "arguments": "{}"}},
+                    {
+                        "id": "R1",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": "{}"},
+                    },
                 ],
             },
             {"role": "tool", "tool_call_id": "R1", "content": "r1"},
@@ -1003,7 +1062,11 @@ class TestRoleValidatorMergeBug:
                 "role": "assistant",
                 "content": "step2",
                 "tool_calls": [
-                    {"id": "R2", "type": "function", "function": {"name": "bash", "arguments": "{}"}},
+                    {
+                        "id": "R2",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": "{}"},
+                    },
                 ],
             },
             {"role": "tool", "tool_call_id": "R2", "content": "r2"},

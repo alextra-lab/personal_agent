@@ -155,3 +155,6 @@ docker/mcp/mcp-secrets.env
 
 # VPS/cloud env override (canonical secrets live in .env; this is a safety net)
 .env.cloud
+
+# FRE-433/434 cache A/B harness run outputs (regeneratable telemetry)
+telemetry/evaluation/fre433-cache-ab/

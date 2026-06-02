@@ -205,6 +205,6 @@ Full coding standards in `.claude/CLAUDE.md` § Coding Standards. Quick summary:
 - Async for all I/O; pass `TraceContext` through call chains
 - Test markers: `integration` (requires live LLM), `requires_llm_server`, `evaluation` (100+ calls) — unit tests carry no marker
 
-### Current status (as of 2026-06-01)
+### Current status (as of 2026-06-02)
 
-Waves A–C, E, J complete. Wave H (memory/context): FRE-375/374/376 ✅ — ADR-0074 Accepted; FRE-377 next. Wave I (prompt observability, FRE-403 EPIC): FRE-404/405/406/407 ✅ — FRE-408 (P4) next. ADR-0081 D1 ✅ (FRE-422, volatility-gradient prompt layout) deployed — the `orchestrator.primary` cache gate remains blocked on D4 (skill-index split). Waves D (deferred per FRE-214 §8.7), F, G partial. See `docs/plans/MASTER_PLAN.md` for the authoritative wave sequence and gate dates.
+Waves A–C, E, J complete. Wave H (memory/context): FRE-375/374/376 ✅ — ADR-0074 Accepted; FRE-377 next. Wave I (prompt observability, FRE-403 EPIC): FRE-404/405/406/407 ✅ — FRE-408 (P4) next. **ADR-0081 cache chain COMPLETE: D1 ✅ (FRE-422) → D4 ✅ (FRE-431) → D2/D3 ✅ (FRE-434) — frozen append-only layout + cache-aware compaction scheduler shipped + live; cross-turn KV reuse local 0→8k+, cloud 13.9k→19.5k.** Owner debrief filed FRE-435–442 (Needs Approval: memory-recall research, cost/cache pricing, PWA notes, rating UX, side-by-side eval, always-references, etc.). Waves D (deferred per FRE-214 §8.7), F, G partial. See `docs/plans/MASTER_PLAN.md` for the authoritative wave sequence and gate dates.

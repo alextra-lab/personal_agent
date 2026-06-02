@@ -159,7 +159,7 @@ export function ArtifactCard({ artifactId, fallbackHref, sessionId }: ArtifactCa
         {/* Header row: type chip + title */}
         <div className="flex items-center gap-2">
           <span
-            className="text-xs font-mono px-1.5 py-0.5 rounded bg-slate-700 text-slate-400 flex-shrink-0"
+            className="text-xs font-mono font-semibold tracking-wide px-1.5 py-0.5 rounded bg-slate-600 text-slate-100 flex-shrink-0"
             aria-label={`Content type: ${meta.content_type}`}
           >
             {label}

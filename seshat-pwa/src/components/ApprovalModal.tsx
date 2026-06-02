@@ -138,7 +138,7 @@ export function ApprovalModal({ data, onApprove, onDeny }: ApprovalModalProps): 
             className="text-base font-semibold text-slate-100 truncate"
           >
             Tool approval required:{' '}
-            <span className="font-mono text-orange-400">{data.tool}</span>
+            <span className="font-mono text-violet-300">{data.tool}</span>
           </h2>
           <span className={`px-2 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wide flex-shrink-0 ${riskChipClasses(data.risk_level)}`}>
             {data.risk_level}

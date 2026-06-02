@@ -26,7 +26,7 @@ export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,
   viewportFit: 'cover', // handles iPhone notch
-  themeColor: '#3b82f6',
+  themeColor: '#2f6bff',
 };
 
 interface RootLayoutProps {

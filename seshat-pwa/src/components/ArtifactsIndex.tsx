@@ -142,7 +142,7 @@ export function ArtifactsIndex() {
                 className="flex items-center gap-3 px-4 py-2.5 hover:bg-slate-800/40 transition-colors"
               >
                 {/* Type chip */}
-                <span className="text-xs font-mono px-1.5 py-0.5 rounded bg-slate-700 text-slate-400 flex-shrink-0 w-10 text-center">
+                <span className="text-xs font-mono font-semibold tracking-wide px-1.5 py-0.5 rounded bg-slate-600 text-slate-100 flex-shrink-0 w-10 text-center">
                   {contentTypeLabel(item.content_type)}
                 </span>
 

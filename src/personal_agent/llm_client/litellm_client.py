@@ -499,6 +499,8 @@ class LiteLLMClient:
                         session_id=UUID(session_id_str),
                         purpose=self.budget_role,
                         latency_ms=latency_ms,
+                        cache_read_input_tokens=usage.get("cache_read_input_tokens"),
+                        cache_creation_input_tokens=usage.get("cache_creation_input_tokens"),
                     )
                 except Exception as record_exc:  # noqa: BLE001
                     # Non-fatal — but the failure should not be silent any

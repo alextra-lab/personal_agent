@@ -55,6 +55,8 @@ class CostTrackerService:
         session_id: UUID,
         purpose: str | None = None,
         latency_ms: int | None = None,
+        cache_read_input_tokens: int | None = None,
+        cache_creation_input_tokens: int | None = None,
     ) -> int | None:
         """Record an API call cost to the database.
 
@@ -63,7 +65,9 @@ class CostTrackerService:
             model: Model name (e.g., ``"claude-sonnet-4.5"``).
             input_tokens: Number of input tokens.
             output_tokens: Number of output tokens.
-            cost_usd: Cost in USD.
+            cost_usd: Cost in USD.  For Anthropic, this reflects cache-tier
+                pricing via ``litellm.completion_cost()`` — cache reads at
+                ~0.1× and cache creation at ~1.25× the standard input rate.
             trace_id: Trace UUID of the request that produced this cost.
                 Required by ADR-0074 (FRE-376) — the cost row must be
                 attributable to the originating request.
@@ -72,6 +76,10 @@ class CostTrackerService:
             purpose: Optional purpose (``"user_request"``, ``"second_brain"``,
                 ``"entity_extraction"`` …).
             latency_ms: Wall-clock time of the API round-trip in milliseconds.
+            cache_read_input_tokens: Anthropic cache-read tokens (FRE-437).
+                ``None`` for non-Anthropic providers or calls without caching.
+            cache_creation_input_tokens: Anthropic cache-creation tokens
+                (FRE-437). ``None`` for non-Anthropic providers.
 
         Returns:
             ID of inserted record, or ``None`` if the pool is unavailable or
@@ -104,8 +112,9 @@ class CostTrackerService:
                     INSERT INTO api_costs (
                         timestamp, provider, model,
                         input_tokens, output_tokens, cost_usd,
+                        cache_read_input_tokens, cache_creation_input_tokens,
                         trace_id, session_id, purpose, latency_ms
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                     RETURNING id
                     """,
                     datetime.now(timezone.utc),
@@ -114,6 +123,8 @@ class CostTrackerService:
                     input_tokens,
                     output_tokens,
                     Decimal(str(cost_usd)),  # Convert to Decimal for precision
+                    cache_read_input_tokens,
+                    cache_creation_input_tokens,
                     trace_id,
                     session_id,
                     purpose,
@@ -129,6 +140,8 @@ class CostTrackerService:
                     record_id=record_id,
                     trace_id=str(trace_id),
                     session_id=str(session_id),
+                    cache_read_input_tokens=cache_read_input_tokens,
+                    cache_creation_input_tokens=cache_creation_input_tokens,
                 )
 
                 return cast(int | None, record_id)

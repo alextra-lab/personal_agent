@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import orjson
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from personal_agent.captains_log.es_indexer import schedule_es_index
 from personal_agent.config import get_settings as _get_settings
@@ -46,6 +46,8 @@ class TaskCapture(BaseModel):
     analysis by the second brain.
     """
 
+    model_config = ConfigDict(populate_by_name=True)
+
     trace_id: str
     session_id: str
     timestamp: datetime
@@ -58,8 +60,12 @@ class TaskCapture(BaseModel):
     outcome: str  # "completed", "failed", "timeout"
     memory_context_used: bool = False
     memory_conversations_found: int = 0
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
+    input_tokens: int = Field(
+        default=0, validation_alias=AliasChoices("input_tokens", "prompt_tokens")
+    )
+    output_tokens: int = Field(
+        default=0, validation_alias=AliasChoices("output_tokens", "completion_tokens")
+    )
     total_tokens: int = 0
     # Raw tool results (tool_name, success, output, error, latency_ms) for comparing LLM reply vs actual tool output
     tool_results: list[dict[str, Any]] = Field(default_factory=list)

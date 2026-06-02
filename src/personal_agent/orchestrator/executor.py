@@ -1415,8 +1415,8 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                         memory_conversations_found=len(ctx.memory_context)
                         if ctx.memory_context
                         else 0,
-                        prompt_tokens=cap_prompt_tokens,
-                        completion_tokens=cap_completion_tokens,
+                        input_tokens=cap_prompt_tokens,
+                        output_tokens=cap_completion_tokens,
                         total_tokens=cap_total_tokens,
                         tool_results=ctx.tool_results,
                         user_id=ctx.user_id,

@@ -489,6 +489,75 @@ export async function setSessionProfile(
 }
 
 // --------------------------------------------------------------------------
+// FRE-230 — Location preference helpers
+// --------------------------------------------------------------------------
+
+/** Operator + per-user location gates returned by the preferences endpoint. */
+export interface LocationPreference {
+  /** Deployment-wide operator gate (AGENT_LOCATION_ENABLED). */
+  feature_enabled: boolean;
+  /** Per-user consent gate stored on the :Person node. */
+  location_consent_enabled: boolean;
+}
+
+/** Optional client-provided coordinates + browser timezone for a consent update. */
+export interface LocationCoordinates {
+  latitude: number;
+  longitude: number;
+  timezone: string;
+}
+
+/**
+ * Read the authenticated user's location gates (FRE-230).
+ *
+ * `feature_enabled` reflects the operator gate; when false the PWA hides the
+ * consent toggle entirely. `location_consent_enabled` is the user's own opt-in.
+ *
+ * @throws Error when the backend returns a non-2xx status.
+ */
+export async function getLocationPreference(): Promise<LocationPreference> {
+  const resp = await fetch(`${SESHAT_API}/api/v1/preferences/location`, {
+    headers: authHeaders(),
+  });
+  if (!resp.ok) throw new Error(`getLocationPreference failed: ${resp.status}`);
+  return resp.json() as Promise<LocationPreference>;
+}
+
+/**
+ * Update the user's location consent and optionally store device coordinates
+ * (FRE-230). Coordinates are only persisted server-side when consent is true.
+ *
+ * @param consentEnabled - New consent value, or undefined to leave unchanged.
+ * @param coords - Device coordinates + IANA timezone, or undefined to skip.
+ * @throws Error when the backend returns a non-2xx status (e.g. 403 when the
+ *   operator gate is disabled).
+ */
+export async function updateLocationPreference(
+  consentEnabled?: boolean,
+  coords?: LocationCoordinates,
+): Promise<LocationPreference> {
+  const body: {
+    consent_enabled?: boolean;
+    latitude?: number;
+    longitude?: number;
+    timezone?: string;
+  } = {};
+  if (consentEnabled !== undefined) body.consent_enabled = consentEnabled;
+  if (coords) {
+    body.latitude = coords.latitude;
+    body.longitude = coords.longitude;
+    body.timezone = coords.timezone;
+  }
+  const resp = await fetch(`${SESHAT_API}/api/v1/preferences/location`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) throw new Error(`updateLocationPreference failed: ${resp.status}`);
+  return resp.json() as Promise<LocationPreference>;
+}
+
+// --------------------------------------------------------------------------
 // FRE-368 — Artifact helpers
 // --------------------------------------------------------------------------
 

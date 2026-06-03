@@ -90,6 +90,9 @@ Four threads carved from the FRE-389 on-device review (2026-05-28). All **Approv
 | [FRE-439](https://linear.app/frenchforest/issue/FRE-439) | — | Sonnet | **Rating UX**: 0 → red pill + distinct "technical error" rating (un-conflate from quality-0). |
 | [FRE-441](https://linear.app/frenchforest/issue/FRE-441) | — | Sonnet | **Eval tooling**: side-by-side pre/post (A/B) response comparison for human quality rating. Prereq for FRE-435. |
 | [FRE-442](https://linear.app/frenchforest/issue/FRE-442) | — | Sonnet | **Behavior**: agent responses always include references/citations + make references a quality signal. |
+| [FRE-464](https://linear.app/frenchforest/issue/FRE-464) | — | Opus | **ADR-0081 D4-trim**: skill-index format/size minimization (Pareto routing-accuracy vs tokens; DSPy candidate). Cost-trim on the now-cached index; does *not* gate cache-GREEN. Project: *ADR-0081 Extended*. |
+| [FRE-465](https://linear.app/frenchforest/issue/FRE-465) | — | Opus | **ADR-0081 D5**: tiered virtual context — cold-tier on-demand `recall_session_history` (reinject context compression dropped). Open retrieval design Qs; likely needs ADR addendum. Project: *ADR-0081 Extended*. |
+| [FRE-466](https://linear.app/frenchforest/issue/FRE-466) | — | Sonnet | **ADR-0081 D6**: optional message pin — never-compress + attention-aware placement; must respect the FRE-434 byte-identity invariant. Project: *ADR-0081 Extended*. |
 | [FRE-381](https://linear.app/frenchforest/issue/FRE-381) | Medium | Sonnet | **Stage 2** consolidator decoupling — invert Turn-creation vs entity-extraction dependency; add `extractor_model` to `TurnNode`. Blocked-by FRE-380 ✅ + post-soak data. |
 | [FRE-390](https://linear.app/frenchforest/issue/FRE-390) | Low | Sonnet | Eval harness skips transport layer — no automated WS delivery coverage. |
 
@@ -107,7 +110,7 @@ FRE-346 ✅ → FRE-347 ✅ → FRE-348 ✅ → FRE-349 (G3, unblocked)
 FRE-328 capture ✅ → naming-stability gate ≥ 2026-06-09 (agent-noun taxonomy deployed)
 FRE-348 ✅ → FRE-350 (reflection eval, gate opened 2026-05-24, Approved)
 FRE-403 EPIC: FRE-404 ✅ → FRE-405 ✅ → FRE-406 ✅ → FRE-407 ✅ → FRE-408 (P4, next) → FRE-409 (P5)
-ADR-0081: D1 ✅ (FRE-422, PR #120) → D4 skill-index split (drafting, owns the cache-GREEN gate D1 couldn't meet)
+ADR-0081 core chain ✅: D1 (FRE-422) → D4 split (FRE-431) → D2/D3 (FRE-434, live) — followups: FRE-464 (D4-trim) · FRE-465 (D5 cold-tier) · FRE-466 (D6 pin), all Needs Approval (project: ADR-0081 Extended)
 FRE-227 ✅ → FRE-226 (self-updating skills)
 FRE-391 (dynamic max_tokens) — independent; addresses artifact-truncation root cause
 ```
@@ -146,7 +149,7 @@ FRE-391 (dynamic max_tokens) — independent; addresses artifact-truncation root
 | ADR | Title | Status |
 |-----|-------|--------|
 | **0082** | **Tier-Aware Model Selection for SINGLE Tasks** | **Proposed 2026-06-01 (PR #122). Adds `model_tier` axis so ~83% SINGLE traffic can use the non-thinking `sub_agent` tier; impl ticket FRE-432 (Needs Approval). Net-new design — not yet approved.** |
-| **0081** | **Cache-Aware Context Layout & Compaction** | **D1 Implemented 2026-06-01 (FRE-422, PR #120, deployed); D4 (skill-index split) **decided** 2026-06-01 (PRs #121/#123) — owns the cache-GREEN gate D1 couldn't meet; impl ticket FRE-431 (Needs Approval). D2/D3/D5/D6 pending.** |
+| **0081** | **Cache-Aware Context Layout & Compaction** | **Core chain COMPLETE + live: D1 ✅ (FRE-422) · D4 skill-index split ✅ (FRE-431) · D2/D3 frozen layout + scheduler ✅ (FRE-434, PRs #129/#130, enabled in prod). Deferred follow-ups tracked in project _ADR-0081 Extended — Context & Memory Injection Quality_: D4-index-trim (FRE-464), D5 cold-tier retrieval (FRE-465), D6 pin (FRE-466) — all Needs Approval.** |
 | **0080** | **Thinking Control — server-side vs `/no_think` suffix** | **Implemented 2026-05-29 (FRE-417, PR #107)** |
 | **0079** | **Server-Authoritative Session Profile** | **Implemented 2026-05-29 (FRE-416/419, PRs #102-104)** |
 | **0078** | **Prompt Management & Observability** | **In Progress — P0 ✅ P1 ✅ P2 ✅ (FRE-406) P3 ✅ (FRE-407); P4 (FRE-408) next, P5 (FRE-409) after** |

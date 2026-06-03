@@ -20,7 +20,6 @@ function makeStatus(overrides: Partial<TurnStatus> = {}): TurnStatus {
     tool_iteration: 1,
     tool_iteration_max: 10,
     turn_cost_usd: 0.01,
-    trace_id: 'test-trace',
     ...overrides,
   };
 }

@@ -229,6 +229,21 @@ WHERE timestamp >= date_trunc('day', NOW() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC
 ON CONFLICT (user_id, time_window, provider, role, window_start) DO NOTHING;
 
 -- ===========================================================================
+-- User identity (ADR-0064 / FRE-213)
+--
+-- Populated on first authenticated request via CF Access.  user_id is the
+-- durable FK used for artifact/session ownership.  Mirrored by the
+-- SQLAlchemy UserModel; create_all and this file must stay in sync.
+-- ===========================================================================
+
+CREATE TABLE IF NOT EXISTS users (
+    user_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email       TEXT NOT NULL UNIQUE,
+    display_name TEXT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ===========================================================================
 -- Artifact substrate (ADR-0069 / FRE-227)
 --
 -- Metadata canon for every byte-string parked in R2: notes, artifacts,

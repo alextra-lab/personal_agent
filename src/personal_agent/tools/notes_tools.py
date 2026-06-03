@@ -433,7 +433,7 @@ async def notes_search_executor(
                   AND type = 'note'
                   AND embedding IS NOT NULL
                   AND (
-                      :tag_filter IS NULL
+                      CAST(:tag_filter AS text[]) IS NULL
                       OR tags && CAST(:tag_filter AS text[])
                   )
                 ORDER BY embedding <=> CAST(:query_emb AS vector)

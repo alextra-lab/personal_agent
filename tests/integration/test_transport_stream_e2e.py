@@ -21,10 +21,10 @@ Starlette's TestClient (anyio background-thread loop).
 
 from __future__ import annotations
 
-import asyncio
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import text
 
 from personal_agent.service.database import AsyncSessionLocal
 from personal_agent.transport.agui.event_buffer import SessionEventBuffer
@@ -36,12 +36,23 @@ async def _postgres_available() -> bool:
     """Return True when the test Postgres substrate (port 5433) is reachable."""
     try:
         async with AsyncSessionLocal() as db:
-            from sqlalchemy import text
-
             await db.execute(text("SELECT 1"))
         return True
     except Exception:
         return False
+
+
+async def _create_session(session_id: UUID) -> None:
+    """Insert a minimal session row so session_events FK constraint is satisfied."""
+    async with AsyncSessionLocal() as db:
+        await db.execute(
+            text(
+                "INSERT INTO sessions (session_id, mode) VALUES (:sid, 'NORMAL') "
+                "ON CONFLICT DO NOTHING"
+            ),
+            {"sid": session_id},
+        )
+        await db.commit()
 
 
 class TestSessionEventBuffer:
@@ -54,6 +65,7 @@ class TestSessionEventBuffer:
             pytest.skip("Test Postgres (port 5433) not reachable — run make test-infra-up")
 
         session_id = uuid4()
+        await _create_session(session_id)
 
         async with AsyncSessionLocal() as db:
             buf = SessionEventBuffer(db)
@@ -83,6 +95,7 @@ class TestSessionEventBuffer:
             pytest.skip("Test Postgres (port 5433) not reachable — run make test-infra-up")
 
         session_id = uuid4()
+        await _create_session(session_id)
 
         async with AsyncSessionLocal() as db:
             buf = SessionEventBuffer(db)
@@ -108,6 +121,7 @@ class TestSessionEventBuffer:
             pytest.skip("Test Postgres (port 5433) not reachable — run make test-infra-up")
 
         session_id = uuid4()
+        await _create_session(session_id)
 
         async with AsyncSessionLocal() as db:
             buf = SessionEventBuffer(db)
@@ -127,6 +141,7 @@ class TestSessionEventBuffer:
             pytest.skip("Test Postgres (port 5433) not reachable — run make test-infra-up")
 
         session_id = uuid4()
+        await _create_session(session_id)
 
         async with AsyncSessionLocal() as db:
             buf = SessionEventBuffer(db)

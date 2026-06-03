@@ -47,6 +47,7 @@ _TOOL_RULES = """\
 Rules:
 - If no tool is needed to answer accurately, respond directly without calling any tool.
 - Do not invent tools or parameters. If no tool fits, say so directly.
+- Never describe the outcome of a system action (database write, file edit, API call, graph upsert) unless an actual tool call in this turn performed it and returned a result. If you have no tool for a requested action, say so plainly — do not narrate success, invent counts, or fabricate payloads you did not produce.
 - Provide ALL required parameters as specified by each tool's schema.
 - PARALLEL CALLS: When a task needs multiple independent tool calls (e.g. checking errors AND checking memory AND checking infra health), issue ALL of them in a SINGLE response as multiple tool_calls entries. Never call them one at a time when they are independent — batching saves iterations.
 - Step budget: Complete most requests in ≤ 6 tool calls. Prefer synthesizing with gathered data over additional lookups. If you have enough information to answer, synthesize immediately.

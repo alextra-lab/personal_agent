@@ -63,20 +63,8 @@ jobs:
   backend-integration:
     name: Backend integration tests (transport)
     runs-on: ubuntu-24.04
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_USER: agent
-          POSTGRES_PASSWORD: agent_dev_password
-          POSTGRES_DB: personal_agent
-        options: >-
-          --health-cmd "pg_isready -U agent -d personal_agent"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-        ports:
-          - 5433:5432
+    # No Docker service container — uses the runner's apt-installed Postgres to
+    # avoid Docker Hub pull failures (transient registry timeouts have broken CI).
     steps:
       - uses: actions/checkout@v4
 
@@ -92,13 +80,20 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
+      - name: Start PostgreSQL and create test database
+        run: |
+          sudo systemctl start postgresql
+          sudo -u postgres psql -c "CREATE USER agent WITH PASSWORD 'agent_dev_password';"
+          sudo -u postgres createdb -O agent personal_agent
+          # Bind on 5433 so the existing AGENT_DATABASE_URL (port 5433) works without changes.
+          # The runner's default Postgres listens on 5432; add a second port via config.
+          sudo -u postgres psql -c "ALTER SYSTEM SET port = 5433;"
+          sudo systemctl restart postgresql
+          # Wait for Postgres to accept connections on the new port.
+          until pg_isready -h localhost -p 5433 -U agent; do sleep 1; done
+
       - name: Apply database schema
         run: |
-          # init.sql is the authoritative schema source; it uses CREATE IF NOT EXISTS
-          # throughout, so it is idempotent on a fresh Postgres service container.
-          # Migrations in docker/postgres/migrations/ are incremental patches applied
-          # on top of production databases already running the base schema — for CI
-          # we only need init.sql since the container starts empty.
           PGPASSWORD=agent_dev_password psql \
             -h localhost -p 5433 -U agent -d personal_agent \
             -f docker/postgres/init.sql

@@ -163,3 +163,31 @@ jobs:
 
       - name: Run Vitest
         run: npx vitest run
+
+  # ── PWA Playwright e2e tests ────────────────────────────────────────────────
+  pwa-e2e:
+    name: PWA e2e tests (Playwright)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: seshat-pwa
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: seshat-pwa/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright e2e tests
+        run: npx playwright test
+        env:
+          CI: "true"

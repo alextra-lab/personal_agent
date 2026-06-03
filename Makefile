@@ -55,7 +55,7 @@ endif
         tunnel-up tunnel-down tunnel-status _tunnel-guard \
         sandbox-build \
         test test-integration test-all test-file test-verbose test-k test-cov eval \
-        test-pwa \
+        test-pwa test-pwa-e2e \
         mypy ruff-check ruff-format \
         eval-recovery-survey eval-recovery \
         test-infra-up test-infra-down test-infra-reset test-infra-ps \
@@ -209,6 +209,12 @@ test-integration:
 # Requires Node.js and seshat-pwa/package-lock.json to be present.
 test-pwa:
 	@cd seshat-pwa && npm ci --prefer-offline && npx vitest run
+
+# PWA browser e2e tests via Playwright (FRE-400 WS3 — added in PR3).
+# Runs headless Chromium; builds + serves the PWA automatically.
+# One-time browser install: cd seshat-pwa && npx playwright install --with-deps chromium
+test-pwa-e2e:
+	@cd seshat-pwa && npm ci --prefer-offline && npx playwright test
 
 # Runs the unit tests only (same as 'test') — eval harness excluded.
 test-all:

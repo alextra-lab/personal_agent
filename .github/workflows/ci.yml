@@ -23,6 +23,9 @@ on:
   pull_request:
     branches: ["**"]
 
+permissions:
+  contents: read
+
 jobs:
   # ── Backend unit tests ──────────────────────────────────────────────────────
   backend-unit:

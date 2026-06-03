@@ -55,6 +55,7 @@ endif
         tunnel-up tunnel-down tunnel-status _tunnel-guard \
         sandbox-build \
         test test-integration test-all test-file test-verbose test-k test-cov eval \
+        test-pwa \
         mypy ruff-check ruff-format \
         eval-recovery-survey eval-recovery \
         test-infra-up test-infra-down test-infra-reset test-infra-ps \
@@ -203,6 +204,11 @@ test-integration:
 		exit 1; \
 	fi
 	@uv run python -m pytest -m "integration" -q
+
+# PWA unit tests via Vitest (FRE-400 WS2 — added in PR2).
+# Requires Node.js and seshat-pwa/package-lock.json to be present.
+test-pwa:
+	@cd seshat-pwa && npm ci --prefer-offline && npx vitest run
 
 # Runs the unit tests only (same as 'test') — eval harness excluded.
 test-all:

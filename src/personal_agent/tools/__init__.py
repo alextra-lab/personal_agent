@@ -128,6 +128,16 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
     else:
         log.warning("notes_tools_skipped_unconfigured")
 
+    # FRE-230 — location tool, register only after explicit opt-in.
+    if settings.location_enabled:
+        from personal_agent.tools.location import (  # noqa: PLC0415
+            get_location_executor,
+            get_location_tool,
+        )
+
+        registry.register(get_location_tool, get_location_executor)
+        log.info("location_tool_registered")
+
     # FRE-261 PIVOT-2 — primitive tools (ADR-0063 Phase 2).
     # Lazy imports inside the guard to avoid circular-import issues and to
     # ensure these modules are never loaded when the flag is off.

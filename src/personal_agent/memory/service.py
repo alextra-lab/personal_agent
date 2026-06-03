@@ -1014,6 +1014,235 @@ class MemoryService:
             )
             return False
 
+    async def get_person_location_consent(self, user_id: str, trace_id: str) -> bool:
+        """Return whether a person has opted into location features.
+
+        Args:
+            user_id: User UUID string anchored on the :Person node.
+            trace_id: Request trace identifier for log correlation.
+
+        Returns:
+            True when location consent is enabled; False when disabled, absent,
+            or Neo4j is unavailable.
+        """
+        if not self.connected or not self.driver:
+            log.warning(
+                "person_location_consent_unavailable",
+                trace_id=trace_id,
+                user_id=user_id,
+                reason="neo4j_not_connected",
+            )
+            return False
+
+        try:
+            async with self.driver.session() as session:
+                result = await session.run(
+                    """
+                    MATCH (p:Person {user_id: $user_id})
+                    RETURN coalesce(p.location_consent_enabled, false) AS enabled
+                    """,
+                    user_id=user_id,
+                )
+                record = await result.single()
+                enabled = bool(record and record["enabled"])
+                log.info(
+                    "person_location_consent_read",
+                    trace_id=trace_id,
+                    user_id=user_id,
+                    enabled=enabled,
+                )
+                return enabled
+        except Exception as e:
+            log.warning(
+                "person_location_consent_read_failed",
+                trace_id=trace_id,
+                user_id=user_id,
+                error=str(e),
+            )
+            return False
+
+    async def set_person_location_consent(
+        self,
+        user_id: str,
+        enabled: bool,
+        trace_id: str,
+    ) -> None:
+        """Set a person's location consent preference.
+
+        Args:
+            user_id: User UUID string anchored on the :Person node.
+            enabled: Whether the user consents to location features.
+            trace_id: Request trace identifier for log correlation.
+        """
+        if not self.connected or not self.driver:
+            log.warning(
+                "person_location_consent_set_unavailable",
+                trace_id=trace_id,
+                user_id=user_id,
+                reason="neo4j_not_connected",
+            )
+            return
+
+        try:
+            async with self.driver.session() as session:
+                # MERGE (not MATCH) on user_id: a user may toggle consent before
+                # their first chat turn has bootstrapped the :Person. This mirrors
+                # ensure_person_for_user's own `MERGE (p:Person {user_id})` anchor,
+                # so any skeletal node created here is reconciled (name, is_owner)
+                # on the next authenticated turn rather than left orphaned.
+                await session.run(
+                    """
+                    MERGE (p:Person {user_id: $user_id})
+                    SET p.location_consent_enabled = $enabled
+                    """,
+                    user_id=user_id,
+                    enabled=enabled,
+                )
+            log.info(
+                "person_location_consent_set",
+                trace_id=trace_id,
+                user_id=user_id,
+                enabled=enabled,
+            )
+        except Exception as e:
+            log.warning(
+                "person_location_consent_set_failed",
+                trace_id=trace_id,
+                user_id=user_id,
+                error=str(e),
+            )
+
+    async def update_person_location(
+        self,
+        user_id: str,
+        latitude: float,
+        longitude: float,
+        timezone: str | None,
+        source: str,
+        trace_id: str,
+    ) -> None:
+        """Update a person's current client-provided location.
+
+        Args:
+            user_id: User UUID string anchored on the :Person node.
+            latitude: Latitude to store on the :Location node.
+            longitude: Longitude to store on the :Location node.
+            timezone: Browser-provided IANA timezone string.
+            source: Location source label.
+            trace_id: Request trace identifier for log correlation.
+        """
+        if not self.connected or not self.driver:
+            log.warning(
+                "person_location_update_unavailable",
+                trace_id=trace_id,
+                user_id=user_id,
+                source=source,
+                reason="neo4j_not_connected",
+            )
+            return
+
+        try:
+            async with self.driver.session() as session:
+                await session.run(
+                    """
+                    MATCH (p:Person {user_id: $user_id})
+                    MERGE (l:Location {latitude: $latitude, longitude: $longitude})
+                      ON CREATE SET l.point = point({latitude: $latitude, longitude: $longitude}),
+                                    l.timezone = $timezone,
+                                    l.source = $source,
+                                    l.resolved_at = datetime()
+                      ON MATCH SET l.timezone = $timezone,
+                                   l.resolved_at = datetime()
+                    WITH p, l
+                    OPTIONAL MATCH (p)-[old:CURRENTLY_AT]->(:Location)
+                    DELETE old
+                    MERGE (p)-[c:CURRENTLY_AT]->(l)
+                    SET c.since = datetime(), c.trace_id = $trace_id
+                    MERGE (p)-[v:VISITED]->(l)
+                      ON CREATE SET v.at = datetime(), v.trace_id = $trace_id
+                    """,
+                    user_id=user_id,
+                    latitude=latitude,
+                    longitude=longitude,
+                    timezone=timezone,
+                    source=source,
+                    trace_id=trace_id,
+                )
+            log.info(
+                "person_location_updated",
+                trace_id=trace_id,
+                user_id=user_id,
+                source=source,
+                timezone_set=timezone is not None,
+            )
+        except Exception as e:
+            log.warning(
+                "person_location_update_failed",
+                trace_id=trace_id,
+                user_id=user_id,
+                source=source,
+                error=str(e),
+            )
+
+    async def get_person_location(self, user_id: str, trace_id: str) -> dict[str, object] | None:
+        """Return a person's current client-provided location.
+
+        Args:
+            user_id: User UUID string anchored on the :Person node.
+            trace_id: Request trace identifier for log correlation.
+
+        Returns:
+            Location properties from the CURRENTLY_AT edge, or None.
+        """
+        if not self.connected or not self.driver:
+            log.warning(
+                "person_location_read_unavailable",
+                trace_id=trace_id,
+                user_id=user_id,
+                reason="neo4j_not_connected",
+            )
+            return None
+
+        try:
+            async with self.driver.session() as session:
+                result = await session.run(
+                    """
+                    MATCH (:Person {user_id: $user_id})-[:CURRENTLY_AT]->(l:Location)
+                    RETURN l.latitude AS latitude,
+                           l.longitude AS longitude,
+                           l.timezone AS timezone,
+                           l.source AS source
+                    """,
+                    user_id=user_id,
+                )
+                record = await result.single()
+                if record is None:
+                    log.info("person_location_not_found", trace_id=trace_id, user_id=user_id)
+                    return None
+                source = record["source"]
+                timezone_value = record["timezone"]
+                log.info(
+                    "person_location_read",
+                    trace_id=trace_id,
+                    user_id=user_id,
+                    source=source,
+                    timezone_set=timezone_value is not None,
+                )
+                return {
+                    "latitude": record["latitude"],
+                    "longitude": record["longitude"],
+                    "timezone": timezone_value,
+                    "source": source,
+                }
+        except Exception as e:
+            log.warning(
+                "person_location_read_failed",
+                trace_id=trace_id,
+                user_id=user_id,
+                error=str(e),
+            )
+            return None
+
     async def create_relationship(
         self,
         relationship: Relationship,

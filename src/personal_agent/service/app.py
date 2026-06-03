@@ -37,6 +37,7 @@ from personal_agent.service.database import AsyncSessionLocal, get_db_session, i
 from personal_agent.service.idempotency import get_deduplicator
 from personal_agent.service.models import (
     ConstraintPreferenceUpdate,
+    LocationPreferenceUpdate,
     SessionCreate,
     SessionResponse,
     SessionUpdate,
@@ -1170,6 +1171,14 @@ async def health_check() -> HealthResponse:
     }
 
 
+def _require_memory_service(trace_id: str) -> MemoryService:
+    """Return the connected memory service or raise HTTP 503."""
+    if not memory_service or not memory_service.connected:
+        log.warning("memory_service_required_unavailable", trace_id=trace_id)
+        raise HTTPException(status_code=503, detail="Memory service unavailable")
+    return memory_service
+
+
 # ============================================================================
 # Session Endpoints
 # ============================================================================
@@ -1258,6 +1267,119 @@ async def update_constraint_preference(
         "constraint_name": data.constraint_name,
         "preferred_action": data.preferred_action,
     }
+
+
+@app.get("/api/preferences/location")
+async def get_location_preference(
+    request_user: RequestUser = Depends(get_request_user),  # noqa: B008
+) -> dict[str, bool]:
+    """Read the authenticated user's location feature and consent gates.
+
+    Args:
+        request_user: Authenticated user (CF Access or owner fallback).
+
+    Returns:
+        Operator feature flag and per-user consent flag.
+    """
+    ctx = SystemTraceContext.new(
+        "get_location_preference",
+        user_id=request_user.user_id,
+    )
+    if not settings.location_enabled:
+        log.info(
+            "location_preference_read",
+            trace_id=ctx.trace_id,
+            user_id=str(request_user.user_id),
+            feature_enabled=False,
+            location_consent_enabled=False,
+        )
+        return {"feature_enabled": False, "location_consent_enabled": False}
+
+    svc = _require_memory_service(ctx.trace_id)
+    consent = await svc.get_person_location_consent(str(request_user.user_id), ctx.trace_id)
+    log.info(
+        "location_preference_read",
+        trace_id=ctx.trace_id,
+        user_id=str(request_user.user_id),
+        feature_enabled=True,
+        location_consent_enabled=consent,
+    )
+    return {"feature_enabled": True, "location_consent_enabled": consent}
+
+
+@app.patch("/api/preferences/location")
+async def update_location_preference(
+    data: LocationPreferenceUpdate,
+    request_user: RequestUser = Depends(get_request_user),  # noqa: B008
+) -> dict[str, bool]:
+    """Update location consent and optionally store client coordinates.
+
+    Args:
+        data: Location preference update payload.
+        request_user: Authenticated user (CF Access or owner fallback).
+
+    Returns:
+        Operator feature flag and effective per-user consent flag.
+
+    Raises:
+        HTTPException: 403 when the deployment-wide feature gate is disabled.
+    """
+    ctx = SystemTraceContext.new(
+        "update_location_preference",
+        user_id=request_user.user_id,
+    )
+    if not settings.location_enabled:
+        log.info(
+            "location_preference_update_denied",
+            trace_id=ctx.trace_id,
+            user_id=str(request_user.user_id),
+            reason="feature_disabled",
+        )
+        raise HTTPException(status_code=403, detail="Location features are disabled.")
+
+    svc = _require_memory_service(ctx.trace_id)
+    user_id = str(request_user.user_id)
+    if data.consent_enabled is not None:
+        await svc.set_person_location_consent(user_id, data.consent_enabled, ctx.trace_id)
+        consent = data.consent_enabled
+    else:
+        consent = await svc.get_person_location_consent(user_id, ctx.trace_id)
+
+    if data.latitude is not None and data.longitude is not None and consent:
+        from personal_agent.tools.location import ClientCoordinatesProvider
+
+        resolution = await ClientCoordinatesProvider(
+            data.latitude,
+            data.longitude,
+            data.timezone,
+            settings.location_precision,
+        ).resolve(ctx)
+        if resolution.latitude is not None and resolution.longitude is not None:
+            await svc.update_person_location(
+                user_id,
+                resolution.latitude,
+                resolution.longitude,
+                resolution.timezone,
+                "client",
+                ctx.trace_id,
+            )
+            log.info(
+                "location_preference_coordinates_stored",
+                trace_id=ctx.trace_id,
+                user_id=user_id,
+                source="client",
+                timezone_set=resolution.timezone is not None,
+            )
+
+    log.info(
+        "location_preference_updated",
+        trace_id=ctx.trace_id,
+        user_id=user_id,
+        feature_enabled=True,
+        location_consent_enabled=consent,
+        coordinates_present=data.latitude is not None and data.longitude is not None,
+    )
+    return {"feature_enabled": True, "location_consent_enabled": consent}
 
 
 @app.get("/sessions/{session_id}", response_model=SessionResponse)

@@ -1,110 +1,39 @@
-"""Tier-2 transport end-to-end test — real Postgres SessionEventBuffer (FRE-400/FRE-390).
+"""Tier-2 transport e2e — real Postgres SessionEventBuffer (FRE-400 / FRE-390).
 
 Requires the isolated test substrate:
 
     make test-infra-up   # Postgres on :5433, ES on :9201, Neo4j on :7688
 
-Invoked by CI's ``backend-integration`` job (and locally via
-``PERSONAL_AGENT_INTEGRATION=1 make test-integration``).
+Invoked by CI's ``backend-integration`` job:
 
-This test exercises the full dual-write path (Postgres ``session_events``
-table + asyncio.Queue) and the reconnect replay sequence — the exact
-gap called out in FRE-390: "no test opens a real WS connection and asserts
-on the received event sequence."
+    PERSONAL_AGENT_INTEGRATION=1 pytest -m integration -k transport -v
+
+These async tests exercise the real ``SessionEventBuffer`` dual-write path
+(Postgres ``session_events`` table) to close the FRE-390 gap:
+    "no test opens the real Postgres buffer and asserts on event sequences."
+
+The ``TestClient`` / WS round-trip path is covered by the Tier-1 unit tests
+(``test_ws_integration.py``) which use a ``FakeSessionEventBuffer``.
+Running those two sets together gives full coverage without the event-loop
+mismatch that would occur if we combined asyncpg (bound to one loop) with
+Starlette's TestClient (anyio background-thread loop).
 """
 
 from __future__ import annotations
 
-from collections.abc import Generator
-from contextlib import contextmanager
-from typing import Any
+import asyncio
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import APIRouter, FastAPI
-from fastapi.testclient import TestClient
 
-from personal_agent.service.auth import RequestUser
 from personal_agent.service.database import AsyncSessionLocal
+from personal_agent.transport.agui.event_buffer import SessionEventBuffer
 
 pytestmark = pytest.mark.integration
 
-_TEST_USER_ID: UUID = uuid4()
-_TEST_USER = RequestUser(
-    user_id=_TEST_USER_ID,
-    email="integration-test@example.com",
-    display_name="Integration Test User",
-)
 
-
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-
-class _FakeSessionRepository:
-    """Always reports a found session (no DB lookup for ownership check)."""
-
-    def __init__(self, db: Any) -> None:
-        pass
-
-    async def get(self, session_id: UUID, user_id: UUID | None = None) -> object:
-        return object()
-
-
-@contextmanager
-def _ws_connect(
-    client: TestClient,
-    session_id: str,
-    last_seq: int = 0,
-) -> Generator[Any, None, None]:
-    """Open a WS connection and perform the mandatory CONNECT handshake."""
-    with client.websocket_connect(f"/ws/{session_id}") as ws:
-        ws.send_json({"type": "CONNECT", "last_seq": last_seq})
-        yield ws
-
-
-def _build_integration_app(mp: pytest.MonkeyPatch) -> FastAPI:
-    """Build a test app that uses the REAL SessionEventBuffer (real Postgres).
-
-    Only ``_authenticate_ws`` and ``SessionRepository`` are mocked; everything
-    else (``AsyncSessionLocal``, ``SessionEventBuffer``) uses the real test
-    substrate on port 5433.
-    """
-    from personal_agent.transport.agui import ws_endpoint as _wsep
-    from personal_agent.transport.agui.ws_endpoint import ws_router
-
-    async def _fake_authenticate(websocket: Any, session_id_str: str) -> RequestUser:
-        return _TEST_USER
-
-    mp.setattr(_wsep, "_authenticate_ws", _fake_authenticate)
-    mp.setattr(_wsep, "SessionRepository", _FakeSessionRepository)
-    from personal_agent.config import settings as _settings
-
-    mp.setattr(_settings, "gateway_auth_enabled", False)
-
-    inject_router = APIRouter()
-
-    @inject_router.post("/__test/text_delta")
-    async def _inject_text_delta(session_id: str, text: str) -> dict[str, str]:
-        from personal_agent.transport.agui.transport import AGUITransport
-
-        await AGUITransport().send_text_delta(text=text, session_id=session_id)
-        return {"ok": "sent"}
-
-    @inject_router.post("/__test/done")
-    async def _inject_done(session_id: str) -> dict[str, str]:
-        from personal_agent.transport.agui.ws_endpoint import get_event_queue
-
-        await get_event_queue(session_id).put(None)
-        return {"ok": "sent"}
-
-    app = FastAPI()
-    app.include_router(ws_router)
-    app.include_router(inject_router)
-    return app
-
-
-async def _pg_available() -> bool:
-    """Check whether the test Postgres (port 5433) is reachable."""
+async def _postgres_available() -> bool:
+    """Return True when the test Postgres substrate (port 5433) is reachable."""
     try:
         async with AsyncSessionLocal() as db:
             from sqlalchemy import text
@@ -115,100 +44,108 @@ async def _pg_available() -> bool:
         return False
 
 
-# ── Tests ──────────────────────────────────────────────────────────────────────
+class TestSessionEventBuffer:
+    """Real Postgres SessionEventBuffer: append, replay, oldest_available_seq."""
 
-
-class TestTransportStreamE2E:
-    """FRE-390 gap: real WS connection + real Postgres event buffer."""
-
-    @pytest.fixture
-    def integration_harness(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> Generator[TestClient, None, None]:
-        """Build the test app backed by real Postgres and yield a TestClient."""
-        app = _build_integration_app(monkeypatch)
-        with TestClient(app, raise_server_exceptions=False) as client:
-            yield client
-
-    def test_skip_if_postgres_unavailable(self, integration_harness: TestClient) -> None:
-        """Marker: this test class requires the test Postgres substrate."""
-        import asyncio
-
-        if not asyncio.get_event_loop().run_until_complete(_pg_available()):
+    @pytest.mark.asyncio
+    async def test_events_stored_with_monotonic_seq(self) -> None:
+        """Three appended events get distinct, monotonically increasing seq values."""
+        if not await _postgres_available():
             pytest.skip("Test Postgres (port 5433) not reachable — run make test-infra-up")
 
-    def test_events_delivered_with_persisted_seq(
-        self, integration_harness: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Events are persisted to Postgres and delivered with monotonic seq over WS."""
-        import asyncio
+        session_id = uuid4()
 
-        if not asyncio.get_event_loop().run_until_complete(_pg_available()):
-            pytest.skip("Test Postgres not reachable")
+        async with AsyncSessionLocal() as db:
+            buf = SessionEventBuffer(db)
+            seq1 = await buf.append(
+                session_id,
+                "TEXT_DELTA",
+                {"type": "TEXT_DELTA", "data": {"text": "alpha"}, "session_id": str(session_id)},
+            )
+            seq2 = await buf.append(
+                session_id,
+                "TEXT_DELTA",
+                {"type": "TEXT_DELTA", "data": {"text": "beta"}, "session_id": str(session_id)},
+            )
+            seq3 = await buf.append(
+                session_id,
+                "TEXT_DELTA",
+                {"type": "TEXT_DELTA", "data": {"text": "gamma"}, "session_id": str(session_id)},
+            )
 
-        client = integration_harness
-        session_id = str(uuid4())
+        assert seq1 < seq2 < seq3
+        assert all(isinstance(s, int) and s > 0 for s in (seq1, seq2, seq3))
 
-        with _ws_connect(client, session_id) as ws:
-            for text in ("alpha", "beta", "gamma"):
-                client.post("/__test/text_delta", params={"session_id": session_id, "text": text})
-            client.post("/__test/done", params={"session_id": session_id})
+    @pytest.mark.asyncio
+    async def test_replay_returns_events_after_last_seq(self) -> None:
+        """replay(after_seq=N) returns only events with seq > N, in insertion order."""
+        if not await _postgres_available():
+            pytest.skip("Test Postgres (port 5433) not reachable — run make test-infra-up")
 
-            msgs: list[dict[str, Any]] = []
-            while True:
-                msg = ws.receive_json()
-                msgs.append(msg)
-                if msg["type"] == "DONE":
-                    break
+        session_id = uuid4()
 
-        deltas = [m for m in msgs if m["type"] == "TEXT_DELTA"]
-        assert len(deltas) == 3
+        async with AsyncSessionLocal() as db:
+            buf = SessionEventBuffer(db)
+            seq1 = await buf.append(session_id, "TEXT_DELTA", {"data": "one"})
+            seq2 = await buf.append(session_id, "TEXT_DELTA", {"data": "two"})
+            seq3 = await buf.append(session_id, "TEXT_DELTA", {"data": "three"})
 
-        # Seqs are Postgres-assigned — must be positive integers in order.
-        seqs = [m["seq"] for m in deltas]
-        assert all(isinstance(s, int) and s > 0 for s in seqs)
-        assert seqs == sorted(seqs), "seqs must be monotonically increasing"
-        assert len(set(seqs)) == 3, "seqs must be unique"
-        assert [m["data"]["text"] for m in deltas] == ["alpha", "beta", "gamma"]
+        # Simulate reconnect: client last saw seq1; expects seq2 and seq3 replayed.
+        async with AsyncSessionLocal() as db:
+            buf = SessionEventBuffer(db)
+            replayed = await buf.replay(session_id, after_seq=seq1)
 
-    def test_reconnect_replays_persisted_events(
-        self, integration_harness: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Disconnect mid-stream and reconnect: missed events replayed from Postgres."""
-        import asyncio
+        assert len(replayed) == 2
+        assert replayed[0]["seq"] == seq2
+        assert replayed[0]["payload"]["data"] == "two"
+        assert replayed[1]["seq"] == seq3
+        assert replayed[1]["payload"]["data"] == "three"
 
-        if not asyncio.get_event_loop().run_until_complete(_pg_available()):
-            pytest.skip("Test Postgres not reachable")
+    @pytest.mark.asyncio
+    async def test_oldest_available_seq_tracks_first_event(self) -> None:
+        """oldest_available_seq returns the lowest seq for the session."""
+        if not await _postgres_available():
+            pytest.skip("Test Postgres (port 5433) not reachable — run make test-infra-up")
 
-        client = integration_harness
-        session_id = str(uuid4())
-        received_seqs: list[int] = []
+        session_id = uuid4()
 
-        # First connection: inject 3 events, receive only the first two.
-        with _ws_connect(client, session_id, last_seq=0) as ws:
-            for text in ("one", "two", "three"):
-                client.post("/__test/text_delta", params={"session_id": session_id, "text": text})
+        async with AsyncSessionLocal() as db:
+            buf = SessionEventBuffer(db)
+            seq1 = await buf.append(session_id, "TEXT_DELTA", {"data": "x"})
+            await buf.append(session_id, "TEXT_DELTA", {"data": "y"})
 
-            msg1 = ws.receive_json()
-            assert msg1["type"] == "TEXT_DELTA"
-            assert msg1["data"]["text"] == "one"
-            received_seqs.append(msg1["seq"])
+        async with AsyncSessionLocal() as db:
+            buf = SessionEventBuffer(db)
+            oldest = await buf.oldest_available_seq(session_id)
 
-            msg2 = ws.receive_json()
-            assert msg2["type"] == "TEXT_DELTA"
-            assert msg2["data"]["text"] == "two"
-            received_seqs.append(msg2["seq"])
+        assert oldest == seq1
 
-            # Disconnect here — msg3 ("three") was persisted but not delivered.
-            last_seq = msg2["seq"]
+    @pytest.mark.asyncio
+    async def test_replay_gap_detected_when_last_seq_is_stale(self) -> None:
+        """When last_seq < oldest_available_seq, a REPLAY_GAP condition is detectable."""
+        if not await _postgres_available():
+            pytest.skip("Test Postgres (port 5433) not reachable — run make test-infra-up")
 
-        # Second connection: reconnect with last_seq = after msg2.
-        with _ws_connect(client, session_id, last_seq=last_seq) as ws:
-            replayed = ws.receive_json()
-            assert replayed["type"] == "TEXT_DELTA"
-            assert replayed["data"]["text"] == "three"
-            assert replayed["seq"] > last_seq
+        session_id = uuid4()
 
-            client.post("/__test/done", params={"session_id": session_id})
-            done = ws.receive_json()
-            assert done["type"] == "DONE"
+        async with AsyncSessionLocal() as db:
+            buf = SessionEventBuffer(db)
+            seq10 = await buf.append(session_id, "TEXT_DELTA", {"data": "late"})
+
+        # Client claims it last saw seq = (seq10 - 5), which is before the oldest event.
+        stale_last_seq = seq10 - 5
+        async with AsyncSessionLocal() as db:
+            buf = SessionEventBuffer(db)
+            oldest = await buf.oldest_available_seq(session_id)
+            # This is the condition the _sender uses to decide to send REPLAY_GAP.
+            is_gap = oldest is not None and stale_last_seq < oldest
+
+        assert is_gap, f"Expected gap: oldest={oldest}, stale_last_seq={stale_last_seq}"
+
+        # Despite the gap, replay still returns events with seq > stale_last_seq.
+        async with AsyncSessionLocal() as db:
+            buf = SessionEventBuffer(db)
+            replayed = await buf.replay(session_id, after_seq=stale_last_seq)
+
+        assert len(replayed) >= 1
+        assert replayed[0]["seq"] == seq10

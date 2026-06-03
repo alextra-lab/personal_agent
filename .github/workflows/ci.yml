@@ -52,7 +52,12 @@ jobs:
           AGENT_DATABASE_URL: postgresql+asyncpg://agent:agent_dev_password@localhost:5433/personal_agent
           AGENT_ELASTICSEARCH_INDEX_PREFIX: agent-logs-test
           AGENT_CAPTAINS_LOG_INDEX_PREFIX: agent-captains-test
-          AGENT_OWNER_EMAIL: ci-test@example.com
+          # No AGENT_OWNER_EMAIL: the dev-mode fallback in get_request_user
+          # requires both gateway_auth_enabled=False AND agent_owner_email set.
+          # Without agent_owner_email the fallback is skipped → 401 raised
+          # correctly. Setting it here would trigger a Postgres lookup when no
+          # service container is available, causing 500 instead of 401 in auth
+          # tests (test_list_artifacts_requires_auth, test_card_click_no_auth_is_401).
 
   # ── Backend integration tests (real Postgres) ───────────────────────────────
   backend-integration:
@@ -138,10 +143,10 @@ jobs:
         run: uv run mypy src/
 
       - name: ruff check
-        run: uv run ruff check src/
+        run: uv tool run ruff check src/
 
       - name: ruff format (check only)
-        run: uv run ruff format --check src/
+        run: uv tool run ruff format --check src/
 
   # ── PWA unit tests ──────────────────────────────────────────────────────────
   # WS2 (Vitest component tests) — added once `make test-pwa` is wired in PR2.

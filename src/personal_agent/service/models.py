@@ -89,6 +89,19 @@ class ConstraintPreferenceUpdate(BaseModel):
     preferred_action: str
 
 
+class LocationPreferenceUpdate(BaseModel):
+    """Request to update location consent and client coordinates (FRE-230).
+
+    Latitude/longitude are bounded to valid WGS84 ranges so malformed input is
+    rejected at the API boundary before it can reach the Neo4j ``point()`` call.
+    """
+
+    consent_enabled: bool | None = None
+    latitude: float | None = Field(default=None, ge=-90.0, le=90.0)
+    longitude: float | None = Field(default=None, ge=-180.0, le=180.0)
+    timezone: str | None = None
+
+
 class SessionResponse(BaseModel):
     """Session data returned by API."""
 

@@ -784,6 +784,42 @@ class AppConfig(BaseSettings):
     use_service_mode: bool = Field(default=True, description="Enable service mode")
     enable_second_brain: bool = Field(default=False, description="Enable second brain (Phase 2.2)")
     enable_memory_graph: bool = Field(default=False, description="Enable memory graph (Phase 2.2)")
+    location_enabled: bool = Field(
+        default=False,
+        description="Master opt-in for location features (FRE-230). Default OFF.",
+    )
+    location_precision: str = Field(
+        default="precise",
+        description=(
+            "'precise' stores verbatim device-coordinate fidelity; 'coarse' is an "
+            "optional operator override that rounds latitude/longitude to 2 decimals."
+        ),
+    )
+
+    @field_validator("location_precision")
+    @classmethod
+    def validate_location_precision(cls, v: str) -> str:
+        """Reject unknown precision values at startup (FRE-230).
+
+        Without this guard an unconstrained string means any typo (e.g.
+        ``"course"``) falls through to the precise branch and silently stores
+        raw coordinates, defeating the operator coarse override.
+
+        Args:
+            v: Candidate precision value.
+
+        Returns:
+            The validated value.
+
+        Raises:
+            ValueError: When the value is not ``"precise"`` or ``"coarse"``.
+        """
+        if v not in ("precise", "coarse"):
+            raise ValueError(
+                f"location_precision must be 'precise' or 'coarse', got {v!r}. "
+                "Set AGENT_LOCATION_PRECISION=precise or =coarse."
+            )
+        return v
 
     # Second Brain Scheduling (Phase 2.2)
     # The four fields below are the host-resource gate, used only when the

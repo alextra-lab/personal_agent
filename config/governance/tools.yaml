@@ -53,6 +53,14 @@ tools:
     timeout_seconds: 15
     rate_limit_per_hour: 120
 
+  get_location:
+    category: "network"
+    allowed_in_modes: ["NORMAL", "ALERT"]
+    risk_level: "low"
+    requires_approval: false
+    timeout_seconds: 10
+    rate_limit_per_hour: 60
+
   write_file:
     category: "system_write"
     allowed_in_modes: ["NORMAL"]

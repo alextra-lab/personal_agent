@@ -1,6 +1,6 @@
 # ADR-0082 — Tier-Aware Model Selection for SINGLE-Strategy Tasks
 
-**Status:** Proposed — 2026-06-01
+**Status:** Partially Superseded by ADR-0084 — 2026-06-03 (D2–D5 superseded for the pedagogical routing question; D1 plumbing may still ship as neutral infrastructure in M4)
 **Related:** ADR-0033 (multi-provider model taxonomy — defines the `primary` / `sub_agent` tiers), ADR-0063 (primitive tools & action-boundary governance — owns the gateway decomposition matrix), ADR-0023 (thinking-budget control), ADR-0074 (identity / joinability — the emit-site discipline D5 inherits), ADR-0078/0081 (prompt/cache work — the cost context this sits beside), FRE-407 (per-turn quality rating — the quality guardrail)
 
 ---

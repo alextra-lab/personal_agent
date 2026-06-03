@@ -1,0 +1,165 @@
+# CI — Personal Agent
+#
+# Runs on every push and pull_request.
+#
+# CI-vs-on-demand split (FRE-400):
+#   IN CI (this file)   — unit tests, integration tests against ephemeral containers,
+#                          static analysis (mypy, ruff).  Fast, deterministic.
+#   ON DEMAND ONLY      — LLM eval harness (`make eval`, 100+ live LLM calls),
+#                          full recovery/skill-routing surveys, manual device tests.
+#
+# Jobs:
+#   backend-unit        — `make test` (all unit tests, no Postgres/LLM required)
+#   backend-integration — `pytest -m integration -k transport` against a real
+#                         Postgres service container (FRE-390 / FRE-400 Tier-2)
+#   lint                — mypy + ruff-check + ruff-format
+#   pwa-unit            — Vitest component tests for seshat-pwa (placeholder; WS2)
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  # ── Backend unit tests ──────────────────────────────────────────────────────
+  backend-unit:
+    name: Backend unit tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run unit tests
+        run: uv run python -m pytest -m "not integration" -q --tb=short
+        env:
+          APP_ENV: test
+          AGENT_NEO4J_URI: bolt://localhost:7688
+          AGENT_ELASTICSEARCH_URL: http://localhost:9201
+          AGENT_DATABASE_URL: postgresql+asyncpg://agent:agent_dev_password@localhost:5433/personal_agent
+          AGENT_ELASTICSEARCH_INDEX_PREFIX: agent-logs-test
+          AGENT_CAPTAINS_LOG_INDEX_PREFIX: agent-captains-test
+          # No AGENT_OWNER_EMAIL: the dev-mode fallback in get_request_user
+          # requires both gateway_auth_enabled=False AND agent_owner_email set.
+          # Without agent_owner_email the fallback is skipped → 401 raised
+          # correctly. Setting it here would trigger a Postgres lookup when no
+          # service container is available, causing 500 instead of 401 in auth
+          # tests (test_list_artifacts_requires_auth, test_card_click_no_auth_is_401).
+
+  # ── Backend integration tests (real Postgres) ───────────────────────────────
+  backend-integration:
+    name: Backend integration tests (transport)
+    runs-on: ubuntu-24.04
+    # No Docker service container — uses the runner's apt-installed Postgres to
+    # avoid Docker Hub pull failures (transient registry timeouts have broken CI).
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Start PostgreSQL and create test database
+        run: |
+          sudo systemctl start postgresql
+          sudo -u postgres psql -c "CREATE USER agent WITH PASSWORD 'agent_dev_password';"
+          sudo -u postgres createdb -O agent personal_agent
+          # Bind on 5433 so the existing AGENT_DATABASE_URL (port 5433) works without changes.
+          # The runner's default Postgres listens on 5432; add a second port via config.
+          sudo -u postgres psql -c "ALTER SYSTEM SET port = 5433;"
+          sudo systemctl restart postgresql
+          # Wait for Postgres to accept connections on the new port.
+          until pg_isready -h localhost -p 5433 -U agent; do sleep 1; done
+
+      - name: Apply database schema
+        run: |
+          PGPASSWORD=agent_dev_password psql \
+            -h localhost -p 5433 -U agent -d personal_agent \
+            -f docker/postgres/init.sql
+
+      - name: Run transport integration tests
+        run: |
+          PERSONAL_AGENT_INTEGRATION=1 uv run python -m pytest -m integration \
+            -k "transport" \
+            -v --tb=short
+        env:
+          APP_ENV: test
+          AGENT_NEO4J_URI: bolt://localhost:7688
+          AGENT_ELASTICSEARCH_URL: http://localhost:9201
+          AGENT_DATABASE_URL: postgresql+asyncpg://agent:agent_dev_password@localhost:5433/personal_agent
+          AGENT_ELASTICSEARCH_INDEX_PREFIX: agent-logs-test
+          AGENT_CAPTAINS_LOG_INDEX_PREFIX: agent-captains-test
+          AGENT_OWNER_EMAIL: ci-test@example.com
+
+  # ── Static analysis ─────────────────────────────────────────────────────────
+  lint:
+    name: Lint (mypy + ruff)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: mypy
+        run: uv run mypy src/
+
+      - name: ruff check
+        run: uv tool run ruff check src/
+
+      - name: ruff format (check only)
+        run: uv tool run ruff format --check src/
+
+  # ── PWA unit tests ──────────────────────────────────────────────────────────
+  # WS2 (Vitest component tests) — added once `make test-pwa` is wired in PR2.
+  pwa-unit:
+    name: PWA unit tests (Vitest)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: seshat-pwa
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: seshat-pwa/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Vitest
+        run: npx vitest run

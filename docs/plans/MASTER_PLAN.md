@@ -22,10 +22,10 @@ Four threads carved from the FRE-389 on-device review (2026-05-28). All **Approv
 |--------|-------|-------|
 | **Dynamic artifacts** | [FRE-397](https://linear.app/frenchforest/issue/FRE-397) | Diagrams now → interactive later (Tier 1 SVG → Tier 2 sandboxed JS → Tier 3 JSX). |
 | **Adaptive limits & error recovery** | [FRE-399](https://linear.app/frenchforest/issue/FRE-399) | ~~524 root cause fixed (`cbd6f45`).~~ Layer 3 ✅ (ADR-0083, PR #139): cross-tunnel SLM health monitor, enriched `/api/inference/status`, executor error-reason hint. Children: FRE-444 (Mac-side enrichment), FRE-443 (L2 cloud fallback — gate: genuine failure observed), FRE-445 (dynamic thresholds, coordinate FRE-391). |
-| **E2E testing (transport/UI/error)** | [FRE-400](https://linear.app/frenchforest/issue/FRE-400) | Automated WS round-trip + PWA + failure-path coverage. |
+| **E2E testing (transport/UI/error)** | [FRE-400](https://linear.app/frenchforest/issue/FRE-400) 🔄 In Progress | PR1 ✅ (PR #140): WS harness + 16 tests + CI. PR2 ✅ (PR #141): 59 Vitest component+hook tests. FRE-390 closed (subsumed). PR3 (Playwright e2e) next. |
 | **Planner-executor split** | [FRE-401](https://linear.app/frenchforest/issue/FRE-401) | Reasoning model plans; subagents execute in isolated context. ADR required before implementation. |
 
-**Recommended order**: FRE-434 ✅ → FRE-377 ✅ → FRE-408 ✅ → FRE-409 ✅ → FRE-399 L3 ✅ → FRE-400 PR1 ✅ (PR #140) → **[FRE-400](https://linear.app/frenchforest/issue/FRE-400) PR2 (next for build — PWA Vitest)** → FRE-400 PR3 (Playwright) → FRE-397 Tier 2.
+**Recommended order**: FRE-434 ✅ → FRE-377 ✅ → FRE-408 ✅ → FRE-409 ✅ → FRE-399 L3 ✅ → FRE-400 PR1 ✅ → FRE-400 PR2 ✅ (PR #141) → **[FRE-400](https://linear.app/frenchforest/issue/FRE-400) PR3 (next for build — Playwright e2e)** → FRE-397 Tier 2.
 
 **Standalone (Approved)**: FRE-394 (PWA SW dead code), FRE-395 (PWA ESLint).
 

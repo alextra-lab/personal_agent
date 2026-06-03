@@ -1269,7 +1269,7 @@ async def update_constraint_preference(
     }
 
 
-@app.get("/api/preferences/location")
+@app.get("/api/v1/preferences/location")
 async def get_location_preference(
     request_user: RequestUser = Depends(get_request_user),  # noqa: B008
 ) -> dict[str, bool]:
@@ -1307,7 +1307,7 @@ async def get_location_preference(
     return {"feature_enabled": True, "location_consent_enabled": consent}
 
 
-@app.patch("/api/preferences/location")
+@app.patch("/api/v1/preferences/location")
 async def update_location_preference(
     data: LocationPreferenceUpdate,
     request_user: RequestUser = Depends(get_request_user),  # noqa: B008

@@ -18,6 +18,7 @@ import { ChatInput } from './ChatInput';
 import { ChatMessage } from './ChatMessage';
 import { ClassifiedErrorCard } from './ClassifiedErrorCard';
 import { DecisionCard } from './DecisionCard';
+import { LocationConsent } from './LocationConsent';
 import { SessionList } from './SessionList';
 import { ToolIndicator } from './ToolIndicator';
 import { TurnStatusBar } from './TurnStatusBar';
@@ -260,6 +261,9 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
               <span aria-hidden="true">📎</span>
               Artifacts
             </Link>
+
+            {/* Location consent toggle — FRE-230 (hidden when operator gate off) */}
+            <LocationConsent />
 
             {/* Session list — remounts on each open (fresh fetch) */}
             <SessionList

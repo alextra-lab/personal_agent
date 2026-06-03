@@ -92,19 +92,16 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Apply database migrations
+      - name: Apply database schema
         run: |
-          # Run all migration SQL files in order to set up the session_events table
-          for f in $(ls docker/postgres/migrations/*.sql 2>/dev/null | sort); do
-            echo "Applying $f"
-            PGPASSWORD=agent_dev_password psql -h localhost -p 5433 -U agent -d personal_agent -f "$f" || true
-          done
-          # Apply main init if migrations directory is empty
-          if [ ! -d docker/postgres/migrations ] || [ -z "$(ls docker/postgres/migrations/*.sql 2>/dev/null)" ]; then
-            PGPASSWORD=agent_dev_password psql -h localhost -p 5433 -U agent -d personal_agent -f docker/postgres/init.sql || true
-          fi
-        env:
-          PGPASSWORD: agent_dev_password
+          # init.sql is the authoritative schema source; it uses CREATE IF NOT EXISTS
+          # throughout, so it is idempotent on a fresh Postgres service container.
+          # Migrations in docker/postgres/migrations/ are incremental patches applied
+          # on top of production databases already running the base schema — for CI
+          # we only need init.sql since the container starts empty.
+          PGPASSWORD=agent_dev_password psql \
+            -h localhost -p 5433 -U agent -d personal_agent \
+            -f docker/postgres/init.sql
 
       - name: Run transport integration tests
         run: |

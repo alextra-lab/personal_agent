@@ -126,6 +126,37 @@ class TestToolUse:
         )
 
 
+class TestArtifactBuild:
+    """Artifact/build intent (FRE-469) must route to TOOL_USE, not CONVERSATIONAL.
+
+    CONVERSATIONAL caps tool iterations at 6 vs 25 for tool_use; build/artifact
+    requests were silently starved of tool runway. Precedent: FRE-256.
+    """
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            # Shape of the originating trace c216bd40: explain + build artifact.
+            "Explain the internals of the gateway and build an interactive HTML guide.",
+            "Build me an interactive HTML guide to the memory system",
+            "Make me an interactive dashboard",
+            "Create a guide explaining the architecture",
+            "Generate an HTML page summarizing the results",
+            "Build a chart of the three approaches",
+            "Create a dashboard showing telemetry",
+            "Generate an interactive diagram of the request flow",
+            "Make a visualization of the knowledge graph",
+        ],
+    )
+    def test_artifact_build_classified_as_tool_use(self, message: str) -> None:
+        """Build/artifact prompts classify as TOOL_USE so tool budget is not capped at 6."""
+        result = classify_intent(message)
+        assert result.task_type == TaskType.TOOL_USE, (
+            f"{message!r} → {result.task_type.value} (signals={result.signals})"
+        )
+        assert "tool_intent_pattern" in result.signals
+
+
 class TestSelfImprove:
     """Self-improvement patterns -- agent discussing its own architecture."""
 

@@ -101,7 +101,18 @@ _TOOL_INTENT_PATTERNS: re.Pattern[str] = re.compile(
     r"|(?:(?:run|do|perform)\s+(?:a\s+)?(?:health|status|diagnostic|infra)\s*(?:check|report|scan)?)"
     # Bare-noun error/log observation — no leading verb (e.g. "errors in elasticsearch")
     r"|(?:\berrors?\s+(?:in|from|within)\s+(?:elasticsearch|kibana|the\s+logs?|telemetry|traces?))"
-    r"|(?:what\s+errors?\s+(?:are\s+)?(?:in|from)\s+(?:the\s+)?(?:logs?|elasticsearch|telemetry))",
+    r"|(?:what\s+errors?\s+(?:are\s+)?(?:in|from)\s+(?:the\s+)?(?:logs?|elasticsearch|telemetry))"
+    # Artifact / build intent (FRE-469): "build me an interactive HTML guide",
+    # "create a dashboard", "generate an HTML page". Without this such requests
+    # fall through to CONVERSATIONAL, whose tool-iteration budget is capped at 6
+    # (vs 25 for tool_use) and starves multi-step artifact builds.
+    # Precedent: FRE-256 _TOOL_INTENT_PATTERNS extension.
+    r"|(?:(?:build|make|create|generate)\s+"
+    r"(?:me\s+|us\s+)?(?:an?\s+|the\s+|some\s+)?"
+    r"(?:\w+\s+){0,3}?"
+    r"(?:guide|web\s*page|web\s*site|page|website|dashboard|chart|graph|"
+    r"diagram|artifact|visuali[sz]ation|infographic|mock-?up|prototype|"
+    r"widget|report|slide\s*show|presentation|app|html|svg|interactive))",
 )
 
 _SELF_IMPROVE_PATTERNS: re.Pattern[str] = re.compile(

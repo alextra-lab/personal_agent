@@ -1,0 +1,62 @@
+{
+    "promptSuggestionEnabled": false,
+    "env": {
+        "CLAUDE_CODE_ENABLE_TELEMETRY": "0",
+        "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
+    },
+    "attribution": {
+        "commit": "",
+        "pr": ""
+    },
+    "plansDirectory": "./docs/superpowers/plans",
+    "prefersReducedMotion": true,
+    "terminalProgressBarEnabled": false,
+    "effortLevel": "high",
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/check-pytest-lock.sh"
+                    },
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/deploy-approval-gate.sh"
+                    }
+                ]
+            },
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/check-forbidden-patterns.sh"
+                    }
+                ]
+            }
+        ],
+        "PostToolUse": [
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/format-python.sh"
+                    }
+                ]
+            }
+        ],
+        "UserPromptSubmit": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/nudge-discussion-mode.sh"
+                    }
+                ]
+            }
+        ]
+    }
+}

@@ -128,7 +128,6 @@ telemetry/within_session_compression/
 .claude/worktrees/
 .claude/todos/
 .claude/.cache/
-.claude/settings.json
 .claude/scheduled_tasks.lock
 
 # SearXNG generated files (ADR-0034)
@@ -158,3 +157,6 @@ docker/mcp/mcp-secrets.env
 
 # FRE-433/434 cache A/B harness run outputs (regeneratable telemetry)
 telemetry/evaluation/fre433-cache-ab/
+
+# deploy-approval-gate runtime sentinel (never committed)
+.claude/.deploy-approved

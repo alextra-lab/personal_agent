@@ -78,6 +78,17 @@ After several rounds: system (1) + last-tool (1) + ≥3 accumulated stale histor
 → Anthropic 400. The forced-synthesis fallback (triggered because tool budget was exhausted) is the call
 that actually tripped it.
 
+> **Scope correction (Codex review, 2026-06-04):** the accumulation is **not only in-turn**. The same
+> shallow-copy + in-place-mutation pattern leaks markers **across turns** into persisted session history:
+> `executor.py:1542` (`ctx.messages = list(session.messages)`) → `executor.py:3543`
+> (`update_session(..., messages=ctx.messages)`) → `session.py:111` (`session.messages = messages`,
+> stored by reference). So Anthropic-only metadata (and the `str`→`list` system-content promotion) can
+> persist into stored history. The FRE-468 strip-on-every-call fix fully closes the **outage** (each
+> Anthropic call clears leftovers before marking), but the deeper abstraction issue — provider request
+> decoration mutating caller-owned / persisted state, with cross-provider risk — is tracked in
+> **FRE-473** (kept out of the Urgent hotfix because persisting the wire form is partly intentional for
+> §D2 byte-identity).
+
 ### Relationship to the prompt-cache work (important)
 
 This bug is in the **`cache_control` marker layer** (Anthropic-only metadata), **not** in the
@@ -131,7 +142,8 @@ All tickets in Linear project **Turn Reliability Hardening (2026-06-04 incident)
 | 2 | Bug (High) | Classifier: route artifact/"build me a"/"make an interactive" intent to `tool_use`/`planning` (extend `_TOOL_INTENT_PATTERNS`, precedent FRE-256); add the recurring-family context | **FRE-469** |
 | 3 | Bug (Low) | `bash` tool: treat exit 141 (SIGPIPE from `head`/`grep -q`) as success, not failure | **FRE-470** |
 | 4 | Bug (Low) | `artifact_draft`: truncate-with-warning instead of terminal hard-fail; raise plan cap toward `_DRAFT_MAX_TOKENS` (refs FRE-391) | **FRE-471** |
-| 5 | Research | "`conversational` capability trap": min tool-runway floor for any turn that starts calling tools; should validation-retries decrement the hard cap? Measure thinking/budget interaction (ties to FRE-432/447) | **FRE-472** |
+| 5 | Research | "`conversational` capability trap": min tool-runway floor **conditioned on a turn actually emitting tool calls** (not a global conversational-cap raise); validation-retry budget accounting; measure budget-pressure→bad-output (ties to FRE-432/447) | **FRE-472** |
+| 6 | Bug (High) | Copy-isolation: provider request decoration must not mutate caller-owned / persisted session messages; deepcopy at the `respond()` boundary + contract test for ≤4 blocks post-LiteLLM-transform (Codex review finding) | **FRE-473** |
 
 ---
 

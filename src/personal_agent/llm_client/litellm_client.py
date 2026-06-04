@@ -12,6 +12,7 @@ and telemetry (structlog). LiteLLM handles provider format conversion and retrie
 
 from __future__ import annotations
 
+import copy
 import time
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
@@ -144,6 +145,37 @@ def _enforce_cache_control_cap(
         cap=cap,
         dropped=drop_count,
     )
+
+
+def _decorated_anthropic_copy(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    *,
+    frozen_layout: bool = False,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
+    """Return cache-decorated **deep copies** of ``messages``/``tools``; inputs untouched.
+
+    Anthropic prompt-cache markers (``cache_control``) are request-local metadata.
+    Decorating in place would scribble onto caller-owned dicts that the executor
+    persists into session history (`session.messages`), leaking provider-specific
+    metadata (and a `str`→`list` system-content promotion) into the saved
+    conversation — which could then ride into a later, possibly non-Anthropic,
+    request (FRE-473). This builder isolates the decoration to a request-local copy
+    so the persisted history stays provider-neutral.
+
+    Args:
+        messages: Caller-owned message list (not modified).
+        tools: Caller-owned OpenAI-format tool list, or None (not modified).
+        frozen_layout: When True, also place the ADR-0081 §D2 history-end breakpoint.
+
+    Returns:
+        ``(wire_messages, wire_tools)`` — decorated deep copies safe to send to
+        LiteLLM. ``wire_tools`` is None iff ``tools`` is None.
+    """
+    wire_messages = copy.deepcopy(messages)
+    wire_tools = copy.deepcopy(tools) if tools is not None else None
+    _apply_anthropic_cache_control(wire_messages, wire_tools, frozen_layout=frozen_layout)
+    return wire_messages, wire_tools
 
 
 def _apply_anthropic_cache_control(
@@ -391,13 +423,18 @@ class LiteLLMClient:
             litellm_kwargs.setdefault("extra_headers", {})["anthropic-beta"] = (
                 "prompt-caching-2024-07-31"
             )
-            _apply_anthropic_cache_control(
+            # FRE-473: decorate request-local copies so cache_control markers never
+            # mutate caller-owned messages/tools (which the executor persists into
+            # session history). The wire payload carries the markers; the saved
+            # conversation stays provider-neutral.
+            wire_messages, wire_tools = _decorated_anthropic_copy(
                 api_messages,
                 litellm_kwargs.get("tools"),
                 frozen_layout=_settings.cache_frozen_layout_enabled,
             )
-            # Reflect updated messages (cache_control blocks mutated in-place)
-            litellm_kwargs["messages"] = api_messages
+            litellm_kwargs["messages"] = wire_messages
+            if wire_tools is not None:
+                litellm_kwargs["tools"] = wire_tools
 
         # ── Cost Check Gate (ADR-0065 D1) ─────────────────────────────────
         # Atomic reservation in front of every paid call. Replaces the

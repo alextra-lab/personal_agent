@@ -5,8 +5,11 @@ from __future__ import annotations
 
 from typing import Any
 
+import copy
+
 from personal_agent.llm_client.litellm_client import (
     _apply_anthropic_cache_control,
+    _decorated_anthropic_copy,
     _enforce_cache_control_cap,
     _mark_message_cache_control,
 )
@@ -199,3 +202,120 @@ def test_enforce_cap_noop_when_within_limit() -> None:
     ]
     _enforce_cache_control_cap(messages, tools=None, cap=4)
     assert _count_cache_control(messages, None) == 2
+
+
+# ── FRE-473: decoration must operate on copies, never caller-owned objects ───────
+
+
+def test_decorated_copy_does_not_mutate_caller_objects() -> None:
+    """Approach A: cache decoration writes to a copy; caller messages/tools stay clean.
+
+    The executor persists `ctx.messages` into session history (`session.py:111`),
+    so any `cache_control` marker (or `str`→`list` promotion) scribbled onto those
+    dicts would leak provider-specific metadata into the saved conversation and ride
+    into later (possibly non-Anthropic) requests. The builder must not touch inputs.
+    """
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": "SYS"},
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "a1"},
+        {"role": "user", "content": "<turn_context>...</turn_context>\n\nq2"},
+    ]
+    tools: list[dict[str, Any]] = [{"name": "t1"}, {"name": "t2"}]
+    messages_before = copy.deepcopy(messages)
+    tools_before = copy.deepcopy(tools)
+
+    wire_messages, wire_tools = _decorated_anthropic_copy(messages, tools, frozen_layout=True)
+
+    # Caller-owned objects are byte-for-byte untouched (no markers, no str→list promotion).
+    assert messages == messages_before
+    assert tools == tools_before
+    assert messages[0]["content"] == "SYS"  # system not promoted in the caller's copy
+    # The returned wire payload IS decorated with the intended ≤3 breakpoints.
+    assert _count_cache_control(wire_messages, wire_tools) == 3
+    assert wire_messages is not messages and wire_tools is not tools
+
+
+def test_decorated_copy_handles_none_tools() -> None:
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": "SYS"},
+        {"role": "user", "content": "only turn"},
+    ]
+    messages_before = copy.deepcopy(messages)
+    wire_messages, wire_tools = _decorated_anthropic_copy(messages, None, frozen_layout=False)
+    assert messages == messages_before  # caller untouched
+    assert wire_tools is None
+    assert _count_cache_control(wire_messages, None) == 1  # system only
+
+
+# ── FRE-473: contract test against LiteLLM's actual Anthropic transform ──────────
+
+
+def _count_cache_control_recursive(obj: Any) -> int:
+    """Count every ``cache_control`` key anywhere in a nested dict/list structure."""
+    total = 0
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == "cache_control":
+                total += 1
+            else:
+                total += _count_cache_control_recursive(value)
+    elif isinstance(obj, list):
+        for item in obj:
+            total += _count_cache_control_recursive(item)
+    return total
+
+
+def test_post_transform_anthropic_payload_within_cap() -> None:
+    """Contract test: what Anthropic *actually receives* must carry ≤4 cache_control blocks.
+
+    Counts breakpoints in LiteLLM's real Anthropic request body (system + messages +
+    tools), not just our local OpenAI-shaped messages — closing the gap that let the
+    FRE-468 5>4 outage reach the API. Drives the multi-round accumulation scenario
+    that previously exceeded the cap.
+    """
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": "SYS"},
+        {"role": "user", "content": "<turn_context>v0</turn_context> build me a guide"},
+    ]
+    tools: list[dict[str, Any]] = [
+        {
+            "type": "function",
+            "function": {
+                "name": "bash",
+                "description": "run",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "artifact_draft",
+                "description": "draft",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    ]
+    for round_idx in range(6):
+        messages.append({"role": "assistant", "content": f"round {round_idx}"})
+        messages.append(
+            {"role": "user", "content": f"<turn_context>v{round_idx + 1}</turn_context>"}
+        )
+
+    wire_messages, wire_tools = _decorated_anthropic_copy(messages, tools, frozen_layout=True)
+    body = AnthropicConfig().transform_request(
+        model="claude-sonnet-4-6",
+        messages=wire_messages,
+        optional_params={"tools": wire_tools},
+        litellm_params={},
+        headers={},
+    )
+
+    post_transform = _count_cache_control_recursive(body)
+    assert post_transform <= 4, (
+        f"Anthropic payload has {post_transform} cache_control blocks (cap 4)"
+    )
+    # Intended set: system + one history-end + last tool.
+    assert post_transform == 3

@@ -50,7 +50,7 @@ Four threads carved from the FRE-389 on-device review (2026-05-28). All **Approv
 
 ## Pending Verification
 
-- **FRE-468** — post-deploy: re-run failing prompt class on cloud-sim (artifact/"build me an interactive guide" type request); confirm no Anthropic 400 + `cache_read` on prefix. Unblocked once gateway rebuilt.
+- **FRE-468** ✅ DONE — post-deploy verified 2026-06-04: no Anthropic 400, `cache_read_tokens=17,772` on round 2, `cache_control_cap_enforced` never fired. Fix confirmed live.
 - **FRE-408** ✅ DONE (owner accepted real-telemetry equivalent — 3 buckets on real ES traces). Optional Mac harness smoke remains belt-and-suspenders, not blocking.
 
 ---

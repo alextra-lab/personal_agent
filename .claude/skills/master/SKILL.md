@@ -1,0 +1,48 @@
+---
+name: master
+description: Use in the master session to integrate a ready PR — analyze (code-review + security-review), doc-drift check, merge, ask before deploy, verify live, close Linear, update MASTER_PLAN.
+---
+
+# Integrate a PR (master / guardian session)
+
+Read `.claude/skills/lifecycle-rules.md` first. Argument: a PR number, or omitted (scan open PRs).
+
+## 1 — Pick the PR
+`gh pr list` (or use the given number). Read PR body, commits, linked ticket.
+
+## 2 — Analyze the diff
+- Correctness: invoke the **code-review** skill on the diff.
+- Security: invoke the **security-review** skill on the diff (the pre-merge security pass).
+Surface findings. Block merge on real issues; relay to the build session.
+
+## 3 — Doc-drift check
+Does this change require updates to MASTER_PLAN, `CLAUDE.md` "Current status", or an ADR status
+field? Flag drift before merging. (Documentation-drift sensitivity is a core guardian duty.)
+
+## 4 — Gate checks
+Ticket is `Approved`/In Progress; PR hygiene holds (REJECT if post-deploy items are in the
+checklist); CI green.
+
+## 5 — Merge
+`gh pr merge <n> --merge` with a review summary; `git pull` on main.
+
+## 6 — Ask before deploy
+Ask the owner: **"deploy now?"** Do NOT deploy on your own initiative. If yes, write the approval
+sentinel so the gate allows exactly one deploy:
+`touch .claude/.deploy-approved`
+
+## 7 — Deploy + verify (only after "yes")
+- `ENV=cloud make rebuild SERVICE=seshat-gateway` (VPS; `make deploy` is Mac-only).
+- `curl -s http://localhost:9001/health` + curl the affected endpoint; paste status + body.
+- If the PR touched an emit site / schema / cost / memory write: run
+  `scripts/monitors/joinability_probe.py` against prod; paste output (ADR-0074 §3.4).
+- Do NOT claim done from "deploy exited 0" alone.
+
+## 8 — Close out (same session as deploy, never deferred)
+- Update MASTER_PLAN on `main` (bump "Last updated"); commit + push.
+- Close the Linear ticket with: PR link, deploy timestamp, verification evidence snippet.
+- If verification failed: file a follow-up issue; do NOT mark done; consider rollback.
+
+## Identity
+Never use the injected CC `userEmail` in any gateway/API/DB call. Use the owner's designated
+test email for gateway test calls.

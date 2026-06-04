@@ -15,6 +15,7 @@ Router-era write-ups now live under **`../archive/`** (e.g. `model_orchestration
 - **`EVAL_08_SLICE_3_PRIORITIES.md`** — Eval priorities that shaped Slice 3
 - **`context_management_research.md`** — Context window management (inputs to `CONTEXT_INTELLIGENCE_SPEC.md`)
 - **`2026-06-02-cache-aware-prompt-layout-and-compaction.md`** — Cross-turn KV-cache reuse via a frozen append-only layout + cost-optimal compaction scheduler (ADR-0081 §D2/D3, FRE-433/434); prefill economics, the two-property theorem, byte-identity invariant, the `L*` scheduler, dev/testing process, diagrams
+- **`2026-06-04-artifact-turn-cost-latency-forensics.md`** — Per-round forensics of the first post-FRE-469 artifact-build turn (`a0a07227`): the uncached context tail re-billed every round (768k fresh input), the generation tail that dominates wall-time and hits the 16k output cap, and the `TOOL_USE`→`SIMPLE` complexity pin that blocks decomposition; ranks four optimization levers (compression, decomposition, bash batching, output cap → FRE-475/476/477/478) with a reproducible measurement recipe
 - **`EVALUATION_PHASE_FINDINGS.md`** — Cross-eval synthesis
 
 2. **Raw Research Data** `temp_perplexity_research.md`

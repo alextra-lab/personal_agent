@@ -1267,6 +1267,15 @@ tools:
     timeout_seconds: 10
     rate_limit_per_hour: 60
 
+  # ADR-0085 / FRE-475 — exact-replay retrieval of a digested tool result.
+  expand_tool_result:
+    category: "memory_read"
+    allowed_in_modes: ["NORMAL", "ALERT", "DEGRADED", "RECOVERY"]
+    risk_level: "low"
+    requires_approval: false
+    timeout_seconds: 10
+    rate_limit_per_hour: 120
+
   # Auto-discovered: 2026-04-03T18:57:35.611133
   # Update an existing Linear document
   mcp_update_document:

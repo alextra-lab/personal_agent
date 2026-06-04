@@ -25,11 +25,12 @@ shown to the model is the exact byte count, never an estimated token count.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from personal_agent.config import settings
@@ -41,6 +42,11 @@ from personal_agent.storage.artifact_store import (
     R2ArtifactStore,
 )
 from personal_agent.telemetry import get_logger
+
+if TYPE_CHECKING:
+    from personal_agent.events.bus import EventBus
+    from personal_agent.orchestrator.types import ExecutionContext
+    from personal_agent.telemetry.trace import TraceContext
 
 log = get_logger(__name__)
 
@@ -287,8 +293,8 @@ def build_digest_message(
         "content_hash": content_hash,
         "hint": (
             f"Full {tool_name} output hidden ({full_byte_len} bytes). "
-            f'Call expand_tool_result("{r2_key}") to retrieve verbatim '
-            "before editing against omitted lines."
+            f'Call expand_tool_result("{r2_key}", "{content_hash}") to retrieve '
+            "verbatim before editing against omitted lines."
         ),
         "r2_key": r2_key,
         "tool_name": tool_name,
@@ -386,3 +392,205 @@ async def persist_tool_result(
             error=str(exc),
         )
         return False
+
+
+# ---------------------------------------------------------------------------
+# D1/D4 — per-round insertion-time digest pass (keep-window deferred)
+# ---------------------------------------------------------------------------
+
+
+def _is_existing_digest(content: str) -> bool:
+    """True when *content* is already an ADR-0085 digest payload (idempotency guard)."""
+    try:
+        parsed = json.loads(content)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(parsed, dict) and parsed.get("_digest") is True
+
+
+def _safe_session_uuid(session_id: str) -> UUID | None:
+    """Parse *session_id* as a UUID, returning ``None`` when it is not one."""
+    try:
+        return UUID(session_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def _update_pins(ctx: "ExecutionContext", sidecar: dict[str, dict[str, Any]]) -> None:
+    """Maintain read→write dependency pins from the current batch (ADR-0085 §D4).
+
+    Records a pin for each ``read`` with a ``path``; releases prior-round pins
+    whose path saw a successful ``write`` this round (except a same-batch
+    read+write to that path — Codex Q2, deferred); and releases pins past the
+    ``pin_ttl_turns`` abandonment bound. A failed ``write`` never releases.
+    """
+    round_now = ctx.tool_iteration_count
+    from personal_agent.orchestrator.types import ToolResultPin
+
+    reads_this_batch: set[str] = set()
+    writes_ok_this_batch: set[str] = set()
+    for tool_call_id, info in sidecar.items():
+        tool_name = str(info.get("tool_name") or "")
+        args = info.get("arguments") or {}
+        path = args.get("path") if isinstance(args, dict) else None
+        if tool_name == "read" and isinstance(path, str) and path:
+            ctx.tool_result_pins[tool_call_id] = ToolResultPin(path=path, round_pinned=round_now)
+            reads_this_batch.add(path)
+        elif tool_name == "write" and info.get("success") and isinstance(path, str) and path:
+            writes_ok_this_batch.add(path)
+
+    # Release prior-round pins on a successful write — unless the same path was
+    # also read this batch (concurrent dispatch; defer to next round / TTL).
+    for path in writes_ok_this_batch - reads_this_batch:
+        for pinned_id in [tid for tid, pin in ctx.tool_result_pins.items() if pin.path == path]:
+            del ctx.tool_result_pins[pinned_id]
+
+    ttl = settings.tool_result_digest_pin_ttl_turns
+    for stale_id in [
+        tid for tid, pin in ctx.tool_result_pins.items() if round_now - pin.round_pinned >= ttl
+    ]:
+        del ctx.tool_result_pins[stale_id]
+
+
+def _digest_candidate_indices(ctx: "ExecutionContext") -> list[int]:
+    """Return indices of tool messages eligible for digestion (keep-window deferred).
+
+    Protects the most-recent ``tool_result_digest_keep`` tool results (the recency
+    floor, which doubles as the conservative D6 reasoning floor), already-digested
+    messages, pinned reads, and content that fails :func:`should_digest`.
+    """
+    keep = settings.tool_result_digest_keep
+    tool_indices = [i for i, m in enumerate(ctx.messages) if m.get("role") == "tool"]
+    protected = set(tool_indices[-keep:]) if keep > 0 else set()
+
+    candidates: list[int] = []
+    for i in tool_indices:
+        if i in protected:
+            continue
+        msg = ctx.messages[i]
+        if msg.get("tool_call_id") in ctx.tool_result_pins:
+            continue
+        content = msg.get("content")
+        if not isinstance(content, str) or not content or _is_existing_digest(content):
+            continue
+        if not should_digest(str(msg.get("name") or ""), content):
+            continue
+        candidates.append(i)
+    return candidates
+
+
+async def apply_intra_turn_digest(
+    ctx: "ExecutionContext",
+    sidecar: dict[str, dict[str, Any]],
+    *,
+    trace_ctx: "TraceContext | None" = None,
+    store: R2ArtifactStore,
+    bus: "EventBus | None" = None,
+) -> None:
+    """Digest aged tool results in ``ctx.messages`` in place (ADR-0085 §D1/§D4).
+
+    Keep-window-deferred semantics (owner decision): run after the current batch is
+    appended; digest oversized, eligible, unpinned tool messages that are *older*
+    than the most-recent ``tool_result_digest_keep`` results, so the model keeps its
+    latest output verbatim. Each digest persists the full bytes to R2 (awaited to
+    durable confirmation) and replaces the message content in place — preserving
+    ``tool_call_id``/``role``/``name`` (D6 adjacency). R2 puts run concurrently,
+    bounded by ``tool_result_digest_put_timeout_ms``; on timeout/failure the result
+    is left verbatim.
+
+    Args:
+        ctx: The live execution context (``messages``/``tool_result_pins`` mutated).
+        sidecar: Current-batch metadata keyed by ``tool_call_id`` →
+            ``{"tool_name", "success", "arguments"}`` (the ``success``/``path`` the
+            transcript message does not carry).
+        trace_ctx: Optional trace context (reserved for span threading).
+        store: The R2 artifact store.
+        bus: Optional event bus for digest telemetry.
+    """
+    _update_pins(ctx, sidecar)
+
+    candidates = _digest_candidate_indices(ctx)
+    if not candidates:
+        return
+
+    session_uuid = _safe_session_uuid(ctx.session_id)
+    if session_uuid is None:
+        log.warning(
+            "tool_result_digest_skipped_non_uuid_session",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+        )
+        return
+
+    async def _persist_one(index: int) -> tuple[int, dict[str, Any], str, str, str, str] | None:
+        msg = ctx.messages[index]
+        content = str(msg["content"])
+        tool_call_id = str(msg["tool_call_id"])
+        tool_name = str(msg.get("name") or "")
+        try:
+            key = build_tool_result_key(session_uuid, ctx.trace_id, tool_call_id)
+        except ArtifactKeyError as exc:
+            log.warning(
+                "tool_result_digest_key_error",
+                trace_id=ctx.trace_id,
+                tool_call_id=tool_call_id,
+                error=str(exc),
+            )
+            return None
+        if not await persist_tool_result(store, r2_key=key, content=content, trace_id=ctx.trace_id):
+            return None
+        return index, {}, content, tool_call_id, tool_name, key
+
+    try:
+        persisted = await asyncio.wait_for(
+            asyncio.gather(*[_persist_one(i) for i in candidates]),
+            timeout=settings.tool_result_digest_put_timeout_ms / 1000,
+        )
+    except asyncio.TimeoutError:
+        log.warning(
+            "tool_result_digest_put_timeout",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            candidate_count=len(candidates),
+        )
+        return
+
+    from personal_agent.telemetry.tool_result_digest import (
+        ToolResultDigestRecord,
+        record_digest,
+    )
+
+    for item in persisted:
+        if item is None:
+            continue
+        index, _unused, content, tool_call_id, tool_name, key = item
+        content_hash = compute_content_hash(content)
+        body = digest_tool_content(tool_name, content)
+        full_byte_len = len(content.encode("utf-8"))
+        digest_msg = build_digest_message(
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            r2_key=key,
+            content_hash=content_hash,
+            full_byte_len=full_byte_len,
+            body=body,
+        )
+        if not digest_saves_enough(content, digest_msg):
+            continue
+        ctx.messages[index]["content"] = digest_msg["content"]
+        await record_digest(
+            ToolResultDigestRecord(
+                trace_id=ctx.trace_id,
+                session_id=ctx.session_id,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                bytes_in=full_byte_len,
+                tokens_in=estimate_tokens(content),
+                tokens_out=estimate_tokens(str(digest_msg["content"])),
+                format=str(body.get("format", "")),
+                persisted=True,
+                r2_key=key,
+                content_hash=content_hash,
+            ),
+            bus,
+        )

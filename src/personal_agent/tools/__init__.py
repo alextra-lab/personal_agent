@@ -125,6 +125,16 @@ def register_mvp_tools(registry: ToolRegistry) -> None:
         # ADR-0077 — artifact_draft: plan/generate split via sub-agent.
         registry.register(artifact_draft_tool, artifact_draft_executor)
         log.info("artifact_tools_registered", bucket=settings.r2_bucket_name)
+        # ADR-0085 / FRE-475 — expand_tool_result is only useful when intra-turn
+        # digestion is enabled (no digests exist otherwise), so gate it on the flag.
+        if settings.tool_result_compression_enabled:
+            from personal_agent.tools.tool_result_expand import (
+                expand_tool_result_executor,
+                expand_tool_result_tool,
+            )
+
+            registry.register(expand_tool_result_tool, expand_tool_result_executor)
+            log.info("expand_tool_result_registered", bucket=settings.r2_bucket_name)
     else:
         log.warning("notes_tools_skipped_unconfigured")
 

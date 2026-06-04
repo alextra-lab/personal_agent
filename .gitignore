@@ -160,3 +160,6 @@ telemetry/evaluation/fre433-cache-ab/
 
 # deploy-approval-gate runtime sentinel (never committed)
 .claude/.deploy-approved
+
+# /build role skill — exempt from the generic build/ ignore above
+!.claude/skills/build/

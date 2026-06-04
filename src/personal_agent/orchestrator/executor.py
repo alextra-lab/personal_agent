@@ -3232,6 +3232,10 @@ async def step_tool_execution(
 
     tool_results: list[dict[str, Any]] = []  # blocked + error results (immediate)
     allowed_plans: list[dict[str, Any]] = []  # tool calls cleared for async dispatch
+    # ADR-0085 / FRE-475: per-result {tool_name, success, arguments} keyed by
+    # tool_call_id — the success bit + path arg the transcript message does not
+    # carry, needed by the intra-turn digest pass for read→write pinning.
+    digest_sidecar: dict[str, dict[str, Any]] = {}
 
     for tool_call in tool_calls:
         tool_call_id = tool_call.get("id", "")
@@ -3436,6 +3440,11 @@ async def step_tool_execution(
                 "content": content,
             }
         )
+        digest_sidecar[dr["tool_call_id"]] = {
+            "tool_name": dr["tool_name"],
+            "success": dr["success"],
+            "arguments": plan["arguments"],
+        }
 
     # Emit parallel-dispatch telemetry for Kibana efficiency tracking
     if allowed_plans:
@@ -3452,6 +3461,22 @@ async def step_tool_execution(
 
     # Append all tool results to messages
     ctx.messages.extend(tool_results)
+
+    # ADR-0085 / FRE-475: intra-turn tool-result digest pass (keep-window deferred).
+    # Flag-off (default) ⇒ skipped entirely ⇒ zero behaviour change. Runs after the
+    # batch is appended so the current results stay verbatim (within the keep window)
+    # and only older oversized results are digested.
+    if settings.tool_result_compression_enabled:
+        from personal_agent.orchestrator.tool_result_digest import (  # noqa: PLC0415
+            apply_intra_turn_digest,
+        )
+        from personal_agent.storage.artifact_store import get_artifact_store  # noqa: PLC0415
+
+        _digest_store = get_artifact_store()
+        if _digest_store is not None:
+            await apply_intra_turn_digest(
+                ctx, digest_sidecar, trace_ctx=trace_ctx, store=_digest_store, bus=None
+            )
 
     duration_ms = int((time.time() - step_start_time) * 1000)
 

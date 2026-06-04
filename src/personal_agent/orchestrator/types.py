@@ -129,6 +129,24 @@ class RoutingResult(TypedDict, total=False):
     response: str | None
 
 
+@dataclass(frozen=True)
+class ToolResultPin:
+    """A verbatim ``read`` result held back from digestion (ADR-0085 §D4).
+
+    The most-recent ``read`` of a file path is kept verbatim while a dependent
+    ``write`` against that path may still be issued (the read→write hazard). The
+    pin is released on a successful ``write`` to the path or after
+    ``tool_result_digest_pin_ttl_turns`` rounds (abandonment).
+
+    Attributes:
+        path: The file path the pinned read targeted.
+        round_pinned: ``tool_iteration_count`` when the pin was recorded.
+    """
+
+    path: str
+    round_pinned: int
+
+
 @dataclass
 class ExecutionContext:
     """Mutable state container passed through execution steps.
@@ -234,6 +252,10 @@ class ExecutionContext:
     # Bounded salient highlights produced by the most recent frozen reset; ride
     # the current turn's volatile block (regenerated on reset, never frozen).
     salient_highlights: str = ""
+
+    # --- ADR-0085 §D4 intra-turn tool-result digest pinning (FRE-475) ---
+    # Reads held verbatim pending a dependent write, keyed by tool_call_id.
+    tool_result_pins: dict[str, ToolResultPin] = field(default_factory=dict)
 
 
 class OrchestratorStep(TypedDict):

@@ -163,46 +163,121 @@ PR-B (D5).
 
 ---
 
-## PR-B — Wire insertion hook + expand tool + pinning (next build task)
+## PR-A — STATUS: SHIPPED (PR #160, merged 2026-06-04)
 
-### B1 — Per-round insertion-time digest pass (D1)
-In `executor.py` immediately **before** `ctx.messages.extend(tool_results)` (line ~3454): a pass
-over the accreted tail that (1) digests newly-arrived oversized, non-pinned, non-excluded results
-*at birth* (verbatim bytes never enter `ctx.messages`), and (2) re-evaluates deferred pins from
-prior rounds and digests any whose release condition is met. Gated by
-`settings.tool_result_compression_enabled`. R2 puts run concurrently (batch), digest substitution
-awaits them bounded by `tool_result_digest_put_timeout_ms`; timeout/failure → leave verbatim + log.
-Threads `ctx.trace_id`/`ctx.session_id` (ADR-0074).
+All A1–A7 landed; flag default-off; full suite green. The module
+`orchestrator/tool_result_digest.py` is on `main`. PR-B wires it.
 
-### B2 — D4 retention & dependency pinning
-`tool_result_digest_keep` most-recent results verbatim; pin the most-recent `read` of a path while
-a dependent `edit`/`write` against that path is pending. Release on first successful `edit`/`write`
-against the path **or** `pin_ttl_turns` elapsed (failed edit/write does **not** release — Codex
-B3). Pin state lives on `ExecutionContext`.
+---
 
-### B3 — `expand_tool_result(key[, offset, limit])` tool (D5)
-New Tier-1 native tool (`tools/` + register in `tools/__init__.py` alongside the R2-gated artifact
-tools + `config/governance/tools.yaml` entry). Fetches full bytes from R2 for the digest key,
-**hash-validated** for exact replay, **ranged** retrieval default for large outputs, capped by
-`tool_result_digest_max_expand_tokens`. **(Codex Q5 — MED) Ranged retrieval has no storage support
-yet:** `R2ArtifactStore.get` (`artifact_store.py:222`) always fetches the whole object. PR-B either
-adds a `Range`-aware get to the store, **or** fetches full bytes then slices locally — decide in
-PR-B and document the memory/latency tradeoff (full-then-slice is simplest and the cap bounds the
-returned size). Re-expansion tokens tracked on the separate `tool_result_digest_reexpanded`
-telemetry dimension. Contract kept **separate** from the future `recall_session_history`
-(FRE-465) — converge vocabulary/UX only.
+## PR-B — Wire insertion hook + expand tool + pinning (this session)
 
-### B4 — Transcript + reasoning invariants (D6, correctness)
-- Assert immediate `tool_use`→`tool_result` adjacency for every digested message (exact position,
-  same `tool_call_id`, no reordering) — stronger than orphan-absence.
-- Honor a per-provider-adapter "do-not-compress floor" (`llm_client/`): the compressor receives an
-  already-computed floor index; reasoning items the API requires intact are not compressed.
-- Fold digested messages into ADR-0081's send-time byte-fixed-point checks (`/no_think` stripping,
-  role-fixing, `_sanitize_tool_pairs`).
+All orchestration logic goes in **`orchestrator/tool_result_digest.py`** (extending PR-A's pure
+module with the turn-stateful pieces); `executor.py` gets a **single guarded call**. Insertion site:
+`step_tool_execution` (`executor.py:3086`), immediately **before** `ctx.messages.extend(tool_results)`
+(`executor.py:3454`). Round counter = `ctx.tool_iteration_count`. Only `read` + `write` primitives
+exist (no separate `edit`); both carry a `path` arg — so D4 is the **read→write** hazard.
 
-### B5 — Follow-up ticket
-File **D6 lost-in-the-middle digest pinning** as a new Needs-Approval issue under the *Turn Cost &
-Latency Optimization* project.
+### B0 — ExecutionContext pin state (D4)
+Add to `orchestrator/types.py` `ExecutionContext`:
+`tool_result_pins: dict[str, ToolResultPin] = field(default_factory=dict)` keyed by `tool_call_id`,
+where `ToolResultPin` (frozen) = `(path: str, round_pinned: int)`. Holds reads left verbatim because a
+write to their path may still come. (The verbatim content stays in `ctx.messages`, found by
+`tool_call_id` on release.)
+
+### B1 — Per-round digest pass (D1) — `apply_intra_turn_digest(...)`
+**(Codex Q1 HIGH — data-flow.)** The assembled `tool_results` entries carry only
+`{tool_call_id, role, name, content}` (`executor.py:3431`); `success` lives in `dr["success"]`
+(`executor.py:3408`) and the `path` argument in `allowed_plans[...]["arguments"]` (`executor.py:3297`).
+So in the existing Phase-3 loop, build a **sidecar map** `digest_sidecar: dict[str, dict]` keyed by
+`tool_call_id` → `{"tool_name", "success", "arguments"}` (no change to the transcript message shape).
+
+**Semantics (owner decision): keep-window deferred.** The pass runs over **all** `role="tool"`
+messages in `ctx.messages` **after** the current batch is appended, and digests only those **older than
+the most-recent `tool_result_digest_keep`** tool results. The current batch stays verbatim so the model
+can act on its latest output; a result is digested a few rounds later once `keep` newer results exist.
+**Honest cache note:** with `keep`≥1 every digest is a *deferred* rewrite (ADR-0085 case b — one bounded
+prefix invalidation each, gated by `digest_saves_enough` = `clear_at_least`), not case-a birth-time;
+it still flattens the curve because each result is verbatim for only `keep` rounds, not all 23.
+
+New `async def apply_intra_turn_digest(ctx, sidecar, *, trace_ctx, store, bus=None) -> None` in
+`tool_result_digest.py`. `sidecar: dict[str, dict]` (current batch only) keyed by `tool_call_id` →
+`{"tool_name", "success", "arguments"}`, built in the Phase-3 loop (Codex Q1: `success`/`path` are not
+on the transcript message). Called from `step_tool_execution` **after** `ctx.messages.extend(...)` when
+`settings.tool_result_compression_enabled` **and** `get_artifact_store()` is not `None`. Each round:
+1. **Pin maintenance (D4, from the current batch via sidecar):** a `read` with a `path` arg records a
+   `ToolResultPin(path, round)` keyed by its `tool_call_id`. A **prior-round** successful `write` to
+   path P releases pins for P. **(Codex Q2)** a same-batch read+write to P does NOT release this round
+   (concurrent dispatch, `executor.py:3315`) — defer to next round/TTL. Pins older than `pin_ttl_turns`
+   are released (abandonment). A **failed** write never releases (Codex B3).
+2. **Eligibility:** enumerate `role="tool"` message indices; protect the last `keep` (the `floor_index`,
+   doubling as the conservative D6 reasoning floor). For each tool message **below** the floor: digest
+   when `should_digest(msg["name"], msg["content"])` (PR-A), it is not already a digest, and its
+   `tool_call_id` is not an active pin. Older messages are digestable from the message alone
+   (`name` + `content`) — no retained arguments needed.
+3. **Persist + substitute:** `compute_content_hash(original)` + `build_tool_result_key(UUID(session_id),
+   trace_id, tool_call_id)`; `persist_tool_result` puts run concurrently (`asyncio.gather`), whole
+   substitution bounded by `asyncio.wait_for(..., put_timeout_ms/1000)`; on timeout/failure/
+   `ArtifactKeyError` leave verbatim. For persisted, `build_digest_message`, gate on
+   `digest_saves_enough`, replace `msg["content"]` **in place** (same position/`tool_call_id`/`role`/
+   `name` — D6 adjacency), emit one `record_digest` row. Codex Q3: in-place rewrite keeps the tool-pair
+   fields (`_sanitize_tool_pairs` never orphans it) and mutates `ctx.messages` only before the next send.
+
+`executor.py` change (Codex Q4 — no `_bus` in scope; local lookup, bus optional):
+```python
+ctx.messages.extend(tool_results)
+if settings.tool_result_compression_enabled:
+    _store = get_artifact_store()
+    if _store is not None:
+        await apply_intra_turn_digest(ctx, digest_sidecar, trace_ctx=trace_ctx, store=_store, bus=None)
+```
+(`bus=None` for the first flag — telemetry still durably writes; wiring a real bus is a trivial follow-up
+once a bus handle is threaded into `step_tool_execution`.) Flag-off (default) ⇒ branch skipped ⇒
+provably zero behaviour change.
+
+### B2 — `expand_tool_result(key, content_hash[, offset, limit])` tool (D5)
+New native tool module `tools/tool_result_expand.py` (`ToolDefinition` + async executor), registered in
+`tools/__init__.py` **inside the R2-gated block** (alongside `artifact_read`) + a `config/governance/
+tools.yaml` entry mirroring `artifact_read` (category `memory_read`, `risk_level: low`,
+`requires_approval: false`, modes NORMAL/ALERT/DEGRADED/RECOVERY).
+**(Codex Q5 MED) Hash is not reachable from a native tool** (executor passes only `TraceContext`, not
+`ExecutionContext`, and the hash lives inside the digest message content). So `content_hash` is an
+**explicit required tool argument** — the model copies both `key` and `content_hash` from the digest it
+sees. PR-B updates `build_digest_message`'s `hint` (same module) to
+`Call expand_tool_result("<key>", "<hash>") …` so the affordance is self-describing (PR-A's
+byte-stability tests still hold: deterministic, `r2_key` still in `hint`). The executor fetches full
+bytes via `store.get(key)`, computes `compute_content_hash(fetched)` and **asserts it equals the passed
+`content_hash`** (integrity/truncation guard; returns a clean error on mismatch), then
+**fetch-full-then-slice** by `offset`/`limit` (Codex Q5 decision — simplest; no new R2 `Range` path;
+`max_expand_tokens` caps returned size). Emits a `_reexpanded` telemetry row on the separate dimension.
+Contract kept distinct from future `recall_session_history` (FRE-465).
+
+### B3 — D6 invariants (correctness)
+- **Adjacency** is structural (in-place replacement, B1) — assert it in tests (exact position +
+  `tool_call_id`, no reorder/split), stronger than orphan-absence.
+- **Reasoning floor (Codex Q6 — documented ADR-0085 §D6 deviation):** `apply_intra_turn_digest` honors
+  an explicit `floor_index` (default = recency-`keep` floor) and never digests at/after it; and it only
+  ever rewrites `role="tool"` messages, never assistant/reasoning content. ADR-0085 §D6 mandates the
+  floor be computed **per-provider adapter** and handed in; PR-B implements the *floor-honoring
+  contract* but defers the per-provider computation (default recency floor) to a follow-up — the cost
+  win does not depend on it and the digest never touches reasoning blocks. **Flagged for owner sign-off
+  below;** the ADR text update (if accepted) is the adr session's job, not this build PR.
+- **Send-time stability:** add a test asserting a digested `role="tool"` message survives
+  `_sanitize_tool_pairs` + role-fixing byte-identical (folds digests into the ADR-0081 send-time
+  contract).
+
+### B4 — Tests (TDD)
+Extend `test_tool_result_digest.py` (or a sibling `test_intra_turn_digest.py`): release-on-successful-
+write; no-release-on-failed-write; TTL abandonment release; recency-`keep` floor; fresh-read-pinned-
+then-released; birth-time digestion of a large bash result (verbatim never enters `ctx.messages`);
+put-timeout → verbatim; `expand_tool_result` happy path + hash-mismatch + ranged slice + cap;
+adjacency + sanitize-survival. Flag stays default-off; add focused tests that flip it via monkeypatch.
+
+### B5 — Follow-up tickets (filed, Needs Approval)
+- **FRE-482** — ADR-0085 §D6 lost-in-the-middle digest pinning (optional enhancement).
+- **FRE-483** — ADR-0085 §D6 per-provider reasoning do-not-compress floor + digest bus telemetry
+  (PR-B implements the floor-honoring contract with the recency-`keep` default and calls
+  `record_digest(..., bus=None)`; the per-provider floor computation and bus publish are deferred).
 
 ---
 

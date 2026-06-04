@@ -452,54 +452,60 @@ def _update_pins(ctx: "ExecutionContext", sidecar: dict[str, dict[str, Any]]) ->
         del ctx.tool_result_pins[stale_id]
 
 
-def _digest_candidate_indices(ctx: "ExecutionContext") -> list[int]:
-    """Return indices of tool messages eligible for digestion (keep-window deferred).
+def _digest_candidate_entries(
+    tool_results: list[dict[str, Any]], pins: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Return the fresh-batch entries eligible for birth-time digestion (ADR-0085 §D1 case-a).
 
-    Protects the most-recent ``tool_result_digest_keep`` tool results (the recency
-    floor, which doubles as the conservative D6 reasoning floor), already-digested
-    messages, pinned reads, and content that fails :func:`should_digest`.
+    Skips pinned reads (kept verbatim — D4), already-digested entries, missing
+    content, and anything that fails :func:`should_digest` (threshold,
+    error-payload-verbatim, exclude-tools). Operates on the freshly built
+    ``tool_results`` list, **not** ``ctx.messages`` — so the verbatim bytes never
+    enter the cached prefix.
     """
-    keep = settings.tool_result_digest_keep
-    tool_indices = [i for i, m in enumerate(ctx.messages) if m.get("role") == "tool"]
-    protected = set(tool_indices[-keep:]) if keep > 0 else set()
-
-    candidates: list[int] = []
-    for i in tool_indices:
-        if i in protected:
+    candidates: list[dict[str, Any]] = []
+    for entry in tool_results:
+        if entry.get("tool_call_id") in pins:
             continue
-        msg = ctx.messages[i]
-        if msg.get("tool_call_id") in ctx.tool_result_pins:
-            continue
-        content = msg.get("content")
+        content = entry.get("content")
         if not isinstance(content, str) or not content or _is_existing_digest(content):
             continue
-        if not should_digest(str(msg.get("name") or ""), content):
+        if not should_digest(str(entry.get("name") or ""), content):
             continue
-        candidates.append(i)
+        candidates.append(entry)
     return candidates
 
 
 async def apply_intra_turn_digest(
     ctx: "ExecutionContext",
+    tool_results: list[dict[str, Any]],
     sidecar: dict[str, dict[str, Any]],
     *,
     trace_ctx: "TraceContext | None" = None,
     store: R2ArtifactStore,
     bus: "EventBus | None" = None,
 ) -> None:
-    """Digest aged tool results in ``ctx.messages`` in place (ADR-0085 §D1/§D4).
+    """Digest the fresh ``tool_results`` batch in place, before transcript insertion.
 
-    Keep-window-deferred semantics (owner decision): run after the current batch is
-    appended; digest oversized, eligible, unpinned tool messages that are *older*
-    than the most-recent ``tool_result_digest_keep`` results, so the model keeps its
-    latest output verbatim. Each digest persists the full bytes to R2 (awaited to
-    durable confirmation) and replaces the message content in place — preserving
-    ``tool_call_id``/``role``/``name`` (D6 adjacency). R2 puts run concurrently,
-    bounded by ``tool_result_digest_put_timeout_ms``; on timeout/failure the result
-    is left verbatim.
+    Birth-time / case-(a) placement (ADR-0085 §D1): the caller invokes this on the
+    freshly built ``tool_results`` list **before** ``ctx.messages.extend(...)``, so the
+    verbatim bytes of a digested result never enter ``ctx.messages`` — a pure forward
+    append with **no cached-prefix invalidation**. (The earlier keep-window-deferred
+    placement ran after ``extend`` and rewrote already-cached bytes → case-(b) churn,
+    which regressed the A/B by +34.9%; this is the fix.)
+
+    Each non-pinned, oversized, eligible entry is persisted verbatim to R2 (awaited to
+    durable confirmation, concurrent, bounded by ``tool_result_digest_put_timeout_ms``)
+    and its ``content`` is replaced with a byte-stable digest in place — preserving
+    ``tool_call_id``/``role``/``name`` (D6 adjacency). Reads are pinned and kept
+    verbatim (the model may edit against them); deferred digestion of released pins is
+    out of scope here (FRE-485).
 
     Args:
-        ctx: The live execution context (``messages``/``tool_result_pins`` mutated).
+        ctx: The live execution context (``tool_result_pins`` mutated; ``messages``
+            untouched — the caller extends it after this returns).
+        tool_results: The freshly built batch of ``{tool_call_id, role, name, content}``
+            result messages; eligible entries are mutated in place.
         sidecar: Current-batch metadata keyed by ``tool_call_id`` →
             ``{"tool_name", "success", "arguments"}`` (the ``success``/``path`` the
             transcript message does not carry).
@@ -509,7 +515,7 @@ async def apply_intra_turn_digest(
     """
     _update_pins(ctx, sidecar)
 
-    candidates = _digest_candidate_indices(ctx)
+    candidates = _digest_candidate_entries(tool_results, ctx.tool_result_pins)
     if not candidates:
         return
 
@@ -522,11 +528,12 @@ async def apply_intra_turn_digest(
         )
         return
 
-    async def _persist_one(index: int) -> tuple[int, dict[str, Any], str, str, str, str] | None:
-        msg = ctx.messages[index]
-        content = str(msg["content"])
-        tool_call_id = str(msg["tool_call_id"])
-        tool_name = str(msg.get("name") or "")
+    async def _persist_one(
+        entry: dict[str, Any],
+    ) -> tuple[dict[str, Any], str, str, str, str] | None:
+        content = str(entry["content"])
+        tool_call_id = str(entry["tool_call_id"])
+        tool_name = str(entry.get("name") or "")
         try:
             key = build_tool_result_key(session_uuid, ctx.trace_id, tool_call_id)
         except ArtifactKeyError as exc:
@@ -539,11 +546,11 @@ async def apply_intra_turn_digest(
             return None
         if not await persist_tool_result(store, r2_key=key, content=content, trace_id=ctx.trace_id):
             return None
-        return index, {}, content, tool_call_id, tool_name, key
+        return entry, content, tool_call_id, tool_name, key
 
     try:
         persisted = await asyncio.wait_for(
-            asyncio.gather(*[_persist_one(i) for i in candidates]),
+            asyncio.gather(*[_persist_one(e) for e in candidates]),
             timeout=settings.tool_result_digest_put_timeout_ms / 1000,
         )
     except asyncio.TimeoutError:
@@ -563,7 +570,7 @@ async def apply_intra_turn_digest(
     for item in persisted:
         if item is None:
             continue
-        index, _unused, content, tool_call_id, tool_name, key = item
+        entry, content, tool_call_id, tool_name, key = item
         content_hash = compute_content_hash(content)
         body = digest_tool_content(tool_name, content)
         full_byte_len = len(content.encode("utf-8"))
@@ -577,7 +584,7 @@ async def apply_intra_turn_digest(
         )
         if not digest_saves_enough(content, digest_msg):
             continue
-        ctx.messages[index]["content"] = digest_msg["content"]
+        entry["content"] = digest_msg["content"]
         await record_digest(
             ToolResultDigestRecord(
                 trace_id=ctx.trace_id,

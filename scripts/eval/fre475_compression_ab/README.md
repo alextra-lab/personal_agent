@@ -36,12 +36,24 @@ win. The infra (PR-A) and `expand_tool_result` (used 3×) are sound; the
 - Re-run this harness; PASS = fresh input ≥30% below baseline **and** artifact built
   **and** no `task_failed`.
 
-## Open bug surfaced by the run (needs attribution)
+## Open bug surfaced by the run (attributed → FRE-484)
 
 `litellm.UnsupportedParamsError: Anthropic doesn't support tool calling without
-tools= param specified` killed the turn (`model_call_error → task_failed`). Confirm
-whether digestion produced a malformed transcript on a synthesis/recovery call, or
-it is a latent no-`tools=` path that also exists flag-off (forced synthesis).
+tools= param specified` killed the turn (`model_call_error → task_failed`).
+**Attributed (FRE-484): latent, digestion-independent** — the forced-synthesis path
+(`executor.py:2275`) sets `tools=None`, and Anthropic rejects that when the transcript
+already holds `tool_use`/`tool_result` blocks. Baseline `a0a07227` never hit forced
+synthesis; the treatment run did. It is a **hard blocker for the `zero task_failed`
+gate** below — the birth-time redesign re-validation cannot go fully green until
+FRE-484 lands.
+
+## Redesign shipped (birth-time, case-a)
+
+The placement fix digests non-pinned oversized results **on the fresh `tool_results`
+list before `ctx.messages.extend`** (`apply_intra_turn_digest`), so verbatim bytes
+never enter the cached prefix. Reads stay verbatim (pinned); deferred digestion of
+released pins is **birth-time-only out of scope → FRE-485** (with an ADR-0085 §D1
+scope note).
 
 ## Run
 

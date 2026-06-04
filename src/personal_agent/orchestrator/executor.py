@@ -3459,13 +3459,10 @@ async def step_tool_execution(
             actual_wall_ms=_actual_wall_ms,
         )
 
-    # Append all tool results to messages
-    ctx.messages.extend(tool_results)
-
-    # ADR-0085 / FRE-475: intra-turn tool-result digest pass (keep-window deferred).
-    # Flag-off (default) ⇒ skipped entirely ⇒ zero behaviour change. Runs after the
-    # batch is appended so the current results stay verbatim (within the keep window)
-    # and only older oversized results are digested.
+    # ADR-0085 / FRE-475: intra-turn tool-result digest pass — BIRTH-TIME (case-a).
+    # Runs on the fresh `tool_results` batch BEFORE the extend below, so the verbatim
+    # bytes of a digested result never enter ctx.messages (no cached-prefix
+    # invalidation). Flag-off (default) ⇒ skipped entirely ⇒ zero behaviour change.
     if settings.tool_result_compression_enabled:
         from personal_agent.orchestrator.tool_result_digest import (  # noqa: PLC0415
             apply_intra_turn_digest,
@@ -3475,8 +3472,16 @@ async def step_tool_execution(
         _digest_store = get_artifact_store()
         if _digest_store is not None:
             await apply_intra_turn_digest(
-                ctx, digest_sidecar, trace_ctx=trace_ctx, store=_digest_store, bus=None
+                ctx,
+                tool_results,
+                digest_sidecar,
+                trace_ctx=trace_ctx,
+                store=_digest_store,
+                bus=None,
             )
+
+    # Append all tool results to messages (digested in place above when enabled).
+    ctx.messages.extend(tool_results)
 
     duration_ms = int((time.time() - step_start_time) * 1000)
 

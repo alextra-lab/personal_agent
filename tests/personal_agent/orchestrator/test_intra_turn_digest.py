@@ -1,8 +1,11 @@
-"""Tests for the PR-B intra-turn digest pass + expand tool (ADR-0085, FRE-475).
+"""Tests for the birth-time intra-turn digest pass + expand tool (ADR-0085, FRE-475).
 
-Keep-window-deferred semantics (owner decision): the per-round pass digests
-oversized/eligible/unpinned tool messages that are OLDER than the most-recent
-``tool_result_digest_keep`` results; the current batch stays verbatim.
+Birth-time / case-(a) semantics (redesign after PR-B's keep-deferred A/B failure):
+`apply_intra_turn_digest` operates on the FRESH `tool_results` list BEFORE
+`ctx.messages.extend(...)`, digesting non-pinned oversized results in place so the
+verbatim bytes never enter `ctx.messages` (no cached-prefix invalidation). Reads are
+pinned (kept verbatim — the model may edit against them); released-pin deferred
+digestion is out of scope (FRE-485).
 """
 
 from __future__ import annotations
@@ -34,14 +37,18 @@ def _big_bash(seed: str = "x") -> str:
     )
 
 
-def _ctx(messages: list[dict[str, object]], *, round_: int = 1, pins=None) -> SimpleNamespace:
+def _ctx(*, round_: int = 1, pins=None, messages=None) -> SimpleNamespace:
     return SimpleNamespace(
-        messages=messages,
+        messages=messages if messages is not None else [],
         tool_iteration_count=round_,
         tool_result_pins=pins if pins is not None else {},
         session_id=_SID,
         trace_id="trace1",
     )
+
+
+def _sidecar(**entries: dict[str, object]) -> dict[str, dict[str, object]]:
+    return dict(entries)
 
 
 class _FakeStore:
@@ -82,132 +89,151 @@ def _digest_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "tool_result_digest_exclude_tools", [])
 
 
-@pytest.mark.asyncio
-async def test_keep_window_protects_current_batch_digests_older() -> None:
-    messages = [
-        {"role": "system", "content": "s"},
-        {"role": "user", "content": "u"},
-        {"role": "assistant", "content": "", "tool_calls": [{"id": "a"}]},
-        _tool_msg("t_old", "bash", _big_bash("old")),
-        {"role": "assistant", "content": "", "tool_calls": [{"id": "b"}]},
-        _tool_msg("t_new", "bash", _big_bash("new")),
-    ]
-    ctx = _ctx(messages)
-    store = _FakeStore()
-    await apply_intra_turn_digest(ctx, {}, trace_ctx=None, store=store)
+# ---------------------------------------------------------------------------
+# Birth-time / case-(a) invariant — the fix
+# ---------------------------------------------------------------------------
 
-    assert _is_digest(messages[3])  # older tool result digested
-    assert not _is_digest(messages[5])  # current batch (within keep) stays verbatim
+
+@pytest.mark.asyncio
+async def test_birth_time_digests_bash_before_extend() -> None:
+    """The fresh bash result is digested in place; the verbatim bytes never
+    enter ctx.messages on the subsequent extend (case-(a), zero invalidation).
+    """
+    tool_results = [_tool_msg("t1", "bash", _big_bash("out"))]
+    sidecar = _sidecar(t1={"tool_name": "bash", "success": True, "arguments": {"command": "c"}})
+    ctx = _ctx()
+    store = _FakeStore()
+
+    await apply_intra_turn_digest(ctx, tool_results, sidecar, trace_ctx=None, store=store)
+    assert _is_digest(tool_results[0])  # digested in the fresh batch
     assert len(store.puts) == 1
-    # adjacency: digested message keeps its tool-pair fields, same position
-    assert messages[3]["tool_call_id"] == "t_old"
-    assert messages[3]["role"] == "tool"
-    assert messages[3]["name"] == "bash"
+    # adjacency fields preserved
+    assert tool_results[0]["tool_call_id"] == "t1"
+    assert tool_results[0]["role"] == "tool"
+    assert tool_results[0]["name"] == "bash"
+
+    # Simulate the executor's extend: only the digest enters ctx.messages.
+    ctx.messages.extend(tool_results)
+    assert _is_digest(ctx.messages[-1])
+    assert "out 1000" not in str(ctx.messages[-1]["content"])  # bulk never entered the prefix
 
 
 @pytest.mark.asyncio
-async def test_pinned_read_not_digested_until_write_releases() -> None:
-    messages = [
-        {"role": "user", "content": "u"},
-        _tool_msg("r1", "read", _big_bash("read")),  # the pinned read (oldest)
-        {"role": "assistant", "content": "", "tool_calls": [{"id": "x"}]},
-        _tool_msg("k1", "bash", _big_bash("keep")),  # keep-window protector
-    ]
-    pins = {"r1": ToolResultPin(path="/a.py", round_pinned=1)}
-    ctx = _ctx(messages, round_=1, pins=pins)
+async def test_read_stays_verbatim_pinned() -> None:
+    tool_results = [_tool_msg("r1", "read", _big_bash("src"))]
+    sidecar = _sidecar(r1={"tool_name": "read", "success": True, "arguments": {"path": "/a.py"}})
+    ctx = _ctx()
     store = _FakeStore()
-    # No write this round → pin holds → read not digested.
-    await apply_intra_turn_digest(ctx, {}, trace_ctx=None, store=store)
-    assert not _is_digest(messages[1])
 
-    # A successful prior-round write to /a.py releases the pin → read digested.
-    ctx.tool_iteration_count = 2
-    sidecar = {"w1": {"tool_name": "write", "success": True, "arguments": {"path": "/a.py"}}}
-    await apply_intra_turn_digest(ctx, sidecar, trace_ctx=None, store=store)
-    assert "r1" not in ctx.tool_result_pins
-    assert _is_digest(messages[1])
-
-
-@pytest.mark.asyncio
-async def test_same_batch_read_and_write_does_not_release() -> None:
-    messages = [
-        {"role": "user", "content": "u"},
-        _tool_msg("r1", "read", _big_bash("read")),
-        {"role": "assistant", "content": "", "tool_calls": [{"id": "x"}]},
-        _tool_msg("k1", "bash", _big_bash("keep")),
-    ]
-    pins = {"r1": ToolResultPin(path="/a.py", round_pinned=1)}
-    ctx = _ctx(messages, round_=2, pins=pins)
-    sidecar = {
-        "r2": {"tool_name": "read", "success": True, "arguments": {"path": "/a.py"}},
-        "w2": {"tool_name": "write", "success": True, "arguments": {"path": "/a.py"}},
-    }
-    await apply_intra_turn_digest(ctx, sidecar, trace_ctx=None, store=_FakeStore())
-    assert "r1" in ctx.tool_result_pins  # same-batch hazard → deferred
-    assert not _is_digest(messages[1])
-
-
-@pytest.mark.asyncio
-async def test_failed_write_does_not_release_pin() -> None:
-    messages = [
-        {"role": "user", "content": "u"},
-        _tool_msg("r1", "read", _big_bash("read")),
-        {"role": "assistant", "content": "", "tool_calls": [{"id": "x"}]},
-        _tool_msg("k1", "bash", _big_bash("keep")),
-    ]
-    pins = {"r1": ToolResultPin(path="/a.py", round_pinned=1)}
-    ctx = _ctx(messages, round_=2, pins=pins)
-    sidecar = {"w1": {"tool_name": "write", "success": False, "arguments": {"path": "/a.py"}}}
-    await apply_intra_turn_digest(ctx, sidecar, trace_ctx=None, store=_FakeStore())
+    await apply_intra_turn_digest(ctx, tool_results, sidecar, trace_ctx=None, store=store)
+    assert not _is_digest(tool_results[0])  # read pinned → verbatim
     assert "r1" in ctx.tool_result_pins
+    assert len(store.puts) == 0
 
 
 @pytest.mark.asyncio
-async def test_ttl_abandonment_releases_pin() -> None:
-    messages = [
-        {"role": "user", "content": "u"},
-        _tool_msg("r1", "read", _big_bash("read")),
-        {"role": "assistant", "content": "", "tool_calls": [{"id": "x"}]},
-        _tool_msg("k1", "bash", _big_bash("keep")),
+async def test_mixed_batch_digests_bash_keeps_read() -> None:
+    tool_results = [
+        _tool_msg("r1", "read", _big_bash("src")),
+        _tool_msg("b1", "bash", _big_bash("out")),
     ]
-    pins = {"r1": ToolResultPin(path="/a.py", round_pinned=0)}
-    ctx = _ctx(messages, round_=4, pins=pins)  # ttl=4 → released
-    await apply_intra_turn_digest(ctx, {}, trace_ctx=None, store=_FakeStore())
-    assert "r1" not in ctx.tool_result_pins
-    assert _is_digest(messages[1])
+    sidecar = _sidecar(
+        r1={"tool_name": "read", "success": True, "arguments": {"path": "/a.py"}},
+        b1={"tool_name": "bash", "success": True, "arguments": {"command": "c"}},
+    )
+    ctx = _ctx()
+    await apply_intra_turn_digest(ctx, tool_results, sidecar, trace_ctx=None, store=_FakeStore())
+    assert not _is_digest(tool_results[0])  # read verbatim
+    assert _is_digest(tool_results[1])  # bash digested
+
+
+@pytest.mark.asyncio
+async def test_error_payload_and_small_and_excluded_stay_verbatim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "tool_result_digest_exclude_tools", ["web"])
+    err = json.dumps({"status": "error", "hint": "x " * 5000})
+    tool_results = [
+        _tool_msg("e1", "bash", err),  # error payload → verbatim
+        _tool_msg("s1", "bash", "tiny"),  # below threshold → verbatim
+        _tool_msg("w1", "web", _big_bash("page")),  # excluded tool → verbatim
+    ]
+    sidecar = _sidecar(
+        e1={"tool_name": "bash", "success": False, "arguments": {}},
+        s1={"tool_name": "bash", "success": True, "arguments": {}},
+        w1={"tool_name": "web", "success": True, "arguments": {}},
+    )
+    ctx = _ctx()
+    await apply_intra_turn_digest(ctx, tool_results, sidecar, trace_ctx=None, store=_FakeStore())
+    assert not any(_is_digest(r) for r in tool_results)
 
 
 @pytest.mark.asyncio
 async def test_put_timeout_leaves_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "tool_result_digest_put_timeout_ms", 20)
-    messages = [
-        {"role": "user", "content": "u"},
-        _tool_msg("t_old", "bash", _big_bash("old")),
-        {"role": "assistant", "content": "", "tool_calls": [{"id": "b"}]},
-        _tool_msg("t_new", "bash", _big_bash("new")),
-    ]
-    ctx = _ctx(messages)
-    store = _FakeStore(delay=0.5)  # exceeds the 20ms ceiling
-    await apply_intra_turn_digest(ctx, {}, trace_ctx=None, store=store)
-    assert not _is_digest(messages[1])  # left verbatim on timeout
+    tool_results = [_tool_msg("b1", "bash", _big_bash("out"))]
+    sidecar = _sidecar(b1={"tool_name": "bash", "success": True, "arguments": {}})
+    ctx = _ctx()
+    store = _FakeStore(delay=0.5)  # exceeds 20ms ceiling
+    await apply_intra_turn_digest(ctx, tool_results, sidecar, trace_ctx=None, store=store)
+    assert not _is_digest(tool_results[0])
 
 
 @pytest.mark.asyncio
 async def test_already_digested_is_idempotent() -> None:
-    messages = [
-        {"role": "user", "content": "u"},
-        _tool_msg("t_old", "bash", _big_bash("old")),
-        {"role": "assistant", "content": "", "tool_calls": [{"id": "b"}]},
-        _tool_msg("t_new", "bash", _big_bash("new")),
-    ]
-    ctx = _ctx(messages)
+    tool_results = [_tool_msg("b1", "bash", _big_bash("out"))]
+    sidecar = _sidecar(b1={"tool_name": "bash", "success": True, "arguments": {}})
+    ctx = _ctx()
     store = _FakeStore()
-    await apply_intra_turn_digest(ctx, {}, trace_ctx=None, store=store)
-    first = messages[1]["content"]
-    # second pass: the already-digested message is not re-digested / re-put.
-    await apply_intra_turn_digest(ctx, {}, trace_ctx=None, store=store)
-    assert messages[1]["content"] == first
+    await apply_intra_turn_digest(ctx, tool_results, sidecar, trace_ctx=None, store=store)
+    first = tool_results[0]["content"]
+    # Re-running the pass over the now-digested batch is a no-op (no second put).
+    await apply_intra_turn_digest(ctx, tool_results, sidecar, trace_ctx=None, store=store)
+    assert tool_results[0]["content"] == first
     assert len(store.puts) == 1
+
+
+# ---------------------------------------------------------------------------
+# D4 pin bookkeeping (release semantics — state only; no deferred digestion)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pin_released_on_prior_round_write() -> None:
+    pins = {"r0": ToolResultPin(path="/a.py", round_pinned=1)}
+    ctx = _ctx(round_=2, pins=pins)
+    sidecar = _sidecar(w1={"tool_name": "write", "success": True, "arguments": {"path": "/a.py"}})
+    await apply_intra_turn_digest(ctx, [], sidecar, trace_ctx=None, store=_FakeStore())
+    assert "r0" not in ctx.tool_result_pins  # released
+
+
+@pytest.mark.asyncio
+async def test_failed_write_does_not_release_pin() -> None:
+    pins = {"r0": ToolResultPin(path="/a.py", round_pinned=1)}
+    ctx = _ctx(round_=2, pins=pins)
+    sidecar = _sidecar(w1={"tool_name": "write", "success": False, "arguments": {"path": "/a.py"}})
+    await apply_intra_turn_digest(ctx, [], sidecar, trace_ctx=None, store=_FakeStore())
+    assert "r0" in ctx.tool_result_pins
+
+
+@pytest.mark.asyncio
+async def test_same_batch_read_write_defers_release() -> None:
+    pins = {"r0": ToolResultPin(path="/a.py", round_pinned=1)}
+    ctx = _ctx(round_=2, pins=pins)
+    sidecar = _sidecar(
+        r1={"tool_name": "read", "success": True, "arguments": {"path": "/a.py"}},
+        w1={"tool_name": "write", "success": True, "arguments": {"path": "/a.py"}},
+    )
+    await apply_intra_turn_digest(ctx, [], sidecar, trace_ctx=None, store=_FakeStore())
+    assert "r0" in ctx.tool_result_pins  # same-batch hazard → deferred
+
+
+@pytest.mark.asyncio
+async def test_ttl_abandonment_releases_pin() -> None:
+    pins = {"r0": ToolResultPin(path="/a.py", round_pinned=0)}
+    ctx = _ctx(round_=4, pins=pins)  # ttl=4
+    await apply_intra_turn_digest(ctx, [], {}, trace_ctx=None, store=_FakeStore())
+    assert "r0" not in ctx.tool_result_pins
 
 
 # ---------------------------------------------------------------------------
@@ -269,23 +295,23 @@ async def test_expand_tool_result_store_unwired(monkeypatch: pytest.MonkeyPatch)
 
 @pytest.mark.asyncio
 async def test_digested_message_survives_sanitize_tool_pairs() -> None:
-    """A digested role="tool" message keeps its tool_call_id, so the send-time
-    pair sanitiser never orphans it and leaves it byte-identical (ADR-0085 D6).
+    """A birth-digested role="tool" entry keeps its tool_call_id, so once extended
+    the send-time pair sanitiser leaves it byte-identical (ADR-0085 D6).
     """
     from personal_agent.orchestrator.context_window import _sanitize_tool_pairs
+
+    tool_results = [_tool_msg("t_old", "bash", _big_bash("old"))]
+    sidecar = _sidecar(t_old={"tool_name": "bash", "success": True, "arguments": {}})
+    ctx = _ctx()
+    await apply_intra_turn_digest(ctx, tool_results, sidecar, trace_ctx=None, store=_FakeStore())
+    assert _is_digest(tool_results[0])
 
     messages = [
         {"role": "user", "content": "u"},
         {"role": "assistant", "content": "", "tool_calls": [{"id": "t_old"}]},
-        _tool_msg("t_old", "bash", _big_bash("old")),
-        {"role": "assistant", "content": "", "tool_calls": [{"id": "t_new"}]},
-        _tool_msg("t_new", "bash", _big_bash("new")),
+        tool_results[0],
     ]
-    ctx = _ctx(messages)
-    await apply_intra_turn_digest(ctx, {}, trace_ctx=None, store=_FakeStore())
-    assert _is_digest(messages[2])  # t_old digested
-    digested_content = messages[2]["content"]
-
+    digested_content = tool_results[0]["content"]
     sanitized = _sanitize_tool_pairs(messages)
     survivor = next(m for m in sanitized if m.get("tool_call_id") == "t_old")
-    assert survivor["content"] == digested_content  # byte-identical, not orphaned
+    assert survivor["content"] == digested_content

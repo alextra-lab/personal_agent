@@ -56,6 +56,10 @@ bash command="curl -s http://elasticsearch:9200/_cluster/health | jq .status"
 
 The auto-approve check splits the command on top-level operators and verifies the first word of every segment. A command like `curl … | grep foo | wc -l` is auto-approved if all three first words (`curl`, `grep`, `wc`) are on the allowlist.
 
+### SIGPIPE / exit 141 (FRE-470)
+
+When a downstream pipeline consumer closes the pipe early — e.g. `find … | head` or `… | grep -q` — the upstream producer is killed by SIGPIPE (signal 13), and under `pipefail` the pipeline's exit code becomes `141` (128 + 13). This is normal early-exit behavior, not a failure. The executor therefore reports `success: true` for exit `141` **when the command is a pipeline**, and adds an explanatory `note` field. A standalone `exit 141` (no pipe) still reports `success: false`, so genuine errors are never masked.
+
 ## Auto-approve list (no PWA prompt required)
 
 **NORMAL mode** — auto-approved first words:

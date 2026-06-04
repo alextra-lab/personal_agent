@@ -48,6 +48,12 @@ MAX_OUTPUT_BYTES = 51_200  # 50 KiB
 _DEFAULT_TIMEOUT = 30
 _MAX_TIMEOUT = 120
 
+# Exit code for a process terminated by SIGPIPE (signal 13): 128 + 13 = 141.
+# Under ``-o pipefail`` this surfaces when a downstream pipeline consumer
+# (``head``, ``grep -q``, …) closes the pipe early and the upstream producer
+# is killed.  That is benign early-exit behavior, not a command failure. FRE-470.
+_SIGPIPE_EXIT_CODE = 141
+
 # Fallback deny-patterns used when governance config is unavailable.
 # Belt-and-suspenders: the authoritative list lives in tools.yaml.
 _FALLBACK_DENY: list[str] = [
@@ -232,6 +238,61 @@ def _split_command_segments(command: str) -> list[str]:
     return [s for s in segments if s]
 
 
+def _has_top_level_pipe(command: str) -> bool:
+    """Return True if the command contains a top-level pipe (``|``, not ``||``).
+
+    Quote- and escape-aware: a ``|`` inside single quotes, double quotes, or
+    preceded by a backslash is not a pipeline operator.  A ``||`` (logical OR)
+    is not a pipe.  Mirrors the quote handling in :func:`_split_command_segments`.
+
+    Used to gate SIGPIPE (exit 141) leniency: exit 141 is only treated as benign
+    when the command actually pipes, so a standalone ``exit 141`` or a
+    non-pipeline command killed by SIGPIPE still reports failure (FRE-470).
+
+    Args:
+        command: Raw shell command string.
+
+    Returns:
+        True if a top-level single ``|`` appears outside quotes, else False.
+    """
+    in_single = False
+    in_double = False
+    i = 0
+    n = len(command)
+
+    while i < n:
+        c = command[i]
+        if in_single:
+            if c == "'":
+                in_single = False
+            i += 1
+        elif in_double:
+            if c == "\\" and i + 1 < n:
+                i += 2
+            else:
+                if c == '"':
+                    in_double = False
+                i += 1
+        elif c == "\\" and i + 1 < n:
+            i += 2
+        elif c == "'":
+            in_single = True
+            i += 1
+        elif c == '"':
+            in_double = True
+            i += 1
+        elif c == "|":
+            if i + 1 < n and command[i + 1] == "|":
+                # Logical OR, not a pipe.
+                i += 2
+            else:
+                return True
+        else:
+            i += 1
+
+    return False
+
+
 def _check_segment_allowlist(command: str, allowlist: list[str]) -> str | None:
     """Check every pipeline segment's first word against the auto-approve allowlist.
 
@@ -318,13 +379,17 @@ async def bash_executor(
 
     Returns:
         Dict with keys:
-        - ``success`` (bool): True when exit_code == 0.
+        - ``success`` (bool): True when exit_code == 0, or when exit_code is
+          141 (SIGPIPE) and the command is a pipeline — a downstream consumer
+          (``head``, ``grep -q``) closing the pipe early is benign (FRE-470).
         - ``exit_code`` (int): Process return code (reflects ``pipefail`` semantics).
         - ``stdout`` (str): Captured stdout (possibly truncated).
         - ``stderr`` (str): Captured stderr (possibly truncated).
         - ``command`` (str): Original command string.
         - ``truncated_path`` (str | None): Path to overflow file if output
           exceeded 50 KiB, else None.
+        - ``note`` (str | None): Explanatory note when a benign SIGPIPE exit was
+          reinterpreted as success, else None.
 
         On guard failures, returns a dict with ``success=False`` and an
         ``error`` key set to one of: ``hard_denied``, ``empty_command``, ``timeout``.
@@ -420,6 +485,22 @@ async def bash_executor(
     exit_code: int = proc.returncode if proc.returncode is not None else -1
 
     # ------------------------------------------------------------------
+    # 6a. Benign-SIGPIPE reinterpretation (FRE-470).
+    #     Exit 141 (128 + SIGPIPE 13) inside a pipeline means a downstream
+    #     consumer closed the pipe early and killed the upstream producer —
+    #     normal early-exit behavior, not a failure.  We gate on the command
+    #     actually being a pipeline so a standalone `exit 141`, or a non-pipe
+    #     command killed by SIGPIPE, still reports failure (no masking).
+    # ------------------------------------------------------------------
+    note: str | None = None
+    if exit_code == _SIGPIPE_EXIT_CODE and _has_top_level_pipe(command):
+        note = (
+            "exit 141 (SIGPIPE): a downstream pipeline consumer closed the pipe "
+            "early, killing the upstream producer; treated as success."
+        )
+    success = exit_code == 0 or note is not None
+
+    # ------------------------------------------------------------------
     # 7. Output cap (50 KiB combined)
     # ------------------------------------------------------------------
     combined = stdout_str + stderr_str
@@ -457,13 +538,15 @@ async def bash_executor(
         stdout_len=len(stdout_str),
         stderr_len=len(stderr_str),
         truncated=truncated_path is not None,
+        sigpipe_success=note is not None,
     )
 
     return {
-        "success": exit_code == 0,
+        "success": success,
         "exit_code": exit_code,
         "stdout": stdout_str,
         "stderr": stderr_str,
         "command": command,
         "truncated_path": truncated_path,
+        "note": note,
     }

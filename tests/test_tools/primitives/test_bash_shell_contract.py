@@ -18,6 +18,7 @@ from pathlib import Path
 from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.primitives.bash import (
     _check_segment_allowlist,
+    _has_top_level_pipe,
     _split_command_segments,
     bash_executor,
 )
@@ -115,6 +116,34 @@ class TestCheckSegmentAllowlist:
 
 
 # ---------------------------------------------------------------------------
+# Unit tests for _has_top_level_pipe
+# ---------------------------------------------------------------------------
+
+
+class TestHasTopLevelPipe:
+    def test_simple_pipe(self) -> None:
+        assert _has_top_level_pipe("find . | head") is True
+
+    def test_no_pipe(self) -> None:
+        assert _has_top_level_pipe("echo hello") is False
+
+    def test_logical_or_is_not_a_pipe(self) -> None:
+        assert _has_top_level_pipe("false || echo fallback") is False
+
+    def test_single_quoted_pipe_not_detected(self) -> None:
+        assert _has_top_level_pipe("echo 'a | b'") is False
+
+    def test_double_quoted_pipe_not_detected(self) -> None:
+        assert _has_top_level_pipe('grep "foo|bar" file.txt') is False
+
+    def test_pipe_after_logical_or(self) -> None:
+        assert _has_top_level_pipe("false || cat x | head") is True
+
+    def test_empty_command(self) -> None:
+        assert _has_top_level_pipe("") is False
+
+
+# ---------------------------------------------------------------------------
 # Executor integration tests — real /bin/bash
 # ---------------------------------------------------------------------------
 
@@ -175,3 +204,49 @@ class TestBashShellContractExecution:
         result = run(bash_executor("exit 42", ctx=_CTX))
         assert result["exit_code"] == 42
         assert result["success"] is False
+
+
+class TestBashSigpipeHandling:
+    """FRE-470: SIGPIPE (exit 141) from a closing downstream pipe is benign.
+
+    ``yes`` writes its argument forever; when a downstream consumer (``head``,
+    ``grep -q``) takes what it needs and closes the pipe, ``yes`` is killed by
+    SIGPIPE (signal 13 -> exit 128 + 13 = 141).  Under ``-o pipefail`` the shell
+    surfaces 141 as the pipeline's exit code.  This is normal early-exit
+    behavior, not a failure, so the executor must report ``success: True``.
+    """
+
+    def test_sigpipe_head_reports_success(self) -> None:
+        result = run(bash_executor("yes | head -n 1", ctx=_CTX))
+        assert result["exit_code"] == 141
+        assert result["success"] is True
+        assert "y" in result["stdout"]
+        assert result["note"] is not None
+        assert "141" in result["note"]
+
+    def test_sigpipe_grep_q_reports_success(self) -> None:
+        # grep -q produces no stdout but exits 0 on first match, closing the
+        # pipe early -> upstream `yes` dies of SIGPIPE -> pipefail surfaces 141.
+        result = run(bash_executor("yes | grep -q y", ctx=_CTX))
+        assert result["exit_code"] == 141
+        assert result["success"] is True
+        assert result["note"] is not None
+
+    def test_standalone_exit_141_still_fails(self) -> None:
+        # No pipeline: an explicit 141 is not a benign SIGPIPE and must remain
+        # a failure so genuine errors are not masked.
+        result = run(bash_executor("exit 141", ctx=_CTX))
+        assert result["exit_code"] == 141
+        assert result["success"] is False
+        assert result["note"] is None
+
+    def test_genuine_failure_still_fails(self) -> None:
+        result = run(bash_executor("exit 1", ctx=_CTX))
+        assert result["exit_code"] == 1
+        assert result["success"] is False
+        assert result["note"] is None
+
+    def test_successful_pipeline_has_no_note(self) -> None:
+        result = run(bash_executor("echo hello | tr 'a-z' 'A-Z'", ctx=_CTX))
+        assert result["success"] is True
+        assert result["note"] is None

@@ -67,6 +67,85 @@ def _mark_message_cache_control(message: dict[str, Any]) -> bool:
     return False
 
 
+def _strip_cache_control(
+    messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None
+) -> None:
+    """Remove every ``cache_control`` marker from messages and tools in-place.
+
+    The executor passes a shallow copy of its working message list each round
+    (``api_messages = list(messages)``), so the underlying message dicts are
+    shared and mutated in place. Without clearing first, re-marking across the
+    in-turn tool loop accumulates breakpoints and eventually exceeds Anthropic's
+    4-block cap (FRE-468). Stripping makes re-application idempotent.
+
+    Args:
+        messages: api_messages list (modified in-place).
+        tools: OpenAI-format tool definitions list, or None (modified in-place).
+    """
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    block.pop("cache_control", None)
+    for tool in tools or []:
+        if isinstance(tool, dict):
+            tool.pop("cache_control", None)
+
+
+def _enforce_cache_control_cap(
+    messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None, *, cap: int = 4
+) -> None:
+    """Defensively clamp the number of ``cache_control`` breakpoints to ``cap``.
+
+    Anthropic rejects any request with more than 4 ``cache_control`` blocks. By
+    construction this function's callers place at most 3 (system + history-end +
+    last tool), but this guard ensures a future regression degrades to a warning
+    and a dropped breakpoint rather than a hard API 400 for the whole turn. The
+    static anchors (system message, tool definitions) are preserved; the earliest
+    history-end markers are dropped first, keeping the newest intended history-end
+    breakpoint (the frozen prefix nearest the current user turn).
+
+    Args:
+        messages: api_messages list (modified in-place).
+        tools: OpenAI-format tool definitions list, or None.
+        cap: Maximum allowed cache_control blocks (Anthropic's hard limit is 4).
+    """
+    static = 0
+    if messages:
+        sys_content = messages[0].get("content")
+        if isinstance(sys_content, list):
+            static += sum(1 for b in sys_content if isinstance(b, dict) and "cache_control" in b)
+    for tool in tools or []:
+        if isinstance(tool, dict) and "cache_control" in tool:
+            static += 1
+
+    history_blocks: list[dict[str, Any]] = []
+    for idx, msg in enumerate(messages):
+        if idx == 0:  # system anchor — never dropped
+            continue
+        content = msg.get("content")
+        if isinstance(content, list):
+            history_blocks.extend(
+                b for b in content if isinstance(b, dict) and "cache_control" in b
+            )
+
+    total = static + len(history_blocks)
+    if total <= cap:
+        return
+
+    allowed_history = max(0, cap - static)
+    drop_count = len(history_blocks) - allowed_history
+    for block in history_blocks[:drop_count]:
+        block.pop("cache_control", None)
+    log.warning(
+        "cache_control_cap_enforced",
+        total=total,
+        cap=cap,
+        dropped=drop_count,
+    )
+
+
 def _apply_anthropic_cache_control(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None,
@@ -96,6 +175,11 @@ def _apply_anthropic_cache_control(
         frozen_layout: When True, also mark the history-end breakpoint
             (ADR-0081 §D2 point 4).
     """
+    # FRE-468: clear markers left by a prior pass over these (shared) dicts so
+    # re-marking across the in-turn tool loop is idempotent and never accumulates
+    # past Anthropic's 4-block cap.
+    _strip_cache_control(messages, tools)
+
     # Mark system message
     if messages and messages[0].get("role") == "system":
         sys_content = messages[0].get("content", "")
@@ -130,6 +214,9 @@ def _apply_anthropic_cache_control(
         last_tool = tools[-1]
         if isinstance(last_tool, dict) and "cache_control" not in last_tool:
             last_tool["cache_control"] = {"type": "ephemeral"}
+
+    # FRE-468: defensive backstop — never let the request exceed Anthropic's cap.
+    _enforce_cache_control_cap(messages, tools, cap=4)
 
 
 class LiteLLMClient:

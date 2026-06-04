@@ -955,19 +955,60 @@ async def test_artifact_draft_empty_plan_raises(
 
 
 @pytest.mark.asyncio
-async def test_artifact_draft_oversized_plan_raises(
+async def test_artifact_draft_oversized_plan_truncates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _install_draft_fakes(monkeypatch)
+    """Oversized plan is truncated-with-warning, not rejected (FRE-471)."""
+    _store, client = _install_draft_fakes(monkeypatch)
 
-    with pytest.raises(ToolExecutionError, match="8000"):
-        await artifact_tools.artifact_draft_executor(
-            slug="x",
-            title="T",
-            summary="S",
-            plan="x" * 8001,
-            ctx=_ctx(),
-        )
+    plan = "section\n" * 4000  # ~32k chars with line boundaries
+    out = await artifact_tools.artifact_draft_executor(
+        slug="x",
+        title="T",
+        summary="S",
+        plan=plan,
+        ctx=_ctx(),
+    )
+
+    # Still produced an artifact rather than raising terminally.
+    assert "artifact_id" in out
+    assert out["plan_truncated"] is True
+    assert out["plan_original_length"] == len(plan)
+
+    # The sub-agent prompt carried the (truncated) plan plus the truncation notice.
+    prompt = client.respond_calls[0]["messages"][1]["content"]
+    assert artifact_tools._PLAN_TRUNCATION_NOTICE in prompt
+
+    # The effective plan stayed within the cap and ended on a line boundary
+    # (boundary-aware truncation — no mid-word "section" sever).
+    effective_plan, was_truncated, original_length = artifact_tools._truncate_plan(plan)
+    assert was_truncated is True
+    assert original_length == len(plan)
+    assert len(effective_plan) <= artifact_tools._MAX_PLAN_CHARS
+    body = effective_plan[: -len(artifact_tools._PLAN_TRUNCATION_NOTICE)]
+    assert body.endswith("section\n") or body.endswith("section")
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_plan_within_cap_not_truncated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A normal plan passes through untouched with plan_truncated=False (FRE-471)."""
+    _store, client = _install_draft_fakes(monkeypatch)
+
+    plan = "Section 1: Intro. Section 2: Data table."
+    out = await artifact_tools.artifact_draft_executor(
+        slug="x",
+        title="T",
+        summary="S",
+        plan=plan,
+        ctx=_ctx(),
+    )
+
+    assert out["plan_truncated"] is False
+    assert out["plan_original_length"] == len(plan)
+    prompt = client.respond_calls[0]["messages"][1]["content"]
+    assert artifact_tools._PLAN_TRUNCATION_NOTICE not in prompt
 
 
 @pytest.mark.asyncio

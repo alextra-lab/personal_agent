@@ -639,9 +639,51 @@ async def artifact_read_executor(
 # artifact_draft — plan/generate split via sub-agent (ADR-0077)
 # ---------------------------------------------------------------------------
 
-_MAX_PLAN_CHARS = 8000
+# Plan char ceiling. ~16k chars ≈ ~4k input tokens which, with the system prompt
+# and title/summary, stays well within the sub-agent's context budget. Plans longer
+# than this are truncated-with-warning (FRE-471), never rejected terminally.
+_MAX_PLAN_CHARS = 16000
 _MIN_HTML_LENGTH = 50
 _DRAFT_MAX_TOKENS = 16384
+
+# Appended to a truncated plan so the generator knows the spec is incomplete and
+# must not fabricate the omitted sections (FRE-471).
+_PLAN_TRUNCATION_NOTICE = (
+    "\n\n[NOTICE: This plan was truncated because it exceeded the generation budget. "
+    "It is INCOMPLETE — later sections are missing. Build a coherent, complete-looking "
+    "HTML document from the sections present above. Do NOT invent or fabricate the "
+    "omitted requirements; prioritize finishing what is specified.]"
+)
+
+
+def _truncate_plan(plan: str) -> tuple[str, bool, int]:
+    r"""Trim an oversized plan to the char ceiling, boundary-aware (FRE-471).
+
+    Plans within ``_MAX_PLAN_CHARS`` pass through untouched. Longer plans are cut at
+    the last line boundary (``\n``) at or before the budget — so a section is not
+    severed mid-sentence — and ``_PLAN_TRUNCATION_NOTICE`` is appended. If no line
+    boundary exists within the budget, a hard character cut is used as a fallback.
+    The returned plan is always ``<= _MAX_PLAN_CHARS`` characters.
+
+    Args:
+        plan: The raw plan text supplied by the primary model.
+
+    Returns:
+        A ``(effective_plan, was_truncated, original_length)`` tuple where
+        ``effective_plan`` is the (possibly trimmed) plan to send to the sub-agent,
+        ``was_truncated`` indicates whether trimming occurred, and
+        ``original_length`` is the character length of the input ``plan``.
+    """
+    original_length = len(plan)
+    if original_length <= _MAX_PLAN_CHARS:
+        return plan, False, original_length
+
+    budget = _MAX_PLAN_CHARS - len(_PLAN_TRUNCATION_NOTICE)
+    head = plan[:budget]
+    boundary = head.rfind("\n")
+    if boundary > 0:
+        head = head[:boundary]
+    return head + _PLAN_TRUNCATION_NOTICE, True, original_length
 
 
 def _draft_timeout_s() -> float:
@@ -758,7 +800,8 @@ artifact_draft_tool = ToolDefinition(
                 "(3) style guidance (color palette, emphasis, layout preferences), "
                 "(4) any specific patterns to use (cards, grids, callouts). "
                 "The sub-agent generates HTML from this plan. Be specific about "
-                "content and data. Do not write HTML yourself. Max ~8000 chars."
+                "content and data. Do not write HTML yourself. Max ~16000 chars; "
+                "longer plans are truncated with a notice rather than rejected."
             ),
             required=True,
         ),
@@ -1022,12 +1065,13 @@ async def artifact_draft_executor(
 
     Returns:
         Same dict as ``artifact_write_executor``, plus ``generation_method``,
-        ``sub_agent_duration_ms``, and ``task_id``.
+        ``sub_agent_duration_ms``, ``task_id``, ``plan_truncated``, and
+        ``plan_original_length``. An oversized plan is truncated-with-warning
+        rather than rejected (FRE-471).
 
     Raises:
-        ToolExecutionError: On missing identity, empty/oversized plan,
-            sub-agent failure, HTML validation failure, or any
-            ``artifact_write_executor`` error.
+        ToolExecutionError: On missing identity, empty plan, sub-agent failure,
+            HTML validation failure, or any ``artifact_write_executor`` error.
     """
     import asyncio  # noqa: PLC0415
     import time  # noqa: PLC0415
@@ -1039,22 +1083,32 @@ async def artifact_draft_executor(
     # --- Input validation ---
     if not plan or not plan.strip():
         raise ToolExecutionError("plan is required and cannot be empty.")
-    if len(plan) > _MAX_PLAN_CHARS:
-        raise ToolExecutionError(
-            f"plan exceeds the {_MAX_PLAN_CHARS}-character limit ({len(plan)} chars). "
-            "Trim the plan or split into multiple artifacts."
-        )
 
     trace_id: str = getattr(ctx, "trace_id", "unknown") if ctx else "unknown"
     session_id: str | None = getattr(ctx, "session_id", None) if ctx else None
     task_id = f"draft-{uuid4().hex[:12]}"
+
+    # FRE-471: an oversized plan is truncated-with-warning, never rejected — a hard
+    # fail at remaining=0 tool budget produced zero artifact (incident trace c216bd40).
+    effective_plan, plan_truncated, plan_original_length = _truncate_plan(plan)
+    if plan_truncated:
+        log.warning(
+            "artifact_draft_plan_truncated",
+            trace_id=trace_id,
+            session_id=session_id,
+            slug=slug,
+            task_id=task_id,
+            original_length=plan_original_length,
+            truncated_length=len(effective_plan),
+            max_plan_chars=_MAX_PLAN_CHARS,
+        )
 
     log.info(
         "artifact_draft_start",
         trace_id=trace_id,
         session_id=session_id,
         slug=slug,
-        plan_length=len(plan),
+        plan_length=len(effective_plan),
         task_id=task_id,
     )
 
@@ -1075,7 +1129,7 @@ async def artifact_draft_executor(
     user_prompt = (
         f"Title: {title}\n"
         f"Summary: {summary}\n\n"
-        f"Plan:\n{plan}\n\n"
+        f"Plan:\n{effective_plan}\n\n"
         "Generate the complete HTML document now."
     )
 
@@ -1192,6 +1246,8 @@ async def artifact_draft_executor(
     result["generation_method"] = "draft"
     result["sub_agent_duration_ms"] = sub_agent_duration_ms
     result["task_id"] = task_id
+    result["plan_truncated"] = plan_truncated
+    result["plan_original_length"] = plan_original_length
 
     log.info(
         "artifact_draft_completed",

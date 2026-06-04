@@ -36,16 +36,21 @@ win. The infra (PR-A) and `expand_tool_result` (used 3×) are sound; the
 - Re-run this harness; PASS = fresh input ≥30% below baseline **and** artifact built
   **and** no `task_failed`.
 
-## Open bug surfaced by the run (attributed → FRE-484)
+## Bug surfaced by the run (FRE-484 — FIXED)
 
 `litellm.UnsupportedParamsError: Anthropic doesn't support tool calling without
 tools= param specified` killed the turn (`model_call_error → task_failed`).
 **Attributed (FRE-484): latent, digestion-independent** — the forced-synthesis path
 (`executor.py:2275`) sets `tools=None`, and Anthropic rejects that when the transcript
 already holds `tool_use`/`tool_result` blocks. Baseline `a0a07227` never hit forced
-synthesis; the treatment run did. It is a **hard blocker for the `zero task_failed`
-gate** below — the birth-time redesign re-validation cannot go fully green until
-FRE-484 lands.
+synthesis; the treatment run did. It was a **hard blocker for the `zero task_failed`
+gate** below.
+
+**Fixed (FRE-484):** on the Anthropic path, when the transcript already contains tool
+blocks, forced synthesis now keeps a non-empty `tools=` and pins `tool_choice="none"`
+(`_forced_synthesis_tool_overrides` in `executor.py`) so the call succeeds and the model
+synthesizes instead of calling more tools. Other paths (local SLM, no tool history) are
+unchanged. The `zero task_failed` re-validation can now be re-run.
 
 ## Redesign shipped (birth-time, case-a)
 

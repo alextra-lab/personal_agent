@@ -144,6 +144,16 @@ ADR-0059 per-session signal.  Ordering rule: durable JSONL append before
 publish (ADR-0054 D4).
 """
 
+# ADR-0085 (Intra-Turn Tool-Result Compression, FRE-475)
+STREAM_CONTEXT_TOOL_RESULT_DIGESTED = "stream:context.tool_result_digested"
+"""Stream for intra-turn tool-result digest events (ADR-0085).
+
+Producer: ``orchestrator.tool_result_digest`` via
+``telemetry.tool_result_digest.record_digest``.  One event per digested tool
+result.  No consumer in PR-A — observability + a composability hook for the
+rollout A/B.  Ordering rule: durable JSONL append before publish (ADR-0054 D4).
+"""
+
 
 # ---------------------------------------------------------------------------
 # Base model
@@ -841,6 +851,39 @@ class WithinSessionCompressionEvent(EventBase):
     pre_pass_replacements: int
     summariser_called: bool
     summariser_duration_ms: int
+    tokens_saved: int
+
+
+class ToolResultDigestEvent(EventBase):
+    """Published per intra-turn tool-result digestion (ADR-0085, FRE-475).
+
+    One event per tool result digested before transcript insertion. No consumer in
+    PR-A — observability + a composability hook for the rollout A/B. ``trace_id`` and
+    ``session_id`` are required — every digestion is request-correlated.
+
+    Attributes:
+        tool_name: Name of the tool whose result was digested.
+        tool_call_id: Identifier of the digested tool call.
+        bytes_in: Exact byte length of the verbatim result.
+        tokens_in: Estimated tokens of the verbatim result.
+        tokens_out: Estimated tokens of the digest message content.
+        digest_format: Digest body discriminator (``bash`` / ``read`` / ``json`` / ``text``).
+        persisted: Whether the full bytes were durably stored in R2.
+        tokens_saved: ``tokens_in - tokens_out`` (always ≥ 0).
+    """
+
+    event_type: Literal["context.tool_result_digested"] = "context.tool_result_digested"
+    source_component: str = "orchestrator.tool_result_digest"
+
+    trace_id: str
+    session_id: str
+    tool_name: str
+    tool_call_id: str
+    bytes_in: int
+    tokens_in: int
+    tokens_out: int
+    digest_format: str
+    persisted: bool
     tokens_saved: int
 
 

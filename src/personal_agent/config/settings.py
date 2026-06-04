@@ -613,6 +613,79 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # Intra-turn tool-result compression (ADR-0085, FRE-475). Knobs modeled on
+    # Anthropic's context-editing vocabulary. Master flag defaults OFF — the
+    # feature rolls out only after the before/after A/B clears the gate.
+    tool_result_compression_enabled: bool = Field(
+        default=False,
+        description=(
+            "Master kill switch for intra-turn tool-result digestion (ADR-0085 §D7). "
+            "When False, tool results enter the transcript verbatim (pre-FRE-475 behaviour)."
+        ),
+    )
+    tool_result_digest_threshold_tokens: int = Field(
+        default=1500,
+        ge=0,
+        description=(
+            "Compress tool results whose estimated token count is at or above this "
+            "(ADR-0085 §D7; open decision §1 — conservative 1.5–2k start)."
+        ),
+    )
+    tool_result_digest_keep: int = Field(
+        default=3,
+        ge=0,
+        description=(
+            "Most-recent tool results kept verbatim regardless of size "
+            "(Anthropic `keep` analogue; ADR-0085 §D4). Enforced in PR-B wiring."
+        ),
+    )
+    tool_result_digest_min_savings_tokens: int = Field(
+        default=500,
+        ge=0,
+        description=(
+            "Skip digestion that would not save at least this many tokens "
+            "(Anthropic `clear_at_least` analogue; ADR-0085 §D1/§D7)."
+        ),
+    )
+    tool_result_digest_pin_ttl_turns: int = Field(
+        default=4,
+        ge=1,
+        description=(
+            "Rounds a read→edit dependency pin survives before the read becomes "
+            "eligible for digestion (abandonment bound; ADR-0085 §D4). PR-B."
+        ),
+    )
+    tool_result_digest_put_timeout_ms: int = Field(
+        default=2000,
+        ge=1,
+        description=(
+            "Insertion-path ceiling for the R2 put before digest substitution; on "
+            "timeout the result is left verbatim (ADR-0085 §D1). PR-B."
+        ),
+    )
+    tool_result_digest_exclude_tools: list[str] = Field(
+        default_factory=list,
+        description="Tool names exempt from digestion (per-tool opt-out; ADR-0085 §D7).",
+    )
+    tool_result_digest_head_lines: int = Field(
+        default=40,
+        ge=0,
+        description="Lines of stream head retained in a head/tail digest (ADR-0085 §D2).",
+    )
+    tool_result_digest_tail_lines: int = Field(
+        default=20,
+        ge=0,
+        description="Lines of stream tail retained in a head/tail digest (ADR-0085 §D2).",
+    )
+    tool_result_digest_max_expand_tokens: int = Field(
+        default=8000,
+        ge=1,
+        description=(
+            "Cap on tokens returned by expand_tool_result re-expansion "
+            "(anti-spike; ADR-0085 §D5). PR-B."
+        ),
+    )
+
     # Cache-aware frozen append-only layout (ADR-0081 §D2/D3, FRE-434)
     cache_frozen_layout_enabled: bool = Field(
         default=True,

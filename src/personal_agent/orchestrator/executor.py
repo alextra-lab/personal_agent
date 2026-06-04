@@ -7,6 +7,7 @@ The executor coordinates task execution through explicit state transitions.
 import asyncio
 import json
 import time
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
@@ -1005,6 +1006,73 @@ def _fallback_reply_from_tool_results(ctx: ExecutionContext, *, lead: str | None
             err = r.get("error") or "Unknown error"
             lines.append(f"- {tool_name}: failed ({err})")
     return "\n".join(lines)
+
+
+# FRE-484: minimal placeholder so Anthropic accepts a forced-synthesis call whose
+# history references tools, when the active mode currently exposes no tool defs.
+# Never invoked — tool_choice is pinned to "none".
+_SYNTHESIS_PLACEHOLDER_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "noop",
+        "description": (
+            "Placeholder so Anthropic accepts a no-tool synthesis call whose "
+            "history references tools. Never invoked (tool_choice is 'none')."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+
+def _transcript_has_tool_blocks(messages: Sequence[Mapping[str, Any]]) -> bool:
+    """Return True if the transcript already contains tool_use/tool_result blocks.
+
+    Anthropic requires ``tools=`` on any request whose message history references
+    tools (assistant ``tool_calls`` or ``role="tool"`` results), even for a no-tool
+    synthesis call (FRE-484).
+
+    Args:
+        messages: Conversation messages in OpenAI format.
+
+    Returns:
+        True if any message carries assistant ``tool_calls`` or is a tool result.
+    """
+    for msg in messages:
+        if msg.get("role") == "tool" or msg.get("tool_calls"):
+            return True
+    return False
+
+
+def _forced_synthesis_tool_overrides(
+    *,
+    provider: str | None,
+    messages: Sequence[Mapping[str, Any]],
+    tool_defs: Sequence[dict[str, Any]] | None,
+) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """Resolve ``(tools, tool_choice)`` for a forced-synthesis model call.
+
+    The forced-synthesis path normally drops ``tools=`` so the model answers from
+    gathered results. On Anthropic, a transcript that already contains tool blocks
+    makes LiteLLM reject the call with ``UnsupportedParamsError`` when ``tools=`` is
+    absent (FRE-484). For that case only, keep a non-empty tool list and pin
+    ``tool_choice="none"`` so the model synthesizes instead of calling more tools.
+    Prefer the real mode ``tool_defs`` (best prompt-cache continuity); fall back to
+    a single placeholder tool when none are available so the call still succeeds.
+
+    Args:
+        provider: Cloud provider name; ``"anthropic"`` triggers the workaround.
+            ``None`` for the local SLM path.
+        messages: Current conversation messages (OpenAI format).
+        tool_defs: Tool definitions for the active mode, or ``None``.
+
+    Returns:
+        ``(tools, tool_choice)``. Every path except Anthropic-with-tool-history
+        returns ``(None, None)`` — identical to the prior drop-tools behavior.
+    """
+    if provider == "anthropic" and _transcript_has_tool_blocks(messages):
+        tools = list(tool_defs) if tool_defs else [dict(_SYNTHESIS_PLACEHOLDER_TOOL)]
+        return tools, "none"
+    return None, None
 
 
 def _unwrap_embedded_response_json(response_content: str) -> str:
@@ -2352,6 +2420,31 @@ async def step_llm_call(
                 reason="synthesizing" if is_synthesizing else "disabled",
             )
 
+        # FRE-484: Anthropic rejects a forced-synthesis call whose history already
+        # contains tool blocks unless tools= is present. Keep a non-empty tool list
+        # and pin tool_choice="none" so synthesis still happens. No-op on every other
+        # path (local SLM, or no tool history) → (None, None) preserves prior behavior.
+        tool_choice: str | dict[str, Any] | None = None
+        if is_synthesizing:
+            _provider = getattr(llm_client, "provider", None)
+            _synthesis_tool_defs = (
+                get_default_registry().get_tool_definitions_for_llm(mode=ctx.mode)
+                if _provider == "anthropic"
+                else None
+            )
+            tools, tool_choice = _forced_synthesis_tool_overrides(
+                provider=_provider,
+                messages=ctx.messages,
+                tool_defs=_synthesis_tool_defs,
+            )
+            if tools:
+                log.info(
+                    "force_synthesis_tools_retained",
+                    trace_id=ctx.trace_id,
+                    provider=_provider,
+                    tool_count=len(tools),
+                )
+
         # ADR-0081 D1: Volatility-gradient layout — build memory_section locally
         # without injecting it yet; it will be appended last as the VOLATILE tail.
         # This ensures the KV-cache boundary sits between the stable prefix and
@@ -2548,6 +2641,7 @@ async def step_llm_call(
             messages=request_messages,
             system_prompt=system_prompt,
             tools=tools if tools else None,
+            tool_choice=tool_choice,
             trace_ctx=span_ctx,
             previous_response_id=ctx.last_response_id,
             max_retries=max_retries_override,

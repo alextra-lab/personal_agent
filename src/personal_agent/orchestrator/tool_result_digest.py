@@ -1,5 +1,16 @@
 """Intra-turn tool-result digest infrastructure (ADR-0085, FRE-475 PR-A).
 
+**PARKED 2026-06-05 (FRE-486).** ADR-0085 is parked dormant behind
+``tool_result_compression_enabled`` (default OFF); this infra is intentionally kept
+in-tree (useful for large *non-file* outputs; carries the fix-a guard + offline
+harness) but is **not shipped**. The unstructured-stream path here head/tail-truncates
+file content the model reads via bash ``cat``/``grep``/``sed`` (the always-injected
+``bash`` skill + the ``read`` tool description steer the model to ``grep -n`` → ranged
+read), deleting the middle of source it reasons over — a *second* truncation layer
+fighting the harness's own read contract. Do not enable on file-read-heavy workloads
+without the allowlist redesign. See ADR-0085 "Decision Outcome" and
+``docs/research/2026-06-05-tool-result-compression-park-decision.md``.
+
 Pure, deterministic machinery for compressing large tool results to a
 **byte-stable** digest before their verbatim bytes enter the conversation
 transcript. PR-A ships this surface *unwired*; the executor insertion hook,

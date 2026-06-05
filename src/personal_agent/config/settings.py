@@ -620,7 +620,11 @@ class AppConfig(BaseSettings):
         default=False,
         description=(
             "Master kill switch for intra-turn tool-result digestion (ADR-0085 §D7). "
-            "When False, tool results enter the transcript verbatim (pre-FRE-475 behaviour)."
+            "When False, tool results enter the transcript verbatim (pre-FRE-475 behaviour). "
+            "PARKED 2026-06-05 (FRE-486): ADR-0085 is parked dormant — do NOT enable on "
+            "file-read-heavy workloads. The bash digest head/tail-truncates file content the "
+            "model reads via cat/grep/sed, corrupting source (see ADR-0085 Decision Outcome). "
+            "Safe only for large non-file outputs; revisit needs the allowlist redesign."
         ),
     )
     tool_result_digest_threshold_tokens: int = Field(

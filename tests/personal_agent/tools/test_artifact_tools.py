@@ -740,6 +740,32 @@ def _install_draft_fakes(
     return store, client
 
 
+class _SpyLogger:
+    """Records (event, kwargs) for every structlog level call (FRE-478 cap-hit test)."""
+
+    def __init__(self, events: list[tuple[str, dict[str, Any]]]) -> None:
+        self._events = events
+
+    def _record(self, event: str, **kwargs: Any) -> None:
+        self._events.append((event, kwargs))
+
+    info = _record
+    warning = _record
+    error = _record
+    debug = _record
+
+    def bind(self, **_kwargs: Any) -> "_SpyLogger":
+        return self
+
+
+def _spy_artifact_log(
+    monkeypatch: pytest.MonkeyPatch,
+    events: list[tuple[str, dict[str, Any]]],
+) -> None:
+    """Replace the artifact_tools module logger with a recording spy."""
+    monkeypatch.setattr(artifact_tools, "log", _SpyLogger(events))
+
+
 # ---------------------------------------------------------------------------
 # artifact_draft — happy paths
 # ---------------------------------------------------------------------------
@@ -922,7 +948,9 @@ async def test_draft_timeout_matches_primary_reasoning_model() -> None:
 async def test_artifact_draft_calls_respond_with_correct_max_tokens(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """respond() receives max_tokens=16384 for HTML generation."""
+    """respond() receives the configured artifact-draft max_tokens (FRE-478)."""
+    from personal_agent.config import settings
+
     _store, client = _install_draft_fakes(monkeypatch)
 
     await artifact_tools.artifact_draft_executor(
@@ -934,7 +962,82 @@ async def test_artifact_draft_calls_respond_with_correct_max_tokens(
     )
 
     call = client.respond_calls[0]
-    assert call["max_tokens"] == 16384
+    assert call["max_tokens"] == artifact_tools._draft_max_tokens()
+    assert call["max_tokens"] == settings.artifact_draft_max_tokens
+
+
+def test_draft_max_tokens_reads_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_draft_max_tokens() resolves from settings.artifact_draft_max_tokens (FRE-478)."""
+    monkeypatch.setattr(artifact_tools.settings, "artifact_draft_max_tokens", 12345)
+    assert artifact_tools._draft_max_tokens() == 12345
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_max_tokens_is_configurable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Overriding the setting flows through to the respond() call (FRE-478)."""
+    _store, client = _install_draft_fakes(monkeypatch)
+    monkeypatch.setattr(artifact_tools.settings, "artifact_draft_max_tokens", 24576)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="configurable-tokens",
+        title="T",
+        summary="S",
+        plan="A plan.",
+        ctx=_ctx(),
+    )
+
+    assert client.respond_calls[0]["max_tokens"] == 24576
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_logs_output_cap_hit_when_cap_binds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cap-hit warning fires when output_tokens reaches the configured cap (FRE-478)."""
+    monkeypatch.setattr(artifact_tools.settings, "artifact_draft_max_tokens", 500)
+    _store, client = _install_draft_fakes(monkeypatch)
+    # _FakeSubAgentClient reports completion_tokens=500 → equals the cap.
+
+    events: list[tuple[str, dict[str, Any]]] = []
+    _spy_artifact_log(monkeypatch, events)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="cap-hit",
+        title="T",
+        summary="S",
+        plan="A plan.",
+        ctx=_ctx(),
+    )
+
+    cap_hits = [e for e in events if e[0] == "artifact_draft_output_cap_hit"]
+    assert len(cap_hits) == 1
+    assert cap_hits[0][1]["output_tokens"] == 500
+    assert cap_hits[0][1]["max_tokens"] == 500
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_no_cap_hit_log_under_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No cap-hit warning when output_tokens is below the cap (FRE-478)."""
+    monkeypatch.setattr(artifact_tools.settings, "artifact_draft_max_tokens", 32768)
+    _store, client = _install_draft_fakes(monkeypatch)
+    # _FakeSubAgentClient reports completion_tokens=500 ≪ 32768.
+
+    events: list[tuple[str, dict[str, Any]]] = []
+    _spy_artifact_log(monkeypatch, events)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="under-cap",
+        title="T",
+        summary="S",
+        plan="A plan.",
+        ctx=_ctx(),
+    )
+
+    assert not [e for e in events if e[0] == "artifact_draft_output_cap_hit"]
 
 
 # ---------------------------------------------------------------------------

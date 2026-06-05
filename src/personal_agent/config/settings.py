@@ -542,6 +542,21 @@ class AppConfig(BaseSettings):
             "Constant-time compared via secrets.compare_digest on the gateway side."
         ),
     )
+    artifact_draft_max_tokens: int = Field(
+        default=32768,
+        ge=1024,
+        le=65536,
+        description=(
+            "Max output tokens for the artifact-draft HTML sub-agent (ADR-0077). "
+            "Raised from 16384 (FRE-478): observed artifacts reached ~31k output "
+            "tokens (trace a0a07227), forcing an unintended cap-hit + continuation "
+            "call. 32768 fits a typical artifact in one generation and matches the "
+            "cloud claude-sonnet-4-6 model-def ceiling; the local SLM server is "
+            "loaded with a ~65k context window, so 32768 + ~5k input stays well "
+            "within it. Reservation is unaffected (cost_estimator uses "
+            "min(max_tokens, default_output_tokens))."
+        ),
+    )
 
     # Paths (for domain config loaders)
     governance_config_path: Path = Field(

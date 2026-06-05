@@ -644,7 +644,6 @@ async def artifact_read_executor(
 # than this are truncated-with-warning (FRE-471), never rejected terminally.
 _MAX_PLAN_CHARS = 16000
 _MIN_HTML_LENGTH = 50
-_DRAFT_MAX_TOKENS = 16384
 
 # Appended to a truncated plan so the generator knows the spec is incomplete and
 # must not fabricate the omitted sections (FRE-471).
@@ -708,6 +707,19 @@ def _draft_timeout_s() -> float:
     if primary is not None and primary.default_timeout:
         return float(primary.default_timeout)
     return float(settings.llm_timeout_seconds)
+
+
+def _draft_max_tokens() -> int:
+    """Output-token ceiling for the artifact-draft HTML sub-agent (FRE-478).
+
+    Resolved from config at call time so the cap is env-overridable without an
+    import-time freeze (mirrors :func:`_draft_timeout_s`). See
+    ``settings.artifact_draft_max_tokens`` for the value rationale.
+
+    Returns:
+        Maximum output tokens for the generation call.
+    """
+    return int(settings.artifact_draft_max_tokens)
 
 
 _SCRIPT_TAG_RE = re.compile(r"<\s*script", re.IGNORECASE)
@@ -1139,6 +1151,7 @@ async def artifact_draft_executor(
     ]
 
     draft_timeout = _draft_timeout_s()
+    draft_max_tokens = _draft_max_tokens()
     log.info(
         "artifact_draft_sub_agent_start",
         trace_id=trace_id,
@@ -1146,7 +1159,7 @@ async def artifact_draft_executor(
         span_id=span_id,
         task_id=task_id,
         model_role=ModelRole.SUB_AGENT.value,
-        max_tokens=_DRAFT_MAX_TOKENS,
+        max_tokens=draft_max_tokens,
         timeout_s=draft_timeout,
     )
 
@@ -1157,7 +1170,7 @@ async def artifact_draft_executor(
             sub_agent_client.respond(
                 role=ModelRole.SUB_AGENT,
                 messages=messages,
-                max_tokens=_DRAFT_MAX_TOKENS,
+                max_tokens=draft_max_tokens,
                 trace_ctx=child_ctx,
                 timeout_s=draft_timeout,
             ),
@@ -1205,6 +1218,12 @@ async def artifact_draft_executor(
     html_content: str = response.get("content", "") if isinstance(response, dict) else str(response)
     html_content = _strip_code_fences(html_content)
 
+    # --- Output-token accounting + cap-hit detection (FRE-478) ---
+    # ``usage`` is dict[str, Any] and may be empty / non-int when the provider
+    # omits it, so guard the type before comparing against the cap.
+    usage = response.get("usage") or {} if isinstance(response, dict) else {}
+    output_tokens = usage.get("completion_tokens")
+
     log.info(
         "artifact_draft_sub_agent_complete",
         trace_id=trace_id,
@@ -1214,7 +1233,23 @@ async def artifact_draft_executor(
         success=True,
         duration_ms=sub_agent_duration_ms,
         html_length=len(html_content),
+        output_tokens=output_tokens,
     )
+
+    if isinstance(output_tokens, int) and output_tokens >= draft_max_tokens:
+        # The generation hit the configured ceiling — the artifact was likely
+        # truncated and spilled into a continuation call (FRE-478). This is the
+        # trip-wire for raising the cap or routing to structural sectioning
+        # (FRE-476).
+        log.warning(
+            "artifact_draft_output_cap_hit",
+            trace_id=trace_id,
+            session_id=session_id,
+            span_id=span_id,
+            task_id=task_id,
+            output_tokens=output_tokens,
+            max_tokens=draft_max_tokens,
+        )
 
     # --- Render Mermaid blocks → inline SVG (FRE-396, ADR-0070 D7 amendment) ---
     html_content = await _render_mermaid_blocks(

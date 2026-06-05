@@ -1,5 +1,16 @@
 """Intra-turn tool-result digest infrastructure (ADR-0085, FRE-475 PR-A).
 
+**PARKED 2026-06-05 (FRE-486).** ADR-0085 is parked dormant behind
+``tool_result_compression_enabled`` (default OFF); this infra is intentionally kept
+in-tree (useful for large *non-file* outputs; carries the fix-a guard + offline
+harness) but is **not shipped**. The unstructured-stream path here head/tail-truncates
+file content the model reads via bash ``cat``/``grep``/``sed`` (the always-injected
+``bash`` skill + the ``read`` tool description steer the model to ``grep -n`` → ranged
+read), deleting the middle of source it reasons over — a *second* truncation layer
+fighting the harness's own read contract. Do not enable on file-read-heavy workloads
+without the allowlist redesign. See ADR-0085 "Decision Outcome" and
+``docs/research/2026-06-05-tool-result-compression-park-decision.md``.
+
 Pure, deterministic machinery for compressing large tool results to a
 **byte-stable** digest before their verbatim bytes enter the conversation
 transcript. PR-A ships this surface *unwired*; the executor insertion hook,
@@ -66,6 +77,15 @@ _KEY_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-]{0,127}$")
 _FRAME_RE = re.compile(
     r'(Traceback|File ".*", line \d+|^@@ |^\+\+\+ |^--- |Error|Exception|FAILED|Failed|assert)'
 )
+
+# Tools whose results are *structurally* never digested, independent of config
+# (ADR-0085 §D5; FRE-475 design fix-a). ``expand_tool_result`` returns the verbatim
+# bytes the model explicitly asked to see — re-digesting that output re-hides the
+# exact content the model paid a round-trip to retrieve (the clawback defect
+# observed in trace 950386d6: 4 of 9 digests re-compressed expansions). This guard
+# is a hard invariant, *not* a config default, so it cannot be accidentally
+# disabled via ``tool_result_digest_exclude_tools`` (which stays additive).
+_NEVER_DIGEST_TOOLS: frozenset[str] = frozenset({"expand_tool_result"})
 
 
 # ---------------------------------------------------------------------------
@@ -291,10 +311,15 @@ def build_digest_message(
         "body": body,
         "bytes": full_byte_len,
         "content_hash": content_hash,
+        # Non-imperative affordance (FRE-475 fix-b): state that the full bytes are
+        # retrievable without *instructing* the model to fetch them. The earlier
+        # imperative copy ("Call ... before editing against omitted lines") nudged an
+        # eager re-expand clawback every round (trace 950386d6: 4 expansions). The
+        # key + hash stay in the string so expansion remains possible when the model
+        # genuinely needs the omitted bytes.
         "hint": (
-            f"Full {tool_name} output hidden ({full_byte_len} bytes). "
-            f'Call expand_tool_result("{r2_key}", "{content_hash}") to retrieve '
-            "verbatim before editing against omitted lines."
+            f"Digest of {tool_name} output ({full_byte_len} bytes; full text stored). "
+            f'expand_tool_result("{r2_key}", "{content_hash}") returns it verbatim if needed.'
         ),
         "r2_key": r2_key,
         "tool_name": tool_name,
@@ -315,15 +340,20 @@ def build_digest_message(
 def should_digest(tool_name: str, content: str) -> bool:
     """Return True when *content* is eligible for digestion on intrinsic grounds (D7).
 
-    Owns only the content-intrinsic gates — per-tool opt-out, error-payload
-    verbatim, and the size threshold. Recency (``keep``) and read→edit dependency
-    pinning are turn-stateful and live in PR-B; the master flag
-    (``tool_result_compression_enabled``) is checked by the PR-B caller.
+    Owns the content-intrinsic gates in priority order: the **structural**
+    never-digest set (:data:`_NEVER_DIGEST_TOOLS` — a hard invariant, checked
+    first), the config-driven per-tool opt-out
+    (``tool_result_digest_exclude_tools`` — additive), error-payload verbatim, and
+    the size threshold. Recency (``keep``) and read→edit dependency pinning are
+    turn-stateful and live in the caller; the master flag
+    (``tool_result_compression_enabled``) is checked by the caller.
 
     Args:
         tool_name: The originating tool's name.
         content: The verbatim tool-result content string.
     """
+    if tool_name in _NEVER_DIGEST_TOOLS:
+        return False
     exclude: Sequence[str] = settings.tool_result_digest_exclude_tools
     if tool_name in exclude:
         return False

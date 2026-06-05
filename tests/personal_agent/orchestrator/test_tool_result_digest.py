@@ -190,6 +190,20 @@ def test_should_digest_excluded_tool_is_false(monkeypatch: pytest.MonkeyPatch) -
     assert should_digest("read_skill", "x " * 5000) is False
 
 
+def test_should_digest_never_digests_expansion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FRE-475 fix-a: ``expand_tool_result`` output is structurally never digested.
+
+    Re-digesting an explicit verbatim retrieval re-hides the exact bytes the model
+    paid a round-trip to see (the clawback defect in trace 950386d6). The exemption
+    is a hard invariant — it holds even above threshold and even if config tries to
+    omit it from the exclude list.
+    """
+    monkeypatch.setattr(settings, "tool_result_digest_threshold_tokens", 1)
+    monkeypatch.setattr(settings, "tool_result_digest_exclude_tools", [])
+    big = "verbatim-expansion-" + "y" * 5000
+    assert should_digest("expand_tool_result", big) is False
+
+
 def test_digest_saves_enough(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "tool_result_digest_min_savings_tokens", 100)
     big = json.dumps(

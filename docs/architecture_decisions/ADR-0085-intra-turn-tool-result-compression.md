@@ -1,9 +1,46 @@
 # ADR-0085 — Intra-Turn Tool-Result Compression (Insertion-Time Digest + Exact Re-Expand)
 
-**Status:** Proposed — 2026-06-04
+**Status:** **Parked (dormant, flag-off) — 2026-06-05** (was Proposed 2026-06-04). See **Decision Outcome** below. Infra remains in-tree behind `tool_result_compression_enabled=false`; not shipped.
 **Related:** ADR-0081 (cache-aware context layout & compaction — **this ADR extends its tiered-context model with an intra-turn tool-result tier**), ADR-0061 (within-session progressive compression — the middle-band `_pre_pass_tool_outputs` this composes with), ADR-0069 (R2 artifact substrate — the durable store for full results), ADR-0074 (identity / joinability — emit-site + trace threading the digest inherits), FRE-468/FRE-473 (cache_control breakpoint clamp — the constraint that makes the tail expensive), FRE-465 (ADR-0081 D5 cold-tier history retrieval — the **converged re-expand vocabulary**, distinct contract)
 **Implements:** FRE-475 (project: *Turn Cost & Latency Optimization (artifact builds)*)
 **Evidence:** `docs/research/2026-06-04-artifact-turn-cost-latency-forensics.md` (trace `a0a07227`), pre-write Codex design critique (logged in the PR), external landscape (see References)
+
+---
+
+## Decision Outcome (2026-06-05) — Parked
+
+**Decision: park this ADR dormant (flag-off); do not ship intra-turn compression; pivot to FRE-476
+(decomposition + sub-agents).** Full rationale: `docs/research/2026-06-05-tool-result-compression-park-decision.md`.
+
+The decisive finding is **architectural, not just a cost number**:
+
+- The digest's only lossy primitive for unstructured streams is **head/tail truncation that deletes the
+  middle** (`_headtail`). When the model reads source via **bash** (`cat`/`grep`/`sed`) — which it
+  overwhelmingly does — that file content flows through the bash digest path (§D2 bash bullet) and **its
+  middle is deleted**. The model reasons over mutilated source, abandons its `cat`/`grep`/`sed` technique
+  (live-observed, trace `950386d6`), and ships an incomplete artifact.
+- §D2 anticipated range-preserving reads *only on the `read`-tool path* ("`read` already encourages
+  grep-then-range, FRE-410"). It never accounted for reads arriving via **bash**, where there is no
+  extractor and no pin (§D4) — only head/tail. That is the gap.
+- The harness **already solves file-read context-bounding** via the exact technique the digest corrupts:
+  the always-injected `bash` skill + the `read` tool's own description instruct the model to **`grep -n`
+  to locate → read narrow ranges** (`orchestrator/skills.py:35` injects `docs/skills/*.md` bodies every
+  turn). The digest is a **second truncation layer fighting the harness's own read contract.** For the
+  artifact-build workload the re-billing tail *is* those file reads, so a correct fix ("don't compress
+  them") leaves little to compress and the cost win evaporates.
+
+**Disposition:**
+- **Code kept dormant, not removed** — the infra is still useful for large *non-file* outputs
+  (JSON/`psql`/`curl`); it carries the worth-keeping fix-a guard (`_NEVER_DIGEST_TOOLS`) and the reusable
+  offline harness. Flag description + module docstring marked PARKED-with-reason (anti-rot). Removal is a
+  deferred option if FRE-476 obviates compression entirely.
+- **`read` tool kept** — it is the path-governed, head-capped, all-modes (incl. LOCKDOWN/RECOVERY where
+  `bash` is forbidden) file door; not redundant despite the model preferring bash.
+- This is a **multi-phase ticket park**, not a Done: FRE-475 and the blocked enhancements
+  (FRE-482/483/485) park with the ADR; FRE-476 becomes the active stream.
+
+Everything below is the **original Proposed design**, retained as the record of what was built and why the
+park is a conclusion rather than an abandonment.
 
 ---
 
@@ -77,7 +114,7 @@ Consequences:
 
 The digest is produced by **deterministic, per-tool, format-aware extractors** — never an LLM call on the synchronous insertion path.
 
-- **bash stdout/stderr** — head/tail retention with an elision marker, **plus** always-preserved: exit status, stderr header lines, and any upstream truncation markers. Naive head/tail is *insufficient* for diagnostic output.
+- **bash stdout/stderr** — head/tail retention with an elision marker, **plus** always-preserved: exit status, stderr header lines, and any upstream truncation markers. Naive head/tail is *insufficient* for diagnostic output. **⚠️ Amended 2026-06-05 (FRE-486, the park finding): this bullet is the defect. bash stdout is frequently not "diagnostic output" but verbatim *file content* — the model reads source via `cat`/`grep`/`sed` (the always-injected `bash` skill + the `read` tool description actively instruct `grep -n` → ranged read). Head/tail elision deletes the middle of that source (and the middle matches of a `grep` map), corrupting what the model reasons over. The `read`-tool pin (§D4) protects the `read` path but *not* the bash path. No deployable bash-file-content extractor exists that both preserves correctness and saves enough to matter (the harness's read contract already bounds reads), which is why the ADR is parked. Do not enable the flag on file-read-heavy workloads.**
 - **read** — outline (structure) + the **matched/ranged regions** the read targeted, dropping bulk. (`read` already encourages grep-then-range, FRE-410, which narrows the blast radius.)
 - **Structured formats whose load-bearing fact is in the middle** (diffs/hunks, stack traces, compiler output, test failures) — routed through **format-aware parsers** that retain failing file/line/function frames and nearby hunk context. Head/tail masking on these would preserve the wrong region and let the model act against an absent fact (Codex critique B-HIGH).
 - **JSON tool results** — type-specific extraction (key paths, counts, matched values, error fields) rather than ADR-0061's shape-only `keys=…`.

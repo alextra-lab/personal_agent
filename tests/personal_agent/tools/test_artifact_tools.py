@@ -1299,6 +1299,7 @@ async def test_artifact_draft_retry_timeout_falls_back_to_prior(
 
     assert "artifact_id" in out
     assert out["sanitization_notes"]  # attempt-1 draft was stripped
+    assert out["sub_agent_attempts"] == 2  # both calls counted despite the retry failing
     assert b"<script" not in store.put_calls[0]["content"].lower()
     assert [e for e in events if e[0] == "artifact_draft_retry_failed_using_prior"]
 
@@ -1474,6 +1475,93 @@ def test_html_generation_prompt_redirects_to_css_only() -> None:
     assert ":target" in prompt
     assert "checkbox-hack" in prompt
     assert "REJECTED" in prompt
+
+
+# ---------------------------------------------------------------------------
+# FRE-496 review fixes: strip ⊇ detect (PR #170)
+# ---------------------------------------------------------------------------
+
+
+def test_sanitize_strips_unterminated_script_tag() -> None:
+    """Review #1: an unterminated <script (no closing >) is detected AND stripped.
+
+    A cap-hit (FRE-478) truncation can land mid-tag; _SCRIPT_TAG_RE flags it, so the
+    opener strip must clear it too — otherwise sanitized HTML re-trips the validator.
+    """
+    raw = '<!DOCTYPE html><html><body><p>real content</p><script src="https://x/a.js'
+    out, notes = artifact_tools._sanitize_sandbox_violations(raw)
+    assert not artifact_tools._SCRIPT_TAG_RE.search(out)
+    assert notes
+
+
+def test_sanitize_strips_glued_event_handler_preserving_quote() -> None:
+    """Review #2: a handler glued to the prior attribute is stripped without eating its quote."""
+    raw = '<!DOCTYPE html><html><body><input type="checkbox"onclick="t()"></body></html>'
+    out, notes = artifact_tools._sanitize_sandbox_violations(raw)
+    assert not artifact_tools._EVENT_HANDLER_RE.search(out)
+    assert 'type="checkbox"' in out  # closing quote preserved
+    assert notes
+
+
+def test_sanitize_empty_value_handler_stripped() -> None:
+    """Review #2: an empty-value handler (onclick=>) is detected AND stripped (strip ⊇ detect)."""
+    raw = "<!DOCTYPE html><html><body><div onclick=>x</div></body></html>"
+    assert artifact_tools._EVENT_HANDLER_RE.search(raw)
+    out, _notes = artifact_tools._sanitize_sandbox_violations(raw)
+    assert not artifact_tools._EVENT_HANDLER_RE.search(out)
+
+
+def test_validate_html_output_allows_data_on_attributes() -> None:
+    """Review #3: a legit data-on* attribute must not trip the event-handler detector."""
+    html = (
+        '<!DOCTYPE html><html><body><div data-online="yes" data-on-load="x">'
+        "plenty of body content here</div></body></html>"
+    )
+    assert not artifact_tools._EVENT_HANDLER_RE.search(html)
+    artifact_tools._validate_html_output(html)  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_strips_glued_handler_and_delivers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review #2: a glued-handler draft commits (not hard-failed) with the quote intact."""
+    glued = (
+        "<!DOCTYPE html><html><head><style>:root{--c:#000}</style></head><body><main>"
+        '<input type="checkbox"onclick="toggle()"><h1>Plenty of content survives.</h1>'
+        "</main></body></html>"
+    )
+    store, _client = _install_draft_fakes(monkeypatch, html_content=glued)
+
+    out = await artifact_tools.artifact_draft_executor(
+        slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    assert "artifact_id" in out
+    stored = store.put_calls[0]["content"]
+    assert b"onclick=" not in stored.lower()
+    assert b'type="checkbox"' in stored  # quote not eaten
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_data_on_attribute_not_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review #3: a draft using data-on* commits with no spurious sanitization."""
+    html = (
+        "<!DOCTYPE html><html><head><style>:root{--c:#000}</style></head><body><main>"
+        '<div data-online="yes">Plenty of legitimate body content here.</div>'
+        "</main></body></html>"
+    )
+    _store, client = _install_draft_fakes(monkeypatch, html_content=html)
+
+    out = await artifact_tools.artifact_draft_executor(
+        slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    assert out["sanitization_notes"] == []  # nothing stripped
+    assert len(client.respond_calls) == 1  # no retry triggered
+    assert out["sub_agent_attempts"] == 1
 
 
 @pytest.mark.asyncio

@@ -723,13 +723,19 @@ def _draft_max_tokens() -> int:
     return int(settings.artifact_draft_max_tokens)
 
 
+# Detectors (used by _validate_html_output's terminal safety net AND as the strip gate).
+# INVARIANT (FRE-496 review): strip ⊇ detect — every input these flag must be removable by
+# the sanitizer below, or sanitized HTML re-trips the validator and the turn hard-fails. The
+# event-handler detector is pinned to a real attribute boundary (^ / whitespace / quote /
+# slash) so it neither (a) misses a glued `"onclick=` nor (b) false-positives on `data-on*`.
 _SCRIPT_TAG_RE = re.compile(r"<\s*script", re.IGNORECASE)
-_EVENT_HANDLER_RE = re.compile(r"\bon\w+\s*=", re.IGNORECASE)
-# FRE-496: sanitizer regexes — used to strip sandbox-prohibited nodes so the artifact
-# can still ship (graceful degradation) instead of hard-failing the turn (ADR-0070 D7).
-# Order of application matters: BLOCK first (removes <script>…JS…</script> whole, so no
-# dangling JS body text), then OPEN (self-closing / src= / stray openers), then CLOSE
-# (orphan closing tags). The CDN regex also matches unquoted href= values.
+_EVENT_HANDLER_RE = re.compile(r"""(?:^|[\s"'/])on\w+\s*=""", re.IGNORECASE)
+# FRE-496: sanitizer regexes — strip sandbox-prohibited nodes so the artifact can still ship
+# (graceful degradation) instead of hard-failing the turn (ADR-0070 D7). Order of application
+# matters: BLOCK first (removes <script>…JS…</script> whole, so no dangling JS body text),
+# then OPEN (self-closing / src= / stray openers, incl. an UNTERMINATED tail with no `>` —
+# the FRE-478 cap-hit truncation case), then CLOSE (orphan closing tags). The CDN regex also
+# matches unquoted href= values.
 # Close-tag patterns use `</\s*script\b[^>]*>` (not `</\s*script\s*>`): HTML treats
 # `</script bar>` / `</script\t\n>` as valid end tags, so the close pattern must tolerate
 # whitespace/attributes before `>` or a block closed that way slips the strip (CWE-116,
@@ -737,9 +743,17 @@ _EVENT_HANDLER_RE = re.compile(r"\bon\w+\s*=", re.IGNORECASE)
 _SCRIPT_BLOCK_RE = re.compile(
     r"<\s*script\b[^>]*>.*?</\s*script\b[^>]*>", re.IGNORECASE | re.DOTALL
 )
-_SCRIPT_OPEN_RE = re.compile(r"<\s*script\b[^>]*/?>", re.IGNORECASE)
+# `(?:>|$)` so a draft truncated mid-tag (`…<script src="https://x/a.js` with no `>`) is also
+# stripped — otherwise _SCRIPT_TAG_RE flags it but nothing removes it → hard-fail.
+_SCRIPT_OPEN_RE = re.compile(r"<\s*script\b[^>]*(?:>|$)", re.IGNORECASE)
 _SCRIPT_CLOSE_RE = re.compile(r"</\s*script\b[^>]*>", re.IGNORECASE)
-_EVENT_HANDLER_ATTR_RE = re.compile(r"""\s+on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""", re.IGNORECASE)
+# Group 1 captures the leading boundary char (start / whitespace / quote / slash) so it can be
+# restored — this lets the strip match a handler glued to the prior attribute
+# (`type="checkbox"onclick="t()"`) without eating the closing quote. Value group tolerates
+# quoted, unquoted, and empty (`onclick=>`) forms so strip ⊇ detect holds.
+_EVENT_HANDLER_ATTR_RE = re.compile(
+    r"""(^|[\s"'/])on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]*)""", re.IGNORECASE
+)
 _CDN_LINK_RE = re.compile(
     r'<\s*link\b[^>]*\bhref\s*=\s*["\']?https?://[^"\'>\s]*["\']?[^>]*>', re.IGNORECASE
 )
@@ -1051,7 +1065,9 @@ def _sanitize_sandbox_violations(html: str) -> tuple[str, list[str]]:
         sanitized = _SCRIPT_CLOSE_RE.sub("", sanitized)
         notes.append("Removed embedded scripts — JavaScript cannot run in this sandbox.")
     if _EVENT_HANDLER_RE.search(sanitized):
-        sanitized = _EVENT_HANDLER_ATTR_RE.sub("", sanitized)
+        # Restore the captured boundary char (group 1) so a glued `"onclick=…` loses only
+        # the handler, not the preceding attribute's closing quote.
+        sanitized = _EVENT_HANDLER_ATTR_RE.sub(r"\1", sanitized)
         notes.append("Removed inline event-handler attributes.")
     if _CDN_LINK_RE.search(sanitized):
         sanitized = _CDN_LINK_RE.sub("", sanitized)
@@ -1307,6 +1323,9 @@ async def artifact_draft_executor(
     retry_triggered = False
 
     for attempt in range(1, max_attempts + 1):
+        # Count the attempt at call time so a retry that times out / errors (and breaks
+        # below to the prior draft) still reports the true sub-agent call count.
+        attempts_made = attempt
         messages = base_messages
         if attempt > 1:
             messages = [
@@ -1400,7 +1419,6 @@ async def artifact_draft_executor(
             break
 
         total_sub_agent_ms += int(time.monotonic() * 1000) - start_ms
-        attempts_made = attempt
 
         # --- Extract content from LLMResponse ---
         candidate: str = (

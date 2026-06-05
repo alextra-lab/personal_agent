@@ -426,6 +426,26 @@ class AppConfig(BaseSettings):
         ge=500,
         description="Maximum tokens per sub-agent response",
     )
+    sub_agent_max_tool_iterations: int = Field(
+        default=5,
+        ge=1,
+        le=15,
+        description=(
+            "ADR-0086 D3. Max tool-use rounds a TOOLED_SEQUENTIAL discovery "
+            "sub-agent may run before a forced final synthesis pass. Bounds "
+            "worst-case sub-agent runtime against worker_timeout_seconds."
+        ),
+    )
+    sub_agent_summary_max_chars: int = Field(
+        default=8000,
+        ge=500,
+        description=(
+            "ADR-0086 D4. Upper bound on the SubAgentResult.summary that enters "
+            "the parent synthesis context. Deliberately generous in round 1 — we "
+            "observe real discovery output before tightening the digest (FRE-481 "
+            "A/B). full_output is always preserved uncapped for observability."
+        ),
+    )
 
     # --- Expansion controller (ADR-0036) ---
     orchestration_mode: str = Field(

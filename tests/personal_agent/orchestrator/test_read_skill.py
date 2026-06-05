@@ -171,27 +171,14 @@ async def _dispatch_read_skill(
     skill_name: str,
     loaded_skills: set[str],
 ) -> dict[str, Any]:
-    """Helper: call _dispatch_tool_call for read_skill with given loaded_skills."""
-    from personal_agent.governance.models import Mode
-    from personal_agent.orchestrator.channels import Channel
+    """Helper: call the shared dispatch_tool_call for read_skill with given loaded_skills."""
     from personal_agent.orchestrator.loop_gate import (
         GateDecision,
         GateResult,
         ToolCallState,
         ToolLoopPolicy,
     )
-    from personal_agent.orchestrator.types import ExecutionContext
     from personal_agent.telemetry.trace import TraceContext
-
-    ctx = ExecutionContext(
-        session_id="test",
-        trace_id="test-trace",
-        user_message="test",
-        mode=Mode.NORMAL,
-        channel=Channel.CHAT,
-        messages=[],
-    )
-    ctx.loaded_skills = loaded_skills
 
     gate_result = GateResult(
         decision=GateDecision.ALLOW,
@@ -204,6 +191,7 @@ async def _dispatch_read_skill(
     )
 
     mock_tool_layer = MagicMock()
+    mock_tool_layer.registry.get_tool = MagicMock(return_value=None)
     mock_result = MagicMock()
     mock_result.success = True
     mock_result.output = {
@@ -216,9 +204,9 @@ async def _dispatch_read_skill(
     mock_tool_layer.execute_tool = AsyncMock(return_value=mock_result)
 
     with patch("personal_agent.orchestrator.skills.find_skills_for_tool", return_value=[]):
-        from personal_agent.orchestrator.executor import _dispatch_tool_call
+        from personal_agent.orchestrator.tool_dispatch import dispatch_tool_call
 
-        return await _dispatch_tool_call(
+        return await dispatch_tool_call(
             tool_call_id="tc-1",
             tool_name="read_skill",
             arguments={"name": skill_name},
@@ -226,8 +214,10 @@ async def _dispatch_read_skill(
             gate_result=gate_result,
             loop_policy=ToolLoopPolicy(),
             tool_layer=mock_tool_layer,
-            ctx=ctx,
             trace_ctx=TraceContext.new_trace(),
+            trace_id="test-trace",
+            session_id="test",
+            loaded_skills=loaded_skills,
         )
 
 
@@ -256,29 +246,20 @@ class TestReadSkillDedup:
 
     @pytest.mark.asyncio
     async def test_loaded_skills_updated_after_first_call(self) -> None:
-        """After a successful read_skill, ctx.loaded_skills is updated."""
-        from personal_agent.governance.models import Mode
-        from personal_agent.orchestrator.channels import Channel
+        """After a successful read_skill, the loaded_skills set is updated in place."""
         from personal_agent.orchestrator.loop_gate import (
             GateDecision,
             GateResult,
             ToolCallState,
             ToolLoopPolicy,
         )
-        from personal_agent.orchestrator.types import ExecutionContext
         from personal_agent.telemetry.trace import TraceContext
 
-        ctx = ExecutionContext(
-            session_id="test",
-            trace_id="t",
-            user_message="t",
-            mode=Mode.NORMAL,
-            channel=Channel.CHAT,
-            messages=[],
-        )
-        assert "bash" not in ctx.loaded_skills
+        loaded_skills: set[str] = set()
+        assert "bash" not in loaded_skills
 
         mock_layer = MagicMock()
+        mock_layer.registry.get_tool = MagicMock(return_value=None)
         mock_res = MagicMock()
         mock_res.success = True
         mock_res.output = {"status": "ok", "skill_name": "bash", "body": "bash body"}
@@ -296,9 +277,9 @@ class TestReadSkillDedup:
             total_calls=1,
         )
         with patch("personal_agent.orchestrator.skills.find_skills_for_tool", return_value=[]):
-            from personal_agent.orchestrator.executor import _dispatch_tool_call
+            from personal_agent.orchestrator.tool_dispatch import dispatch_tool_call
 
-            await _dispatch_tool_call(
+            await dispatch_tool_call(
                 tool_call_id="tc",
                 tool_name="read_skill",
                 arguments={"name": "bash"},
@@ -306,11 +287,13 @@ class TestReadSkillDedup:
                 gate_result=gate,
                 loop_policy=ToolLoopPolicy(),
                 tool_layer=mock_layer,
-                ctx=ctx,
                 trace_ctx=TraceContext.new_trace(),
+                trace_id="t",
+                session_id="test",
+                loaded_skills=loaded_skills,
             )
 
-        assert "bash" in ctx.loaded_skills
+        assert "bash" in loaded_skills
 
 
 # ---------------------------------------------------------------------------

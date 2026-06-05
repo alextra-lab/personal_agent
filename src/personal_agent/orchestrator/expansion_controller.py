@@ -31,9 +31,10 @@ from personal_agent.orchestrator.expansion_types import (
     ExpansionPlan,
     PhaseResult,
     PlanTask,
+    SubAgentMode,
 )
 from personal_agent.orchestrator.fallback_planner import generate_fallback_plan
-from personal_agent.orchestrator.sub_agent import run_sub_agent
+from personal_agent.orchestrator.sub_agent import _DISCOVERY_TOOL_ALLOWLIST, run_sub_agent
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
 
 logger = structlog.get_logger(__name__)
@@ -55,6 +56,35 @@ _PLANNER_SYSTEM_PROMPT = (
     "- task names must be snake_case identifiers\n"
     "- Do NOT answer the question — only produce the plan"
 )
+
+# ADR-0086 D3 — discovery-slice augmentation, appended ONLY when
+# artifact_decomposition_enabled is on. Built per-call (never by mutating the
+# constant above) so flag-on never leaks into later calls. Existing HYBRID turns
+# stay byte-for-byte unchanged while the flag is off.
+_PLANNER_DISCOVERY_SLICE_GUIDANCE = (
+    "\n\nFor artifact-build queries (e.g. 'build an interactive HTML guide that "
+    "explains X'), decompose the DISCOVERY work into non-overlapping investigation "
+    "slices that can run concurrently. Each discovery slice may add two fields:\n"
+    '  "mode": "tooled_sequential",\n'
+    '  "tools": [<read-only discovery tools>]\n'
+    f"Allowed read-only tools: {', '.join(sorted(_DISCOVERY_TOOL_ALLOWLIST))}. "
+    "Never request write/edit/artifact_write or any mutating tool. Keep slices "
+    "non-overlapping so they do not rediscover the same facts."
+)
+
+
+def _build_planner_system_prompt() -> str:
+    """Build the planner system prompt, flag-gated for discovery slices.
+
+    Returns:
+        The base planner prompt, plus the tooled-discovery-slice guidance only
+        when ``settings.artifact_decomposition_enabled`` is True (ADR-0086 D3).
+        Built per-call so the augmentation never leaks across calls when the flag
+        flips.
+    """
+    if get_settings().artifact_decomposition_enabled:
+        return _PLANNER_SYSTEM_PROMPT + _PLANNER_DISCOVERY_SLICE_GUIDANCE
+    return _PLANNER_SYSTEM_PROMPT
 
 
 @dataclass
@@ -219,7 +249,7 @@ class ExpansionController:
 
         try:
             planner_messages = [
-                {"role": "system", "content": _PLANNER_SYSTEM_PROMPT},
+                {"role": "system", "content": _build_planner_system_prompt()},
                 {
                     "role": "user",
                     "content": (f"Strategy: {strategy}\nQuery: {query}\n\nProduce the JSON plan."),
@@ -465,6 +495,11 @@ def _validate_plan_json(
     max_tasks = _MAX_TASKS.get(strategy, 4)
     tasks: list[PlanTask] = []
 
+    # ADR-0086 D3: tooled discovery slices are accepted ONLY when the rollout flag
+    # is on. Flag off ⇒ every task is PARALLEL_INFERENCE with no tools, so existing
+    # HYBRID/DECOMPOSE turns never enter the tool loop (inertness guarantee).
+    discovery_enabled = get_settings().artifact_decomposition_enabled
+
     for t in tasks_raw[: max_tasks + 1]:  # +1 for synthesis/recommendation task
         if not isinstance(t, dict):
             continue
@@ -473,12 +508,26 @@ def _validate_plan_json(
         if not name or not goal:
             return None
 
+        mode = SubAgentMode.PARALLEL_INFERENCE
+        tools: list[str] = []
+        if discovery_enabled and str(t.get("mode", "")).lower() == "tooled_sequential":
+            mode = SubAgentMode.TOOLED_SEQUENTIAL
+            # Read-only enforcement at the planner boundary: drop any tool outside
+            # the discovery allowlist before it ever reaches a sub-agent.
+            tools = [
+                str(tool)
+                for tool in (t.get("tools") or [])
+                if str(tool) in _DISCOVERY_TOOL_ALLOWLIST
+            ]
+
         tasks.append(
             PlanTask(
                 name=str(name),
                 goal=str(goal),
                 constraints=[str(c) for c in t.get("constraints", [])],
                 expected_output=str(t.get("expected_output", "text")),
+                mode=mode,
+                tools=tools,
             )
         )
 

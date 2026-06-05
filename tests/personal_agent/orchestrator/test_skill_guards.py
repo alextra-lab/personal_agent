@@ -19,13 +19,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from personal_agent.orchestrator.loop_gate import GateDecision, GateResult, ToolCallState, ToolLoopPolicy
+from personal_agent.orchestrator.loop_gate import (
+    GateDecision,
+    GateResult,
+    ToolCallState,
+    ToolLoopPolicy,
+)
 from personal_agent.orchestrator.skills import SkillDoc
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_gate_result() -> GateResult:
     return GateResult(
@@ -83,25 +88,15 @@ async def _call_dispatch(
     arguments: dict[str, Any],
     linked_skill: SkillDoc | None,
 ) -> dict[str, Any]:
-    """Invoke _dispatch_tool_call with the given linked_skill injected via patch."""
-    from personal_agent.governance.models import Mode
-    from personal_agent.orchestrator.channels import Channel
-    from personal_agent.orchestrator.types import ExecutionContext
+    """Invoke the shared dispatch_tool_call with the given linked_skill injected."""
     from personal_agent.telemetry.trace import TraceContext
 
-    ctx = ExecutionContext(
-        session_id="test-session",
-        trace_id="test-trace",
-        user_message="test",
-        mode=Mode.NORMAL,
-        channel=Channel.CHAT,
-        messages=[],
-    )
     trace_ctx = TraceContext.new_trace()
     gate_result = _make_gate_result()
     loop_policy = ToolLoopPolicy()
 
     mock_tool_layer = MagicMock()
+    mock_tool_layer.registry.get_tool = MagicMock(return_value=None)
     mock_result = MagicMock()
     mock_result.success = True
     mock_result.output = {"ok": True}
@@ -109,16 +104,16 @@ async def _call_dispatch(
     mock_result.latency_ms = 10
     mock_tool_layer.execute_tool = AsyncMock(return_value=mock_result)
 
-    # Patch the canonical source so any local import inside _dispatch_tool_call picks it up.
+    # Patch the canonical source so any local import inside dispatch_tool_call picks it up.
     # find_skills_for_tool returns a list; wrap the fixture skill in a list (or empty list).
     skills_list = [linked_skill] if linked_skill is not None else []
     with patch(
         "personal_agent.orchestrator.skills.find_skills_for_tool",
         return_value=skills_list,
     ):
-        from personal_agent.orchestrator.executor import _dispatch_tool_call
+        from personal_agent.orchestrator.tool_dispatch import dispatch_tool_call
 
-        return await _dispatch_tool_call(
+        return await dispatch_tool_call(
             tool_call_id="tc-1",
             tool_name=tool_name,
             arguments=arguments,
@@ -126,8 +121,10 @@ async def _call_dispatch(
             gate_result=gate_result,
             loop_policy=loop_policy,
             tool_layer=mock_tool_layer,
-            ctx=ctx,
             trace_ctx=trace_ctx,
+            trace_id="test-trace",
+            session_id="test-session",
+            loaded_skills=set(),
         )
 
 
@@ -193,44 +190,38 @@ class TestGuardBlocksOnMatch:
         """tool_call_blocked_known_bad_pattern warning is emitted on block."""
         skill = _make_skill_doc(
             tools=("bash",),
-            known_bad_patterns=(
-                _bad_pattern("logs-*", tool="bash", fields=["command"]),
-            ),
+            known_bad_patterns=(_bad_pattern("logs-*", tool="bash", fields=["command"]),),
         )
-        import personal_agent.orchestrator.executor as exec_mod
+        import personal_agent.orchestrator.tool_dispatch as dispatch_mod
 
         with (
             patch(
                 "personal_agent.orchestrator.skills.find_skills_for_tool",
                 return_value=[skill],
             ),
-            unittest.mock.patch.object(exec_mod, "log") as mock_log,
+            unittest.mock.patch.object(dispatch_mod, "log") as mock_log,
         ):
-            from personal_agent.governance.models import Mode
-            from personal_agent.orchestrator.channels import Channel
-            from personal_agent.orchestrator.executor import _dispatch_tool_call
-            from personal_agent.orchestrator.types import ExecutionContext
+            from personal_agent.orchestrator.tool_dispatch import dispatch_tool_call
             from personal_agent.telemetry.trace import TraceContext
 
-            ctx = ExecutionContext(
-                session_id="s", trace_id="t", user_message="u",
-                mode=Mode.NORMAL, channel=Channel.CHAT, messages=[],
-            )
-            await _dispatch_tool_call(
+            mock_layer = MagicMock()
+            mock_layer.registry.get_tool = MagicMock(return_value=None)
+            await dispatch_tool_call(
                 tool_call_id="tc",
                 tool_name="bash",
                 arguments={"command": "curl /logs-*/_search"},
                 args_hash="x",
                 gate_result=_make_gate_result(),
                 loop_policy=ToolLoopPolicy(),
-                tool_layer=MagicMock(),
-                ctx=ctx,
+                tool_layer=mock_layer,
                 trace_ctx=TraceContext.new_trace(),
+                trace_id="t",
+                session_id="s",
+                loaded_skills=set(),
             )
 
         warning_events = [
-            call.args[0] if call.args else None
-            for call in mock_log.warning.call_args_list
+            call.args[0] if call.args else None for call in mock_log.warning.call_args_list
         ]
         assert "tool_call_blocked_known_bad_pattern" in warning_events
 
@@ -252,9 +243,7 @@ class TestGuardPassesOnNoMatch:
         """
         skill = _make_skill_doc(
             tools=("bash",),
-            known_bad_patterns=(
-                _bad_pattern("logs-*", tool="bash", fields=["command"]),
-            ),
+            known_bad_patterns=(_bad_pattern("logs-*", tool="bash", fields=["command"]),),
         )
         result = await _call_dispatch(
             "bash",
@@ -298,9 +287,7 @@ class TestAppliesTo:
         """Pattern scoped to run_python does not fire for bash."""
         skill = _make_skill_doc(
             tools=("bash", "run_python"),
-            known_bad_patterns=(
-                _bad_pattern("logs-*", tool="run_python", fields=["code"]),
-            ),
+            known_bad_patterns=(_bad_pattern("logs-*", tool="run_python", fields=["code"]),),
         )
         result = await _call_dispatch(
             tool_name="bash",
@@ -314,9 +301,7 @@ class TestAppliesTo:
         """Pattern scoped to bash fires for bash."""
         skill = _make_skill_doc(
             tools=("bash",),
-            known_bad_patterns=(
-                _bad_pattern("logs-*", tool="bash", fields=["command"]),
-            ),
+            known_bad_patterns=(_bad_pattern("logs-*", tool="bash", fields=["command"]),),
         )
         result = await _call_dispatch(
             tool_name="bash",
@@ -345,15 +330,16 @@ class TestAppliesTo:
         """If applies_to.fields = [command], other string args are not searched."""
         skill = _make_skill_doc(
             tools=("bash",),
-            known_bad_patterns=(
-                _bad_pattern("logs-*", tool="bash", fields=["command"]),
-            ),
+            known_bad_patterns=(_bad_pattern("logs-*", tool="bash", fields=["command"]),),
         )
         # Pattern is in 'other' (not a declared field) and 'command' is clean.
         # Note: agent-captains-captures-* does not contain 'logs-*' as a substring.
         result = await _call_dispatch(
             tool_name="bash",
-            arguments={"command": "curl /agent-captains-captures-*/_search", "other": "FROM logs-*"},
+            arguments={
+                "command": "curl /agent-captains-captures-*/_search",
+                "other": "FROM logs-*",
+            },
             linked_skill=skill,
         )
         assert result["success"] is True
@@ -397,9 +383,7 @@ class TestIncidentClassSmoke:
                 arguments={"command": cmd},
                 linked_skill=es_skill,
             )
-            assert result["success"] is False, (
-                f"Guard did not fire for command: {cmd!r}"
-            )
+            assert result["success"] is False, f"Guard did not fire for command: {cmd!r}"
             content = json.loads(result["content"])
             assert "agent-logs-*" in content["hint"], (
                 f"Suggestion missing for command: {cmd!r}\nhint: {content['hint']}"

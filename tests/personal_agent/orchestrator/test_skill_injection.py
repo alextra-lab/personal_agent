@@ -13,6 +13,27 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _restore_executor_tool_globals() -> object:
+    """Restore the executor's lazily-cached registry globals after each test.
+
+    These tests patch ``executor.get_default_registry`` and drive ``step_llm_call``,
+    which seeds the module-level ``_tool_registry`` / ``_tool_execution_layer`` from
+    the *patched* registry. Without this restore the patched (small) registry leaks
+    past the patch scope and pollutes later tests in the process (e.g. the primary
+    tool-flow tests that expect the real registry). Snapshot-and-restore keeps the
+    leak contained regardless of collection order.
+    """
+    import personal_agent.orchestrator.executor as _ex
+
+    saved_registry = _ex._tool_registry
+    saved_layer = _ex._tool_execution_layer
+    yield
+    _ex._tool_registry = saved_registry
+    _ex._tool_execution_layer = saved_layer
+
+
 # ---------------------------------------------------------------------------
 # Functional mock tests — drive step_llm_call with mocked LLM
 # ---------------------------------------------------------------------------

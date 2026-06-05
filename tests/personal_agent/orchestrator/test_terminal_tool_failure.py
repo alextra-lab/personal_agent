@@ -95,7 +95,7 @@ class TestTerminalToolFailureShortCircuit:
     async def test_terminal_failure_short_circuits_to_failed(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(ex, "_dispatch_tool_call", _dispatch_returning(terminal=True))
+        monkeypatch.setattr(ex, "dispatch_tool_call", _dispatch_returning(terminal=True))
         ctx = _make_ctx()
 
         next_state = await ex.step_tool_execution(ctx, MagicMock(), _trace_ctx())
@@ -111,7 +111,7 @@ class TestTerminalToolFailureShortCircuit:
     async def test_non_terminal_error_returns_to_llm_call(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(ex, "_dispatch_tool_call", _dispatch_returning(terminal=False))
+        monkeypatch.setattr(ex, "dispatch_tool_call", _dispatch_returning(terminal=False))
         ctx = _make_ctx()
 
         next_state = await ex.step_tool_execution(ctx, MagicMock(), _trace_ctx())

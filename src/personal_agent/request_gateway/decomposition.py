@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import structlog
 
+from personal_agent.config import settings
 from personal_agent.request_gateway.types import (
     Complexity,
     DecompositionResult,
@@ -57,7 +58,11 @@ def assess_decomposition(
             reason="zero_budget",
         )
 
-    strategy, reason = _apply_matrix(intent.task_type, intent.complexity)
+    strategy, reason = _apply_matrix(
+        intent.task_type,
+        intent.complexity,
+        artifact_decomposition_enabled=settings.artifact_decomposition_enabled,
+    )
 
     logger.info(
         "decomposition_assessed",
@@ -76,12 +81,17 @@ def assess_decomposition(
 def _apply_matrix(
     task_type: TaskType,
     complexity: Complexity,
+    *,
+    artifact_decomposition_enabled: bool,
 ) -> tuple[DecompositionStrategy, str]:
     """Apply the decomposition decision matrix.
 
     Args:
         task_type: Classified task type.
         complexity: Estimated complexity.
+        artifact_decomposition_enabled: ADR-0086 rollout flag. When False, TOOL_USE
+            turns keep the legacy unconditional SINGLE path; when True they branch
+            on complexity (MODERATE/COMPLEX → HYBRID for discovery decomposition).
 
     Returns:
         Tuple of (strategy, reason).
@@ -100,7 +110,20 @@ def _apply_matrix(
             return DecompositionStrategy.DELEGATE, "delegation_route_external"
 
         case TaskType.TOOL_USE:
-            return DecompositionStrategy.SINGLE, "tool_use_single"
+            # ADR-0086 D2: gated branch. Flag off (default) preserves the legacy
+            # SINGLE path so Phase 1 is inert in prod until FRE-480 (tool-using
+            # sub-agent loop) + FRE-481 (telemetry/A/B) land. HYBRID (not
+            # DECOMPOSE) for both moderate and complex: artifact-build discovery
+            # slices parallelize with no inter-slice ordering.
+            if not artifact_decomposition_enabled:
+                return DecompositionStrategy.SINGLE, "tool_use_single"
+            match complexity:
+                case Complexity.SIMPLE:
+                    return DecompositionStrategy.SINGLE, "tool_use_simple_single"
+                case Complexity.MODERATE:
+                    return DecompositionStrategy.HYBRID, "tool_use_moderate_hybrid"
+                case _:
+                    return DecompositionStrategy.HYBRID, "tool_use_complex_hybrid"
 
         case TaskType.ANALYSIS:
             match complexity:

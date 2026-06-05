@@ -432,6 +432,18 @@ class AppConfig(BaseSettings):
         default="enforced",
         description="Expansion enforcement mode: 'enforced' (gateway binding) or 'autonomous' (LLM decides)",
     )
+
+    # --- Artifact-build decomposition rollout (ADR-0086) ---
+    artifact_decomposition_enabled: bool = Field(
+        default=False,
+        description=(
+            "ADR-0086 rollout flag. When False (default) TOOL_USE turns route to "
+            "SINGLE (legacy 'tool_use_single'). When True, MODERATE/COMPLEX "
+            "artifact builds route to HYBRID for tool-using discovery "
+            "decomposition. Off until FRE-480 (sub-agent tool loop) + FRE-481 "
+            "(telemetry/A/B) land. Rollback = set False."
+        ),
+    )
     planner_timeout_seconds: float = Field(
         default=30.0,
         description="Max time for LLM planner phase in expansion controller",

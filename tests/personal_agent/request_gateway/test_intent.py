@@ -106,6 +106,26 @@ class TestToolUse:
     @pytest.mark.parametrize(
         "message",
         [
+            # ADR-0086 D1 no-regression guarantee: short plain lookups stay SIMPLE.
+            "Search for files matching *.py",
+            "Read the config file",
+            "Check ES health",
+        ],
+    )
+    def test_plain_tool_lookups_stay_simple(self, message: str) -> None:
+        """Short plain tool lookups resolve to SIMPLE with no artifact_build signal.
+
+        Preserves SINGLE routing (FRE-256/210/469 no-regression guarantee) once
+        the TOOL_USE complexity pin is removed.
+        """
+        result = classify_intent(message)
+        assert result.task_type == TaskType.TOOL_USE
+        assert result.complexity == Complexity.SIMPLE
+        assert "artifact_build" not in result.signals
+
+    @pytest.mark.parametrize(
+        "message",
+        [
             # Real bug-report phrasings that fell through to CONVERSATIONAL
             # before FRE-254 follow-up.
             "Check infrastructure health using the infra_health tool.",
@@ -155,6 +175,49 @@ class TestArtifactBuild:
             f"{message!r} → {result.task_type.value} (signals={result.signals})"
         )
         assert "tool_intent_pattern" in result.signals
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "Explain the internals of the gateway and build an interactive HTML guide.",
+            "Build me an interactive HTML guide to the memory system",
+            "Make me an interactive dashboard",
+            "Create a guide explaining the architecture",
+            "Generate an HTML page summarizing the results",
+            "Build a chart of the three approaches",
+            "Create a dashboard showing telemetry",
+            "Generate an interactive diagram of the request flow",
+            "Make a visualization of the knowledge graph",
+        ],
+    )
+    def test_artifact_build_floors_at_moderate(self, message: str) -> None:
+        """ADR-0086 D1: artifact builds bias complexity to a MODERATE floor.
+
+        These short prompts would estimate SIMPLE on word/verb heuristics; the
+        artifact_build sub-signal floors them at MODERATE so Stage 5 can route
+        them to HYBRID (when the rollout flag is enabled).
+        """
+        result = classify_intent(message)
+        assert result.task_type == TaskType.TOOL_USE
+        assert result.complexity == Complexity.MODERATE, (
+            f"{message!r} → {result.complexity.value} (signals={result.signals})"
+        )
+        assert "artifact_build" in result.signals
+
+    def test_artifact_build_allows_complex(self) -> None:
+        """ADR-0086 D1: the MODERATE floor still allows COMPLEX when heuristics reach it.
+
+        For TOOL_USE, _estimate_complexity reaches COMPLEX only via question_count
+        >= 3, so this fixture combines an artifact-build match with three questions.
+        """
+        message = (
+            "Build an interactive HTML dashboard. What sections should it have? "
+            "How should I structure the data? Which charts work best?"
+        )
+        result = classify_intent(message)
+        assert result.task_type == TaskType.TOOL_USE
+        assert result.complexity == Complexity.COMPLEX
+        assert "artifact_build" in result.signals
 
 
 class TestSelfImprove:

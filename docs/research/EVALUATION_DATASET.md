@@ -239,8 +239,8 @@ Each path verifies that the gateway classifies one specific `TaskType` correctly
 **Telemetry Assertions:**
 - Turn 1: `task_type == "tool_use"` (signal: `tool_intent_pattern`, matched by "List...tools")
 - Turn 1: `confidence == 0.8`
-- Turn 1: `complexity == "simple"` (hardcoded for TOOL_USE)
-- Turn 1: `strategy == "single"` (reason: `tool_use_single`)
+- Turn 1: `complexity == "simple"` (estimated; plain short lookups resolve to SIMPLE post-ADR-0086 D1)
+- Turn 1: `strategy == "single"` (reason: `tool_use_single`; ADR-0086 rollout flag off by default)
 - Turn 2: `task_type == "tool_use"` (signal: `tool_intent_pattern`, matched by "Read...log" via `read\s+(\w+\s+)*?log`)
 - Turn 2: `tool_call_completed` event for self_telemetry_query (errors) or read_file
 

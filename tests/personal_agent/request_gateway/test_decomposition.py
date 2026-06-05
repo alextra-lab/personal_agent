@@ -2,6 +2,7 @@
 
 import pytest
 
+from personal_agent.config import settings
 from personal_agent.governance.models import Mode
 from personal_agent.request_gateway.decomposition import assess_decomposition
 from personal_agent.request_gateway.types import (
@@ -74,15 +75,21 @@ class TestConversationalAlwaysSingle:
     """CONVERSATIONAL → SINGLE at every complexity level."""
 
     def test_conversational_simple(self) -> None:
-        result = assess_decomposition(_intent(TaskType.CONVERSATIONAL, Complexity.SIMPLE), _governance())
+        result = assess_decomposition(
+            _intent(TaskType.CONVERSATIONAL, Complexity.SIMPLE), _governance()
+        )
         assert result.strategy == DecompositionStrategy.SINGLE
 
     def test_conversational_moderate(self) -> None:
-        result = assess_decomposition(_intent(TaskType.CONVERSATIONAL, Complexity.MODERATE), _governance())
+        result = assess_decomposition(
+            _intent(TaskType.CONVERSATIONAL, Complexity.MODERATE), _governance()
+        )
         assert result.strategy == DecompositionStrategy.SINGLE
 
     def test_conversational_complex(self) -> None:
-        result = assess_decomposition(_intent(TaskType.CONVERSATIONAL, Complexity.COMPLEX), _governance())
+        result = assess_decomposition(
+            _intent(TaskType.CONVERSATIONAL, Complexity.COMPLEX), _governance()
+        )
         assert result.strategy == DecompositionStrategy.SINGLE
 
 
@@ -90,28 +97,77 @@ class TestMemoryRecallAlwaysSingle:
     """MEMORY_RECALL → SINGLE at every complexity level."""
 
     def test_memory_recall_simple(self) -> None:
-        result = assess_decomposition(_intent(TaskType.MEMORY_RECALL, Complexity.SIMPLE), _governance())
+        result = assess_decomposition(
+            _intent(TaskType.MEMORY_RECALL, Complexity.SIMPLE), _governance()
+        )
         assert result.strategy == DecompositionStrategy.SINGLE
 
     def test_memory_recall_complex(self) -> None:
-        result = assess_decomposition(_intent(TaskType.MEMORY_RECALL, Complexity.COMPLEX), _governance())
+        result = assess_decomposition(
+            _intent(TaskType.MEMORY_RECALL, Complexity.COMPLEX), _governance()
+        )
         assert result.strategy == DecompositionStrategy.SINGLE
 
 
-class TestToolUseSingle:
-    """TOOL_USE → SINGLE (tools execute independently)."""
+class TestToolUseMatrix:
+    """TOOL_USE routing (ADR-0086 D2), gated by artifact_decomposition_enabled.
 
-    def test_tool_use_simple(self) -> None:
+    Flag OFF (default): legacy unconditional SINGLE / "tool_use_single".
+    Flag ON: complexity branch mirroring ANALYSIS/PLANNING.
+    """
+
+    @pytest.mark.parametrize(
+        "complexity",
+        [Complexity.SIMPLE, Complexity.MODERATE, Complexity.COMPLEX],
+    )
+    def test_tool_use_flag_off_is_legacy_single(self, complexity: Complexity) -> None:
+        """Flag off (default): every TOOL_USE complexity → SINGLE / tool_use_single."""
+        result = assess_decomposition(_intent(TaskType.TOOL_USE, complexity), _governance())
+        assert result.strategy == DecompositionStrategy.SINGLE
+        assert result.reason == "tool_use_single"
+
+    def test_tool_use_simple_is_single(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(settings, "artifact_decomposition_enabled", True)
         result = assess_decomposition(_intent(TaskType.TOOL_USE, Complexity.SIMPLE), _governance())
         assert result.strategy == DecompositionStrategy.SINGLE
+        assert result.reason == "tool_use_simple_single"
 
-    def test_tool_use_moderate(self) -> None:
-        result = assess_decomposition(_intent(TaskType.TOOL_USE, Complexity.MODERATE), _governance())
-        assert result.strategy == DecompositionStrategy.SINGLE
+    def test_tool_use_moderate_is_hybrid(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(settings, "artifact_decomposition_enabled", True)
+        result = assess_decomposition(
+            _intent(TaskType.TOOL_USE, Complexity.MODERATE), _governance()
+        )
+        assert result.strategy == DecompositionStrategy.HYBRID
+        assert result.reason == "tool_use_moderate_hybrid"
 
-    def test_tool_use_complex(self) -> None:
+    def test_tool_use_complex_is_hybrid(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(settings, "artifact_decomposition_enabled", True)
         result = assess_decomposition(_intent(TaskType.TOOL_USE, Complexity.COMPLEX), _governance())
+        assert result.strategy == DecompositionStrategy.HYBRID
+        assert result.reason == "tool_use_complex_hybrid"
+
+    def test_tool_use_complex_zero_budget_forces_single(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Resource-pressure guard precedes the matrix even with the flag on."""
+        monkeypatch.setattr(settings, "artifact_decomposition_enabled", True)
+        result = assess_decomposition(
+            _intent(TaskType.TOOL_USE, Complexity.COMPLEX),
+            _governance(expansion_budget=0),
+        )
         assert result.strategy == DecompositionStrategy.SINGLE
+        assert result.reason == "zero_budget"
+
+    def test_tool_use_complex_expansion_denied_forces_single(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(settings, "artifact_decomposition_enabled", True)
+        result = assess_decomposition(
+            _intent(TaskType.TOOL_USE, Complexity.COMPLEX),
+            _governance(expansion_permitted=False),
+        )
+        assert result.strategy == DecompositionStrategy.SINGLE
+        assert result.reason == "expansion_denied"
 
 
 class TestAnalysisMatrix:
@@ -123,7 +179,9 @@ class TestAnalysisMatrix:
         assert result.reason == "analysis_simple"
 
     def test_analysis_moderate_is_hybrid(self) -> None:
-        result = assess_decomposition(_intent(TaskType.ANALYSIS, Complexity.MODERATE), _governance())
+        result = assess_decomposition(
+            _intent(TaskType.ANALYSIS, Complexity.MODERATE), _governance()
+        )
         assert result.strategy == DecompositionStrategy.HYBRID
         assert result.reason == "analysis_moderate_hybrid"
 
@@ -142,7 +200,9 @@ class TestPlanningMatrix:
         assert result.reason == "planning_simple"
 
     def test_planning_moderate_is_hybrid(self) -> None:
-        result = assess_decomposition(_intent(TaskType.PLANNING, Complexity.MODERATE), _governance())
+        result = assess_decomposition(
+            _intent(TaskType.PLANNING, Complexity.MODERATE), _governance()
+        )
         assert result.strategy == DecompositionStrategy.HYBRID
         assert result.reason == "planning_moderate_hybrid"
 
@@ -156,11 +216,15 @@ class TestDelegationAlwaysDelegate:
     """DELEGATION → DELEGATE at every complexity level."""
 
     def test_delegation_simple(self) -> None:
-        result = assess_decomposition(_intent(TaskType.DELEGATION, Complexity.SIMPLE), _governance())
+        result = assess_decomposition(
+            _intent(TaskType.DELEGATION, Complexity.SIMPLE), _governance()
+        )
         assert result.strategy == DecompositionStrategy.DELEGATE
 
     def test_delegation_complex(self) -> None:
-        result = assess_decomposition(_intent(TaskType.DELEGATION, Complexity.COMPLEX), _governance())
+        result = assess_decomposition(
+            _intent(TaskType.DELEGATION, Complexity.COMPLEX), _governance()
+        )
         assert result.strategy == DecompositionStrategy.DELEGATE
         assert result.reason == "delegation_route_external"
 
@@ -169,11 +233,15 @@ class TestSelfImproveAlwaysSingle:
     """SELF_IMPROVE → SINGLE at every complexity level."""
 
     def test_self_improve_simple(self) -> None:
-        result = assess_decomposition(_intent(TaskType.SELF_IMPROVE, Complexity.SIMPLE), _governance())
+        result = assess_decomposition(
+            _intent(TaskType.SELF_IMPROVE, Complexity.SIMPLE), _governance()
+        )
         assert result.strategy == DecompositionStrategy.SINGLE
 
     def test_self_improve_complex(self) -> None:
-        result = assess_decomposition(_intent(TaskType.SELF_IMPROVE, Complexity.COMPLEX), _governance())
+        result = assess_decomposition(
+            _intent(TaskType.SELF_IMPROVE, Complexity.COMPLEX), _governance()
+        )
         assert result.strategy == DecompositionStrategy.SINGLE
         assert result.reason == "self_improve_always_single"
 

@@ -1411,6 +1411,32 @@ def test_sanitize_handles_regex_variants() -> None:
     assert len(notes) >= 2
 
 
+def test_sanitize_strips_attribute_and_whitespace_close_tags() -> None:
+    """Close tags with whitespace/attributes are valid HTML end tags and must strip.
+
+    FRE-496 / CodeQL py/bad-tag-filter: HTML treats a close tag carrying trailing
+    whitespace or attributes (a space, or a tab/newline, before the closing angle
+    bracket) as a valid end tag, so the close pattern must tolerate it — otherwise
+    the block (with its JS body) slips the strip.
+    """
+    raw = (
+        "<!DOCTYPE html><html><body>"
+        "<script>evil()</script bar>"  # attribute before > on the close tag
+        "<script>more()</script\t\n>"  # whitespace before >
+        "<p>A CSS-only interactive section, no JavaScript required.</p>"
+        "</body></html>"
+    )
+    out, notes = artifact_tools._sanitize_sandbox_violations(raw)
+    lowered = out.lower()
+    assert "<script" not in lowered
+    assert "</script" not in lowered
+    assert "evil()" not in out  # JS body removed with the block, not left as text
+    assert "more()" not in out
+    assert len(notes) >= 1
+    # Defense-in-depth validator must not fire on the sanitized output.
+    artifact_tools._validate_html_output(out)
+
+
 def test_injected_banner_passes_validation() -> None:
     """FRE-496: the injected banner is itself sandbox-clean (no <script>/onX= tokens)."""
     out, notes = artifact_tools._sanitize_sandbox_violations(_SCRIPT_HTML)

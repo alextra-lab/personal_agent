@@ -730,9 +730,15 @@ _EVENT_HANDLER_RE = re.compile(r"\bon\w+\s*=", re.IGNORECASE)
 # Order of application matters: BLOCK first (removes <script>…JS…</script> whole, so no
 # dangling JS body text), then OPEN (self-closing / src= / stray openers), then CLOSE
 # (orphan closing tags). The CDN regex also matches unquoted href= values.
-_SCRIPT_BLOCK_RE = re.compile(r"<\s*script\b[^>]*>.*?</\s*script\s*>", re.IGNORECASE | re.DOTALL)
+# Close-tag patterns use `</\s*script\b[^>]*>` (not `</\s*script\s*>`): HTML treats
+# `</script bar>` / `</script\t\n>` as valid end tags, so the close pattern must tolerate
+# whitespace/attributes before `>` or a block closed that way slips the strip (CWE-116,
+# CodeQL py/bad-tag-filter). `\b` still pins the tag name to exactly "script".
+_SCRIPT_BLOCK_RE = re.compile(
+    r"<\s*script\b[^>]*>.*?</\s*script\b[^>]*>", re.IGNORECASE | re.DOTALL
+)
 _SCRIPT_OPEN_RE = re.compile(r"<\s*script\b[^>]*/?>", re.IGNORECASE)
-_SCRIPT_CLOSE_RE = re.compile(r"</\s*script\s*>", re.IGNORECASE)
+_SCRIPT_CLOSE_RE = re.compile(r"</\s*script\b[^>]*>", re.IGNORECASE)
 _EVENT_HANDLER_ATTR_RE = re.compile(r"""\s+on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""", re.IGNORECASE)
 _CDN_LINK_RE = re.compile(
     r'<\s*link\b[^>]*\bhref\s*=\s*["\']?https?://[^"\'>\s]*["\']?[^>]*>', re.IGNORECASE

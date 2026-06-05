@@ -27,6 +27,7 @@ import base64
 import os
 import re  # noqa: F401 — used by _SCRIPT_TAG_RE / _EVENT_HANDLER_RE at module level
 import tempfile
+from collections.abc import Sequence
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -722,8 +723,40 @@ def _draft_max_tokens() -> int:
     return int(settings.artifact_draft_max_tokens)
 
 
+# Detectors (used by _validate_html_output's terminal safety net AND as the strip gate).
+# INVARIANT (FRE-496 review): strip ⊇ detect — every input these flag must be removable by
+# the sanitizer below, or sanitized HTML re-trips the validator and the turn hard-fails. The
+# event-handler detector is pinned to a real attribute boundary (^ / whitespace / quote /
+# slash) so it neither (a) misses a glued `"onclick=` nor (b) false-positives on `data-on*`.
 _SCRIPT_TAG_RE = re.compile(r"<\s*script", re.IGNORECASE)
-_EVENT_HANDLER_RE = re.compile(r"\bon\w+\s*=", re.IGNORECASE)
+_EVENT_HANDLER_RE = re.compile(r"""(?:^|[\s"'/])on\w+\s*=""", re.IGNORECASE)
+# FRE-496: sanitizer regexes — strip sandbox-prohibited nodes so the artifact can still ship
+# (graceful degradation) instead of hard-failing the turn (ADR-0070 D7). Order of application
+# matters: BLOCK first (removes <script>…JS…</script> whole, so no dangling JS body text),
+# then OPEN (self-closing / src= / stray openers, incl. an UNTERMINATED tail with no `>` —
+# the FRE-478 cap-hit truncation case), then CLOSE (orphan closing tags). The CDN regex also
+# matches unquoted href= values.
+# Close-tag patterns use `</\s*script\b[^>]*>` (not `</\s*script\s*>`): HTML treats
+# `</script bar>` / `</script\t\n>` as valid end tags, so the close pattern must tolerate
+# whitespace/attributes before `>` or a block closed that way slips the strip (CWE-116,
+# CodeQL py/bad-tag-filter). `\b` still pins the tag name to exactly "script".
+_SCRIPT_BLOCK_RE = re.compile(
+    r"<\s*script\b[^>]*>.*?</\s*script\b[^>]*>", re.IGNORECASE | re.DOTALL
+)
+# `(?:>|$)` so a draft truncated mid-tag (`…<script src="https://x/a.js` with no `>`) is also
+# stripped — otherwise _SCRIPT_TAG_RE flags it but nothing removes it → hard-fail.
+_SCRIPT_OPEN_RE = re.compile(r"<\s*script\b[^>]*(?:>|$)", re.IGNORECASE)
+_SCRIPT_CLOSE_RE = re.compile(r"</\s*script\b[^>]*>", re.IGNORECASE)
+# Group 1 captures the leading boundary char (start / whitespace / quote / slash) so it can be
+# restored — this lets the strip match a handler glued to the prior attribute
+# (`type="checkbox"onclick="t()"`) without eating the closing quote. Value group tolerates
+# quoted, unquoted, and empty (`onclick=>`) forms so strip ⊇ detect holds.
+_EVENT_HANDLER_ATTR_RE = re.compile(
+    r"""(^|[\s"'/])on\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]*)""", re.IGNORECASE
+)
+_CDN_LINK_RE = re.compile(
+    r'<\s*link\b[^>]*\bhref\s*=\s*["\']?https?://[^"\'>\s]*["\']?[^>]*>', re.IGNORECASE
+)
 # Matches <pre class="mermaid">…</pre> and <div class="mermaid">…</div> (FRE-396).
 _MERMAID_BLOCK_RE = re.compile(
     r'<(pre|div)\b[^>]*\bclass=["\'][^"\']*\bmermaid\b[^"\']*["\'][^>]*>(.*?)</\1>',
@@ -747,9 +780,18 @@ REQUIREMENTS:
 m-1 through m-8, text-center, text-left, text-right, font-bold, font-medium, \
 rounded, rounded-lg, shadow, shadow-lg, hidden, w-full.
   * No external CDN links — the document must be fully self-contained.
-- SECURITY: No <script> tags whatsoever. No inline event handlers \
-(onclick, onload, onerror, onmouseover, etc.). No external fetches, no \
-iframes, no form actions. The document renders in a sandboxed iframe.
+- INTERACTIVITY: this document renders in a JavaScript-free sandboxed iframe. \
+Make it interactive with CSS only — :hover, :focus, :target (anchor-driven \
+tabs/accordions), <details>/<summary>, the checkbox-hack (a hidden \
+<input type="checkbox"> + <label> + sibling/general selectors), CSS \
+transitions and animations, and scroll-snap. These are the ONLY interactivity \
+mechanisms available; design the whole experience around them.
+- SECURITY (hard constraint): any <script> tag — inline OR external (src=) — \
+causes the artifact to be REJECTED and the user receives nothing. The same \
+applies to inline event handlers (onclick, onload, onerror, onmouseover, etc.) \
+and to remote/CDN frameworks (Tailwind CDN, Alpine.js, htmx, jQuery, etc.). \
+Inline ALL CSS in the <style> block and load NO external resources. There is \
+no exception — JavaScript cannot run here, so use the CSS-only patterns above.
 - For diagrams and flowcharts, use <pre class="mermaid">…</pre> markup \
 with Mermaid syntax — the server renders these to static inline SVG \
 automatically. Never use <script>, CDN URLs, or the mermaid.js library. \
@@ -993,12 +1035,120 @@ async def _render_mermaid_blocks(
     return result
 
 
+def _sanitize_sandbox_violations(html: str) -> tuple[str, list[str]]:
+    """Strip sandbox-prohibited nodes (ADR-0070 D7) so the artifact can still ship.
+
+    Graceful-degradation fallback for FRE-496: rather than hard-failing the whole turn
+    when the model emits JavaScript for an "interactive" request, strip the offending
+    nodes and deliver a static artifact. Best-effort regex pass mirroring
+    :func:`_mermaid_fallback`; the last-resort guard remains :func:`_validate_html_output`.
+
+    Removes, in order: ``<script>…</script>`` blocks (so no dangling JS body text), stray
+    or self-closing ``<script>`` openers, orphan ``</script>`` closers, inline
+    event-handler attributes (``onclick=…`` etc.), and external CDN ``<link href="http…">``
+    references.
+
+    Args:
+        html: Generated HTML document text.
+
+    Returns:
+        ``(sanitized_html, notes)`` where ``notes`` lists human-readable descriptions of
+        what was stripped (empty when the input was already clean). Note strings contain
+        no literal ``<script`` token or ``onX=`` attribute so the re-validated banner that
+        carries them does not self-trip :func:`_validate_html_output`.
+    """
+    notes: list[str] = []
+    sanitized = html
+    if _SCRIPT_TAG_RE.search(sanitized):
+        sanitized = _SCRIPT_BLOCK_RE.sub("", sanitized)
+        sanitized = _SCRIPT_OPEN_RE.sub("", sanitized)
+        sanitized = _SCRIPT_CLOSE_RE.sub("", sanitized)
+        notes.append("Removed embedded scripts — JavaScript cannot run in this sandbox.")
+    if _EVENT_HANDLER_RE.search(sanitized):
+        # Restore the captured boundary char (group 1) so a glued `"onclick=…` loses only
+        # the handler, not the preceding attribute's closing quote.
+        sanitized = _EVENT_HANDLER_ATTR_RE.sub(r"\1", sanitized)
+        notes.append("Removed inline event-handler attributes.")
+    if _CDN_LINK_RE.search(sanitized):
+        sanitized = _CDN_LINK_RE.sub("", sanitized)
+        notes.append("Removed external CDN resources — the artifact must be self-contained.")
+    return sanitized, notes
+
+
+def _inject_sanitization_banner(html: str, notes: Sequence[str]) -> str:
+    """Insert a static banner listing what :func:`_sanitize_sandbox_violations` stripped.
+
+    Mirrors the in-document mermaid fallback caption so the human sees why the artifact
+    differs from the request. The banner uses an inline ``style=`` attribute only (no
+    ``<script>``, no ``on*=``) so it passes :func:`_validate_html_output`.
+
+    Args:
+        html: Sanitized HTML document text.
+        notes: Human-readable strings describing the removals (our own static text — no
+            user data — so it is safe to inline without escaping).
+
+    Returns:
+        The HTML with a ``<aside class="artifact-sanitization-note">`` inserted after the
+        opening ``<body>`` (else after ``<html>``, else after the doctype). If no anchor
+        is found the input is returned unchanged (the notes still ride in the result dict).
+    """
+    if not notes:
+        return html
+    items = "".join(f"<li>{note}</li>" for note in notes)
+    banner = (
+        '<aside class="artifact-sanitization-note" style="margin:0 0 1rem;padding:0.75rem 1rem;'
+        "border-left:4px solid #b45309;background:#fffbeb;color:#7c2d12;font-size:0.875rem;"
+        'border-radius:0.25rem;">'
+        "<strong>Note:</strong> this artifact was adjusted to run in a JavaScript-free sandbox."
+        f'<ul style="margin:0.5rem 0 0;padding-left:1.25rem;">{items}</ul></aside>'
+    )
+    for anchor in (
+        re.compile(r"<\s*body\b[^>]*>", re.IGNORECASE),
+        re.compile(r"<\s*html\b[^>]*>", re.IGNORECASE),
+        re.compile(r"<!doctype html>", re.IGNORECASE),
+    ):
+        match = anchor.search(html)
+        if match:
+            return html[: match.end()] + banner + html[match.end() :]
+    return html
+
+
+def _css_only_retry_reminder(violation_notes: Sequence[str]) -> str:
+    """Build the bounded-retry instruction appended to the user prompt (FRE-496).
+
+    Names the violation that triggered the retry and demands a CSS-only regeneration. The
+    previous (large) HTML is deliberately NOT echoed back, so attempt 2 costs roughly the
+    same as attempt 1 rather than double.
+
+    Args:
+        violation_notes: Notes from :func:`_sanitize_sandbox_violations` describing what
+            the previous attempt emitted.
+
+    Returns:
+        A reminder string to append to the user message of the retry call.
+    """
+    violations = " / ".join(violation_notes) if violation_notes else "sandbox-prohibited content"
+    return (
+        f"The previous attempt was rejected ({violations}). JavaScript, inline event "
+        "handlers, and external/CDN resources CANNOT run in this sandbox. Regenerate the "
+        "COMPLETE document with CSS-only interactivity (:hover, :focus, :target, "
+        "<details>/<summary>, the checkbox-hack, CSS transitions/animations). No <script>, "
+        "no on* handlers, no external resources. Output only the HTML document."
+    )
+
+
 def _validate_html_output(html: str) -> None:
     """Validate sub-agent HTML before persisting (ADR-0077 D9, ADR-0070 D7).
 
+    Sandbox-violating nodes are normally stripped first by
+    :func:`_sanitize_sandbox_violations` (FRE-496 graceful degradation); the terminal
+    raises below are the defense-in-depth safety net for anything the stripper misses
+    (e.g. a literal ``onclick=`` token in body text) — we never ship a script to the
+    sandbox.
+
     Raises:
         TerminalToolError: On a sandbox violation (script tags or inline event
-            handlers) — non-recoverable, so the turn short-circuits (FRE-402).
+            handlers) the stripper did not clear — non-recoverable (FRE-402).
         ToolExecutionError: On recoverable malformation (too small, missing
             DOCTYPE / closing tag) — the model may fix this on retry.
     """
@@ -1063,8 +1213,11 @@ async def artifact_draft_executor(
     """Plan an HTML artifact and delegate generation to a sub-agent.
 
     The primary model provides a structured plan; a sub-agent (instruct mode,
-    thinking disabled) generates the HTML. The generated HTML is validated
-    and persisted via ``artifact_write_executor``.
+    thinking disabled) generates the HTML. If the first draft emits sandbox-prohibited
+    nodes (script / inline handlers / external resources) the sub-agent is retried once
+    with strengthened CSS-only guidance (FRE-496); any residue is then stripped and the
+    static artifact is delivered with a banner note rather than hard-failing the turn.
+    The result is validated and persisted via ``artifact_write_executor``.
 
     Args:
         slug: Human-readable kebab-case handle.
@@ -1077,13 +1230,16 @@ async def artifact_draft_executor(
 
     Returns:
         Same dict as ``artifact_write_executor``, plus ``generation_method``,
-        ``sub_agent_duration_ms``, ``task_id``, ``plan_truncated``, and
-        ``plan_original_length``. An oversized plan is truncated-with-warning
-        rather than rejected (FRE-471).
+        ``sub_agent_duration_ms``, ``task_id``, ``plan_truncated``,
+        ``plan_original_length``, ``sanitization_notes`` (list of strings describing any
+        stripped sandbox violations; empty when none), and ``sub_agent_attempts`` (1 or 2).
+        An oversized plan is truncated-with-warning rather than rejected (FRE-471).
 
     Raises:
-        ToolExecutionError: On missing identity, empty plan, sub-agent failure,
-            HTML validation failure, or any ``artifact_write_executor`` error.
+        TerminalToolError: On a first-pass sub-agent timeout (FRE-402), or if the final
+            HTML still violates the sandbox after stripping (defense-in-depth safety net).
+        ToolExecutionError: On missing identity, empty plan, first-pass sub-agent failure,
+            HTML malformation, or any ``artifact_write_executor`` error.
     """
     import asyncio  # noqa: PLC0415
     import time  # noqa: PLC0415
@@ -1145,118 +1301,209 @@ async def artifact_draft_executor(
         "Generate the complete HTML document now."
     )
 
-    messages: list[dict[str, Any]] = [
+    base_messages: list[dict[str, Any]] = [
         {"role": "system", "content": _HTML_GENERATION_SYSTEM_PROMPT},
         {"role": "user", "content": user_prompt},
     ]
 
     draft_timeout = _draft_timeout_s()
     draft_max_tokens = _draft_max_tokens()
-    log.info(
-        "artifact_draft_sub_agent_start",
-        trace_id=trace_id,
-        session_id=session_id,
-        span_id=span_id,
-        task_id=task_id,
-        model_role=ModelRole.SUB_AGENT.value,
-        max_tokens=draft_max_tokens,
-        timeout_s=draft_timeout,
-    )
 
-    # --- Sub-agent inference ---
-    start_ms = int(time.monotonic() * 1000)
-    try:
-        response = await asyncio.wait_for(
-            sub_agent_client.respond(
-                role=ModelRole.SUB_AGENT,
-                messages=messages,
-                max_tokens=draft_max_tokens,
-                trace_ctx=child_ctx,
-                timeout_s=draft_timeout,
-            ),
-            timeout=draft_timeout,
-        )
-    except asyncio.TimeoutError as exc:
-        duration_ms = int(time.monotonic() * 1000) - start_ms
-        log.warning(
-            "artifact_draft_sub_agent_complete",
+    # --- Sub-agent inference with one bounded CSS-only retry (FRE-496) ---
+    # Attempt 1 generates from the plan. If it emits sandbox-prohibited nodes (script,
+    # inline handlers, external/CDN resources) we retry once with strengthened CSS-only
+    # guidance that names the violation. A clean retry ships as-is; a still-violating or
+    # failed retry falls through to strip-and-deliver below. Net: at most two sub-agent
+    # calls, and the user always gets an artifact rather than a hard-failed turn.
+    max_attempts = 2
+    html_content = ""
+    violation_notes: list[str] = []
+    total_sub_agent_ms = 0
+    attempts_made = 0
+    retry_triggered = False
+
+    for attempt in range(1, max_attempts + 1):
+        # Count the attempt at call time so a retry that times out / errors (and breaks
+        # below to the prior draft) still reports the true sub-agent call count.
+        attempts_made = attempt
+        messages = base_messages
+        if attempt > 1:
+            messages = [
+                base_messages[0],
+                {
+                    "role": "user",
+                    "content": f"{user_prompt}\n\n{_css_only_retry_reminder(violation_notes)}",
+                },
+            ]
+
+        log.info(
+            "artifact_draft_sub_agent_start",
             trace_id=trace_id,
             session_id=session_id,
             span_id=span_id,
             task_id=task_id,
-            success=False,
-            duration_ms=duration_ms,
-            error="timeout",
-        )
-        # FRE-402: a sub-agent timeout is non-recoverable for this turn — mark it
-        # terminal so the orchestrator surfaces it immediately instead of spending a
-        # full primary-model call to explain the failure.
-        raise TerminalToolError(
-            f"HTML generation sub-agent timed out after {draft_timeout}s.",
-            reason="The artifact generator timed out — the document was too complex to build in time.",
-            next_step="Try a simpler artifact, or switch to Cloud for more capacity.",
-        ) from exc
-    except Exception as exc:
-        duration_ms = int(time.monotonic() * 1000) - start_ms
-        log.warning(
-            "artifact_draft_sub_agent_complete",
-            trace_id=trace_id,
-            session_id=session_id,
-            span_id=span_id,
-            task_id=task_id,
-            success=False,
-            duration_ms=duration_ms,
-            error=str(exc),
-        )
-        raise ToolExecutionError(
-            f"HTML generation sub-agent failed: {exc}. Use artifact_write directly as fallback."
-        ) from exc
-
-    sub_agent_duration_ms = int(time.monotonic() * 1000) - start_ms
-
-    # --- Extract content from LLMResponse ---
-    html_content: str = response.get("content", "") if isinstance(response, dict) else str(response)
-    html_content = _strip_code_fences(html_content)
-
-    # --- Output-token accounting + cap-hit detection (FRE-478) ---
-    # ``usage`` is dict[str, Any] and may be empty / non-int when the provider
-    # omits it, so guard the type before comparing against the cap.
-    usage = response.get("usage") or {} if isinstance(response, dict) else {}
-    output_tokens = usage.get("completion_tokens")
-
-    log.info(
-        "artifact_draft_sub_agent_complete",
-        trace_id=trace_id,
-        session_id=session_id,
-        span_id=span_id,
-        task_id=task_id,
-        success=True,
-        duration_ms=sub_agent_duration_ms,
-        html_length=len(html_content),
-        output_tokens=output_tokens,
-    )
-
-    if isinstance(output_tokens, int) and output_tokens >= draft_max_tokens:
-        # The generation hit the configured ceiling — the artifact was likely
-        # truncated and spilled into a continuation call (FRE-478). This is the
-        # trip-wire for raising the cap or routing to structural sectioning
-        # (FRE-476).
-        log.warning(
-            "artifact_draft_output_cap_hit",
-            trace_id=trace_id,
-            session_id=session_id,
-            span_id=span_id,
-            task_id=task_id,
-            output_tokens=output_tokens,
+            model_role=ModelRole.SUB_AGENT.value,
             max_tokens=draft_max_tokens,
+            timeout_s=draft_timeout,
+            attempt=attempt,
         )
+
+        start_ms = int(time.monotonic() * 1000)
+        try:
+            response = await asyncio.wait_for(
+                sub_agent_client.respond(
+                    role=ModelRole.SUB_AGENT,
+                    messages=messages,
+                    max_tokens=draft_max_tokens,
+                    trace_ctx=child_ctx,
+                    timeout_s=draft_timeout,
+                ),
+                timeout=draft_timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            total_sub_agent_ms += int(time.monotonic() * 1000) - start_ms
+            log.warning(
+                "artifact_draft_sub_agent_complete",
+                trace_id=trace_id,
+                session_id=session_id,
+                span_id=span_id,
+                task_id=task_id,
+                success=False,
+                duration_ms=total_sub_agent_ms,
+                error="timeout",
+                attempt=attempt,
+            )
+            if attempt == 1:
+                # FRE-402: a first-pass timeout is non-recoverable — surface immediately
+                # instead of spending a full primary-model call to explain the failure.
+                raise TerminalToolError(
+                    f"HTML generation sub-agent timed out after {draft_timeout}s.",
+                    reason="The artifact generator timed out — the document was too complex to build in time.",
+                    next_step="Try a simpler artifact, or switch to Cloud for more capacity.",
+                ) from exc
+            # FRE-496: a failed retry still leaves the attempt-1 draft — degrade to it.
+            log.warning(
+                "artifact_draft_retry_failed_using_prior",
+                trace_id=trace_id,
+                session_id=session_id,
+                span_id=span_id,
+                task_id=task_id,
+                error="timeout",
+            )
+            break
+        except Exception as exc:
+            total_sub_agent_ms += int(time.monotonic() * 1000) - start_ms
+            log.warning(
+                "artifact_draft_sub_agent_complete",
+                trace_id=trace_id,
+                session_id=session_id,
+                span_id=span_id,
+                task_id=task_id,
+                success=False,
+                duration_ms=total_sub_agent_ms,
+                error=str(exc),
+                attempt=attempt,
+            )
+            if attempt == 1:
+                raise ToolExecutionError(
+                    f"HTML generation sub-agent failed: {exc}. Use artifact_write directly as fallback."
+                ) from exc
+            log.warning(
+                "artifact_draft_retry_failed_using_prior",
+                trace_id=trace_id,
+                session_id=session_id,
+                span_id=span_id,
+                task_id=task_id,
+                error=str(exc),
+            )
+            break
+
+        total_sub_agent_ms += int(time.monotonic() * 1000) - start_ms
+
+        # --- Extract content from LLMResponse ---
+        candidate: str = (
+            response.get("content", "") if isinstance(response, dict) else str(response)
+        )
+        candidate = _strip_code_fences(candidate)
+
+        # --- Output-token accounting + cap-hit detection (FRE-478) ---
+        # ``usage`` is dict[str, Any] and may be empty / non-int when the provider
+        # omits it, so guard the type before comparing against the cap.
+        usage = response.get("usage") or {} if isinstance(response, dict) else {}
+        output_tokens = usage.get("completion_tokens")
+
+        log.info(
+            "artifact_draft_sub_agent_complete",
+            trace_id=trace_id,
+            session_id=session_id,
+            span_id=span_id,
+            task_id=task_id,
+            success=True,
+            duration_ms=total_sub_agent_ms,
+            html_length=len(candidate),
+            output_tokens=output_tokens,
+            attempt=attempt,
+        )
+
+        if isinstance(output_tokens, int) and output_tokens >= draft_max_tokens:
+            # The generation hit the configured ceiling — the artifact was likely
+            # truncated and spilled into a continuation call (FRE-478). This is the
+            # trip-wire for raising the cap or routing to structural sectioning
+            # (FRE-476).
+            log.warning(
+                "artifact_draft_output_cap_hit",
+                trace_id=trace_id,
+                session_id=session_id,
+                span_id=span_id,
+                task_id=task_id,
+                output_tokens=output_tokens,
+                max_tokens=draft_max_tokens,
+            )
+
+        html_content = candidate
+        _, violation_notes = _sanitize_sandbox_violations(candidate)
+        if not violation_notes:
+            break  # clean output — no retry needed
+        if attempt < max_attempts:
+            # FRE-496: sandbox violation → one bounded CSS-only retry before degrading.
+            retry_triggered = True
+            log.warning(
+                "artifact_draft_sandbox_retry",
+                trace_id=trace_id,
+                session_id=session_id,
+                span_id=span_id,
+                task_id=task_id,
+                attempt=attempt,
+                violation_notes=violation_notes,
+            )
+        # else: retries exhausted — html_content keeps the last (violating) draft; the
+        # strip-and-deliver pass below sanitizes it.
+
+    sub_agent_duration_ms = total_sub_agent_ms
 
     # --- Render Mermaid blocks → inline SVG (FRE-396, ADR-0070 D7 amendment) ---
     html_content = await _render_mermaid_blocks(
         html_content, trace_id=trace_id, session_id=session_id
     )
 
-    # --- Validate HTML output (ADR-0077 D9, ADR-0070 D7) ---
+    # --- Strip-and-deliver: sanitize any sandbox residue the retry could not clear (FRE-496) ---
+    # Deliberate steering: _HTML_GENERATION_SYSTEM_PROMPT tells the model scripts are
+    # "rejected", but here we strip the residue and ship a static artifact with a
+    # user-visible banner rather than hard-failing the turn (ADR-0070 D7 graceful path).
+    html_content, sanitize_notes = _sanitize_sandbox_violations(html_content)
+    if sanitize_notes:
+        html_content = _inject_sanitization_banner(html_content, sanitize_notes)
+        log.warning(
+            "artifact_draft_sanitized_sandbox_violations",
+            trace_id=trace_id,
+            session_id=session_id,
+            span_id=span_id,
+            task_id=task_id,
+            notes=sanitize_notes,
+            retry_triggered=retry_triggered,
+        )
+
+    # --- Validate HTML output (ADR-0077 D9, ADR-0070 D7) — safety net after sanitize ---
     _validate_html_output(html_content)
 
     log.info(
@@ -1283,6 +1530,8 @@ async def artifact_draft_executor(
     result["task_id"] = task_id
     result["plan_truncated"] = plan_truncated
     result["plan_original_length"] = plan_original_length
+    result["sanitization_notes"] = sanitize_notes
+    result["sub_agent_attempts"] = attempts_made
 
     log.info(
         "artifact_draft_completed",

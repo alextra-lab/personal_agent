@@ -705,17 +705,39 @@ _VALID_HTML = (
 
 
 class _FakeSubAgentClient:
-    """Mock LLM client for sub-agent inference in artifact_draft tests."""
+    """Mock LLM client for sub-agent inference in artifact_draft tests.
 
-    def __init__(self, html_content: str = _VALID_HTML) -> None:
+    ``html_sequence`` (FRE-496) returns a different body per ``respond`` call —
+    e.g. a sandbox-violating draft on call 1 and a clean draft on call 2 to
+    exercise the bounded CSS-only retry. The last element is reused once the
+    sequence is exhausted. ``raises`` (per-call exception) lets a later attempt
+    fail so the fall-back-to-prior path can be tested.
+    """
+
+    def __init__(
+        self,
+        html_content: str = _VALID_HTML,
+        *,
+        html_sequence: list[str] | None = None,
+        raises: list[BaseException | None] | None = None,
+    ) -> None:
         self.html_content = html_content
+        self.html_sequence = html_sequence
+        self.raises = raises
         self.respond_calls: list[dict[str, Any]] = []
 
     async def respond(self, **kwargs: Any) -> dict[str, Any]:
+        idx = len(self.respond_calls)
         self.respond_calls.append(kwargs)
+        if self.raises is not None and idx < len(self.raises) and self.raises[idx] is not None:
+            raise self.raises[idx]
+        if self.html_sequence is not None:
+            body = self.html_sequence[min(idx, len(self.html_sequence) - 1)]
+        else:
+            body = self.html_content
         return {
             "role": "assistant",
-            "content": self.html_content,
+            "content": body,
             "tool_calls": [],
             "reasoning_trace": None,
             "usage": {"prompt_tokens": 100, "completion_tokens": 500},
@@ -728,11 +750,15 @@ def _install_draft_fakes(
     monkeypatch: pytest.MonkeyPatch,
     *,
     html_content: str = _VALID_HTML,
+    html_sequence: list[str] | None = None,
+    raises: list[BaseException | None] | None = None,
 ) -> tuple[_FakeStore, _FakeSubAgentClient]:
     """Install fakes for artifact_draft tests: R2/DB/embedding + sub-agent client."""
     store = _FakeStore()
     _install_fakes(monkeypatch, store=store)
-    client = _FakeSubAgentClient(html_content=html_content)
+    client = _FakeSubAgentClient(
+        html_content=html_content, html_sequence=html_sequence, raises=raises
+    )
     monkeypatch.setattr(
         "personal_agent.llm_client.factory.get_llm_client",
         lambda role_name="primary": client,
@@ -1156,42 +1182,386 @@ async def test_artifact_draft_rejects_missing_doctype(
     assert not isinstance(exc_info.value, TerminalToolError)
 
 
+# ---------------------------------------------------------------------------
+# artifact_draft — FRE-496 sandbox graceful degradation (bounded retry + strip)
+# ---------------------------------------------------------------------------
+
+# Body must exceed _MIN_HTML_LENGTH after stripping so validation still passes.
+_SCRIPT_HTML = (
+    "<!DOCTYPE html><html><head><style>:root{--c:#000}</style></head><body>"
+    "<main><h1>Interactive</h1><p>Some real content that survives stripping.</p>"
+    "<script>alert(1)</script></main></body></html>"
+)
+_HANDLER_HTML = (
+    "<!DOCTYPE html><html><head><style>:root{--c:#000}</style></head><body>"
+    '<main><h1>Interactive</h1><div onclick="evil()">click me for the demo content</div>'
+    "</main></body></html>"
+)
+
+
 @pytest.mark.asyncio
-async def test_artifact_draft_rejects_script_tags(
+async def test_artifact_draft_strips_script_tags_and_delivers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Script rejection is terminal (FRE-402) — short-circuit, don't loop to the model."""
+    """FRE-496: a persistently script-laden draft is stripped + delivered, not hard-failed.
+
+    Both attempts emit <script>, so the bounded retry fires and still fails; the final
+    strip-and-deliver path must commit a script-free artifact with a sanitization note.
+    """
     from personal_agent.tools.executor import TerminalToolError
 
-    bad_html = "<!DOCTYPE html><html><head></head><body><script>alert(1)</script></body></html>"
-    _install_draft_fakes(monkeypatch, html_content=bad_html)
+    store, client = _install_draft_fakes(monkeypatch, html_content=_SCRIPT_HTML)
 
-    with pytest.raises(TerminalToolError, match="script") as exc_info:
-        await artifact_tools.artifact_draft_executor(
-            slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
-        )
-    assert exc_info.value.reason
-    assert exc_info.value.next_step
-
-
-@pytest.mark.asyncio
-async def test_artifact_draft_rejects_event_handlers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Inline-handler rejection is terminal (FRE-402)."""
-    from personal_agent.tools.executor import TerminalToolError
-
-    bad_html = (
-        '<!DOCTYPE html><html><head></head><body><div onclick="evil()">click</div></body></html>'
+    out = await artifact_tools.artifact_draft_executor(
+        slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
     )
-    _install_draft_fakes(monkeypatch, html_content=bad_html)
 
-    with pytest.raises(TerminalToolError, match="event handler") as exc_info:
-        await artifact_tools.artifact_draft_executor(
-            slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
-        )
-    assert exc_info.value.reason
-    assert exc_info.value.next_step
+    assert not isinstance(out, TerminalToolError)
+    assert "artifact_id" in out
+    assert out["sanitization_notes"]  # non-empty
+    assert out["sub_agent_attempts"] == 2  # retry fired before giving up
+    stored = store.put_calls[0]["content"]
+    assert b"<script" not in stored.lower()
+    assert b"alert(1)" not in stored
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_strips_event_handlers_and_delivers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-496: inline event handlers are stripped + delivered, not hard-failed."""
+    store, _client = _install_draft_fakes(monkeypatch, html_content=_HANDLER_HTML)
+
+    out = await artifact_tools.artifact_draft_executor(
+        slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    assert "artifact_id" in out
+    assert out["sanitization_notes"]
+    stored = store.put_calls[0]["content"].lower()
+    assert b"onclick=" not in stored
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_sandbox_retry_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-496: a clean CSS-only retry is delivered as-is — no strip, no banner note."""
+    store, client = _install_draft_fakes(monkeypatch, html_sequence=[_SCRIPT_HTML, _VALID_HTML])
+
+    out = await artifact_tools.artifact_draft_executor(
+        slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    assert len(client.respond_calls) == 2
+    assert out["sub_agent_attempts"] == 2
+    assert out["sanitization_notes"] == []
+    stored = store.put_calls[0]["content"]
+    assert b"<script" not in stored.lower()
+    assert b"alert(1)" not in stored
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_clean_first_pass_no_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-496: a clean first draft is delivered with exactly one sub-agent call."""
+    events: list[tuple[str, dict[str, Any]]] = []
+    _store, client = _install_draft_fakes(monkeypatch)
+    _spy_artifact_log(monkeypatch, events)
+
+    out = await artifact_tools.artifact_draft_executor(
+        slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    assert len(client.respond_calls) == 1
+    assert out["sub_agent_attempts"] == 1
+    assert out["sanitization_notes"] == []
+    assert not [e for e in events if e[0] == "artifact_draft_sandbox_retry"]
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_retry_timeout_falls_back_to_prior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-496: a retry that times out falls back to stripping the attempt-1 draft."""
+    events: list[tuple[str, dict[str, Any]]] = []
+    store, _client = _install_draft_fakes(
+        monkeypatch,
+        html_sequence=[_SCRIPT_HTML, _VALID_HTML],
+        raises=[None, asyncio.TimeoutError()],
+    )
+    _spy_artifact_log(monkeypatch, events)
+
+    out = await artifact_tools.artifact_draft_executor(
+        slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    assert "artifact_id" in out
+    assert out["sanitization_notes"]  # attempt-1 draft was stripped
+    assert out["sub_agent_attempts"] == 2  # both calls counted despite the retry failing
+    assert b"<script" not in store.put_calls[0]["content"].lower()
+    assert [e for e in events if e[0] == "artifact_draft_retry_failed_using_prior"]
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_sandbox_retry_logs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-496: the bounded-retry trigger emits artifact_draft_sandbox_retry with notes."""
+    events: list[tuple[str, dict[str, Any]]] = []
+    _install_draft_fakes(monkeypatch, html_content=_SCRIPT_HTML)
+    _spy_artifact_log(monkeypatch, events)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    retries = [e for e in events if e[0] == "artifact_draft_sandbox_retry"]
+    assert len(retries) == 1
+    assert retries[0][1]["violation_notes"]
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_sanitization_logs_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-496: the strip-and-deliver fallback logs artifact_draft_sanitized_sandbox_violations."""
+    events: list[tuple[str, dict[str, Any]]] = []
+    _install_draft_fakes(monkeypatch, html_content=_SCRIPT_HTML)
+    _spy_artifact_log(monkeypatch, events)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    sanitized = [e for e in events if e[0] == "artifact_draft_sanitized_sandbox_violations"]
+    assert len(sanitized) == 1
+    assert sanitized[0][1]["notes"]
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_strips_cdn_link_and_delivers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-496: an external CDN <link> is stripped and the artifact still ships."""
+    cdn_html = (
+        "<!DOCTYPE html><html><head><style>:root{--c:#000}</style>"
+        '<link rel="stylesheet" href="https://cdn.tailwindcss.com/x.css"></head>'
+        "<body><main><h1>Content here that survives stripping fine.</h1></main></body></html>"
+    )
+    store, _client = _install_draft_fakes(monkeypatch, html_content=cdn_html)
+
+    out = await artifact_tools.artifact_draft_executor(
+        slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    assert out["sanitization_notes"]
+    assert b"cdn.tailwindcss.com" not in store.put_calls[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_mermaid_plus_script_both_handled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-496: a draft mixing a mermaid block and a <script> ships with both handled."""
+    mixed = (
+        "<!DOCTYPE html><html><head><style>:root{--c:#000}</style></head><body><main>"
+        '<pre class="mermaid">graph LR; A--&gt;B;</pre>'
+        "<script>alert(1)</script><p>Body content that survives.</p>"
+        "</main></body></html>"
+    )
+    store, _client = _install_draft_fakes(monkeypatch, html_content=mixed)
+    # Force mermaid render to fall back (no mmdc binary) — still script-free.
+    monkeypatch.setattr(artifact_tools, "_MERMAID_RENDER_TIMEOUT_S", 0.01)
+
+    out = await artifact_tools.artifact_draft_executor(
+        slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    assert "artifact_id" in out
+    assert b"<script" not in store.put_calls[0]["content"].lower()
+
+
+def test_sanitize_sandbox_violations_noop_on_clean_html() -> None:
+    """FRE-496: clean HTML passes through _sanitize_sandbox_violations unchanged."""
+    out, notes = artifact_tools._sanitize_sandbox_violations(_VALID_HTML)
+    assert out == _VALID_HTML
+    assert notes == []
+
+
+def test_sanitize_handles_regex_variants() -> None:
+    """FRE-496: mixed-case, self-closing, orphan-close, quoted/unquoted handlers, unquoted CDN."""
+    raw = (
+        "<!DOCTYPE html><html><body>"
+        "<SCRIPT>var x=1;</SCRIPT>"
+        '<script src="https://cdn.example.com/a.js" />'
+        "</script>"  # orphan closer
+        "<div onclick='a()'>x</div>"
+        "<button onmouseover=b()>y</button>"
+        "<link rel=stylesheet href=https://cdn.example.com/a.css>"
+        "</body></html>"
+    )
+    out, notes = artifact_tools._sanitize_sandbox_violations(raw)
+    lowered = out.lower()
+    assert "<script" not in lowered
+    assert "</script" not in lowered
+    assert "onclick" not in lowered
+    assert "onmouseover" not in lowered
+    assert "cdn.example.com/a.css" not in out
+    assert len(notes) >= 2
+
+
+def test_sanitize_strips_attribute_and_whitespace_close_tags() -> None:
+    """Close tags with whitespace/attributes are valid HTML end tags and must strip.
+
+    FRE-496 / CodeQL py/bad-tag-filter: HTML treats a close tag carrying trailing
+    whitespace or attributes (a space, or a tab/newline, before the closing angle
+    bracket) as a valid end tag, so the close pattern must tolerate it — otherwise
+    the block (with its JS body) slips the strip.
+    """
+    raw = (
+        "<!DOCTYPE html><html><body>"
+        "<script>evil()</script bar>"  # attribute before > on the close tag
+        "<script>more()</script\t\n>"  # whitespace before >
+        "<p>A CSS-only interactive section, no JavaScript required.</p>"
+        "</body></html>"
+    )
+    out, notes = artifact_tools._sanitize_sandbox_violations(raw)
+    lowered = out.lower()
+    assert "<script" not in lowered
+    assert "</script" not in lowered
+    assert "evil()" not in out  # JS body removed with the block, not left as text
+    assert "more()" not in out
+    assert len(notes) >= 1
+    # Defense-in-depth validator must not fire on the sanitized output.
+    artifact_tools._validate_html_output(out)
+
+
+def test_injected_banner_passes_validation() -> None:
+    """FRE-496: the injected banner is itself sandbox-clean (no <script>/onX= tokens)."""
+    out, notes = artifact_tools._sanitize_sandbox_violations(_SCRIPT_HTML)
+    banner_html = artifact_tools._inject_sanitization_banner(out, notes)
+    # Must not raise — banner text contains no literal <script or onX= token.
+    artifact_tools._validate_html_output(banner_html)
+    assert "artifact-sanitization-note" in banner_html
+
+
+def test_sanitize_banner_bodyless_html() -> None:
+    """FRE-496: banner injects into bodyless HTML without breaking doctype validation."""
+    bodyless = (
+        "<!DOCTYPE html><html><head><style>:root{--c:#000}</style>"
+        "<p>Content without a body element but long enough.</p></head></html>"
+    )
+    out, _notes = artifact_tools._sanitize_sandbox_violations(bodyless)
+    banner_html = artifact_tools._inject_sanitization_banner(out, ["Removed embedded scripts."])
+    artifact_tools._validate_html_output(banner_html)  # must not raise
+    assert "artifact-sanitization-note" in banner_html
+
+
+def test_validate_html_output_still_terminal_on_script() -> None:
+    """FRE-496: the safety net still rejects raw <script> (defense-in-depth intact)."""
+    from personal_agent.tools.executor import TerminalToolError
+
+    raw = "<!DOCTYPE html><html><body><script>alert(1)</script>padding padding</body></html>"
+    with pytest.raises(TerminalToolError, match="script"):
+        artifact_tools._validate_html_output(raw)
+
+
+def test_html_generation_prompt_redirects_to_css_only() -> None:
+    """FRE-496: the generation prompt sanctions CSS-only interactivity + states the consequence."""
+    prompt = artifact_tools._HTML_GENERATION_SYSTEM_PROMPT
+    assert "CSS only" in prompt or "CSS-only" in prompt
+    assert ":target" in prompt
+    assert "checkbox-hack" in prompt
+    assert "REJECTED" in prompt
+
+
+# ---------------------------------------------------------------------------
+# FRE-496 review fixes: strip ⊇ detect (PR #170)
+# ---------------------------------------------------------------------------
+
+
+def test_sanitize_strips_unterminated_script_tag() -> None:
+    """Review #1: an unterminated <script (no closing >) is detected AND stripped.
+
+    A cap-hit (FRE-478) truncation can land mid-tag; _SCRIPT_TAG_RE flags it, so the
+    opener strip must clear it too — otherwise sanitized HTML re-trips the validator.
+    """
+    raw = '<!DOCTYPE html><html><body><p>real content</p><script src="https://x/a.js'
+    out, notes = artifact_tools._sanitize_sandbox_violations(raw)
+    assert not artifact_tools._SCRIPT_TAG_RE.search(out)
+    assert notes
+
+
+def test_sanitize_strips_glued_event_handler_preserving_quote() -> None:
+    """Review #2: a handler glued to the prior attribute is stripped without eating its quote."""
+    raw = '<!DOCTYPE html><html><body><input type="checkbox"onclick="t()"></body></html>'
+    out, notes = artifact_tools._sanitize_sandbox_violations(raw)
+    assert not artifact_tools._EVENT_HANDLER_RE.search(out)
+    assert 'type="checkbox"' in out  # closing quote preserved
+    assert notes
+
+
+def test_sanitize_empty_value_handler_stripped() -> None:
+    """Review #2: an empty-value handler (onclick=>) is detected AND stripped (strip ⊇ detect)."""
+    raw = "<!DOCTYPE html><html><body><div onclick=>x</div></body></html>"
+    assert artifact_tools._EVENT_HANDLER_RE.search(raw)
+    out, _notes = artifact_tools._sanitize_sandbox_violations(raw)
+    assert not artifact_tools._EVENT_HANDLER_RE.search(out)
+
+
+def test_validate_html_output_allows_data_on_attributes() -> None:
+    """Review #3: a legit data-on* attribute must not trip the event-handler detector."""
+    html = (
+        '<!DOCTYPE html><html><body><div data-online="yes" data-on-load="x">'
+        "plenty of body content here</div></body></html>"
+    )
+    assert not artifact_tools._EVENT_HANDLER_RE.search(html)
+    artifact_tools._validate_html_output(html)  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_strips_glued_handler_and_delivers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review #2: a glued-handler draft commits (not hard-failed) with the quote intact."""
+    glued = (
+        "<!DOCTYPE html><html><head><style>:root{--c:#000}</style></head><body><main>"
+        '<input type="checkbox"onclick="toggle()"><h1>Plenty of content survives.</h1>'
+        "</main></body></html>"
+    )
+    store, _client = _install_draft_fakes(monkeypatch, html_content=glued)
+
+    out = await artifact_tools.artifact_draft_executor(
+        slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    assert "artifact_id" in out
+    stored = store.put_calls[0]["content"]
+    assert b"onclick=" not in stored.lower()
+    assert b'type="checkbox"' in stored  # quote not eaten
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_data_on_attribute_not_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review #3: a draft using data-on* commits with no spurious sanitization."""
+    html = (
+        "<!DOCTYPE html><html><head><style>:root{--c:#000}</style></head><body><main>"
+        '<div data-online="yes">Plenty of legitimate body content here.</div>'
+        "</main></body></html>"
+    )
+    _store, client = _install_draft_fakes(monkeypatch, html_content=html)
+
+    out = await artifact_tools.artifact_draft_executor(
+        slug="x", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    assert out["sanitization_notes"] == []  # nothing stripped
+    assert len(client.respond_calls) == 1  # no retry triggered
+    assert out["sub_agent_attempts"] == 1
 
 
 @pytest.mark.asyncio
@@ -1265,9 +1635,10 @@ async def test_artifact_draft_subagent_exception_raises(
 
 
 def test_system_prompt_prohibits_scripts() -> None:
-    """The HTML generation system prompt must prohibit script tags."""
+    """The HTML generation system prompt must prohibit script tags (FRE-496 reframe)."""
     prompt = artifact_tools._HTML_GENERATION_SYSTEM_PROMPT
-    assert "No <script>" in prompt or "no <script>" in prompt.lower()
+    assert "<script>" in prompt  # the prohibition still names the tag explicitly
+    assert "REJECTED" in prompt  # ...and states the consequence (FRE-496)
     assert "event handler" in prompt.lower() or "onclick" in prompt.lower()
 
 

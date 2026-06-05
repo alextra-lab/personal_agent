@@ -81,6 +81,7 @@ async def run_sub_agent(
         max_tokens=spec.max_tokens,
         timeout=spec.timeout_seconds,
         trace_id=trace_id,
+        session_id=session_id,
     )
 
     try:
@@ -185,14 +186,22 @@ async def run_sub_agent(
             error=str(exc),
         )
 
+    # Recomputed here (not reusing the in-`try` `is_tooled`) so it is defined on the
+    # timeout/exception paths too. ADR-0086 D7: "complete with digest size" — the
+    # digest is SubAgentResult.summary, the only text that crosses into the parent's
+    # synthesis context.
+    complete_tooled = spec.mode == SubAgentMode.TOOLED_SEQUENTIAL and bool(spec.tools)
     logger.info(
         "sub_agent_complete",
         task_id=task_id,
         success=result.success,
         duration_ms=result.duration_ms,
         token_count=result.token_count,
+        digest_chars=len(result.summary),
+        tooled=complete_tooled,
         error=result.error,
         trace_id=trace_id,
+        session_id=session_id,
     )
 
     return result
@@ -394,6 +403,7 @@ async def _run_tooled_loop(
             iteration=iteration,
             tool_count=len(tool_calls),
             trace_id=trace_id,
+            session_id=session_id,
         )
 
     # Iteration ceiling reached — force a final synthesis. Tools are disabled by
@@ -408,6 +418,7 @@ async def _run_tooled_loop(
         task_id=task_id,
         max_iterations=max_iterations,
         trace_id=trace_id,
+        session_id=session_id,
     )
     final_response = await asyncio.wait_for(
         llm_client.respond(

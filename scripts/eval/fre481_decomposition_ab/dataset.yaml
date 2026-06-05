@@ -1,0 +1,36 @@
+# FRE-481 — ADR-0086 artifact-decomposition A/B dataset.
+#
+# Purpose: re-run an artifact-build turn equivalent to the originating trace
+# a0a07227 (research doc docs/research/2026-06-04-artifact-turn-cost-latency-
+# forensics.md) under two arms so discovery decomposition can be measured:
+#
+#   * arm baseline  (AGENT_ARTIFACT_DECOMPOSITION_ENABLED=false) — serial SINGLE
+#   * arm decompose (AGENT_ARTIFACT_DECOMPOSITION_ENABLED=true)  — HYBRID, tool-
+#     using discovery sub-agents returning digests
+#
+# Design constraints (so the turn actually exercises the discovery phase):
+#   * The prompt must combine "explain internals" (forces real discovery across
+#     several subsystems) WITH "build an interactive HTML guide" (forces the
+#     artifact_build signal → MODERATE/COMPLEX floor → HYBRID when the flag is on).
+#   * Single-turn: the metric of interest is intra-turn discovery cost, not
+#     cross-turn cache reuse (that is FRE-433's dataset).
+#
+# Headline metric (deterministic): parent max_fresh_in. Baseline climbs toward
+# ~71 k as the serial discovery context grows; decompose should bound it because
+# only digests cross into the parent synthesis context (ADR-0086 D4).
+# Measurement-gated: Σ tokens, wall-time (near-zero local win on single GPU).
+
+prompts:
+  - label: gateway_internals_guide
+    note: a0a07227-equivalent — explain gateway internals + build interactive HTML guide
+    message: >-
+      Explain the internals of the request gateway — the seven-stage pre-LLM
+      pipeline, intent classification, decomposition, and context assembly — and
+      build an interactive HTML guide that walks through each stage with diagrams.
+
+  - label: memory_subsystem_guide
+    note: second discovery shape — multi-subsystem investigation + artifact
+    message: >-
+      Investigate how the memory subsystem works end to end (episodic capture,
+      entity extraction, semantic promotion, and recall) and create an interactive
+      HTML dashboard explaining the pipeline with the key files and data flows.

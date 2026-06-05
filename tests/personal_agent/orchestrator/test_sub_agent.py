@@ -121,6 +121,35 @@ class TestRunSubAgent:
         assert "task_id" in events[0]
         assert events[0]["success"] is True
 
+    @pytest.mark.asyncio
+    async def test_start_and_complete_carry_session_id(self) -> None:
+        """ADR-0086 D7 / ADR-0074: discovery events join under the session anchor.
+
+        ``walk.py:_walk_es_agent_logs`` finds events by ``term session_id``; without
+        ``session_id`` the start/complete events are invisible to the joinability
+        walk. The complete event also carries ``digest_chars`` (the digest size that
+        crosses into the parent synthesis context).
+        """
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(return_value="done")
+
+        with structlog.testing.capture_logs() as cap_logs:
+            await run_sub_agent(
+                spec=_spec(),
+                llm_client=mock_client,
+                trace_id="t",
+                session_id="sess-1",
+            )
+
+        start = [e for e in cap_logs if e.get("event") == "sub_agent_start"]
+        complete = [e for e in cap_logs if e.get("event") == "sub_agent_complete"]
+        assert len(start) == 1
+        assert start[0]["session_id"] == "sess-1"
+        assert len(complete) == 1
+        assert complete[0]["session_id"] == "sess-1"
+        assert isinstance(complete[0]["digest_chars"], int)
+        assert complete[0]["tooled"] is False
+
 
 class TestTooledLoop:
     """ADR-0086 D3/D4 — the real tool-using discovery loop."""
@@ -169,6 +198,45 @@ class TestTooledLoop:
         assert "FINAL DISCOVERY DIGEST" in result.summary
         dispatch.assert_awaited_once()
         assert dispatch.await_args.kwargs["tool_name"] == "read"
+
+    @pytest.mark.asyncio
+    async def test_tooled_iteration_event_carries_session_id(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ADR-0086 D7: the per-iteration discovery event joins by session_id."""
+        dispatch = AsyncMock(
+            return_value={
+                "tool_call_id": "c1",
+                "tool_name": "read",
+                "content": '{"status":"ok"}',
+                "success": True,
+                "latency_ms": 1.0,
+            }
+        )
+        monkeypatch.setattr("personal_agent.orchestrator.sub_agent.dispatch_tool_call", dispatch)
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                _llm_response("", [_tool_call("c1", "read", '{"path": "/x"}')]),
+                _llm_response("DIGEST"),
+            ]
+        )
+
+        with structlog.testing.capture_logs() as cap_logs:
+            await run_sub_agent(
+                spec=_tooled_spec(tools=["read"]),
+                llm_client=mock_client,
+                trace_id="t",
+                session_id="s",
+            )
+
+        iters = [e for e in cap_logs if e.get("event") == "sub_agent_tooled_iteration"]
+        assert iters
+        assert all(e["session_id"] == "s" for e in iters)
+        complete = [e for e in cap_logs if e.get("event") == "sub_agent_complete"]
+        assert complete[0]["session_id"] == "s"
+        assert complete[0]["tooled"] is True
 
     @pytest.mark.asyncio
     async def test_mutating_tool_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:

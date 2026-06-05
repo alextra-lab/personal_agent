@@ -226,12 +226,91 @@ class TestTooledLoop:
             trace_id="t",
         )
 
-        assert result.success is True
+        # The forced synthesis here returns empty content → no digest → failure
+        # (master review #1: empty discovery must not be a silent success).
+        assert result.success is False
+        assert result.error is not None
+        assert "empty" in result.error.lower()
         # 2 tool rounds + 1 forced synthesis call.
         assert mock_client.respond.await_count == 3
         assert dispatch.await_count == 2
-        # The final call disables tools so the model synthesizes from results.
-        assert mock_client.respond.await_args.kwargs.get("tool_choice") == "none"
+        # The final call offers NO tools (the enforced "can't tool-call" guarantee);
+        # we do not pass a dead tool_choice (master review #2).
+        final_kwargs = mock_client.respond.await_args.kwargs
+        assert final_kwargs.get("tools") is None
+        assert "tool_choice" not in final_kwargs
+
+    @pytest.mark.asyncio
+    async def test_ceiling_with_nonempty_synthesis_succeeds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Ceiling reached but the forced synthesis yields content → success."""
+        from personal_agent.config import settings
+
+        monkeypatch.setattr(settings, "sub_agent_max_tool_iterations", 1)
+
+        dispatch = AsyncMock(
+            return_value={
+                "tool_call_id": "c",
+                "tool_name": "read",
+                "content": "{}",
+                "success": True,
+                "latency_ms": 1.0,
+            }
+        )
+        monkeypatch.setattr("personal_agent.orchestrator.sub_agent.dispatch_tool_call", dispatch)
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                _llm_response("", [_tool_call("c", "read", '{"path": "/x"}')]),
+                _llm_response("SYNTHESIZED DIGEST"),
+            ]
+        )
+
+        result = await run_sub_agent(
+            spec=_tooled_spec(tools=["read"]),
+            llm_client=mock_client,
+            trace_id="t",
+        )
+
+        assert result.success is True
+        assert result.full_output == "SYNTHESIZED DIGEST"
+        assert result.tools_used == ["read"]
+
+    @pytest.mark.asyncio
+    async def test_malformed_tool_call_entry_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A non-Mapping tool_call entry is skipped; the slice survives (review #3)."""
+        dispatch = AsyncMock(
+            return_value={
+                "tool_call_id": "c1",
+                "tool_name": "read",
+                "content": "ok",
+                "success": True,
+                "latency_ms": 1.0,
+            }
+        )
+        monkeypatch.setattr("personal_agent.orchestrator.sub_agent.dispatch_tool_call", dispatch)
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                # One malformed (non-Mapping) entry alongside one valid call.
+                _llm_response("", [None, _tool_call("c1", "read", '{"path": "/x"}')]),
+                _llm_response("digest despite a malformed call"),
+            ]
+        )
+
+        result = await run_sub_agent(
+            spec=_tooled_spec(tools=["read"]),
+            llm_client=mock_client,
+            trace_id="t",
+        )
+
+        assert result.success is True
+        assert result.tools_used == ["read"]
+        assert result.full_output == "digest despite a malformed call"
+        dispatch.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_parallel_inference_unaffected(self) -> None:

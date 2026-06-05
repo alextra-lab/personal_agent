@@ -138,6 +138,13 @@ async def run_sub_agent(
 
         duration_ms = int(time.monotonic() * 1000) - start_ms
 
+        # A tooled discovery sub-agent that finishes with no content (exhausted its
+        # iteration ceiling without a usable synthesis, or hit max_tokens) produced
+        # no digest. Surface that to the parent as a failure rather than a silent
+        # empty success it would synthesize around (master review #1).
+        is_tooled = spec.mode == SubAgentMode.TOOLED_SEQUENTIAL and bool(spec.tools)
+        empty_digest = is_tooled and not response_content.strip()
+
         result = SubAgentResult(
             task_id=task_id,
             spec_task=spec.task,
@@ -146,8 +153,8 @@ async def run_sub_agent(
             tools_used=tools_used,
             token_count=len(response_content.split()),
             duration_ms=duration_ms,
-            success=True,
-            error=None,
+            success=not empty_digest,
+            error="discovery sub-agent produced an empty digest" if empty_digest else None,
         )
 
     except asyncio.TimeoutError:
@@ -191,7 +198,7 @@ async def run_sub_agent(
     return result
 
 
-def _parse_llm_response(response: Any) -> tuple[str, list[dict[str, Any]]]:
+def _parse_llm_response(response: Any) -> tuple[str, list[Mapping[str, Any]]]:
     """Extract (content, tool_calls) from a respond() result.
 
     Real ``llm_client.respond`` returns an ``LLMResponse`` mapping; the
@@ -201,17 +208,20 @@ def _parse_llm_response(response: Any) -> tuple[str, list[dict[str, Any]]]:
     Args:
         response: The value returned by ``llm_client.respond``.
 
+    Malformed tool-call entries (non-Mapping) are dropped here so a single bad
+    element never crashes the loop and discards the whole slice (master review #3).
+
     Returns:
         A tuple of (content string, list of tool-call dicts ``{id,name,arguments}``).
     """
     if isinstance(response, Mapping):
         content = str(response.get("content") or "")
-        tool_calls = list(response.get("tool_calls") or [])
+        tool_calls = [tc for tc in (response.get("tool_calls") or []) if isinstance(tc, Mapping)]
         return content, tool_calls
     return str(response), []
 
 
-def _to_openai_tool_calls(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _to_openai_tool_calls(tool_calls: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Normalize ``LLMResponse`` tool calls to OpenAI assistant-message wire format.
 
     ``LLMResponse.tool_calls`` items are flat ``{id, name, arguments}``; the
@@ -386,9 +396,13 @@ async def _run_tooled_loop(
             trace_id=trace_id,
         )
 
-    # Iteration ceiling reached — force a final synthesis with tools disabled so
-    # the model produces a digest from gathered results (mirrors the primary's
-    # force_synthesis_from_limit). ADR-0086 D3.
+    # Iteration ceiling reached — force a final synthesis. Tools are disabled by
+    # OMITTING the tools= argument entirely: with no tool surface offered the model
+    # cannot tool-call and must synthesize a digest from gathered results (mirrors
+    # the primary's force_synthesis_from_limit). NOTE: we do NOT pass
+    # tool_choice="none" — both adapters gate tool_choice behind `if tools:`, so it
+    # would never reach the wire; "no tools offered" is the enforced guarantee
+    # (master review #2). ADR-0086 D3.
     logger.info(
         "sub_agent_tooled_ceiling",
         task_id=task_id,
@@ -400,7 +414,6 @@ async def _run_tooled_loop(
             role=spec.model_role,
             messages=loop_messages,
             max_tokens=spec.max_tokens,
-            tool_choice="none",
             trace_ctx=trace_ctx,
         ),
         timeout=spec.timeout_seconds,

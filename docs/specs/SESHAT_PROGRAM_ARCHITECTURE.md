@@ -338,6 +338,25 @@ This document recommends; it does not execute project surgery.
    Recall Quality, Inference Architecture, ADR-0081 Extended — with boundaries drawn per §4 so they
    need only one carve, not a carve-then-recarve.
 
+### Execution status (2026-06-06, owner-authorized)
+
+Most of §8 has been applied to Linear (owner authorized "approve on my behalf, restructure"):
+
+- ✅ **Observability Foundation** project created (Approved) — `observability-foundation-8b305d1921e6`.
+- ✅ **Lifted into it:** FRE-451 (taxonomy), FRE-452 (ledger), FRE-453 (matrix), FRE-505 (sub-agent
+  auditability, from Turn Cost), FRE-506 (gate-decision telemetry). FRE-453 is filed *in* the L0
+  project, which owns the L1 matrix (no separate L1 project) — a deliberate co-location of the
+  reconciliation loop's two halves, not a separate project.
+- ✅ **FRE-502** (planner reliability) moved to **Inference Architecture** per §4.
+- ✅ **Pillars approved:** Memory Recall Quality, Inference Architecture, ADR-0081 Extended.
+- ⏳ **Artifact Execution Security pillar (ADR-0089): deferred to the ADR-0089 authoring step** — the
+  ADR defines the pillar's shape, so its project + the re-homing of FRE-497/498/499/500 (currently in
+  Turn Cost) land *with* the ADR, not before it.
+- 🧹 **Residual for master:** Pedagogical "M2: Mapping & Measurement" milestone is now empty;
+  FRE-505/506 carry no priority.
+
+Kept as recommendation (not executed): the Gate Health Monitoring merge question (#1) — left separate.
+
 ---
 
 ## 9. What this spawns

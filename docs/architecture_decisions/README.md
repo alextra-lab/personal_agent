@@ -160,7 +160,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0080](ADR-0080-thinking-control-policy.md) | Model-Aware Thinking-Control Policy | Implemented (FRE-417, PR #107) |
 | [ADR-0081](ADR-0081-cache-aware-context-layout-and-compaction.md) | Cache-Aware Context Layout & Compaction | Proposed |
 
-### Routing, Pedagogy & Memory (ADR-0082 – ADR-0087)
+### Routing, Pedagogy & Memory (ADR-0082 – ADR-0088)
 
 | ADR | Title | Status |
 |-----|-------|--------|
@@ -170,6 +170,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0085](ADR-0085-intra-turn-tool-result-compression.md) | Intra-Turn Tool-Result Compression (Insertion-Time Digest + Exact Re-Expand) | Parked (dormant, flag-off) |
 | [ADR-0086](ADR-0086-hybrid-decompose-routing-for-artifact-builds.md) | HYBRID/DECOMPOSE Routing for High-Complexity Artifact Builds | Proposed |
 | [ADR-0087](ADR-0087-memory-recall-quality-measurement-program.md) | Memory-Recall Quality: A Measurement-First Program (Diagnose → Gate → Architecture) | Proposed |
+| [ADR-0088](ADR-0088-execution-topology-observability-contract.md) | Execution Topology Observability Contract (Trace-Scoped Spine for Status, Cost, Loud Degradation) | Proposed |
 
 ### Supplementary
 

@@ -171,6 +171,11 @@ to present the correlation to the learner (it may be premature or incorrect).
 > **This is the canonical list.** All FRE tickets in the Seshat Pedagogical Architecture project
 > measure against these. Do not extend this list without a corresponding ADR-0084 revision.
 > Matches ADR-0084 §D4 exactly.
+>
+> **Formal reference:** `docs/specs/RESULT_TYPE_TAXONOMY_SPEC.md` (FRE-451) formalizes each type
+> with entry/evidence conditions, assignment conventions, detection classification (programmatic vs
+> human-rubric), and how the taxonomy drives the M2 eval set and M5 harness. That spec adds rigor on
+> top of this frozen list; it does not extend membership.
 
 ### Orchestration events (what the harness did)
 

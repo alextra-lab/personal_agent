@@ -126,9 +126,10 @@ class TestHybridExecutionPath:
     async def test_hybrid_path_calls_execute_hybrid_and_re_enters(self) -> None:
         """When expansion_strategy is set and sub_agent_results is None,
         step_llm_call should parse the plan, run sub-agents, and return
-        TaskState.LLM_CALL for synthesis."""
+        TaskState.LLM_CALL for synthesis.
+        """
         from personal_agent.orchestrator.sub_agent_types import SubAgentResult
-        from personal_agent.orchestrator.types import ExecutionContext, TaskState
+        from personal_agent.orchestrator.types import ExecutionContext
 
         # Build a mock execution context in the expansion state
         ctx = MagicMock(spec=ExecutionContext)
@@ -203,14 +204,112 @@ class TestHybridExecutionPath:
     @pytest.mark.asyncio
     async def test_phase2_skips_expansion_hook(self) -> None:
         """When sub_agent_results is already populated (phase 2),
-        the expansion hook should be skipped."""
+        the expansion hook should be skipped.
+        """
         ctx = MagicMock()
         ctx.expansion_strategy = "hybrid"
         ctx.sub_agent_results = [MagicMock()]  # Already populated
 
         # Phase 2: the hook condition fails, execution continues normally
-        should_expand = (
-            ctx.expansion_strategy is not None
-            and ctx.sub_agent_results is None
-        )
+        should_expand = ctx.expansion_strategy is not None and ctx.sub_agent_results is None
         assert should_expand is False
+
+
+class TestExpansionCostRollup:
+    """FRE-501 — enforced expansion rolls planner+sub-agent cost into the live meter."""
+
+    @pytest.mark.asyncio
+    async def test_enforced_path_rolls_cost_and_emits(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """step_init (enforced HYBRID) adds ExpansionResult.cost_usd to
+        ctx.turn_cost_usd and emits turn_status at dispatch-start and after.
+        """
+        import personal_agent.orchestrator.executor as ex
+        from personal_agent.orchestrator.channels import Channel
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+        from personal_agent.orchestrator.sub_agent_types import SubAgentResult
+        from personal_agent.orchestrator.types import ExecutionContext, TaskState
+        from personal_agent.telemetry.trace import TraceContext
+
+        monkeypatch.setattr(ex.settings, "orchestration_mode", "enforced")
+
+        gw = GatewayOutput(
+            intent=IntentResult(
+                task_type=TaskType.CONVERSATIONAL,
+                complexity=Complexity.SIMPLE,
+                confidence=0.9,
+                signals=[],
+            ),
+            governance=GovernanceContext(mode=Mode.NORMAL, expansion_permitted=True),
+            decomposition=DecompositionResult(
+                strategy=DecompositionStrategy.HYBRID,
+                reason="test",
+                constraints={"max_sub_agents": 2},
+            ),
+            context=AssembledContext(
+                messages=[{"role": "user", "content": "build X and Y"}],
+                memory_context=None,
+                tool_definitions=None,
+            ),
+            session_id="s1",
+            trace_id="t1",
+        )
+        ctx = ExecutionContext(
+            session_id="s1",
+            trace_id="t1",
+            user_message="build X and Y",
+            mode=Mode.NORMAL,
+            channel=Channel.CHAT,
+            gateway_output=gw,
+        )
+
+        emitted: list[float] = []
+
+        async def _spy_emit(c: ExecutionContext) -> None:
+            emitted.append(c.turn_cost_usd)
+
+        monkeypatch.setattr(ex, "_emit_turn_status", _spy_emit)
+
+        def _sub(cost: float, name: str) -> SubAgentResult:
+            return SubAgentResult(
+                task_id=name,
+                spec_task=name,
+                summary="s",
+                full_output="s",
+                tools_used=[],
+                token_count=1,
+                duration_ms=1,
+                success=True,
+                cost_usd=cost,
+            )
+
+        exp_result = ExpansionResult(
+            plan=MagicMock(is_fallback=False),
+            sub_agent_results=[_sub(0.1, "a"), _sub(0.2, "b")],
+            synthesis_context="SYN",
+            planner_cost_usd=0.05,
+        )
+
+        controller = MagicMock()
+        controller.execute = AsyncMock(return_value=exp_result)
+        monkeypatch.setattr(
+            "personal_agent.orchestrator.expansion_controller.ExpansionController",
+            lambda: controller,
+        )
+        monkeypatch.setattr(
+            "personal_agent.llm_client.factory.get_llm_client",
+            lambda role_name=None: MagicMock(),
+        )
+
+        session_manager = MagicMock()
+        session_manager.get_session = MagicMock(return_value=None)
+        trace_ctx = TraceContext(trace_id="t1", session_id="s1")
+
+        state = await ex.step_init(ctx, session_manager, trace_ctx)
+
+        assert state == TaskState.LLM_CALL
+        # planner 0.05 + sub-agents (0.1 + 0.2) = 0.35
+        assert ctx.turn_cost_usd == pytest.approx(0.35)
+        # emit at dispatch-start (meter still 0.0) then after the rollup (0.35)
+        assert emitted == [pytest.approx(0.0), pytest.approx(0.35)]

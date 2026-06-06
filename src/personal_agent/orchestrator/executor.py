@@ -1726,6 +1726,9 @@ async def step_init(
 
                 llm_client = get_llm_client(role_name=ModelRole.PRIMARY.value)
                 controller = ExpansionController()
+                # FRE-501: light up the meter at dispatch start so it is not blank
+                # for the (potentially multi-minute) decomposition window.
+                await _emit_turn_status(ctx)
                 expansion_result = await controller.execute(
                     query=ctx.messages[-1].get("content", "") if ctx.messages else "",
                     strategy=gw.decomposition.strategy.value.upper(),
@@ -1762,6 +1765,21 @@ async def step_init(
                     sub_agent_count=len(expansion_result.sub_agent_results),
                     successful=expansion_result.successful_count,
                     degraded=expansion_result.degraded,
+                    trace_id=ctx.trace_id,
+                )
+
+                # FRE-501: roll planner + sub-agent cost into the live meter so it
+                # matches the api_cost ledger, then push an updated turn_status.
+                ctx.turn_cost_usd += expansion_result.cost_usd
+                await _emit_turn_status(ctx)
+                log.info(
+                    "expansion_cost_rolled_up",
+                    mode="enforced",
+                    planner_cost_usd=round(expansion_result.planner_cost_usd, 6),
+                    sub_agent_cost_usd=round(
+                        expansion_result.cost_usd - expansion_result.planner_cost_usd, 6
+                    ),
+                    turn_cost_usd=round(ctx.turn_cost_usd, 6),
                     trace_id=ctx.trace_id,
                 )
 
@@ -2734,6 +2752,9 @@ async def step_llm_call(
                 ]
 
             if specs:
+                # FRE-501: light up the meter at dispatch start (the primary
+                # planning call's cost is already in ctx.turn_cost_usd).
+                await _emit_turn_status(ctx)
                 results = await execute_hybrid(
                     specs=specs,
                     trace_id=ctx.trace_id,
@@ -2741,6 +2762,18 @@ async def step_llm_call(
                     session_id=ctx.session_id,
                 )
                 ctx.sub_agent_results = results
+
+                # FRE-501: roll sub-agent cost into the live meter, then re-emit.
+                _sub_agent_cost = sum(r.cost_usd for r in results)
+                ctx.turn_cost_usd += _sub_agent_cost
+                await _emit_turn_status(ctx)
+                log.info(
+                    "expansion_cost_rolled_up",
+                    mode="autonomous",
+                    sub_agent_cost_usd=round(_sub_agent_cost, 6),
+                    turn_cost_usd=round(ctx.turn_cost_usd, 6),
+                    trace_id=ctx.trace_id,
+                )
 
                 # Build synthesis context and append to messages
                 synthesis_parts = ["Sub-agent results:\n"]

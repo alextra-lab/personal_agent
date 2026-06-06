@@ -98,6 +98,8 @@ class ExpansionResult:
         phase_results: Timing and success data for each phase.
         degraded: True if graceful degradation was triggered.
         degradation_reason: Why degradation occurred, if applicable.
+        planner_cost_usd: USD cost of the LLM planner call (0.0 on the fallback
+            planner, which makes no LLM call) (FRE-501).
     """
 
     plan: ExpansionPlan | None = None
@@ -106,6 +108,16 @@ class ExpansionResult:
     phase_results: list[PhaseResult] = field(default_factory=list)
     degraded: bool = False
     degradation_reason: str | None = None
+    planner_cost_usd: float = 0.0
+
+    @property
+    def cost_usd(self) -> float:
+        """Total expansion cost: planner call + every dispatched sub-agent (FRE-501).
+
+        The executor rolls this into the live turn meter ``ctx.turn_cost_usd`` so
+        the PWA reflects sub-agent spend, not just the primary call.
+        """
+        return self.planner_cost_usd + sum(r.cost_usd for r in self.sub_agent_results)
 
     @property
     def successful_count(self) -> int:
@@ -270,6 +282,9 @@ class ExpansionController:
             )
 
             duration_ms = time.monotonic() * 1000 - start_ms
+            # FRE-501: capture planner-call cost so the executor can roll it into
+            # the live turn meter. Paid/cloud calls populate cost_usd; 0.0 otherwise.
+            result.planner_cost_usd = float(raw_response.get("cost_usd") or 0.0)
             plan = _validate_plan_json(raw_response["content"], strategy)
 
             if plan is not None:

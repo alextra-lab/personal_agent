@@ -5,8 +5,8 @@
 > **Prompt:** *"Build an interactive, dynamic artifact to teach me about how an organism that could see all the wavelengths of the spectrum of light would see and experience earth, and the universe."* (a subject the owner has discussed several times before)
 > **Trace:** `87cbd720-7b98-4136-9235-ec14f28b6c43` (cloud, owner identity)
 
-## TL;DR
-Decomposition delivered a **production-quality artifact at lower cost** than the old long single-agent path — a real win on both quality and cost. But the first run exposed four plumbing/grounding gaps, none fatal, all addressable. The most important is about **memory grounding depth**, not the cost/UI plumbing.
+## TL;DR (corrected 2026-06-06 after deeper forensics)
+**Decomposition-with-subs does NOT work yet.** The artifact was brilliant and cheaper — but that came from **Sonnet + the artifact-draft pipeline, not from working decomposition.** The mechanism degraded: the **planner failed** schema-validation → generic fallback tasks; the 2 subs ran **tool-less** (no discovery, no KG retrieval); proactive memory found **10 KG candidates but injected only 2** (~330 tok, 500-tok budget cap); the cost meter **under-counted** ($0.57 vs $0.90), the UI was **blind** during expansion, and the security gate **didn't fire** (33 KB JS shipped). The run was a **successful probe** — one pass exposed a **6-issue cluster**. **Flag stays ON; we iterate to working, visibility-first.** (Earlier framing — "quality+cost win, gaps are plumbing not mechanism" — was wrong; the core mechanism is the broken part.)
 
 ## What went right
 - **Output quality:** owner-rated "next-level visual quality, big wow factor." A 6-module interactive HTML artifact ("Omnispectral Vision"). Built and committed.
@@ -41,5 +41,13 @@ Decomposition delivered a **production-quality artifact at lower cost** than the
 3. **Live status through the sub-agent path:** emit `turn_status` from the expansion controller / sub-agent loop so decomposed turns aren't blind.
 4. **Planner reliability:** fix `schema_validation_failed` so decomposition runs as designed (real tool-using discovery) rather than degrading to generate-from-knowledge.
 
-## Verdict
-Keep decomposition **on** — the quality + cost results justify it. The gaps are observability and grounding-depth, not the core mechanism. Items 2–4 are plumbing; item 1 is the one that matters for the Socratic-tutor north star.
+## Verdict (corrected)
+Decomposition's **core mechanism is the broken part** — the planner failed, so the subs never did real tool-using discovery; the wins were the pipeline's, not decomposition's. But this is exactly what a first run of a major harness change should produce: a probe that surfaces the breakage. **Keep the flag ON and iterate, visibility-first** (the harness flywheel — fast iteration needs to *see* what the model and gates do).
+
+**Fix queue (Linear, all Approved, each confirm-via-telemetry first; each carries a visibility deliverable):**
+- **Wave 0 — SEE:** FRE-501 (live cost+status meter) · FRE-505 (sub-agent input/output/digest auditability) · FRE-506 (sandbox gate-decision telemetry + bypass confirm).
+- **Wave 1 — make it real:** FRE-502 (planner reliability + discovery-aware fallback).
+- **Wave 2 — ground it:** FRE-503 (proactive depth for build/teach — raise the 500-tok budget) + FRE-435.
+- **Parallel:** FRE-500 (flag-gate sandbox off; temporary bridge). **adr:** FRE-504 (7 architecture threads → ADRs).
+
+Plan: `docs/superpowers/plans/write-this-all-up-dynamic-graham.md`.

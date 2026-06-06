@@ -83,11 +83,23 @@ Keep ticket creation minimal (3 new + 2 updates + 1 note) — no sprawl.
 - **Debug WIP in `artifact_tools.py`:** removed in PR-4.
 - **Deploys:** PR-1/PR-4 affect live behavior → owner-approved deploy at the gate, **not while a build session is mid-turn** (decomposition turns run ~13 min). PR-2/PR-3 likewise.
 
-## Sequencing
-1. **PR-1 (cost+status)** + **PR-4 (sandbox)** — both high-priority and independent; PR-1 is the owner's stated first, PR-4 unblocks interactive artifacts. Can run in parallel (different files).
-2. **PR-2 (planner reliability)** — restores real tool-using discovery.
-3. **PR-3 (memory quick bump)** — parallel-safe (gateway/memory area).
-4. **FRE-435 design** + **FRE-397 architecture discussion** — ongoing, owner-paced.
+## Conclusion correction (owner, 2026-06-06)
+Decomposition-with-subs **does not work yet** — the brilliant artifact came from Sonnet + the artifact pipeline, *not* from working decomposition (planner failed → tool-less generic subs; memory 10→2; gate bypassed; meter lied; UI blind). The first run was a **successful probe** that exposed a 6-issue cluster. **Flag stays ON; we iterate to working.**
+
+## Sequencing — VISIBILITY-FIRST (owner principle: we iterate fast only when we can *see* what the model and gates do)
+**Every ticket carries a visibility deliverable** — not just a fix. Then each wave is verified by *watching telemetry*, not forensics.
+
+- **Wave 0 — SEE (do first; unblocks everything):**
+  - **FRE-501** — live cost roll-up + `turn_status` during expansion (user-facing meter).
+  - **FRE-505** — sub-agent **input context + output + injected digest** auditable (engineering visibility — answers "what was each sub fed/did/returned").
+  - **FRE-506** — sandbox **gate-decision telemetry** (`pass`/`reject`/`strip`/`bypassed`) + confirm the bypass path.
+  - → Deploy Wave 0, then **every subsequent fix is observable live.**
+- **Wave 1 — MAKE IT REAL (root cause):** **FRE-502** — planner schema-validation recovery + discovery-aware fallback (so subs actually run tool-using discovery, not generic tool-less). Verified via Wave-0 visibility.
+- **Wave 2 — GROUND IT:** **FRE-503** — proactive depth for build/teach (raise the 500-tok budget that trimmed 10→2) + recall-gate extension; feed measurement to FRE-435.
+- **Parallel lane (independent files):** **FRE-500** — flag-gate the sandbox off (interactive artifacts; temporary bridge, paired with FRE-506).
+- **adr (ongoing):** **FRE-504** — the 7 architecture threads → ADR(s).
+
+Loop after each wave: deploy → run one decomposition build → **watch** (cost meter, sub-agent records, gate decisions, planner planned-vs-fallback, memory surfaced) → iterate. Owner-approved deploys; not while a build session is mid-turn.
 
 ## Architecture Review (open conversation — feeds ADRs, not a code ticket)
 The first decomposition run was a *probe* that exposed deeper structural questions. These are for a free architectural discussion (owner + adr session), likely producing one or more ADRs:

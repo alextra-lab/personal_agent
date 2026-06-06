@@ -390,3 +390,84 @@ class TestTooledLoop:
         assert result.success is True
         assert result.summary == "plain analysis"
         assert result.tools_used == []
+
+
+def _llm_response_with_cost(
+    content: str, cost: float, tool_calls: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """An LLMResponse-shaped dict carrying a per-call cost_usd (paid/cloud calls)."""
+    resp = _llm_response(content, tool_calls)
+    resp["cost_usd"] = cost
+    return resp
+
+
+class TestSubAgentCost:
+    """FRE-501 — per-call cost_usd is captured and summed onto SubAgentResult."""
+
+    @pytest.mark.asyncio
+    async def test_default_path_captures_cost_from_mapping(self) -> None:
+        """The PARALLEL_INFERENCE path keeps the mapping's cost_usd and content."""
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(return_value=_llm_response_with_cost("analysis", 0.0123))
+
+        result = await run_sub_agent(spec=_spec(), llm_client=mock_client, trace_id="t")
+
+        assert result.success is True
+        # Content is parsed from the mapping (not str(dict)) — fixes a latent bug.
+        assert result.summary == "analysis"
+        assert result.cost_usd == pytest.approx(0.0123)
+
+    @pytest.mark.asyncio
+    async def test_default_path_bare_string_is_zero_cost(self) -> None:
+        """A bare-string response (free/local or test mock) yields cost_usd 0.0."""
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(return_value="plain string")
+
+        result = await run_sub_agent(spec=_spec(), llm_client=mock_client, trace_id="t")
+
+        assert result.cost_usd == 0.0
+        assert result.summary == "plain string"
+
+    @pytest.mark.asyncio
+    async def test_tooled_loop_sums_per_call_cost(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A tooled discovery loop sums cost across every LLM call it makes."""
+        dispatch = AsyncMock(
+            return_value={
+                "tool_call_id": "c1",
+                "tool_name": "read",
+                "content": "{}",
+                "success": True,
+                "latency_ms": 1.0,
+            }
+        )
+        monkeypatch.setattr("personal_agent.orchestrator.sub_agent.dispatch_tool_call", dispatch)
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                _llm_response_with_cost("", 0.01, [_tool_call("c1", "read", '{"path": "/x"}')]),
+                _llm_response_with_cost("FINAL DIGEST", 0.02),
+            ]
+        )
+
+        result = await run_sub_agent(
+            spec=_tooled_spec(tools=["read"]),
+            llm_client=mock_client,
+            trace_id="t",
+            session_id="s",
+        )
+
+        assert result.success is True
+        assert result.cost_usd == pytest.approx(0.03)
+
+    @pytest.mark.asyncio
+    async def test_cost_surfaced_on_complete_telemetry(self) -> None:
+        """sub_agent_complete carries cost_usd for the post-deploy cross-check."""
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(return_value=_llm_response_with_cost("done", 0.005))
+
+        with structlog.testing.capture_logs() as cap_logs:
+            await run_sub_agent(spec=_spec(), llm_client=mock_client, trace_id="t")
+
+        complete = [e for e in cap_logs if e.get("event") == "sub_agent_complete"]
+        assert complete[0]["cost_usd"] == pytest.approx(0.005)

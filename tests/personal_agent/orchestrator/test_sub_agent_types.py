@@ -5,7 +5,6 @@ import pytest
 from personal_agent.llm_client import ModelRole
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
 
-
 # ---------------------------------------------------------------------------
 # SubAgentSpec
 # ---------------------------------------------------------------------------
@@ -51,7 +50,7 @@ class TestSubAgentSpec:
             spec.task = "modified"  # type: ignore[misc]
 
     def test_context_can_hold_structured_data(self) -> None:
-        """context accepts arbitrary dicts (messages, docs, tool results)."""
+        """Context accepts arbitrary dicts (messages, docs, tool results)."""
         ctx = [
             {"role": "user", "content": "Question"},
             {"type": "doc", "title": "Manual", "text": "..."},
@@ -102,6 +101,16 @@ class TestSubAgentResult:
         result = self._make_result(success=True)
         assert result.error is None
 
+    def test_cost_usd_defaults_to_zero(self) -> None:
+        """FRE-501: cost_usd defaults to 0.0 so existing constructors stay valid."""
+        result = self._make_result()
+        assert result.cost_usd == 0.0
+
+    def test_cost_usd_explicit_value(self) -> None:
+        """FRE-501: a populated per-call cost is carried on the result."""
+        result = self._make_result(cost_usd=0.0123)
+        assert result.cost_usd == pytest.approx(0.0123)
+
     def test_immutability(self) -> None:
         """SubAgentResult is frozen — mutation raises AttributeError."""
         result = self._make_result()
@@ -109,7 +118,7 @@ class TestSubAgentResult:
             result.success = False  # type: ignore[misc]
 
     def test_summary_vs_full_output_split(self) -> None:
-        """summary and full_output are separate fields."""
+        """Summary and full_output are separate fields."""
         result = self._make_result(
             summary="Short summary for synthesis.",
             full_output="Very long detailed output... " * 100,

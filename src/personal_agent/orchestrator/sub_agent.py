@@ -51,6 +51,24 @@ _DISCOVERY_TOOL_ALLOWLIST = frozenset(
 )
 
 
+def _extract_call_cost(response: Any) -> float:
+    """Pull the per-call ``cost_usd`` from an LLM response.
+
+    ``llm_client.respond`` returns an ``LLMResponse`` mapping carrying
+    ``cost_usd`` on paid/cloud calls (``NotRequired``); the PARALLEL_INFERENCE
+    path and some tests return a bare string. Both are handled (FRE-501).
+
+    Args:
+        response: The value returned by ``llm_client.respond``.
+
+    Returns:
+        The call cost in USD, or 0.0 when absent or the response is a bare string.
+    """
+    if isinstance(response, Mapping):
+        return float(response.get("cost_usd") or 0.0)
+    return 0.0
+
+
 async def run_sub_agent(
     spec: SubAgentSpec,
     llm_client: Any,
@@ -106,9 +124,10 @@ async def run_sub_agent(
         )
 
         tools_used: list[str] = []
+        call_cost_usd = 0.0
         if spec.mode == SubAgentMode.TOOLED_SEQUENTIAL and spec.tools:
             # Tooled mode: real bounded tool-use loop (ADR-0086 D3).
-            response_content, tools_used = await _run_tooled_loop(
+            response_content, tools_used, call_cost_usd = await _run_tooled_loop(
                 messages=messages,
                 llm_client=llm_client,
                 spec=spec,
@@ -121,20 +140,22 @@ async def run_sub_agent(
             # full_output is preserved uncapped for ES observability.
             summary_cap = settings.sub_agent_summary_max_chars
         else:
-            # Default: single inference call
+            # Default: single inference call. Capture the raw response so its
+            # cost_usd is rolled into the turn meter (FRE-501); _parse_llm_response
+            # yields the content for both Mapping and bare-string responses.
             from personal_agent.telemetry.trace import TraceContext
 
-            response_content = str(
-                await asyncio.wait_for(
-                    llm_client.respond(
-                        role=spec.model_role,
-                        messages=messages,
-                        max_tokens=spec.max_tokens,
-                        trace_ctx=TraceContext(trace_id=trace_id, session_id=session_id),
-                    ),
-                    timeout=spec.timeout_seconds,
-                )
+            raw_response = await asyncio.wait_for(
+                llm_client.respond(
+                    role=spec.model_role,
+                    messages=messages,
+                    max_tokens=spec.max_tokens,
+                    trace_ctx=TraceContext(trace_id=trace_id, session_id=session_id),
+                ),
+                timeout=spec.timeout_seconds,
             )
+            response_content, _ = _parse_llm_response(raw_response)
+            call_cost_usd = _extract_call_cost(raw_response)
             summary_cap = 2000
 
         duration_ms = int(time.monotonic() * 1000) - start_ms
@@ -156,6 +177,7 @@ async def run_sub_agent(
             duration_ms=duration_ms,
             success=not empty_digest,
             error="discovery sub-agent produced an empty digest" if empty_digest else None,
+            cost_usd=call_cost_usd,
         )
 
     except asyncio.TimeoutError:
@@ -200,6 +222,7 @@ async def run_sub_agent(
         digest_chars=len(result.summary),
         tooled=complete_tooled,
         error=result.error,
+        cost_usd=round(result.cost_usd, 6),
         trace_id=trace_id,
         session_id=session_id,
     )
@@ -266,7 +289,7 @@ async def _run_tooled_loop(
     trace_id: str,
     task_id: str,
     session_id: str | None = None,
-) -> tuple[str, list[str]]:
+) -> tuple[str, list[str], float]:
     """Run a real bounded tool-use loop for TOOLED_SEQUENTIAL sub-agents (ADR-0086 D3).
 
     The sub-agent calls read-only discovery tools, incorporates their results in
@@ -286,7 +309,8 @@ async def _run_tooled_loop(
         session_id: Originating session id for cost attribution (ADR-0074).
 
     Returns:
-        A tuple of (final response content, list of tool names actually executed).
+        A tuple of (final response content, list of tool names actually executed,
+        summed USD cost of every LLM call made in this loop) (FRE-501).
     """
     from personal_agent.telemetry.trace import TraceContext
     from personal_agent.tools import ToolExecutionLayer, get_default_registry
@@ -314,6 +338,7 @@ async def _run_tooled_loop(
 
     loop_messages = list(messages)
     tools_used: list[str] = []
+    loop_cost_usd = 0.0
     max_iterations = settings.sub_agent_max_tool_iterations
 
     for iteration in range(max_iterations):
@@ -327,12 +352,13 @@ async def _run_tooled_loop(
             ),
             timeout=spec.timeout_seconds,
         )
+        loop_cost_usd += _extract_call_cost(response)
 
         content, tool_calls = _parse_llm_response(response)
 
         if not tool_calls:
             # Model produced a final answer — discovery complete.
-            return content, tools_used
+            return content, tools_used, loop_cost_usd
 
         # Record the assistant turn (with normalized tool_calls) in the loop's
         # own transcript so the model sees its requests alongside the results.
@@ -429,5 +455,6 @@ async def _run_tooled_loop(
         ),
         timeout=spec.timeout_seconds,
     )
+    loop_cost_usd += _extract_call_cost(final_response)
     content, _ = _parse_llm_response(final_response)
-    return content, tools_used
+    return content, tools_used, loop_cost_usd

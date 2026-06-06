@@ -41,6 +41,7 @@ def _make_sub_agent_result(
     task_name: str = "task_0",
     success: bool = True,
     summary: str = "Result summary",
+    cost_usd: float = 0.0,
 ) -> SubAgentResult:
     return SubAgentResult(
         task_id=f"sub-{task_name}",
@@ -52,6 +53,7 @@ def _make_sub_agent_result(
         duration_ms=2000,
         success=success,
         error=None if success else "Timeout",
+        cost_usd=cost_usd,
     )
 
 
@@ -371,3 +373,55 @@ class TestGracefulDegradation:
         assert "FAILED" in result.synthesis_context
         assert "Redis is fast" in result.synthesis_context
         assert "Hazelcast scales" in result.synthesis_context
+
+
+class TestExpansionResultCost:
+    """FRE-501 — ExpansionResult exposes planner + sub-agent cost for the meter."""
+
+    def test_cost_usd_zero_by_default(self) -> None:
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        assert ExpansionResult().cost_usd == 0.0
+        assert ExpansionResult().planner_cost_usd == 0.0
+
+    def test_cost_usd_sums_planner_and_subagents(self) -> None:
+        from personal_agent.orchestrator.expansion_controller import ExpansionResult
+
+        result = ExpansionResult(
+            sub_agent_results=[
+                _make_sub_agent_result("a", cost_usd=0.1),
+                _make_sub_agent_result("b", cost_usd=0.2),
+            ],
+            planner_cost_usd=0.05,
+        )
+        assert result.cost_usd == pytest.approx(0.35)
+
+    @pytest.mark.asyncio
+    async def test_planner_cost_captured_via_execute(self) -> None:
+        """A real planner call (dict response) populates planner_cost_usd, and the
+        total rolls planner + every sub-agent cost (FRE-501).
+        """
+        controller = ExpansionController()
+        # A Mapping planner response exercises the real planner path (not fallback)
+        # AND carries the planner call cost.
+        client = AsyncMock()
+        client.respond = AsyncMock(return_value={"content": _make_plan_json(3), "cost_usd": 0.02})
+        mock_results = [_make_sub_agent_result(f"task_{i}", cost_usd=0.01) for i in range(3)]
+
+        with patch(
+            "personal_agent.orchestrator.expansion_controller.run_sub_agent",
+            side_effect=mock_results,
+        ):
+            result = await controller.execute(
+                query="Compare Redis, Memcached, and Hazelcast",
+                strategy="HYBRID",
+                llm_client=client,
+                trace_id="test-trace-cost",
+                messages=[{"role": "user", "content": "q"}],
+            )
+
+        assert result.plan is not None
+        assert result.plan.is_fallback is False  # real planner path was taken
+        assert result.planner_cost_usd == pytest.approx(0.02)
+        # total = planner 0.02 + 3 sub-agents × 0.01
+        assert result.cost_usd == pytest.approx(0.05)

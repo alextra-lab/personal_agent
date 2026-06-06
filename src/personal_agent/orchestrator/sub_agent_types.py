@@ -70,6 +70,10 @@ class SubAgentResult:
         duration_ms: Wall-clock execution time in milliseconds.
         success: True if the call completed without error.
         error: Error message if success=False, None otherwise.
+        cost_usd: Summed USD cost of every LLM call this sub-agent made
+            (paid/cloud calls only; 0.0 for free local calls or when a
+            timeout/exception loses the partial figure). Rolled into the live
+            turn meter ``ctx.turn_cost_usd`` by the executor (FRE-501).
     """
 
     task_id: str
@@ -81,3 +85,4 @@ class SubAgentResult:
     duration_ms: float
     success: bool
     error: str | None = None
+    cost_usd: float = 0.0

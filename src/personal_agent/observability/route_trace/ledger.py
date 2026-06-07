@@ -73,6 +73,26 @@ _INSERT_SQL = """
 
 _SELECT_SQL = "SELECT * FROM route_traces WHERE trace_id = $1"
 
+_SELECT_BY_SESSION_SQL = (
+    "SELECT * FROM route_traces WHERE session_id = $1 ORDER BY created_at DESC LIMIT $2"
+)
+
+# Deterministic "label-lie candidate" predicate (FRE-514): the gateway-declared expansion
+# plan disagrees with what orchestration actually did — the "lying gateway label" gap
+# (FRE-452). It is a *candidate* heuristic, not an authoritative classifier. Kept
+# orthogonal to ``fallback_triggered`` (that path carries its own distinct
+# ``orchestration_event`` value, so it never overlaps these clauses). Composed only from
+# fixed identifiers/literals — no user input is interpolated, so it is injection-safe.
+_LABEL_LIE_SQL = (
+    "("
+    "(decomposition_strategy IS NOT NULL AND decomposition_strategy <> 'single' "
+    "AND orchestration_event = 'primary_handled') "
+    "OR "
+    "(decomposition_strategy = 'single' AND orchestration_event IN "
+    "('delegate_called', 'delegate_result_used', 'delegate_result_discarded'))"
+    ")"
+)
+
 
 class RouteTraceLedger:
     """Postgres-backed durable store for per-turn route-trace rows."""
@@ -83,7 +103,14 @@ class RouteTraceLedger:
         self.db_url = _normalize_asyncpg_dsn(settings.database_url)
 
     async def connect(self) -> None:
-        """Open the asyncpg connection pool (non-fatal on failure, mirrors cost tracker)."""
+        """Open the asyncpg connection pool (non-fatal on failure, mirrors cost tracker).
+
+        Idempotent: a second call while already connected is a no-op, so a double-connect
+        (e.g. the standalone gateway lifespan plus the main-service lifespan) cannot leak
+        the first pool.
+        """
+        if self.pool is not None:
+            return
         try:
             self.pool = await asyncpg.create_pool(
                 self.db_url, min_size=1, max_size=5, command_timeout=10
@@ -216,6 +243,66 @@ class RouteTraceLedger:
         if record is None:
             return None
         return _row_from_record(record)
+
+    async def list_by_session_id(self, session_id: UUID, limit: int = 50) -> list[RouteTraceRow]:
+        """Read a session's route-trace rows, newest first (FRE-514).
+
+        Args:
+            session_id: The owning session identifier.
+            limit: Maximum number of rows to return (caller is responsible for clamping).
+
+        Returns:
+            Route-trace rows ordered by ``created_at`` descending; empty when no rows or
+            no pool.
+        """
+        if not self.pool:
+            return []
+        records = await self.pool.fetch(_SELECT_BY_SESSION_SQL, session_id, limit)
+        return [_row_from_record(r) for r in records]
+
+    async def list_recent(
+        self,
+        *,
+        limit: int = 50,
+        label_lie: bool = False,
+        fallback_triggered: bool = False,
+        not_reconciled: bool = False,
+    ) -> list[RouteTraceRow]:
+        """Read the most recent route-trace rows, with optional boundary filters (FRE-514).
+
+        The three filters make the deterministic-shell boundary queryable and compose with
+        ``AND`` when more than one is set:
+
+        - ``fallback_triggered``: ``fallback_triggered = TRUE`` (exact column).
+        - ``not_reconciled``: ``cost_reconciled = FALSE`` (exact column).
+        - ``label_lie``: the gateway-declared expansion plan disagrees with the actual
+          orchestration event (:data:`_LABEL_LIE_SQL` — a *candidate* heuristic).
+
+        Args:
+            limit: Maximum number of rows to return (caller is responsible for clamping).
+            label_lie: When ``True``, restrict to label-lie candidates.
+            fallback_triggered: When ``True``, restrict to turns that escalated to the primary.
+            not_reconciled: When ``True``, restrict to turns whose live/authoritative cost
+                disagreed.
+
+        Returns:
+            Route-trace rows ordered by ``created_at`` descending; empty when no rows or
+            no pool.
+        """
+        if not self.pool:
+            return []
+        clauses: list[str] = []
+        if fallback_triggered:
+            clauses.append("fallback_triggered = TRUE")
+        if not_reconciled:
+            clauses.append("cost_reconciled = FALSE")
+        if label_lie:
+            clauses.append(_LABEL_LIE_SQL)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        # Only fixed module-level fragments are interpolated; ``limit`` is a bound param.
+        sql = f"SELECT * FROM route_traces{where} ORDER BY created_at DESC LIMIT $1"
+        records = await self.pool.fetch(sql, limit)
+        return [_row_from_record(r) for r in records]
 
 
 def _loads(value: Any) -> Any:

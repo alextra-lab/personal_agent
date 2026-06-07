@@ -107,6 +107,137 @@ async def test_fetch_authoritative_cost_zero_when_unconnected() -> None:
     assert await ledger.fetch_authoritative_cost(uuid4()) == (0.0, 0, 0)
 
 
+def _record(**overrides: object) -> dict[str, object]:
+    """Build a complete ``route_traces`` record dict for ``_row_from_record`` (FRE-514).
+
+    Mirrors every column the reader touches so the round-trip mapping succeeds with a
+    plain dict standing in for an ``asyncpg.Record``.
+    """
+    base: dict[str, object] = dict(
+        trace_id=uuid4(),
+        session_id=uuid4(),
+        task_id=None,
+        created_at=datetime.now(timezone.utc),
+        schema_version=1,
+        user_message_chars=10,
+        message_count=2,
+        user_message_sha256="abc123",
+        user_message_preview=None,
+        task_type="memory_recall",
+        complexity="simple",
+        intent_confidence=0.9,
+        decomposition_strategy="single",
+        decomposition_reason="memory_recall_always_single",
+        degraded_stages=None,
+        mode="standard",
+        channel="chat",
+        gateway_label="memory_recall/single",
+        model_role="primary",
+        thinking_enabled=None,
+        routing_history=None,
+        tool_iteration_count=0,
+        tools_used=None,
+        skills_loaded=None,
+        sub_agent_count=0,
+        sub_agents=None,
+        expansion_strategy=None,
+        delegate_result_passed_to_synthesis=False,
+        orchestration_event="primary_handled",
+        pedagogical_outcomes=None,
+        final_reply_chars=42,
+        latency_total_ms=12.0,
+        latency_breakdown=None,
+        cost_live_usd=0.5,
+        cost_authoritative_usd=0.5,
+        cost_reconciled=True,
+        input_tokens=100,
+        output_tokens=50,
+        fallback_triggered=False,
+        error_type=None,
+        error_class=None,
+    )
+    base.update(overrides)
+    return base
+
+
+async def test_list_by_session_id_orders_desc_and_binds() -> None:
+    ledger = RouteTraceLedger()
+    pool = MagicMock()
+    sid = uuid4()
+    rec = _record(session_id=sid)
+    pool.fetch = AsyncMock(return_value=[rec])
+    ledger.pool = pool
+
+    rows = await ledger.list_by_session_id(sid, limit=25)
+
+    pool.fetch.assert_awaited_once()
+    sql = pool.fetch.call_args.args[0]
+    assert "WHERE session_id = $1" in sql
+    assert "ORDER BY created_at DESC" in sql
+    assert "LIMIT $2" in sql
+    assert pool.fetch.call_args.args[1] == sid
+    assert pool.fetch.call_args.args[2] == 25
+    assert len(rows) == 1
+    assert rows[0].session_id == sid
+
+
+async def test_list_by_session_empty_when_unconnected() -> None:
+    ledger = RouteTraceLedger()
+    ledger.pool = None
+    assert await ledger.list_by_session_id(uuid4()) == []
+
+
+async def test_list_recent_no_filters_sql() -> None:
+    ledger = RouteTraceLedger()
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[_record(), _record()])
+    ledger.pool = pool
+
+    rows = await ledger.list_recent(limit=10)
+
+    sql = pool.fetch.call_args.args[0]
+    assert "WHERE" not in sql
+    assert "ORDER BY created_at DESC" in sql
+    assert "LIMIT $1" in sql
+    assert pool.fetch.call_args.args[1] == 10
+    assert len(rows) == 2
+
+
+async def test_list_recent_label_lie_predicate() -> None:
+    ledger = RouteTraceLedger()
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+    ledger.pool = pool
+
+    await ledger.list_recent(label_lie=True)
+
+    sql = pool.fetch.call_args.args[0]
+    assert "WHERE" in sql
+    assert "decomposition_strategy <> 'single'" in sql
+    assert "orchestration_event = 'primary_handled'" in sql
+    assert "orchestration_event IN" in sql
+
+
+async def test_list_recent_combines_filters_with_and() -> None:
+    ledger = RouteTraceLedger()
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=[])
+    ledger.pool = pool
+
+    await ledger.list_recent(fallback_triggered=True, not_reconciled=True)
+
+    sql = pool.fetch.call_args.args[0]
+    assert "fallback_triggered = TRUE" in sql
+    assert "cost_reconciled = FALSE" in sql
+    assert " AND " in sql
+
+
+async def test_list_recent_empty_when_unconnected() -> None:
+    ledger = RouteTraceLedger()
+    ledger.pool = None
+    assert await ledger.list_recent() == []
+
+
 @pytest.mark.integration
 async def test_write_read_roundtrip_and_idempotency() -> None:
     """Real round-trip against the isolated test substrate (requires make test-infra-up)."""
@@ -150,5 +281,12 @@ async def test_write_read_roundtrip_and_idempotency() -> None:
         assert fetched.degraded_stages == ("context",)
         assert fetched.routing_history == ({"decision": "HANDLE"},)
         assert fetched.latency_breakdown == {"total_duration_ms": 12.0}
+
+        # list-by-session returns the row; recent + label_lie filter excludes this
+        # honest single/primary_handled row.
+        by_session = await ledger.list_by_session_id(row.session_id)  # type: ignore[arg-type]
+        assert any(r.trace_id == trace_id for r in by_session)
+        liars = await ledger.list_recent(label_lie=True, limit=200)
+        assert all(r.trace_id != trace_id for r in liars)
     finally:
         await ledger.disconnect()

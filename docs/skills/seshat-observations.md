@@ -87,6 +87,42 @@ curl -X POST \
   "$SESHAT_API_URL/observations/query"
 ```
 
+### Route-trace ledger (per-turn stimulus → model-path → result-type)
+
+The route-trace ledger (FRE-452 / ADR-0088) records **one Postgres row per turn**: what the
+gateway decided (the deterministic-shell `gateway_label`) vs what the harness actually did
+(`orchestration_event`), joinable to `api_costs` on `trace_id`. Rows are returned as a bare
+list of the seam-neutral `RouteTraceRow` shape. Scope: `observations:read`.
+
+**Single turn (GET /observations/route-traces/{trace_id})** — 404 if absent/malformed:
+
+```bash
+curl -H "Authorization: Bearer $SESHAT_API_TOKEN" \
+  "$SESHAT_API_URL/observations/route-traces/{trace_id}"
+```
+
+**By session, newest first (GET /observations/route-traces/session/{session_id}?limit=)**:
+
+```bash
+curl -H "Authorization: Bearer $SESHAT_API_TOKEN" \
+  "$SESHAT_API_URL/observations/route-traces/session/{session_id}?limit=50"
+```
+
+**Recent-N with boundary filters (GET /observations/route-traces/recent)** — filters compose
+with AND; `limit` is clamped to 200:
+
+| Query param | Effect |
+|-------------|--------|
+| `limit` | Max rows (default 50, max 200) |
+| `label_lie=true` | Gateway-declared expansion disagrees with the actual orchestration event (*candidate* heuristic) |
+| `fallback_triggered=true` | Turn escalated to the primary after a sub-agent/phase failure |
+| `not_reconciled=true` | Live vs authoritative (`api_costs`) cost disagreed |
+
+```bash
+curl -H "Authorization: Bearer $SESHAT_API_TOKEN" \
+  "$SESHAT_API_URL/observations/route-traces/recent?label_lie=true&limit=25"
+```
+
 ---
 
 ## 🚫 Planned — not implemented (do not call)

@@ -68,7 +68,7 @@ _INSERT_SQL = """
         $37, $38,
         $39, $40, $41
     )
-    ON CONFLICT (trace_id) DO NOTHING
+    ON CONFLICT (trace_id, task_id) DO NOTHING
 """
 
 _SELECT_SQL = "SELECT * FROM route_traces WHERE trace_id = $1"
@@ -155,7 +155,11 @@ class RouteTraceLedger:
         return (float(row["cost"]), int(row["in_tok"]), int(row["out_tok"]))
 
     async def write(self, row: RouteTraceRow) -> None:
-        """Persist a route-trace row (idempotent on ``trace_id``).
+        """Persist a route-trace row (idempotent on ``(trace_id, task_id)``).
+
+        The conflict key is ``(trace_id, task_id)`` with ``NULLS NOT DISTINCT`` (ADR-0088
+        seam): the turn-level write carries ``task_id=None`` and de-duplicates per turn,
+        while future per-topology rows de-duplicate per ``(trace_id, task_id)``.
 
         Args:
             row: The fully-assembled route-trace DTO.

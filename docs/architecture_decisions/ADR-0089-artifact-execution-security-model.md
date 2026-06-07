@@ -1,6 +1,6 @@
 # ADR-0089 — Artifact Execution Security Model (Sandbox the Execution, Don't Sanitize the Output)
 
-**Status:** Proposed — 2026-06-06
+**Status:** Implemented — 2026-06-07 (FRE-509 Worker CSP · FRE-510 iframe sandbox flip · FRE-511 sanitizer retirement · FRE-512 envelope-integrity verification; prod-verified `make verify-envelope` exit 0, 12/12 directives exact)
 **Deciders:** Project owner
 **Related:** ADR-0070 (Output Channel Model — its **D7 "documents not apps" sandbox posture is superseded here**), ADR-0069 (R2-Backed Artifact Substrate — the Worker origin + serving path this rides on), ADR-0088 (Execution Topology Observability Contract — the **observable-first done-bar this inherits**), ADR-0064 (Inbound User Identity via Cloudflare Access — the auth layer in front of the artifact origin), ADR-0063 (Primitive Tools / Action-Boundary Governance — conservative-by-default posture). **Supersedes:** the FRE-496 *strip-and-deliver* sanitizer (as a security mechanism) and the FRE-500 *flag-the-strip-off* bridge. **Ratifies + reframes:** FRE-397 (the artifact-tier thread). **Depends on (L0):** FRE-506 (gate-decision / envelope-integrity telemetry). **Adjacent (separate ADR):** FRE-497 (self-correcting deterministic gates).
 **Implements:** FRE-504 (thread 5) → the new **Artifact Execution Security** pillar (L2). Spawned by FRE-508.

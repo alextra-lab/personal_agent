@@ -15,14 +15,18 @@
 
 DO $$
 BEGIN
-    -- Preflight (codex Q3): the new constraint cannot be added if duplicate turn rows
-    -- already exist (they should not — 0009 enforced UNIQUE(trace_id) — but a manual
-    -- backfill could have bypassed it). Fail loudly rather than silently dropping data.
+    -- Preflight (codex Q3): the new constraint cannot be added if duplicate keys already
+    -- exist. The key is the PAIR (trace_id, task_id) under NULLS NOT DISTINCT, so check for
+    -- duplicate pairs — GROUP BY groups NULL task_ids together, matching NULLS NOT DISTINCT.
+    -- In production all existing rows are turn-level (task_id NULL) and trace_id was UNIQUE,
+    -- so this is a no-op; it only fires if a manual backfill bypassed 0009's UNIQUE(trace_id).
+    -- (Checking trace_id alone would be wrong: legitimate per-topology rows share a trace_id
+    -- with distinct task_ids.)
     IF EXISTS (
-        SELECT 1 FROM route_traces GROUP BY trace_id HAVING COUNT(*) > 1
+        SELECT 1 FROM route_traces GROUP BY trace_id, task_id HAVING COUNT(*) > 1
     ) THEN
         RAISE EXCEPTION
-            'route_traces has duplicate trace_id rows; resolve before applying 0010';
+            'route_traces has duplicate (trace_id, task_id) rows; resolve before applying 0010';
     END IF;
 END
 $$;

@@ -323,7 +323,10 @@ async def artifact_write_executor(
     ``artifact_gate_decision`` analytics label (FRE-506): ``committed`` for HTML
     (with script/handler/CDN counts), ``not_applicable`` otherwise. ``_commit_path``
     is internal-only (not in the tool schema) — ``artifact_draft`` passes ``draft``
-    so the label distinguishes the two commit paths.
+    so the label distinguishes the two commit paths. After the commit, one
+    served-envelope probe verifies the CSP/MIME/nosniff posture actually applied
+    at the edge and emits ``artifact_envelope_integrity`` (FRE-512, ADR-0089 D5)
+    — never load-bearing.
 
     Args:
         slug: Human-readable kebab-case handle (validated by build_r2_key).
@@ -469,9 +472,32 @@ async def artifact_write_executor(
         violations=violations,
     )
 
+    # FRE-512 (ADR-0089 D5): verify the served envelope with one real GET through
+    # the edge. Never load-bearing — the probe swallows its own errors, and this
+    # guard ensures even a buggy probe cannot fail the commit.
+    public_url = _public_url(artifact_id)
+    if settings.artifact_envelope_probe_enabled and public_url is not None:
+        try:
+            await probe_served_envelope(
+                public_url=public_url,
+                artifact_id=str(artifact_id),
+                slug=slug,
+                content_type=content_type,
+                trace_id=trace_id,
+                session_id=str(session_id) if session_id is not None else None,
+                user_id=str(user_id),
+            )
+        except Exception:
+            log.warning(
+                "artifact_envelope_probe_error",
+                trace_id=trace_id,
+                artifact_id=str(artifact_id),
+                exc_info=True,
+            )
+
     return {
         "artifact_id": str(artifact_id),
-        "public_url": _public_url(artifact_id),
+        "public_url": public_url,
         "slug": slug,
         "content_type": content_type,
         "size_bytes": size_bytes,

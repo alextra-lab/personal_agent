@@ -87,7 +87,7 @@ def _patch_executor_seams(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _noop_status(_ctx) -> None:
         return None
 
-    monkeypatch.setattr(ex, "_emit_turn_status", _noop_status)
+    monkeypatch.setattr(ex, "_report_turn_progress", _noop_status)
 
 
 class TestTerminalToolFailureShortCircuit:

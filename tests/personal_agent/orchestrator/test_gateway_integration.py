@@ -216,14 +216,18 @@ class TestHybridExecutionPath:
 
 
 class TestExpansionCostRollup:
-    """FRE-501 — enforced expansion rolls planner+sub-agent cost into the live meter."""
+    """ADR-0088 D3/D4 (FRE-513) — enforced expansion no longer rolls cost into the
+    per-loop accumulator; it reports progress and lets the cost boundary drive the meter.
+    """
 
     @pytest.mark.asyncio
-    async def test_enforced_path_rolls_cost_and_emits(
+    async def test_enforced_path_reports_progress_without_rollup(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """step_init (enforced HYBRID) adds ExpansionResult.cost_usd to
-        ctx.turn_cost_usd and emits turn_status at dispatch-start and after.
+        """step_init (enforced HYBRID) does NOT add ExpansionResult.cost_usd to
+        ctx.turn_cost_usd (FRE-501 rollup removed); it reports turn progress at
+        dispatch-start and after expansion. Live cost now climbs from
+        turn.model_call_completed events published at the cost boundary (D3).
         """
         import personal_agent.orchestrator.executor as ex
         from personal_agent.orchestrator.channels import Channel
@@ -264,12 +268,12 @@ class TestExpansionCostRollup:
             gateway_output=gw,
         )
 
-        emitted: list[float] = []
+        progress_calls: list[float] = []
 
-        async def _spy_emit(c: ExecutionContext) -> None:
-            emitted.append(c.turn_cost_usd)
+        async def _spy_progress(c: ExecutionContext) -> None:
+            progress_calls.append(c.turn_cost_usd)
 
-        monkeypatch.setattr(ex, "_emit_turn_status", _spy_emit)
+        monkeypatch.setattr(ex, "_report_turn_progress", _spy_progress)
 
         def _sub(cost: float, name: str) -> SubAgentResult:
             return SubAgentResult(
@@ -309,7 +313,8 @@ class TestExpansionCostRollup:
         state = await ex.step_init(ctx, session_manager, trace_ctx)
 
         assert state == TaskState.LLM_CALL
-        # planner 0.05 + sub-agents (0.1 + 0.2) = 0.35
-        assert ctx.turn_cost_usd == pytest.approx(0.35)
-        # emit at dispatch-start (meter still 0.0) then after the rollup (0.35)
-        assert emitted == [pytest.approx(0.0), pytest.approx(0.35)]
+        # ADR-0088 D3: the per-loop rollup is gone — expansion never mutates the
+        # accumulator; cost climbs from turn.model_call_completed at the cost boundary.
+        assert ctx.turn_cost_usd == pytest.approx(0.0)
+        # Progress is reported at dispatch-start and after expansion (both with no rollup).
+        assert progress_calls == [pytest.approx(0.0), pytest.approx(0.0)]

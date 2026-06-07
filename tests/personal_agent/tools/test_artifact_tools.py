@@ -1741,3 +1741,151 @@ async def test_artifact_draft_mermaid_rendered_to_svg(
 def test_artifact_draft_tool_category_is_artifact_write() -> None:
     """Governance category matches artifact_write for consistent policy."""
     assert artifact_tools.artifact_draft_tool.category == "artifact_write"
+
+
+# ---------------------------------------------------------------------------
+# FRE-506 — sandbox gate-decision telemetry (non-load-bearing label, ADR-0089 D1/D5)
+# ---------------------------------------------------------------------------
+
+_GATE_EVENT = "artifact_gate_decision"
+
+# HTML carrying both a <script> block and an inline handler — the shape that shipped
+# via the ungated direct-write path in the da216aa4 incident (trace 87cbd720).
+_BYPASS_HTML = (
+    "<!DOCTYPE html><html><head><style>:root{--c:#000}</style></head><body><main>"
+    '<h1>Interactive</h1><div onclick="go()">click</div><script>alert(1)</script>'
+    "</main></body></html>"
+)
+
+
+def _gate_events(events: list[tuple[str, dict[str, Any]]]) -> list[dict[str, Any]]:
+    return [kw for ev, kw in events if ev == _GATE_EVENT]
+
+
+@pytest.mark.asyncio
+async def test_gate_decision_bypassed_on_direct_html_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct artifact_write of script-laden HTML emits gate_decision=bypassed (FRE-506).
+
+    This is the alarm signal that was missing in the da216aa4 incident: the ungated
+    commit path now logs that no gate ran, with the violation counts.
+    """
+    events: list[tuple[str, dict[str, Any]]] = []
+    _install_fakes(monkeypatch, store=_FakeStore())
+    _spy_artifact_log(monkeypatch, events)
+
+    await artifact_tools.artifact_write_executor(
+        slug="bypass",
+        content_type="text/html; charset=utf-8",
+        content=_BYPASS_HTML,
+        ctx=_ctx(),
+    )
+
+    gates = _gate_events(events)
+    assert len(gates) == 1
+    g = gates[0]
+    assert g["gate_decision"] == "bypassed"
+    assert g["commit_path"] == "direct_write"
+    assert g["gate_ran"] is False
+    assert g["script_count"] == 1
+    assert g["handler_count"] >= 1
+    assert g["artifact_id"]  # committed → has an id
+
+
+@pytest.mark.asyncio
+async def test_gate_decision_not_applicable_for_non_html(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-HTML direct write logs gate_decision=not_applicable with zero counts."""
+    events: list[tuple[str, dict[str, Any]]] = []
+    _install_fakes(monkeypatch, store=_FakeStore())
+    _spy_artifact_log(monkeypatch, events)
+
+    await artifact_tools.artifact_write_executor(
+        slug="data",
+        content_type="application/json",
+        content='{"a": 1}',
+        ctx=_ctx(),
+    )
+
+    gates = _gate_events(events)
+    assert len(gates) == 1
+    g = gates[0]
+    assert g["gate_decision"] == "not_applicable"
+    assert g["script_count"] == 0
+    assert g["handler_count"] == 0
+    assert g["cdn_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_gate_decision_enforced_pass_clean_draft(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A clean artifact_draft commit logs exactly one gate event: enforced_pass / draft."""
+    events: list[tuple[str, dict[str, Any]]] = []
+    _install_draft_fakes(monkeypatch)  # _VALID_HTML, clean
+    _spy_artifact_log(monkeypatch, events)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="clean", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    gates = _gate_events(events)
+    assert len(gates) == 1  # single emit despite the draft→write chain
+    g = gates[0]
+    assert g["gate_decision"] == "enforced_pass"
+    assert g["commit_path"] == "draft"
+    assert g["gate_ran"] is True
+    assert g["script_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_gate_decision_stripped_when_draft_sanitizes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A draft that strips a violation commits with gate_decision=stripped + counts."""
+    events: list[tuple[str, dict[str, Any]]] = []
+    _install_draft_fakes(monkeypatch, html_content=_HANDLER_HTML)
+    _spy_artifact_log(monkeypatch, events)
+
+    out = await artifact_tools.artifact_draft_executor(
+        slug="stripped", title="T", summary="S", plan="A plan.", ctx=_ctx()
+    )
+
+    assert out["sanitization_notes"]  # something was stripped
+    gates = _gate_events(events)
+    assert len(gates) == 1
+    g = gates[0]
+    assert g["gate_decision"] == "stripped"
+    assert g["commit_path"] == "draft"
+    assert g["handler_count"] >= 1  # pre-strip violation count carried on the label
+
+
+@pytest.mark.asyncio
+async def test_gate_decision_rejected_on_terminal_sandbox_violation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sandbox TerminalToolError emits gate_decision=rejected before propagating, no commit."""
+    from personal_agent.tools.executor import TerminalToolError
+
+    events: list[tuple[str, dict[str, Any]]] = []
+    store, _client = _install_draft_fakes(monkeypatch, html_content=_SCRIPT_HTML)
+    # Neutralise the sanitizer so the <script> survives to the defense-in-depth validator,
+    # which then raises terminally (the rare residue case the wrapper must label).
+    monkeypatch.setattr(artifact_tools, "_sanitize_sandbox_violations", lambda html: (html, []))
+    _spy_artifact_log(monkeypatch, events)
+
+    with pytest.raises(TerminalToolError, match="script"):
+        await artifact_tools.artifact_draft_executor(
+            slug="rejected", title="T", summary="S", plan="A plan.", ctx=_ctx()
+        )
+
+    gates = _gate_events(events)
+    assert len(gates) == 1
+    g = gates[0]
+    assert g["gate_decision"] == "rejected"
+    assert g["gate_ran"] is True
+    assert g["script_count"] >= 1
+    assert g["artifact_id"] is None  # never committed → null, not the string "None"
+    assert store.put_calls == []  # nothing written

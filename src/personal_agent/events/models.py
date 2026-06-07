@@ -1028,6 +1028,33 @@ class TurnCompletedEvent(EventBase):
     task_id: str | None = None
 
 
+class TurnProgressEvent(EventBase):
+    """Published as a turn progresses, to drive the live meter (ADR-0088 D4).
+
+    Carries the executor-side live fields the cost boundary cannot see (tool iteration,
+    context-window occupancy). The executor reports these to the spine (replacing the
+    scattered direct ``emit_turn_status`` calls); the projector relays them onto
+    ``turn_status``. Best-effort live signal only.
+
+    Attributes:
+        tool_iteration: Current tool-execution iteration count.
+        tool_iteration_max: Resolved per-turn tool-iteration cap.
+        context_tokens: Estimated tokens currently in the turn's context window.
+        context_max: Resolved context-window token budget.
+        topology: Active topology label when known.
+    """
+
+    event_type: Literal["turn.progress"] = "turn.progress"
+    source_component: str = "orchestrator.executor"
+    trace_id: str
+    session_id: str
+    tool_iteration: int
+    tool_iteration_max: int
+    context_tokens: int
+    context_max: int
+    topology: str | None = None
+
+
 def parse_stream_event(payload: dict[str, Any]) -> EventBase:
     """Deserialize a stream JSON payload into the correct event subclass.
 
@@ -1090,4 +1117,6 @@ def parse_stream_event(payload: dict[str, Any]) -> EventBase:
         return TurnDegradedEvent.model_validate(payload)
     if raw_type == "turn.completed":
         return TurnCompletedEvent.model_validate(payload)
+    if raw_type == "turn.progress":
+        return TurnProgressEvent.model_validate(payload)
     raise ValueError(f"unknown event_type: {raw_type!r}")

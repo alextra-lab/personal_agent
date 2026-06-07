@@ -48,6 +48,7 @@ from personal_agent.events.models import (
     TopologyEnteredEvent,
     TurnCompletedEvent,
     TurnDegradedEvent,
+    TurnProgressEvent,
     parse_stream_event,
 )
 
@@ -80,6 +81,7 @@ __all__ = [
     "TopologyEnteredEvent",
     "TurnCompletedEvent",
     "TurnDegradedEvent",
+    "TurnProgressEvent",
     "get_event_bus",
     "parse_stream_event",
     "set_global_event_bus",

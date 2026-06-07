@@ -94,11 +94,12 @@ CREATE INDEX idx_api_costs_session_id ON api_costs(session_id);
 -- Route-trace ledger (FRE-452 / ADR-0088 D6 sink 1): one row per turn capturing what the
 -- gateway decided (deterministic-shell label) vs what the harness actually did
 -- (orchestration event). Bus-independent durable write (ADR-0088 D8); joins to api_costs on
--- trace_id for authoritative cost (ADR-0088 D3). UNIQUE(trace_id) backs ON CONFLICT DO
--- NOTHING (turn-level idempotency; task_id reserved for the future per-topology key).
+-- trace_id for authoritative cost (ADR-0088 D3). UNIQUE NULLS NOT DISTINCT (trace_id,
+-- task_id) is the ADR-0088 seam key backing ON CONFLICT DO NOTHING: the turn-level write
+-- (task_id NULL) de-duplicates per turn, future per-topology rows per (trace_id, task_id).
 CREATE TABLE IF NOT EXISTS route_traces (
     id BIGSERIAL PRIMARY KEY,
-    trace_id UUID NOT NULL UNIQUE,
+    trace_id UUID NOT NULL,
     session_id UUID,
     task_id UUID,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -158,7 +159,11 @@ CREATE TABLE IF NOT EXISTS route_traces (
     -- Fallback / error path
     fallback_triggered BOOLEAN NOT NULL DEFAULT FALSE,
     error_type VARCHAR(80),
-    error_class VARCHAR(40)
+    error_class VARCHAR(40),
+
+    -- ADR-0088 seam key (FRE-513): per-topology idempotency. NULLS NOT DISTINCT so the
+    -- turn-level write (task_id NULL) still collapses to one row per trace_id.
+    CONSTRAINT uq_route_traces_trace_task UNIQUE NULLS NOT DISTINCT (trace_id, task_id)
 );
 
 CREATE INDEX idx_route_traces_session_id ON route_traces(session_id);

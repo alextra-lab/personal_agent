@@ -15,6 +15,57 @@ log = get_logger(__name__)
 settings = get_settings()
 
 
+async def _publish_model_call_completed(
+    *,
+    trace_id: UUID,
+    session_id: UUID,
+    cost_usd: float,
+    input_tokens: int,
+    output_tokens: int,
+    model_role: str | None,
+) -> None:
+    """Publish a best-effort live cost event for the ADR-0088 projector (FRE-513).
+
+    ``record_api_call`` is the hard-enforced identity boundary every model call passes
+    through — including sub-agents — so emitting here gives the live meter a
+    topology-independent cost cadence (D3) without per-loop accumulation. Live-only: the
+    durable ``api_costs`` row is the source of truth and a bus failure never affects it.
+
+    Args:
+        trace_id: Trace UUID of the request that produced this cost.
+        session_id: Session UUID the request ran in.
+        cost_usd: Cost of this single model call in USD.
+        input_tokens: Prompt tokens billed for this call.
+        output_tokens: Completion tokens billed for this call.
+        model_role: Purpose / model role attributed to the call, when known.
+    """
+    try:
+        from personal_agent.events import get_event_bus
+        from personal_agent.events.models import (
+            STREAM_TURN_OBSERVED,
+            ModelCallCompletedEvent,
+        )
+        from personal_agent.observability.topology import current_topology
+
+        await get_event_bus().publish(
+            STREAM_TURN_OBSERVED,
+            ModelCallCompletedEvent(
+                trace_id=str(trace_id),
+                session_id=str(session_id),
+                cost_usd=float(cost_usd),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                model_role=model_role,
+                # ADR-0088 D7: stamp the active topology so a call made outside any
+                # observe_topology surfaces as topology=None (an out-of-seam violation).
+                topology=current_topology(),
+            ),
+            maxlen=settings.turn_observed_stream_maxlen,
+        )
+    except Exception:
+        log.debug("model_call_completed_publish_failed", trace_id=str(trace_id))
+
+
 class CostTrackerService:
     """Service for persisting API cost tracking to PostgreSQL."""
 
@@ -144,7 +195,16 @@ class CostTrackerService:
                     cache_creation_input_tokens=cache_creation_input_tokens,
                 )
 
-                return cast(int | None, record_id)
+            # Connection released before the (best-effort, live-only) bus publish.
+            await _publish_model_call_completed(
+                trace_id=trace_id,
+                session_id=session_id,
+                cost_usd=cost_usd,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                model_role=purpose,
+            )
+            return cast(int | None, record_id)
 
         except Exception as e:
             log.error(

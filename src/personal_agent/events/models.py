@@ -47,6 +47,20 @@ STREAM_MEMORY_ACCESSED = "stream:memory.accessed"
 STREAM_MEMORY_ENTITIES_UPDATED = "stream:memory.entities_updated"
 """Stream for memory-entities-updated events (Phase 4)."""
 
+# ADR-0088 — Execution-topology observability spine (FRE-513)
+STREAM_TURN_OBSERVED = "stream:turn.observed"
+"""Stream for execution-topology observability events (ADR-0088 D6 live sink).
+
+The seam (``observe_topology``), the cost boundary (``cost_tracker``), and
+``report_degradation`` publish ``turn.topology_entered`` / ``turn.model_call_completed``
+/ ``turn.degraded`` / ``turn.completed`` here. The live projector consumes the stream and
+is the sole emitter of ``turn_status``. Best-effort: durability lives in the direct route-
+trace ledger + ``api_costs`` writes, never on the bus (ADR-0088 D8).
+"""
+
+CG_TURN_PROJECTOR = "cg:turn-projector"
+"""Consumer group: live turn-observation projector (ADR-0088 D4)."""
+
 CG_CONSOLIDATOR = "cg:consolidator"
 """Consumer group: brainstem consolidator."""
 
@@ -912,6 +926,135 @@ class ModeAdvisoryEvent(EventBase):
     reason: str
 
 
+# ---------------------------------------------------------------------------
+# ADR-0088 — Execution-topology observability spine (FRE-513)
+# ---------------------------------------------------------------------------
+
+
+class TopologyEnteredEvent(EventBase):
+    """Published when a turn enters an execution topology (ADR-0088 D2 seam enter).
+
+    Emitted by ``observe_topology(...)`` on context-manager enter. Best-effort live
+    signal; the durable record is the seam's direct route-trace write (D8).
+
+    Attributes:
+        topology: The execution topology label (``primary`` / ``hybrid_fanout`` /
+            ``decompose`` / ``delegate`` / ``planner_executor``).
+        task_id: Per-topology task identifier when the row is a topology segment;
+            ``None`` for the turn-level entry.
+    """
+
+    event_type: Literal["turn.topology_entered"] = "turn.topology_entered"
+    source_component: str = "observability.topology.seam"
+    trace_id: str
+    session_id: str
+    topology: str
+    task_id: str | None = None
+
+
+class ModelCallCompletedEvent(EventBase):
+    """Published after a model call's cost is durably recorded (ADR-0088 D2/D3).
+
+    Emitted (best-effort) from ``cost_tracker.record_api_call`` — the hard-enforced
+    identity boundary every model call passes through, including sub-agents — so the live
+    cost meter is topology-independent. The authoritative total remains ``SUM(api_costs)``.
+
+    Attributes:
+        cost_usd: Cost of this single model call in USD.
+        input_tokens: Prompt tokens billed for this call.
+        output_tokens: Completion tokens billed for this call.
+        model_role: Selected model tier / purpose (e.g. ``primary`` / ``sub_agent``);
+            ``None`` when no explicit role was attributed.
+        topology: Active topology label when known; ``None`` otherwise.
+    """
+
+    event_type: Literal["turn.model_call_completed"] = "turn.model_call_completed"
+    source_component: str = "llm_client.cost_tracker"
+    trace_id: str
+    session_id: str
+    cost_usd: float
+    input_tokens: int
+    output_tokens: int
+    model_role: str | None = None
+    topology: str | None = None
+
+
+class TurnDegradedEvent(EventBase):
+    """Published when a topology does less than intended (ADR-0088 D5).
+
+    The single sanctioned "did less" signal — emitted via ``report_degradation(...)`` for
+    planner schema-fail → tool-less fallback, artifact strip-and-deliver, budget-trimmed
+    memory, discarded sub-agent results, etc. The projector raises a visible ``degraded``
+    state with reason onto ``turn_status``.
+
+    Attributes:
+        where: Topology / call-site that degraded.
+        reason: Human-readable degradation reason.
+        severity: ``info`` | ``warning`` | ``critical``.
+        expected: What the topology intended to do, when expressible.
+        actual: What it did instead, when expressible.
+    """
+
+    event_type: Literal["turn.degraded"] = "turn.degraded"
+    source_component: str = "observability.topology.seam"
+    trace_id: str
+    session_id: str
+    where: str
+    reason: str
+    severity: Literal["info", "warning", "critical"]
+    expected: str | None = None
+    actual: str | None = None
+
+
+class TurnCompletedEvent(EventBase):
+    """Published when a turn's topology exits (ADR-0088 D2 seam exit).
+
+    Emitted by ``observe_topology(...)`` on context-manager exit, after the direct durable
+    route-trace write. Carries the authoritative cost so the projector reconciles the live
+    meter to ``SUM(api_costs)`` (D3, authoritative wins).
+
+    Attributes:
+        topology: The execution topology label that completed.
+        cost_authoritative_usd: ``SUM(api_costs WHERE trace_id)`` at completion.
+        task_id: Per-topology task identifier when applicable; ``None`` for turn-level.
+    """
+
+    event_type: Literal["turn.completed"] = "turn.completed"
+    source_component: str = "observability.topology.seam"
+    trace_id: str
+    session_id: str
+    topology: str
+    cost_authoritative_usd: float
+    task_id: str | None = None
+
+
+class TurnProgressEvent(EventBase):
+    """Published as a turn progresses, to drive the live meter (ADR-0088 D4).
+
+    Carries the executor-side live fields the cost boundary cannot see (tool iteration,
+    context-window occupancy). The executor reports these to the spine (replacing the
+    scattered direct ``emit_turn_status`` calls); the projector relays them onto
+    ``turn_status``. Best-effort live signal only.
+
+    Attributes:
+        tool_iteration: Current tool-execution iteration count.
+        tool_iteration_max: Resolved per-turn tool-iteration cap.
+        context_tokens: Estimated tokens currently in the turn's context window.
+        context_max: Resolved context-window token budget.
+        topology: Active topology label when known.
+    """
+
+    event_type: Literal["turn.progress"] = "turn.progress"
+    source_component: str = "orchestrator.executor"
+    trace_id: str
+    session_id: str
+    tool_iteration: int
+    tool_iteration_max: int
+    context_tokens: int
+    context_max: int
+    topology: str | None = None
+
+
 def parse_stream_event(payload: dict[str, Any]) -> EventBase:
     """Deserialize a stream JSON payload into the correct event subclass.
 
@@ -966,4 +1109,14 @@ def parse_stream_event(payload: dict[str, Any]) -> EventBase:
         return ModeAdvisoryEvent.model_validate(payload)
     if raw_type == "context.within_session_compressed":
         return WithinSessionCompressionEvent.model_validate(payload)
+    if raw_type == "turn.topology_entered":
+        return TopologyEnteredEvent.model_validate(payload)
+    if raw_type == "turn.model_call_completed":
+        return ModelCallCompletedEvent.model_validate(payload)
+    if raw_type == "turn.degraded":
+        return TurnDegradedEvent.model_validate(payload)
+    if raw_type == "turn.completed":
+        return TurnCompletedEvent.model_validate(payload)
+    if raw_type == "turn.progress":
+        return TurnProgressEvent.model_validate(payload)
     raise ValueError(f"unknown event_type: {raw_type!r}")

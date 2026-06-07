@@ -673,6 +673,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         CG_MODE_CONTROLLER,
         CG_PROMOTION,
         CG_SESSION_WRITER,
+        CG_TURN_PROJECTOR,
         STREAM_CONSOLIDATION_COMPLETED,
         STREAM_CONTEXT_COMPACTION_QUALITY_POOR,
         STREAM_ERRORS_PATTERN_DETECTED,
@@ -684,6 +685,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         STREAM_PROMOTION_ISSUE_CREATED,
         STREAM_REQUEST_CAPTURED,
         STREAM_REQUEST_COMPLETED,
+        STREAM_TURN_OBSERVED,
         EventBase,
     )
     from personal_agent.events.pipeline_handlers import (
@@ -793,6 +795,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             consumer_name="freshness-entities-0",
             handler=_noop_freshness_entities,
         )
+
+        # ADR-0088: cg:turn-projector — the sole emitter of turn_status (FRE-513).
+        # Consumes stream:turn.observed and projects the live meter. Live-only; under
+        # NoOpBus (not RedisStreamBus) this block is skipped and the durable route-trace
+        # + api_costs writes still happen (ADR-0088 D8).
+        if settings.turn_projector_enabled:
+            from personal_agent.observability.topology.projector import (
+                TurnObservationProjector,
+            )
+
+            _turn_projector = TurnObservationProjector()
+            await active_bus.subscribe(
+                stream=STREAM_TURN_OBSERVED,
+                group=CG_TURN_PROJECTOR,
+                consumer_name="turn-projector-0",
+                handler=_turn_projector.handle,
+            )
+            log.info("turn_projector_registered", consumer_group=CG_TURN_PROJECTOR)
 
         # ADR-0055: cg:mode-controller — receives metrics.sampled and
         # mode.transition events, drives ModeManager.evaluate_transitions().

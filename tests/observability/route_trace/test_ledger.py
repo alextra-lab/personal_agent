@@ -74,12 +74,15 @@ async def test_write_issues_idempotent_insert() -> None:
     conn.execute.assert_awaited_once()
     sql = conn.execute.call_args.args[0]
     assert "INSERT INTO route_traces" in sql
-    assert "ON CONFLICT (trace_id) DO NOTHING" in sql
+    # ADR-0088 seam key: per-topology rows are keyed by (trace_id, task_id), so the
+    # idempotency conflict target migrated from (trace_id) to (trace_id, task_id).
+    assert "ON CONFLICT (trace_id, task_id) DO NOTHING" in sql
     # 41 bound parameters follow the SQL string.
     assert len(conn.execute.call_args.args) == 42
-    # Identity params are passed first, as UUIDs.
+    # Identity params are passed first, as UUIDs; task_id is the third bound param.
     assert conn.execute.call_args.args[1] == row.trace_id
     assert conn.execute.call_args.args[2] == row.session_id
+    assert conn.execute.call_args.args[3] == row.task_id
 
 
 async def test_write_noop_when_not_connected() -> None:
@@ -248,15 +251,13 @@ async def test_write_read_roundtrip_and_idempotency() -> None:
     if ledger.pool is None:
         pytest.skip("route-trace test substrate unavailable")
     try:
-        # Self-provision the schema from the canonical migration (idempotent).
-        migration = (
-            Path(__file__).resolve().parents[3]
-            / "docker"
-            / "postgres"
-            / "migrations"
-            / "0009_route_trace_ledger.sql"
+        # Self-provision the schema from the canonical migrations (idempotent): the
+        # FRE-452 base table, then the ADR-0088 seam key migration (0010).
+        migrations_dir = Path(__file__).resolve().parents[3] / "docker" / "postgres" / "migrations"
+        await ledger.pool.execute((migrations_dir / "0009_route_trace_ledger.sql").read_text())
+        await ledger.pool.execute(
+            (migrations_dir / "0010_route_trace_topology_key.sql").read_text()
         )
-        await ledger.pool.execute(migration.read_text())
 
         trace_id = uuid4()
         row = _row(
@@ -288,5 +289,22 @@ async def test_write_read_roundtrip_and_idempotency() -> None:
         assert any(r.trace_id == trace_id for r in by_session)
         liars = await ledger.list_recent(label_lie=True, limit=200)
         assert all(r.trace_id != trace_id for r in liars)
+
+        # ADR-0088 seam key (FRE-513): two rows sharing trace_id but with distinct
+        # task_id are both persisted — the per-topology forward slot. A NULL task_id
+        # row is the turn-level write above; a non-NULL task_id is a topology segment.
+        seam_trace = uuid4()
+        sess = uuid4()
+        await ledger.write(_row(trace_id=seam_trace, session_id=sess, task_id=None))
+        sub_task = uuid4()
+        await ledger.write(_row(trace_id=seam_trace, session_id=sess, task_id=sub_task))
+        rows_for_trace = await ledger.list_by_session_id(sess, limit=10)
+        assert len([r for r in rows_for_trace if r.trace_id == seam_trace]) == 2
+        # Re-writing the same (trace_id, task_id) is idempotent (incl. NULLS NOT DISTINCT
+        # for the turn-level NULL slot).
+        await ledger.write(_row(trace_id=seam_trace, session_id=sess, task_id=None))
+        await ledger.write(_row(trace_id=seam_trace, session_id=sess, task_id=sub_task))
+        rows_after = await ledger.list_by_session_id(sess, limit=10)
+        assert len([r for r in rows_after if r.trace_id == seam_trace]) == 2
     finally:
         await ledger.disconnect()

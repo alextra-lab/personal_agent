@@ -17,16 +17,25 @@ import json
 import time
 import uuid
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import Any
 
 import structlog
 
+from personal_agent.captains_log.capture import SubAgentCapture, write_sub_agent_capture
 from personal_agent.config import settings
 from personal_agent.orchestrator.expansion_types import SubAgentMode
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult, SubAgentSpec
 from personal_agent.orchestrator.tool_dispatch import dispatch_tool_call
 
 logger = structlog.get_logger(__name__)
+
+# Marker the primary injects when proactive-memory/KG entities are in context
+# (executor._render_memory_section). Scanned in sub-agent context to answer the
+# question FRE-505 exists for: "was memory/KG in the sub-agent's input?"
+_MEMORY_CONTEXT_MARKER = "## Your Memory Graph"
+# Per-message content preview length (mirrors executor.llm_call_messages_debug).
+_CONTEXT_PREVIEW_CHARS = 200
 
 # System prompt for sub-agents: focused, no personality
 _SUB_AGENT_SYSTEM_PROMPT = (
@@ -69,6 +78,92 @@ def _extract_call_cost(response: Any) -> float:
     return 0.0
 
 
+def _summarize_input_context(system_content: str, spec: SubAgentSpec) -> dict[str, Any]:
+    """Build the structured input-context breakdown for an audit record (FRE-505).
+
+    Answers "what was this sub-agent fed?" from ``spec`` alone (always available,
+    even on the timeout/cancel/exception paths). Detects whether proactive-memory/
+    KG content reached the sub-agent context — by current design memory is injected
+    only into the *primary* system prompt, so this is typically ``False``, which is
+    itself the answer the ticket asks for.
+
+    Args:
+        system_content: The fully-built sub-agent system prompt (base + skill index).
+        spec: The sub-agent specification.
+
+    Returns:
+        A mapping with system/skill/context sizes, a per-message breakdown
+        (``role``/``chars``/``content_preview``), and ``memory_in_context``.
+    """
+    context_messages: list[dict[str, Any]] = []
+    context_chars = 0
+    memory_in_context = False
+    for msg in spec.context:
+        content = str(msg.get("content") or "")
+        context_chars += len(content)
+        if _MEMORY_CONTEXT_MARKER in content:
+            memory_in_context = True
+        context_messages.append(
+            {
+                "role": str(msg.get("role") or ""),
+                "chars": len(content),
+                "content_preview": content[:_CONTEXT_PREVIEW_CHARS],
+            }
+        )
+    return {
+        "system_prompt_chars": len(system_content),
+        "skill_index_block_chars": len(spec.skill_index_block),
+        "context_message_count": len(spec.context),
+        "context_chars": context_chars,
+        "context_messages": context_messages,
+        "memory_in_context": memory_in_context,
+    }
+
+
+def _emit_sub_agent_capture(
+    result: SubAgentResult,
+    spec: SubAgentSpec,
+    context_breakdown: dict[str, Any],
+    trace_id: str,
+    session_id: str | None,
+) -> None:
+    """Build and write the per-sub-agent audit record (FRE-505), best-effort.
+
+    Args:
+        result: The terminal sub-agent result (success, timeout, error, or cancel).
+        spec: The sub-agent specification.
+        context_breakdown: Output of :func:`_summarize_input_context`.
+        trace_id: Parent request trace identifier.
+        session_id: Originating session id.
+    """
+    full_output_chars = len(result.full_output)
+    digest_chars = len(result.summary)
+    truncation_ratio = digest_chars / full_output_chars if full_output_chars else 0.0
+    capture = SubAgentCapture(
+        trace_id=trace_id,
+        session_id=session_id,
+        task_id=result.task_id,
+        timestamp=datetime.now(timezone.utc),
+        spec_task=spec.task,
+        mode=spec.mode.value,
+        model_role=spec.model_role.value,
+        max_tokens=spec.max_tokens,
+        tools_granted=list(spec.tools),
+        tools_used=result.tools_used,
+        full_output=result.full_output,
+        full_output_chars=full_output_chars,
+        injected_digest=result.summary,
+        digest_chars=digest_chars,
+        truncation_ratio=truncation_ratio,
+        success=result.success,
+        error=result.error,
+        duration_ms=result.duration_ms,
+        cost_usd=result.cost_usd,
+        **context_breakdown,
+    )
+    write_sub_agent_capture(capture)
+
+
 async def run_sub_agent(
     spec: SubAgentSpec,
     llm_client: Any,
@@ -91,6 +186,15 @@ async def run_sub_agent(
     task_id = f"sub-{uuid.uuid4().hex[:12]}"
     start_ms = int(time.monotonic() * 1000)
 
+    # Build system prompt: base + optional skill index inherited from parent (Phase B).
+    # Built before the try so the FRE-505 input-context breakdown is available on every
+    # terminal path (success/timeout/exception/cancel), and so cancellation — which
+    # raises BaseException, not Exception — can still emit an audit record.
+    _system_content = _SUB_AGENT_SYSTEM_PROMPT
+    if spec.skill_index_block:
+        _system_content = f"{_system_content}\n\n{spec.skill_index_block}"
+    _context_breakdown = _summarize_input_context(_system_content, spec)
+
     logger.info(
         "sub_agent_start",
         task_id=task_id,
@@ -100,14 +204,12 @@ async def run_sub_agent(
         timeout=spec.timeout_seconds,
         trace_id=trace_id,
         session_id=session_id,
+        **_context_breakdown,
     )
 
+    tools_used: list[str] = []
+    call_cost_usd = 0.0
     try:
-        # Build system prompt: base + optional skill index inherited from parent (Phase B)
-        _system_content = _SUB_AGENT_SYSTEM_PROMPT
-        if spec.skill_index_block:
-            _system_content = f"{_system_content}\n\n{spec.skill_index_block}"
-
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": _system_content},
         ]
@@ -123,8 +225,6 @@ async def run_sub_agent(
             }
         )
 
-        tools_used: list[str] = []
-        call_cost_usd = 0.0
         if spec.mode == SubAgentMode.TOOLED_SEQUENTIAL and spec.tools:
             # Tooled mode: real bounded tool-use loop (ADR-0086 D3).
             response_content, tools_used, call_cost_usd = await _run_tooled_loop(
@@ -194,6 +294,26 @@ async def run_sub_agent(
             error=f"Timeout after {spec.timeout_seconds}s",
         )
 
+    except asyncio.CancelledError:
+        # The outer dispatch can cancel us on a global timeout (expansion_controller).
+        # CancelledError is a BaseException — not caught by `except Exception` — so we
+        # emit the audit record here (FRE-505) and re-raise to preserve cancellation.
+        duration_ms = int(time.monotonic() * 1000) - start_ms
+        cancelled = SubAgentResult(
+            task_id=task_id,
+            spec_task=spec.task,
+            summary="",
+            full_output="",
+            tools_used=tools_used,
+            token_count=0,
+            duration_ms=duration_ms,
+            success=False,
+            error="cancelled (global dispatch timeout)",
+            cost_usd=call_cost_usd,
+        )
+        _emit_sub_agent_capture(cancelled, spec, _context_breakdown, trace_id, session_id)
+        raise
+
     except Exception as exc:
         duration_ms = int(time.monotonic() * 1000) - start_ms
         result = SubAgentResult(
@@ -201,11 +321,12 @@ async def run_sub_agent(
             spec_task=spec.task,
             summary="",
             full_output="",
-            tools_used=[],
+            tools_used=tools_used,
             token_count=0,
             duration_ms=duration_ms,
             success=False,
             error=str(exc),
+            cost_usd=call_cost_usd,
         )
 
     # Recomputed here (not reusing the in-`try` `is_tooled`) so it is defined on the
@@ -213,19 +334,28 @@ async def run_sub_agent(
     # digest is SubAgentResult.summary, the only text that crosses into the parent's
     # synthesis context.
     complete_tooled = spec.mode == SubAgentMode.TOOLED_SEQUENTIAL and bool(spec.tools)
+    _full_output_chars = len(result.full_output)
+    _digest_chars = len(result.summary)
     logger.info(
         "sub_agent_complete",
         task_id=task_id,
         success=result.success,
         duration_ms=result.duration_ms,
         token_count=result.token_count,
-        digest_chars=len(result.summary),
+        digest_chars=_digest_chars,
+        full_output_chars=_full_output_chars,
+        truncation_ratio=(_digest_chars / _full_output_chars if _full_output_chars else 0.0),
         tooled=complete_tooled,
         error=result.error,
         cost_usd=round(result.cost_usd, 6),
         trace_id=trace_id,
         session_id=session_id,
     )
+
+    # FRE-505: durable per-sub-agent audit record (input context + full output +
+    # injected digest + truncation ratio) so a decomposition turn is reconstructable
+    # from telemetry alone. Best-effort; never raises.
+    _emit_sub_agent_capture(result, spec, _context_breakdown, trace_id, session_id)
 
     return result
 

@@ -126,6 +126,7 @@ All five from the `cache_control 5>4` post-mortem (PR #150). FRE-468 is Urgent a
 
 | Ticket | Priority | Tier | What |
 |--------|----------|------|------|
+| [FRE-523](https://linear.app/frenchforest/issue/FRE-523) | Bug | Sonnet | **Redesign `eval_mode` suppression (owner decision 2026-06-07): memory pipeline (capture/reflection/extraction) must RUN during eval** — suppressing it made pedagogical-continuity/recall untestable ("error in test planning"); only external side effects stay suppressed; fix primary/sub-agent inconsistency; EVAL provenance on derived content. Project: *Observability Foundation*. |
 | [FRE-521](https://linear.app/frenchforest/issue/FRE-521) | — | Haiku | **PWA: per-session turn count** in the session UI + visually flag `channel=EVAL` sessions. Owner note from the FRE-453 baseline review (2026-06-07). Project: *VPS/Cloud Architecture Stabilization*. |
 | [FRE-522](https://linear.app/frenchforest/issue/FRE-522) | — | Sonnet | **Eval ⇄ PWA reconciliation**: deep links report-case→session, run/case context on EVAL sessions, **+ fix the confirmed tool-use rendering gap** (ledger shows tools on 15/18 baseline cases; PWA shows none). Owner note from the FRE-453 baseline review. Project: *Observability Foundation*. |
 | [FRE-435](https://linear.app/frenchforest/issue/FRE-435) | — | Opus | **Memory-recall research initiative** — quantify KG write + retrieval quality with a deep A/B harness (FRE-433 method); explore markdown/LLM-wiki retrieval. Owner's next big research item. |

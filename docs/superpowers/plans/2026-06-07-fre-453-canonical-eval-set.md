@@ -112,6 +112,41 @@ CLI: `--run-id` (required), `--profile {local,cloud}`, `--chat-url` (default `ht
 | Post-deploy (owner/master) | Human rubric pass over the md report — fills outcome boxes per case (the M2 gate's "both layers" half) | completed rubric section attached to Linear comment |
 | Future gate | §5.2/§5.3 conventions confirmed or revised from a labeled run | FRE-515 / M2 review against first labeled report |
 
+## Addendum — owner co-design session (2026-06-07)
+
+Scope evolved with the owner before implementation; the dataset below supersedes the
+7-case table above. Final shape — **19 cases, two tiers**:
+
+1. **Tier `canonical` (7)** — the ADR-0084 pedagogical turn types, topics drawn from the
+   owner's real learning threads (agent-harness development, cooking, music studies,
+   security/CSIRT operations): trivial_conversational, memory_recall (beurre blanc),
+   opening_ritual (parallel fifths open thread), closing_ritual (CSIRT dwell-time
+   surprise), cross_thread_synthesis (mise en place × IR playbooks — the §7.3 probe),
+   emotionally_loaded (borrowed chords misconception), tool_heavy_research (own memory
+   subsystem code path).
+2. **Tier `coverage` (12)** — realistic multi-tool queries, pedagogically framed, whose
+   **union** of expected skills/tools spans the toolbox: self_observability_teaching,
+   infra_triage_pedagogy, web_research_teach, data_prediction_reveal, diagram_quiz,
+   open_threads_coach, knowledge_graph_gaps, browser_lesson, delegation_handoff (the
+   only DELEGATE-path hypothesis), linear_capture, artifact_study_guide (HYBRID
+   artifact-decomposition + FRE-506 gate-decision observation), plus the canonical 7's
+   incidental coverage.
+3. **Per-case expected fields extended:** `skills` (subset of `skills_loaded`),
+   `tools_any_of` (tool names or family names), both MATCH/MISMATCH findings.
+4. **Union-coverage enforcement test** (self-describing, no hand-maintained mapping):
+   all `docs/skills/*.md` skills (minus explicit allowlist) and all native (non-`mcp_`)
+   tools in `config/governance/tools.yaml` must be claimed by some case; MCP tools are
+   enforced at **family** granularity (browser, linear) via declared families.
+   v1 allowlist: `get_location`, `get_library_docs` — flagged in the dataset, not silent.
+5. **Backend static-prompt surfaces are OBSERVATIONAL ONLY** (owner: v0.1, never tuned —
+   expectations are the wrong instrument): every case records which surfaces fired
+   (captain's-log capture, reflection, entity extraction, within-session compression,
+   tool-result digest) with output excerpts, best-effort within a bounded ES wait;
+   scheduled surfaces (consolidation, insights) go in a post-run sweep section. No
+   verdicts; first run = their first exploration baseline.
+6. **Posture restated:** every expectation is a hypothesis; the first run is
+   baseline-learning, not pass/fail ("we will learn").
+
 ## Out of scope
 
 - Auto-assigning pedagogical outcomes (M3).

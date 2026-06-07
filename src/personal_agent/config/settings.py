@@ -309,6 +309,18 @@ class AppConfig(BaseSettings):
         description="MAXLEN (approximate) on stream:metrics.sampled — matches MetricsDaemon "
         "ring-buffer depth (~1 h at 5 s).",
     )
+    turn_observed_stream_maxlen: int = Field(
+        default=10000,
+        ge=100,
+        description="MAXLEN (approximate) on stream:turn.observed — the ADR-0088 live "
+        "observability stream (FRE-513). Best-effort; durability is the direct ledger write.",
+    )
+    turn_projector_enabled: bool = Field(
+        default=True,
+        description="Register the ADR-0088 live turn-observation projector (FRE-513). When "
+        "off, the durable route-trace + api_costs writes still happen; only the live "
+        "turn_status surface is absent (ADR-0088 D8).",
+    )
     mode_evaluation_interval_seconds: float = Field(
         default=30.0,
         gt=0,

@@ -14,6 +14,7 @@ from personal_agent.events.models import (
     CG_INSIGHTS,
     CG_PROMOTION,
     CG_SESSION_WRITER,
+    CG_TURN_PROJECTOR,
     STREAM_CONSOLIDATION_COMPLETED,
     STREAM_FEEDBACK_RECEIVED,
     STREAM_INSIGHTS_COST_ANOMALY,
@@ -22,15 +23,20 @@ from personal_agent.events.models import (
     STREAM_PROMOTION_ISSUE_CREATED,
     STREAM_REQUEST_CAPTURED,
     STREAM_REQUEST_COMPLETED,
+    STREAM_TURN_OBSERVED,
     AccessContext,
     ConsolidationCompletedEvent,
     FeedbackReceivedEvent,
     InsightsCostAnomalyEvent,
     InsightsPatternDetectedEvent,
     MemoryAccessedEvent,
+    ModelCallCompletedEvent,
     PromotionIssueCreatedEvent,
     RequestCapturedEvent,
     RequestCompletedEvent,
+    TopologyEnteredEvent,
+    TurnCompletedEvent,
+    TurnDegradedEvent,
     parse_stream_event,
 )
 
@@ -594,3 +600,89 @@ class TestWithinSessionCompressionEvent:
                 summariser_duration_ms=0,
                 tokens_saved=90,
             )
+
+
+class TestTurnObservedEvents:
+    """ADR-0088 spine events on stream:turn.observed (FRE-513)."""
+
+    def test_stream_and_group_constants(self) -> None:
+        assert STREAM_TURN_OBSERVED == "stream:turn.observed"
+        assert CG_TURN_PROJECTOR == "cg:turn-projector"
+
+    def test_topology_entered_roundtrip(self) -> None:
+        event = TopologyEnteredEvent(
+            trace_id="t-1",
+            session_id="s-1",
+            source_component="observability.topology.seam",
+            topology="hybrid_fanout",
+        )
+        parsed = parse_stream_event(event.model_dump(mode="json"))
+        assert isinstance(parsed, TopologyEnteredEvent)
+        assert parsed.event_type == "turn.topology_entered"
+        assert parsed.topology == "hybrid_fanout"
+        assert parsed.trace_id == "t-1"
+        assert parsed.session_id == "s-1"
+        assert parsed.task_id is None
+
+    def test_model_call_completed_roundtrip(self) -> None:
+        event = ModelCallCompletedEvent(
+            trace_id="t-1",
+            session_id="s-1",
+            source_component="llm_client.cost_tracker",
+            cost_usd=0.0123,
+            input_tokens=1200,
+            output_tokens=800,
+            model_role="sub_agent",
+            topology="hybrid_fanout",
+        )
+        parsed = parse_stream_event(event.model_dump(mode="json"))
+        assert isinstance(parsed, ModelCallCompletedEvent)
+        assert parsed.event_type == "turn.model_call_completed"
+        assert parsed.cost_usd == pytest.approx(0.0123)
+        assert parsed.input_tokens == 1200
+        assert parsed.output_tokens == 800
+        assert parsed.model_role == "sub_agent"
+
+    def test_turn_degraded_roundtrip(self) -> None:
+        event = TurnDegradedEvent(
+            trace_id="t-1",
+            session_id="s-1",
+            source_component="observability.topology.seam",
+            where="decompose",
+            reason="planner_schema_fail",
+            severity="critical",
+            expected="tool-using sub-agents",
+            actual="tool-less fallback",
+        )
+        parsed = parse_stream_event(event.model_dump(mode="json"))
+        assert isinstance(parsed, TurnDegradedEvent)
+        assert parsed.event_type == "turn.degraded"
+        assert parsed.severity == "critical"
+        assert parsed.where == "decompose"
+        assert parsed.reason == "planner_schema_fail"
+
+    def test_turn_degraded_rejects_bad_severity(self) -> None:
+        with pytest.raises(ValidationError):
+            TurnDegradedEvent(
+                trace_id="t-1",
+                session_id="s-1",
+                source_component="observability.topology.seam",
+                where="decompose",
+                reason="x",
+                severity="catastrophic",  # not in the Literal
+            )
+
+    def test_turn_completed_roundtrip(self) -> None:
+        event = TurnCompletedEvent(
+            trace_id="t-1",
+            session_id="s-1",
+            source_component="observability.topology.seam",
+            topology="primary",
+            cost_authoritative_usd=0.42,
+        )
+        parsed = parse_stream_event(event.model_dump(mode="json"))
+        assert isinstance(parsed, TurnCompletedEvent)
+        assert parsed.event_type == "turn.completed"
+        assert parsed.topology == "primary"
+        assert parsed.cost_authoritative_usd == pytest.approx(0.42)
+        assert parsed.task_id is None

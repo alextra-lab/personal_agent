@@ -45,6 +45,7 @@ async def _publish_model_call_completed(
             STREAM_TURN_OBSERVED,
             ModelCallCompletedEvent,
         )
+        from personal_agent.observability.topology import current_topology
 
         await get_event_bus().publish(
             STREAM_TURN_OBSERVED,
@@ -55,6 +56,9 @@ async def _publish_model_call_completed(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 model_role=model_role,
+                # ADR-0088 D7: stamp the active topology so a call made outside any
+                # observe_topology surfaces as topology=None (an out-of-seam violation).
+                topology=current_topology(),
             ),
             maxlen=settings.turn_observed_stream_maxlen,
         )

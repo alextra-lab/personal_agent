@@ -7,8 +7,9 @@ D8) and a **best-effort bus event** on ``stream:turn.observed`` for the live pro
 """
 
 from personal_agent.observability.topology.seam import (
+    current_topology,
     observe_topology,
     report_degradation,
 )
 
-__all__ = ["observe_topology", "report_degradation"]
+__all__ = ["current_topology", "observe_topology", "report_degradation"]

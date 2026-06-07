@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -44,6 +45,22 @@ log = structlog.get_logger(__name__)
 # can see, through the _publish helper, that every payload is a typed Event whose
 # trace_id/session_id are mandatory at the type level.
 TurnObservedEvent = TopologyEnteredEvent | TurnDegradedEvent | TurnCompletedEvent
+
+# ADR-0088 D7 runtime guard: the topology active in the current async context. Set by
+# observe_topology on enter and reset on exit; ``contextvars`` propagates it into every
+# awaited coroutine (including sub-agents on the same call stack). A model call whose
+# context shows ``None`` ran outside the seam — a checkable contract violation.
+_active_topology: ContextVar[str | None] = ContextVar("active_topology", default=None)
+
+
+def current_topology() -> str | None:
+    """Return the execution topology active in the current async context, or ``None``.
+
+    ``None`` means no ``observe_topology`` is active on this call stack — model work seen
+    with ``None`` is an out-of-seam violation (ADR-0088 D7).
+    """
+    return _active_topology.get()
+
 
 # Map the gateway decomposition strategy to the ADR-0088 D1 topology vocabulary.
 _STRATEGY_TO_TOPOLOGY: dict[str, str] = {
@@ -146,6 +163,7 @@ async def observe_topology(ctx: ExecutionContext) -> AsyncIterator[None]:
     trace_id = str(getattr(ctx, "trace_id", "")) or None
     session_id = str(getattr(ctx, "session_id", "")) or None
 
+    token = _active_topology.set(topology)
     if trace_id and session_id:
         await _publish(
             TopologyEnteredEvent(trace_id=trace_id, session_id=session_id, topology=topology),
@@ -154,6 +172,7 @@ async def observe_topology(ctx: ExecutionContext) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        _active_topology.reset(token)
         cost = await _write_durable_row(ctx, topology)
         if trace_id and session_id:
             await _publish(

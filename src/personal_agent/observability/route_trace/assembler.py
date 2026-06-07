@@ -111,6 +111,8 @@ def assemble_route_trace(
     store_preview: bool,
     preview_chars: int,
     created_at: datetime | None = None,
+    topology: str | None = None,
+    task_id: UUID | None = None,
 ) -> RouteTraceRow:
     """Build a :class:`RouteTraceRow` from a completed turn's execution context.
 
@@ -123,6 +125,11 @@ def assemble_route_trace(
             when ``False`` only a SHA-256 pointer and counts are kept.
         preview_chars: Maximum preview length when ``store_preview`` is enabled.
         created_at: Row timestamp; defaults to ``datetime.now(UTC)``.
+        topology: Resolved ADR-0088 execution-topology label (``primary`` /
+            ``hybrid_fanout`` / ``decompose`` / ``delegate``). Drives the ``cost_live_usd``
+            source (see below); ``None`` is treated as ``primary``.
+        task_id: Per-topology task identifier for the ``(trace_id, task_id)`` key; ``None``
+            for the turn-level write.
 
     Returns:
         A fully-populated, frozen :class:`RouteTraceRow`. Missing producers yield
@@ -170,12 +177,22 @@ def assemble_route_trace(
     channel = getattr(ctx, "channel", None)
     model_role = getattr(ctx, "selected_model_role", None)
 
-    cost_live = float(getattr(ctx, "turn_cost_usd", 0.0) or 0.0)
+    # ADR-0088 D3 cost cadence: for the primary topology the live meter is the per-loop
+    # accumulator (``ctx.turn_cost_usd``); for non-primary topologies that accumulator is
+    # not the live source (FRE-501 rollup removed), so the row records the authoritative
+    # SUM as the live value — the projector is the live surface for those turns and
+    # reconciles to authoritative. Keeps ``cost_reconciled`` a primary-accumulator drift
+    # signal rather than flagging every expansion turn.
+    if topology in (None, "primary"):
+        cost_live = float(getattr(ctx, "turn_cost_usd", 0.0) or 0.0)
+    else:
+        cost_live = float(authoritative_cost_usd)
     orchestration_event = classify_orchestration_event(ctx)
 
     return RouteTraceRow(
         trace_id=_to_uuid(getattr(ctx, "trace_id", None)),  # type: ignore[arg-type]
         session_id=_to_uuid(getattr(ctx, "session_id", None)),
+        task_id=task_id,
         created_at=created_at or datetime.now(timezone.utc),
         # Stimulus (PII-gated)
         user_message_chars=len(user_message),

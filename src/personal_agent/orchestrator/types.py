@@ -257,6 +257,12 @@ class ExecutionContext:
     # Reads held verbatim pending a dependent write, keyed by tool_call_id.
     tool_result_pins: dict[str, ToolResultPin] = field(default_factory=dict)
 
+    # --- ADR-0088 execution-topology observability seam (FRE-513) ---
+    # Resolved execution-topology label for this turn (primary / hybrid_fanout /
+    # decompose / delegate). Set once by observe_topology on seam enter; read by the
+    # route-trace assembler and carried on stream:turn.observed events.
+    topology: str | None = None
+
 
 class OrchestratorStep(TypedDict):
     """Step metadata for observability.

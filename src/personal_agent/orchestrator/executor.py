@@ -16,6 +16,7 @@ from uuid import UUID, uuid4
 from personal_agent.config import settings
 from personal_agent.config.env_loader import Environment
 from personal_agent.llm_client import ModelRole
+from personal_agent.observability.topology import observe_topology
 from personal_agent.orchestrator import compression_manager
 from personal_agent.orchestrator.context_window import (
     apply_context_window,
@@ -1291,47 +1292,6 @@ async def _trigger_captains_log_reflection(ctx: ExecutionContext) -> None:
         )
 
 
-async def _write_route_trace(ctx: ExecutionContext) -> None:
-    """Write the ADR-0088 D6 direct durable route-trace row (FRE-452).
-
-    This is the *direct durable sink* of the execution-topology observability contract —
-    a synchronous, bus-independent Postgres write (ADR-0088 D8), built here by the interim
-    primary-turn adapter (``assemble_route_trace``). It is **best-effort**: any failure is
-    logged and swallowed so a ledger problem can never break the turn.
-    ``asyncio.CancelledError`` is deliberately not caught, so turn cancellation still
-    propagates while the row is still attempted from the caller's ``finally``.
-
-    Args:
-        ctx: The completed turn's execution context.
-    """
-    try:
-        from uuid import UUID
-
-        from personal_agent.observability.route_trace import (
-            assemble_route_trace,
-            get_route_trace_ledger,
-        )
-
-        ledger = get_route_trace_ledger()
-        trace_uuid = UUID(str(ctx.trace_id))
-        cost, in_tok, out_tok = await ledger.fetch_authoritative_cost(trace_uuid)
-        row = assemble_route_trace(
-            ctx,
-            authoritative_cost_usd=cost,
-            input_tokens=in_tok,
-            output_tokens=out_tok,
-            store_preview=settings.route_trace_store_preview,
-            preview_chars=settings.route_trace_preview_chars,
-        )
-        await ledger.write(row)
-    except Exception as e:
-        log.warning(
-            "route_trace_write_failed",
-            trace_id=getattr(ctx, "trace_id", None),
-            error=str(e),
-        )
-
-
 async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -> ExecutionContext:
     """Main execution loop: iterate states until terminal.
 
@@ -1410,219 +1370,215 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
     }
 
     previous_state: TaskState | None = None
-    try:
-        while state not in {TaskState.COMPLETED, TaskState.FAILED}:
-            log.info(
-                STATE_TRANSITION,
-                trace_id=ctx.trace_id,
-                from_state=(previous_state.value if previous_state is not None else state.value),
-                to_state=state.value,
-                component="executor",
-            )
-            ctx.state = state
-            previous_state = state
-
-            step_func = step_functions.get(state)
-            if not step_func:
-                log.error(
-                    UNKNOWN_STATE,
-                    trace_id=ctx.trace_id,
-                    state=state.value,
-                )
-                ctx.error = ValueError(f"Unknown state: {state}")
-                state = TaskState.FAILED
-                break
-
-            # Execute step function
-            state = await step_func(ctx, session_manager, trace_ctx)
-
-        ctx.state = state
-
-        # Stop request-scoped monitoring BEFORE Captain's Log (ADR-0012)
-        # This ensures metrics_summary is available for reflection enrichment
-        if monitor is not None:
-            try:
-                metrics_summary = await monitor.stop()
-                ctx.metrics_summary = metrics_summary
-
-                # Log summary for analysis
+    async with observe_topology(ctx):
+        try:
+            while state not in {TaskState.COMPLETED, TaskState.FAILED}:
                 log.info(
-                    "request_metrics_summary",
+                    STATE_TRANSITION,
                     trace_id=ctx.trace_id,
-                    duration_seconds=metrics_summary.get("duration_seconds"),
-                    samples_collected=metrics_summary.get("samples_collected"),
-                    cpu_avg=metrics_summary.get("cpu_avg"),
-                    memory_avg=metrics_summary.get("memory_avg"),
-                    gpu_avg=metrics_summary.get("gpu_avg"),
-                    threshold_violations=metrics_summary.get("threshold_violations"),
+                    from_state=(
+                        previous_state.value if previous_state is not None else state.value
+                    ),
+                    to_state=state.value,
                     component="executor",
                 )
-            except Exception as e:
-                # Don't fail task if monitoring cleanup fails
-                log.warning(
-                    "request_monitor_stop_failed",
-                    trace_id=ctx.trace_id,
-                    error=str(e),
-                    component="executor",
-                )
+                ctx.state = state
+                previous_state = state
 
-        if state == TaskState.COMPLETED:
-            log.info(
-                TASK_COMPLETED,
-                trace_id=ctx.trace_id,
-                session_id=ctx.session_id,
-                reply_length=len(ctx.final_reply or ""),
-                steps_count=len(ctx.steps),
-            )
+                step_func = step_functions.get(state)
+                if not step_func:
+                    log.error(
+                        UNKNOWN_STATE,
+                        trace_id=ctx.trace_id,
+                        state=state.value,
+                    )
+                    ctx.error = ValueError(f"Unknown state: {state}")
+                    state = TaskState.FAILED
+                    break
 
-            if not ctx.eval_mode:
-                # Fast capture (Phase 2.2): Write structured capture immediately (no LLM)
+                # Execute step function
+                state = await step_func(ctx, session_manager, trace_ctx)
+
+            ctx.state = state
+
+            # Stop request-scoped monitoring BEFORE Captain's Log (ADR-0012)
+            # This ensures metrics_summary is available for reflection enrichment
+            if monitor is not None:
                 try:
-                    from personal_agent.captains_log.capture import TaskCapture, write_capture
+                    metrics_summary = await monitor.stop()
+                    ctx.metrics_summary = metrics_summary
 
-                    # Calculate duration from metrics summary if available
-                    duration_ms = None
-                    if ctx.metrics_summary and "duration_seconds" in ctx.metrics_summary:
-                        duration_ms = ctx.metrics_summary["duration_seconds"] * 1000
-
-                    # Extract tools used and accumulate token counts from steps
-                    tools_used = []
-                    cap_prompt_tokens = 0
-                    cap_completion_tokens = 0
-                    cap_total_tokens = 0
-                    for step in ctx.steps:
-                        if step.get("type") == "tool_call":
-                            tool_name = (step.get("metadata") or {}).get("tool_name")
-                            if tool_name:
-                                tools_used.append(tool_name)
-                        elif step.get("type") == "llm_call":
-                            meta = step.get("metadata") or {}
-                            cap_prompt_tokens += meta.get("prompt_tokens", 0)
-                            cap_completion_tokens += meta.get("completion_tokens", 0)
-                            cap_total_tokens += meta.get("tokens", 0)
-
-                    # FRE-343: TaskCapture.user_id is non-optional. ExecutionContext.user_id
-                    # is typed UUID | None for legacy reasons but is always populated in
-                    # production by the orchestrator from request_user.user_id (which
-                    # get_request_user always resolves). Pydantic validation catches the
-                    # None case as a real bug.
-                    assert ctx.user_id is not None, (
-                        "ExecutionContext.user_id missing — orchestrator should populate it "
-                        "from request_user.user_id (FRE-343)"
-                    )
-                    capture = TaskCapture(
+                    # Log summary for analysis
+                    log.info(
+                        "request_metrics_summary",
                         trace_id=ctx.trace_id,
-                        session_id=ctx.session_id,
-                        timestamp=datetime.now(timezone.utc),
-                        user_message=ctx.user_message,
-                        assistant_response=ctx.final_reply,
-                        steps=cast(list[dict[str, Any]], ctx.steps),
-                        tools_used=list(set(tools_used)),  # Deduplicate
-                        duration_ms=duration_ms,
-                        metrics_summary=ctx.metrics_summary,
-                        outcome="completed",
-                        memory_context_used=bool(ctx.memory_context),
-                        memory_conversations_found=len(ctx.memory_context)
-                        if ctx.memory_context
-                        else 0,
-                        input_tokens=cap_prompt_tokens,
-                        output_tokens=cap_completion_tokens,
-                        total_tokens=cap_total_tokens,
-                        tool_results=ctx.tool_results,
-                        user_id=ctx.user_id,
+                        duration_seconds=metrics_summary.get("duration_seconds"),
+                        samples_collected=metrics_summary.get("samples_collected"),
+                        cpu_avg=metrics_summary.get("cpu_avg"),
+                        memory_avg=metrics_summary.get("memory_avg"),
+                        gpu_avg=metrics_summary.get("gpu_avg"),
+                        threshold_violations=metrics_summary.get("threshold_violations"),
+                        component="executor",
                     )
-                    write_capture(capture)
-
-                    # Publish request.captured event (ADR-0041)
-                    from personal_agent.captains_log.background import (
-                        run_in_background as _run_bg,
-                    )
-                    from personal_agent.events.bus import get_event_bus
-                    from personal_agent.events.models import (
-                        STREAM_REQUEST_CAPTURED,
-                        RequestCapturedEvent,
-                    )
-
-                    event = RequestCapturedEvent(
-                        trace_id=ctx.trace_id,
-                        session_id=ctx.session_id,
-                        source_component="orchestrator.executor",
-                    )
-                    _run_bg(get_event_bus().publish(STREAM_REQUEST_CAPTURED, event))
                 except Exception as e:
-                    # Don't fail task if capture fails
+                    # Don't fail task if monitoring cleanup fails
                     log.warning(
-                        "capture_write_failed",
+                        "request_monitor_stop_failed",
                         trace_id=ctx.trace_id,
                         error=str(e),
-                        exc_info=True,
+                        component="executor",
                     )
 
-                # Trigger Captain's Log reflection (LLM-based, background)
-                # Run in background to avoid blocking user response
-                # Metrics summary is now available in ctx for reflection enrichment
-                from personal_agent.captains_log.background import run_in_background
-
-                run_in_background(_trigger_captains_log_reflection(ctx))
-            else:
+            if state == TaskState.COMPLETED:
                 log.info(
-                    "eval_mode_side_effects_suppressed",
+                    TASK_COMPLETED,
                     trace_id=ctx.trace_id,
                     session_id=ctx.session_id,
-                    suppressed=["capture", "request_captured_event", "reflection"],
+                    reply_length=len(ctx.final_reply or ""),
+                    steps_count=len(ctx.steps),
                 )
-        else:
-            log.warning(
-                TASK_FAILED,
-                trace_id=ctx.trace_id,
-                session_id=ctx.session_id,
-                error=str(ctx.error) if ctx.error else "Unknown error",
-            )
 
-    except Exception as e:
-        log.error(
-            ORCHESTRATOR_FATAL_ERROR,
-            trace_id=ctx.trace_id,
-            error=str(e),
-            error_type=type(e).__name__,
-            exc_info=True,
-        )
-        ctx.error = e
-        ctx.state = TaskState.FAILED
+                if not ctx.eval_mode:
+                    # Fast capture (Phase 2.2): Write structured capture immediately (no LLM)
+                    try:
+                        from personal_agent.captains_log.capture import TaskCapture, write_capture
 
-        # Stop monitoring even on fatal error
-        if monitor is not None and ctx.metrics_summary is None:
-            try:
-                metrics_summary = await monitor.stop()
-                ctx.metrics_summary = metrics_summary
+                        # Calculate duration from metrics summary if available
+                        duration_ms = None
+                        if ctx.metrics_summary and "duration_seconds" in ctx.metrics_summary:
+                            duration_ms = ctx.metrics_summary["duration_seconds"] * 1000
 
-                # Log summary for analysis
-                log.info(
-                    "request_metrics_summary",
-                    trace_id=ctx.trace_id,
-                    duration_seconds=metrics_summary.get("duration_seconds"),
-                    samples_collected=metrics_summary.get("samples_collected"),
-                    cpu_avg=metrics_summary.get("cpu_avg"),
-                    memory_avg=metrics_summary.get("memory_avg"),
-                    gpu_avg=metrics_summary.get("gpu_avg"),
-                    threshold_violations=metrics_summary.get("threshold_violations"),
-                    component="executor",
-                )
-            except Exception as e:
-                # Don't fail task if monitoring cleanup fails
+                        # Extract tools used and accumulate token counts from steps
+                        tools_used = []
+                        cap_prompt_tokens = 0
+                        cap_completion_tokens = 0
+                        cap_total_tokens = 0
+                        for step in ctx.steps:
+                            if step.get("type") == "tool_call":
+                                tool_name = (step.get("metadata") or {}).get("tool_name")
+                                if tool_name:
+                                    tools_used.append(tool_name)
+                            elif step.get("type") == "llm_call":
+                                meta = step.get("metadata") or {}
+                                cap_prompt_tokens += meta.get("prompt_tokens", 0)
+                                cap_completion_tokens += meta.get("completion_tokens", 0)
+                                cap_total_tokens += meta.get("tokens", 0)
+
+                        # FRE-343: TaskCapture.user_id is non-optional. ExecutionContext.user_id
+                        # is typed UUID | None for legacy reasons but is always populated in
+                        # production by the orchestrator from request_user.user_id (which
+                        # get_request_user always resolves). Pydantic validation catches the
+                        # None case as a real bug.
+                        assert ctx.user_id is not None, (
+                            "ExecutionContext.user_id missing — orchestrator should populate it "
+                            "from request_user.user_id (FRE-343)"
+                        )
+                        capture = TaskCapture(
+                            trace_id=ctx.trace_id,
+                            session_id=ctx.session_id,
+                            timestamp=datetime.now(timezone.utc),
+                            user_message=ctx.user_message,
+                            assistant_response=ctx.final_reply,
+                            steps=cast(list[dict[str, Any]], ctx.steps),
+                            tools_used=list(set(tools_used)),  # Deduplicate
+                            duration_ms=duration_ms,
+                            metrics_summary=ctx.metrics_summary,
+                            outcome="completed",
+                            memory_context_used=bool(ctx.memory_context),
+                            memory_conversations_found=len(ctx.memory_context)
+                            if ctx.memory_context
+                            else 0,
+                            input_tokens=cap_prompt_tokens,
+                            output_tokens=cap_completion_tokens,
+                            total_tokens=cap_total_tokens,
+                            tool_results=ctx.tool_results,
+                            user_id=ctx.user_id,
+                        )
+                        write_capture(capture)
+
+                        # Publish request.captured event (ADR-0041)
+                        from personal_agent.captains_log.background import (
+                            run_in_background as _run_bg,
+                        )
+                        from personal_agent.events.bus import get_event_bus
+                        from personal_agent.events.models import (
+                            STREAM_REQUEST_CAPTURED,
+                            RequestCapturedEvent,
+                        )
+
+                        event = RequestCapturedEvent(
+                            trace_id=ctx.trace_id,
+                            session_id=ctx.session_id,
+                            source_component="orchestrator.executor",
+                        )
+                        _run_bg(get_event_bus().publish(STREAM_REQUEST_CAPTURED, event))
+                    except Exception as e:
+                        # Don't fail task if capture fails
+                        log.warning(
+                            "capture_write_failed",
+                            trace_id=ctx.trace_id,
+                            error=str(e),
+                            exc_info=True,
+                        )
+
+                    # Trigger Captain's Log reflection (LLM-based, background)
+                    # Run in background to avoid blocking user response
+                    # Metrics summary is now available in ctx for reflection enrichment
+                    from personal_agent.captains_log.background import run_in_background
+
+                    run_in_background(_trigger_captains_log_reflection(ctx))
+                else:
+                    log.info(
+                        "eval_mode_side_effects_suppressed",
+                        trace_id=ctx.trace_id,
+                        session_id=ctx.session_id,
+                        suppressed=["capture", "request_captured_event", "reflection"],
+                    )
+            else:
                 log.warning(
-                    "request_monitor_stop_failed",
+                    TASK_FAILED,
                     trace_id=ctx.trace_id,
-                    error=str(e),
-                    component="executor",
+                    session_id=ctx.session_id,
+                    error=str(ctx.error) if ctx.error else "Unknown error",
                 )
 
-    finally:
-        # ADR-0088 D6 direct durable sink (FRE-452): write exactly one route-trace row at
-        # the turn terminal. In `finally` so it covers success, handled Exception, and
-        # CancelledError alike; best-effort inside, so it never breaks or delays the turn
-        # result, and CancelledError still propagates after the row is attempted.
-        await _write_route_trace(ctx)
+        except Exception as e:
+            log.error(
+                ORCHESTRATOR_FATAL_ERROR,
+                trace_id=ctx.trace_id,
+                error=str(e),
+                error_type=type(e).__name__,
+                exc_info=True,
+            )
+            ctx.error = e
+            ctx.state = TaskState.FAILED
+
+            # Stop monitoring even on fatal error
+            if monitor is not None and ctx.metrics_summary is None:
+                try:
+                    metrics_summary = await monitor.stop()
+                    ctx.metrics_summary = metrics_summary
+
+                    # Log summary for analysis
+                    log.info(
+                        "request_metrics_summary",
+                        trace_id=ctx.trace_id,
+                        duration_seconds=metrics_summary.get("duration_seconds"),
+                        samples_collected=metrics_summary.get("samples_collected"),
+                        cpu_avg=metrics_summary.get("cpu_avg"),
+                        memory_avg=metrics_summary.get("memory_avg"),
+                        gpu_avg=metrics_summary.get("gpu_avg"),
+                        threshold_violations=metrics_summary.get("threshold_violations"),
+                        component="executor",
+                    )
+                except Exception as e:
+                    # Don't fail task if monitoring cleanup fails
+                    log.warning(
+                        "request_monitor_stop_failed",
+                        trace_id=ctx.trace_id,
+                        error=str(e),
+                        component="executor",
+                    )
 
     return ctx
 

@@ -151,6 +151,120 @@ class TestRunSubAgent:
         assert complete[0]["tooled"] is False
 
 
+class TestInputContextSummary:
+    """FRE-505: structured breakdown of what a sub-agent was fed."""
+
+    def test_detects_memory_marker(self) -> None:
+        from personal_agent.orchestrator.sub_agent import _summarize_input_context
+
+        spec = SubAgentSpec(
+            task="t",
+            context=[
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "## Your Memory Graph — Known Entities\n- x"},
+            ],
+        )
+        summary = _summarize_input_context("system prompt body", spec)
+
+        assert summary["memory_in_context"] is True
+        assert summary["context_message_count"] == 2
+        assert summary["system_prompt_chars"] == len("system prompt body")
+        assert summary["context_chars"] == len("hello") + len(
+            "## Your Memory Graph — Known Entities\n- x"
+        )
+        assert summary["context_messages"][0] == {
+            "role": "user",
+            "chars": 5,
+            "content_preview": "hello",
+        }
+
+    def test_no_memory_marker(self) -> None:
+        from personal_agent.orchestrator.sub_agent import _summarize_input_context
+
+        spec = SubAgentSpec(task="t", context=[{"role": "user", "content": "plain"}])
+        summary = _summarize_input_context("sys", spec)
+
+        assert summary["memory_in_context"] is False
+
+    def test_handles_missing_keys(self) -> None:
+        from personal_agent.orchestrator.sub_agent import _summarize_input_context
+
+        spec = SubAgentSpec(task="t", context=[{"role": "user"}, {"content": "c"}])
+        summary = _summarize_input_context("sys", spec)
+
+        assert summary["context_message_count"] == 2
+        assert summary["context_messages"][0]["chars"] == 0
+
+
+class TestSubAgentCaptureEmitted:
+    """FRE-505: a per-sub-agent audit record is written on every terminal path."""
+
+    @pytest.mark.asyncio
+    async def test_capture_written_on_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import personal_agent.orchestrator.sub_agent as sa
+
+        captured: list[Any] = []
+        monkeypatch.setattr(sa, "write_sub_agent_capture", lambda cap: captured.append(cap))
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(return_value="x" * 5000)
+
+        result = await run_sub_agent(
+            spec=_spec(), llm_client=mock_client, trace_id="t", session_id="s"
+        )
+
+        assert len(captured) == 1
+        cap = captured[0]
+        assert cap.trace_id == "t"
+        assert cap.session_id == "s"
+        assert cap.task_id == result.task_id
+        assert cap.injected_digest == result.summary
+        assert cap.full_output == result.full_output
+        assert cap.full_output_chars == 5000
+        assert 0.0 < cap.truncation_ratio <= 1.0
+        assert cap.success is True
+
+    @pytest.mark.asyncio
+    async def test_capture_written_on_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import personal_agent.orchestrator.sub_agent as sa
+
+        captured: list[Any] = []
+        monkeypatch.setattr(sa, "write_sub_agent_capture", lambda cap: captured.append(cap))
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(side_effect=RuntimeError("boom"))
+
+        await run_sub_agent(spec=_spec(), llm_client=mock_client, trace_id="t")
+
+        assert len(captured) == 1
+        cap = captured[0]
+        assert cap.success is False
+        assert cap.truncation_ratio == 0.0
+        assert cap.full_output == ""
+
+    @pytest.mark.asyncio
+    async def test_capture_written_on_cancellation(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Global dispatch timeout cancels the coroutine — the audit record still fires."""
+        import personal_agent.orchestrator.sub_agent as sa
+
+        captured: list[Any] = []
+        monkeypatch.setattr(sa, "write_sub_agent_capture", lambda cap: captured.append(cap))
+
+        mock_client = AsyncMock()
+
+        async def _cancelled(*args: object, **kwargs: object) -> str:
+            raise asyncio.CancelledError()
+
+        mock_client.respond = _cancelled
+
+        with pytest.raises(asyncio.CancelledError):
+            await run_sub_agent(spec=_spec(), llm_client=mock_client, trace_id="t")
+
+        assert len(captured) == 1
+        assert captured[0].success is False
+        assert "cancel" in (captured[0].error or "").lower()
+
+
 class TestTooledLoop:
     """ADR-0086 D3/D4 — the real tool-using discovery loop."""
 

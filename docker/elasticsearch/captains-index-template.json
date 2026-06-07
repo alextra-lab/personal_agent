@@ -112,6 +112,20 @@
             "latency_ms": { "type": "float" },
             "output": { "type": "text", "index": false }
           }
+        },
+        "spec_task": { "type": "text" },
+        "full_output": { "type": "text" },
+        "injected_digest": { "type": "text" },
+        "error": { "type": "text" },
+        "truncation_ratio": { "type": "float" },
+        "cost_usd": { "type": "float" },
+        "context_messages": {
+          "type": "nested",
+          "properties": {
+            "role": { "type": "keyword" },
+            "chars": { "type": "integer" },
+            "content_preview": { "type": "text" }
+          }
         }
       }
     }

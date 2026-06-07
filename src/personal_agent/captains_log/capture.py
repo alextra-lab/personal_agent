@@ -22,6 +22,11 @@ log = get_logger(__name__)
 # Captain's Log capture index prefix (settings-driven for test/prod isolation — FRE-375)
 _cl_settings = _get_settings()
 CAPTURES_INDEX_PREFIX = f"{_cl_settings.captains_log_index_prefix}-captures"
+# Per-sub-agent audit records (FRE-505) — sibling index in the captures family.
+# Separate from the TaskCapture daily index so the differing doc shape does not
+# pollute that index's mapping; still matched by the agent-captains-captures-*
+# template (explicit text/float/nested properties added there for the new fields).
+SUBAGENT_CAPTURES_INDEX_PREFIX = f"{CAPTURES_INDEX_PREFIX}-subagents"
 
 if TYPE_CHECKING:
     from personal_agent.telemetry.es_handler import ElasticsearchHandler
@@ -80,6 +85,88 @@ class TaskCapture(BaseModel):
         if type(v) is UUID:
             return v
         return UUID(str(v))
+
+
+class SubAgentCapture(BaseModel):
+    """Per-sub-agent audit record (FRE-505).
+
+    Makes a decomposition turn reconstructable from telemetry alone: what each
+    sub-agent was fed (input-context breakdown + memory presence), what it was
+    allowed to do vs actually did, and what it returned (full output + the
+    injected digest that crossed into parent synthesis). Identity-threaded with
+    ``trace_id``/``session_id``/``task_id`` (ADR-0074); the parent turn joins by
+    ``trace_id``. Indexed to ``SUBAGENT_CAPTURES_INDEX_PREFIX`` via
+    ``write_sub_agent_capture``. Immutable once built.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    # Identity (ADR-0074)
+    trace_id: str
+    session_id: str | None = None
+    task_id: str
+    timestamp: datetime
+
+    # Input context — "what was the sub fed"
+    system_prompt_chars: int
+    skill_index_block_chars: int
+    spec_task: str
+    context_message_count: int
+    context_chars: int
+    context_messages: list[dict[str, Any]] = Field(default_factory=list)
+    memory_in_context: bool = False
+    mode: str
+    model_role: str
+    max_tokens: int
+
+    # Task surface — granted vs actually exercised
+    tools_granted: list[str] = Field(default_factory=list)
+    tools_used: list[str] = Field(default_factory=list)
+
+    # Output — full text, the injected digest, and the truncation ratio
+    full_output: str
+    full_output_chars: int
+    injected_digest: str
+    digest_chars: int
+    truncation_ratio: float
+    success: bool
+    error: str | None = None
+    duration_ms: float
+    cost_usd: float = 0.0
+
+
+def write_sub_agent_capture(
+    capture: SubAgentCapture,
+    es_handler: "ElasticsearchHandler | None" = None,
+) -> None:
+    """Index a sub-agent audit record to the captures family (best-effort, ES-only).
+
+    No disk write: one file per ``trace_id`` would collide across the N sub-agents
+    of a single turn, so these live only in Elasticsearch. ``schedule_es_index`` is
+    non-blocking and never raises; any unexpected error here is swallowed so a
+    telemetry failure can never break the sub-agent (mirrors ``capture_write_failed``).
+
+    Args:
+        capture: The sub-agent audit record to index.
+        es_handler: Optional Elasticsearch handler; falls back to the default.
+    """
+    try:
+        date_str = capture.timestamp.strftime("%Y-%m-%d")
+        index_name = f"{SUBAGENT_CAPTURES_INDEX_PREFIX}-{date_str}"
+        handler = es_handler or _default_es_handler
+        schedule_es_index(
+            index_name,
+            capture.model_dump(mode="json"),
+            es_handler=handler,
+            doc_id=f"{capture.trace_id}:{capture.task_id}",
+        )
+    except Exception as exc:
+        log.warning(
+            "sub_agent_capture_write_failed",
+            trace_id=capture.trace_id,
+            task_id=capture.task_id,
+            error=str(exc),
+        )
 
 
 def _get_captures_dir() -> pathlib.Path:

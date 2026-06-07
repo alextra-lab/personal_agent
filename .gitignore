@@ -158,6 +158,9 @@ docker/mcp/mcp-secrets.env
 # FRE-433/434 cache A/B harness run outputs (regeneratable telemetry)
 telemetry/evaluation/fre433-cache-ab/
 
+# FRE-453 canonical eval set run outputs (raw runs never committed; curated summaries only)
+telemetry/evaluation/fre453-canonical-evalset/
+
 # deploy-approval-gate runtime sentinel (never committed)
 .claude/.deploy-approved
 

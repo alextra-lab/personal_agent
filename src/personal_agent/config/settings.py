@@ -931,6 +931,15 @@ class AppConfig(BaseSettings):
         le=3600,
         description="Seconds before an unacknowledged message is considered stuck",
     )
+    session_write_wait_timeout_seconds: float = Field(
+        default=10.0,
+        ge=0.1,
+        le=120.0,
+        description=(
+            "Max seconds a /chat turn waits for the prior turn's session append "
+            "before proceeding without it (FRE-520 safety valve)"
+        ),
+    )
 
     # Feature flags
     use_service_mode: bool = Field(default=True, description="Enable service mode")

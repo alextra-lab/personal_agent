@@ -1548,7 +1548,7 @@ async def chat(
     from personal_agent.events.session_write_waiter import await_previous_session_write
 
     if isinstance(get_event_bus(), RedisStreamBus):
-        await await_previous_session_write(sid)
+        await await_previous_session_write(sid, trace_id=trace_id)
     elif sid in _pending_append_tasks:
         await _pending_append_tasks.pop(sid)
 

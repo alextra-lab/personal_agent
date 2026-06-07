@@ -26,6 +26,7 @@ import structlog
 
 from personal_agent.config import get_settings
 from personal_agent.llm_client.types import ModelRole
+from personal_agent.observability.topology import report_degradation
 from personal_agent.orchestrator.expansion_types import (
     ExpansionPhase,
     ExpansionPlan,
@@ -180,6 +181,18 @@ class ExpansionController:
         if not plan or not plan.tasks:
             result.degraded = True
             result.degradation_reason = "No valid plan produced"
+            # ADR-0088 D5: the planner-fallback case (the 87cbd720 silent degradation) is
+            # now a loud, first-class signal routed through the one sanctioned call.
+            if session_id is not None:
+                await report_degradation(
+                    trace_id=trace_id,
+                    session_id=session_id,
+                    where=f"expansion:{strategy.lower()}",
+                    reason="No valid plan produced",
+                    severity="critical",
+                    expected="a tool-using sub-agent plan",
+                    actual="no plan — fall back to the primary loop",
+                )
             return result
 
         if strategy.upper() == "HYBRID":
@@ -210,9 +223,25 @@ class ExpansionController:
                 reason="all_subagents_failed",
                 trace_id=trace_id,
             )
+            if session_id is not None:
+                await report_degradation(
+                    trace_id=trace_id,
+                    session_id=session_id,
+                    where=f"expansion:{strategy.lower()}",
+                    reason="All sub-agents failed",
+                    severity="critical",
+                )
         elif not sub_results:
             result.degraded = True
             result.degradation_reason = "No sub-agent results"
+            if session_id is not None:
+                await report_degradation(
+                    trace_id=trace_id,
+                    session_id=session_id,
+                    where=f"expansion:{strategy.lower()}",
+                    reason="No sub-agent results",
+                    severity="warning",
+                )
 
         # --- Build synthesis context ---
         result.synthesis_context = self._build_synthesis_context(
@@ -429,6 +458,14 @@ class ExpansionController:
             sub_results = []
             result.degraded = True
             result.degradation_reason = "Global dispatch timeout"
+            if session_id is not None:
+                await report_degradation(
+                    trace_id=trace_id,
+                    session_id=session_id,
+                    where="expansion:dispatch",
+                    reason="Global dispatch timeout",
+                    severity="warning",
+                )
 
         duration_ms = time.monotonic() * 1000 - start_ms
 

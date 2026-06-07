@@ -1,0 +1,493 @@
+# FRE-453 — Canonical eval set: 18 cases, two tiers.
+#
+# Tier `canonical` (7): the ADR-0084 §Open-decisions-3 pedagogical turn types — the M2
+# gate set. Tier `coverage` (11): realistic multi-tool queries, pedagogically framed,
+# whose UNION of expected skills/tools spans the toolbox (enforced by
+# tests/evaluation/test_fre453_canonical_evalset.py against docs/skills/ and
+# config/governance/tools.yaml).
+#
+# EVERY `expected:` block is a HYPOTHESIS (RESULT_TYPE_TAXONOMY_SPEC §5 "[proposed — M2
+# validates]"): the harness reports MATCH/MISMATCH as findings and nothing gates on
+# them. The first run is the baseline that teaches us how the harness actually behaves.
+#
+# Topics are the owner's real learning threads (2026-06-07): agent-harness development,
+# cooking, music studies, security/CSIRT operations — so the human rubric pass reviews
+# turns that look like genuine usage.
+#
+# `setup_messages` are sent unscored into the same session before the scored stimulus.
+# `expected.orchestration_event` is restricted to the classifier-emittable subset
+# (primary_handled | delegate_called | fallback_triggered) — used/discarded is hybrid
+# rubric territory (FRE-515). `expected.pedagogical_outcomes` is the rubric layer: the
+# harness never auto-assigns it (M3 emit sites don't exist); the report renders it as a
+# fillable checklist.
+
+coverage:
+  # v1 exemptions — flagged here, not silently ignored. get_location/get_library_docs
+  # have no natural pedagogical case yet; expand_tool_result is internal plumbing the
+  # model invokes opportunistically, not user-routable.
+  allowlist_skills: [get_location]
+  allowlist_tools: [get_location, get_library_docs, expand_tool_result]
+  # MCP tools are enforced at family granularity (a real browser task exercises many
+  # mcp_browser_* micro-tools in one turn; per-method cases are meaningless).
+  tool_families:
+    browser: "mcp_browser_"
+
+cases:
+  # =========================================================================
+  # Tier: canonical — the pedagogical 7 (M2 gate)
+  # =========================================================================
+
+  - id: trivial_conversational
+    tier: canonical
+    title: Trivial conversational
+    note: >-
+      Tests whether primary suppresses thinking on genuinely cheap turns (ADR-0084
+      §Open decisions §1) and whether a greeting carries zero pedagogical outcomes —
+      the spec §5.3 "zero allowed" open question.
+    setup_messages: []
+    stimulus: "Hello Seshat! How are you doing today?"
+    expected:
+      model_path: single_primary
+      orchestration_event: primary_handled
+      pedagogical_outcomes: []
+      task_type: conversational
+    rubric:
+      - "Light, warm reply — proportionate to a greeting."
+      - "No forced tutoring move (no quiz, no lecture) bolted onto small talk."
+    regression: >-
+      Thinking budget burned on a greeting (thinking_enabled + high output tokens);
+      HYBRID expansion; pedantic tutor-mode reply to "hello".
+
+  - id: memory_recall
+    tier: canonical
+    title: Memory recall (cooking)
+    note: >-
+      Tests whether retrieval preserves pedagogical continuity. This is the known
+      ADR-0087 failure shape ("no prior discussions").
+    setup_messages:
+      - >-
+        I've been experimenting with emulsions. I finally got a beurre blanc to hold
+        by adding cold butter off-heat, one cube at a time — keeping it under 58°C
+        was the trick.
+    stimulus: "What did I say earlier about how I got the beurre blanc to hold?"
+    expected:
+      model_path: single_primary
+      orchestration_event: primary_handled
+      pedagogical_outcomes: []
+      task_type: memory_recall
+    rubric:
+      - "Retrieves BOTH details accurately: cold butter off-heat in cubes, under 58°C."
+      - "Continuity: builds on what I said, doesn't re-explain emulsions from scratch."
+    regression: >-
+      "We haven't discussed this before" (ADR-0087 recall failure); invented details
+      that weren't in the setup turn.
+
+  - id: opening_ritual
+    tier: canonical
+    title: Opening ritual (music studies)
+    note: >-
+      Session start with a prior thread explicitly held open — tests the active-recall
+      trigger and Socratic framing. A retrieval PROMPT here is a recall_practiced
+      *candidate* only: full assignment needs the learner's attempt (spec §4.1), which
+      a single scored turn cannot show.
+    setup_messages:
+      - >-
+        We were working through voice leading. I get why parallel octaves sound
+        hollow, but let's keep open the question of why parallel fifths are actually
+        forbidden in counterpoint — I want to sit with it.
+    stimulus: "Good morning Seshat — let's pick up where we left off."
+    expected:
+      model_path: single_primary
+      orchestration_event: primary_handled
+      pedagogical_outcomes: [open_thread_preserved]
+    rubric:
+      - >-
+        Opens by asking ME what I remember or concluded about parallel fifths —
+        a retrieval prompt, not a summary (recall_practiced candidate).
+      - "The open thread is resurfaced explicitly, not dropped or silently resolved."
+      - "Socratic framing: a question to re-enter the material, not a lecture restart."
+    regression: >-
+      Summary dump of the prior session; generic "what shall we do today?"; the
+      parallel-fifths thread never mentioned.
+
+  - id: closing_ritual
+    tier: canonical
+    title: Closing ritual (CSIRT)
+    note: >-
+      End of a rich conversation — tests concept extraction and field-note generation
+      (North Star §4). notes_write is the field-note-shaped tool; whether the model
+      actually reaches for it is a hypothesis.
+    setup_messages:
+      - >-
+        In CSIRT operations I'm studying triage — severity classification matrices,
+        and how analysts decide escalation paths under uncertainty.
+      - >-
+        Here's what surprised me in the SANS incident data: most dwell time isn't
+        detection lag — it's handoff lag between teams. That's counterintuitive;
+        I'd assumed detection was the bottleneck.
+    stimulus: "That's a good place to stop — let's wrap up for today."
+    expected:
+      model_path: single_primary
+      orchestration_event: primary_handled
+      pedagogical_outcomes: [concept_extracted, open_thread_preserved]
+      tools_any_of: [notes_write]
+    rubric:
+      - "Extracts the session's concepts (triage matrices, escalation under uncertainty)."
+      - >-
+        Explicitly marks the dwell-time surprise for revisiting — the
+        counterintuitive_finding_marked shape (surprises stick).
+      - "Names what's still open for next time rather than closing flat."
+    regression: >-
+      Bare goodbye with no extraction; the surprise unmarked; session ends with no
+      trace of what should be reinforced later.
+
+  - id: cross_thread_synthesis
+    tier: canonical
+    title: Cross-thread synthesis (cooking × CSIRT)
+    note: >-
+      THE §7.3 label-lie probe: the gateway will likely label this MEMORY_RECALL or
+      CONVERSATIONAL / SINGLE while the turn performs cross-domain synthesis — the
+      deterministic-shell boundary violation the instrument exists to expose.
+    setup_messages:
+      - >-
+        In cooking I've internalized mise en place — every ingredient prepped and
+        positioned before heat ever touches the pan, because mid-cook is the worst
+        time to improvise.
+      - >-
+        Separately, in my CSIRT studies: incident response playbooks — pre-approved
+        decision trees, contact chains, and containment steps, all written before
+        any incident happens.
+    stimulus: >-
+      Wait — playbooks are basically mise en place, aren't they? Is there a real
+      structural connection here, or am I forcing it?
+    expected:
+      model_path: single_primary
+      orchestration_event: primary_handled
+      pedagogical_outcomes: [cross_connection_made, synthesis_performed]
+    rubric:
+      - >-
+        Names the shared structural principle (front-loading decisions out of the
+        high-pressure execution window), naming both domains.
+      - >-
+        Engages honestly with "am I forcing it?" — tests the analogy's limits rather
+        than flattering me.
+    regression: >-
+      Treats the domains as isolated; empty validation ("great connection!") with no
+      structure; gateway label-lie goes unobserved because the turn was scored as a
+      trivial lookup.
+
+  - id: emotionally_loaded
+    tier: canonical
+    title: Emotionally loaded learning (music studies)
+    note: >-
+      Topic with explicit confusion/curiosity signal — tests emotional calibration and
+      misconception catch (misalignment_detected is one of the two outcomes that catch
+      subtle failures invisible to orchestration, spec §4.10).
+    setup_messages: []
+    stimulus: >-
+      I'm honestly confused. I was sure the key of a piece determines which chords
+      are allowed — that's how I learned it. But I just analyzed a song with a chord
+      that's clearly outside the key and it obviously works. It's bugging me — how
+      can both be true?
+    expected:
+      model_path: single_primary
+      orchestration_event: primary_handled
+      pedagogical_outcomes: [misalignment_detected, counterintuitive_finding_marked]
+    rubric:
+      - "Acknowledges the frustration and leans into the curiosity (doesn't flatten it)."
+      - >-
+        Pinpoints the actual misconception: diatonic membership is a default, not a
+        law — borrowed chords / modal mixture are the systematic exception.
+      - "Calibrates challenge to my level rather than dumping the whole theory chapter."
+    regression: >-
+      Flat factual lecture that ignores the emotional signal; vague "music has
+      exceptions" with no identification of WHAT I had wrong.
+
+  - id: tool_heavy_research
+    tier: canonical
+    title: Tool-heavy research (agent-harness development)
+    note: >-
+      Multi-step investigation — tests the delegation boundary: what gets offloaded
+      to sub-agents vs what the primary keeps (ADR-0084 D4 framing).
+    setup_messages: []
+    stimulus: >-
+      Investigate how your own memory subsystem promotes episodic memories to
+      semantic facts — trace the actual code path, cite the key files, and explain
+      the design choices as you go.
+    expected:
+      model_path: hybrid
+      orchestration_event: delegate_called
+      pedagogical_outcomes: []
+      tools_used_nonempty: true
+      skills: [read-write, list-directory]
+      tools_any_of: [read]
+    rubric:
+      - "Bounded discovery offloaded; synthesis and explanation kept by the primary."
+      - "Cited files are real paths in this repo, not hallucinated."
+      - "Teaches the design rationale, not just a file listing."
+    regression: >-
+      The a0a07227 shape — primary serially grinding tools (SINGLE with high
+      tool_iteration_count and climbing context); delegate output discarded;
+      invented file paths.
+
+  # =========================================================================
+  # Tier: coverage — multi-tool queries, pedagogically framed
+  # =========================================================================
+
+  - id: self_observability_teaching
+    tier: coverage
+    title: Self-observability as teaching material (harness dev)
+    note: Exercises the self-telemetry / ES / forensics cluster in a teaching frame.
+    setup_messages: []
+    stimulus: >-
+      Look at your own telemetry for this session so far and teach me how to read
+      it — what happened on the slowest turn, and where would I look to find out?
+    expected:
+      model_path: single_primary
+      orchestration_event: primary_handled
+      pedagogical_outcomes: []
+      tools_used_nonempty: true
+      skills: [self-telemetry, query-elasticsearch, turn-forensics]
+      tools_any_of: [read_skill]
+    rubric:
+      - "Teaches the METHOD (which index, which fields, how to interpret) — not just the answer."
+      - "Numbers shown trace to real telemetry, not invented."
+    regression: >-
+      Generic observability lecture with no actual lookup; or raw data dump with no
+      teaching structure.
+
+  - id: infra_triage_pedagogy
+    tier: coverage
+    title: Infrastructure health as triage lesson (CSIRT)
+    note: Exercises the infrastructure/system cluster, framed as CSIRT mentoring.
+    setup_messages: []
+    stimulus: >-
+      Check your infrastructure health, and explain it to me the way a CSIRT mentor
+      would teach triage: which signals do you check first, and why that order?
+    expected:
+      model_path: single_primary
+      orchestration_event: primary_handled
+      pedagogical_outcomes: []
+      tools_used_nonempty: true
+      skills: [infrastructure-health, system-diagnostics, system-metrics, bash]
+      tools_any_of: [bash]
+    rubric:
+      - "Triage ORDERING has a rationale (blast radius first, then dependencies…)."
+      - "Real health output drives the lesson; the pedagogy wraps actual signals."
+    regression: >-
+      Health check performed but explained as a flat status list — the mentoring
+      frame dropped the moment tools got involved (tool use strips the tutor).
+
+  - id: web_research_teach
+    tier: coverage
+    title: Web research, taught with sources (cooking)
+    note: Exercises the web/search cluster; references are a standing owner requirement.
+    setup_messages: []
+    stimulus: >-
+      Research the current scientific consensus on resting meat after cooking and
+      teach it to me — with sources — and connect it to what we know about
+      carryover cooking.
+    expected:
+      model_path: single_primary
+      orchestration_event: primary_handled
+      pedagogical_outcomes: [cross_connection_made]
+      tools_used_nonempty: true
+      skills: [fetch-url]
+      tools_any_of: [web_search, perplexity_query]
+    rubric:
+      - "Claims carry citations / sources I can check."
+      - "Explicitly connects resting to carryover cooking (the cross-connection)."
+      - "Distinguishes consensus from contested claims honestly."
+    regression: >-
+      Confident unsourced summary; carryover connection never made; or search ran
+      but the answer ignores what it returned.
+
+  - id: data_prediction_reveal
+    tier: coverage
+    title: Data analysis with prediction-before-reveal (harness dev)
+    note: Exercises run_python + ES in an active-engagement frame.
+    setup_messages: []
+    stimulus: >-
+      Pull your API token costs for the past week and chart them with Python — but
+      before you show me the numbers, ask me what I'd predict, then compare my
+      prediction to reality.
+    expected:
+      model_path: single_primary
+      orchestration_event: primary_handled
+      pedagogical_outcomes: []
+      tools_used_nonempty: true
+      skills: [run-python, query-elasticsearch]
+      tools_any_of: [run_python]
+    rubric:
+      - >-
+        The prediction step actually happens — I'm asked for my estimate BEFORE the
+        data is revealed (active engagement, recall_practiced candidate).
+      - "The chart/data is real (matches the cost ledger), with a readable takeaway."
+    regression: >-
+      Chart dumped immediately with no prediction step; or the engagement question is
+      rhetorical and answered by Seshat itself in the same breath.
+
+  - id: diagram_quiz
+    tier: coverage
+    title: Diagram then quiz (harness dev)
+    note: Exercises mermaid + file reading; tests whether a build task keeps the tutor.
+    setup_messages: []
+    stimulus: >-
+      Help me really understand your request gateway's seven-stage pipeline: draw it
+      as a mermaid diagram, then quiz me on the flow.
+    expected:
+      model_path: single_primary
+      orchestration_event: primary_handled
+      pedagogical_outcomes: [concept_extracted]
+      tools_used_nonempty: true
+      skills: [mermaid-diagrams, read-write]
+      tools_any_of: [write_file, write]
+    rubric:
+      - "Diagram reflects the actual seven stages in order."
+      - "The quiz follows AND WAITS for my answer — it doesn't answer itself."
+    regression: >-
+      Diagram correct but quiz absent or self-answered; stages invented rather than
+      read from the code.
+
+  - id: open_threads_coach
+    tier: coverage
+    title: Open threads, prioritized like a coach
+    note: Exercises the session/observation cluster in a spaced-repetition frame.
+    setup_messages: []
+    stimulus: >-
+      What threads are still open across our recent sessions? Prioritize what we
+      should revisit first, like a spaced-repetition coach would.
+    expected:
+      model_path: single_primary
+      orchestration_event: primary_handled
+      pedagogical_outcomes: [open_thread_preserved]
+      tools_used_nonempty: true
+      skills: [seshat-sessions, seshat-observations, personal-history-recall]
+      tools_any_of: [recall_personal_history, notes_search]
+    rubric:
+      - "Threads come from real session history, not confabulated."
+      - "Prioritization has spaced-repetition reasoning (age, difficulty, momentum)."
+    regression: >-
+      Generic study advice with no actual session lookup; threads invented; no
+      prioritization rationale.
+
+  - id: knowledge_graph_gaps
+    tier: coverage
+    title: Knowledge-graph self-portrait with honest gaps (music)
+    note: Exercises the knowledge-graph cluster; honesty about gaps is the point.
+    setup_messages: []
+    stimulus: >-
+      What do you actually know about my music studies so far? Check your knowledge
+      graph, not just this conversation — and tell me where your picture of me has
+      gaps.
+    expected:
+      model_path: single_primary
+      orchestration_event: primary_handled
+      pedagogical_outcomes: []
+      tools_used_nonempty: true
+      skills: [seshat-knowledge, neo4j-direct, personal-history-recall]
+      tools_any_of: [recall_personal_history]
+    rubric:
+      - "Answer is graph-backed (cites what the substrate holds), not session-only."
+      - "Gaps admitted honestly — no confabulated learner model."
+    regression: >-
+      Confident portrait built from nothing; graph never queried; gaps papered over.
+
+  - id: browser_lesson
+    tier: coverage
+    title: Browser-driven lesson (CSIRT)
+    note: One case for the whole mcp_browser_* family — navigation in a teaching frame.
+    setup_messages: []
+    stimulus: >-
+      Go to the NIST SP 800-61 page, find the incident response lifecycle phases,
+      and teach them to me — finish with one check question for me.
+    expected:
+      model_path: single_primary
+      orchestration_event: primary_handled
+      pedagogical_outcomes: []
+      tools_used_nonempty: true
+      tools_any_of: [browser]
+    rubric:
+      - "Actual navigation occurred (the phases come from the page, not memory)."
+      - "Lesson ends with a check question and waits for my answer."
+    regression: >-
+      Phases recited from training data with no navigation; or navigation succeeds
+      but the teaching close is dropped.
+
+  - id: delegation_handoff
+    tier: coverage
+    title: Delegation package (music)
+    note: >-
+      The set's only DELEGATE-path hypothesis — tests whether a turn that explicitly
+      asks for an external-agent handoff routes to DELEGATE and whether the package
+      carries learner context. High learning value; low confidence in the expectation.
+    setup_messages: []
+    stimulus: >-
+      This is bigger than one turn: prepare a delegation package for an external
+      agent to research ear-training methods and apps — with my level and goals
+      baked in so the agent doesn't start from zero.
+    expected:
+      model_path: delegate
+      orchestration_event: primary_handled
+      pedagogical_outcomes: []
+      skills: [seshat-delegate]
+    rubric:
+      - "The package carries learner context (level, goals), not a generic brief."
+      - "Scope and deliverable for the external agent are explicit."
+    regression: >-
+      Seshat just answers the research question itself inline; or produces a package
+      with no learner model in it.
+
+  - id: linear_capture
+    tier: coverage
+    title: Linear capture of a study plan (CSIRT)
+    note: >-
+      Exercises the native Linear tool family. channel=EVAL suppresses the real
+      side-effecting write — this tests ROUTING to the tools, not the side effect.
+    setup_messages: []
+    stimulus: >-
+      File a Linear issue capturing my CSIRT study plan for next week: a deep dive
+      on triage matrices plus one tabletop exercise.
+    expected:
+      model_path: single_primary
+      orchestration_event: primary_handled
+      pedagogical_outcomes: []
+      tools_any_of:
+        [create_linear_issue, find_linear_issues, list_linear_projects, create_linear_project]
+    rubric:
+      - "The issue body structures the plan (two concrete items), not a one-liner."
+      - "Acknowledges the EVAL-channel suppression honestly if the write is blocked."
+    regression: >-
+      Tool never invoked (plan recited back instead); or a hallucinated 'filed!'
+      claim with no tool call behind it.
+
+  - id: artifact_study_guide
+    tier: coverage
+    title: Interactive artifact build (music studies)
+    note: >-
+      Exercises the artifact family + the FRE-481/ADR-0086 artifact-decomposition
+      path (flag-state sensitive: HYBRID when AGENT_ARTIFACT_DECOMPOSITION_ENABLED,
+      else SINGLE serial — either result is a finding). Also the one case that feeds
+      the FRE-506 artifact-commit gate-decision telemetry, observed in the
+      background layer.
+    setup_messages: []
+    stimulus: >-
+      Build me an interactive HTML study guide for interval recognition — what each
+      interval sounds like, reference songs for each, and a self-quiz section at the
+      end. I'll use it for daily practice.
+    expected:
+      model_path: hybrid
+      orchestration_event: delegate_called
+      pedagogical_outcomes: [concept_extracted]
+      tools_used_nonempty: true
+      tools_any_of: [artifact_write, artifact_draft, artifact_list, artifact_read]
+    rubric:
+      - >-
+        Pedagogically structured for PRACTICE (sound → anchor song → quiz), not an
+        encyclopedia of interval theory.
+      - "Reference songs are real and actually start with the named interval."
+      - "Quiz answers are hidden/revealed, usable for self-testing."
+      - "Lean markup (classes/CSS vars), not a token-expensive inline-styled monolith."
+    regression: >-
+      The a0a07227 cost shape (serial discovery, climbing parent context); an
+      unusable wall of theory; broken or answer-revealing quiz.

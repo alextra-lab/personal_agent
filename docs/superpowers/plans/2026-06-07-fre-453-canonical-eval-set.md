@@ -115,7 +115,7 @@ CLI: `--run-id` (required), `--profile {local,cloud}`, `--chat-url` (default `ht
 ## Addendum — owner co-design session (2026-06-07)
 
 Scope evolved with the owner before implementation; the dataset below supersedes the
-7-case table above. Final shape — **19 cases, two tiers**:
+7-case table above. Final shape — **18 cases, two tiers**:
 
 1. **Tier `canonical` (7)** — the ADR-0084 pedagogical turn types, topics drawn from the
    owner's real learning threads (agent-harness development, cooking, music studies,
@@ -124,7 +124,7 @@ Scope evolved with the owner before implementation; the dataset below supersedes
    surprise), cross_thread_synthesis (mise en place × IR playbooks — the §7.3 probe),
    emotionally_loaded (borrowed chords misconception), tool_heavy_research (own memory
    subsystem code path).
-2. **Tier `coverage` (12)** — realistic multi-tool queries, pedagogically framed, whose
+2. **Tier `coverage` (11)** — realistic multi-tool queries, pedagogically framed, whose
    **union** of expected skills/tools spans the toolbox: self_observability_teaching,
    infra_triage_pedagogy, web_research_teach, data_prediction_reveal, diagram_quiz,
    open_threads_coach, knowledge_graph_gaps, browser_lesson, delegation_handoff (the

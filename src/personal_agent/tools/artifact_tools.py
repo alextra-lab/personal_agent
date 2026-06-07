@@ -314,8 +314,19 @@ async def artifact_write_executor(
     summary: str | None = None,
     tags: list[str] | None = None,
     ctx: Any = None,
+    _gate_decision: str | None = None,
+    _gate_violations: tuple[int, int, int] | None = None,
+    _commit_path: str = "direct_write",
 ) -> dict[str, Any]:
     """Write a human-facing artifact to R2 and record the Postgres row.
+
+    This is intentionally an **ungated** commit path. Per ADR-0089 D1, security is a
+    property of the served-CSP envelope (D2/D3, FRE-509), not of inspecting the bytes —
+    so this function does not strip or reject HTML. The ``_gate_*`` parameters are
+    internal-only (not in the tool schema): ``artifact_draft`` passes the decision it
+    computed so the single per-commit ``artifact_gate_decision`` event (FRE-506) reflects
+    the gated path; a direct caller leaves them unset and the commit is labelled
+    ``bypassed`` (HTML) or ``not_applicable`` (other types) for visibility.
 
     Args:
         slug: Human-readable kebab-case handle (validated by build_r2_key).
@@ -436,6 +447,40 @@ async def artifact_write_executor(
         artifact_id=str(artifact_id),
         slug=slug,
         size_bytes=size_bytes,
+    )
+
+    # FRE-506: one sandbox gate-decision label per commit. The gated draft path passes
+    # its decision via _gate_decision; a direct HTML write ran no gate (bypassed); a
+    # non-HTML write has no sandbox gate (not_applicable). Visibility only — the served
+    # CSP envelope is the boundary (ADR-0089 D1/D5).
+    if _gate_decision is not None:
+        decision = _gate_decision
+        violations = _gate_violations or (0, 0, 0)
+        commit_path = _commit_path
+        gate_ran = True
+    elif content_type == _HTML_CONTENT_TYPE:
+        decision = "bypassed"
+        violations = _count_sandbox_violations(content)
+        commit_path = "direct_write"
+        gate_ran = False
+    else:
+        decision = "not_applicable"
+        violations = (0, 0, 0)
+        commit_path = "direct_write"
+        gate_ran = False
+
+    _emit_gate_decision(
+        trace_id=trace_id,
+        session_id=str(session_id) if session_id is not None else None,
+        user_id=user_id,
+        artifact_id=artifact_id,
+        slug=slug,
+        content_type=content_type,
+        size_bytes=size_bytes,
+        decision=decision,
+        commit_path=commit_path,
+        gate_ran=gate_ran,
+        violations=violations,
     )
 
     return {
@@ -763,6 +808,88 @@ _MERMAID_BLOCK_RE = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 _MERMAID_RENDER_TIMEOUT_S: float = 30.0
+
+# ---------------------------------------------------------------------------
+# FRE-506 — sandbox gate-decision telemetry (non-load-bearing label, ADR-0089 D1/D5)
+# ---------------------------------------------------------------------------
+
+_HTML_CONTENT_TYPE = "text/html; charset=utf-8"
+
+
+def _count_sandbox_violations(html: str) -> tuple[int, int, int]:
+    """Count sandbox-relevant constructs for the gate-decision label.
+
+    Reuses the gate's own detectors so the counts match what the gate would act on.
+    This is an analytics label only (ADR-0089 D1/D5) — nothing depends on it for
+    safety; the served-CSP envelope is the boundary (D2/D3).
+
+    Args:
+        html: The artifact HTML text.
+
+    Returns:
+        A ``(script_count, handler_count, cdn_count)`` tuple.
+    """
+    return (
+        len(_SCRIPT_TAG_RE.findall(html)),
+        len(_EVENT_HANDLER_RE.findall(html)),
+        len(_CDN_LINK_RE.findall(html)),
+    )
+
+
+def _emit_gate_decision(
+    *,
+    trace_id: str,
+    session_id: str | None,
+    user_id: object | None,
+    artifact_id: object | None,
+    slug: str,
+    content_type: str,
+    size_bytes: int,
+    decision: str,
+    commit_path: str,
+    gate_ran: bool,
+    violations: tuple[int, int, int],
+) -> None:
+    """Emit the per-commit sandbox gate-decision label (FRE-506, ADR-0089 D5).
+
+    An observation, never a security verdict: the served-CSP envelope is the boundary
+    (ADR-0089 D2/D3, served by the Worker — FRE-509). A ``bypassed`` decision is the
+    alarm signal that a commit path ran no content gate — the failure mode that took
+    manual forensics to find on trace ``87cbd720``.
+
+    Args:
+        trace_id: Caller trace id.
+        session_id: Caller session id, or None.
+        user_id: Owning user id, or None.
+        artifact_id: Committed artifact id, or None when no commit occurred (rejected).
+        slug: Artifact slug.
+        content_type: Committed MIME type.
+        size_bytes: Committed byte length.
+        decision: One of enforced_pass / stripped / rejected / bypassed / not_applicable.
+        commit_path: ``draft`` or ``direct_write``.
+        gate_ran: Whether a content gate ran on this commit path.
+        violations: ``(script_count, handler_count, cdn_count)`` label.
+    """
+    script_count, handler_count, cdn_count = violations
+    log.info(
+        "artifact_gate_decision",
+        trace_id=trace_id,
+        session_id=session_id,
+        user_id=str(user_id) if user_id is not None else None,
+        # rejected path has no artifact_id yet → emit null, never the literal "None"
+        # (codex review: downstream presence filters must not match a string).
+        artifact_id=str(artifact_id) if artifact_id is not None else None,
+        slug=slug,
+        content_type=content_type,
+        size_bytes=size_bytes,
+        gate_decision=decision,
+        commit_path=commit_path,
+        gate_ran=gate_ran,
+        script_count=script_count,
+        handler_count=handler_count,
+        cdn_count=cdn_count,
+    )
+
 
 _HTML_GENERATION_SYSTEM_PROMPT = """\
 You are an HTML document generator. You receive a structured plan and produce \
@@ -1486,6 +1613,10 @@ async def artifact_draft_executor(
         html_content, trace_id=trace_id, session_id=session_id
     )
 
+    # FRE-506: capture the violation counts the gate is about to act on, for the
+    # gate-decision label (non-load-bearing — ADR-0089 D1/D5).
+    pre_strip_violations = _count_sandbox_violations(html_content)
+
     # --- Strip-and-deliver: sanitize any sandbox residue the retry could not clear (FRE-496) ---
     # Deliberate steering: _HTML_GENERATION_SYSTEM_PROMPT tells the model scripts are
     # "rejected", but here we strip the residue and ship a static artifact with a
@@ -1504,7 +1635,25 @@ async def artifact_draft_executor(
         )
 
     # --- Validate HTML output (ADR-0077 D9, ADR-0070 D7) — safety net after sanitize ---
-    _validate_html_output(html_content)
+    # FRE-506: a sandbox TerminalToolError here is the gate's `rejected` decision — emit
+    # it before propagating, since no commit (and thus no artifact_id) occurs on this path.
+    try:
+        _validate_html_output(html_content)
+    except TerminalToolError:
+        _emit_gate_decision(
+            trace_id=trace_id,
+            session_id=session_id,
+            user_id=getattr(ctx, "user_id", None) if ctx else None,
+            artifact_id=None,
+            slug=slug,
+            content_type=_HTML_CONTENT_TYPE,
+            size_bytes=len(html_content.encode("utf-8")),
+            decision="rejected",
+            commit_path="draft",
+            gate_ran=True,
+            violations=pre_strip_violations,
+        )
+        raise
 
     log.info(
         "artifact_draft_html_validated",
@@ -1515,6 +1664,8 @@ async def artifact_draft_executor(
     )
 
     # --- Chain to artifact_write_executor (D3: direct call, no governance re-check) ---
+    # FRE-506: pass the gate decision so the single per-commit gate-decision event reflects
+    # the gated draft path (enforced_pass when nothing was stripped, else stripped).
     result = await artifact_write_executor(
         slug=slug,
         content_type="text/html; charset=utf-8",
@@ -1523,6 +1674,9 @@ async def artifact_draft_executor(
         summary=summary,
         tags=tags,
         ctx=ctx,
+        _gate_decision="stripped" if sanitize_notes else "enforced_pass",
+        _gate_violations=pre_strip_violations,
+        _commit_path="draft",
     )
 
     result["generation_method"] = "draft"

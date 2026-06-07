@@ -67,7 +67,7 @@ presence.
   **`log.error`** — the D5 alarm condition
 - `unverified_access_denied` (Access wall, token not yet authorized) → `log.warning`
 - `probe_failed` (timeout / connection error) → `log.warning`
-- probe disabled or no public URL configured → `log.debug`, no event
+- probe disabled or no public URL configured → skipped, no event (tests pin the skip)
 
 Access-denial classification is one shared helper `classify_access_denied(status, headers)` used
 by both the probe and the CLI script (codex finding 4): any 3xx whose `location` host ends with
@@ -163,12 +163,12 @@ documents the two bounded-not-closed residuals (self-navigation; WebRTC on brows
    `probe_duration_ms`. Catches all exceptions; never raises.
 5. **`scripts/verify_artifact_envelope.py`** — CLI: GET url → print report → exit 0/1.
    Reads service-token env vars if present. ~60 lines, reuses verifier.
-6. **`tests/personal_agent/observability/artifact_envelope/test_verifier.py`** — layer-1
+6. **`tests/observability/artifact_envelope/test_verifier.py`** — layer-1
    verifier contract tests (D-g) + residual-bound test (D-h) + parse edge cases
    (case-insensitive header names, whitespace, trailing `;`, duplicate directive, multiple CSP
    headers, report-only-only, `charset=UTF-8` casing, extra Content-Type params, missing
    Content-Type, non-Access 3xx).
-7. **`tests/personal_agent/observability/artifact_envelope/test_probe.py`** — mocked httpx:
+7. **`tests/observability/artifact_envelope/test_probe.py`** — mocked httpx:
    happy path emits info event with `envelope_ok=true` + full identity; missing-directive serve
    emits **error** event naming the directive; Access-302 emits `unverified_access_denied`
    warning; timeout emits `probe_failed` warning; never raises; body never read (stream closed —
@@ -202,9 +202,9 @@ documents the two bounded-not-closed residuals (self-navigation; WebRTC on brows
 ## Steps (TDD)
 
 1. `spec.py` + `verifier.py` tests first → fail → implement → green:
-   `make test-file FILE=tests/personal_agent/observability/artifact_envelope/test_verifier.py`
+   `make test-file FILE=tests/observability/artifact_envelope/test_verifier.py`
 2. `probe.py` tests first → fail → implement → green:
-   `make test-file FILE=tests/personal_agent/observability/artifact_envelope/test_probe.py`
+   `make test-file FILE=tests/observability/artifact_envelope/test_probe.py`
 3. Settings + `artifact_tools.py` hook, tests extended first:
    `make test-file FILE=tests/personal_agent/tools/test_artifact_tools.py`
 4. ES template + script + Makefile target (script smoke-tested against the live origin from the

@@ -1,9 +1,14 @@
 /**
  * ArtifactViewer — sandboxed iframe overlay for HTML/text artifacts (FRE-368).
  *
- * Implements ADR-0070 D5/D6/D7: single-surface progressive disclosure with a
+ * Implements ADR-0070 D5/D6: single-surface progressive disclosure with a
  * right-side drawer on desktop and a bottom sheet on mobile. The iframe uses
- * sandbox="" (strictest posture — no scripts, no same-origin) per ADR-0070 D7.
+ * sandbox="allow-scripts" per ADR-0089 D2/D3 (supersedes ADR-0070 D7):
+ * scripts run inside a unique opaque origin — no PWA session, no storage,
+ * no cookies, no parent navigation. The load-bearing boundary is the Worker
+ * CSP envelope on artifacts.frenchforet.com (FRE-509); this attribute is
+ * defense-in-depth on the embedded path. NEVER add allow-same-origin —
+ * it would lift the opaque origin and defeat the isolation model.
  *
  * MANUAL TEST PLAN
  * ================
@@ -14,13 +19,18 @@
  *    Expected: viewer slides in from the right on laptop (width ≤ max-w-3xl),
  *    slides up from the bottom on iPhone (max-h-[90vh], rounded top corners).
  *
- * 2. Verify sandbox posture (ADR-0070 D7):
- *    Write an artifact containing <script>document.title='PWNED'</script>.
- *    Expand it. Expected: page title stays "Artifact" — script never ran.
+ * 2. Verify sandbox posture (ADR-0089 D2/D3):
+ *    Write an artifact containing
+ *    <p id="t">static</p><script>document.getElementById('t').textContent='script ran'</script>.
+ *    Expand it. Expected: the iframe shows "script ran" (scripts execute),
+ *    but the PWA tab title and session are untouched. An artifact calling
+ *    localStorage.setItem(...) throws (opaque origin denies storage).
  *
  * 3. Verify iframe cannot navigate parent:
- *    Write an artifact with <a href="javascript:parent.location='https://evil.com'">click</a>.
- *    Click the link. Expected: nothing happens (sandbox blocks navigation).
+ *    Write an artifact with <script>parent.location='https://evil.com'</script>
+ *    or <a href="javascript:parent.location='https://evil.com'">click</a>.
+ *    Expected: nothing happens — allow-top-navigation is omitted, so the
+ *    sandbox blocks parent navigation even with scripts enabled.
  *
  * 4. ESC key closes the viewer.
  *    Expected: drawer/sheet slides out, chat is fully visible again.
@@ -178,10 +188,11 @@ export function ArtifactViewer({
           </button>
         </div>
 
-        {/* Sandboxed iframe — documents not apps (ADR-0070 D7) */}
+        {/* Sandboxed iframe — opaque origin, scripts only (ADR-0089 D2/D3).
+            NEVER add allow-same-origin. */}
         <iframe
           src={publicUrl}
-          sandbox=""
+          sandbox="allow-scripts"
           referrerPolicy="no-referrer"
           className="flex-1 w-full bg-white"
           title={displayTitle}

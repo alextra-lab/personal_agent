@@ -29,6 +29,7 @@ from personal_agent.gateway.chat_api import router as chat_router
 from personal_agent.gateway.feedback_api import router as feedback_router
 from personal_agent.gateway.knowledge_api import router as knowledge_router
 from personal_agent.gateway.observation_api import router as observation_router
+from personal_agent.gateway.route_trace_api import router as route_trace_router
 from personal_agent.gateway.session_api import router as session_router
 from personal_agent.telemetry import get_logger
 from personal_agent.transport.agui.ws_endpoint import ws_router as transport_router
@@ -86,6 +87,7 @@ def create_gateway_router() -> APIRouter:
     root.include_router(knowledge_router)
     root.include_router(session_router)
     root.include_router(observation_router)
+    root.include_router(route_trace_router)
     root.include_router(feedback_router)
     root.include_router(_health_router)
     return root
@@ -121,6 +123,14 @@ async def _gateway_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_db()
     app.state.db_session_factory = AsyncSessionLocal
     log.info("gateway_database_initialized")
+
+    # Route-trace ledger (FRE-452/FRE-514): own asyncpg pool, separate from the
+    # SQLAlchemy session factory. Connect here so a standalone gateway serves the
+    # /observations/route-traces/* read surface; idempotent (no-op if already connected).
+    from personal_agent.observability.route_trace import get_route_trace_ledger
+
+    await get_route_trace_ledger().connect()
+    log.info("gateway_route_trace_ledger_initialized")
 
     # -----------------------------------------------------------------------
     # Elasticsearch — observation queries
@@ -164,6 +174,9 @@ async def _gateway_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Shutdown
     # -----------------------------------------------------------------------
     log.info("gateway_shutting_down")
+    from personal_agent.observability.route_trace import get_route_trace_ledger
+
+    await get_route_trace_ledger().disconnect()
     if app.state.knowledge_graph is not None:
         try:
             await app.state.knowledge_graph._service.disconnect()

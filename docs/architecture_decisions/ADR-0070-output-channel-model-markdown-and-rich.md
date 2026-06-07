@@ -1,6 +1,6 @@
 # ADR-0070: Output Channel Model — Markdown for Agents, Rich for Humans
 
-**Status**: Implemented — FRE-368 shipped 2026-05-21 (PRs #66 + #67). D8 measurement window open; review gate ≥ 2026-06-04.
+**Status**: Implemented — FRE-368 shipped 2026-05-21 (PRs #66 + #67). D8 measurement window open; review gate ≥ 2026-06-04. **D7 (sandbox="") superseded by ADR-0089 D2/D3** — iframe is `sandbox="allow-scripts"` as of FRE-510 (PR #182, 2026-06-07).
 **Date**: 2026-05-15
 **Deciders**: Project owner
 **Related**: ADR-0069 (R2-Backed Artifact Substrate), ADR-0064 (Inbound User Identity), ADR-0063 (Primitive Tools / Action-Boundary Governance), FRE-227, FRE-368, FRE-369, FRE-315 (PWA Mermaid block rendering — precedent), FRE-209 (approval modal — precedent)

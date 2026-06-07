@@ -125,6 +125,8 @@ def _install_fakes(
         "https://artifacts.test",
         raising=False,
     )
+    # FRE-512: stub the served-envelope probe so unit tests never issue HTTP.
+    monkeypatch.setattr(artifact_tools, "probe_served_envelope", AsyncMock(), raising=False)
     return session
 
 
@@ -1602,3 +1604,115 @@ async def test_gate_decision_not_applicable_for_non_html(
     assert g["script_count"] == 0
     assert g["handler_count"] == 0
     assert g["cdn_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# FRE-512 — served-envelope probe hook (ADR-0089 D5)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_artifact_write_triggers_envelope_probe_with_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every direct-write commit probes the served URL with full ADR-0074 identity."""
+    _install_fakes(monkeypatch, store=_FakeStore())
+    ctx = _ctx(session_id=uuid4())
+
+    out = await artifact_tools.artifact_write_executor(
+        slug="probe-me",
+        content_type="text/html; charset=utf-8",
+        content="<h1>x</h1>",
+        ctx=ctx,
+    )
+
+    probe = artifact_tools.probe_served_envelope
+    probe.assert_awaited_once()
+    kwargs = probe.await_args.kwargs
+    assert kwargs["public_url"] == out["public_url"]
+    assert kwargs["artifact_id"] == out["artifact_id"]
+    assert kwargs["slug"] == "probe-me"
+    assert kwargs["content_type"] == "text/html; charset=utf-8"
+    assert kwargs["trace_id"] == "trace-test"
+    assert kwargs["session_id"] == str(ctx.session_id)
+    assert kwargs["user_id"] == str(ctx.user_id)
+
+
+@pytest.mark.asyncio
+async def test_artifact_draft_triggers_envelope_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The draft path commits through artifact_write_executor — one probe fires."""
+    _install_draft_fakes(monkeypatch)
+
+    await artifact_tools.artifact_draft_executor(
+        slug="draft-probe",
+        title="t",
+        summary="s",
+        plan="Build a table.",
+        ctx=_ctx(),
+    )
+
+    artifact_tools.probe_served_envelope.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_envelope_probe_exception_does_not_fail_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The probe is never load-bearing: even a buggy probe cannot fail the commit."""
+    _install_fakes(monkeypatch, store=_FakeStore())
+    monkeypatch.setattr(
+        artifact_tools,
+        "probe_served_envelope",
+        AsyncMock(side_effect=RuntimeError("probe bug")),
+        raising=False,
+    )
+
+    out = await artifact_tools.artifact_write_executor(
+        slug="resilient",
+        content_type="text/html; charset=utf-8",
+        content="<h1>x</h1>",
+        ctx=_ctx(),
+    )
+
+    assert "artifact_id" in out  # commit succeeded despite the probe raising
+
+
+@pytest.mark.asyncio
+async def test_envelope_probe_skipped_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fakes(monkeypatch, store=_FakeStore())
+    monkeypatch.setattr(
+        artifact_tools.settings, "artifact_envelope_probe_enabled", False, raising=False
+    )
+
+    await artifact_tools.artifact_write_executor(
+        slug="no-probe",
+        content_type="text/html; charset=utf-8",
+        content="<h1>x</h1>",
+        ctx=_ctx(),
+    )
+
+    artifact_tools.probe_served_envelope.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_envelope_probe_skipped_without_public_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No public base URL (local dev) → nothing to probe."""
+    _install_fakes(monkeypatch, store=_FakeStore())
+    monkeypatch.setattr(
+        artifact_tools.settings, "artifacts_public_base_url", None, raising=False
+    )
+
+    await artifact_tools.artifact_write_executor(
+        slug="local-only",
+        content_type="text/html; charset=utf-8",
+        content="<h1>x</h1>",
+        ctx=_ctx(),
+    )
+
+    artifact_tools.probe_served_envelope.assert_not_awaited()

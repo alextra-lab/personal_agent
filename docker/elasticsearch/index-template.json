@@ -133,7 +133,20 @@
             "end_time":    { "type": "keyword" },
             "description": { "type": "text" }
           }
-        }
+        },
+        "envelope_ok":           { "type": "boolean" },
+        "csp_present":           { "type": "boolean" },
+        "mime_ok":               { "type": "boolean" },
+        "nosniff_ok":            { "type": "boolean" },
+        "missing_directives":    { "type": "keyword" },
+        "mismatched_directives": { "type": "keyword" },
+        "unexpected_directives": { "type": "keyword" },
+        "envelope_failures":     { "type": "keyword" },
+        "served_mime":           { "type": "keyword" },
+        "probe_status":          { "type": "keyword" },
+        "csp_header":            { "type": "keyword", "ignore_above": 2048 },
+        "http_status":           { "type": "integer" },
+        "probe_duration_ms":     { "type": "integer" }
       }
     }
   }

@@ -570,6 +570,24 @@ class AppConfig(BaseSettings):
             "Constant-time compared via secrets.compare_digest on the gateway side."
         ),
     )
+    artifact_envelope_probe_enabled: bool = Field(
+        default=True,
+        description=(
+            "Probe the served artifact URL after every commit and emit the "
+            "artifact_envelope_integrity event (FRE-512, ADR-0089 D5). The probe "
+            "is never load-bearing — failures log, the commit succeeds."
+        ),
+    )
+    artifact_envelope_probe_timeout_s: float = Field(
+        default=2.0,
+        gt=0.0,
+        le=30.0,
+        description=(
+            "Worst-case latency tax the envelope probe may add to an artifact "
+            "commit. Kept tight: the commit already spends seconds in R2 + "
+            "embedding; on timeout the event reports probe_status=probe_failed."
+        ),
+    )
     artifact_draft_max_tokens: int = Field(
         default=32768,
         ge=1024,

@@ -7,6 +7,7 @@ is deployed by the Worker (FRE-509, ``personal_agent_secrets``); this package on
 *verifies* it from the served response.
 """
 
+from personal_agent.observability.artifact_envelope.probe import probe_served_envelope
 from personal_agent.observability.artifact_envelope.spec import (
     EXPECTED_CSP_DIRECTIVES,
     EXPECTED_HTML_MIME,
@@ -26,5 +27,6 @@ __all__ = [
     "EnvelopeReport",
     "classify_access_denied",
     "parse_csp",
+    "probe_served_envelope",
     "verify_envelope",
 ]

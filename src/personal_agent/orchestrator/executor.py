@@ -188,34 +188,41 @@ def _resolve_context_max() -> int:
     return settings.context_window_max_tokens
 
 
-async def _emit_turn_status(ctx: "ExecutionContext") -> None:
-    """Push a live ``turn_status`` STATE_DELTA for the PWA status bar (ADR-0076).
+async def _report_turn_progress(ctx: "ExecutionContext") -> None:
+    """Report live turn progress to the ADR-0088 spine (FRE-513).
+
+    Publishes a best-effort ``turn.progress`` event carrying the executor-side live fields
+    (tool iteration, context-window occupancy) the cost boundary cannot see. The live
+    projector relays these onto ``turn_status`` (ADR-0076 sink); topologies never emit
+    ``turn_status`` directly (ADR-0088 D4). Live cost is carried separately on
+    ``turn.model_call_completed`` from the cost boundary (D3).
 
     Best-effort: a telemetry emission must never break the execution loop.
 
     Args:
         ctx: Execution context whose live metrics are reported.
     """
-    if not ctx.session_id:
+    if not ctx.session_id or not ctx.trace_id:
         return
     try:
-        from personal_agent.transport.agui.transport import emit_turn_status
+        from personal_agent.events import get_event_bus
+        from personal_agent.events.models import STREAM_TURN_OBSERVED, TurnProgressEvent
 
-        await emit_turn_status(
-            session_id=ctx.session_id,
-            value={
-                "context_tokens": estimate_messages_tokens(ctx.messages),
-                "context_max": _resolve_context_max(),
-                "tool_iteration": ctx.tool_iteration_count,
-                "tool_iteration_max": _resolve_max_iterations(ctx),
-                "turn_cost_usd": round(ctx.turn_cost_usd, 6),
-                # FRE-407: the client stamps this onto the assistant message so the
-                # rating control (which joins on trace_id) can render after DONE.
-                "trace_id": ctx.trace_id,
-            },
+        await get_event_bus().publish(
+            STREAM_TURN_OBSERVED,
+            TurnProgressEvent(
+                trace_id=str(ctx.trace_id),
+                session_id=str(ctx.session_id),
+                tool_iteration=ctx.tool_iteration_count,
+                tool_iteration_max=_resolve_max_iterations(ctx),
+                context_tokens=estimate_messages_tokens(ctx.messages),
+                context_max=_resolve_context_max(),
+                topology=ctx.topology,
+            ),
+            maxlen=settings.turn_observed_stream_maxlen,
         )
     except Exception:
-        log.debug("turn_status_emit_failed", trace_id=ctx.trace_id, session_id=ctx.session_id)
+        log.debug("turn_progress_publish_failed", trace_id=ctx.trace_id, session_id=ctx.session_id)
 
 
 async def _load_constraint_preference(
@@ -1730,9 +1737,10 @@ async def step_init(
 
                 llm_client = get_llm_client(role_name=ModelRole.PRIMARY.value)
                 controller = ExpansionController()
-                # FRE-501: light up the meter at dispatch start so it is not blank
-                # for the (potentially multi-minute) decomposition window.
-                await _emit_turn_status(ctx)
+                # ADR-0088 D4: report progress at dispatch start so tool/context fields are
+                # live during the (potentially multi-minute) expansion window. Cost itself
+                # climbs from turn.model_call_completed events, not a per-loop accumulator.
+                await _report_turn_progress(ctx)
                 expansion_result = await controller.execute(
                     query=ctx.messages[-1].get("content", "") if ctx.messages else "",
                     strategy=gw.decomposition.strategy.value.upper(),
@@ -1772,20 +1780,12 @@ async def step_init(
                     trace_id=ctx.trace_id,
                 )
 
-                # FRE-501: roll planner + sub-agent cost into the live meter so it
-                # matches the api_cost ledger, then push an updated turn_status.
-                ctx.turn_cost_usd += expansion_result.cost_usd
-                await _emit_turn_status(ctx)
-                log.info(
-                    "expansion_cost_rolled_up",
-                    mode="enforced",
-                    planner_cost_usd=round(expansion_result.planner_cost_usd, 6),
-                    sub_agent_cost_usd=round(
-                        expansion_result.cost_usd - expansion_result.planner_cost_usd, 6
-                    ),
-                    turn_cost_usd=round(ctx.turn_cost_usd, 6),
-                    trace_id=ctx.trace_id,
-                )
+                # ADR-0088 D3: FRE-501's per-loop cost rollup is removed — the live meter
+                # now climbs from turn.model_call_completed events (every model call,
+                # including these sub-agents, publishes one from the cost boundary) and the
+                # durable row's authoritative cost is SUM(api_costs). Report progress so the
+                # tool/context fields refresh after expansion.
+                await _report_turn_progress(ctx)
 
                 # Go directly to synthesis LLM call
                 return TaskState.LLM_CALL
@@ -2685,9 +2685,11 @@ async def step_llm_call(
         prompt_tokens = response.get("usage", {}).get("prompt_tokens", 0)
         completion_tokens = response.get("usage", {}).get("completion_tokens", 0)
 
-        # ADR-0076: accumulate per-call cost and push a live turn_status update.
+        # Accumulate the primary loop's per-call cost — this feeds the durable row's
+        # cost_live_usd for primary turns (ADR-0088 D3); the live meter itself climbs from
+        # turn.model_call_completed events. Report progress so tool/context refresh.
         ctx.turn_cost_usd += float(response.get("cost_usd") or 0.0)
-        await _emit_turn_status(ctx)
+        await _report_turn_progress(ctx)
 
         if timer:
             timer.end_span(
@@ -2756,9 +2758,10 @@ async def step_llm_call(
                 ]
 
             if specs:
-                # FRE-501: light up the meter at dispatch start (the primary
-                # planning call's cost is already in ctx.turn_cost_usd).
-                await _emit_turn_status(ctx)
+                # ADR-0088 D4: report progress at dispatch start (the meter is already
+                # lit by the seam's turn.topology_entered + primary model_call_completed
+                # events; cost is not accumulated per-loop).
+                await _report_turn_progress(ctx)
                 results = await execute_hybrid(
                     specs=specs,
                     trace_id=ctx.trace_id,
@@ -2767,17 +2770,11 @@ async def step_llm_call(
                 )
                 ctx.sub_agent_results = results
 
-                # FRE-501: roll sub-agent cost into the live meter, then re-emit.
-                _sub_agent_cost = sum(r.cost_usd for r in results)
-                ctx.turn_cost_usd += _sub_agent_cost
-                await _emit_turn_status(ctx)
-                log.info(
-                    "expansion_cost_rolled_up",
-                    mode="autonomous",
-                    sub_agent_cost_usd=round(_sub_agent_cost, 6),
-                    turn_cost_usd=round(ctx.turn_cost_usd, 6),
-                    trace_id=ctx.trace_id,
-                )
+                # ADR-0088 D3: FRE-501's per-loop sub-agent cost rollup is removed — each
+                # sub-agent model call already publishes turn.model_call_completed from the
+                # cost boundary, so the live meter climbs without accumulation here. Report
+                # progress so the tool/context fields refresh after the fan-out.
+                await _report_turn_progress(ctx)
 
                 # Build synthesis context and append to messages
                 synthesis_parts = ["Sub-agent results:\n"]
@@ -3011,7 +3008,7 @@ async def step_tool_execution(
     # Loop governance: prevent infinite tool execution cycles
     ctx.tool_iteration_count += 1
     # ADR-0076: push the freshly-incremented tool count to the status bar.
-    await _emit_turn_status(ctx)
+    await _report_turn_progress(ctx)
     _max_iters = _resolve_max_iterations(ctx)
     if ctx.tool_iteration_count > _max_iters:
         log.warning(

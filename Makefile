@@ -56,6 +56,7 @@ endif
         sandbox-build \
         test test-integration test-all test-file test-verbose test-k test-cov eval \
         test-pwa test-pwa-e2e \
+        verify-envelope \
         mypy ruff-check ruff-format \
         eval-recovery-survey eval-recovery \
         test-infra-up test-infra-down test-infra-reset test-infra-ps \
@@ -144,6 +145,10 @@ shell:
 
 health:
 	@curl -sf http://localhost:$(SERVICE_PORT)/health | python3 -m json.tool
+
+verify-envelope:
+	@[ -n "$(URL)" ] || { echo "Usage: make verify-envelope URL=https://artifacts.frenchforet.com/<id>"; exit 1; }
+	@uv run python scripts/verify_artifact_envelope.py $(URL)
 
 # ─── Backward-compat aliases ─────────────────────────────────────────────────
 

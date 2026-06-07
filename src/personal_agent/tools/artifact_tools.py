@@ -34,6 +34,7 @@ from sqlalchemy import text
 
 from personal_agent.config import settings
 from personal_agent.memory.embeddings import generate_embedding
+from personal_agent.observability.artifact_envelope.probe import probe_served_envelope
 from personal_agent.service.database import AsyncSessionLocal
 from personal_agent.storage import (
     ArtifactKeyError,

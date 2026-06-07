@@ -456,6 +456,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_db()
     log.info("database_initialized")
 
+    # Route-trace ledger (FRE-452 / ADR-0088 D6): direct durable observability sink.
+    # Connect early so every turn's terminal write has a pool; non-fatal on failure.
+    from personal_agent.observability.route_trace import get_route_trace_ledger
+
+    await get_route_trace_ledger().connect()
+
     # Cost Check Gate (ADR-0065 / FRE-305): atomic Postgres-backed reservation
     # primitive in front of every paid LLM call. Loaded here so the
     # subsequent service-init code can already issue paid calls if needed.
@@ -1037,6 +1043,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     if memory_service:
         await memory_service.disconnect()
+
+    # Route-trace ledger teardown (FRE-452)
+    from personal_agent.observability.route_trace import get_route_trace_ledger
+
+    await get_route_trace_ledger().disconnect()
 
     # Cost Check Gate teardown (FRE-305)
     if cost_gate_reaper_task is not None:

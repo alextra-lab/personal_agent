@@ -1,6 +1,6 @@
 # ADR-0088 — Execution Topology Observability Contract (Trace-Scoped Spine for Status, Cost, and Loud Degradation)
 
-**Status:** Proposed — 2026-06-06
+**Status:** Accepted — 2026-06-06
 **Related:** ADR-0076 (`turn_status` / STATE_DELTA live surface — the sink this contract feeds), ADR-0074 (identity / joinability — the `trace_id`/`session_id`/`task_id` discipline every spine event inherits), ADR-0086 (HYBRID/DECOMPOSE topology — the new topology that ran below the observability floor), ADR-0036 (expansion controller — a topology that must emit through the spine), ADR-0053 (Agent-Driven Gate Health Monitoring — adjacent gateway-stage observability, kept separate), ADR-0082 (tier-aware model selection — model role is a spine attribute). **Supersedes (tactically):** FRE-501's per-loop cost accumulation. **Shares its seam + event model with:** FRE-452 (route-trace ledger — written by the seam's *direct durable write*, not via the bus stream; designed together).
 **Implements:** FRE-504 → **Observability Foundation** project (L0). Keystone of L0.
 **Spec:** `docs/specs/SESHAT_PROGRAM_ARCHITECTURE.md` (the parent program architecture; this ADR is its L0 keystone)

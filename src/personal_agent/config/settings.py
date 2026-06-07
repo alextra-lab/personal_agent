@@ -172,6 +172,22 @@ class AppConfig(BaseSettings):
         ge=0,
         description="Maximum times the same tool call signature can repeat per request",
     )
+
+    # Route-trace ledger (FRE-452 / ADR-0088). The preview is a PII gate: when False
+    # (default) the ledger stores only a SHA-256 pointer + counts, never raw stimulus text.
+    route_trace_store_preview: bool = Field(
+        default=False,
+        description=(
+            "PII gate for the route-trace ledger. When True, a bounded user-message "
+            "preview is persisted to Postgres (widening the PII exposure surface); when "
+            "False, only a SHA-256 pointer and character/message counts are stored."
+        ),
+    )
+    route_trace_preview_chars: int = Field(
+        default=280,
+        ge=0,
+        description="Max stimulus-preview length when route_trace_store_preview is enabled",
+    )
     orchestrator_max_tool_iterations_by_task_type: dict[str, int] = Field(
         default_factory=lambda: {
             "conversational": 6,

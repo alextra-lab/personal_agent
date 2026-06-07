@@ -1291,6 +1291,47 @@ async def _trigger_captains_log_reflection(ctx: ExecutionContext) -> None:
         )
 
 
+async def _write_route_trace(ctx: ExecutionContext) -> None:
+    """Write the ADR-0088 D6 direct durable route-trace row (FRE-452).
+
+    This is the *direct durable sink* of the execution-topology observability contract —
+    a synchronous, bus-independent Postgres write (ADR-0088 D8), built here by the interim
+    primary-turn adapter (``assemble_route_trace``). It is **best-effort**: any failure is
+    logged and swallowed so a ledger problem can never break the turn.
+    ``asyncio.CancelledError`` is deliberately not caught, so turn cancellation still
+    propagates while the row is still attempted from the caller's ``finally``.
+
+    Args:
+        ctx: The completed turn's execution context.
+    """
+    try:
+        from uuid import UUID
+
+        from personal_agent.observability.route_trace import (
+            assemble_route_trace,
+            get_route_trace_ledger,
+        )
+
+        ledger = get_route_trace_ledger()
+        trace_uuid = UUID(str(ctx.trace_id))
+        cost, in_tok, out_tok = await ledger.fetch_authoritative_cost(trace_uuid)
+        row = assemble_route_trace(
+            ctx,
+            authoritative_cost_usd=cost,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+            store_preview=settings.route_trace_store_preview,
+            preview_chars=settings.route_trace_preview_chars,
+        )
+        await ledger.write(row)
+    except Exception as e:
+        log.warning(
+            "route_trace_write_failed",
+            trace_id=getattr(ctx, "trace_id", None),
+            error=str(e),
+        )
+
+
 async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -> ExecutionContext:
     """Main execution loop: iterate states until terminal.
 
@@ -1575,6 +1616,13 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                     error=str(e),
                     component="executor",
                 )
+
+    finally:
+        # ADR-0088 D6 direct durable sink (FRE-452): write exactly one route-trace row at
+        # the turn terminal. In `finally` so it covers success, handled Exception, and
+        # CancelledError alike; best-effort inside, so it never breaks or delays the turn
+        # result, and CancelledError still propagates after the row is attempted.
+        await _write_route_trace(ctx)
 
     return ctx
 

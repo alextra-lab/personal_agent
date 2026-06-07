@@ -13,12 +13,19 @@ refinement. The classifier never invents a hybrid label.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
-from personal_agent.observability.route_trace.types import OrchestrationEvent
+from personal_agent.observability.route_trace.types import (
+    OrchestrationEvent,
+    RouteTraceRow,
+)
 
 if TYPE_CHECKING:
     from personal_agent.orchestrator.types import ExecutionContext
+
+# FRE-515: candidate-grade disposition leans for the hybrid used/discarded rubric. Never
+# a verdict — mirrors the ledger's ``_LABEL_LIE_SQL`` "candidate heuristic" posture.
+DispositionCandidate = Literal["used_candidate", "discarded_candidate"]
 
 
 def classify_orchestration_event(ctx: ExecutionContext) -> OrchestrationEvent:
@@ -54,3 +61,33 @@ def classify_orchestration_event(ctx: ExecutionContext) -> OrchestrationEvent:
 
     # delegate_called (§3.2): sub-agents ran. used/discarded is hybrid — not decided here.
     return "delegate_called"
+
+
+def delegate_disposition_candidate(row: RouteTraceRow) -> DispositionCandidate | None:
+    """Triage lean for the hybrid used/discarded refinement of a ledger row (FRE-515).
+
+    A *candidate*, never a verdict (taxonomy §3.3/§3.4): genuine incorporation vs.
+    rejection is judged by the rubric during the eval-set human pass — this heuristic only
+    orders the queue. ``error_type`` as a discard lean is deliberately blunt (an errored
+    turn could still have synthesized from successful subs); the rubric overrides.
+
+    Args:
+        row: A persisted route-trace ledger row (works on historical rows — reads only
+            scalars that have existed since FRE-452).
+
+    Returns:
+        ``None`` unless ``row.orchestration_event == "delegate_called"`` — the refinement
+        applies only to the programmatic floor; ``fallback_triggered`` rows also carry
+        subs but are their own terminal event (§3.5). Otherwise ``"discarded_candidate"``
+        when no sub-agent result reached synthesis, the turn errored, or the reply is
+        empty; else ``"used_candidate"``.
+    """
+    if row.orchestration_event != "delegate_called":
+        return None
+    if (
+        not row.delegate_result_passed_to_synthesis
+        or row.error_type is not None
+        or row.final_reply_chars == 0
+    ):
+        return "discarded_candidate"
+    return "used_candidate"

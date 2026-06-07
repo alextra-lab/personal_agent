@@ -362,3 +362,79 @@ class TestRenderer:
         assert "- [ ]" in md  # fillable rubric boxes
         assert "Coverage matrix" in md
         assert "Backend surfaces" in md
+
+    def _render_single(self, evalset: EvalSet, case: EvalCase, row: RouteTraceRow) -> str:
+        evaluation = evaluate_case(case, row)
+        return render_markdown(
+            run_meta={"run_id": "unit-smoke", "profile": "local", "timestamp": "t"},
+            results=[
+                {
+                    "case": case,
+                    "row": row,
+                    "evaluation": evaluation,
+                    "response_text": "hi!",
+                    "background": [],
+                }
+            ],
+            evalset=evalset,
+        )
+
+    def test_disposition_block_rendered_for_delegate_called(self, evalset: EvalSet) -> None:
+        """FRE-515: delegate_called rows get the disposition rubric block."""
+        case = _case(evalset, "tool_heavy_research")
+        row = _make_row(
+            orchestration_event="delegate_called",
+            decomposition_strategy="hybrid",
+            sub_agent_count=2,
+            delegate_result_passed_to_synthesis=True,
+            final_reply_chars=5000,
+            sub_agents=(
+                {
+                    "task_id": "sub-1",
+                    "success": True,
+                    "summary_chars": 800,
+                    "output_chars": 800,
+                    "reply_overlap": 0.62,
+                    "error": None,
+                },
+            ),
+        )
+        md = self._render_single(evalset, case, row)
+        assert "Delegate disposition (FRE-515" in md
+        assert "used_candidate" in md
+        assert "- [ ] `delegate_result_used` confirmed" in md
+        assert "- [ ] `delegate_result_discarded` confirmed" in md
+        assert "reply_overlap" in md
+        assert "0.62" in md
+
+    def test_disposition_candidate_discarded_on_error_row(self, evalset: EvalSet) -> None:
+        """FRE-515: the artifact_study_guide baseline shape leans discarded."""
+        case = _case(evalset, "artifact_study_guide")
+        row = _make_row(
+            orchestration_event="delegate_called",
+            decomposition_strategy="hybrid",
+            sub_agent_count=4,
+            delegate_result_passed_to_synthesis=True,
+            final_reply_chars=501,
+            error_type="LLMServerError",
+        )
+        md = self._render_single(evalset, case, row)
+        assert "discarded_candidate" in md
+
+    def test_disposition_block_absent_for_primary_handled(self, evalset: EvalSet) -> None:
+        """FRE-515: primary_handled rows carry no disposition block."""
+        case = _case(evalset, "trivial_conversational")
+        md = self._render_single(evalset, case, _make_row())
+        assert "Delegate disposition" not in md
+
+    def test_disposition_block_absent_for_fallback_triggered(self, evalset: EvalSet) -> None:
+        """FRE-515: fallback rows carry subs but are their own terminal event (§3.5)."""
+        case = _case(evalset, "tool_heavy_research")
+        row = _make_row(
+            orchestration_event="fallback_triggered",
+            decomposition_strategy="hybrid",
+            sub_agent_count=2,
+            fallback_triggered=True,
+        )
+        md = self._render_single(evalset, case, row)
+        assert "Delegate disposition" not in md

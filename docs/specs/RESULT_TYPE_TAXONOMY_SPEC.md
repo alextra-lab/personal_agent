@@ -110,6 +110,15 @@ from the harness's own control flow — the decomposition strategy chosen by the
   synthesis step; **hybrid** for confirming genuine *incorporation* (vs. the result being present but
   ignored), which can require reading the response. Treat the structural pass-through as the
   programmatic signal and flag genuine-incorporation confirmation as a hybrid check.
+- **Refinement mechanism (FRE-515):** applied **post-hoc by rubric**, never at write time — the
+  harness has no incorporate/reject decision point (all sub-agent summaries are injected into one
+  synthesis message unconditionally), so the row keeps the `delegate_called` floor and the label is
+  refined during the eval-set human pass. Candidate-grade structural signals on the row order the
+  queue: per-sub `reply_overlap` (summary-token containment in the final reply — weak/noisy, informs
+  the rubric, never decides it) and the read-time `delegate_disposition_candidate` heuristic
+  (`route_trace/classifier.py`). Rubric: Q1 dependence → used; Q2 explicit rejection → discarded;
+  Q3 implicit non-use (e.g. an error/apology reply) → discarded; partial incorporation counts as
+  used. Verdicts are recorded in the run report + Linear, not written back to the row.
 
 ### 3.4 `delegate_result_discarded`
 
@@ -119,6 +128,13 @@ from the harness's own control flow — the decomposition strategy chosen by the
 - **Detection source:** Programmatic where the harness records an explicit reject/skip decision;
   **hybrid** where rejection is implicit (the primary silently produced an answer that does not use
   the result). M2 must decide where the threshold sits.
+- **Refinement mechanism (FRE-515) — where the threshold sits:** no explicit reject/skip decision
+  exists in the harness today, so detection is fully hybrid: post-hoc rubric over the row's
+  disposition signals (see §3.3 refinement note). The `fre453-baseline-02` exemplar is the
+  implicit-non-use shape: sub-agent summaries passed to synthesis, but the turn errored downstream
+  (`error_type=LLMServerError`) and the reply is a 501-char apology using none of them. If a future
+  ADR adds an explicit primary review/reject decision, that decision becomes the programmatic
+  signal and write-time refinement becomes defensible.
 
 ### 3.5 `fallback_triggered`
 
@@ -244,7 +260,7 @@ This matches the M2 gate wording (ADR-0084 §Verification): *"the instrument can
 orchestration event **and** a pedagogical outcome."* The layers are assigned independently — the
 orchestration event never implies a pedagogical outcome, and vice versa.
 
-### 5.2 Orchestration-event cardinality and exclusivity — **[proposed — M2 validates]**
+### 5.2 Orchestration-event cardinality and exclusivity — **[provisionally supported — FRE-515]**
 ADR-0084 §D4 lists the five events without stating whether they are mutually exclusive. This spec
 *proposes* the convention that a turn is labeled with the **single** orchestration event that best
 describes its terminal control-flow outcome (e.g. a turn that called a sub-agent and then used its
@@ -252,6 +268,13 @@ output is `delegate_result_used`, which subsumes `delegate_called`). This is a p
 M2 to validate against the eval set, **not** a claim from ADR-0084. M2 may instead find that a layered
 event model (e.g. `delegate_called` + `delegate_result_used`) labels real turns more faithfully; if so,
 M2's finding governs.
+
+**FRE-515 finding (2026-06-07):** provisionally supported by `fre453-baseline-02` for the
+delegate-called cases observed. The layered alternative adds no information: the `delegate_called`
+fact is structurally preserved on every row by `sub_agent_count > 0` (and the `sub_agents` JSONB),
+so refining the single label loses nothing — both baseline delegate rows remain fully interpretable
+under one refined event. Two rows are too small a sample to harden the convention; continue
+validating as fallback / explicit-discard cases appear.
 
 ### 5.3 Pedagogical-outcome cardinality — **[proposed — M2 validates]**
 Pedagogical outcomes are **multi-label**: a single turn may exercise recall, preserve an open thread,

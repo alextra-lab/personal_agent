@@ -69,8 +69,9 @@ class RouteTraceRow:
         tools_used: Distinct tool names invoked during the turn.
         skills_loaded: Skill names loaded for the turn.
         sub_agent_count: Number of sub-agents invoked.
-        sub_agents: Per-sub-agent disposition signals (JSONB): model/tokens/cost/success
-            and ``summary_chars``/``output_chars`` for later hybrid used/discarded rubric.
+        sub_agents: Per-sub-agent disposition signals (JSONB): model/tokens/cost/success,
+            ``summary_chars``/``output_chars``, and the FRE-515 ``reply_overlap``
+            candidate signal — inputs to the hybrid used/discarded rubric.
         expansion_strategy: Expansion strategy label, when expansion ran.
         delegate_result_passed_to_synthesis: Structural fact (not a hybrid judgement):
             at least one sub-agent result reached the primary synthesis step.

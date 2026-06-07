@@ -159,6 +159,56 @@ def test_delegate_passed_to_synthesis_flag() -> None:
     assert row.sub_agents[0]["success"] is True
 
 
+def _sub(summary: str, **overrides: object) -> SubAgentResult:
+    """A successful sub-agent result with the given summary."""
+    defaults: dict[str, object] = dict(
+        task_id="s1",
+        spec_task="x",
+        summary=summary,
+        full_output=summary,
+        tools_used=[],
+        token_count=10,
+        duration_ms=5.0,
+        success=True,
+        cost_usd=0.0,
+    )
+    defaults.update(overrides)
+    return SubAgentResult(**defaults)  # type: ignore[arg-type]
+
+
+def test_reply_overlap_full_containment() -> None:
+    """FRE-515: summary tokens fully present in the reply → overlap 1.0."""
+    summary = "postgres connection pooling explained"
+    reply = "Here is the answer: postgres connection pooling explained in detail."
+    row = _assemble(_base_ctx(sub_agent_results=[_sub(summary)], final_reply=reply))
+    assert row.sub_agents[0]["reply_overlap"] == 1.0
+
+
+def test_reply_overlap_unrelated_reply_is_zero() -> None:
+    """FRE-515: no summary token appears in the reply → overlap 0.0."""
+    row = _assemble(
+        _base_ctx(
+            sub_agent_results=[_sub("quantum entanglement decoherence")],
+            final_reply="Sorry, the model call failed before synthesis.",
+        )
+    )
+    assert row.sub_agents[0]["reply_overlap"] == 0.0
+
+
+def test_reply_overlap_partial() -> None:
+    """FRE-515: half the distinct content tokens contained → overlap 0.5."""
+    summary = "alpha_token beta_token"
+    reply = "the reply mentions alpha_token only"
+    row = _assemble(_base_ctx(sub_agent_results=[_sub(summary)], final_reply=reply))
+    assert row.sub_agents[0]["reply_overlap"] == 0.5
+
+
+def test_reply_overlap_none_when_summary_has_no_content_tokens() -> None:
+    """FRE-515: token-free summary (too short / punctuation) → overlap None."""
+    row = _assemble(_base_ctx(sub_agent_results=[_sub("ok — a b c!")], final_reply="anything"))
+    assert row.sub_agents[0]["reply_overlap"] is None
+
+
 def test_error_fields_populated() -> None:
     classified = SimpleNamespace(category="timeout")
     row = _assemble(_base_ctx(error=ValueError("boom"), classified_error=classified))

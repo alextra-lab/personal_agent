@@ -14,6 +14,7 @@ timer, expansion) may not have run, so missing values become explicit ``None`` /
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from enum import Enum
@@ -83,8 +84,40 @@ def _tools_from_steps(steps: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
     return tuple(seen)
 
 
-def _sub_agent_records(subs: Sequence[Any]) -> tuple[dict[str, Any], ...]:
+# FRE-515: content tokens for the reply_overlap signal — lowercase alnum runs of length
+# >= 4 (drops stopword-sized noise and punctuation without a stopword list).
+_CONTENT_TOKEN_RE = re.compile(r"[a-z0-9_]{4,}")
+
+
+def _content_tokens(text: str) -> frozenset[str]:
+    """Return the distinct content tokens of ``text`` (lowercased, length >= 4)."""
+    return frozenset(_CONTENT_TOKEN_RE.findall(text.lower()))
+
+
+def _reply_overlap(summary: str, reply_tokens: frozenset[str]) -> float | None:
+    """Containment of a sub-agent summary's content tokens in the final reply (FRE-515).
+
+    A *weak, candidate-grade* disposition signal (taxonomy §3.3/§3.4): markdown noise and
+    boilerplate inflate it, paraphrased incorporation deflates it. It informs the hybrid
+    used/discarded rubric — it never decides it.
+
+    Args:
+        summary: The sub-agent summary text.
+        reply_tokens: Pre-computed content tokens of the final user-facing reply.
+
+    Returns:
+        ``|tokens(summary) ∩ tokens(reply)| / |tokens(summary)|`` rounded to 3 decimals,
+        or ``None`` when the summary has no content tokens.
+    """
+    summary_tokens = _content_tokens(summary)
+    if not summary_tokens:
+        return None
+    return round(len(summary_tokens & reply_tokens) / len(summary_tokens), 3)
+
+
+def _sub_agent_records(subs: Sequence[Any], final_reply: str) -> tuple[dict[str, Any], ...]:
     """Project sub-agent results into JSONB disposition records (hybrid-rubric inputs)."""
+    reply_tokens = _content_tokens(final_reply)
     records: list[dict[str, Any]] = []
     for s in subs:
         records.append(
@@ -96,6 +129,7 @@ def _sub_agent_records(subs: Sequence[Any]) -> tuple[dict[str, Any], ...]:
                 "cost_usd": getattr(s, "cost_usd", None),
                 "summary_chars": len(getattr(s, "summary", "") or ""),
                 "output_chars": len(getattr(s, "full_output", "") or ""),
+                "reply_overlap": _reply_overlap(getattr(s, "summary", "") or "", reply_tokens),
                 "error": getattr(s, "error", None),
             }
         )
@@ -159,6 +193,7 @@ def assemble_route_trace(
     gateway_label = f"{task_type or 'unknown'}/{strategy or 'unknown'}"
 
     subs = list(getattr(ctx, "sub_agent_results", None) or [])
+    final_reply = getattr(ctx, "final_reply", "") or ""
     # Structural fact (not a hybrid judgement): a successful sub-agent result with a
     # non-empty summary reached the primary synthesis step.
     passed_to_synthesis = any(
@@ -219,14 +254,14 @@ def assemble_route_trace(
         skills_loaded=tuple(sorted(getattr(ctx, "loaded_skills", None) or set())),
         # Delegation
         sub_agent_count=len(subs),
-        sub_agents=_sub_agent_records(subs),
+        sub_agents=_sub_agent_records(subs, final_reply),
         expansion_strategy=getattr(ctx, "expansion_strategy", None),
         delegate_result_passed_to_synthesis=passed_to_synthesis,
         # Result type
         orchestration_event=orchestration_event,
         pedagogical_outcomes=None,
         # Synthesis
-        final_reply_chars=len(getattr(ctx, "final_reply", "") or ""),
+        final_reply_chars=len(final_reply),
         # Latency
         latency_total_ms=latency_total_ms,
         latency_breakdown=latency_breakdown,

@@ -59,6 +59,9 @@ import structlog
 import yaml  # type: ignore[import-untyped]
 
 from personal_agent.config import get_settings
+from personal_agent.observability.route_trace.classifier import (
+    delegate_disposition_candidate,
+)
 from personal_agent.observability.route_trace.ledger import RouteTraceLedger
 from personal_agent.observability.route_trace.types import RouteTraceRow
 
@@ -661,6 +664,51 @@ def _measurement_cells(row: RouteTraceRow) -> str:
     )
 
 
+def _disposition_block(row: RouteTraceRow) -> list[str]:
+    """Render the FRE-515 delegate-disposition rubric block for a ``delegate_called`` row.
+
+    Returns an empty list for every other orchestration event (``fallback_triggered``
+    rows also carry subs but are their own terminal event — taxonomy §3.5). The candidate
+    is a triage lean, never a verdict: the fillable checkboxes are the hybrid half
+    (taxonomy §3.3/§3.4), completed during the human pass.
+    """
+    candidate = delegate_disposition_candidate(row)
+    if candidate is None:
+        return []
+    lines = [
+        "**Delegate disposition (FRE-515 — hybrid used/discarded rubric):**",
+        "",
+        f"- structural signals: passed_to_synthesis={row.delegate_result_passed_to_synthesis}, "
+        f"error_type={row.error_type}, final_reply_chars={row.final_reply_chars}",
+        f"- candidate (triage lean, never a verdict): `{candidate}`",
+        "",
+        "| sub task_id | success | summary_chars | output_chars | reply_overlap | error |",
+        "|---|---|---|---|---|---|",
+    ]
+    for sub in row.sub_agents:
+        lines.append(
+            f"| {sub.get('task_id')} | {sub.get('success')} | {sub.get('summary_chars')} "
+            f"| {sub.get('output_chars')} | {sub.get('reply_overlap', 'n/a')} "
+            f"| {sub.get('error') or '—'} |"
+        )
+    lines += [
+        "",
+        "Rubric — read the response, then check exactly one:",
+        "- Q1 (dependence): the reply contains content traceable to a sub-agent summary "
+        "that is not in the primary's own tool results or prior context → used.",
+        "- Q2 (explicit rejection): the reply explicitly rejects/contradicts the "
+        "sub-agent output on review → discarded (explicit).",
+        "- Q3 (implicit non-use): the reply is an error/apology or shows no dependence "
+        "on the summaries → discarded (implicit).",
+        "- Tie-break: partial incorporation counts as used.",
+        "",
+        "- [ ] `delegate_result_used` confirmed",
+        "- [ ] `delegate_result_discarded` confirmed",
+        "",
+    ]
+    return lines
+
+
 def render_markdown(
     run_meta: Mapping[str, object],
     results: Sequence[Mapping[str, object]],
@@ -722,6 +770,7 @@ def render_markdown(
         lines.append("|---|---|---|---|---|---|---|---|---|")
         lines.append(_measurement_cells(row))
         lines.append("")
+        lines.extend(_disposition_block(row))
         lines.append("**Rubric (human pass — fill after reading the response):**")
         for outcome in case.expected.pedagogical_outcomes:
             lines.append(f"- [ ] outcome `{outcome}` confirmed")

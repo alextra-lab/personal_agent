@@ -33,6 +33,16 @@ first run is the behavioural baseline — we run it to *learn*, not to pass.
   candidate* (declared strategy vs actual orchestration event — the ledger's
   `_LABEL_LIE_SQL` heuristic). The taxonomy **§7.3 label-lie** verdict (gateway label
   hiding pedagogical work) is rubric-derived during the human pass.
+- **Delegate disposition (FRE-515).** Rows whose event is `delegate_called` get a
+  disposition rubric block in the report: structural signals (per-sub success/chars +
+  `reply_overlap`, `passed_to_synthesis`, `error_type`, `final_reply_chars`), a
+  candidate lean (`used_candidate`/`discarded_candidate` — triage, never a verdict),
+  and fillable `delegate_result_used`/`delegate_result_discarded` checkboxes. The
+  human pass refines the floor label post-hoc; verdicts are recorded in the completed
+  checklist + Linear, not written back to the ledger. Rubric: **Q1 dependence** (reply
+  contains content traceable to a sub summary, not in the primary's own tool results)
+  → used; **Q2 explicit rejection** → discarded; **Q3 implicit non-use** (error/apology
+  or no dependence) → discarded; partial incorporation counts as used.
 - **Backend static-prompt surfaces are observational only.** Captain's-log capture,
   reflection, entity extraction, within-session compression, and tool-result digests are
   v0.1 prompts that have never been tuned — the harness records fired / not-fired
@@ -96,7 +106,9 @@ make test-file FILE=tests/evaluation/test_fre453_canonical_evalset.py
 
 ## Follow-ups this feeds
 
-- **FRE-515** — refine `delegate_called` → used/discarded with the hybrid rubric on
-  this set.
-- Spec §5.2/§5.3 proposed conventions (single-terminal-event; zero-outcomes-allowed)
-  are confirmed or revised from the first labeled run.
+- ~~**FRE-515** — refine `delegate_called` → used/discarded with the hybrid rubric on
+  this set.~~ Shipped: the disposition rubric block above; §5.2 provisionally supported
+  from `fre453-baseline-02` (tool_heavy_research → used, artifact_study_guide →
+  discarded).
+- Spec §5.3 proposed convention (zero-outcomes-allowed) is confirmed or revised from
+  the first labeled run.

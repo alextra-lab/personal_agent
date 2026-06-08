@@ -136,6 +136,26 @@ def test_export_bad_mode_422(monkeypatch: pytest.MonkeyPatch) -> None:
     assert resp.status_code == 422
 
 
+@pytest.mark.asyncio
+async def test_http_fetcher_rejects_disallowed_host() -> None:
+    # SSRF guard: a host outside the allowlist is refused before any request.
+    fetcher = router_module._HttpAssetFetcher(
+        origin_host="artifacts.frenchforet.com",
+        allowed_hosts=frozenset({"artifacts.frenchforet.com", "cdn.jsdelivr.net"}),
+    )
+    with pytest.raises(ArtifactExportError):
+        await fetcher.fetch("https://169.254.169.254/latest/meta-data/")
+
+
+def test_build_asset_fetcher_allowlist_from_map() -> None:
+    from personal_agent.storage.artifact_export import load_substitution_map
+
+    fetcher = router_module._build_asset_fetcher(load_substitution_map())
+    assert isinstance(fetcher, router_module._HttpAssetFetcher)
+    assert "artifacts.frenchforet.com" in fetcher._allowed_hosts
+    assert "cdn.jsdelivr.net" in fetcher._allowed_hosts
+
+
 def test_export_fetch_failure_502(monkeypatch: pytest.MonkeyPatch) -> None:
     # inline export of an inline-only asset (three.js) forces a fetch
     html = f'<script src="{_ORIGIN}/lib/three@0.171.0/three.iife.min.js"></script>'.encode()

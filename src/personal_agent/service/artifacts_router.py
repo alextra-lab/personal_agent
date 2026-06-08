@@ -53,6 +53,7 @@ from personal_agent.storage.artifact_export import (
     ArtifactExportError,
     AssetFetcher,
     ExportMode,
+    SubstitutionMap,
     export_artifact_html,
     load_substitution_map,
 )
@@ -343,23 +344,35 @@ _EXPORT_FETCH_TIMEOUT_S = 15.0
 class _HttpAssetFetcher:
     """httpx-backed :class:`AssetFetcher` for the export endpoint.
 
-    Attaches the CF Access service token **only** for the artifacts ``/lib/``
-    origin (Access-gated); public CDN hosts are fetched plain. Any non-200 is
-    raised as :class:`ArtifactExportError` so the endpoint maps it to 502.
+    SSRF mitigation: a request is made **only** to a host on ``allowed_hosts``
+    — the artifacts ``/lib/`` origin plus the public-CDN hosts named in the
+    *trusted* substitution map. Any other host (a redirect target, or a URL
+    smuggled in via artifact content) is refused before the request is issued,
+    and redirects are not followed (a 3xx could otherwise relocate the request
+    off an allowed host). The CF Access service token is attached **only** for
+    the artifacts origin (Access-gated); public CDN hosts are fetched plain. Any
+    non-200 is raised as :class:`ArtifactExportError` so the endpoint maps it to
+    502.
     """
 
-    def __init__(self, origin: str, timeout: float = _EXPORT_FETCH_TIMEOUT_S) -> None:
-        self._origin_host = urlparse(origin).netloc.lower()
+    def __init__(
+        self,
+        *,
+        origin_host: str,
+        allowed_hosts: frozenset[str],
+        timeout: float = _EXPORT_FETCH_TIMEOUT_S,
+    ) -> None:
+        self._origin_host = origin_host.lower()
+        self._allowed_hosts = allowed_hosts
         self._timeout = timeout
 
     async def fetch(self, url: str) -> bytes:
-        headers = (
-            cf_access_service_token_headers()
-            if urlparse(url).netloc.lower() == self._origin_host
-            else {}
-        )
+        host = urlparse(url).netloc.lower()
+        if host not in self._allowed_hosts:
+            raise ArtifactExportError(f"refusing to fetch from disallowed host: {host!r}")
+        headers = cf_access_service_token_headers() if host == self._origin_host else {}
         try:
-            async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True) as client:
+            async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=False) as client:
                 response = await client.get(url, headers=headers)
         except httpx.HTTPError as exc:
             raise ArtifactExportError(f"failed to fetch {url}: {exc}") from exc
@@ -368,9 +381,21 @@ class _HttpAssetFetcher:
         return response.content
 
 
-def _build_asset_fetcher(origin: str) -> AssetFetcher:
-    """Factory for the export asset fetcher (seam for tests to override)."""
-    return _HttpAssetFetcher(origin)
+def _build_asset_fetcher(sub_map: SubstitutionMap) -> AssetFetcher:
+    """Build the export asset fetcher with a host allowlist from the trusted map.
+
+    The allowlist is the artifacts origin host plus every public-CDN host named
+    in the substitution map — both come from our own config, never from artifact
+    content. This is the seam tests override.
+    """
+    origin_host = urlparse(sub_map.origin).netloc.lower()
+    allowed = {origin_host}
+    for asset in sub_map.by_lib_path.values():
+        if asset.public_cdn_url:
+            cdn_host = urlparse(asset.public_cdn_url).netloc.lower()
+            if cdn_host:
+                allowed.add(cdn_host)
+    return _HttpAssetFetcher(origin_host=origin_host, allowed_hosts=frozenset(allowed))
 
 
 @router.get(
@@ -437,7 +462,7 @@ async def export_artifact(
     html = raw.decode("utf-8", errors="replace")
 
     sub_map = load_substitution_map()
-    fetcher = _build_asset_fetcher(sub_map.origin)
+    fetcher = _build_asset_fetcher(sub_map)
     try:
         out = await export_artifact_html(html=html, mode=mode, sub_map=sub_map, fetcher=fetcher)
     except ArtifactExportError as exc:

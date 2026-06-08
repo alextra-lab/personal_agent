@@ -475,7 +475,7 @@ class LiteLLMClient:
                 trace_id=trace_id,
                 role=role.value,
                 budget_role=self.budget_role,
-                reservation_amount=str(reservation_amount),
+                reservation_amount_usd=float(reservation_amount),
             )
             await cost_tracker.disconnect()
             raise
@@ -495,7 +495,7 @@ class LiteLLMClient:
             span_id=span_id,
             extra={
                 "budget_role": self.budget_role,
-                "reservation_amount": str(reservation_amount),
+                "reservation_amount_usd": float(reservation_amount),
                 "max_tokens": effective_max_tokens,
             },
         )

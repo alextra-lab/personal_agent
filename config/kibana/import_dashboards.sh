@@ -34,6 +34,7 @@ FILES=(
   "expansion_decomposition.ndjson"
   "intent_classification.ndjson"
   "prompt-cost-cache.ndjson"
+  "cost_budget.ndjson"
 )
 
 echo "Importing dashboards into Kibana at ${KIBANA_URL} ..."

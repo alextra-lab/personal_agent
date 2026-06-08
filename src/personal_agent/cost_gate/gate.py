@@ -193,7 +193,7 @@ class CostGate:
                     log.warning(
                         "cost_gate_reserve_uncapped",
                         role=role,
-                        amount=str(amount),
+                        amount_usd=float(amount),
                         trace_id=str(trace_id) if trace_id else None,
                     )
                     return await self._insert_uncapped_reservation(
@@ -221,7 +221,7 @@ class CostGate:
         log.info(
             "cost_gate_reserved",
             role=role,
-            amount=str(amount),
+            amount_usd=float(amount),
             reservation_id=str(reservation_id),
             trace_id=str(trace_id) if trace_id else None,
             cap_count=len(counters),
@@ -318,9 +318,10 @@ class CostGate:
         log.info(
             "cost_gate_committed",
             reservation_id=str(reservation_id),
-            actual_cost=str(actual_cost),
-            reserved=str(reserved),
-            delta=str(delta),
+            role=role,
+            actual_cost_usd=float(actual_cost),
+            reserved_usd=float(reserved),
+            delta_usd=float(delta),
             trace_id=str(trace_id) if trace_id else None,
         )
 
@@ -412,7 +413,8 @@ class CostGate:
         log.info(
             "cost_gate_refunded",
             reservation_id=str(reservation_id),
-            amount=str(amount),
+            role=role,
+            amount_usd=float(amount),
             trace_id=str(trace_id) if trace_id else None,
         )
 

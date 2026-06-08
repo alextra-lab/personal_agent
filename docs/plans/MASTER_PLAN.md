@@ -101,8 +101,8 @@ All five from the `cache_control 5>4` post-mortem (PR #150). FRE-468 is Urgent a
 
 ```
 Lane T (Telemetry · local, NO prod deploy)
-  533✅ ⟶ ┬ 534 ┐        534/535 BUILDABLE off the 533 CSV
-  (done)  └ 535 ┴⟶ 536 · 537 · 538 · 539
+  533✅ ⟶ ┬ 534✅ ┐       534 applied+verified live (ladder/ms/join keys)
+  (done)  └ 535  ┴⟶ 536 · 537 · 538 · 539   535 + 536–539 BUILDABLE
 
 Lane A (Artifact toolkit)
   526✅ ⟶ 527✅ ⟶ ┬ 528 ┐
@@ -115,7 +115,7 @@ Lane O (Observability)
  (deployed) (next)            453 → re-sequenced behind 541 (Needs Approval)
 ```
 
-- **Lane T — Telemetry** (local ES/Kibana; **no prod deploy**): FRE-533 ✅ (1023-row inventory; 14 broken panels confirmed) → FRE-534 (templates) ‖ FRE-535 (dashboard triage) **← buildable now off the CSV** → FRE-536/537/538/539 (cost · ledger+topology · joinability+SLM-health · turn/E2E/envelope).
+- **Lane T — Telemetry** (local ES/Kibana; **no prod deploy**): FRE-533 ✅ (1023-row inventory) → FRE-534 ✅ (templates corrected + applied+verified live, PR #194) ‖ FRE-535 (dashboard triage) **← buildable** → FRE-536/537/538/539 (cost · ledger+topology · joinability+SLM-health · turn/E2E/envelope) **← now unblocked**.
 - **Lane A — Artifact toolkit** (ADR-0089 Add. A merged, PR #188): FRE-526 ✅ → FRE-527 ✅ (`/lib` hosted + `verify-lib` green) → {FRE-528 prompt ‖ FRE-529 skill ‖ FRE-530 export} **← buildable now** → FRE-531 (E2E); FRE-532 (PWA) independent. FRE-525 umbrella closes with FRE-531.
 - **Lane O — Observability**: FRE-518 ✅ (live-render bug, deployed) → FRE-523 (eval-mode memory bug) **← next** → FRE-517 (per-topology rows) → FRE-522 (eval⇄PWA + tool-render). Non-build: FRE-505 ✅ verified+closed · FRE-453 re-sequenced behind FRE-541 (rubric waits on the conversation driver).
 
@@ -139,7 +139,7 @@ Lane O (Observability)
 | [FRE-531](https://linear.app/frenchforest/issue/FRE-531) | Art | — | Sonnet | Toolkit #6 — E2E: `/lib/` render under live CSP + offline export. Blocked by 527+528+530. Closes FRE-525. |
 | [FRE-532](https://linear.app/frenchforest/issue/FRE-532) | Art | — | Sonnet | Toolkit #7 — PWA convergence (share curation not hosting; add KaTeX). Independent. |
 | [FRE-533](https://linear.app/frenchforest/issue/FRE-533) ✅ | Tel | — | Opus | **DONE** — reconciliation inventory (PR #193): 1023 (field,family) rows; 643 emitted-but-unmapped, 30 traps, **14 broken panels / 6 of 12 dashboards** (`.keyword` aggs on bare-keyword → silent empty). `docs/research/` + CSV + reusable audit script. **Unblocks 534/535/537/538/540.** |
-| [FRE-534](https://linear.app/frenchforest/issue/FRE-534) | Tel | — | Sonnet | A2 — correct templates (explicit props, split straddle, add missing). Blocked by 533. |
+| [FRE-534](https://linear.app/frenchforest/issue/FRE-534) ✅ | Tel | — | Sonnet | **DONE** — templates corrected + **applied+verified live** (PR #194): `ms_fields_as_float`, captains 3-way split (subagents@120), insights/slm-health templates w/ keyword join keys; `denial_reason` kept keyword for the donut. New-indices-only, no backfill. Unblocks 536–539. |
 | [FRE-535](https://linear.app/frenchforest/issue/FRE-535) | Tel | — | Sonnet | B1 — dashboard triage (keep/retire/fix 12/57; NDJSON to git). Blocked by 533, ‖ A2. |
 | [FRE-536](https://linear.app/frenchforest/issue/FRE-536)/537/538/539 | Tel | — | Sonnet | C1–C4 new viz — cost · ledger+topology · joinability+SLM-health · turn/E2E/envelope. Blocked by 534. |
 

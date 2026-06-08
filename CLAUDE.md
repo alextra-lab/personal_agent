@@ -205,6 +205,11 @@ Full coding standards in `.claude/CLAUDE.md` § Coding Standards. Quick summary:
 - Async for all I/O; pass `TraceContext` through call chains
 - Test markers: `integration` (requires live LLM), `requires_llm_server`, `evaluation` (100+ calls) — unit tests carry no marker
 
-### Current status (as of 2026-06-02)
+### Current status (as of 2026-06-08)
 
-Waves A–C, E, J complete. Wave H (memory/context): FRE-375/374/376 ✅ — ADR-0074 Accepted; FRE-377 next. Wave I (prompt observability, FRE-403 EPIC): FRE-404/405/406/407 ✅ — FRE-408 (P4) next. **ADR-0081 cache chain COMPLETE: D1 ✅ (FRE-422) → D4 ✅ (FRE-431) → D2/D3 ✅ (FRE-434) — frozen append-only layout + cache-aware compaction scheduler shipped + live; cross-turn KV reuse local 0→8k+, cloud 13.9k→19.5k.** Owner debrief filed FRE-435–442 (Needs Approval: memory-recall research, cost/cache pricing, PWA notes, rating UX, side-by-side eval, always-references, etc.). Waves D (deferred per FRE-214 §8.7), F, G partial. See `docs/plans/MASTER_PLAN.md` for the authoritative wave sequence and gate dates.
+Portfolio organized as **L0–L3 substrate-pillars-vs-consumers** (`docs/specs/SESHAT_PROGRAM_ARCHITECTURE.md`, FRE-504). **Three active projects:**
+- **Telemetry Surface Audit** (L0 — ES emit↔mapping↔dashboard reconciliation, **ADR-0090**): FRE-533 1023-row inventory ✅ (14 broken Kibana panels confirmed) → 534/535 buildable → 536–539.
+- **Observability Foundation** (L0 — **ADR-0088** topology spine): 518 live-render bug ✅, 505 sub-agent audit ✅; 523/517/522 buildable; 453 eval set gated on the conversation driver FRE-541.
+- **Artifact Execution Security** (L2 — **ADR-0089** sealed-box, Implemented + Addendum A curated `/lib/` toolkit): 526 meter ✅ + 527 `/lib/` hosted+verified ✅ live; 528–532 buildable.
+
+Standing research pillars: **Memory Recall Quality** (ADR-0087, FRE-435) · **Seshat Inference Architecture** (ADR-0082). Recent ADRs: **0088** Accepted · **0089** Implemented · **0090** Proposed. Earlier complete: Waves A–C/E/J; Wave H (FRE-375/374/376) + Wave I (FRE-403 EPIC, FRE-404–409); **ADR-0081 cache chain** (D1/D4/D2/D3) shipped + live. Waves D (deferred per FRE-214 §8.7), F, G partial. **`docs/plans/MASTER_PLAN.md` is authoritative for current priorities + sequencing.**

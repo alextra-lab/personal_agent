@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
-> **Last updated**: 2026-06-08 (master) — **🗓️ DAY PLAN: 3-project parallel build — Telemetry Surface Audit ‖ Observability Foundation ‖ Artifact Execution Security** (3 largely-independent surfaces → 3 lanes; sequencing + deploy cadence in *Immediately Actionable*). MP↔Linear synced. **Artifact Execution Security: ADR-0089 core COMPLETE (509✅510✅511✅512✅, Implemented); Addendum A (FRE-525 curated `/lib/` toolkit) authored by adr session + merged (PR #188, `75815b4`) → 7 implementation tickets FRE-526–532 filed + Approved (build session: meter-fix→host→prompt→skill→export→E2E→PWA). FRE-524 canceled, FRE-498 canceled, FRE-497 re-homed.** **Observability Foundation open:** 518 live-render gap (High bug), 523 eval-mode memory pipeline (bug), 517 per-topology rows, 522 eval⇄PWA reconciliation — all **Approved/buildable**; 505 verify+close (master); 453 owner rubric pass. Today's sequence + session assignment in *Immediately Actionable → Project-completion cluster*. **NEW project — Telemetry Surface Audit (Approved):** three-way reconciliation of the ES telemetry surface (emit-site code ↔ index mappings ↔ Kibana dashboards) — A1 FRE-533 (Opus, inventory, runs first) → A2 FRE-534 (templates) ‖ B1 FRE-535 (dashboard triage) → C1–C4 FRE-536/537/538/539 (new viz: cost, ledger+topology, joinability+SLM-health, turn/E2E/envelope). Local infra; session assignment held until Artifact Exec Security clears. Previously: 2026-06-07 (master, EOD final) — **🏆 ADR-0089 TRACK COMPLETE: 509✅ 510✅ 511✅ 512✅ — ADR marked Implemented.** FRE-512 closed with prod evidence after owner fixed the terraform token mismatch (laptop had authorized a different service token than prod's — caught by the reopen-on-evidence gate, fixed, re-verified): `make verify-envelope` from VPS → HTTP 200, 12/12 directives exact, `ENVELOPE OK`, exit 0. Envelope probe now emits `verified` on every artifact commit; degraded envelope = error-level alarm. Sealed-box artifact execution is fully live, verified, and self-monitoring. Day total: FRE-510/511/512/515/520/453-harness shipped+deployed; FRE-520 deadlock found+fixed+post-mortemed; two eval baselines landed (shell-not-model finding); FRE-521/522/523/524 filed→table. Open: owner rubric pass (FRE-453), approvals queue (521/522/523/524, FRE-432 best-evidenced).
+> **Last updated**: 2026-06-08 (master, EOD) — **3-project parallel build — SHIPPED + deployed today:** Artifact 526 (meter) + 527 (`/lib/` hosted, `verify-lib` green) · Observability 518 (live-render bug) + 505 (sub-agent audit, closed) · Telemetry 533 (1023-row reconciliation inventory). **Filed** FRE-541 (eval conversation driver + `clarification_requested`) → re-sequenced 453 behind it. **Closed** FRE-504 (its ADRs all landed). Substitution map moved to public repo. ADR-0090 Proposed+merged. MP↔Linear synced. **Artifact Execution Security:** ADR-0089 Implemented + Addendum A (PR #188). FRE-526 ✅ + 527 ✅ shipped; **buildable:** 528/529/530/531/532; FRE-525 umbrella closes w/ 531. FRE-524/498 canceled, 497 re-homed. **Observability Foundation:** 518 ✅ + 505 ✅ shipped; **buildable:** 523/517/522; 453 re-sequenced behind FRE-541 (Needs Approval). **Telemetry Surface Audit:** FRE-533 ✅ inventory (1023 rows; 14 broken panels confirmed) → **534/535 buildable** off the CSV → 536–539. Local infra, no prod deploy. Previously: 2026-06-07 (master, EOD final) — **🏆 ADR-0089 TRACK COMPLETE: 509✅ 510✅ 511✅ 512✅ — ADR marked Implemented.** FRE-512 closed with prod evidence after owner fixed the terraform token mismatch (laptop had authorized a different service token than prod's — caught by the reopen-on-evidence gate, fixed, re-verified): `make verify-envelope` from VPS → HTTP 200, 12/12 directives exact, `ENVELOPE OK`, exit 0. Envelope probe now emits `verified` on every artifact commit; degraded envelope = error-level alarm. Sealed-box artifact execution is fully live, verified, and self-monitoring. Day total: FRE-510/511/512/515/520/453-harness shipped+deployed; FRE-520 deadlock found+fixed+post-mortemed; two eval baselines landed (shell-not-model finding); FRE-521/522/523/524 filed→table. Open: owner rubric pass (FRE-453), approvals queue (521/522/523/524, FRE-432 best-evidenced).
 
 ---
 
@@ -27,7 +27,7 @@ As of 2026-06-06 (FRE-504) the portfolio is organized as **substrate pillars vs 
 
 **Reconciliation loop (L0↔L1):** intended matrix vs actual ledger; every gap resolved loudly in one of two explicit directions ("loud or it rots"). Currently a *principle*, not yet a running control system (operationalizing it is itself a future L0/L1 deliverable).
 
-**Active sequence — visibility-first (decomposition first-run fix queue):** Wave 0 (SEE) = **FRE-501 ✅** (live cost+status meter, PR #171, deployed) · FRE-505 · FRE-506 — *build/adr*. Wave 1 = FRE-502 (planner reliability). Wave 2 = FRE-503 (proactive depth for build/teach). Parallel = FRE-500 (sandbox flag bridge). adr = **FRE-504** (spec ✅ landed PR #172; **ADR-0088/0089 pending**, ticket stays In Progress).
+**Active sequence — visibility-first (decomposition first-run fix queue):** Wave 0 (SEE) = **FRE-501 ✅** (live cost+status meter, PR #171, deployed) · FRE-505 · FRE-506 — *build/adr*. Wave 1 = FRE-502 (planner reliability). Wave 2 = FRE-503 (proactive depth for build/teach). Parallel = FRE-500 (sandbox flag bridge). adr = **FRE-504** ✅ **done** (spec PR #172; ADR-0088 Accepted · 0089 Implemented · 0090 Proposed — all landed; closed 2026-06-08, threads 2/3/7 routed to Memory Recall / Inference pillars).
 
 **Reconciliation — RESOLVED by adr session (2026-06-06; do not re-resolve):**
 1. **FRE-502** (planner reliability) — ✅ **MOVED** to **Seshat Inference Architecture** (spec §4 mechanism-robustness routing); was in Turn Cost.
@@ -97,13 +97,27 @@ All five from the `cache_control 5>4` post-mortem (PR #150). FRE-468 is Urgent a
 
 ## Immediately Actionable (approved, no gate)
 
-**Three-project parallel build (2026-06-08) — Telemetry Surface Audit ‖ Observability Foundation ‖ Artifact Execution Security.** Three largely-independent surfaces → 3 lanes.
+**Three-project parallel build — Telemetry Surface Audit ‖ Observability Foundation ‖ Artifact Execution Security.** Three largely-independent surfaces → 3 lanes. **Live status (EOD 2026-06-08):**
 
-**Kickoff (start now — all dependency-free, no shared-file/deploy collision):** `adr → FRE-533` (Telemetry A1, Opus, local, research-doc, no src writes) · `build → FRE-518` (Observability live-render bug, Opus, highest live impact) · `build2 → FRE-526 → FRE-527` (Artifact chain) · `master` → FRE-505 verified+closed ✅, then merges/deploys.
+```
+Lane T (Telemetry · local, NO prod deploy)
+  533✅ ⟶ ┬ 534 ┐        534/535 BUILDABLE off the 533 CSV
+  (done)  └ 535 ┴⟶ 536 · 537 · 538 · 539
 
-- **Lane T — Telemetry** (local ES/Kibana; **no prod deploy**): FRE-533 (Opus, inventory, gates all) → FRE-534 (templates) ‖ FRE-535 (dashboard triage) → FRE-536/537/538/539 (cost · ledger+topology · joinability+SLM-health · turn/E2E/envelope).
-- **Lane A — Artifact toolkit** (ADR-0089 Add. A merged, PR #188): FRE-526 (meter, no dep) → FRE-527 (host `/lib`, Worker) → {FRE-528 prompt ‖ FRE-529 skill ‖ FRE-530 export} → FRE-531 (E2E); FRE-532 (PWA) independent. FRE-525 umbrella closes with FRE-531.
-- **Lane O — Observability**: FRE-518 (Opus, High bug — **first**) → FRE-523 (eval-mode memory bug) → FRE-517 (per-topology rows) → FRE-522 (eval⇄PWA + tool-render). Non-build: FRE-505 master verify+close · FRE-453 owner rubric.
+Lane A (Artifact toolkit)
+  526✅ ⟶ 527✅ ⟶ ┬ 528 ┐
+ (deployed)(hosted+   ├ 529 ┼⟶ 531 ⟶ closes 525   528/529/530 BUILDABLE
+            verify-lib)└ 530 ┘  (530: substitution map ready, public repo)
+  532 ───────────────────────── (independent)
+
+Lane O (Observability)
+  518✅ ⟶ 523 ⟶ 517 ⟶ 522     505✅ master verify+closed
+ (deployed) (next)            453 → re-sequenced behind 541 (Needs Approval)
+```
+
+- **Lane T — Telemetry** (local ES/Kibana; **no prod deploy**): FRE-533 ✅ (1023-row inventory; 14 broken panels confirmed) → FRE-534 (templates) ‖ FRE-535 (dashboard triage) **← buildable now off the CSV** → FRE-536/537/538/539 (cost · ledger+topology · joinability+SLM-health · turn/E2E/envelope).
+- **Lane A — Artifact toolkit** (ADR-0089 Add. A merged, PR #188): FRE-526 ✅ → FRE-527 ✅ (`/lib` hosted + `verify-lib` green) → {FRE-528 prompt ‖ FRE-529 skill ‖ FRE-530 export} **← buildable now** → FRE-531 (E2E); FRE-532 (PWA) independent. FRE-525 umbrella closes with FRE-531.
+- **Lane O — Observability**: FRE-518 ✅ (live-render bug, deployed) → FRE-523 (eval-mode memory bug) **← next** → FRE-517 (per-topology rows) → FRE-522 (eval⇄PWA + tool-render). Non-build: FRE-505 ✅ verified+closed · FRE-453 re-sequenced behind FRE-541 (rubric waits on the conversation driver).
 
 **Deploy cadence (master, owner-approved, one-at-a-time from main):** *Gateway* (526/528/523/517 + 518 backend) — batch by surface; joinability probe after any emit/schema/memory ticket. *Worker/terraform* (527/530) — independent surface. *PWA* (518/522/532) — serialize, bump `CACHE_NAME`, gateway rebuild ≠ PWA deploy. *Telemetry* — no prod deploy; local apply + commit templates + NDJSON.
 **Contention guardrails:** PWA is the shared resource (518/522/532) → one lane owns it at a time, land 518 first. `pytest` lock = one `make test` at a time → throughput cap. `artifact_tools.py` touched by 526+528 (same lane, sequential). Merge server-side; deploy from main one at a time.

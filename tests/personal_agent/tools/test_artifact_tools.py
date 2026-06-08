@@ -1447,6 +1447,52 @@ def test_system_prompt_advertises_curated_lib_toolkit() -> None:
     assert "curated" in prompt.lower()
 
 
+def test_artifact_design_doc_matches_manifest() -> None:
+    """FRE-529 (ADR-0089 A4): docs/skills/artifact-design.md is the source-of-truth.
+
+    The skill doc is the maintainable superset the generation prompt is distilled
+    from. This manifest-driven drift guard keeps doc ↔ manifest ↔ prompt in
+    lockstep: every non-eval-gated asset must appear as its full absolute,
+    version-pinned URL (``origin + /lib/ + path``); the eval-gated paged.js must
+    be present but flagged experimental, never first-class; the native-typography
+    recipes and the D4 "never bake secrets" rule must be documented.
+    """
+    from personal_agent.observability.artifact_envelope.spec import (
+        DEFAULT_LIB_MANIFEST_PATH,
+    )
+
+    repo_root = DEFAULT_LIB_MANIFEST_PATH.resolve().parents[1]
+    doc_path = repo_root / "docs" / "skills" / "artifact-design.md"
+    doc = doc_path.read_text(encoding="utf-8")
+
+    origin, assets = load_lib_manifest()
+
+    # Self-describing frontmatter (sibling to mermaid-diagrams.md).
+    assert "name: artifact-design" in doc
+
+    for asset in assets:
+        url = f"{origin}/lib/{asset.path}"
+        if asset.eval_gated:
+            assert url not in doc, f"eval-gated asset must not be first-class: {url}"
+        else:
+            assert url in doc, f"missing curated /lib/ recipe URL: {url}"
+
+    # paged.js: present (it is in the curated brief) but flagged experimental.
+    assert "paged.js" in doc.lower()
+    assert "experimental" in doc.lower()
+
+    # Native typography recipes (no library).
+    assert "::first-letter" in doc
+    assert "hyphens: auto" in doc
+    assert "text-wrap: balance" in doc
+    assert "font-feature-settings" in doc
+    assert "column-count" in doc
+    assert "@page" in doc
+
+    # The standing D4 rule.
+    assert "never bake secrets" in doc.lower()
+
+
 # ---------------------------------------------------------------------------
 # Mermaid render helpers — unit tests (FRE-396)
 # ---------------------------------------------------------------------------

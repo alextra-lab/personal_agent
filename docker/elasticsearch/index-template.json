@@ -146,7 +146,10 @@
         "probe_status":          { "type": "keyword" },
         "csp_header":            { "type": "keyword", "ignore_above": 2048 },
         "http_status":           { "type": "integer" },
-        "probe_duration_ms":     { "type": "integer" }
+        "probe_duration_ms":     { "type": "integer" },
+        "external_script_count": { "type": "long" },
+        "script_reach_allowed":  { "type": "long" },
+        "script_reach_blocked":  { "type": "long" }
       }
     }
   }

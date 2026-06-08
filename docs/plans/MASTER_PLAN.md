@@ -116,7 +116,7 @@ All five from the `cache_control 5>4` post-mortem (PR #150). FRE-468 is Urgent a
 | [FRE-522](https://linear.app/frenchforest/issue/FRE-522) | Obs | — | Sonnet | Reconcile eval-run ⇄ PWA: report-case→session deep links + **fix tool-use render gap** (ledger 15/18, PWA 0). |
 | [FRE-505](https://linear.app/frenchforest/issue/FRE-505) ✅ | Obs | High | Sonnet | **DONE** — verified live: 20 records in `agent-captains-captures-subagents-2026-06-07` with `memory_in_context` + `full_output` + `truncation_ratio` (PR #179/#180). |
 | [FRE-453](https://linear.app/frenchforest/issue/FRE-453) | Obs | Med | Sonnet | Canonical eval set — harness done; **owner rubric pass** remains. |
-| [FRE-526](https://linear.app/frenchforest/issue/FRE-526) | Art | — | Sonnet | Toolkit #1 — fix blind demand meter (count/classify external `<script src>`); closes FRE-498. No dep. |
+| [FRE-526](https://linear.app/frenchforest/issue/FRE-526) ✅merged | Art | — | Sonnet | Toolkit #1 — meter fix (PR #190, `6ed78dd`); 3 `long` fields on `artifact_gate_decision`. **Awaiting gateway deploy** to go live; closes FRE-498. |
 | [FRE-527](https://linear.app/frenchforest/issue/FRE-527) | Art | — | Sonnet | Toolkit #2 — host curated `/lib/` (KaTeX/Chart.js/three.js/highlight.js/OFL fonts/paged.js) + substitution map + `verify-envelope` assertion. Worker/secrets. Blocks 528/530/531. |
 | [FRE-528](https://linear.app/frenchforest/issue/FRE-528) | Art | — | Sonnet | Toolkit #3 — reframe `_HTML_GENERATION_SYSTEM_PROMPT` to advertise `/lib/` + native typography. Blocked by 527. |
 | [FRE-529](https://linear.app/frenchforest/issue/FRE-529) | Art | — | Sonnet | Toolkit #4 — author `docs/skills/artifact-design.md` (runtime guidance). Parallel; 528 distills from it. |
@@ -230,6 +230,9 @@ FRE-391 (dynamic max_tokens) — independent; addresses artifact-truncation root
 
 | ADR | Title | Status |
 |-----|-------|--------|
+| **0090** | **Telemetry Surface Contract (emit↔mapping↔dashboard)** | **Proposed 2026-06-08 (PR #189). Governs the _Telemetry Surface Audit_ project (L0); three-corner reconciliation contract, report-only→gate CI phasing. Complements ADR-0088 (emission seam vs storage/display surface). Realization: FRE-533→539 + one D5 checker ticket (Needs Approval).** |
+| **0089** | **Artifact Execution Security (sandbox not sanitize)** | **Implemented 2026-06-07 (509–512 live+verified). Addendum A merged 2026-06-08 (PR #188) — curated `/lib/` toolkit; impl FRE-526✅(PR #190)/527–532. FRE-525 umbrella In Progress.** |
+| **0088** | **Execution Topology Observability Contract** | **Accepted 2026-06-06; spine shipped (FRE-513 PR #178) + read surfaces (514/515/519). Open: FRE-517 per-topology rows, FRE-518 live-render bug.** |
 | **0084** | **Pedagogical Architecture: Socratic Tutor Layer** | **Accepted 2026-06-03 (PR #146). Primary = pedagogical continuity layer; delegation = bounded cognition only; 5-layer architecture; result-type taxonomy. Supersedes ADR-0082 D2–D5 for routing question. FRE-447/448/449 Done (M1). FRE-432 reconceived → Needs Approval; FRE-450 tracks scope revision.** |
 | **0082** | **Tier-Aware Model Selection for SINGLE Tasks** | **Partially Superseded by ADR-0084 2026-06-03 — D2–D5 superseded for pedagogical routing; D1 plumbing may still ship in M4. FRE-432 scope invalidated → reconceived.** |
 | **0081** | **Cache-Aware Context Layout & Compaction** | **Core chain COMPLETE + live: D1 ✅ (FRE-422) · D4 skill-index split ✅ (FRE-431) · D2/D3 frozen layout + scheduler ✅ (FRE-434, PRs #129/#130, enabled in prod). Deferred follow-ups tracked in project _ADR-0081 Extended — Context & Memory Injection Quality_: D4-index-trim (FRE-464), D5 cold-tier retrieval (FRE-465), D6 pin (FRE-466) — all Needs Approval.** |

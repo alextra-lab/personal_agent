@@ -22,25 +22,11 @@ from personal_agent.observability.artifact_envelope.verifier import (
     classify_access_denied,
     verify_envelope,
 )
+from personal_agent.service.cf_service_token import cf_access_service_token_headers
 
 log = structlog.get_logger(__name__)
 
 _EVENT = "artifact_envelope_integrity"
-
-
-def _service_token_headers() -> dict[str, str]:
-    """CF Access service-token headers, when configured.
-
-    The token must also be authorized on the artifacts Access app policy
-    (terraform, ``personal_agent_secrets``) — until then the probe reports
-    ``unverified_access_denied``.
-    """
-    if settings.cf_access_client_id and settings.cf_access_client_secret:
-        return {
-            "CF-Access-Client-Id": settings.cf_access_client_id,
-            "CF-Access-Client-Secret": settings.cf_access_client_secret,
-        }
-    return {}
 
 
 async def probe_served_envelope(
@@ -84,7 +70,7 @@ async def probe_served_envelope(
         timeout = float(settings.artifact_envelope_probe_timeout_s)
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
             async with client.stream(
-                "GET", public_url, headers=_service_token_headers()
+                "GET", public_url, headers=cf_access_service_token_headers()
             ) as response:
                 status_code = int(response.status_code)
                 header_pairs = list(response.headers.multi_items())

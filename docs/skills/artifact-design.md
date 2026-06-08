@@ -360,6 +360,12 @@ Three distinct lanes; pick by how the artifact needs to travel.
    - **Honest limit:** an exported file **leaves the envelope** — it runs **unsandboxed**
      wherever opened (no CSP, no opaque origin), and substitution-map exports depend on a
      third-party CDN at view time (bounded by SRI). This is why the next rule is absolute.
+   - **Realized as** `GET /api/v1/artifacts/{id}/export?mode=inline|substitute` (owner-scoped,
+     HTML-only). Inline mode SRI-verifies each fetched `/lib/` asset against the pinned map and
+     also inlines a stylesheet's own `url(...)` subresources (e.g. KaTeX glyph fonts) as `data:`
+     URIs so math renders offline; substitute mode emits the pinned `integrity` and lets the
+     **browser** byte-verify at view time. A reference to an **unmapped** `/lib/` path fails the
+     export closed (it would otherwise silently point a "portable" file back at the gated origin).
 
 > *Saving work produced **inside** a running artifact* (e.g. a draft typed into the artifact) is a
 > different problem — the sandbox omits downloads/storage/network, so a running artifact cannot

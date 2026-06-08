@@ -2,6 +2,7 @@
   "description": "Export substitution map for the curated artifact /lib/ toolkit (ADR-0089 Addendum A5 · FRE-527 #2 · feeds FRE-530). For each asset hosted at artifacts.frenchforet.com/lib/, gives the public-CDN twin at the same version, the SRI (sha384) computed from OUR pinned bytes, whether the public twin is CORS-verified (ACAO present), classic|module loading, and the ultimate fallback. three.js + fonts have no faithful public classic twin (bespoke IIFE / UA-varying font CDN) → inline-only.",
   "origin": "https://artifacts.frenchforet.com",
   "lib_manifest_ref": "personal_agent (public) config/artifact_lib_manifest.json",
+  "generated_from": "personal_agent_secrets infrastructure/terraform-cloudflare/artifact_lib_substitution_map.json — generation source (SRI computed from the hosted /lib/ bytes beside the Worker terraform); this public copy is the runtime mirror consumed by FRE-530. Regenerate there and re-sync here on any pin change.",
   "sri_algorithm": "sha384",
   "entries": [
     {

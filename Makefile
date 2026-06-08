@@ -56,7 +56,7 @@ endif
         sandbox-build \
         test test-integration test-all test-file test-verbose test-k test-cov eval \
         test-pwa test-pwa-e2e \
-        verify-envelope \
+        verify-envelope verify-lib \
         mypy ruff-check ruff-format \
         eval-recovery-survey eval-recovery \
         test-infra-up test-infra-down test-infra-reset test-infra-ps \
@@ -149,6 +149,12 @@ health:
 verify-envelope:
 	@[ -n "$(URL)" ] || { echo "Usage: make verify-envelope URL=https://artifacts.frenchforet.com/<id>"; exit 1; }
 	@uv run python scripts/verify_artifact_envelope.py $(URL)
+
+# Curated /lib/ toolkit assertion (FRE-527 / ADR-0089 Addendum A · A7): reachable +
+# correct executable-MIME + nosniff under the artifact CSP. Standalone today; fold
+# into the verify-envelope deploy gate once the Worker hosts /lib/ (master, post-hosting).
+verify-lib:
+	@uv run python scripts/verify_artifact_envelope.py --lib $(if $(MANIFEST),--manifest $(MANIFEST),) $(if $(ORIGIN),--origin $(ORIGIN),)
 
 # ─── Backward-compat aliases ─────────────────────────────────────────────────
 

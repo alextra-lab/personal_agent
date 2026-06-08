@@ -13,8 +13,12 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from personal_agent.observability.artifact_envelope.spec import (
+    EXECUTABLE_SCRIPT_MIMES,
     EXPECTED_CSP_DIRECTIVES,
-    FORBIDDEN_SCRIPT_MIMES,
+    EXPECTED_FONT_MIMES,
+    EXPECTED_STYLE_MIME,
+    LIB_KIND_CSP_DIRECTIVE,
+    LibAsset,
 )
 
 Headers = Mapping[str, str] | Sequence[tuple[str, str]]
@@ -154,7 +158,7 @@ def _check_mime(served: str | None, *, expect_html: bool) -> tuple[bool, str | N
     if parsed is None:
         return False, "wrong_mime"
     media_type, params = parsed
-    if media_type in FORBIDDEN_SCRIPT_MIMES:
+    if media_type in EXECUTABLE_SCRIPT_MIMES:
         return False, "executable_mime"
     if expect_html and (media_type != "text/html" or params != {"charset": "utf-8"}):
         return False, "wrong_mime"
@@ -248,5 +252,124 @@ def verify_envelope(status_code: int, headers: Headers, *, expect_html: bool) ->
         nosniff_ok=nosniff_ok,
         http_status=status_code,
         csp_header=csp_header,
+        failures=tuple(failures),
+    )
+
+
+@dataclass(frozen=True)
+class LibAssetReport:
+    """The verification verdict for one served ``/lib/`` toolkit asset.
+
+    Attributes:
+        asset_ok: True iff no failure was detected.
+        name: The library name (from the manifest).
+        path: The asset path relative to ``/lib/``.
+        kind: The asset kind (``script`` / ``style`` / ``font``).
+        http_status: The served HTTP status code.
+        served_mime: The raw Content-Type value, or None when absent.
+        mime_ok: The served MIME matched the kind's requirement.
+        nosniff_ok: ``X-Content-Type-Options: nosniff`` was served.
+        csp_host_ok: The serving origin is admitted by the artifact CSP
+            directive that governs this asset kind.
+        failures: Stable failure codes, empty when ``asset_ok``.
+    """
+
+    asset_ok: bool
+    name: str
+    path: str
+    kind: str
+    http_status: int
+    served_mime: str | None
+    mime_ok: bool
+    nosniff_ok: bool
+    csp_host_ok: bool
+    failures: tuple[str, ...]
+
+
+def _check_lib_mime(served: str | None, asset: LibAsset) -> tuple[bool, str | None]:
+    """Return (mime_ok, failure_code) for a served ``/lib/`` asset Content-Type.
+
+    The polarity is inverse to the artifact rule: a ``script`` asset *must* serve
+    an executable JS MIME; a ``style``/``font`` asset must serve its exact type.
+    """
+    if served is None:
+        return False, "wrong_mime"
+    parsed = _parse_content_type(served)
+    if parsed is None:
+        return False, "wrong_mime"
+    media_type, _ = parsed
+    if asset.kind == "script":
+        if media_type not in EXECUTABLE_SCRIPT_MIMES:
+            return False, "non_executable_script_mime"
+        return True, None
+    if asset.kind == "style":
+        if media_type != EXPECTED_STYLE_MIME:
+            return False, "wrong_mime"
+        return True, None
+    # font
+    suffix = urlsplit(asset.path).path.rsplit(".", 1)
+    ext = f".{suffix[-1]}" if len(suffix) == 2 else ""
+    if media_type != EXPECTED_FONT_MIMES.get(ext):
+        return False, "wrong_mime"
+    return True, None
+
+
+def verify_lib_asset(
+    status_code: int, headers: Headers, *, asset: LibAsset, origin: str
+) -> LibAssetReport:
+    """Verify a served ``/lib/`` toolkit asset (ADR-0089 Addendum A · A7).
+
+    Consumes only the status code and headers (D1/D5 scope boundary). Asserts the
+    asset is reachable (2xx), serves the correct MIME for its kind, carries
+    ``nosniff``, and is served from an origin the artifact CSP admits for that
+    kind — i.e. genuinely loadable *under the artifact CSP*, not merely same-host.
+
+    Args:
+        status_code: The served HTTP status.
+        headers: The served response headers (mapping or multi-value pairs).
+        asset: The manifest entry being verified.
+        origin: The serving origin (e.g. ``https://artifacts.frenchforet.com``).
+
+    Returns:
+        The :class:`LibAssetReport`; ``asset_ok`` is True iff no check failed.
+    """
+    pairs = _as_pairs(headers)
+    failures: list[str] = []
+
+    if not (200 <= status_code < 300):
+        failures.append("http_error")
+
+    content_type_values = _values(pairs, "content-type")
+    if len(content_type_values) == 1:
+        served_mime: str | None = content_type_values[0]
+    elif not content_type_values:
+        served_mime = None
+    else:
+        served_mime = ", ".join(content_type_values)
+    mime_ok, mime_failure = _check_lib_mime(served_mime, asset)
+    if mime_failure is not None:
+        failures.append(mime_failure)
+
+    nosniff_ok = any(
+        value.strip().lower() == "nosniff" for value in _values(pairs, "x-content-type-options")
+    )
+    if not nosniff_ok:
+        failures.append("missing_nosniff")
+
+    directive = LIB_KIND_CSP_DIRECTIVE[asset.kind]
+    csp_host_ok = origin in EXPECTED_CSP_DIRECTIVES[directive]
+    if not csp_host_ok:
+        failures.append("csp_host_not_allowed")
+
+    return LibAssetReport(
+        asset_ok=not failures,
+        name=asset.name,
+        path=asset.path,
+        kind=asset.kind,
+        http_status=status_code,
+        served_mime=served_mime,
+        mime_ok=mime_ok,
+        nosniff_ok=nosniff_ok,
+        csp_host_ok=csp_host_ok,
         failures=tuple(failures),
     )

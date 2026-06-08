@@ -103,7 +103,7 @@ All five from the `cache_control 5>4` post-mortem (PR #150). FRE-468 is Urgent a
 Lane T (Telemetry · local, NO prod deploy)
   533✅ ⟶ ┬ 534✅ ┐       A1/A2/B1 done + applied live; 536–539 BUILDABLE
   (done)  └ 535✅ ┴⟶ 536 · 537 · 538 · 539
-  536 (C1 cost dashboard) merged ◑ — bundles a cost_gate emit fix → needs GATEWAY deploy + ES/Kibana apply
+  536✅ (C1 cost dashboard) deployed+applied+verified (gateway *_usd double emit + dashboard live + joinability green); 537/538/539 buildable
   follow-ups (Needs Approval): 545 (wire routing_decision) · 546 (prompt-cost-cache import fmt) · 547 (cap-utilization snapshot)
 
 Lane A (Artifact toolkit)
@@ -144,7 +144,7 @@ Lane O (Observability)
 | [FRE-533](https://linear.app/frenchforest/issue/FRE-533) ✅ | Tel | — | Opus | **DONE** — reconciliation inventory (PR #193): 1023 (field,family) rows; 643 emitted-but-unmapped, 30 traps, **14 broken panels / 6 of 12 dashboards** (`.keyword` aggs on bare-keyword → silent empty). `docs/research/` + CSV + reusable audit script. **Unblocks 534/535/537/538/540.** |
 | [FRE-534](https://linear.app/frenchforest/issue/FRE-534) ✅ | Tel | — | Sonnet | **DONE** — templates corrected + **applied+verified live** (PR #194): `ms_fields_as_float`, captains 3-way split (subagents@120), insights/slm-health templates w/ keyword join keys; `denial_reason` kept keyword for the donut. New-indices-only, no backfill. Unblocks 536–539. |
 | [FRE-535](https://linear.app/frenchforest/issue/FRE-535) ✅ | Tel | — | Sonnet | **DONE** — triage 12 dashboards fixed/retired + **imported+verified live** (PR #195, harness PASS 0 silent-empty). Filter-aware harness caught 20 broken vs A1's 14; hardened `import_dashboards.sh`. Spawned **545** (routing_decision emit) + **546** (prompt-cost-cache import fmt) — both Needs Approval. |
-| [FRE-536](https://linear.app/frenchforest/issue/FRE-536) ◑ | Tel | — | Sonnet | C1 cost & budget dashboard **merged** (PR #197) + cost_gate money-field emit fix (`*_usd` double). **Awaiting gateway deploy + ES/Kibana apply.** Cap-util deferred → 547. |
+| [FRE-536](https://linear.app/frenchforest/issue/FRE-536) ✅ | Tel | — | Sonnet | **DONE** — C1 cost & budget dashboard + cost_gate `*_usd` `double` emit fix (PR #197); **deployed+applied+verified** (gateway emit live, template `double`, dashboard live, joinability green). Cap-util deferred → 547. |
 | [FRE-537](https://linear.app/frenchforest/issue/FRE-537)/538/539 | Tel | — | Sonnet | C2–C4 new viz — ledger+topology · joinability+SLM-health · turn/E2E/envelope. Unblocked (534 done). |
 
 

@@ -25,7 +25,10 @@ coverage:
   # v1 exemptions — flagged here, not silently ignored. get_location/get_library_docs
   # have no natural pedagogical case yet; expand_tool_result is internal plumbing the
   # model invokes opportunistically, not user-routable.
-  allowlist_skills: [get_location]
+  # artifact-design (FRE-529, ADR-0089 A4) is runtime-guidance source-of-truth for the
+  # artifact-generation sub-agent, distilled into _HTML_GENERATION_SYSTEM_PROMPT; it is
+  # not a user-routable skill and has no skill-loading mechanism wired yet, so no case.
+  allowlist_skills: [get_location, artifact-design]
   allowlist_tools: [get_location, get_library_docs, expand_tool_result]
   # MCP tools are enforced at family granularity (a real browser task exercises many
   # mcp_browser_* micro-tools in one turn; per-method cases are meaningless).

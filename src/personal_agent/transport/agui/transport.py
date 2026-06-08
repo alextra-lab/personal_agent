@@ -52,36 +52,102 @@ from personal_agent.transport.events import (
 
 log = get_logger(__name__)
 
+# ── Per-session emit serialization (FRE-518) ────────────────────────────────
+#
+# Concurrent emitters (the main chat coroutine pushing the final response delta
+# + the ``cg:turn-projector`` consumer task pushing ``turn_status``) persist on
+# separate DB connections, so the ``await buf.append`` resume order can invert
+# the Postgres ``seq`` order. A higher-seq event enqueued before a lower-seq one
+# then gets permanently dropped by the sender's ``max_sent_seq`` guard and the
+# client's ``lastSeq`` guard, orphaning the final response from the live + replay
+# paths (ADR-0075). Serialising the ``persist → set seq → enqueue`` critical
+# section per session restores the invariant *enqueue order == seq order*.
+_session_emit_locks: dict[str, asyncio.Lock] = {}
+# Bounded to avoid unbounded growth across distinct sessions; far beyond any
+# realistic concurrent-session working set so a held lock is never evicted in
+# practice (mirrors the projector's ``_MAX_TRACKED_TRACES`` pattern).
+_MAX_EMIT_LOCKS = 4096
+
+
+def _get_emit_lock(session_id: str) -> asyncio.Lock:
+    """Return (creating if needed) the per-session emit-serialization lock."""
+    lock = _session_emit_locks.get(session_id)
+    if lock is None:
+        if len(_session_emit_locks) >= _MAX_EMIT_LOCKS:
+            # Evict the oldest insertion-order entry to stay bounded.
+            oldest = next(iter(_session_emit_locks))
+            del _session_emit_locks[oldest]
+        lock = asyncio.Lock()
+        _session_emit_locks[session_id] = lock
+    return lock
+
 
 async def _push_event(event: InternalEvent, session_id: str) -> None:
-    """Persist an event, then enqueue the sequenced envelope for live WS delivery."""
+    """Persist an event, then enqueue the sequenced envelope for live WS delivery.
+
+    The persist + enqueue run under the per-session emit lock so seq order equals
+    enqueue order across concurrent emitters (FRE-518).
+    """
     envelope = to_agui_event(event)
     event_type = envelope["type"]
 
-    try:
-        async with AsyncSessionLocal() as db:
-            buf = SessionEventBuffer(db)
-            seq = await buf.append(
-                session_id=UUID(session_id),
-                event_type=event_type,
-                payload=envelope,
+    async with _get_emit_lock(session_id):
+        try:
+            async with AsyncSessionLocal() as db:
+                buf = SessionEventBuffer(db)
+                seq = await buf.append(
+                    session_id=UUID(session_id),
+                    event_type=event_type,
+                    payload=envelope,
+                )
+            envelope["seq"] = seq
+        except Exception:
+            log.exception(
+                "transport.persist_event_failed", session_id=session_id, event_type=event_type
             )
-        envelope["seq"] = seq
-    except Exception:
-        log.exception(
-            "transport.persist_event_failed", session_id=session_id, event_type=event_type
-        )
-        return
+            return
 
-    queue = get_event_queue(session_id)
-    try:
-        queue.put_nowait(envelope)
-    except asyncio.QueueFull:
-        log.warning(
-            "transport.queue_full",
-            session_id=session_id,
-            event_type=event_type,
-        )
+        queue = get_event_queue(session_id)
+        try:
+            queue.put_nowait(envelope)
+        except asyncio.QueueFull:
+            log.warning(
+                "transport.queue_full",
+                session_id=session_id,
+                event_type=event_type,
+            )
+
+
+async def emit_done(session_id: str) -> None:
+    """Persist the terminal ``DONE`` row, then enqueue the close sentinel (FRE-518).
+
+    Runs under the same per-session emit lock as :func:`_push_event` so the DONE
+    row's ``seq`` is ordered after every prior live emit and the ``None`` sentinel
+    is enqueued in seq order behind them. The sentinel closes the sender's live
+    drain loop; the persisted DONE row is what reconnect replay delivers.
+
+    Best-effort: a persistence failure still pushes the sentinel so the live
+    socket is not left hanging.
+
+    Args:
+        session_id: Target session identifier.
+    """
+    async with _get_emit_lock(session_id):
+        try:
+            async with AsyncSessionLocal() as db:
+                buf = SessionEventBuffer(db)
+                await buf.append(
+                    session_id=UUID(session_id),
+                    event_type="DONE",
+                    payload={"type": "DONE"},
+                )
+        except Exception:
+            log.exception("transport.persist_done_failed", session_id=session_id)
+        queue = get_event_queue(session_id)
+        try:
+            queue.put_nowait(None)
+        except asyncio.QueueFull:
+            log.warning("transport.queue_full", session_id=session_id, event_type="DONE")
 
 
 async def register_and_push_constraint(

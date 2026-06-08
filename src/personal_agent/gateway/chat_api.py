@@ -31,7 +31,6 @@ from personal_agent.service.models import SessionModel
 from personal_agent.service.repositories.session_repository import SessionRepository
 from personal_agent.telemetry import get_logger
 from personal_agent.transport.agui.transport import _push_event
-from personal_agent.transport.agui.ws_endpoint import get_event_queue
 from personal_agent.transport.events import TextDeltaEvent
 
 log = get_logger(__name__)
@@ -80,7 +79,6 @@ async def _stream_to_queue(
             failure path refunds it.
     """
     session_id_str = str(session_uuid)
-    queue = get_event_queue(session_id_str)
     start_time = time.time()
 
     # --- Stream from Anthropic --------------------------------------------
@@ -202,22 +200,13 @@ async def _stream_to_queue(
             final_message=final_message,
         )
     finally:
-        # Persist DONE to Postgres (so reconnect replay delivers it) then
-        # push None sentinel to close the live WebSocket drain loop.
-        try:
-            from personal_agent.transport.agui.event_buffer import (
-                SessionEventBuffer,  # noqa: PLC0415
-            )
+        # Persist DONE to Postgres (so reconnect replay delivers it) then push
+        # the None sentinel to close the live WS drain loop — serialized under
+        # the per-session emit lock so the DONE seq + sentinel stay ordered
+        # behind every prior live emit (FRE-518).
+        from personal_agent.transport.agui.transport import emit_done  # noqa: PLC0415
 
-            async with AsyncSessionLocal() as db:
-                buf = SessionEventBuffer(db)
-                await buf.append(UUID(session_id_str), "DONE", {"type": "DONE"})
-        except Exception:
-            pass
-        try:
-            queue.put_nowait(None)
-        except asyncio.QueueFull:
-            pass
+        await emit_done(session_id_str)
 
 
 async def _refund_reservation_safe(reservation_id: UUID, trace_id: str) -> None:

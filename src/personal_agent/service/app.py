@@ -47,7 +47,6 @@ from personal_agent.telemetry import add_elasticsearch_handler, get_logger
 from personal_agent.telemetry.es_handler import ElasticsearchHandler
 from personal_agent.telemetry.request_timer import RequestTimer
 from personal_agent.telemetry.trace import SystemTraceContext
-from personal_agent.transport.agui.ws_endpoint import get_event_queue
 from personal_agent.transport.events import TextDeltaEvent
 
 log = get_logger(__name__)
@@ -156,8 +155,6 @@ async def _process_chat_stream_background(
             the dedup entry when the task completes so retries work immediately.
     """
     from personal_agent.config.profile import load_profile, set_current_profile
-
-    queue = get_event_queue(session_id)
 
     try:
         # Wire execution profile so LLM factory dispatches to the correct model.
@@ -366,20 +363,13 @@ async def _process_chat_stream_background(
             session_id,
         )
     finally:
-        # Persist DONE to Postgres (so reconnect replay delivers it) then
-        # push None sentinel to close the live WebSocket drain loop.
-        try:
-            from personal_agent.transport.agui.event_buffer import SessionEventBuffer  # noqa: E402
+        # Persist DONE to Postgres (so reconnect replay delivers it) then push
+        # the None sentinel to close the live WS drain loop — serialized under
+        # the per-session emit lock so the DONE seq + sentinel stay ordered
+        # behind every prior live emit (FRE-518).
+        from personal_agent.transport.agui.transport import emit_done  # noqa: E402
 
-            async with AsyncSessionLocal() as db:
-                buf = SessionEventBuffer(db)
-                await buf.append(UUID(session_id), "DONE", {"type": "DONE"})
-        except Exception:
-            pass
-        try:
-            queue.put_nowait(None)
-        except asyncio.QueueFull:
-            pass
+        await emit_done(session_id)
         # Release the dedup entry so the user can immediately retry on error
         # without waiting for TTL expiry (FRE-392).
         get_deduplicator().release(session_id, message, client_msg_id=client_msg_id)

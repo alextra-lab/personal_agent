@@ -75,6 +75,25 @@ def test_logs_threshold_floats_are_explicit() -> None:
         assert props.get(field, {}).get("type") == "float", f"{field} must be float"
 
 
+def test_logs_cost_gate_money_fields_are_double() -> None:
+    """cost_gate money fields are pinned double, not dynamic keyword (FRE-536).
+
+    ``gate.py`` previously emitted these as ``str(Decimal)`` so they fell through
+    to the default keyword mapping and could not be summed. FRE-536 renames them
+    to ``*_usd`` and emits ``float(...)``; the template must pin each as double so
+    the cost & budget dashboard can aggregate them.
+    """
+    props = _props(_load("index-template.json"))
+    for field in (
+        "amount_usd",
+        "actual_cost_usd",
+        "reserved_usd",
+        "delta_usd",
+        "reservation_amount_usd",
+    ):
+        assert props.get(field, {}).get("type") == "double", f"{field} must be double"
+
+
 def test_logs_free_text_covers_genuine_long_text_leaves() -> None:
     """free_text maps the genuine long-text leaves to text."""
     tpl = _load("index-template.json")

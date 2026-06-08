@@ -24,7 +24,6 @@ FILES=(
   "data_views.ndjson"
   "system_health.ndjson"
   "task_analytics.ndjson"
-  "request_latency.ndjson"
   "request_timing.ndjson"
   "request_traces.ndjson"
   "reflection_insights.ndjson"
@@ -34,6 +33,7 @@ FILES=(
   "delegation_outcomes.ndjson"
   "expansion_decomposition.ndjson"
   "intent_classification.ndjson"
+  "prompt-cost-cache.ndjson"
 )
 
 echo "Importing dashboards into Kibana at ${KIBANA_URL} ..."
@@ -46,17 +46,31 @@ for f in "${FILES[@]}"; do
     continue
   fi
 
-  status=$(curl -s -o /dev/null -w "%{http_code}" \
+  # Capture both the HTTP status and the response body. The _import endpoint
+  # returns HTTP 200 even when individual objects fail (the failures are reported
+  # in the JSON body), so trusting the status code alone hides broken imports.
+  response=$(curl -s -w $'\n%{http_code}' \
     -X POST "${KIBANA_URL}/api/saved_objects/_import?overwrite=true" \
     -H "kbn-xsrf: true" \
     -F "file=@${filepath}")
+  status=$(printf '%s' "$response" | tail -n1)
+  body=$(printf '%s' "$response" | sed '$d')
 
-  if [ "$status" = "200" ]; then
+  if [ "$status" = "200" ] && printf '%s' "$body" | grep -q '"success":true' \
+     && ! printf '%s' "$body" | grep -q '"errors"'; then
     echo "  OK    ${f}"
   else
     echo "  FAIL  ${f} (HTTP ${status})"
+    echo "        ${body}"
+    fail=1
   fi
 done
+
+if [ "${fail:-0}" = "1" ]; then
+  echo ""
+  echo "ERROR: one or more files failed to import (see above)."
+  exit 1
+fi
 
 echo ""
 echo "Done. Visit ${KIBANA_URL}/app/dashboards to verify."

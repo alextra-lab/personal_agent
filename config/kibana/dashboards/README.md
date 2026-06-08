@@ -7,16 +7,18 @@ This folder holds Kibana saved objects. Each file contains one dashboard and all
 - **data_views.ndjson** — All index-patterns and saved searches. Import this first.
 - **system_health.ndjson** — System Health (CPU/memory timeline, state transitions, consolidation events, errors).
 - **task_analytics.ndjson** — Task Analytics (task outcomes, duration by tool, tool frequency, entity/memory enrichment).
-- **request_latency.ndjson** — Request Latency (request-to-reply latency by phase, P95, trace table).
-- **request_timing.ndjson** — Request Timing E2E (per-phase breakdown, waterfall, duration over time).
-- **request_traces.ndjson** — Request Traces (single-trace drilldown, phase averages, trace selector).
+- **request_timing.ndjson** — Request Timing E2E (E2E duration over time, total request duration).
+- **request_traces.ndjson** — Request Traces (single-trace drilldown, phase averages, trace selector). Per-phase analysis lives here.
 - **reflection_insights.ndjson** — Reflection Insights (proposed changes over time, improvement categories, impact, metrics).
-- **insights_engine.ndjson** — Insights Engine (insight count by type, confidence trend, anomalies, weekly proposals).
-- **extraction_retry_health.ndjson** — Extraction Retry Health (median attempts, dead-letter rate, denial_reason distribution).
+- **insights_engine.ndjson** — Insights Engine (insight count by type, confidence trend, anomalies).
+- **extraction_retry_health.ndjson** — Extraction Retry Health (median attempts, fallback rate, denial_reason distribution).
 - **llm_performance.ndjson** — LLM Performance (call count by model, latency, token usage, errors over time).
-- **delegation_outcomes.ndjson** — Delegation Outcomes (volume by agent, success rate, rounds needed, satisfaction).
+- **delegation_outcomes.ndjson** — Delegation Outcomes (volume by agent).
 - **expansion_decomposition.ndjson** — Expansion & Decomposition (strategy distribution, sub-agent spawn rate/success, context budget).
 - **intent_classification.ndjson** — Intent Classification (task type distribution, confidence scores, signal frequency).
+- **prompt-cost-cache.ndjson** — Prompt Cost & Cache Attribution (per-callsite token/cost, static-prefix-hash erosion). Lens-based (FRE-406).
+
+> **Retired (FRE-535):** `request_latency.ndjson` — fully superseded by Request Traces; every panel filtered a never-emitted `request_latency_*` event. See `docs/research/2026-06-08-fre-535-dashboard-triage.md`.
 
 ## Import
 

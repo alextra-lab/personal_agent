@@ -1,0 +1,121 @@
+{
+  "description": "Export substitution map for the curated artifact /lib/ toolkit (ADR-0089 Addendum A5 · FRE-527 #2 · feeds FRE-530). For each asset hosted at artifacts.frenchforet.com/lib/, gives the public-CDN twin at the same version, the SRI (sha384) computed from OUR pinned bytes, whether the public twin is CORS-verified (ACAO present), classic|module loading, and the ultimate fallback. three.js + fonts have no faithful public classic twin (bespoke IIFE / UA-varying font CDN) → inline-only.",
+  "origin": "https://artifacts.frenchforet.com",
+  "lib_manifest_ref": "personal_agent (public) config/artifact_lib_manifest.json",
+  "sri_algorithm": "sha384",
+  "entries": [
+    {
+      "lib_path": "lib/katex@0.16.11/katex.min.js",
+      "name": "katex",
+      "kind": "script",
+      "loading": "classic",
+      "public_cdn_url": "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js",
+      "sri": "sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg",
+      "cors_verified": true,
+      "acao": "*",
+      "fallback": "inline"
+    },
+    {
+      "lib_path": "lib/katex@0.16.11/katex.min.css",
+      "name": "katex",
+      "kind": "style",
+      "loading": "classic",
+      "public_cdn_url": "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css",
+      "sri": "sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+",
+      "cors_verified": true,
+      "acao": "*",
+      "fallback": "inline",
+      "note": "Relative url(fonts/…) refs resolve under the same jsdelivr katex/dist/ path on substitution; KaTeX font subresources travel with this stylesheet."
+    },
+    {
+      "lib_path": "lib/chartjs@4.4.7/chart.umd.js",
+      "name": "chartjs",
+      "kind": "script",
+      "loading": "classic",
+      "public_cdn_url": "https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.js",
+      "sri": "sha384-zYPBGXwO4633CABX/5Spf6emCKUJCfoOkhOMYyxMsatqQZPnDblmmOewfjsIVWCM",
+      "cors_verified": true,
+      "acao": "*",
+      "fallback": "inline"
+    },
+    {
+      "lib_path": "lib/highlightjs@11.9.0/highlight.min.js",
+      "name": "highlightjs",
+      "kind": "script",
+      "loading": "classic",
+      "public_cdn_url": "https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/highlight.min.js",
+      "sri": "sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp",
+      "cors_verified": true,
+      "acao": "*",
+      "fallback": "inline"
+    },
+    {
+      "lib_path": "lib/highlightjs@11.9.0/github-dark.min.css",
+      "name": "highlightjs",
+      "kind": "style",
+      "loading": "classic",
+      "public_cdn_url": "https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/styles/github-dark.min.css",
+      "sri": "sha384-wH75j6z1lH97ZOpMOInqhgKzFkAInZPPSPlZpYKYTOqsaizPvhQZmAtLcPKXpLyH",
+      "cors_verified": true,
+      "acao": "*",
+      "fallback": "inline"
+    },
+    {
+      "lib_path": "lib/pagedjs@0.4.3/paged.polyfill.min.js",
+      "name": "pagedjs",
+      "kind": "script",
+      "loading": "classic",
+      "eval_gated": true,
+      "public_cdn_url": "https://cdn.jsdelivr.net/npm/pagedjs@0.4.3/dist/paged.polyfill.min.js",
+      "sri": "sha384-y6+mefdjvGUaOPOrIMXHgP6Wwpza9G0N1QW1YUteLiwb50olbeI7H909UwZTMuVX",
+      "cors_verified": true,
+      "acao": "*",
+      "fallback": "inline",
+      "note": "eval_gated: excluded from the verify-lib default assert set until confirmed eval-free under the artifact CSP (which omits 'unsafe-eval')."
+    },
+    {
+      "lib_path": "lib/three@0.171.0/three.iife.min.js",
+      "name": "three",
+      "kind": "script",
+      "loading": "classic",
+      "public_cdn_url": null,
+      "sri": "sha384-ub2OAFYRlzHsrySfXHosvp8VmVFfCekBLT8+Fv3m/eLQX0gkHv7H8aHCp+b4epDB",
+      "cors_verified": false,
+      "fallback": "inline",
+      "note": "Inline-only: bespoke esbuild IIFE/global build (global THREE, REVISION 171). Modern three ships ESM + CJS only — no browser-global IIFE — so there is no faithful public classic twin to substitute."
+    },
+    {
+      "lib_path": "lib/fonts/source-serif-4@4.005/source-serif-4.woff2",
+      "name": "source-serif-4",
+      "kind": "font",
+      "loading": "classic",
+      "public_cdn_url": null,
+      "sri": "sha384-/ILBFWoA8R8g72w1BqOrd5bgTucLXr2cEQuJRJYYBis65lbx1lxDDguUyyvvd3d+",
+      "cors_verified": false,
+      "fallback": "inline",
+      "note": "Inline-only (UA-varying font CDN). OFL. Bytes are the Fontsource variable build (@fontsource-variable/source-serif-4, latin wght-normal)."
+    },
+    {
+      "lib_path": "lib/fonts/playfair-display@2.103/playfair-display.woff2",
+      "name": "playfair-display",
+      "kind": "font",
+      "loading": "classic",
+      "public_cdn_url": null,
+      "sri": "sha384-aNxuYz93YJyaBPGME88rk40OETt2sGJwef2tDJzFwkA0BnKTSTa3z0NHfwF9qLI4",
+      "cors_verified": false,
+      "fallback": "inline",
+      "note": "Inline-only (UA-varying font CDN). OFL. Bytes are the Fontsource variable build (@fontsource-variable/playfair-display, latin wght-normal)."
+    },
+    {
+      "lib_path": "lib/fonts/jetbrains-mono@2.304/jetbrains-mono.woff2",
+      "name": "jetbrains-mono",
+      "kind": "font",
+      "loading": "classic",
+      "public_cdn_url": null,
+      "sri": "sha384-g2p3DONsRgB71ryU0/Vwr5KWy0Mcp8CSPjzC+3EhRMPKkz5MLtwxpE6GK3i2I9E2",
+      "cors_verified": false,
+      "fallback": "inline",
+      "note": "Inline-only (UA-varying font CDN). OFL. Bytes are the Fontsource variable build (@fontsource-variable/jetbrains-mono, latin wght-normal)."
+    }
+  ]
+}

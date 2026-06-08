@@ -101,8 +101,9 @@ All five from the `cache_control 5>4` post-mortem (PR #150). FRE-468 is Urgent a
 
 ```
 Lane T (Telemetry · local, NO prod deploy)
-  533✅ ⟶ ┬ 534✅ ┐       534 applied+verified live (ladder/ms/join keys)
-  (done)  └ 535  ┴⟶ 536 · 537 · 538 · 539   535 + 536–539 BUILDABLE
+  533✅ ⟶ ┬ 534✅ ┐       A1/A2/B1 done + applied live; 536–539 BUILDABLE
+  (done)  └ 535✅ ┴⟶ 536 · 537 · 538 · 539
+  follow-ups (Needs Approval): 545 (wire routing_decision) · 546 (prompt-cost-cache import fmt)
 
 Lane A (Artifact toolkit)
   526✅ ⟶ 527✅ ⟶ ┬ 528 ┐
@@ -140,7 +141,7 @@ Lane O (Observability)
 | [FRE-532](https://linear.app/frenchforest/issue/FRE-532) | Art | — | Sonnet | Toolkit #7 — PWA convergence (share curation not hosting; add KaTeX). Independent. |
 | [FRE-533](https://linear.app/frenchforest/issue/FRE-533) ✅ | Tel | — | Opus | **DONE** — reconciliation inventory (PR #193): 1023 (field,family) rows; 643 emitted-but-unmapped, 30 traps, **14 broken panels / 6 of 12 dashboards** (`.keyword` aggs on bare-keyword → silent empty). `docs/research/` + CSV + reusable audit script. **Unblocks 534/535/537/538/540.** |
 | [FRE-534](https://linear.app/frenchforest/issue/FRE-534) ✅ | Tel | — | Sonnet | **DONE** — templates corrected + **applied+verified live** (PR #194): `ms_fields_as_float`, captains 3-way split (subagents@120), insights/slm-health templates w/ keyword join keys; `denial_reason` kept keyword for the donut. New-indices-only, no backfill. Unblocks 536–539. |
-| [FRE-535](https://linear.app/frenchforest/issue/FRE-535) | Tel | — | Sonnet | B1 — dashboard triage (keep/retire/fix 12/57; NDJSON to git). Blocked by 533, ‖ A2. |
+| [FRE-535](https://linear.app/frenchforest/issue/FRE-535) ✅ | Tel | — | Sonnet | **DONE** — triage 12 dashboards fixed/retired + **imported+verified live** (PR #195, harness PASS 0 silent-empty). Filter-aware harness caught 20 broken vs A1's 14; hardened `import_dashboards.sh`. Spawned **545** (routing_decision emit) + **546** (prompt-cost-cache import fmt) — both Needs Approval. |
 | [FRE-536](https://linear.app/frenchforest/issue/FRE-536)/537/538/539 | Tel | — | Sonnet | C1–C4 new viz — cost · ledger+topology · joinability+SLM-health · turn/E2E/envelope. Blocked by 534. |
 
 

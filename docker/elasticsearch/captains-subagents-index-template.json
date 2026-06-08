@@ -1,0 +1,138 @@
+{
+  "index_patterns": ["agent-captains-captures-subagents*"],
+  "priority": 120,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.codec": "best_compression",
+      "index.refresh_interval": "5s"
+    },
+    "mappings": {
+      "dynamic": true,
+      "dynamic_templates": [
+        {
+          "ms_fields_as_float": {
+            "match_pattern": "regex",
+            "match": "^(.*_ms|.*_seconds|.*_latency|.*_duration|.*_offset)$",
+            "match_mapping_type": "*",
+            "mapping": { "type": "float" }
+          }
+        },
+        {
+          "ids_keyword": {
+            "match": "*_id",
+            "match_mapping_type": "string",
+            "mapping": { "type": "keyword" }
+          }
+        },
+        {
+          "enums_keyword": {
+            "match_pattern": "regex",
+            "match": "^(.*_type|.*_name|.*_role|.*_status|.*_decision|.*_strategy|.*_mode|.*_phase|.*_action|.*_kind|.*_state)$",
+            "match_mapping_type": "string",
+            "mapping": { "type": "keyword" }
+          }
+        },
+        {
+          "free_text": {
+            "match_pattern": "regex",
+            "match": "^(.*_message|.*_content|.*_description|reason|hint|stderr|stdout|raw_.*|.*_text|.*_prompt)$",
+            "match_mapping_type": "string",
+            "mapping": { "type": "text" }
+          }
+        },
+        {
+          "default_string_keyword": {
+            "match_mapping_type": "string",
+            "mapping": { "type": "keyword", "ignore_above": 1024 }
+          }
+        }
+      ],
+      "properties": {
+        "timestamp": { "type": "date" },
+        "trace_id": { "type": "keyword" },
+        "task_id": { "type": "keyword" },
+        "session_id": { "type": "keyword" },
+        "entry_id": { "type": "keyword" },
+        "type": { "type": "keyword" },
+        "status": { "type": "keyword" },
+        "mode": { "type": "keyword" },
+        "model_role": { "type": "keyword" },
+        "title": { "type": "text", "fields": { "keyword": { "type": "keyword", "ignore_above": 256 } } },
+        "rationale": { "type": "text" },
+        "user_message": { "type": "text" },
+        "assistant_response": { "type": "text" },
+        "outcome": { "type": "keyword" },
+        "tools_used": { "type": "keyword" },
+        "duration_ms": { "type": "float" },
+        "memory_context_used": { "type": "boolean" },
+        "memory_conversations_found": { "type": "integer" },
+        "memory_in_context": { "type": "boolean" },
+        "success": { "type": "boolean" },
+        "input_tokens": { "type": "integer" },
+        "output_tokens": { "type": "integer" },
+        "total_tokens": { "type": "integer" },
+        "max_tokens": { "type": "integer" },
+        "context_message_count": { "type": "integer" },
+        "system_prompt_chars": { "type": "long" },
+        "digest_chars": { "type": "long" },
+        "context_chars": { "type": "long" },
+        "full_output_chars": { "type": "long" },
+        "skill_index_block_chars": { "type": "long" },
+        "proposed_change": {
+          "properties": {
+            "what": { "type": "text" },
+            "why": { "type": "text" },
+            "how": { "type": "text" }
+          }
+        },
+        "supporting_metrics": { "type": "keyword" },
+        "metrics_structured": {
+          "type": "nested",
+          "properties": {
+            "name": { "type": "keyword" },
+            "value": { "type": "float" },
+            "unit": { "type": "keyword" }
+          }
+        },
+        "telemetry_refs": {
+          "type": "nested",
+          "properties": {
+            "trace_id": { "type": "keyword" },
+            "metric_name": { "type": "keyword" },
+            "value": { "type": "keyword" }
+          }
+        },
+        "tool_results": {
+          "type": "nested",
+          "properties": {
+            "tool_name": { "type": "keyword" },
+            "success": { "type": "boolean" },
+            "error": { "type": "text" },
+            "latency_ms": { "type": "float" },
+            "output": { "type": "text", "index": false }
+          }
+        },
+        "spec_task": { "type": "text" },
+        "full_output": { "type": "text" },
+        "injected_digest": { "type": "text" },
+        "error": { "type": "text" },
+        "truncation_ratio": { "type": "float" },
+        "cost_usd": { "type": "float" },
+        "context_messages": {
+          "type": "nested",
+          "properties": {
+            "role": { "type": "keyword" },
+            "chars": { "type": "integer" },
+            "content_preview": { "type": "text" }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Captain's Log sub-agent capture docs. Index agent-captains-captures-subagents-YYYY-MM-DD. Carved out in FRE-534/A2 at priority 120 so it out-ranks the agent-captains-captures-* (priority 110) glob it would otherwise inherit (wrong shape: 10 sub-agent fields fell through to dynamic mapping). Pins the sub-agent shape: *_chars (long), context_message_count/max_tokens (integer), memory_in_context/success (boolean), mode/model_role/task_id (keyword).",
+    "managed_by": "scripts/setup-elasticsearch.sh"
+  }
+}

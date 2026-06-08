@@ -52,6 +52,25 @@ put_resource() {
   fi
 }
 
+delete_resource() {
+  # Args: <label> <url-path>
+  # DELETEs a resource; a 404 (already absent) is treated as success so the
+  # script stays idempotent. Used to tear down retired templates whose index
+  # patterns would otherwise collide at equal priority with their replacements.
+  local label="$1"
+  local path="$2"
+  local resp
+  resp=$(curl -sS -w '\nHTTP_STATUS:%{http_code}' -X DELETE "$ES_URL$path" 2>&1) || true
+  local http_status="${resp##*HTTP_STATUS:}"
+  if [[ "$http_status" =~ ^2[0-9][0-9]$ || "$http_status" == "404" ]]; then
+    echo "  ✓ $label"
+  else
+    echo "  ✗ $label: HTTP $http_status — ${resp%$'\n'HTTP_STATUS:*}"
+    failures=$((failures + 1))
+    return 1
+  fi
+}
+
 echo "=== Setting up Elasticsearch at $ES_URL ==="
 
 # Wait for Elasticsearch to be ready (max 60s — fail fast if unreachable).
@@ -77,10 +96,34 @@ put_resource "Index template: agent-logs-template" \
   "/_index_template/agent-logs-template" \
   "$PROJECT_ROOT/docker/elasticsearch/index-template.json"
 
-# 3. Captain's Log index template (PUT replaces — idempotent)
-put_resource "Index template: agent-captains-template" \
-  "/_index_template/agent-captains-template" \
-  "$PROJECT_ROOT/docker/elasticsearch/captains-index-template.json"
+# 3. Captain's Log index templates (FRE-534/A2 — split from the single
+#    straddling agent-captains-template into three non-colliding shapes).
+#    The retired template's patterns (captures-* + reflections-*) overlap the
+#    split captures/reflections templates at the SAME priority (110), so it must
+#    be DELETEd first or the PUTs below fail with an equal-priority conflict.
+delete_resource "Retire template: agent-captains-template" \
+  "/_index_template/agent-captains-template"
+put_resource "Index template: agent-captains-captures-template" \
+  "/_index_template/agent-captains-captures-template" \
+  "$PROJECT_ROOT/docker/elasticsearch/captains-captures-index-template.json"
+put_resource "Index template: agent-captains-reflections-template" \
+  "/_index_template/agent-captains-reflections-template" \
+  "$PROJECT_ROOT/docker/elasticsearch/captains-reflections-index-template.json"
+# Sub-agent captures: priority 120 so it out-ranks the captures-* glob (110).
+put_resource "Index template: agent-captains-subagents-template" \
+  "/_index_template/agent-captains-subagents-template" \
+  "$PROJECT_ROOT/docker/elasticsearch/captains-subagents-index-template.json"
+
+# 3b. Insights engine template (FRE-534/A2 — family previously untemplated).
+put_resource "Index template: agent-insights-template" \
+  "/_index_template/agent-insights-template" \
+  "$PROJECT_ROOT/docker/elasticsearch/insights-index-template.json"
+
+# 3c. SLM health probe template (FRE-534/A2 / ADR-0083 — previously untemplated;
+#     trace_id was ES-default text, breaking exact-term joins).
+put_resource "Index template: agent-monitors-slm-health-template" \
+  "/_index_template/agent-monitors-slm-health-template" \
+  "$PROJECT_ROOT/docker/elasticsearch/monitors-slm-health-index-template.json"
 
 # 4. Joinability probe ILM policy (ADR-0074 Phase 5 / FRE-376).
 put_resource "ILM policy: agent-monitors-joinability-policy" \

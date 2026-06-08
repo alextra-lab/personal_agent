@@ -12,6 +12,14 @@
       "dynamic": true,
       "dynamic_templates": [
         {
+          "ms_fields_as_float": {
+            "match_pattern": "regex",
+            "match": "^(.*_ms|.*_seconds|.*_latency|.*_duration|.*_offset)$",
+            "match_mapping_type": "*",
+            "mapping": { "type": "float" }
+          }
+        },
+        {
           "ids_keyword": {
             "match": "*_id",
             "match_mapping_type": "string",
@@ -29,7 +37,7 @@
         {
           "free_text": {
             "match_pattern": "regex",
-            "match": "^(.*_message|.*_content|.*_description|reason|hint|stderr|stdout|raw_.*|.*_text|.*_prompt)$",
+            "match": "^(.*_message|.*_content|.*_description|reason|hint|stderr|stdout|raw_.*|.*_text|.*_prompt|content|content_value|.*_preview|.*_excerpt|summary)$",
             "match_mapping_type": "string",
             "mapping": { "type": "text" }
           }
@@ -68,6 +76,10 @@
         "expansion_budget":    { "type": "integer" },
         "strategy":            { "type": "keyword" },
         "reason":              { "type": "keyword", "ignore_above": 1024 },
+        "denial_reason":       { "type": "keyword", "ignore_above": 8192 },
+        "calibration_threshold": { "type": "float" },
+        "governance_threshold":  { "type": "float" },
+        "threshold":             { "type": "float" },
         "message_count":       { "type": "integer" },
         "token_count":         { "type": "integer" },
         "estimated_tokens":    { "type": "integer" },

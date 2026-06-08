@@ -1,0 +1,87 @@
+{
+  "index_patterns": ["agent-insights-*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.codec": "best_compression",
+      "index.refresh_interval": "10s"
+    },
+    "mappings": {
+      "dynamic": true,
+      "dynamic_templates": [
+        {
+          "ms_fields_as_float": {
+            "match_pattern": "regex",
+            "match": "^(.*_ms|.*_seconds|.*_latency|.*_duration|.*_offset)$",
+            "match_mapping_type": "*",
+            "mapping": { "type": "float" }
+          }
+        },
+        {
+          "cost_ratio_as_float": {
+            "match_pattern": "regex",
+            "match": "^(.*_cost_usd|ratio|confidence|.*_ratio)$",
+            "match_mapping_type": "*",
+            "mapping": { "type": "float" }
+          }
+        },
+        {
+          "ids_keyword": {
+            "match": "*_id",
+            "match_mapping_type": "string",
+            "mapping": { "type": "keyword" }
+          }
+        },
+        {
+          "enums_keyword": {
+            "match_pattern": "regex",
+            "match": "^(.*_type|.*_name|.*_role|.*_status|.*_kind|.*_state)$",
+            "match_mapping_type": "string",
+            "mapping": { "type": "keyword" }
+          }
+        },
+        {
+          "free_text": {
+            "match_pattern": "regex",
+            "match": "^(.*_message|.*_description|reason|hint|summary|.*_text|entity|scope_hint|requested_name)$",
+            "match_mapping_type": "string",
+            "mapping": { "type": "text" }
+          }
+        },
+        {
+          "default_string_keyword": {
+            "match_mapping_type": "string",
+            "mapping": { "type": "keyword", "ignore_above": 1024 }
+          }
+        }
+      ],
+      "properties": {
+        "timestamp":            { "type": "date" },
+        "insight_type":         { "type": "keyword" },
+        "record_type":          { "type": "keyword" },
+        "title":                { "type": "text" },
+        "summary":              { "type": "text" },
+        "confidence":           { "type": "float" },
+        "actionable":           { "type": "boolean" },
+        "analysis_window_days": { "type": "integer" },
+        "evidence": {
+          "properties": {
+            "component_id":      { "type": "keyword" },
+            "baseline_cost_usd": { "type": "float" },
+            "observed_cost_usd": { "type": "float" },
+            "ratio":             { "type": "float" },
+            "entity":            { "type": "text" },
+            "requested_name":    { "type": "text" },
+            "scope_hint":        { "type": "text" }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Insights engine records (FRE-407 family). Daily index agent-insights-YYYY-MM-DD. Authored in FRE-534/A2 — the family previously had no template, so every field worked by first-value dynamic inference. evidence.component_id is keyword (was text under ES-default → the prompt-component join key was tokenised); *_cost_usd/ratio/confidence are pinned float so a stray 0 cannot flip them to long.",
+    "managed_by": "scripts/setup-elasticsearch.sh"
+  }
+}

@@ -103,14 +103,15 @@ All five from the `cache_control 5>4` post-mortem (PR #150). FRE-468 is Urgent a
 Lane T (Telemetry · local, NO prod deploy)
   533✅ ⟶ ┬ 534✅ ┐       A1/A2/B1 done + applied live; 536–539 BUILDABLE
   (done)  └ 535✅ ┴⟶ 536 · 537 · 538 · 539
-  follow-ups (Needs Approval): 545 (wire routing_decision) · 546 (prompt-cost-cache import fmt)
+  536 (C1 cost dashboard) merged ◑ — bundles a cost_gate emit fix → needs GATEWAY deploy + ES/Kibana apply
+  follow-ups (Needs Approval): 545 (wire routing_decision) · 546 (prompt-cost-cache import fmt) · 547 (cap-utilization snapshot)
 
 Lane A (Artifact toolkit)
   526✅ ⟶ 527✅ ⟶ ┬ 528✅ ┐
- (deployed)(hosted)  ├ 529  ┼⟶ 531 ⟶ closes 525   529/530 BUILDABLE
+ (deployed)(hosted)  ├ 529✅ ┼⟶ 531 ⟶ closes 525   530 BUILDABLE; 531 = E2E (closes 525)
                      └ 530  ┘  (530: substitution map ready, public repo)
   532 ───────────────────────── (independent)
-  (528 deployed: model now advertised the /lib/ shelf; 526 meter logs the reaches)
+  (526/527/528/529 live: shelf hosted + advertised + skill-doc; meter logging reaches)
 
 Lane O (Observability)
   518✅ ⟶ 523 ⟶ 517 ⟶ 522     505✅ master verify+closed
@@ -136,14 +137,15 @@ Lane O (Observability)
 | [FRE-526](https://linear.app/frenchforest/issue/FRE-526) ✅ | Art | — | Sonnet | **DONE** — meter fix (PR #190); deployed 2026-06-08 (gateway rebuilt, code live, joinability green, agent-logs template carries the 3 `long` fields). FRE-498 Canceled (superseded). |
 | [FRE-527](https://linear.app/frenchforest/issue/FRE-527) ✅ | Art | — | Sonnet | **DONE** — `/lib/` hosted on the Worker (terraform); `make verify-lib` green from VPS (9/9 reachable + correct MIME + nosniff; paged.js eval-gated→FRE-531). Verifier PR #191. **Unblocks 528/530/531.** Master follow-up: fold `verify-lib` into the deploy gate. |
 | [FRE-528](https://linear.app/frenchforest/issue/FRE-528) ✅ | Art | — | Sonnet | **DONE** — `_HTML_GENERATION_SYSTEM_PROMPT` reframed to advertise the curated `/lib/` shelf + native typography (PR #196); **deployed+verified live** (prompt in container, health green). Sealed-box constraints preserved (no arbitrary CDN/network/storage). |
-| [FRE-529](https://linear.app/frenchforest/issue/FRE-529) | Art | — | Sonnet | Toolkit #4 — author `docs/skills/artifact-design.md` (runtime guidance). Parallel; 528 distills from it. |
+| [FRE-529](https://linear.app/frenchforest/issue/FRE-529) ✅ | Art | — | Sonnet | **DONE** — `docs/skills/artifact-design.md` runtime-guidance source-of-truth (PR #198, docs-only); manifest-driven drift-guard test lockstep w/ 528. |
 | [FRE-530](https://linear.app/frenchforest/issue/FRE-530) | Art | — | Sonnet | Toolkit #5 — export-to-standalone (inline + substitution-map→CDN+SRI). Blocked by 527. |
 | [FRE-531](https://linear.app/frenchforest/issue/FRE-531) | Art | — | Sonnet | Toolkit #6 — E2E: `/lib/` render under live CSP + offline export. Blocked by 527+528+530. Closes FRE-525. |
 | [FRE-532](https://linear.app/frenchforest/issue/FRE-532) | Art | — | Sonnet | Toolkit #7 — PWA convergence (share curation not hosting; add KaTeX). Independent. |
 | [FRE-533](https://linear.app/frenchforest/issue/FRE-533) ✅ | Tel | — | Opus | **DONE** — reconciliation inventory (PR #193): 1023 (field,family) rows; 643 emitted-but-unmapped, 30 traps, **14 broken panels / 6 of 12 dashboards** (`.keyword` aggs on bare-keyword → silent empty). `docs/research/` + CSV + reusable audit script. **Unblocks 534/535/537/538/540.** |
 | [FRE-534](https://linear.app/frenchforest/issue/FRE-534) ✅ | Tel | — | Sonnet | **DONE** — templates corrected + **applied+verified live** (PR #194): `ms_fields_as_float`, captains 3-way split (subagents@120), insights/slm-health templates w/ keyword join keys; `denial_reason` kept keyword for the donut. New-indices-only, no backfill. Unblocks 536–539. |
 | [FRE-535](https://linear.app/frenchforest/issue/FRE-535) ✅ | Tel | — | Sonnet | **DONE** — triage 12 dashboards fixed/retired + **imported+verified live** (PR #195, harness PASS 0 silent-empty). Filter-aware harness caught 20 broken vs A1's 14; hardened `import_dashboards.sh`. Spawned **545** (routing_decision emit) + **546** (prompt-cost-cache import fmt) — both Needs Approval. |
-| [FRE-536](https://linear.app/frenchforest/issue/FRE-536)/537/538/539 | Tel | — | Sonnet | C1–C4 new viz — cost · ledger+topology · joinability+SLM-health · turn/E2E/envelope. Blocked by 534. |
+| [FRE-536](https://linear.app/frenchforest/issue/FRE-536) ◑ | Tel | — | Sonnet | C1 cost & budget dashboard **merged** (PR #197) + cost_gate money-field emit fix (`*_usd` double). **Awaiting gateway deploy + ES/Kibana apply.** Cap-util deferred → 547. |
+| [FRE-537](https://linear.app/frenchforest/issue/FRE-537)/538/539 | Tel | — | Sonnet | C2–C4 new viz — ledger+topology · joinability+SLM-health · turn/E2E/envelope. Unblocked (534 done). |
 
 
 | [FRE-384](https://linear.app/frenchforest/issue/FRE-384) ✅ | **High** | Sonnet | **DONE** (PR #143) — `CAST(:tag_filter AS text[]) IS NULL` fixes AmbiguousParameterError. `init.sql` FK order fixed. Verified live. |

@@ -1607,6 +1607,213 @@ async def test_gate_decision_not_applicable_for_non_html(
 
 
 # ---------------------------------------------------------------------------
+# FRE-526 — external <script src> reach meter (non-load-bearing, ADR-0089 A1)
+# ---------------------------------------------------------------------------
+
+
+def _html_with(body: str) -> str:
+    """Wrap a body fragment in a minimal valid HTML document."""
+    return (
+        "<!DOCTYPE html><html><head><style>:root{--c:#000}</style></head>"
+        f"<body><main>{body}</main></body></html>"
+    )
+
+
+def test_classify_script_reaches_blocks_external_cdn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An absolute CDN <script src> is an external, host-blocked reach."""
+    monkeypatch.setattr(
+        artifact_tools.settings,
+        "artifacts_public_base_url",
+        "https://artifacts.test",
+        raising=False,
+    )
+    html = _html_with('<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>')
+    assert artifact_tools._classify_script_reaches(html) == (1, 0, 1)
+
+
+def test_classify_script_reaches_allows_lib_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A <script src> on the artifacts host's /lib/ shelf is host-allowed."""
+    monkeypatch.setattr(
+        artifact_tools.settings,
+        "artifacts_public_base_url",
+        "https://artifacts.test",
+        raising=False,
+    )
+    html = _html_with('<script src="https://artifacts.test/lib/katex@0.16.js"></script>')
+    assert artifact_tools._classify_script_reaches(html) == (1, 1, 0)
+
+
+def test_classify_script_reaches_mixed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One /lib/ reach + one CDN reach → (2, 1, 1)."""
+    monkeypatch.setattr(
+        artifact_tools.settings,
+        "artifacts_public_base_url",
+        "https://artifacts.test",
+        raising=False,
+    )
+    html = _html_with(
+        '<script src="https://artifacts.test/lib/chart@4.js"></script>'
+        '<script src="https://cdn.jsdelivr.net/npm/three"></script>'
+    )
+    assert artifact_tools._classify_script_reaches(html) == (2, 1, 1)
+
+
+def test_classify_script_reaches_protocol_relative_cdn_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A protocol-relative //cdn src resolves to a real CDN fetch — counted blocked."""
+    monkeypatch.setattr(
+        artifact_tools.settings,
+        "artifacts_public_base_url",
+        "https://artifacts.test",
+        raising=False,
+    )
+    html = _html_with('<script src="//cdn.jsdelivr.net/x.js"></script>')
+    assert artifact_tools._classify_script_reaches(html) == (1, 0, 1)
+
+
+def test_classify_script_reaches_ignores_inline_script(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An inline <script> block (no src) is not an external reach."""
+    monkeypatch.setattr(
+        artifact_tools.settings,
+        "artifacts_public_base_url",
+        "https://artifacts.test",
+        raising=False,
+    )
+    html = _html_with("<script>alert(1)</script>")
+    assert artifact_tools._classify_script_reaches(html) == (0, 0, 0)
+
+
+def test_classify_script_reaches_ignores_empty_src(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty src="" is not an external reach."""
+    monkeypatch.setattr(
+        artifact_tools.settings,
+        "artifacts_public_base_url",
+        "https://artifacts.test",
+        raising=False,
+    )
+    html = _html_with('<script src=""></script>')
+    assert artifact_tools._classify_script_reaches(html) == (0, 0, 0)
+
+
+def test_classify_script_reaches_no_script_tags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A document with no script tags yields all zeros."""
+    monkeypatch.setattr(
+        artifact_tools.settings,
+        "artifacts_public_base_url",
+        "https://artifacts.test",
+        raising=False,
+    )
+    assert artifact_tools._classify_script_reaches(_html_with("<p>just prose</p>")) == (0, 0, 0)
+
+
+def test_classify_script_reaches_two_tags_one_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two <script src> tags on a single line are both counted (findall iterates all)."""
+    monkeypatch.setattr(
+        artifact_tools.settings,
+        "artifacts_public_base_url",
+        "https://artifacts.test",
+        raising=False,
+    )
+    one_line = (
+        '<script src="https://artifacts.test/lib/a.js"></script>'
+        '<script src="https://evil.example/b.js"></script>'
+    )
+    assert artifact_tools._classify_script_reaches(_html_with(one_line)) == (2, 1, 1)
+
+
+def test_classify_script_reaches_no_base_url_all_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no configured artifacts host, nothing can be proven allowed."""
+    monkeypatch.setattr(artifact_tools.settings, "artifacts_public_base_url", None, raising=False)
+    html = _html_with('<script src="https://artifacts.test/lib/x.js"></script>')
+    assert artifact_tools._classify_script_reaches(html) == (1, 0, 1)
+
+
+@pytest.mark.asyncio
+async def test_gate_decision_emits_script_reach_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A direct HTML write with a CDN <script src> emits the three reach fields."""
+    events: list[tuple[str, dict[str, Any]]] = []
+    _install_fakes(monkeypatch, store=_FakeStore())  # sets base_url=https://artifacts.test
+    _spy_artifact_log(monkeypatch, events)
+
+    await artifact_tools.artifact_write_executor(
+        slug="reach",
+        content_type="text/html; charset=utf-8",
+        content=_html_with('<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>'),
+        ctx=_ctx(),
+    )
+
+    gates = _gate_events(events)
+    assert len(gates) == 1
+    g = gates[0]
+    assert g["external_script_count"] == 1
+    assert g["script_reach_blocked"] == 1
+    assert g["script_reach_allowed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_gate_decision_allowed_lib_reach(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A /lib/ <script src> on the configured host counts as host-allowed."""
+    events: list[tuple[str, dict[str, Any]]] = []
+    _install_fakes(monkeypatch, store=_FakeStore())  # base_url=https://artifacts.test
+    _spy_artifact_log(monkeypatch, events)
+
+    await artifact_tools.artifact_write_executor(
+        slug="lib-reach",
+        content_type="text/html; charset=utf-8",
+        content=_html_with('<script src="https://artifacts.test/lib/katex@0.16.js"></script>'),
+        ctx=_ctx(),
+    )
+
+    g = _gate_events(events)[0]
+    assert g["external_script_count"] == 1
+    assert g["script_reach_allowed"] == 1
+    assert g["script_reach_blocked"] == 0
+
+
+@pytest.mark.asyncio
+async def test_gate_decision_script_reach_fields_zero_for_non_html(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-HTML write reports zero for all three reach fields."""
+    events: list[tuple[str, dict[str, Any]]] = []
+    _install_fakes(monkeypatch, store=_FakeStore())
+    _spy_artifact_log(monkeypatch, events)
+
+    await artifact_tools.artifact_write_executor(
+        slug="data",
+        content_type="application/json",
+        content='{"a": 1}',
+        ctx=_ctx(),
+    )
+
+    g = _gate_events(events)[0]
+    assert g["external_script_count"] == 0
+    assert g["script_reach_allowed"] == 0
+    assert g["script_reach_blocked"] == 0
+
+
+# ---------------------------------------------------------------------------
 # FRE-512 — served-envelope probe hook (ADR-0089 D5)
 # ---------------------------------------------------------------------------
 
@@ -1704,9 +1911,7 @@ async def test_envelope_probe_skipped_without_public_url(
 ) -> None:
     """No public base URL (local dev) → nothing to probe."""
     _install_fakes(monkeypatch, store=_FakeStore())
-    monkeypatch.setattr(
-        artifact_tools.settings, "artifacts_public_base_url", None, raising=False
-    )
+    monkeypatch.setattr(artifact_tools.settings, "artifacts_public_base_url", None, raising=False)
 
     await artifact_tools.artifact_write_executor(
         slug="local-only",

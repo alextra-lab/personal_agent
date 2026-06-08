@@ -28,6 +28,7 @@ import os
 import re
 import tempfile
 from typing import Any
+from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 from sqlalchemy import text
@@ -456,9 +457,11 @@ async def artifact_write_executor(
     if content_type == _HTML_CONTENT_TYPE:
         decision = "committed"
         violations = _count_sandbox_violations(content)
+        script_reaches = _classify_script_reaches(content)
     else:
         decision = "not_applicable"
         violations = (0, 0, 0)
+        script_reaches = (0, 0, 0)
 
     _emit_gate_decision(
         trace_id=trace_id,
@@ -471,6 +474,7 @@ async def artifact_write_executor(
         decision=decision,
         commit_path=_commit_path,
         violations=violations,
+        script_reaches=script_reaches,
     )
 
     # FRE-512 (ADR-0089 D5): verify the served envelope with one real GET through
@@ -792,6 +796,15 @@ _EVENT_HANDLER_RE = re.compile(r"""(?:^|[\s"'/])on\w+\s*=""", re.IGNORECASE)
 _CDN_LINK_RE = re.compile(
     r'<\s*link\b[^>]*\bhref\s*=\s*["\']?https?://[^"\'>\s]*["\']?[^>]*>', re.IGNORECASE
 )
+# FRE-526 (ADR-0089 A1): match <script ... src="…"> where src is an absolute
+# (https://…) or protocol-relative (//cdn…) URL. Inline <script> blocks (no src)
+# and relative-path srcs are not external reaches and are intentionally excluded
+# — ADR-0089 A3 specifies the model uses absolute version-pinned /lib/ URLs, so a
+# relative /lib/ path is not the expected reach form. Protocol-relative // is
+# included because under the served https origin it resolves to a real CDN fetch.
+_SCRIPT_SRC_RE = re.compile(
+    r"""<\s*script\b[^>]*\bsrc\s*=\s*["']?((?:https?:)?//[^"'>\s]+)""", re.IGNORECASE
+)
 # Matches <pre class="mermaid">…</pre> and <div class="mermaid">…</div> (FRE-396).
 _MERMAID_BLOCK_RE = re.compile(
     r'<(pre|div)\b[^>]*\bclass=["\'][^"\']*\bmermaid\b[^"\']*["\'][^>]*>(.*?)</\1>',
@@ -827,6 +840,67 @@ def _count_sandbox_violations(html: str) -> tuple[int, int, int]:
     )
 
 
+def _artifacts_lib_netloc() -> str | None:
+    """Return the lowercased netloc (host[:port]) of the configured artifacts host.
+
+    A ``<script src>`` reach is *host-allowed* only when it targets this host's
+    ``/lib/`` path — the single place the served CSP admits executable JS
+    (ADR-0089 A3). Matching on netloc (not scheme) so an absolute ``https`` URL
+    and a protocol-relative ``//host/lib/`` reference to our own shelf both
+    classify allowed. Without a configured host nothing can be proven allowed.
+
+    Returns:
+        The lowercased netloc, or ``None`` when no artifacts host is configured.
+    """
+    base = settings.artifacts_public_base_url
+    if not base:
+        return None
+    netloc = urlparse(base).netloc
+    return netloc.lower() or None
+
+
+def _is_lib_reach(url: str, lib_netloc: str | None) -> bool:
+    """Return whether ``url`` targets the artifacts host's ``/lib/`` shelf.
+
+    Args:
+        url: The ``<script src>`` URL (absolute or protocol-relative).
+        lib_netloc: The configured artifacts netloc, or ``None``.
+
+    Returns:
+        ``True`` when the URL is a satisfied need (host-allowed), else ``False``.
+    """
+    if lib_netloc is None:
+        return False
+    parsed = urlparse(url)
+    return parsed.netloc.lower() == lib_netloc and parsed.path.startswith("/lib/")
+
+
+def _classify_script_reaches(html: str) -> tuple[int, int, int]:
+    """Count + classify external ``<script src>`` reaches for the analytics label.
+
+    Non-load-bearing (ADR-0089 D1/D5, A1): the served-CSP envelope is the
+    boundary; this only makes unmet-capability demand observable. A host-blocked
+    reach (any non-``/lib/`` origin) is the real demand signal FRE-498 asked for.
+
+    Args:
+        html: The artifact HTML text.
+
+    Returns:
+        A ``(external_script_count, host_allowed, host_blocked)`` tuple where
+        ``host_allowed`` targets the artifacts ``/lib/`` shelf and
+        ``host_blocked`` is any other origin.
+    """
+    lib_netloc = _artifacts_lib_netloc()
+    allowed = 0
+    blocked = 0
+    for url in _SCRIPT_SRC_RE.findall(html):
+        if _is_lib_reach(url, lib_netloc):
+            allowed += 1
+        else:
+            blocked += 1
+    return (allowed + blocked, allowed, blocked)
+
+
 def _emit_gate_decision(
     *,
     trace_id: str,
@@ -839,6 +913,7 @@ def _emit_gate_decision(
     decision: str,
     commit_path: str,
     violations: tuple[int, int, int],
+    script_reaches: tuple[int, int, int],
 ) -> None:
     """Emit the per-commit content label (FRE-506 substrate, ADR-0089 D1/D5).
 
@@ -846,7 +921,8 @@ def _emit_gate_decision(
     (ADR-0089 D2/D3, served by the Worker — FRE-509). With the content gate retired
     (FRE-511) the old pass/strip/reject/bypass vocabulary and the ``gate_ran`` field
     are gone; serve-side envelope integrity is FRE-512's alarm surface. The event name
-    and remaining fields are kept for ES/dashboard continuity.
+    and remaining fields are kept for ES/dashboard continuity. FRE-526 adds the
+    external ``<script src>`` reach counts (A1) — the demand signal FRE-498 asked for.
 
     Args:
         trace_id: Caller trace id.
@@ -859,8 +935,11 @@ def _emit_gate_decision(
         decision: ``committed`` (HTML) or ``not_applicable`` (non-HTML).
         commit_path: ``draft`` or ``direct_write``.
         violations: ``(script_count, handler_count, cdn_count)`` label.
+        script_reaches: ``(external_script_count, host_allowed, host_blocked)``
+            external ``<script src>`` reach label (FRE-526, ADR-0089 A1).
     """
     script_count, handler_count, cdn_count = violations
+    external_script_count, script_reach_allowed, script_reach_blocked = script_reaches
     log.info(
         "artifact_gate_decision",
         trace_id=trace_id,
@@ -875,6 +954,9 @@ def _emit_gate_decision(
         script_count=script_count,
         handler_count=handler_count,
         cdn_count=cdn_count,
+        external_script_count=external_script_count,
+        script_reach_allowed=script_reach_allowed,
+        script_reach_blocked=script_reach_blocked,
     )
 
 

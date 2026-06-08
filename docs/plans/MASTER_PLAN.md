@@ -106,10 +106,11 @@ Lane T (Telemetry · local, NO prod deploy)
   follow-ups (Needs Approval): 545 (wire routing_decision) · 546 (prompt-cost-cache import fmt)
 
 Lane A (Artifact toolkit)
-  526✅ ⟶ 527✅ ⟶ ┬ 528 ┐
- (deployed)(hosted+   ├ 529 ┼⟶ 531 ⟶ closes 525   528/529/530 BUILDABLE
-            verify-lib)└ 530 ┘  (530: substitution map ready, public repo)
+  526✅ ⟶ 527✅ ⟶ ┬ 528✅ ┐
+ (deployed)(hosted)  ├ 529  ┼⟶ 531 ⟶ closes 525   529/530 BUILDABLE
+                     └ 530  ┘  (530: substitution map ready, public repo)
   532 ───────────────────────── (independent)
+  (528 deployed: model now advertised the /lib/ shelf; 526 meter logs the reaches)
 
 Lane O (Observability)
   518✅ ⟶ 523 ⟶ 517 ⟶ 522     505✅ master verify+closed
@@ -134,7 +135,7 @@ Lane O (Observability)
 | [FRE-453](https://linear.app/frenchforest/issue/FRE-453) | Obs | Med | Sonnet | **Re-sequenced to backlog** — harness done (PR #183) but single-shot baselines conflate quality with harness-completion; rubric pass waits on **FRE-541** (driver). Not an owner-rubric-ready item anymore. |
 | [FRE-526](https://linear.app/frenchforest/issue/FRE-526) ✅ | Art | — | Sonnet | **DONE** — meter fix (PR #190); deployed 2026-06-08 (gateway rebuilt, code live, joinability green, agent-logs template carries the 3 `long` fields). FRE-498 Canceled (superseded). |
 | [FRE-527](https://linear.app/frenchforest/issue/FRE-527) ✅ | Art | — | Sonnet | **DONE** — `/lib/` hosted on the Worker (terraform); `make verify-lib` green from VPS (9/9 reachable + correct MIME + nosniff; paged.js eval-gated→FRE-531). Verifier PR #191. **Unblocks 528/530/531.** Master follow-up: fold `verify-lib` into the deploy gate. |
-| [FRE-528](https://linear.app/frenchforest/issue/FRE-528) | Art | — | Sonnet | Toolkit #3 — reframe `_HTML_GENERATION_SYSTEM_PROMPT` to advertise `/lib/` + native typography. Blocked by 527. |
+| [FRE-528](https://linear.app/frenchforest/issue/FRE-528) ✅ | Art | — | Sonnet | **DONE** — `_HTML_GENERATION_SYSTEM_PROMPT` reframed to advertise the curated `/lib/` shelf + native typography (PR #196); **deployed+verified live** (prompt in container, health green). Sealed-box constraints preserved (no arbitrary CDN/network/storage). |
 | [FRE-529](https://linear.app/frenchforest/issue/FRE-529) | Art | — | Sonnet | Toolkit #4 — author `docs/skills/artifact-design.md` (runtime guidance). Parallel; 528 distills from it. |
 | [FRE-530](https://linear.app/frenchforest/issue/FRE-530) | Art | — | Sonnet | Toolkit #5 — export-to-standalone (inline + substitution-map→CDN+SRI). Blocked by 527. |
 | [FRE-531](https://linear.app/frenchforest/issue/FRE-531) | Art | — | Sonnet | Toolkit #6 — E2E: `/lib/` render under live CSP + offline export. Blocked by 527+528+530. Closes FRE-525. |

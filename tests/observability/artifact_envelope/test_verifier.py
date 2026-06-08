@@ -11,14 +11,23 @@ changes, ``spec.py`` and these tests change in lockstep).
 from __future__ import annotations
 
 from personal_agent.observability.artifact_envelope.spec import (
+    DEFAULT_LIB_MANIFEST_PATH,
+    EXECUTABLE_SCRIPT_MIMES,
     EXPECTED_CSP_DIRECTIVES,
+    EXPECTED_FONT_MIMES,
     FORBIDDEN_SCRIPT_MIMES,
+    LIB_KIND_CSP_DIRECTIVE,
+    LibAsset,
+    load_lib_manifest,
 )
 from personal_agent.observability.artifact_envelope.verifier import (
     classify_access_denied,
     parse_csp,
     verify_envelope,
+    verify_lib_asset,
 )
+
+ARTIFACT_ORIGIN = "https://artifacts.frenchforet.com"
 
 # The exact policy the Worker serves (FRE-509). Token order within a directive is
 # CSP-insignificant; this string mirrors the deployed constant.
@@ -343,3 +352,187 @@ class TestResidualBound:
         assert EXPECTED_CSP_DIRECTIVES["frame-ancestors"] == frozenset(
             {"https://agent.frenchforet.com"}
         )
+
+
+# ── /lib/ toolkit asset verification (FRE-527 / ADR-0089 Addendum A · A3/A7) ───
+#
+# The /lib/ rule is the exact inverse of the artifact rule: toolkit JS *must*
+# serve an executable JS MIME (else nosniff stops the browser executing it),
+# whereas an artifact must *never*. Same canonical set, opposite polarity.
+
+
+def _lib_headers(content_type: str | None, *, nosniff: bool = True) -> list[tuple[str, str]]:
+    """A served /lib/ asset response header set."""
+    headers: list[tuple[str, str]] = []
+    if content_type is not None:
+        headers.append(("Content-Type", content_type))
+    if nosniff:
+        headers.append(("X-Content-Type-Options", "nosniff"))
+    return headers
+
+
+SCRIPT_ASSET = LibAsset(name="chartjs", path="chartjs@4.4.7/chart.umd.js", kind="script")
+STYLE_ASSET = LibAsset(name="katex", path="katex@0.16.11/katex.min.css", kind="style")
+FONT_ASSET = LibAsset(
+    name="jetbrains-mono",
+    path="fonts/jetbrains-mono@2.304/jetbrains-mono.woff2",
+    kind="font",
+)
+
+
+class TestVerifyLibAssetHappyPath:
+    def test_script_with_executable_mime_passes(self) -> None:
+        report = verify_lib_asset(
+            200, _lib_headers("text/javascript"), asset=SCRIPT_ASSET, origin=ARTIFACT_ORIGIN
+        )
+        assert report.asset_ok is True
+        assert report.failures == ()
+        assert report.mime_ok is True
+        assert report.nosniff_ok is True
+        assert report.csp_host_ok is True
+
+    def test_script_application_javascript_also_passes(self) -> None:
+        report = verify_lib_asset(
+            200, _lib_headers("application/javascript"), asset=SCRIPT_ASSET, origin=ARTIFACT_ORIGIN
+        )
+        assert report.asset_ok is True
+
+    def test_style_text_css_passes(self) -> None:
+        report = verify_lib_asset(
+            200, _lib_headers("text/css"), asset=STYLE_ASSET, origin=ARTIFACT_ORIGIN
+        )
+        assert report.asset_ok is True
+
+    def test_font_woff2_passes(self) -> None:
+        report = verify_lib_asset(
+            200, _lib_headers("font/woff2"), asset=FONT_ASSET, origin=ARTIFACT_ORIGIN
+        )
+        assert report.asset_ok is True
+
+
+class TestVerifyLibAssetFailures:
+    def test_non_executable_script_mime_fails(self) -> None:
+        report = verify_lib_asset(
+            200, _lib_headers("text/plain"), asset=SCRIPT_ASSET, origin=ARTIFACT_ORIGIN
+        )
+        assert report.asset_ok is False
+        assert "non_executable_script_mime" in report.failures
+
+    def test_script_served_as_html_fails(self) -> None:
+        report = verify_lib_asset(
+            200,
+            _lib_headers("text/html; charset=utf-8"),
+            asset=SCRIPT_ASSET,
+            origin=ARTIFACT_ORIGIN,
+        )
+        assert "non_executable_script_mime" in report.failures
+
+    def test_style_wrong_mime_fails(self) -> None:
+        report = verify_lib_asset(
+            200, _lib_headers("text/plain"), asset=STYLE_ASSET, origin=ARTIFACT_ORIGIN
+        )
+        assert "wrong_mime" in report.failures
+
+    def test_font_wrong_mime_fails(self) -> None:
+        report = verify_lib_asset(
+            200, _lib_headers("application/octet-stream"), asset=FONT_ASSET, origin=ARTIFACT_ORIGIN
+        )
+        assert "wrong_mime" in report.failures
+
+    def test_missing_nosniff_fails(self) -> None:
+        report = verify_lib_asset(
+            200,
+            _lib_headers("text/javascript", nosniff=False),
+            asset=SCRIPT_ASSET,
+            origin=ARTIFACT_ORIGIN,
+        )
+        assert report.nosniff_ok is False
+        assert "missing_nosniff" in report.failures
+
+    def test_missing_content_type_fails(self) -> None:
+        report = verify_lib_asset(
+            200, _lib_headers(None), asset=SCRIPT_ASSET, origin=ARTIFACT_ORIGIN
+        )
+        assert report.served_mime is None
+        assert report.asset_ok is False
+
+    def test_http_error_fails(self) -> None:
+        report = verify_lib_asset(
+            404, _lib_headers("text/javascript"), asset=SCRIPT_ASSET, origin=ARTIFACT_ORIGIN
+        )
+        assert "http_error" in report.failures
+
+    def test_origin_outside_csp_directive_fails(self) -> None:
+        report = verify_lib_asset(
+            200, _lib_headers("text/javascript"), asset=SCRIPT_ASSET, origin="https://evil.example"
+        )
+        assert report.csp_host_ok is False
+        assert "csp_host_not_allowed" in report.failures
+
+
+class TestPolarity:
+    """The same JS MIME passes for /lib/ and fails for an artifact — one set, two surfaces."""
+
+    def test_js_mime_passes_lib_and_fails_artifact(self) -> None:
+        js_mime = "text/javascript"
+        lib_report = verify_lib_asset(
+            200, _lib_headers(js_mime), asset=SCRIPT_ASSET, origin=ARTIFACT_ORIGIN
+        )
+        assert lib_report.asset_ok is True
+
+        artifact_headers = [
+            ("Content-Security-Policy", GOOD_CSP),
+            ("Content-Type", js_mime),
+            ("X-Content-Type-Options", "nosniff"),
+        ]
+        artifact_report = verify_envelope(200, artifact_headers, expect_html=True)
+        assert artifact_report.envelope_ok is False
+        assert "executable_mime" in artifact_report.failures
+
+    def test_forbidden_alias_is_the_executable_set(self) -> None:
+        assert FORBIDDEN_SCRIPT_MIMES is EXECUTABLE_SCRIPT_MIMES
+
+
+class TestLibManifest:
+    def test_committed_manifest_parses(self) -> None:
+        origin, assets = load_lib_manifest(DEFAULT_LIB_MANIFEST_PATH)
+        assert origin == ARTIFACT_ORIGIN
+        assert len(assets) >= 1
+        assert all(isinstance(a, LibAsset) for a in assets)
+
+    def test_every_asset_kind_is_valid(self) -> None:
+        _, assets = load_lib_manifest(DEFAULT_LIB_MANIFEST_PATH)
+        assert all(a.kind in LIB_KIND_CSP_DIRECTIVE for a in assets)
+
+    def test_font_assets_have_a_known_extension(self) -> None:
+        from pathlib import PurePosixPath
+
+        _, assets = load_lib_manifest(DEFAULT_LIB_MANIFEST_PATH)
+        for asset in assets:
+            if asset.kind == "font":
+                assert PurePosixPath(asset.path).suffix in EXPECTED_FONT_MIMES
+
+    def test_manifest_origin_admitted_by_every_used_directive(self) -> None:
+        origin, assets = load_lib_manifest(DEFAULT_LIB_MANIFEST_PATH)
+        used_directives = {LIB_KIND_CSP_DIRECTIVE[a.kind] for a in assets}
+        for directive in used_directives:
+            assert origin in EXPECTED_CSP_DIRECTIVES[directive]
+
+    def test_loader_rejects_unknown_kind(self, tmp_path: object) -> None:
+        import json
+        from pathlib import Path
+
+        bad = Path(str(tmp_path)) / "bad.json"
+        bad.write_text(
+            json.dumps(
+                {
+                    "origin": ARTIFACT_ORIGIN,
+                    "assets": [{"name": "x", "path": "x@1/x.js", "kind": "wasm"}],
+                }
+            )
+        )
+        try:
+            load_lib_manifest(bad)
+        except ValueError:
+            return
+        raise AssertionError("expected ValueError for unknown kind")

@@ -1,8 +1,5 @@
 {
-  "index_patterns": [
-    "agent-captains-captures-*",
-    "agent-captains-reflections-*"
-  ],
+  "index_patterns": ["agent-captains-reflections-*"],
   "priority": 110,
   "template": {
     "settings": {
@@ -48,10 +45,7 @@
         {
           "default_string_keyword": {
             "match_mapping_type": "string",
-            "mapping": {
-              "type": "keyword",
-              "ignore_above": 1024
-            }
+            "mapping": { "type": "keyword", "ignore_above": 1024 }
           }
         }
       ],
@@ -62,12 +56,7 @@
         "entry_id": { "type": "keyword" },
         "type": { "type": "keyword" },
         "status": { "type": "keyword" },
-        "title": {
-          "type": "text",
-          "fields": {
-            "keyword": { "type": "keyword", "ignore_above": 256 }
-          }
-        },
+        "title": { "type": "text", "fields": { "keyword": { "type": "keyword", "ignore_above": 256 } } },
         "rationale": { "type": "text" },
         "user_message": { "type": "text" },
         "assistant_response": { "type": "text" },
@@ -79,11 +68,20 @@
         "input_tokens": { "type": "integer" },
         "output_tokens": { "type": "integer" },
         "total_tokens": { "type": "integer" },
+        "impact_assessment": { "type": "text" },
+        "linear_issue_id": { "type": "keyword" },
+        "related_experiments": { "type": "keyword" },
         "proposed_change": {
           "properties": {
             "what": { "type": "text" },
             "why": { "type": "text" },
-            "how": { "type": "text" }
+            "how": { "type": "text" },
+            "category": { "type": "keyword" },
+            "scope": { "type": "keyword" },
+            "fingerprint": { "type": "keyword" },
+            "seen_count": { "type": "integer" },
+            "first_seen": { "type": "date" },
+            "related_entry_ids": { "type": "keyword" }
           }
         },
         "supporting_metrics": { "type": "keyword" },
@@ -129,5 +127,9 @@
         }
       }
     }
+  },
+  "_meta": {
+    "description": "Captain's Log reflection docs (self-improvement proposals). Daily index agent-captains-reflections-YYYY-MM-DD. Split out of the shared agent-captains-template in FRE-534/A2. Adds reflection-only shape: proposed_change.{category,scope,fingerprint,seen_count,first_seen,related_entry_ids}, impact_assessment, linear_issue_id, related_experiments.",
+    "managed_by": "scripts/setup-elasticsearch.sh"
   }
 }

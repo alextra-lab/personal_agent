@@ -99,7 +99,7 @@ All five from the `cache_control 5>4` post-mortem (PR #150). FRE-468 is Urgent a
 
 **Three-project parallel build (2026-06-08) — Telemetry Surface Audit ‖ Observability Foundation ‖ Artifact Execution Security.** Three largely-independent surfaces → 3 lanes.
 
-**Kickoff (start now — all dependency-free, no shared-file/deploy collision):** `adr → FRE-533` (Telemetry A1, Opus, local, research-doc, no src writes) · `build → FRE-518` (Observability live-render bug, Opus, highest live impact) · `build2 → FRE-526 → FRE-527` (Artifact chain) · `master → verify+close FRE-505`, then merges/deploys.
+**Kickoff (start now — all dependency-free, no shared-file/deploy collision):** `adr → FRE-533` (Telemetry A1, Opus, local, research-doc, no src writes) · `build → FRE-518` (Observability live-render bug, Opus, highest live impact) · `build2 → FRE-526 → FRE-527` (Artifact chain) · `master` → FRE-505 verified+closed ✅, then merges/deploys.
 
 - **Lane T — Telemetry** (local ES/Kibana; **no prod deploy**): FRE-533 (Opus, inventory, gates all) → FRE-534 (templates) ‖ FRE-535 (dashboard triage) → FRE-536/537/538/539 (cost · ledger+topology · joinability+SLM-health · turn/E2E/envelope).
 - **Lane A — Artifact toolkit** (ADR-0089 Add. A merged, PR #188): FRE-526 (meter, no dep) → FRE-527 (host `/lib`, Worker) → {FRE-528 prompt ‖ FRE-529 skill ‖ FRE-530 export} → FRE-531 (E2E); FRE-532 (PWA) independent. FRE-525 umbrella closes with FRE-531.
@@ -114,7 +114,7 @@ All five from the `cache_control 5>4` post-mortem (PR #150). FRE-468 is Urgent a
 | [FRE-523](https://linear.app/frenchforest/issue/FRE-523) | Obs | bug | Sonnet | `eval_mode` redesign — memory pipeline (capture/reflection/extraction→KG) RUNS during eval; only external side effects suppressed. Unblocks recall testing (ADR-0087). |
 | [FRE-517](https://linear.app/frenchforest/issue/FRE-517) | Obs | Med | Sonnet | ADR-0088 seam: per-topology `(trace_id, task_id)` rows — one per sub-agent/segment; generalize read surface to multi-row; per-segment cost. |
 | [FRE-522](https://linear.app/frenchforest/issue/FRE-522) | Obs | — | Sonnet | Reconcile eval-run ⇄ PWA: report-case→session deep links + **fix tool-use render gap** (ledger 15/18, PWA 0). |
-| [FRE-505](https://linear.app/frenchforest/issue/FRE-505) | Obs | High | Sonnet | Sub-agent auditability shipped (PR #179); **master verify+close**. |
+| [FRE-505](https://linear.app/frenchforest/issue/FRE-505) ✅ | Obs | High | Sonnet | **DONE** — verified live: 20 records in `agent-captains-captures-subagents-2026-06-07` with `memory_in_context` + `full_output` + `truncation_ratio` (PR #179/#180). |
 | [FRE-453](https://linear.app/frenchforest/issue/FRE-453) | Obs | Med | Sonnet | Canonical eval set — harness done; **owner rubric pass** remains. |
 | [FRE-526](https://linear.app/frenchforest/issue/FRE-526) | Art | — | Sonnet | Toolkit #1 — fix blind demand meter (count/classify external `<script src>`); closes FRE-498. No dep. |
 | [FRE-527](https://linear.app/frenchforest/issue/FRE-527) | Art | — | Sonnet | Toolkit #2 — host curated `/lib/` (KaTeX/Chart.js/three.js/highlight.js/OFL fonts/paged.js) + substitution map + `verify-envelope` assertion. Worker/secrets. Blocks 528/530/531. |

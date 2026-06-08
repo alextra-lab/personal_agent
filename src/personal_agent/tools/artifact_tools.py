@@ -975,22 +975,60 @@ REQUIREMENTS:
   * Utility classes: flex, grid, gap-1 through gap-6, p-1 through p-8, \
 m-1 through m-8, text-center, text-left, text-right, font-bold, font-medium, \
 rounded, rounded-lg, shadow, shadow-lg, hidden, w-full.
-  * No external CDN links — the document must be fully self-contained.
 - INTERACTIVITY: JavaScript is available. The document runs in a sandboxed, \
 sealed page — inline <script> blocks and event handlers run normally, so use \
 them freely for genuine interactivity: simulations, explorable diagrams, \
 charts, animations, calculators, tabs, filters. Prefer plain CSS (:hover, \
 :target, <details>/<summary>, transitions) when it does the job with less \
 code; reach for JavaScript when the experience genuinely needs it.
+- CURATED TOOLKIT: a small, vetted /lib/ shelf is hosted on the artifact \
+origin — it is the ONLY external origin this page may load. Reference each \
+asset by its EXACT absolute, version-pinned URL below (a relative path will \
+not load). Reach for one only when the document genuinely needs it; otherwise \
+inline your own code.
+  * Math (KaTeX) — render TeX/LaTeX:
+    <link rel="stylesheet" href="https://artifacts.frenchforet.com/lib/katex@0.16.11/katex.min.css">
+    <script src="https://artifacts.frenchforet.com/lib/katex@0.16.11/katex.min.js"></script>
+  * Data viz (Chart.js — global `Chart`) — charts/graphs from inline data:
+    <script src="https://artifacts.frenchforet.com/lib/chartjs@4.4.7/chart.umd.js"></script>
+  * 3-D (three.js — global `THREE`, r171) — scenes/geometry; build meshes in \
+code and embed any textures as data: URIs, never fetch them:
+    <script src="https://artifacts.frenchforet.com/lib/three@0.171.0/three.iife.min.js"></script>
+  * Code (highlight.js) — syntax-highlight code blocks:
+    <link rel="stylesheet" href="https://artifacts.frenchforet.com/lib/highlightjs@11.9.0/github-dark.min.css">
+    <script src="https://artifacts.frenchforet.com/lib/highlightjs@11.9.0/highlight.min.js"></script>
+  * Prose typography (OFL variable fonts) — declare with @font-face, then use \
+the family in your design system:
+    @font-face { font-family: "Source Serif 4"; src: url("https://artifacts.frenchforet.com/lib/fonts/source-serif-4@4.005/source-serif-4.woff2") format("woff2"); }
+    @font-face { font-family: "Playfair Display"; src: url("https://artifacts.frenchforet.com/lib/fonts/playfair-display@2.103/playfair-display.woff2") format("woff2"); }
+    @font-face { font-family: "JetBrains Mono"; src: url("https://artifacts.frenchforet.com/lib/fonts/jetbrains-mono@2.304/jetbrains-mono.woff2") format("woff2"); }
+    Use Source Serif 4 for body prose, Playfair Display for display headings, \
+JetBrains Mono for code.
+  * Book/print layout: prefer the NATIVE CSS recipes below (@page, \
+column-count, break-*). A paged.js polyfill is also on the shelf but is \
+EXPERIMENTAL and may be restricted under the live page policy — do not rely \
+on it.
+- NATIVE TYPOGRAPHY (no library) — reach for these before any font library for \
+refined text:
+  * Drop cap: p::first-letter { float: left; font-size: 3.2em; line-height: \
+0.8; padding-right: 0.08em; }
+  * Justified prose: text-align: justify; hyphens: auto; (set lang on <html>).
+  * Balanced headings: text-wrap: balance;
+  * Ligatures / old-style figures: font-feature-settings: "liga", "onum", \
+"kern";
+  * Multi-column flow: column-count, column-gap, column-rule.
+  * Print/book pages: @page { margin: ... } with break-inside: avoid; and \
+widows/orphans control.
 - SEALED-BOX CONSTRAINTS (hard, enforced by the runtime — design within them):
-  * No network: fetch/XHR/WebSocket/beacon are blocked. Embed ALL data \
-inline in the document.
+  * No network: fetch/XHR/WebSocket/beacon are blocked. Embed ALL of your own \
+data inline; inline images and 3-D textures as data: URIs or inline SVG — \
+never fetch them.
   * No storage: localStorage, sessionStorage, IndexedDB, and cookies are \
 unavailable. Keep state in JS variables or the DOM.
-  * No external resources: CDN scripts/styles/fonts/images (Tailwind CDN, \
-Alpine.js, jQuery, Google Fonts, etc.) will silently fail to load. Everything \
-must be inline: CSS in <style>, JS in <script>, images as data: URIs or \
-inline SVG.
+  * No arbitrary CDN: only the curated /lib/ shelf above loads. Any other \
+external script/style/font/image (Tailwind CDN, Alpine.js, jQuery, Google \
+Fonts, unpkg, etc.) silently fails — inline it instead. Default to inline CSS \
+and native JS wherever no shelf library is warranted.
   * No popups, no form submission to external endpoints.
 - PORTABILITY (choose deliberately): for static diagrams that should travel \
 with the file — flowcharts, architecture, sequence/class diagrams — use \

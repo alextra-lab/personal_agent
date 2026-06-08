@@ -27,6 +27,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from personal_agent.observability.artifact_envelope.spec import load_lib_manifest
 from personal_agent.tools import artifact_tools
 from personal_agent.tools.executor import ToolExecutionError
 
@@ -1409,6 +1410,41 @@ def test_system_prompt_instructs_mermaid_markup() -> None:
     prompt = artifact_tools._HTML_GENERATION_SYSTEM_PROMPT
     assert "mermaid" in prompt.lower()
     assert '<pre class="mermaid">' in prompt or "pre class" in prompt.lower()
+
+
+def test_system_prompt_advertises_curated_lib_toolkit() -> None:
+    """FRE-528 (ADR-0089 A4): the prompt advertises the curated /lib/ shelf.
+
+    Manifest-driven drift guard: every non-eval-gated asset must appear as its
+    full absolute, version-pinned URL (``origin + /lib/ + path``). A relative
+    ``/lib/`` path is not counted as a demand-met reach by the meter
+    (``_SCRIPT_SRC_RE``), so the prompt must steer absolute URLs. Native
+    typography recipes (no library) must be present, and the eval-gated
+    paged.js must NOT appear as a first-class snippet.
+    """
+    prompt = artifact_tools._HTML_GENERATION_SYSTEM_PROMPT
+    origin, assets = load_lib_manifest()
+
+    for asset in assets:
+        url = f"{origin}/lib/{asset.path}"
+        if asset.eval_gated:
+            assert url not in prompt, f"eval-gated asset must not be first-class: {url}"
+        else:
+            assert url in prompt, f"missing curated /lib/ snippet: {url}"
+
+    # Native typography recipes (no library).
+    assert "::first-letter" in prompt
+    assert "hyphens: auto" in prompt
+    assert "text-wrap: balance" in prompt
+    assert "font-feature-settings" in prompt
+    assert "column-count" in prompt
+    assert "@page" in prompt
+
+    # paged.js is named but flagged experimental/gated, never first-class.
+    assert "experimental" in prompt.lower()
+
+    # Arbitrary CDNs are still steered against — only the curated shelf is admitted.
+    assert "curated" in prompt.lower()
 
 
 # ---------------------------------------------------------------------------

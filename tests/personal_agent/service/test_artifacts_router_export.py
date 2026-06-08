@@ -106,7 +106,8 @@ def test_export_substitute_rewrites_to_cdn(monkeypatch: pytest.MonkeyPatch) -> N
     client = _client(monkeypatch, row=_row(), payload=html)
     resp = client.get(f"/api/v1/artifacts/{uuid4()}/export?mode=substitute")
     assert resp.status_code == 200
-    assert "cdn.jsdelivr.net" in resp.text
+    # assert on the full CDN path (not a bare host substring) + the SRI markup
+    assert "/npm/chart.js@4.4.7/dist/chart.umd.js" in resp.text
     assert "integrity=" in resp.text
     assert _ORIGIN not in resp.text
 
@@ -152,8 +153,8 @@ def test_build_asset_fetcher_allowlist_from_map() -> None:
 
     fetcher = router_module._build_asset_fetcher(load_substitution_map())
     assert isinstance(fetcher, router_module._HttpAssetFetcher)
-    assert "artifacts.frenchforet.com" in fetcher._allowed_hosts
-    assert "cdn.jsdelivr.net" in fetcher._allowed_hosts
+    # set-subset (not substring) — the allowlist must contain both trusted hosts
+    assert {"artifacts.frenchforet.com", "cdn.jsdelivr.net"} <= fetcher._allowed_hosts
 
 
 def test_export_fetch_failure_502(monkeypatch: pytest.MonkeyPatch) -> None:

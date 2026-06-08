@@ -124,7 +124,7 @@ All five from the `cache_control 5>4` post-mortem (PR #150). FRE-468 is Urgent a
 | [FRE-530](https://linear.app/frenchforest/issue/FRE-530) | Art | — | Sonnet | Toolkit #5 — export-to-standalone (inline + substitution-map→CDN+SRI). Blocked by 527. |
 | [FRE-531](https://linear.app/frenchforest/issue/FRE-531) | Art | — | Sonnet | Toolkit #6 — E2E: `/lib/` render under live CSP + offline export. Blocked by 527+528+530. Closes FRE-525. |
 | [FRE-532](https://linear.app/frenchforest/issue/FRE-532) | Art | — | Sonnet | Toolkit #7 — PWA convergence (share curation not hosting; add KaTeX). Independent. |
-| [FRE-533](https://linear.app/frenchforest/issue/FRE-533) | Tel | — | Opus | A1 — three-way reconciliation inventory (emit↔mapping↔dashboard). Runs first; gates all Telemetry. Local. |
+| [FRE-533](https://linear.app/frenchforest/issue/FRE-533) ✅ | Tel | — | Opus | **DONE** — reconciliation inventory (PR #193): 1023 (field,family) rows; 643 emitted-but-unmapped, 30 traps, **14 broken panels / 6 of 12 dashboards** (`.keyword` aggs on bare-keyword → silent empty). `docs/research/` + CSV + reusable audit script. **Unblocks 534/535/537/538/540.** |
 | [FRE-534](https://linear.app/frenchforest/issue/FRE-534) | Tel | — | Sonnet | A2 — correct templates (explicit props, split straddle, add missing). Blocked by 533. |
 | [FRE-535](https://linear.app/frenchforest/issue/FRE-535) | Tel | — | Sonnet | B1 — dashboard triage (keep/retire/fix 12/57; NDJSON to git). Blocked by 533, ‖ A2. |
 | [FRE-536](https://linear.app/frenchforest/issue/FRE-536)/537/538/539 | Tel | — | Sonnet | C1–C4 new viz — cost · ledger+topology · joinability+SLM-health · turn/E2E/envelope. Blocked by 534. |

@@ -1055,6 +1055,30 @@ class TurnProgressEvent(EventBase):
     topology: str | None = None
 
 
+class SubAgentProgressEvent(EventBase):
+    """A sub-agent tool-iteration tick, to climb the aggregate live meter (FRE-553).
+
+    Published best-effort from the sub-agent tool loop so the live projector can surface
+    sub-agent iterations in the turn meter (cost is already aggregated via
+    ``turn.model_call_completed``, FRE-501). Keyed by ``task_id`` so concurrent sub-agents
+    are summed rather than clobbering a single counter. ADR-0088 D4 is preserved: the
+    projector stays the sole ``turn_status`` emitter; this is only an upstream input.
+
+    Attributes:
+        task_id: Sub-agent task identifier (per-sub-agent join key).
+        iteration: Completed tool-iteration count for this sub-agent (0 = started tick).
+        iteration_max: This sub-agent's tool-iteration cap.
+    """
+
+    event_type: Literal["turn.sub_agent_progress"] = "turn.sub_agent_progress"
+    source_component: str = "orchestrator.sub_agent"
+    trace_id: str
+    session_id: str
+    task_id: str
+    iteration: int
+    iteration_max: int
+
+
 def parse_stream_event(payload: dict[str, Any]) -> EventBase:
     """Deserialize a stream JSON payload into the correct event subclass.
 
@@ -1119,4 +1143,6 @@ def parse_stream_event(payload: dict[str, Any]) -> EventBase:
         return TurnCompletedEvent.model_validate(payload)
     if raw_type == "turn.progress":
         return TurnProgressEvent.model_validate(payload)
+    if raw_type == "turn.sub_agent_progress":
+        return SubAgentProgressEvent.model_validate(payload)
     raise ValueError(f"unknown event_type: {raw_type!r}")

@@ -353,6 +353,92 @@ class TestTooledLoop:
         assert complete[0]["tooled"] is True
 
     @pytest.mark.asyncio
+    async def test_tooled_loop_publishes_sub_agent_progress(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FRE-553: the tooled loop publishes a started (0) + per-iteration progress tick."""
+        import personal_agent.events as events_pkg
+        from personal_agent.events.models import SubAgentProgressEvent
+
+        bus = AsyncMock()
+        monkeypatch.setattr(events_pkg, "get_event_bus", lambda: bus)
+
+        dispatch = AsyncMock(
+            return_value={
+                "tool_call_id": "c1",
+                "tool_name": "read",
+                "content": '{"status":"ok"}',
+                "success": True,
+                "latency_ms": 1.0,
+            }
+        )
+        monkeypatch.setattr("personal_agent.orchestrator.sub_agent.dispatch_tool_call", dispatch)
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                _llm_response("", [_tool_call("c1", "read", '{"path": "/x"}')]),
+                _llm_response("DIGEST"),
+            ]
+        )
+
+        await run_sub_agent(
+            spec=_tooled_spec(tools=["read"]),
+            llm_client=mock_client,
+            trace_id="t",
+            session_id="s",
+        )
+
+        progress = [
+            call.args[1]
+            for call in bus.publish.await_args_list
+            if isinstance(call.args[1], SubAgentProgressEvent)
+        ]
+        # A started tick (iteration=0) before the loop, then one per completed iteration.
+        assert [p.iteration for p in progress] == [0, 1]
+        assert all(p.session_id == "s" and p.trace_id == "t" for p in progress)
+        assert all(p.task_id and p.iteration_max > 0 for p in progress)
+
+    @pytest.mark.asyncio
+    async def test_tooled_loop_progress_skipped_without_session(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FRE-553: no session_id (headless) → no sub-agent progress published."""
+        import personal_agent.events as events_pkg
+        from personal_agent.events.models import SubAgentProgressEvent
+
+        bus = AsyncMock()
+        monkeypatch.setattr(events_pkg, "get_event_bus", lambda: bus)
+
+        dispatch = AsyncMock(
+            return_value={
+                "tool_call_id": "c1",
+                "tool_name": "read",
+                "content": '{"status":"ok"}',
+                "success": True,
+                "latency_ms": 1.0,
+            }
+        )
+        monkeypatch.setattr("personal_agent.orchestrator.sub_agent.dispatch_tool_call", dispatch)
+
+        mock_client = AsyncMock()
+        mock_client.respond = AsyncMock(
+            side_effect=[
+                _llm_response("", [_tool_call("c1", "read", '{"path": "/x"}')]),
+                _llm_response("DIGEST"),
+            ]
+        )
+
+        await run_sub_agent(spec=_tooled_spec(tools=["read"]), llm_client=mock_client, trace_id="t")
+
+        progress = [
+            call.args[1]
+            for call in bus.publish.await_args_list
+            if isinstance(call.args[1], SubAgentProgressEvent)
+        ]
+        assert progress == []
+
+    @pytest.mark.asyncio
     async def test_mutating_tool_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """AC#3 — a mutating tool (not in the read-only allowlist) is never dispatched."""
         dispatch = AsyncMock()

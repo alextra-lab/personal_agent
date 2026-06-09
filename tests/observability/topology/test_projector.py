@@ -11,16 +11,17 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from personal_agent.observability.topology.projector import TurnObservationProjector
 
 from personal_agent.events.models import (
     ModelCallCompletedEvent,
+    SubAgentProgressEvent,
     TopologyEnteredEvent,
     TurnCompletedEvent,
     TurnDegradedEvent,
     TurnProgressEvent,
 )
 from personal_agent.observability.topology import projector as projector_mod
+from personal_agent.observability.topology.projector import TurnObservationProjector
 
 pytestmark = pytest.mark.asyncio
 
@@ -101,6 +102,103 @@ async def test_progress_updates_tool_iteration_and_context(
     assert emitted[-1]["tool_iteration_max"] == 25
     assert emitted[-1]["context_tokens"] == 8000
     assert emitted[-1]["context_max"] == 40000
+
+
+async def test_sub_agent_progress_climbs_aggregate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FRE-553: the surfaced meter is primary + Σ sub-agent (numerator and max)."""
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    # Primary reports a baseline tick (1/25), then two concurrent sub-agents progress.
+    await proj.handle(
+        TurnProgressEvent(
+            trace_id="t-1",
+            session_id="s-1",
+            tool_iteration=1,
+            tool_iteration_max=25,
+            context_tokens=0,
+            context_max=0,
+            topology="decompose",
+        )
+    )
+    await proj.handle(
+        SubAgentProgressEvent(
+            trace_id="t-1", session_id="s-1", task_id="a", iteration=3, iteration_max=10
+        )
+    )
+    await proj.handle(
+        SubAgentProgressEvent(
+            trace_id="t-1", session_id="s-1", task_id="b", iteration=2, iteration_max=10
+        )
+    )
+
+    # primary 1 + a:3 + b:2 = 6 ; max 25 + 10 + 10 = 45
+    assert emitted[-1]["tool_iteration"] == 6
+    assert emitted[-1]["tool_iteration_max"] == 45
+
+
+async def test_concurrent_sub_agents_do_not_clobber(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FRE-553: interleaved per-task ticks sum, never collapse to one task's value."""
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(
+        SubAgentProgressEvent(
+            trace_id="t-1", session_id="s-1", task_id="a", iteration=1, iteration_max=10
+        )
+    )
+    await proj.handle(
+        SubAgentProgressEvent(
+            trace_id="t-1", session_id="s-1", task_id="b", iteration=1, iteration_max=10
+        )
+    )
+    await proj.handle(
+        SubAgentProgressEvent(
+            trace_id="t-1", session_id="s-1", task_id="a", iteration=4, iteration_max=10
+        )
+    )
+
+    # latest a:4 + latest b:1 = 5 (no clobber — never just 4 or just 1)
+    assert emitted[-1]["tool_iteration"] == 5
+
+
+async def test_reordered_tick_is_non_regressing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FRE-553: a stale/reordered lower tick must not drop the surfaced count (max-wins)."""
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(
+        SubAgentProgressEvent(
+            trace_id="t-1", session_id="s-1", task_id="a", iteration=3, iteration_max=10
+        )
+    )
+    await proj.handle(
+        SubAgentProgressEvent(
+            trace_id="t-1", session_id="s-1", task_id="a", iteration=1, iteration_max=10
+        )
+    )
+
+    assert emitted[-1]["tool_iteration"] == 3
+
+
+async def test_non_decomposed_unaffected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FRE-553: with no sub-agent events the surfaced meter equals the primary values."""
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(
+        TurnProgressEvent(
+            trace_id="t-1",
+            session_id="s-1",
+            tool_iteration=7,
+            tool_iteration_max=25,
+            context_tokens=0,
+            context_max=0,
+        )
+    )
+
+    assert emitted[-1]["tool_iteration"] == 7
+    assert emitted[-1]["tool_iteration_max"] == 25
 
 
 async def test_degraded_raises_visible_state(monkeypatch: pytest.MonkeyPatch) -> None:

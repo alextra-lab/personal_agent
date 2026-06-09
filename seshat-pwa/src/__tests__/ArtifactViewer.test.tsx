@@ -6,24 +6,33 @@
  * ADR-0089 isolation model.
  */
 
-import { render } from '@testing-library/react';
+import { render, fireEvent, screen } from '@testing-library/react';
 import { vi, describe, it, expect } from 'vitest';
 
-vi.mock('@/lib/agui-client', () => ({
-  postCardClick: vi.fn(),
-}));
+const postCardClick = vi.fn();
+vi.mock('@/lib/agui-client', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/agui-client')>(
+    '@/lib/agui-client',
+  );
+  return {
+    ...actual,
+    postCardClick: (...args: unknown[]) => postCardClick(...args),
+    // ArtifactExportMenu (rendered for HTML) imports this; stub it out.
+    fetchArtifactExport: vi.fn(),
+  };
+});
 
 import { ArtifactViewer } from '@/components/ArtifactViewer';
 
 const PUBLIC_URL = 'https://artifacts.frenchforet.com/test-artifact-id';
 
-function renderViewer() {
+function renderViewer(contentType = 'text/html; charset=utf-8') {
   return render(
     <ArtifactViewer
       artifactId="test-artifact-id"
       publicUrl={PUBLIC_URL}
       title="Test Artifact"
-      contentType="text/html; charset=utf-8"
+      contentType={contentType}
       onClose={vi.fn()}
     />,
   );
@@ -53,5 +62,29 @@ describe('ArtifactViewer — iframe sandbox posture (ADR-0089)', () => {
     const { container } = renderViewer();
     const iframe = container.querySelector('iframe');
     expect(iframe).toHaveAttribute('src', PUBLIC_URL);
+  });
+});
+
+describe('ArtifactViewer — export control (FRE-549)', () => {
+  it('shows the Export control for HTML and keeps the Open link working', () => {
+    renderViewer();
+    expect(
+      screen.getByRole('button', { name: /export artifact/i }),
+    ).toBeInTheDocument();
+
+    // The existing standalone "Open ↗" link still fires its telemetry.
+    fireEvent.click(screen.getByRole('link', { name: /open standalone/i }));
+    expect(postCardClick).toHaveBeenCalledWith(
+      'test-artifact-id',
+      'standalone',
+      undefined,
+    );
+  });
+
+  it('hides the Export control for non-HTML artifacts', () => {
+    renderViewer('application/json');
+    expect(
+      screen.queryByRole('button', { name: /export artifact/i }),
+    ).not.toBeInTheDocument();
   });
 });

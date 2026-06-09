@@ -59,6 +59,7 @@
 import { useEffect, useRef } from 'react';
 
 import { postCardClick } from '@/lib/agui-client';
+import { ArtifactExportMenu } from './ArtifactExportMenu';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -128,6 +129,12 @@ export function ArtifactViewer({
   const label = contentTypeLabel(contentType);
   const displayTitle = title ?? 'Artifact';
 
+  // Export-to-standalone (FRE-549) is HTML-only — the endpoint 400s otherwise.
+  const isHtml = contentType.toLowerCase().startsWith('text/html');
+  const exportFilename = `${
+    (title ?? 'artifact').replace(/[/\\?%*:|"<>]/g, '-').trim() || artifactId
+  }.html`;
+
   return (
     <>
       {/* Backdrop — z-40 so it sits below the panel (z-50) */}
@@ -166,6 +173,10 @@ export function ArtifactViewer({
           <h2 className="flex-1 text-sm font-semibold text-slate-100 truncate">
             {displayTitle}
           </h2>
+
+          {isHtml && (
+            <ArtifactExportMenu artifactId={artifactId} filename={exportFilename} />
+          )}
 
           <a
             href={publicUrl}

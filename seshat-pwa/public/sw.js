@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v21-toolkit-convergence';
+const CACHE_NAME = 'seshat-v22-artifact-export';
 
 const PRECACHE_URLS = [
   '/',

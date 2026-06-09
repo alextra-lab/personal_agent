@@ -249,6 +249,14 @@ Two distinct root causes, both for B1 (FRE-535):
 - **`docs/research/2026-06-08-fre-533-reconciliation-table.csv`** — all 1023 `(field, family)` rows with
   live type, template-expected type + resolution path, classification, candidate emit sites, and dashboard
   refs. This is the "every field" acceptance artifact.
+- **`scripts/audit/telemetry_surface_check.py`** (FRE-540, ADR-0090 D5) — the standing **hermetic** CI
+  guard derived from this table: parses the committed templates + dashboard NDJSON (no live stack) and
+  reproduces the static subset of these classifications (mapping↔dashboard `.keyword`/unmapped findings +
+  trap-class lint). Reuses this script's primitives so its taxonomy matches. Run:
+  `uv run python -m scripts.audit.telemetry_surface_check` (report-only) or `--gate` to fail on floor
+  findings. The hermetic floor catches the `.keyword`-on-bare-keyword + unmapped subset; the
+  emit-corner renames in the broken-panel table (`role`→`model_role`, `target_model`, `rounds_needed`)
+  are surfaced report-only (the floor cannot prove "mapped-but-unemitted" without the emit/live corners).
 
 ```bash
 uv run python scripts/audit/fre533_reconcile.py --out /tmp/fre533

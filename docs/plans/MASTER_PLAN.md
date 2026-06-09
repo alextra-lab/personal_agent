@@ -103,7 +103,7 @@ All five from the `cache_control 5>4` post-mortem (PR #150). FRE-468 is Urgent a
 Lane T (Telemetry · local, NO prod deploy)
   533✅ ⟶ ┬ 534✅ ┐       A1/A2/B1 done + applied live; 536–539 BUILDABLE
   (done)  └ 535✅ ┴⟶ 536 · 537 · 538 · 539
-  536✅ (C1 cost) + 537✅ (C2 traversal/gate) live; 538 (C3 monitors) merged ◑ awaiting Kibana import; 539 (C4) buildable
+  536✅ (C1 cost) + 537✅ (C2 traversal/gate) + 538✅ (C3 monitors) live; only 539 (C4) left
   follow-ups (Needs Approval): 540 (A3 CI checker) · 543 (ILM) · 544 (dyn-field bound) · 545 (routing_decision) · 546 (cost-cache import) · 547 (cap-util) · 548 (topology) · 550 (joinability breakdown)
 
 Lane A (Artifact toolkit) — 526–531 ✅ COMPLETE; **FRE-525 umbrella Done**
@@ -145,7 +145,7 @@ Lane O (Observability)
 | [FRE-535](https://linear.app/frenchforest/issue/FRE-535) ✅ | Tel | — | Sonnet | **DONE** — triage 12 dashboards fixed/retired + **imported+verified live** (PR #195, harness PASS 0 silent-empty). Filter-aware harness caught 20 broken vs A1's 14; hardened `import_dashboards.sh`. Spawned **545** (routing_decision emit) + **546** (prompt-cost-cache import fmt) — both Needs Approval. |
 | [FRE-536](https://linear.app/frenchforest/issue/FRE-536) ✅ | Tel | — | Sonnet | **DONE** — C1 cost & budget dashboard + cost_gate `*_usd` `double` emit fix (PR #197); **deployed+applied+verified** (gateway emit live, template `double`, dashboard live, joinability green). Cap-util deferred → 547. |
 | [FRE-537](https://linear.app/frenchforest/issue/FRE-537) ✅ | Tel | — | Sonnet | **DONE** — C2 traversal-ledger & gate-decision dashboard (PR #200); **imported+verified live** (6 panels, A1-trap-guarded). Topology deferred → 548. |
-| [FRE-538](https://linear.app/frenchforest/issue/FRE-538) ◑ | Tel | — | Sonnet | C3 monitors dashboard (joinability + SLM-health) **merged** (PR #201); **awaiting Kibana import**. Per-substrate breakdown deferred → 550. |
+| [FRE-538](https://linear.app/frenchforest/issue/FRE-538) ✅ | Tel | — | Sonnet | **DONE** — C3 monitors dashboard (joinability + SLM-health) imported+live (PR #201); handled cross-time SLM mapping straddle. Per-substrate breakdown deferred → 550. |
 | [FRE-539](https://linear.app/frenchforest/issue/FRE-539) | Tel | — | Sonnet | C4 — turn-level + E2E trace/session + artifact-envelope viz. Buildable (534 done). Last C-ticket. |
 
 

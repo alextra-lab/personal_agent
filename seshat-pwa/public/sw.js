@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v20-artifact-scripts';
+const CACHE_NAME = 'seshat-v21-toolkit-convergence';
 
 const PRECACHE_URLS = [
   '/',

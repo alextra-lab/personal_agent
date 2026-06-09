@@ -2,6 +2,11 @@
 .playwright-mcp/
 .worktrees/
 
+# FRE-531 E2E artifact render harness — generated fixtures + local deps
+e2e/artifact-lib/.fixtures/
+e2e/artifact-lib/node_modules/
+e2e/artifact-lib/test-results/
+
 .DS_Store
 
 .venv/

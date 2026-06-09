@@ -403,6 +403,47 @@ doc. Keep the pairs in sync when either changes:
 
 ---
 
+## E2E verification (FRE-531 · ADR-0089 Addendum A7)
+
+The done-bar for the curated toolkit is **"it renders under the live policy, and the
+envelope is provably applied"** — not "it renders". Two complementary gates cover it:
+
+**1. Hermetic render harness (in-repo, CI-able) — `make verify-artifact-e2e`.**
+Builds a real, SRI-pinned fixture set (`scripts/build_e2e_artifact_fixtures.py`: KaTeX
+0.16.11 + Chart.js 4.4.7 + paged.js fetched from the substitution-map CDN twins, each
+byte-verified against the pinned `sha384`), then runs `e2e/artifact-lib/` on **Chromium
+and WebKit**:
+
+- **A — hosted render** under the *exact* artifact CSP directive set (served by a local
+  CSP server whose header is emitted by the Python builder from `EXPECTED_CSP_DIRECTIVES`,
+  the single source of truth). Asserts the KaTeX MathML annotation echoes the source TeX,
+  the live `Chart.getChart()` instance holds the seeded dataset + the canvas painted, the
+  CSP header is present, and **zero CSP violations**.
+- **B — offline export** — the real `export_artifact_html(mode="inline")` output opened via
+  `file://` with **all network aborted**; same semantic render assertions; proves zero
+  network requests (truly self-contained).
+- **C — paged.js eval-gate** — loads paged.js under the eval-free CSP and asserts it runs
+  with **no `eval`/script CSP violation**.
+
+One-time browser install: `cd e2e/artifact-lib && npx playwright install --with-deps webkit chromium`.
+
+**Fidelity gap:** the harness rebinds the CSP host token to its localhost serving origin, so
+it proves render under the directive *shape*, not the exact `artifacts.frenchforet.com` tokens.
+
+**2. Live-origin gate (master, post-merge) — `make verify-envelope URL=…` + `make verify-lib`.**
+Closes the host-token gap on the real Access-gated origin: the served artifact carries the
+exact CSP directive set + MIME + `nosniff`, and every `/lib/` asset serves the correct
+executable/typed MIME + `nosniff` reachable under the artifact CSP. Requires a CF Access
+service token; runs at the deploy gate. A real-device iOS Safari pass is the owner's check.
+
+**paged.js Scenario C verdict (2026-06-09, record-only):** paged.js 0.4.3 runs **eval-free**
+under the eval-free artifact CSP and paginates on **both Chromium and WebKit** in the hermetic
+harness — corroborating the static-analysis claim. The `eval_gated` flag is **left set** (the
+shelf entry stays *experimental/gated*); un-gating it — which would add paged.js to the default
+`verify-lib` assert set — is a separate explicit decision pending the live-origin confirmation.
+
+---
+
 ## References
 
 - ADR-0089 — Artifact Execution Security Model (`docs/architecture_decisions/ADR-0089-artifact-execution-security-model.md`), §D2/D3/D4 + **Addendum A** (A2 curated set, A3 hosting/pinning, A4 this doc, A5 export, A7 done-bar).

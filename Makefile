@@ -56,7 +56,7 @@ endif
         sandbox-build \
         test test-integration test-all test-file test-verbose test-k test-cov eval \
         test-pwa test-pwa-e2e \
-        verify-envelope verify-lib \
+        verify-envelope verify-lib verify-artifact-e2e \
         mypy ruff-check ruff-format \
         eval-recovery-survey eval-recovery \
         test-infra-up test-infra-down test-infra-reset test-infra-ps \
@@ -155,6 +155,18 @@ verify-envelope:
 # into the verify-envelope deploy gate once the Worker hosts /lib/ (master, post-hosting).
 verify-lib:
 	@uv run python scripts/verify_artifact_envelope.py --lib $(if $(MANIFEST),--manifest $(MANIFEST),) $(if $(ORIGIN),--origin $(ORIGIN),)
+
+# Hermetic E2E render harness (FRE-531 / ADR-0089 Addendum A · A7): builds real
+# SRI-pinned /lib/ fixtures (KaTeX + Chart.js, fetched from the substitution-map
+# CDN twins) then asserts they render under the EXACT artifact CSP directive set
+# on Chromium + WebKit, that the inline export renders offline, and that paged.js
+# runs eval-free under the eval-free CSP. The local serving origin rebinds the CSP
+# host token to localhost — the live `make verify-envelope URL=...` (master,
+# post-merge) closes that one-token gap on the real artifacts origin.
+# One-time browser install: cd e2e/artifact-lib && npx playwright install --with-deps webkit chromium
+verify-artifact-e2e:
+	@uv run python scripts/build_e2e_artifact_fixtures.py --out e2e/artifact-lib/.fixtures
+	@cd e2e/artifact-lib && npm ci --prefer-offline && npx playwright test
 
 # ─── Backward-compat aliases ─────────────────────────────────────────────────
 

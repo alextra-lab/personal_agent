@@ -1,8 +1,7 @@
 'use client';
 
 import { useEffect, useId, useRef, useState } from 'react';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { CodeHighlight } from './CodeHighlight';
 
 interface MermaidBlockProps {
   chart: string;
@@ -357,19 +356,9 @@ export function MermaidBlock({ chart }: MermaidBlockProps) {
               <p className="text-xs text-rose-300/80">{errorMsg}</p>
             </div>
           )}
-          <SyntaxHighlighter
-            style={oneDark}
-            language="text"
-            PreTag="div"
-            customStyle={{
-              margin: 0,
-              borderRadius: 0,
-              fontSize: '0.75rem',
-              background: '#0d1117',
-            }}
-          >
-            {chart}
-          </SyntaxHighlighter>
+          <pre className="m-0 p-3 overflow-x-auto text-xs leading-relaxed bg-[#0d1117]">
+            <CodeHighlight language="text" code={chart} />
+          </pre>
         </div>
       )}
     </div>

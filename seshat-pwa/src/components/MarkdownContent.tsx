@@ -3,10 +3,11 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 import type { Components } from 'react-markdown';
 import { ArtifactCard } from './ArtifactCard';
+import { CodeHighlight } from './CodeHighlight';
 import { MermaidBlock } from './MermaidBlock';
 
 // ---------------------------------------------------------------------------
@@ -98,19 +99,9 @@ function CodeBlock({ language, children }: { language: string; children: string 
           )}
         </button>
       </div>
-      <SyntaxHighlighter
-        style={oneDark}
-        language={language}
-        PreTag="div"
-        customStyle={{
-          margin: 0,
-          borderRadius: 0,
-          fontSize: '0.75rem',
-          background: '#0d1117',
-        }}
-      >
-        {children}
-      </SyntaxHighlighter>
+      <pre className="m-0 p-3 overflow-x-auto text-xs leading-relaxed bg-[#0d1117]">
+        <CodeHighlight language={language} code={children} />
+      </pre>
     </div>
   );
 }
@@ -182,7 +173,11 @@ export function MarkdownContent({ content }: MarkdownContentProps) {
         'break-words',
       ].join(' ')}
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
+        components={markdownComponents}
+      >
         {content}
       </ReactMarkdown>
     </div>

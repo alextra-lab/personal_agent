@@ -1,6 +1,10 @@
 import type { Metadata, Viewport } from 'next';
 
 import './globals.css';
+// Curated artifact toolkit alignment (FRE-532): bundle our own pinned copies of
+// the toolkit's chat-render stylesheets, ordered after Tailwind layers.
+import 'katex/dist/katex.min.css';
+import 'highlight.js/styles/github-dark.css';
 
 export const metadata: Metadata = {
   title: 'Seshat',

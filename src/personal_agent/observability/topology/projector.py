@@ -24,6 +24,7 @@ import structlog
 from personal_agent.events.models import (
     EventBase,
     ModelCallCompletedEvent,
+    SubAgentProgressEvent,
     TopologyEnteredEvent,
     TurnCompletedEvent,
     TurnDegradedEvent,
@@ -48,8 +49,12 @@ class TurnObservation:
         session_id: Session the ``turn_status`` STATE_DELTA is keyed by.
         topology: Active execution-topology label.
         phase: Coarse lifecycle phase (``running`` / ``completed``).
-        tool_iteration: Latest tool-execution iteration reported.
-        tool_iteration_max: Resolved per-turn tool-iteration cap.
+        tool_iteration: Latest primary tool-execution iteration reported.
+        tool_iteration_max: Resolved per-turn primary tool-iteration cap.
+        sub_agent_iterations: Per-``task_id`` latest sub-agent iteration (FRE-553); summed
+            into the surfaced meter so concurrent sub-agents never clobber one counter.
+        sub_agent_iteration_max: Per-``task_id`` sub-agent cap (FRE-553); summed into the
+            surfaced max.
         context_tokens: Latest estimated context-window occupancy.
         context_max: Resolved context-window token budget.
         live_cost_usd: Accumulated live cost from model-call events.
@@ -65,6 +70,8 @@ class TurnObservation:
     phase: str = "running"
     tool_iteration: int = 0
     tool_iteration_max: int = 0
+    sub_agent_iterations: dict[str, int] = field(default_factory=dict)
+    sub_agent_iteration_max: dict[str, int] = field(default_factory=dict)
     context_tokens: int = 0
     context_max: int = 0
     live_cost_usd: float = 0.0
@@ -112,6 +119,18 @@ class TurnObservationProjector:
             obs.context_max = event.context_max
             if event.topology is not None:
                 obs.topology = event.topology
+        elif isinstance(event, SubAgentProgressEvent):
+            # FRE-553: track each sub-agent's latest iteration per task_id, max-wins so a
+            # stale/reordered best-effort tick can never drop the surfaced count. Entries
+            # persist until TurnCompletedEvent pops the whole trace (do not pop per sub-agent
+            # — removing both numerator and denominator would mask completed work).
+            obs = self._observation(event.trace_id, event.session_id)
+            obs.sub_agent_iterations[event.task_id] = max(
+                obs.sub_agent_iterations.get(event.task_id, 0), event.iteration
+            )
+            obs.sub_agent_iteration_max[event.task_id] = max(
+                obs.sub_agent_iteration_max.get(event.task_id, 0), event.iteration_max
+            )
         elif isinstance(event, ModelCallCompletedEvent):
             obs = self._observation(event.trace_id, event.session_id)
             obs.live_cost_usd += event.cost_usd
@@ -139,14 +158,19 @@ class TurnObservationProjector:
 
     async def _emit(self, obs: TurnObservation) -> None:
         """Emit the full-state ``turn_status`` STATE_DELTA (best-effort)."""
+        # FRE-553: surface the aggregate (primary + Σ sub-agent) so the meter climbs live
+        # through a decomposed turn's expansion window. Raw fields are kept separate and
+        # summed only here. With no sub-agent ticks the dicts are empty → primary values.
+        tool_iteration = obs.tool_iteration + sum(obs.sub_agent_iterations.values())
+        tool_iteration_max = obs.tool_iteration_max + sum(obs.sub_agent_iteration_max.values())
         try:
             await emit_turn_status(
                 session_id=obs.session_id,
                 value={
                     "context_tokens": obs.context_tokens,
                     "context_max": obs.context_max,
-                    "tool_iteration": obs.tool_iteration,
-                    "tool_iteration_max": obs.tool_iteration_max,
+                    "tool_iteration": tool_iteration,
+                    "tool_iteration_max": tool_iteration_max,
                     "turn_cost_usd": round(obs.live_cost_usd, 6),
                     # FRE-407: the client stamps trace_id onto the assistant message so the
                     # rating control (which joins on trace_id) can render after DONE.

@@ -30,6 +30,45 @@ from personal_agent.orchestrator.tool_dispatch import dispatch_tool_call
 
 logger = structlog.get_logger(__name__)
 
+
+async def _publish_sub_agent_progress(
+    *, trace_id: str, session_id: str | None, task_id: str, iteration: int, iteration_max: int
+) -> None:
+    """Publish a best-effort sub-agent tool-iteration tick for the live meter (FRE-553).
+
+    Lets the live projector surface sub-agent iterations in the turn meter (cost is already
+    aggregated via ``turn.model_call_completed``). Keyed by ``task_id`` so concurrent
+    sub-agents are summed, not clobbered. No-op without a session id (headless). Best-effort:
+    a telemetry emission must never break the sub-agent loop.
+
+    Args:
+        trace_id: Parent turn trace identifier (join key).
+        session_id: Originating session id; None (headless) skips the publish.
+        task_id: Sub-agent task identifier (per-sub-agent join key).
+        iteration: Completed tool-iteration count (0 = started tick).
+        iteration_max: This sub-agent's tool-iteration cap.
+    """
+    if not session_id:
+        return
+    try:
+        from personal_agent.events import get_event_bus
+        from personal_agent.events.models import STREAM_TURN_OBSERVED, SubAgentProgressEvent
+
+        await get_event_bus().publish(
+            STREAM_TURN_OBSERVED,
+            SubAgentProgressEvent(
+                trace_id=trace_id,
+                session_id=session_id,
+                task_id=task_id,
+                iteration=iteration,
+                iteration_max=iteration_max,
+            ),
+            maxlen=settings.turn_observed_stream_maxlen,
+        )
+    except Exception:
+        logger.debug("sub_agent_progress_publish_failed", task_id=task_id, trace_id=trace_id)
+
+
 # Marker the primary injects when proactive-memory/KG entities are in context
 # (executor._render_memory_section). Scanned in sub-agent context to answer the
 # question FRE-505 exists for: "was memory/KG in the sub-agent's input?"
@@ -471,6 +510,16 @@ async def _run_tooled_loop(
     loop_cost_usd = 0.0
     max_iterations = settings.sub_agent_max_tool_iterations
 
+    # FRE-553: started tick (iteration=0) establishes the meter's denominator before any
+    # iterations count, so the aggregate max doesn't jump on the first real tick.
+    await _publish_sub_agent_progress(
+        trace_id=trace_id,
+        session_id=session_id,
+        task_id=task_id,
+        iteration=0,
+        iteration_max=max_iterations,
+    )
+
     for iteration in range(max_iterations):
         response = await asyncio.wait_for(
             llm_client.respond(
@@ -560,6 +609,14 @@ async def _run_tooled_loop(
             tool_count=len(tool_calls),
             trace_id=trace_id,
             session_id=session_id,
+        )
+        # FRE-553: surface this completed iteration onto the live meter (1-based).
+        await _publish_sub_agent_progress(
+            trace_id=trace_id,
+            session_id=session_id,
+            task_id=task_id,
+            iteration=iteration + 1,
+            iteration_max=max_iterations,
         )
 
     # Iteration ceiling reached — force a final synthesis. Tools are disabled by

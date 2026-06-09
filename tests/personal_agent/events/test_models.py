@@ -34,6 +34,7 @@ from personal_agent.events.models import (
     PromotionIssueCreatedEvent,
     RequestCapturedEvent,
     RequestCompletedEvent,
+    SubAgentProgressEvent,
     TopologyEnteredEvent,
     TurnCompletedEvent,
     TurnDegradedEvent,
@@ -199,6 +200,22 @@ class TestParseStreamEvent:
     def test_unknown_event_type_raises(self) -> None:
         with pytest.raises(ValueError, match="unknown"):
             parse_stream_event({"event_type": "nope"})
+
+    def test_sub_agent_progress_roundtrip(self) -> None:
+        """FRE-553: turn.sub_agent_progress restores its subclass fields."""
+        event = SubAgentProgressEvent(
+            trace_id="t",
+            session_id="s",
+            task_id="a",
+            iteration=2,
+            iteration_max=10,
+        )
+        assert event.event_type == "turn.sub_agent_progress"
+        parsed = parse_stream_event(event.model_dump(mode="json"))
+        assert isinstance(parsed, SubAgentProgressEvent)
+        assert parsed.task_id == "a"
+        assert parsed.iteration == 2
+        assert parsed.iteration_max == 10
 
 
 class TestPhase3Events:

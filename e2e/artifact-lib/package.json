@@ -1,0 +1,12 @@
+{
+  "name": "seshat-artifact-lib-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "FRE-531 E2E render harness for the curated artifact /lib/ toolkit (ADR-0089 Addendum A7).",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0"
+  }
+}

@@ -103,13 +103,14 @@ All five from the `cache_control 5>4` post-mortem (PR #150). FRE-468 is Urgent a
 Lane T (Telemetry · local, NO prod deploy)
   533✅ ⟶ ┬ 534✅ ┐       A1/A2/B1 done + applied live; 536–539 BUILDABLE
   (done)  └ 535✅ ┴⟶ 536 · 537 · 538 · 539
-  536✅ (C1 cost) + 537✅ (C2 traversal/gate) + 538✅ (C3 monitors) live; only 539 (C4) left
+  536✅ 537✅ 538✅ 539✅ — **ALL C-dashboards live; Telemetry build phase (533–539) COMPLETE**
   follow-ups (Needs Approval): 540 (A3 CI checker) · 543 (ILM) · 544 (dyn-field bound) · 545 (routing_decision) · 546 (cost-cache import) · 547 (cap-util) · 548 (topology) · 550 (joinability breakdown)
 
 Lane A (Artifact toolkit) — 526–531 ✅ COMPLETE; **FRE-525 umbrella Done**
   526✅ → 527✅ → 528✅ → 529✅ → 530✅ → 531✅ (E2E, closed 525)
-  Remaining (separate follow-ups, not 525): 532 PWA rendering convergence · 549 PWA export trigger ·
-  551 extend E2E (three.js+fonts) · cross-repo CF-token auth for live inline /lib/ export
+  532✅ PWA rendering convergence (deployed — hljs/KaTeX/mermaid pinned, CACHE_NAME v21)
+  Remaining (separate follow-ups): 549 PWA export trigger · 551 extend E2E (three.js+fonts) ·
+  cross-repo CF-token auth for live inline /lib/ export
   Toolkit live: shelf hosted+advertised+metered+exportable, E2E-verified under CSP
 
 Lane O (Observability)
@@ -139,14 +140,14 @@ Lane O (Observability)
 | [FRE-529](https://linear.app/frenchforest/issue/FRE-529) ✅ | Art | — | Sonnet | **DONE** — `docs/skills/artifact-design.md` runtime-guidance source-of-truth (PR #198, docs-only); manifest-driven drift-guard test lockstep w/ 528. |
 | [FRE-530](https://linear.app/frenchforest/issue/FRE-530) ✅ | Art | — | Sonnet | **DONE** — export-to-standalone `/export` endpoint (inline SRI + substitute CDN+SRI; SSRF-guarded; PR #199); **deployed+verified** (route 401, joinability green). Inline `/lib/` fetch needs CF token auth (laptop, cross-repo); substitute works now. |
 | [FRE-531](https://linear.app/frenchforest/issue/FRE-531) ✅ | Art | — | Sonnet | **DONE** — E2E render harness (Chromium+WebKit) under exact CSP + offline export + paged.js eval-free (PR #202); live `verify-lib` 9/9. **Closed FRE-525 umbrella** (toolkit complete). |
-| [FRE-532](https://linear.app/frenchforest/issue/FRE-532) | Art | — | Sonnet | Toolkit #7 — PWA convergence (share curation not hosting; add KaTeX). Independent. |
+| [FRE-532](https://linear.app/frenchforest/issue/FRE-532) ✅ | Art | — | Sonnet | **DONE** — PWA toolkit convergence (hljs/KaTeX/mermaid pinned; trust-gradient preserved); **deployed** (seshat-pwa, CACHE_NAME v21). katex@0.16.11 advisory mitigated (trust:false). |
 | [FRE-533](https://linear.app/frenchforest/issue/FRE-533) ✅ | Tel | — | Opus | **DONE** — reconciliation inventory (PR #193): 1023 (field,family) rows; 643 emitted-but-unmapped, 30 traps, **14 broken panels / 6 of 12 dashboards** (`.keyword` aggs on bare-keyword → silent empty). `docs/research/` + CSV + reusable audit script. **Unblocks 534/535/537/538/540.** |
 | [FRE-534](https://linear.app/frenchforest/issue/FRE-534) ✅ | Tel | — | Sonnet | **DONE** — templates corrected + **applied+verified live** (PR #194): `ms_fields_as_float`, captains 3-way split (subagents@120), insights/slm-health templates w/ keyword join keys; `denial_reason` kept keyword for the donut. New-indices-only, no backfill. Unblocks 536–539. |
 | [FRE-535](https://linear.app/frenchforest/issue/FRE-535) ✅ | Tel | — | Sonnet | **DONE** — triage 12 dashboards fixed/retired + **imported+verified live** (PR #195, harness PASS 0 silent-empty). Filter-aware harness caught 20 broken vs A1's 14; hardened `import_dashboards.sh`. Spawned **545** (routing_decision emit) + **546** (prompt-cost-cache import fmt) — both Needs Approval. |
 | [FRE-536](https://linear.app/frenchforest/issue/FRE-536) ✅ | Tel | — | Sonnet | **DONE** — C1 cost & budget dashboard + cost_gate `*_usd` `double` emit fix (PR #197); **deployed+applied+verified** (gateway emit live, template `double`, dashboard live, joinability green). Cap-util deferred → 547. |
 | [FRE-537](https://linear.app/frenchforest/issue/FRE-537) ✅ | Tel | — | Sonnet | **DONE** — C2 traversal-ledger & gate-decision dashboard (PR #200); **imported+verified live** (6 panels, A1-trap-guarded). Topology deferred → 548. |
 | [FRE-538](https://linear.app/frenchforest/issue/FRE-538) ✅ | Tel | — | Sonnet | **DONE** — C3 monitors dashboard (joinability + SLM-health) imported+live (PR #201); handled cross-time SLM mapping straddle. Per-substrate breakdown deferred → 550. |
-| [FRE-539](https://linear.app/frenchforest/issue/FRE-539) | Tel | — | Sonnet | C4 — turn-level + E2E trace/session + artifact-envelope viz. Buildable (534 done). Last C-ticket. |
+| [FRE-539](https://linear.app/frenchforest/issue/FRE-539) ✅ | Tel | — | Sonnet | **DONE** — C4 turn/session/artifact-envelope dashboard imported+live (PR #204). **Last C-ticket — Telemetry build COMPLETE.** Honest data-limits documented (readiness banner). |
 
 
 | [FRE-384](https://linear.app/frenchforest/issue/FRE-384) ✅ | **High** | Sonnet | **DONE** (PR #143) — `CAST(:tag_filter AS text[]) IS NULL` fixes AmbiguousParameterError. `init.sql` FK order fixed. Verified live. |

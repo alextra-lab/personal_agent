@@ -664,3 +664,56 @@ export function postCardClick(
     // Best-effort — swallow all errors
   });
 }
+
+// --------------------------------------------------------------------------
+// FRE-549 — Artifact export (wires the FRE-530 /export endpoint)
+// --------------------------------------------------------------------------
+
+/** Export modes accepted by the backend (ADR-0089 A5, FRE-530). */
+export type ArtifactExportMode = 'inline' | 'substitute';
+
+/**
+ * Raised by {@link fetchArtifactExport} on a non-2xx response.
+ *
+ * Carries the exact HTTP status so the UI can branch — notably `502` (inline
+ * asset fetch / SRI failure, e.g. before the CF service token is authorized)
+ * versus any other failure.
+ */
+export class ArtifactExportError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ArtifactExportError';
+    this.status = status;
+  }
+}
+
+/**
+ * Fetch a standalone export of an HTML artifact (FRE-530 endpoint).
+ *
+ * Follows the existing PWA fetch pattern — `authHeaders()` only, with the CF
+ * Access JWT injected by the edge — so no `credentials` flag is set. Returns
+ * the response body as a Blob for download; the caller supplies the filename.
+ *
+ * @param artifactId - The artifact to export.
+ * @param mode - `inline` (offline-portable) or `substitute` (CDN + SRI).
+ * @returns The exported HTML as a Blob.
+ * @throws ArtifactExportError carrying the HTTP status on any non-2xx response.
+ */
+export async function fetchArtifactExport(
+  artifactId: string,
+  mode: ArtifactExportMode,
+): Promise<Blob> {
+  const resp = await fetch(
+    `${SESHAT_API}/api/v1/artifacts/${encodeURIComponent(artifactId)}/export?mode=${mode}`,
+    { headers: authHeaders() },
+  );
+  if (!resp.ok) {
+    throw new ArtifactExportError(
+      resp.status,
+      `artifact export failed: ${resp.status} ${resp.statusText}`,
+    );
+  }
+  return resp.blob();
+}

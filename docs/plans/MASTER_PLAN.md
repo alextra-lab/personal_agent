@@ -37,6 +37,8 @@ As of 2026-06-06 (FRE-504) the portfolio is organized as **substrate pillars vs 
 
 *Restructure provenance:* Observability Foundation created (Approved); lifted FRE-451/452/453 (from Pedagogical M2), FRE-505 (from Turn Cost), FRE-506 (no prior project) into it.
 
+*Re-home pass (2026-06-10, owner-authorized — "easier to trace and sequence"):* the two near-complete incident projects (**Turn Cost & Latency** ~72% closed, **Turn Reliability Hardening** ~63% closed) stay as-is to wind down; only the open tickets with a clear dependency home moved out — **FRE-507** (event-driven cost streaming) → **Observability Foundation** (ADR-0088 D3 / ADR-0076 lineage; reassess vs what FRE-513 already shipped at the cost boundary); **FRE-495** (local sub_agent context_length), **FRE-472** (conversational capability-trap research), **FRE-492** (HITL dynamic allow-gate for discovery sub-agents) → **Seshat Inference Architecture**. Left in place as general turn-work: FRE-477/487 (Turn Cost ergonomics), FRE-497/474 (Turn Reliability). Not folded into the 3 active substrate pillars (different charter; would dilute scope + lose incident provenance).
+
 ---
 
 ## Active Design Threads

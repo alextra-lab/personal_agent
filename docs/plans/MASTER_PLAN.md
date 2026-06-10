@@ -122,11 +122,11 @@ Lane O (Observability)
 
 ### Today's two-worktree dispatch (2026-06-10) — assigned by file-domain to avoid A/B collision
 
-**Worktree A — Telemetry surface + Turn-Cost closes** (ES templates · Kibana · cost_gate emit · gateway emit · tools governance — no topology code):
-1. FRE-545 routing_decision emit → 2. FRE-552 session_id on error logs → 3. FRE-547 cap-util ES snapshot → 4. FRE-543 ILM/retention → 5. FRE-544 dyn-field bound → 6. FRE-546 cost-cache Kibana import fix → 7. FRE-550 joinability breakdown panels → 8. FRE-477 discovery batching (Turn Cost) → 9. FRE-487 govern model file-reads (Turn Cost).
+**Worktree A — Telemetry surface + Turn-Cost closes** (ES templates · Kibana · cost_gate emit · tools governance — no topology code; all Tier-2/3 mechanical):
+1. FRE-552 session_id on error logs → 2. FRE-547 cap-util ES snapshot → 3. FRE-543 ILM/retention → 4. FRE-544 dyn-field bound → 5. FRE-546 cost-cache Kibana import fix → 6. FRE-550 joinability breakdown panels → 7. FRE-477 discovery batching (Turn Cost) → 8. FRE-487 govern model file-reads (Turn Cost).
 
-**Worktree B — Topology/eval + Artifact + Turn ADR/research** (topology projector · ledger · eval harness · artifact_tools · gates):
-1. FRE-507 rescope vs 513 (likely shrink/close) → 2. FRE-523 eval-mode memory bug → 3. FRE-517 per-topology rows → 4. FRE-548 topology→ES projection emitter *(Telemetry ticket, placed here so it doesn't collide with 517 on topology code)* → 5. FRE-522 eval⇄PWA → 6. FRE-541 conversation driver (unblocks 453) → 7. FRE-551 artifact E2E extend → 8. FRE-497 self-correcting gates (ADR) → 9. FRE-474 cross-provider cache research.
+**Worktree B — Topology/eval/ledger + Artifact + Turn ADR/research** (topology projector · route-trace ledger · eval harness · artifact_tools · gates):
+1. FRE-507 rescope vs 513 (likely shrink/close) → 2. FRE-523 eval-mode memory bug → 3. FRE-517 per-topology rows → 4. FRE-548 topology→ES projection emitter *(Telemetry ticket; here to avoid colliding with 517 on topology code)* → 5. **FRE-545 project route-trace-ledger routing fields → ES** *(re-anchored 2026-06-10: ADR-0088 ledger projection, NOT a new ADR-0082 event; reuses the 548 pattern)* → 6. FRE-522 eval⇄PWA → 7. FRE-541 conversation driver (unblocks 453) → 8. FRE-551 artifact E2E extend → 9. FRE-497 self-correcting gates (ADR) → 10. FRE-474 cross-provider cache research.
 
 **Capstone (run last, either worktree once free):** FRE-555 flip reconciliation checker → hard CI gate — **gated on ALL emit-gaps merged** (543/544/545/546/547/548/550/552). Closes the Telemetry project + realizes ADR-0090 D5.
 

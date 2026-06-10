@@ -83,9 +83,9 @@ Four threads carved from the FRE-389 on-device review (2026-05-28). All **Approv
 
 ---
 
-## Turn Reliability Hardening (2026-06-04 incident) — Needs Approval
+## Turn Reliability Hardening (2026-06-04 incident) — winding down (build-to-close)
 
-All five from the `cache_control 5>4` post-mortem (PR #150). FRE-468 is Urgent and first.
+All five from the `cache_control 5>4` post-mortem (PR #150). FRE-468 is Urgent and first. **2026-06-10:** after the re-home pass (FRE-472 → Inference), the two residuals **FRE-497** (self-correcting gates, ADR) + **FRE-474** (cross-provider cache research) were **Approved** to build-to-close; project closes when both ship. Turn Cost & Latency likewise winds down via **FRE-477** + **FRE-487** (both Approved).
 
 | Ticket | Priority | Tier | What |
 |--------|----------|------|------|
@@ -120,6 +120,18 @@ Lane O (Observability)
  (deployed) (next)            453 → re-sequenced behind 541 (Needs Approval)
 ```
 
+### Today's two-worktree dispatch (2026-06-10) — assigned by file-domain to avoid A/B collision
+
+**Worktree A — Telemetry surface + Turn-Cost closes** (ES templates · Kibana · cost_gate emit · gateway emit · tools governance — no topology code):
+1. FRE-545 routing_decision emit → 2. FRE-552 session_id on error logs → 3. FRE-547 cap-util ES snapshot → 4. FRE-543 ILM/retention → 5. FRE-544 dyn-field bound → 6. FRE-546 cost-cache Kibana import fix → 7. FRE-550 joinability breakdown panels → 8. FRE-477 discovery batching (Turn Cost) → 9. FRE-487 govern model file-reads (Turn Cost).
+
+**Worktree B — Topology/eval + Artifact + Turn ADR/research** (topology projector · ledger · eval harness · artifact_tools · gates):
+1. FRE-507 rescope vs 513 (likely shrink/close) → 2. FRE-523 eval-mode memory bug → 3. FRE-517 per-topology rows → 4. FRE-548 topology→ES projection emitter *(Telemetry ticket, placed here so it doesn't collide with 517 on topology code)* → 5. FRE-522 eval⇄PWA → 6. FRE-541 conversation driver (unblocks 453) → 7. FRE-551 artifact E2E extend → 8. FRE-497 self-correcting gates (ADR) → 9. FRE-474 cross-provider cache research.
+
+**Capstone (run last, either worktree once free):** FRE-555 flip reconciliation checker → hard CI gate — **gated on ALL emit-gaps merged** (543/544/545/546/547/548/550/552). Closes the Telemetry project + realizes ADR-0090 D5.
+
+**Collision rule:** anything touching the topology projector/ledger (517, 548) stays in B and serial. PWA is shared (522/532/PWA-side of 551) — one lane at a time. `pytest` lock = one `make test` at a time. Master merges server-side + deploys one-at-a-time from main.
+
 - **Lane T — Telemetry** (local ES/Kibana; **no prod deploy**): FRE-533 ✅ (1023-row inventory) → FRE-534 ✅ (templates corrected + applied+verified live, PR #194) ‖ FRE-535 (dashboard triage) **← buildable** → FRE-536/537/538/539 (cost · ledger+topology · joinability+SLM-health · turn/E2E/envelope) **← now unblocked**.
 - **Lane A — Artifact toolkit** (ADR-0089 Add. A merged, PR #188): FRE-526 ✅ → FRE-527 ✅ (`/lib` hosted + `verify-lib` green) → {FRE-528 prompt ‖ FRE-529 skill ‖ FRE-530 export} **← buildable now** → FRE-531 (E2E); FRE-532 (PWA) independent. FRE-525 umbrella closes with FRE-531.
 - **Lane O — Observability**: FRE-518 ✅ (live-render bug, deployed) → FRE-523 (eval-mode memory bug) **← next** → FRE-517 (per-topology rows) → FRE-522 (eval⇄PWA + tool-render). Non-build: FRE-505 ✅ verified+closed · FRE-453 re-sequenced behind FRE-541 (rubric waits on the conversation driver).
@@ -134,7 +146,7 @@ Lane O (Observability)
 | [FRE-517](https://linear.app/frenchforest/issue/FRE-517) | Obs | Med | Sonnet | ADR-0088 seam: per-topology `(trace_id, task_id)` rows — one per sub-agent/segment; generalize read surface to multi-row; per-segment cost. |
 | [FRE-522](https://linear.app/frenchforest/issue/FRE-522) | Obs | — | Sonnet | Reconcile eval-run ⇄ PWA: report-case→session deep links + **fix tool-use render gap** (ledger 15/18, PWA 0). |
 | [FRE-505](https://linear.app/frenchforest/issue/FRE-505) ✅ | Obs | High | Sonnet | **DONE** — verified live: 20 records in `agent-captains-captures-subagents-2026-06-07` with `memory_in_context` + `full_output` + `truncation_ratio` (PR #179/#180). |
-| [FRE-541](https://linear.app/frenchforest/issue/FRE-541) | Obs | — | Opus | **Needs Approval** — eval conversation driver + `clarification_requested` result type: carry each case to a natural end; separate completion-status from outcome-quality. Blocks 453. (Finding: baselines' `not_fired_within_window` conflates quality-miss with model-paused-for-input.) |
+| [FRE-541](https://linear.app/frenchforest/issue/FRE-541) | Obs | — | Opus | **Approved (2026-06-10)** — eval conversation driver + `clarification_requested` result type: carry each case to a natural end; separate completion-status from outcome-quality. Unblocks 453. (Finding: baselines' `not_fired_within_window` conflates quality-miss with model-paused-for-input.) |
 | [FRE-453](https://linear.app/frenchforest/issue/FRE-453) | Obs | Med | Sonnet | **Re-sequenced to backlog** — harness done (PR #183) but single-shot baselines conflate quality with harness-completion; rubric pass waits on **FRE-541** (driver). Not an owner-rubric-ready item anymore. |
 | [FRE-526](https://linear.app/frenchforest/issue/FRE-526) ✅ | Art | — | Sonnet | **DONE** — meter fix (PR #190); deployed 2026-06-08 (gateway rebuilt, code live, joinability green, agent-logs template carries the 3 `long` fields). FRE-498 Canceled (superseded). |
 | [FRE-527](https://linear.app/frenchforest/issue/FRE-527) ✅ | Art | — | Sonnet | **DONE** — `/lib/` hosted on the Worker (terraform); `make verify-lib` green from VPS (9/9 reachable + correct MIME + nosniff; paged.js eval-gated→FRE-531). Verifier PR #191. **Unblocks 528/530/531.** Master follow-up: fold `verify-lib` into the deploy gate. |

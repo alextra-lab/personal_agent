@@ -70,6 +70,7 @@
         "memory_conversations_found": { "type": "integer" },
         "memory_in_context": { "type": "boolean" },
         "success": { "type": "boolean" },
+        "eval_mode": { "type": "boolean" },
         "input_tokens": { "type": "integer" },
         "output_tokens": { "type": "integer" },
         "total_tokens": { "type": "integer" },

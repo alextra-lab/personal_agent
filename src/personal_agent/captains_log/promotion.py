@@ -205,6 +205,19 @@ class PromotionPipeline:
             if data.get("status") != CaptainLogStatus.AWAITING_APPROVAL.value:
                 continue
 
+            # FRE-523: eval-derived reflection entries are written (the cognitive
+            # pipeline runs during eval) but must never be promoted to Linear —
+            # filing tickets off synthetic/eval prompts is exactly the side effect
+            # the EVAL contract suppresses. Read the raw flag so even a malformed
+            # entry is skipped before model validation.
+            if data.get("eval_mode"):
+                log.debug(
+                    "promotion_skipped_eval_entry",
+                    file=str(json_file),
+                    entry_id=data.get("entry_id"),
+                )
+                continue
+
             pc = data.get("proposed_change")
             if not pc:
                 continue

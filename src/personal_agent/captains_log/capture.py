@@ -78,6 +78,10 @@ class TaskCapture(BaseModel):
     # (CF Access header or settings.agent_owner_email fallback or 401),
     # so user_id=None at write time is a real bug, not a fallback.
     user_id: UUID
+    # FRE-523: identifies eval-derived captures so KG/consolidation content from
+    # eval runs stays traceable (joins with FRE-521/522). Legacy on-disk capture
+    # files predate this key — Pydantic defaults it to False on read.
+    eval_mode: bool = False
 
     @field_validator("user_id", mode="before")
     @classmethod
@@ -133,6 +137,9 @@ class SubAgentCapture(BaseModel):
     error: str | None = None
     duration_ms: float
     cost_usd: float = 0.0
+    # FRE-523: EVAL provenance, uniform with TaskCapture (the sub-agent audit
+    # record is written unconditionally; this flags eval-run origin).
+    eval_mode: bool = False
 
 
 def write_sub_agent_capture(

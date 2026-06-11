@@ -165,8 +165,13 @@ def _emit_sub_agent_capture(
     context_breakdown: dict[str, Any],
     trace_id: str,
     session_id: str | None,
+    eval_mode: bool = False,
 ) -> None:
     """Build and write the per-sub-agent audit record (FRE-505), best-effort.
+
+    The record is written unconditionally — including eval runs (FRE-523), which
+    accidentally aligned with the new uniform contract — and carries ``eval_mode``
+    so eval-derived sub-agent activity stays identifiable.
 
     Args:
         result: The terminal sub-agent result (success, timeout, error, or cancel).
@@ -174,6 +179,7 @@ def _emit_sub_agent_capture(
         context_breakdown: Output of :func:`_summarize_input_context`.
         trace_id: Parent request trace identifier.
         session_id: Originating session id.
+        eval_mode: True when the parent turn originated from an eval run (FRE-523).
     """
     full_output_chars = len(result.full_output)
     digest_chars = len(result.summary)
@@ -198,6 +204,7 @@ def _emit_sub_agent_capture(
         error=result.error,
         duration_ms=result.duration_ms,
         cost_usd=result.cost_usd,
+        eval_mode=eval_mode,
         **context_breakdown,
     )
     write_sub_agent_capture(capture)
@@ -209,6 +216,7 @@ async def run_sub_agent(
     trace_id: str,
     concurrency_controller: Any | None = None,
     session_id: str | None = None,
+    eval_mode: bool = False,
 ) -> SubAgentResult:
     """Execute a single sub-agent inference call.
 
@@ -218,6 +226,8 @@ async def run_sub_agent(
         trace_id: Parent request trace identifier.
         concurrency_controller: Optional concurrency controller for slot management.
         session_id: Originating session id for cost attribution (ADR-0074).
+        eval_mode: True when the parent turn originated from an eval run; stamped
+            onto the per-sub-agent audit record for EVAL provenance (FRE-523).
 
     Returns:
         SubAgentResult with summary, metrics, and success status.
@@ -350,7 +360,9 @@ async def run_sub_agent(
             error="cancelled (global dispatch timeout)",
             cost_usd=call_cost_usd,
         )
-        _emit_sub_agent_capture(cancelled, spec, _context_breakdown, trace_id, session_id)
+        _emit_sub_agent_capture(
+            cancelled, spec, _context_breakdown, trace_id, session_id, eval_mode
+        )
         raise
 
     except Exception as exc:
@@ -394,7 +406,7 @@ async def run_sub_agent(
     # FRE-505: durable per-sub-agent audit record (input context + full output +
     # injected digest + truncation ratio) so a decomposition turn is reconstructable
     # from telemetry alone. Best-effort; never raises.
-    _emit_sub_agent_capture(result, spec, _context_breakdown, trace_id, session_id)
+    _emit_sub_agent_capture(result, spec, _context_breakdown, trace_id, session_id, eval_mode)
 
     return result
 

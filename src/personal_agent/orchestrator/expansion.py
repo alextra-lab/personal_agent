@@ -81,6 +81,7 @@ async def execute_hybrid(
     trace_id: str,
     max_concurrent: int | None = None,
     session_id: str | None = None,
+    eval_mode: bool = False,
 ) -> list[SubAgentResult]:
     """Execute sub-agents concurrently within the expansion budget.
 
@@ -96,6 +97,8 @@ async def execute_hybrid(
         trace_id: Parent request trace identifier.
         max_concurrent: Max concurrent sub-agents (None = config default).
         session_id: Originating session id for cost attribution (ADR-0074).
+        eval_mode: True when the parent turn originated from an eval run; threaded
+            to per-sub-agent audit records for EVAL provenance (FRE-523).
 
     Returns:
         List of SubAgentResults in the same order as specs.
@@ -122,6 +125,7 @@ async def execute_hybrid(
                 llm_client=sub_agent_client,
                 trace_id=trace_id,
                 session_id=session_id,
+                eval_mode=eval_mode,
             )
 
     tasks = [_run_with_semaphore(spec) for spec in specs]

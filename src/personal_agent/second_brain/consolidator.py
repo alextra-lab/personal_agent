@@ -517,6 +517,8 @@ class SecondBrainConsolidator:
                         "outcome": capture.outcome,
                         "extraction_outcome": "capped_after_retries",
                         "extraction_attempts": attempt_number,
+                        # FRE-523: EVAL provenance so eval-derived KG content is identifiable.
+                        "eval_mode": capture.eval_mode,
                     },
                 )
                 # No `_entity_data` attached — entities list is intentionally empty.
@@ -574,6 +576,8 @@ class SecondBrainConsolidator:
                 "tools_used": capture.tools_used,
                 "duration_ms": capture.duration_ms,
                 "outcome": capture.outcome,
+                # FRE-523: EVAL provenance so eval-derived KG content is identifiable.
+                "eval_mode": capture.eval_mode,
             },
         )
         # Attach full entity data so create_conversation can set entity_type on inline nodes.

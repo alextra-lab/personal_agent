@@ -124,6 +124,7 @@ def _write_entry(
     category: ChangeCategory = ChangeCategory.RELIABILITY,
     scope: ChangeScope = ChangeScope.LLM_CLIENT,
     linear_issue_id: str | None = None,
+    eval_mode: bool = False,
 ) -> pathlib.Path:
     """Helper to write a CL entry JSON file to disk."""
     if first_seen is None:
@@ -150,6 +151,7 @@ def _write_entry(
         "supporting_metrics": ["cpu: 45%"],
         "status": status.value,
         "linear_issue_id": linear_issue_id,
+        "eval_mode": eval_mode,
     }
     file_path = log_dir / f"{entry_id}-test.json"
     file_path.write_text(json.dumps(data, indent=2))
@@ -188,6 +190,34 @@ class TestScanPromotableEntries:
 
         pipeline = PromotionPipeline(log_dir=log_dir)
         assert len(pipeline.scan_promotable_entries()) == 0
+
+    def test_skips_eval_derived_entries(self, tmp_path: pathlib.Path) -> None:
+        """FRE-523: eval-derived entries are never promoted (no Linear leak)."""
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        # An otherwise-qualifying entry that originated from an eval run.
+        _write_entry(log_dir, entry_id="CL-20260220-120000-001", seen_count=5, eval_mode=True)
+
+        pipeline = PromotionPipeline(log_dir=log_dir)
+        assert len(pipeline.scan_promotable_entries()) == 0
+
+    def test_promotes_non_eval_alongside_eval(self, tmp_path: pathlib.Path) -> None:
+        """A real (non-eval) entry is still promoted while the eval one is skipped."""
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        _write_entry(log_dir, entry_id="CL-20260220-120000-001", seen_count=5, eval_mode=False)
+        _write_entry(
+            log_dir,
+            entry_id="CL-20260220-120000-002",
+            what="Eval-derived change",
+            seen_count=5,
+            eval_mode=True,
+        )
+
+        pipeline = PromotionPipeline(log_dir=log_dir)
+        entries = pipeline.scan_promotable_entries()
+        assert len(entries) == 1
+        assert entries[0].entry_id == "CL-20260220-120000-001"
 
     def test_skips_already_approved(self, tmp_path: pathlib.Path) -> None:
         """Test that scan skips already approved entries."""

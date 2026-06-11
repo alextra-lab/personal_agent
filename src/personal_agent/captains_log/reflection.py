@@ -230,6 +230,7 @@ async def generate_reflection_entry(
     iteration_count: int = 0,
     max_iterations: int = 0,
     session_id: str | None = None,
+    eval_mode: bool = False,
 ) -> CaptainLogEntry:
     """Generate an LLM-based reflection entry analyzing task execution.
 
@@ -254,6 +255,9 @@ async def generate_reflection_entry(
             ``missing_skill_requested`` warnings emitted on capability-gap
             recognition (FRE-328) so the ≥2-distinct-sessions clustering
             threshold can be evaluated.
+        eval_mode: True when the task originated from an eval run (FRE-523).
+            Stamped onto the returned entry so the promotion pipeline skips it
+            (no Linear issues filed off eval prompts).
 
     Returns:
         A rich CaptainLogEntry with LLM-generated insights.
@@ -370,6 +374,7 @@ async def generate_reflection_entry(
                     trace_id=trace_id,
                     session_id=session_id,
                 )
+            entry.eval_mode = eval_mode  # FRE-523 provenance
             return entry
         except Exception as e:
             # DSPy failed, fallback to manual
@@ -505,6 +510,7 @@ async def generate_reflection_entry(
             component="reflection",
         )
 
+        entry.eval_mode = eval_mode  # FRE-523 provenance
         return entry
 
     except Exception as e:
@@ -517,7 +523,12 @@ async def generate_reflection_entry(
             component="reflection",
         )
         return _create_basic_reflection_entry(
-            user_message, trace_id, steps_count, effective_final_state, reply_length
+            user_message,
+            trace_id,
+            steps_count,
+            effective_final_state,
+            reply_length,
+            eval_mode=eval_mode,
         )
 
 
@@ -700,6 +711,7 @@ def _create_basic_reflection_entry(
     steps_count: int,
     final_state: str,
     reply_length: int,
+    eval_mode: bool = False,
 ) -> CaptainLogEntry:
     """Create a basic reflection entry without LLM analysis (fallback).
 
@@ -709,6 +721,7 @@ def _create_basic_reflection_entry(
         steps_count: Number of orchestrator steps executed.
         final_state: Final task state.
         reply_length: Length of the agent's reply.
+        eval_mode: True when the task originated from an eval run (FRE-523).
 
     Returns:
         Basic CaptainLogEntry.
@@ -730,4 +743,5 @@ def _create_basic_reflection_entry(
         impact_assessment=None,
         status=CaptainLogStatus.AWAITING_APPROVAL,
         telemetry_refs=[TelemetryRef(trace_id=trace_id, metric_name=None, value=None)],
+        eval_mode=eval_mode,
     )

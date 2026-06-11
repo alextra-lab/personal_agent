@@ -148,6 +148,7 @@ class ExpansionController:
         messages: list[dict[str, Any]],
         constraints: dict[str, Any] | None = None,  # TODO: wire into planner prompt
         session_id: str | None = None,
+        eval_mode: bool = False,
     ) -> ExpansionResult:
         """Run the full expansion pipeline.
 
@@ -159,6 +160,8 @@ class ExpansionController:
             messages: Conversation context for sub-agents.
             constraints: Optional expansion constraints from gateway.
             session_id: Originating session id for cost attribution (ADR-0074).
+            eval_mode: True when the parent turn originated from an eval run; threaded
+                to per-sub-agent audit records for EVAL provenance (FRE-523).
 
         Returns:
             ExpansionResult with plan, sub-agent results, and synthesis context.
@@ -210,6 +213,7 @@ class ExpansionController:
             messages=messages,
             result=result,
             session_id=session_id,
+            eval_mode=eval_mode,
         )
         result.sub_agent_results = sub_results
 
@@ -387,6 +391,7 @@ class ExpansionController:
         messages: list[dict[str, Any]],
         result: ExpansionResult,
         session_id: str | None = None,
+        eval_mode: bool = False,
     ) -> list[SubAgentResult]:
         """Phase 2: Dispatch sub-agents in parallel.
 
@@ -397,6 +402,8 @@ class ExpansionController:
             messages: Conversation context window slice for sub-agents.
             result: ExpansionResult to append phase data to.
             session_id: Originating session id for cost attribution (ADR-0074).
+            eval_mode: True when the parent turn originated from an eval run; threaded
+                to per-sub-agent audit records for EVAL provenance (FRE-523).
 
         Returns:
             List of SubAgentResult from all dispatched sub-agents.
@@ -433,6 +440,7 @@ class ExpansionController:
                             llm_client=llm_client,
                             trace_id=trace_id,
                             session_id=session_id,
+                            eval_mode=eval_mode,
                         )
                         for spec in specs
                     ],

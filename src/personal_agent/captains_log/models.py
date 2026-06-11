@@ -191,6 +191,12 @@ class CaptainLogEntry(BaseModel):
     potential_implementation: list[str] | None = Field(
         None, description="Potential implementation (for idea type)"
     )
+    # FRE-523: eval-derived reflection entries are written (the cognitive pipeline
+    # runs during eval) but must never be promoted to Linear — the promotion
+    # pipeline skips entries with eval_mode=True.
+    eval_mode: bool = Field(
+        default=False, description="True when the entry originated from an eval run (FRE-523)"
+    )
 
     @field_validator("timestamp", mode="before")
     @classmethod

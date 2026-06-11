@@ -71,6 +71,7 @@
         "prompt_tokens": { "type": "integer" },
         "completion_tokens": { "type": "integer" },
         "user_id": { "type": "keyword" },
+        "eval_mode": { "type": "boolean" },
         "proposed_change": {
           "properties": {
             "what": { "type": "text" },

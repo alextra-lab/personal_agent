@@ -1,8 +1,11 @@
-"""Tests for FRE-387: eval session side-effect isolation.
+"""Tests for FRE-523: eval runs exercise the full cognitive pipeline.
 
-Verifies that EVAL channel sessions produce zero writes to Captain's Log,
-Neo4j (via the capture/event pipeline), and ES trace indexing, while
-non-EVAL sessions continue to write normally.
+Supersedes FRE-387. The EVAL channel now RUNS Captain's Log capture, the
+``RequestCapturedEvent``, and reflection (so consolidation/entity-extraction
+can write eval-derived content to the KG), while keeping outward-facing
+side effects suppressed (e.g. ``create_linear_issue``) and the request-trace
+ES observability doc suppressed. Eval-derived captures carry identifiable
+EVAL provenance (``eval_mode=True``).
 """
 
 from __future__ import annotations
@@ -38,12 +41,13 @@ _FAKE_USER_ID = UUID("00000000-0000-0000-0000-000000000001")
 
 @patch("personal_agent.llm_client.factory.get_llm_client")
 @pytest.mark.asyncio
-async def test_eval_mode_suppresses_capture_and_reflection(mock_client_class: MagicMock) -> None:
-    """EVAL sessions must not write captures, publish events, or trigger reflections.
+async def test_eval_mode_now_writes_capture_and_reflection(mock_client_class: MagicMock) -> None:
+    """EVAL sessions must write captures and trigger reflection (FRE-523).
 
-    All three side-effects (write_capture, RequestCapturedEvent, reflection) are
-    gated by a single ``if not ctx.eval_mode:`` in execute_task. This test
-    verifies the gate fires when eval_mode=True.
+    The former ``if not ctx.eval_mode:`` gate is removed: the cognitive pipeline
+    (write_capture + RequestCapturedEvent + reflection) runs for eval turns so
+    consolidation can extract eval content into the KG. Outward side effects stay
+    suppressed elsewhere (tools/linear.py, request-trace ES handler).
     """
     mock_client = AsyncMock()
     configure_mock_llm_client_model_configs(mock_client)
@@ -72,7 +76,7 @@ async def test_eval_mode_suppresses_capture_and_reflection(mock_client_class: Ma
 
     with (
         patch("personal_agent.captains_log.capture.write_capture") as mock_write,
-        patch("personal_agent.events.bus.get_event_bus") as mock_bus,
+        patch("personal_agent.events.bus.get_event_bus"),
         patch(
             "personal_agent.orchestrator.executor._trigger_captains_log_reflection",
             new_callable=AsyncMock,
@@ -80,16 +84,11 @@ async def test_eval_mode_suppresses_capture_and_reflection(mock_client_class: Ma
     ):
         await execute_task_safe(ctx, session_manager)
 
-    mock_write.assert_not_called()
-    mock_reflect.assert_not_called()
-    # RequestCapturedEvent must not be published to STREAM_REQUEST_CAPTURED
-    if mock_bus.called:
-        bus_instance = mock_bus.return_value
-        for call in bus_instance.publish.call_args_list:
-            stream = call.args[0] if call.args else call.kwargs.get("stream")
-            assert stream != "stream:request.captured", (
-                "RequestCapturedEvent must not be published in eval mode"
-            )
+    mock_write.assert_called_once()
+    mock_reflect.assert_called_once()
+    # The capture must carry EVAL provenance.
+    written_capture = mock_write.call_args.args[0]
+    assert written_capture.eval_mode is True
 
 
 @patch("personal_agent.llm_client.factory.get_llm_client")
@@ -136,11 +135,12 @@ async def test_non_eval_writes_capture_normally(mock_client_class: MagicMock) ->
 
 
 @pytest.mark.asyncio
-async def test_reflection_skipped_when_eval_mode_true() -> None:
-    """_trigger_captains_log_reflection must return immediately when eval_mode=True.
+async def test_reflection_runs_when_eval_mode_true() -> None:
+    """_trigger_captains_log_reflection must run for eval turns (FRE-523).
 
-    Defense-in-depth guard against accidental direct calls bypassing the
-    executor-level gate.
+    Reflection is part of the cognitive pipeline that eval runs exercise. The
+    generated entry must carry EVAL provenance so the promotion pipeline can
+    skip it (no Linear issues filed off eval prompts).
     """
     ctx = ExecutionContext(
         session_id="test-session",
@@ -151,10 +151,23 @@ async def test_reflection_skipped_when_eval_mode_true() -> None:
         eval_mode=True,
     )
 
-    with patch("personal_agent.captains_log.reflection.generate_reflection_entry") as mock_gen:
+    mock_entry = MagicMock()
+    with (
+        patch(
+            "personal_agent.captains_log.reflection.generate_reflection_entry",
+            new_callable=AsyncMock,
+            return_value=mock_entry,
+        ) as mock_gen,
+        patch("personal_agent.captains_log.CaptainLogManager") as mock_manager_cls,
+    ):
+        mock_manager = MagicMock()
+        mock_manager_cls.return_value = mock_manager
         await _trigger_captains_log_reflection(ctx)
 
-    mock_gen.assert_not_called()
+    mock_gen.assert_called_once()
+    # eval provenance threaded to the reflection generator.
+    assert mock_gen.call_args.kwargs.get("eval_mode") is True
+    mock_manager.write_entry.assert_called_once_with(mock_entry)
 
 
 @pytest.mark.asyncio

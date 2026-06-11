@@ -1246,8 +1246,6 @@ async def _trigger_captains_log_reflection(ctx: ExecutionContext) -> None:
     Args:
         ctx: Execution context with task details.
     """
-    if ctx.eval_mode:
-        return
     try:
         from personal_agent.captains_log import CaptainLogManager
         from personal_agent.captains_log.reflection import generate_reflection_entry
@@ -1282,6 +1280,7 @@ async def _trigger_captains_log_reflection(ctx: ExecutionContext) -> None:
             iteration_count=ctx.tool_iteration_count,
             max_iterations=effective_max,
             session_id=ctx.session_id,
+            eval_mode=ctx.eval_mode,
         )
 
         # Write entry to file
@@ -1445,102 +1444,101 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                     steps_count=len(ctx.steps),
                 )
 
-                if not ctx.eval_mode:
-                    # Fast capture (Phase 2.2): Write structured capture immediately (no LLM)
-                    try:
-                        from personal_agent.captains_log.capture import TaskCapture, write_capture
+                # FRE-523: the cognitive pipeline (capture + request.captured event +
+                # reflection) runs for eval turns too, so consolidation/entity-extraction
+                # can write eval-derived content to the KG. eval_mode is stamped on the
+                # capture for provenance; outward-facing side effects stay suppressed
+                # elsewhere (tools/linear.py gate, request-trace ES handler, and the
+                # promotion pipeline which skips eval-derived entries).
+                # Fast capture (Phase 2.2): Write structured capture immediately (no LLM)
+                try:
+                    from personal_agent.captains_log.capture import TaskCapture, write_capture
 
-                        # Calculate duration from metrics summary if available
-                        duration_ms = None
-                        if ctx.metrics_summary and "duration_seconds" in ctx.metrics_summary:
-                            duration_ms = ctx.metrics_summary["duration_seconds"] * 1000
+                    # Calculate duration from metrics summary if available
+                    duration_ms = None
+                    if ctx.metrics_summary and "duration_seconds" in ctx.metrics_summary:
+                        duration_ms = ctx.metrics_summary["duration_seconds"] * 1000
 
-                        # Extract tools used and accumulate token counts from steps
-                        tools_used = []
-                        cap_prompt_tokens = 0
-                        cap_completion_tokens = 0
-                        cap_total_tokens = 0
-                        for step in ctx.steps:
-                            if step.get("type") == "tool_call":
-                                tool_name = (step.get("metadata") or {}).get("tool_name")
-                                if tool_name:
-                                    tools_used.append(tool_name)
-                            elif step.get("type") == "llm_call":
-                                meta = step.get("metadata") or {}
-                                cap_prompt_tokens += meta.get("prompt_tokens", 0)
-                                cap_completion_tokens += meta.get("completion_tokens", 0)
-                                cap_total_tokens += meta.get("tokens", 0)
+                    # Extract tools used and accumulate token counts from steps
+                    tools_used = []
+                    cap_prompt_tokens = 0
+                    cap_completion_tokens = 0
+                    cap_total_tokens = 0
+                    for step in ctx.steps:
+                        if step.get("type") == "tool_call":
+                            tool_name = (step.get("metadata") or {}).get("tool_name")
+                            if tool_name:
+                                tools_used.append(tool_name)
+                        elif step.get("type") == "llm_call":
+                            meta = step.get("metadata") or {}
+                            cap_prompt_tokens += meta.get("prompt_tokens", 0)
+                            cap_completion_tokens += meta.get("completion_tokens", 0)
+                            cap_total_tokens += meta.get("tokens", 0)
 
-                        # FRE-343: TaskCapture.user_id is non-optional. ExecutionContext.user_id
-                        # is typed UUID | None for legacy reasons but is always populated in
-                        # production by the orchestrator from request_user.user_id (which
-                        # get_request_user always resolves). Pydantic validation catches the
-                        # None case as a real bug.
-                        assert ctx.user_id is not None, (
-                            "ExecutionContext.user_id missing — orchestrator should populate it "
-                            "from request_user.user_id (FRE-343)"
-                        )
-                        capture = TaskCapture(
-                            trace_id=ctx.trace_id,
-                            session_id=ctx.session_id,
-                            timestamp=datetime.now(timezone.utc),
-                            user_message=ctx.user_message,
-                            assistant_response=ctx.final_reply,
-                            steps=cast(list[dict[str, Any]], ctx.steps),
-                            tools_used=list(set(tools_used)),  # Deduplicate
-                            duration_ms=duration_ms,
-                            metrics_summary=ctx.metrics_summary,
-                            outcome="completed",
-                            memory_context_used=bool(ctx.memory_context),
-                            memory_conversations_found=len(ctx.memory_context)
-                            if ctx.memory_context
-                            else 0,
-                            input_tokens=cap_prompt_tokens,
-                            output_tokens=cap_completion_tokens,
-                            total_tokens=cap_total_tokens,
-                            tool_results=ctx.tool_results,
-                            user_id=ctx.user_id,
-                        )
-                        write_capture(capture)
-
-                        # Publish request.captured event (ADR-0041)
-                        from personal_agent.captains_log.background import (
-                            run_in_background as _run_bg,
-                        )
-                        from personal_agent.events.bus import get_event_bus
-                        from personal_agent.events.models import (
-                            STREAM_REQUEST_CAPTURED,
-                            RequestCapturedEvent,
-                        )
-
-                        event = RequestCapturedEvent(
-                            trace_id=ctx.trace_id,
-                            session_id=ctx.session_id,
-                            source_component="orchestrator.executor",
-                        )
-                        _run_bg(get_event_bus().publish(STREAM_REQUEST_CAPTURED, event))
-                    except Exception as e:
-                        # Don't fail task if capture fails
-                        log.warning(
-                            "capture_write_failed",
-                            trace_id=ctx.trace_id,
-                            error=str(e),
-                            exc_info=True,
-                        )
-
-                    # Trigger Captain's Log reflection (LLM-based, background)
-                    # Run in background to avoid blocking user response
-                    # Metrics summary is now available in ctx for reflection enrichment
-                    from personal_agent.captains_log.background import run_in_background
-
-                    run_in_background(_trigger_captains_log_reflection(ctx))
-                else:
-                    log.info(
-                        "eval_mode_side_effects_suppressed",
+                    # FRE-343: TaskCapture.user_id is non-optional. ExecutionContext.user_id
+                    # is typed UUID | None for legacy reasons but is always populated in
+                    # production by the orchestrator from request_user.user_id (which
+                    # get_request_user always resolves). Pydantic validation catches the
+                    # None case as a real bug.
+                    assert ctx.user_id is not None, (
+                        "ExecutionContext.user_id missing — orchestrator should populate it "
+                        "from request_user.user_id (FRE-343)"
+                    )
+                    capture = TaskCapture(
                         trace_id=ctx.trace_id,
                         session_id=ctx.session_id,
-                        suppressed=["capture", "request_captured_event", "reflection"],
+                        timestamp=datetime.now(timezone.utc),
+                        user_message=ctx.user_message,
+                        assistant_response=ctx.final_reply,
+                        steps=cast(list[dict[str, Any]], ctx.steps),
+                        tools_used=list(set(tools_used)),  # Deduplicate
+                        duration_ms=duration_ms,
+                        metrics_summary=ctx.metrics_summary,
+                        outcome="completed",
+                        memory_context_used=bool(ctx.memory_context),
+                        memory_conversations_found=len(ctx.memory_context)
+                        if ctx.memory_context
+                        else 0,
+                        input_tokens=cap_prompt_tokens,
+                        output_tokens=cap_completion_tokens,
+                        total_tokens=cap_total_tokens,
+                        tool_results=ctx.tool_results,
+                        user_id=ctx.user_id,
+                        eval_mode=ctx.eval_mode,
                     )
+                    write_capture(capture)
+
+                    # Publish request.captured event (ADR-0041)
+                    from personal_agent.captains_log.background import (
+                        run_in_background as _run_bg,
+                    )
+                    from personal_agent.events.bus import get_event_bus
+                    from personal_agent.events.models import (
+                        STREAM_REQUEST_CAPTURED,
+                        RequestCapturedEvent,
+                    )
+
+                    event = RequestCapturedEvent(
+                        trace_id=ctx.trace_id,
+                        session_id=ctx.session_id,
+                        source_component="orchestrator.executor",
+                    )
+                    _run_bg(get_event_bus().publish(STREAM_REQUEST_CAPTURED, event))
+                except Exception as e:
+                    # Don't fail task if capture fails
+                    log.warning(
+                        "capture_write_failed",
+                        trace_id=ctx.trace_id,
+                        error=str(e),
+                        exc_info=True,
+                    )
+
+                # Trigger Captain's Log reflection (LLM-based, background)
+                # Run in background to avoid blocking user response
+                # Metrics summary is now available in ctx for reflection enrichment
+                from personal_agent.captains_log.background import run_in_background
+
+                run_in_background(_trigger_captains_log_reflection(ctx))
             else:
                 log.warning(
                     TASK_FAILED,
@@ -1749,6 +1747,7 @@ async def step_init(
                     messages=ctx.messages,
                     constraints=ctx.expansion_constraints,
                     session_id=ctx.session_id,
+                    eval_mode=ctx.eval_mode,
                 )
 
                 ctx.expansion_plan = expansion_result.plan
@@ -2767,6 +2766,7 @@ async def step_llm_call(
                     trace_id=ctx.trace_id,
                     max_concurrent=max_sub,
                     session_id=ctx.session_id,
+                    eval_mode=ctx.eval_mode,
                 )
                 ctx.sub_agent_results = results
 

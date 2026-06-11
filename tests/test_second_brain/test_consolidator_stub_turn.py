@@ -25,7 +25,7 @@ from personal_agent.captains_log.capture import TaskCapture
 from personal_agent.second_brain.consolidator import SecondBrainConsolidator
 
 
-def _make_capture(trace_id: str | None = None) -> TaskCapture:
+def _make_capture(trace_id: str | None = None, *, eval_mode: bool = False) -> TaskCapture:
     """Build a minimal TaskCapture for the cap-logic tests."""
     return TaskCapture(
         trace_id=trace_id or str(uuid.uuid4()),
@@ -37,6 +37,7 @@ def _make_capture(trace_id: str | None = None) -> TaskCapture:
         duration_ms=100,
         outcome="completed",
         user_id=uuid.uuid4(),
+        eval_mode=eval_mode,
     )
 
 
@@ -241,6 +242,95 @@ async def test_successful_extraction_unaffected_by_cap(
     # The success path records `success`, never `extraction_capped`.
     outcomes = [c.kwargs.get("outcome") for c in mock_record.await_args_list]
     assert "extraction_capped" not in outcomes
+
+
+# ---------------------------------------------------------------------------
+# FRE-523: EVAL provenance stamped onto the Turn (success + stub paths)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_eval_provenance_stamped_on_success_turn(
+    consolidator: SecondBrainConsolidator, memory_service: MagicMock
+) -> None:
+    """A successfully-extracted eval capture stamps eval_mode on the Turn."""
+    capture = _make_capture(eval_mode=True)
+    with (
+        patch(
+            "personal_agent.second_brain.consolidator.extract_entities_and_relationships",
+            new_callable=AsyncMock,
+            return_value=_successful_extraction(),
+        ),
+        patch(
+            "personal_agent.second_brain.consolidator.previous_attempt_count",
+            new_callable=AsyncMock,
+            return_value=0,
+        ),
+        patch(
+            "personal_agent.second_brain.consolidator.record_consolidation_attempt",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await consolidator._process_capture(capture)
+
+    turn_arg = memory_service.create_conversation.await_args.args[0]
+    assert turn_arg.properties.get("eval_mode") is True
+
+
+@pytest.mark.asyncio
+async def test_eval_provenance_stamped_on_stub_turn(
+    consolidator: SecondBrainConsolidator, memory_service: MagicMock
+) -> None:
+    """An at-cap eval capture stamps eval_mode on the stub Turn."""
+    capture = _make_capture(eval_mode=True)
+    with (
+        patch(
+            "personal_agent.second_brain.consolidator.extract_entities_and_relationships",
+            new_callable=AsyncMock,
+            return_value=_fallback_extraction(capture),
+        ),
+        patch(
+            "personal_agent.second_brain.consolidator.previous_attempt_count",
+            new_callable=AsyncMock,
+            return_value=4,  # attempt_number = 5 = cap
+        ),
+        patch(
+            "personal_agent.second_brain.consolidator.record_consolidation_attempt",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await consolidator._process_capture(capture)
+
+    turn_arg = memory_service.create_conversation.await_args.args[0]
+    assert turn_arg.properties.get("eval_mode") is True
+
+
+@pytest.mark.asyncio
+async def test_non_eval_turn_marks_provenance_false(
+    consolidator: SecondBrainConsolidator, memory_service: MagicMock
+) -> None:
+    """A normal (non-eval) capture stamps eval_mode=False on the Turn."""
+    capture = _make_capture(eval_mode=False)
+    with (
+        patch(
+            "personal_agent.second_brain.consolidator.extract_entities_and_relationships",
+            new_callable=AsyncMock,
+            return_value=_successful_extraction(),
+        ),
+        patch(
+            "personal_agent.second_brain.consolidator.previous_attempt_count",
+            new_callable=AsyncMock,
+            return_value=0,
+        ),
+        patch(
+            "personal_agent.second_brain.consolidator.record_consolidation_attempt",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await consolidator._process_capture(capture)
+
+    turn_arg = memory_service.create_conversation.await_args.args[0]
+    assert turn_arg.properties.get("eval_mode") is False
 
 
 # ---------------------------------------------------------------------------

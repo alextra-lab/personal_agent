@@ -11,6 +11,9 @@ Public surface:
   Pydantic models loaded from ``config/governance/budget.yaml``
 - :func:`load_budget_config` — load the YAML into a ``BudgetConfig``
 - :func:`run_reaper` — long-running task to spawn from the FastAPI lifespan
+- :func:`run_counter_snapshotter` — long-running task that snapshots
+  ``budget_counters`` to ES on a fixed cadence (FRE-547) for the cap-utilization
+  dashboard panel; spawned from the FastAPI lifespan
 - :func:`set_default_gate` / :func:`get_default_gate_or_none` —
   module-level singleton accessor used by ``LiteLLMClient.respond()``;
   populated by the FastAPI lifespan hook at startup.
@@ -26,6 +29,10 @@ from __future__ import annotations
 from personal_agent.cost_gate.gate import RESERVATION_TTL_SECONDS, CostGate
 from personal_agent.cost_gate.policy import BudgetConfigError, load_budget_config
 from personal_agent.cost_gate.reaper import DEFAULT_REAPER_INTERVAL_SECONDS, run_reaper
+from personal_agent.cost_gate.snapshotter import (
+    DEFAULT_SNAPSHOT_INTERVAL_SECONDS,
+    run_counter_snapshotter,
+)
 from personal_agent.cost_gate.types import (
     BudgetConfig,
     BudgetDenied,
@@ -126,6 +133,7 @@ def budget_role_for(factory_role_name: str) -> str:
 
 __all__ = [
     "DEFAULT_REAPER_INTERVAL_SECONDS",
+    "DEFAULT_SNAPSHOT_INTERVAL_SECONDS",
     "RESERVATION_TTL_SECONDS",
     "BudgetConfig",
     "BudgetConfigError",
@@ -142,6 +150,7 @@ __all__ = [
     "get_default_gate",
     "get_default_gate_or_none",
     "load_budget_config",
+    "run_counter_snapshotter",
     "run_reaper",
     "set_default_gate",
 ]

@@ -62,6 +62,7 @@ consumer_runner: "ConsumerRunner | None" = None  # type: ignore  # noqa: F821
 freshness_consumer: "FreshnessConsumer | None" = None  # type: ignore  # noqa: F821
 cost_gate: "CostGate | None" = None  # type: ignore  # noqa: F821
 cost_gate_reaper_task: asyncio.Task[None] | None = None
+cost_gate_snapshotter_task: asyncio.Task[None] | None = None
 
 # Fire-and-forget assistant message appends: session_id -> task (FRE-51).
 # Next request for same session awaits this so history is consistent before hydration.
@@ -433,7 +434,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         consumer_runner, \
         freshness_consumer, \
         cost_gate, \
-        cost_gate_reaper_task
+        cost_gate_reaper_task, \
+        cost_gate_snapshotter_task
 
     # Startup
     log.info("service_starting")
@@ -459,6 +461,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         from personal_agent.cost_gate import (
             CostGate,
             load_budget_config,
+            run_counter_snapshotter,
             run_reaper,
             set_default_gate,
         )
@@ -468,6 +471,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await cost_gate.connect()
         set_default_gate(cost_gate)
         cost_gate_reaper_task = asyncio.create_task(run_reaper(cost_gate))
+        # Cap-utilization snapshot emitter (FRE-547): mirrors budget_counters to
+        # ES so the Cost & Budget dashboard can render utilization vs caps. The
+        # snapshotter sleeps before its first emit, so the ES log handler
+        # (attached below) is wired before any snapshot fires.
+        cost_gate_snapshotter_task = asyncio.create_task(run_counter_snapshotter(cost_gate))
         log.info(
             "cost_gate_initialized",
             roles=len(budget_config.roles),
@@ -1067,6 +1075,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except asyncio.CancelledError:
             pass
         cost_gate_reaper_task = None
+    if cost_gate_snapshotter_task is not None:
+        cost_gate_snapshotter_task.cancel()
+        try:
+            await cost_gate_snapshotter_task
+        except asyncio.CancelledError:
+            pass
+        cost_gate_snapshotter_task = None
     if cost_gate is not None:
         from personal_agent.cost_gate import set_default_gate as _set_default_gate
 

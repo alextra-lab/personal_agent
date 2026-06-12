@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
@@ -141,7 +142,7 @@ class TestHybridExecutionPath:
         ctx.response_text = None
 
         mock_result = SubAgentResult(
-            task_id="sub-1",
+            task_id=uuid4(),
             spec_task="Research X",
             summary="X is well-documented",
             full_output="Full analysis of X...",
@@ -277,7 +278,7 @@ class TestExpansionCostRollup:
 
         def _sub(cost: float, name: str) -> SubAgentResult:
             return SubAgentResult(
-                task_id=name,
+                task_id=uuid4(),
                 spec_task=name,
                 summary="s",
                 full_output="s",

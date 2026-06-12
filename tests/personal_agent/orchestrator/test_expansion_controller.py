@@ -10,6 +10,7 @@ import asyncio
 import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
@@ -44,7 +45,7 @@ def _make_sub_agent_result(
     cost_usd: float = 0.0,
 ) -> SubAgentResult:
     return SubAgentResult(
-        task_id=f"sub-{task_name}",
+        task_id=uuid4(),
         spec_task=task_name,
         summary=summary,
         full_output=summary,

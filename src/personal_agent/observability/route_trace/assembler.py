@@ -120,9 +120,11 @@ def _sub_agent_records(subs: Sequence[Any], final_reply: str) -> tuple[dict[str,
     reply_tokens = _content_tokens(final_reply)
     records: list[dict[str, Any]] = []
     for s in subs:
+        sub_task_id = getattr(s, "task_id", None)
         records.append(
             {
-                "task_id": getattr(s, "task_id", None),
+                # FRE-517: task_id is a UUID; stringify for JSONB (UUID isn't JSON-serialisable).
+                "task_id": str(sub_task_id) if sub_task_id is not None else None,
                 "success": getattr(s, "success", None),
                 "tools_used": list(getattr(s, "tools_used", []) or []),
                 "token_count": getattr(s, "token_count", None),
@@ -134,6 +136,65 @@ def _sub_agent_records(subs: Sequence[Any], final_reply: str) -> tuple[dict[str,
             }
         )
     return tuple(records)
+
+
+def assemble_sub_agent_route_trace(
+    ctx: ExecutionContext,
+    sub: Any,
+    *,
+    created_at: datetime | None = None,
+) -> RouteTraceRow:
+    """Build a per-segment :class:`RouteTraceRow` for one sub-agent (ADR-0088, FRE-517).
+
+    A *segment* row is the per-topology counterpart to the turn-level row: it shares the
+    turn's ``trace_id`` but carries the sub-agent's own ``task_id`` (a ``UUID``), so a trace
+    fans out to one turn-level row (``task_id`` NULL) plus one segment row per sub-agent. The
+    discriminator between the two is ``task_id IS NOT NULL`` — segment rows deliberately leave
+    the gateway-classification fields unset (a sub-agent has no gateway decision of its own).
+
+    Attribution (ADR-0088 D3 / FRE-517): ``api_costs`` has no ``task_id``, so per-segment cost
+    comes from the sub-agent's own ``cost_usd`` (live == authoritative == self-sourced, hence
+    ``cost_reconciled=True``). Per-sub token split is unavailable — ``SubAgentResult.token_count``
+    is a word-split estimate, not a billed input/output split — so ``input_tokens`` /
+    ``output_tokens`` are ``0`` and the estimate is preserved with an explicit availability flag
+    in ``sub_agents`` (which, for a segment row, describes the segment itself, not children).
+
+    Args:
+        ctx: The completed turn's execution context (read only for identity).
+        sub: The ``SubAgentResult`` for this segment.
+        created_at: Row timestamp; defaults to ``datetime.now(UTC)``.
+
+    Returns:
+        A frozen, sparse :class:`RouteTraceRow` keyed by ``(trace_id, sub.task_id)``.
+    """
+    cost = float(getattr(sub, "cost_usd", 0.0) or 0.0)
+    success = bool(getattr(sub, "success", False))
+    full_output = getattr(sub, "full_output", "") or ""
+    self_record = {
+        "task_id": str(getattr(sub, "task_id", "")),
+        "token_count": getattr(sub, "token_count", None),
+        "token_count_is_estimate": True,
+        "token_split_available": False,
+    }
+    return RouteTraceRow(
+        trace_id=_to_uuid(getattr(ctx, "trace_id", None)),  # type: ignore[arg-type]
+        session_id=_to_uuid(getattr(ctx, "session_id", None)),
+        task_id=getattr(sub, "task_id", None),
+        created_at=created_at or datetime.now(timezone.utc),
+        model_role="sub_agent",
+        tools_used=tuple(getattr(sub, "tools_used", None) or ()),
+        sub_agents=(self_record,),
+        # Discriminator is task_id IS NOT NULL; orchestration_event stays the neutral default.
+        orchestration_event="primary_handled",
+        final_reply_chars=len(full_output),
+        cost_live_usd=cost,
+        cost_authoritative_usd=cost,
+        cost_reconciled=True,
+        input_tokens=0,
+        output_tokens=0,
+        fallback_triggered=False,
+        error_type=None if success else "sub_agent_failed",
+    )
 
 
 def assemble_route_trace(

@@ -474,16 +474,19 @@ async def wait_for_route_trace(
         interval_s: Poll interval in seconds.
 
     Returns:
-        The row, or ``None`` on timeout (an instrument-health failure).
+        The turn-level row, or ``None`` on timeout (an instrument-health failure).
     """
     from uuid import UUID
 
     deadline = asyncio.get_event_loop().time() + timeout_s
     tid = UUID(trace_id)
     while asyncio.get_event_loop().time() < deadline:
-        row = await ledger.get_by_trace_id(tid)
-        if row is not None:
-            return row
+        # FRE-517: get_by_trace_id now returns turn-level + per-segment rows; pick the
+        # turn-level row (task_id NULL) for the per-turn instrument-health check.
+        rows = await ledger.get_by_trace_id(tid)
+        turn_level = next((r for r in rows if r.task_id is None), None)
+        if turn_level is not None:
+            return turn_level
         await asyncio.sleep(interval_s)
     return None
 

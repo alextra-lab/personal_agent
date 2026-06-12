@@ -1,5 +1,7 @@
 """Tests for SubAgentSpec and SubAgentResult types."""
 
+from uuid import UUID, uuid4
+
 import pytest
 
 from personal_agent.llm_client import ModelRole
@@ -74,7 +76,7 @@ class TestSubAgentSpec:
 class TestSubAgentResult:
     def _make_result(self, **overrides: object) -> SubAgentResult:
         defaults: dict[str, object] = {
-            "task_id": "agent-001",
+            "task_id": uuid4(),
             "spec_task": "Summarise section 3",
             "summary": "Section 3 covers authentication flows.",
             "full_output": "Section 3 covers authentication flows in detail...",
@@ -88,7 +90,7 @@ class TestSubAgentResult:
 
     def test_successful_result_construction(self) -> None:
         result = self._make_result()
-        assert result.task_id == "agent-001"
+        assert isinstance(result.task_id, UUID)
         assert result.success is True
         assert result.error is None
 

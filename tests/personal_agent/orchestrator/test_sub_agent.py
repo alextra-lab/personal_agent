@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 from unittest.mock import AsyncMock
+from uuid import UUID
 
 import pytest
 import structlog.testing
@@ -67,7 +68,8 @@ class TestRunSubAgent:
         assert isinstance(result, SubAgentResult)
         assert result.success is True
         assert result.summary == "Sub-agent analysis result"
-        assert result.task_id.startswith("sub-")
+        # FRE-517: task_id is a real UUID (keys the (trace_id, task_id) route-trace segment row).
+        assert isinstance(result.task_id, UUID)
         assert result.duration_ms >= 0
 
     @pytest.mark.asyncio
@@ -217,7 +219,8 @@ class TestSubAgentCaptureEmitted:
         cap = captured[0]
         assert cap.trace_id == "t"
         assert cap.session_id == "s"
-        assert cap.task_id == result.task_id
+        # FRE-517: the capture keys on the stringified UUID (ES/wire boundary stays str).
+        assert cap.task_id == str(result.task_id)
         assert cap.injected_digest == result.summary
         assert cap.full_output == result.full_output
         assert cap.full_output_chars == 5000
@@ -397,6 +400,8 @@ class TestTooledLoop:
         # A started tick (iteration=0) before the loop, then one per completed iteration.
         assert [p.iteration for p in progress] == [0, 1]
         assert all(p.session_id == "s" and p.trace_id == "t" for p in progress)
+        # FRE-517: the wire boundary keeps task_id as a (UUID-)string, not a UUID object.
+        assert all(isinstance(p.task_id, str) and p.task_id for p in progress)
         assert all(p.task_id and p.iteration_max > 0 for p in progress)
 
     @pytest.mark.asyncio

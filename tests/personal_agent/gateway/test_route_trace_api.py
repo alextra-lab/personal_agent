@@ -53,11 +53,13 @@ def _mock_ledger() -> AsyncMock:
 # ---------------------------------------------------------------------------
 
 
-def test_get_by_trace_id_returns_row() -> None:
+def test_get_by_trace_id_returns_all_rows() -> None:
+    """FRE-517: the endpoint returns the trace's rows (turn-level + segments) as a list."""
     tid = uuid4()
-    row = _row(trace_id=tid)
+    turn_level = _row(trace_id=tid)
+    segment = _row(trace_id=tid, task_id=uuid4(), model_role="sub_agent")
     ledger = _mock_ledger()
-    ledger.get_by_trace_id.return_value = row
+    ledger.get_by_trace_id.return_value = [turn_level, segment]
 
     with patch(_LEDGER_PATH, return_value=ledger):
         with TestClient(_app(), raise_server_exceptions=True) as client:
@@ -65,14 +67,16 @@ def test_get_by_trace_id_returns_row() -> None:
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["trace_id"] == str(tid)
-    assert body["gateway_label"] == "memory_recall/single"
+    assert isinstance(body, list) and len(body) == 2
+    assert body[0]["trace_id"] == str(tid)
+    assert body[0]["gateway_label"] == "memory_recall/single"
+    assert body[1]["model_role"] == "sub_agent"
     ledger.get_by_trace_id.assert_awaited_once()
 
 
 def test_get_by_trace_id_404_when_absent() -> None:
     ledger = _mock_ledger()
-    ledger.get_by_trace_id.return_value = None
+    ledger.get_by_trace_id.return_value = []
 
     with patch(_LEDGER_PATH, return_value=ledger):
         with TestClient(_app(), raise_server_exceptions=True) as client:

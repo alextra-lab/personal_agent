@@ -12,7 +12,10 @@ from uuid import uuid4
 
 from personal_agent.governance.models import Mode
 from personal_agent.llm_client.types import ModelRole
-from personal_agent.observability.route_trace.assembler import assemble_route_trace
+from personal_agent.observability.route_trace.assembler import (
+    assemble_route_trace,
+    assemble_sub_agent_route_trace,
+)
 from personal_agent.orchestrator.channels import Channel
 from personal_agent.orchestrator.sub_agent_types import SubAgentResult
 from personal_agent.request_gateway.types import Complexity, DecompositionStrategy, TaskType
@@ -141,7 +144,7 @@ def test_none_model_role_pre_llm() -> None:
 
 def test_delegate_passed_to_synthesis_flag() -> None:
     sub = SubAgentResult(
-        task_id="s1",
+        task_id=uuid4(),
         spec_task="x",
         summary="useful summary",
         full_output="full",
@@ -162,7 +165,7 @@ def test_delegate_passed_to_synthesis_flag() -> None:
 def _sub(summary: str, **overrides: object) -> SubAgentResult:
     """A successful sub-agent result with the given summary."""
     defaults: dict[str, object] = dict(
-        task_id="s1",
+        task_id=uuid4(),
         spec_task="x",
         summary=summary,
         full_output=summary,
@@ -214,3 +217,38 @@ def test_error_fields_populated() -> None:
     row = _assemble(_base_ctx(error=ValueError("boom"), classified_error=classified))
     assert row.error_type == "ValueError"
     assert row.error_class == "timeout"
+
+
+# ---------------------------------------------------------------------------
+# FRE-517 — per-segment (sub-agent) route-trace rows
+# ---------------------------------------------------------------------------
+
+
+def test_assemble_sub_agent_route_trace_segment_shape() -> None:
+    """A segment row carries the sub-agent's UUID task_id + self-sourced cost (FRE-517)."""
+    ctx = _base_ctx()
+    sub = _sub("postgres pooling notes", token_count=37, cost_usd=0.03)
+    row = assemble_sub_agent_route_trace(ctx, sub)
+
+    assert row.task_id == sub.task_id  # the sub-agent's UUID is the segment key
+    assert str(row.trace_id) == ctx.trace_id
+    assert str(row.session_id) == ctx.session_id
+    assert row.model_role == "sub_agent"
+    # Cost is self-sourced (api_costs has no task_id), so live == authoritative, reconciled.
+    assert row.cost_live_usd == 0.03
+    assert row.cost_authoritative_usd == 0.03
+    assert row.cost_reconciled is True
+    # Token split is unavailable; the estimate is preserved with an explicit flag.
+    assert row.input_tokens == 0 and row.output_tokens == 0
+    assert row.sub_agents[0]["token_count"] == 37
+    assert row.sub_agents[0]["token_split_available"] is False
+    assert row.sub_agents[0]["task_id"] == str(sub.task_id)
+    assert row.error_type is None
+    assert row.fallback_triggered is False
+
+
+def test_assemble_sub_agent_route_trace_marks_failure() -> None:
+    """A failed sub-agent segment records error_type without raising (FRE-517)."""
+    sub = _sub("x", success=False, error="boom")
+    row = assemble_sub_agent_route_trace(_base_ctx(), sub)
+    assert row.error_type == "sub_agent_failed"

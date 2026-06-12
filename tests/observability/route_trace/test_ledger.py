@@ -176,6 +176,8 @@ async def test_list_by_session_id_orders_desc_and_binds() -> None:
     pool.fetch.assert_awaited_once()
     sql = pool.fetch.call_args.args[0]
     assert "WHERE session_id = $1" in sql
+    # FRE-517: turn-level only — segment rows (task_id set) are excluded from the session view.
+    assert "task_id IS NULL" in sql
     assert "ORDER BY created_at DESC" in sql
     assert "LIMIT $2" in sql
     assert pool.fetch.call_args.args[1] == sid
@@ -199,7 +201,8 @@ async def test_list_recent_no_filters_sql() -> None:
     rows = await ledger.list_recent(limit=10)
 
     sql = pool.fetch.call_args.args[0]
-    assert "WHERE" not in sql
+    # FRE-517: the recent dashboard is turn-level only, so task_id IS NULL is always present.
+    assert "WHERE task_id IS NULL" in sql
     assert "ORDER BY created_at DESC" in sql
     assert "LIMIT $1" in sql
     assert pool.fetch.call_args.args[1] == 10
@@ -241,6 +244,34 @@ async def test_list_recent_empty_when_unconnected() -> None:
     assert await ledger.list_recent() == []
 
 
+async def test_get_by_trace_id_returns_all_rows_for_trace() -> None:
+    """FRE-517: get_by_trace_id returns the turn-level row + every segment row."""
+    ledger = RouteTraceLedger()
+    pool = MagicMock()
+    tid = uuid4()
+    seg_task = uuid4()
+    pool.fetch = AsyncMock(
+        return_value=[_record(trace_id=tid, task_id=None), _record(trace_id=tid, task_id=seg_task)]
+    )
+    ledger.pool = pool
+
+    rows = await ledger.get_by_trace_id(tid)
+
+    pool.fetch.assert_awaited_once()
+    sql = pool.fetch.call_args.args[0]
+    assert "WHERE trace_id = $1" in sql
+    # Turn-level row first, segments chronological (not UUID-lexical).
+    assert "ORDER BY (task_id IS NOT NULL), created_at ASC" in sql
+    assert pool.fetch.call_args.args[1] == tid
+    assert [r.task_id for r in rows] == [None, seg_task]
+
+
+async def test_get_by_trace_id_empty_when_unconnected() -> None:
+    ledger = RouteTraceLedger()
+    ledger.pool = None
+    assert await ledger.get_by_trace_id(uuid4()) == []
+
+
 @pytest.mark.integration
 async def test_write_read_roundtrip_and_idempotency() -> None:
     """Real round-trip against the isolated test substrate (requires make test-infra-up)."""
@@ -274,9 +305,11 @@ async def test_write_read_roundtrip_and_idempotency() -> None:
         await ledger.write(row)
         await ledger.write(row)  # second write must be a no-op (ON CONFLICT)
 
-        fetched = await ledger.get_by_trace_id(trace_id)
-        assert fetched is not None
+        fetched_rows = await ledger.get_by_trace_id(trace_id)
+        assert len(fetched_rows) == 1  # turn-level row only (no segments for this trace)
+        fetched = fetched_rows[0]
         assert fetched.trace_id == trace_id
+        assert fetched.task_id is None  # turn-level row sorts first
         assert fetched.task_type == "memory_recall"
         assert fetched.gateway_label == "memory_recall/single"
         assert fetched.degraded_stages == ("context",)
@@ -290,21 +323,26 @@ async def test_write_read_roundtrip_and_idempotency() -> None:
         liars = await ledger.list_recent(label_lie=True, limit=200)
         assert all(r.trace_id != trace_id for r in liars)
 
-        # ADR-0088 seam key (FRE-513): two rows sharing trace_id but with distinct
-        # task_id are both persisted — the per-topology forward slot. A NULL task_id
-        # row is the turn-level write above; a non-NULL task_id is a topology segment.
+        # ADR-0088 seam key (FRE-513/FRE-517): two rows sharing trace_id but with distinct
+        # task_id are both persisted — the per-topology fan-out. A NULL task_id row is the
+        # turn-level write; a non-NULL task_id is a topology segment.
         seam_trace = uuid4()
         sess = uuid4()
         await ledger.write(_row(trace_id=seam_trace, session_id=sess, task_id=None))
         sub_task = uuid4()
         await ledger.write(_row(trace_id=seam_trace, session_id=sess, task_id=sub_task))
-        rows_for_trace = await ledger.list_by_session_id(sess, limit=10)
-        assert len([r for r in rows_for_trace if r.trace_id == seam_trace]) == 2
+        # FRE-517: get_by_trace_id returns BOTH rows (turn-level first), session view only the
+        # turn-level row (segments excluded).
+        trace_rows = await ledger.get_by_trace_id(seam_trace)
+        assert len(trace_rows) == 2
+        assert trace_rows[0].task_id is None and trace_rows[1].task_id == sub_task
+        by_sess = await ledger.list_by_session_id(sess, limit=10)
+        assert [r.task_id for r in by_sess if r.trace_id == seam_trace] == [None]
         # Re-writing the same (trace_id, task_id) is idempotent (incl. NULLS NOT DISTINCT
         # for the turn-level NULL slot).
         await ledger.write(_row(trace_id=seam_trace, session_id=sess, task_id=None))
         await ledger.write(_row(trace_id=seam_trace, session_id=sess, task_id=sub_task))
-        rows_after = await ledger.list_by_session_id(sess, limit=10)
-        assert len([r for r in rows_after if r.trace_id == seam_trace]) == 2
+        rows_after = await ledger.get_by_trace_id(seam_trace)
+        assert len(rows_after) == 2
     finally:
         await ledger.disconnect()

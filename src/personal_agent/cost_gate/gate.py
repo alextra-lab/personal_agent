@@ -465,6 +465,72 @@ class CostGate:
             log.debug("cost_gate_reaper_swept", count=0)
         return len(expired)
 
+    async def snapshot_counters(self) -> int:
+        """Emit one ``budget_counter_snapshot`` event per configured cap.
+
+        Reads each cap's current-window ``running_total`` from
+        ``budget_counters`` and emits the standing counter state to
+        Elasticsearch so Kibana can render cap utilization (``running_total``
+        vs ``cap_usd``) — state that otherwise lives only in Postgres and is
+        invisible to the dashboard (FRE-547).
+
+        A single ``now`` drives every window computation and all reads run
+        inside one ``repeatable_read`` transaction, so the batch is a
+        consistent point-in-time snapshot even across a window boundary or a
+        concurrent reserve/commit. Money / ratio fields are emitted as
+        ``float`` (not ``Decimal``) and ``window_start`` as an ISO-8601 string
+        so Elasticsearch maps them as ``double`` / ``date`` rather than
+        ``keyword`` (FRE-536 type discipline). A cap with no counter row yet
+        this window snapshots at ``running_total = 0.0``.
+
+        This is a standing-state gauge on a fixed cadence with no originating
+        request, so there is no ``trace_id`` to thread (ADR-0074) — mirrors the
+        reaper's ``cost_gate_reaper_swept`` event.
+
+        Returns:
+            Number of snapshot events emitted (one per configured cap).
+
+        Raises:
+            RuntimeError: If ``connect()`` was not called first.
+        """
+        if self.pool is None:
+            raise RuntimeError("CostGate.connect() must be called before snapshot_counters()")
+
+        now = datetime.now(timezone.utc)
+        emitted = 0
+        async with self.pool.acquire() as conn:
+            async with conn.transaction(isolation="repeatable_read"):
+                for cap in self.config.caps:
+                    window_start = _window_start(cap.time_window, now)
+                    row = await conn.fetchrow(
+                        """
+                        SELECT running_total FROM budget_counters
+                         WHERE user_id IS NULL
+                           AND time_window = $1
+                           AND provider IS NULL
+                           AND role = $2
+                           AND window_start = $3
+                        """,
+                        cap.time_window,
+                        cap.role,
+                        window_start,
+                    )
+                    running_total = float(row["running_total"]) if row is not None else 0.0
+                    cap_usd = float(cap.cap_usd)
+                    utilization_ratio = running_total / cap_usd if cap_usd > 0 else 0.0
+                    log.info(
+                        "budget_counter_snapshot",
+                        role=cap.role,
+                        time_window=cap.time_window,
+                        window_start=window_start.isoformat(),
+                        running_total=running_total,
+                        cap_usd=cap_usd,
+                        utilization_ratio=utilization_ratio,
+                    )
+                    emitted += 1
+        log.debug("budget_counter_snapshot_emitted", count=emitted)
+        return emitted
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -621,13 +687,24 @@ class CostGate:
 # ---------------------------------------------------------------------------
 
 
-def _window_start(time_window: str) -> datetime:
+def _window_start(time_window: str, now: datetime | None = None) -> datetime:
     """Return the UTC boundary of the current window.
 
     Matches the Postgres ``date_trunc`` used in the migration backfill so
     the row that a reservation locks is the same row the migration created.
+
+    Args:
+        time_window: ``daily`` or ``weekly``.
+        now: Reference instant; defaults to ``datetime.now(timezone.utc)``.
+            Callers that compute several windows as one consistent batch
+            (e.g. :meth:`CostGate.snapshot_counters`) pass a single captured
+            ``now`` so the batch can't straddle a midnight / week boundary.
+
+    Returns:
+        UTC ``datetime`` at the start of the window containing ``now``.
     """
-    now = datetime.now(timezone.utc)
+    if now is None:
+        now = datetime.now(timezone.utc)
     if time_window == TimeWindow.DAILY.value:
         return now.replace(hour=0, minute=0, second=0, microsecond=0)
     if time_window == TimeWindow.WEEKLY.value:

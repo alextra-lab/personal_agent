@@ -99,7 +99,9 @@ async def db_pool() -> AsyncIterator[asyncpg.Pool]:
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def _cleanup_test_rows(unique_role: str) -> AsyncIterator[None]:
+async def _cleanup_test_rows(
+    unique_role: str, request: pytest.FixtureRequest
+) -> AsyncIterator[None]:
     """Drop counter / reservation pollution and revert ``_total`` weekly.
 
     Captures the ``_total`` weekly ``running_total`` before the test, and
@@ -113,7 +115,16 @@ async def _cleanup_test_rows(unique_role: str) -> AsyncIterator[None]:
 
     Without this fixture the dev DB's ``_total`` weekly steadily grows with
     every test run, eventually overlapping the real prod cap.
+
+    Skipped for non-``integration`` tests: unit tests in this package (e.g.
+    ``test_snapshotter`` with a fake pool) never write to Postgres, so forcing
+    a DB connection here would make them fail in the unit-only CI job where the
+    test-stack Postgres is absent.
     """
+    if request.node.get_closest_marker("integration") is None:
+        yield
+        return
+
     pool = await asyncpg.create_pool(
         _normalize_asyncpg_dsn(settings.database_url),
         min_size=1,

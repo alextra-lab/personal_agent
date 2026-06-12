@@ -314,6 +314,35 @@ models:
                 )
 
     @pytest.mark.asyncio
+    async def test_respond_error_logs_session_id(self, client: LocalLLMClient) -> None:
+        """FRE-552: model_call_error carries session_id from the trace context.
+
+        Patches the module logger (capturing log.error calls); capture_logs()
+        is unreliable under the shared suite due to structlog logger caching.
+        """
+        calls: list[tuple[str, dict]] = []
+        mock_log = MagicMock()
+        mock_log.error = MagicMock(side_effect=lambda event, **kw: calls.append((event, kw)))
+        with patch("httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client.stream = MagicMock(
+                return_value=_stream_mock_raising(httpx.TimeoutException("Timeout"))
+            )
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+
+            trace_ctx = TraceContext.new_trace(session_id="sess-552")
+            with patch("personal_agent.llm_client.client.log", mock_log):
+                with pytest.raises(LLMTimeout):
+                    await client.respond(
+                        role=ModelRole.PRIMARY,
+                        messages=[{"role": "user", "content": "Test"}],
+                        trace_ctx=trace_ctx,
+                    )
+        errors = [kw for event, kw in calls if event == "model_call_error"]
+        assert errors, "expected a model_call_error event"
+        assert errors[0]["session_id"] == "sess-552"
+
+    @pytest.mark.asyncio
     async def test_respond_connection_error(self, client: LocalLLMClient) -> None:
         """Test connection error handling."""
         with patch("httpx.AsyncClient") as mock_client_class:
@@ -339,9 +368,7 @@ models:
             err_response = MagicMock(status_code=429)
             mock_client.stream = MagicMock(
                 return_value=_stream_mock_raising(
-                    httpx.HTTPStatusError(
-                        "Rate limit", request=MagicMock(), response=err_response
-                    )
+                    httpx.HTTPStatusError("Rate limit", request=MagicMock(), response=err_response)
                 )
             )
             mock_client_class.return_value.__aenter__.return_value = mock_client
@@ -478,9 +505,7 @@ models:
             err_response = MagicMock(status_code=404)
             mock_client.stream = MagicMock(
                 return_value=_stream_mock_raising(
-                    httpx.HTTPStatusError(
-                        "Not found", request=MagicMock(), response=err_response
-                    )
+                    httpx.HTTPStatusError("Not found", request=MagicMock(), response=err_response)
                 )
             )
             mock_client_class.return_value.__aenter__.return_value = mock_client
@@ -676,9 +701,7 @@ models:
             assert payload["response_format"] == response_format
 
     @pytest.mark.asyncio
-    async def test_cf_access_headers_injected_for_slm_endpoint(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_cf_access_headers_injected_for_slm_endpoint(self, tmp_path: Path) -> None:
         """CF-Access headers are injected when endpoint contains slm.frenchforet.com."""
         config_file = tmp_path / "models_slm.yaml"
         config_file.write_text(
@@ -732,9 +755,7 @@ models:
             assert headers.get("CF-Access-Client-Secret") == "test-secret-456"
 
     @pytest.mark.asyncio
-    async def test_no_cf_headers_for_localhost_endpoint(
-        self, client: LocalLLMClient
-    ) -> None:
+    async def test_no_cf_headers_for_localhost_endpoint(self, client: LocalLLMClient) -> None:
         """CF-Access headers are NOT added for localhost endpoints."""
         mock_response = {
             "choices": [{"message": {"role": "assistant", "content": "hello"}}],

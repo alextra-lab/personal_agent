@@ -1,6 +1,7 @@
 """Tests for ToolExecutionLayer."""
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -124,6 +125,60 @@ async def test_execute_tool_executor_exception(execution_layer, trace_ctx) -> No
     assert result.error is not None
     assert "test error" in result.error.lower()
     assert result.latency_ms >= 0
+
+
+# FRE-552: assert error-path session_id threading by patching the module
+# logger. capture_logs() is unreliable under the shared suite because
+# structlog caches the (pre-materialized) executor logger.
+def _capturing_log() -> tuple[MagicMock, list[tuple[str, dict]]]:
+    """Return a mock module logger and the list its warning/error calls land in."""
+    calls: list[tuple[str, dict]] = []
+
+    def _capture(event: str, **kw: object) -> None:
+        calls.append((event, kw))
+
+    mock_log = MagicMock()
+    mock_log.warning = MagicMock(side_effect=_capture)
+    mock_log.error = MagicMock(side_effect=_capture)
+    return mock_log, calls
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_failure_logs_session_id(execution_layer, trace_ctx) -> None:
+    """FRE-552: tool_call_failed carries the session_id passed to execute_tool."""
+
+    def failing_executor() -> dict:
+        raise ValueError("boom")
+
+    failing_tool = ToolDefinition(
+        name="failing_tool",
+        description="Failing tool",
+        category="read_only",
+        parameters=[],
+        risk_level="low",
+        allowed_modes=["NORMAL"],
+    )
+    execution_layer.registry.register(failing_tool, failing_executor)
+
+    mock_log, calls = _capturing_log()
+    with patch("personal_agent.tools.executor.log", mock_log):
+        await execution_layer.execute_tool("failing_tool", {}, trace_ctx, session_id="sess-552")
+
+    failed = [kw for event, kw in calls if event == "tool_call_failed"]
+    assert failed, "expected a tool_call_failed event"
+    assert failed[0]["session_id"] == "sess-552"
+
+
+@pytest.mark.asyncio
+async def test_execute_nonexistent_tool_logs_session_id(execution_layer, trace_ctx) -> None:
+    """FRE-552: tool_call_failed (not-found) carries the session_id."""
+    mock_log, calls = _capturing_log()
+    with patch("personal_agent.tools.executor.log", mock_log):
+        await execution_layer.execute_tool("nonexistent_tool", {}, trace_ctx, session_id="sess-552")
+
+    failed = [kw for event, kw in calls if event == "tool_call_failed"]
+    assert failed, "expected a tool_call_failed event"
+    assert failed[0]["session_id"] == "sess-552"
 
 
 @pytest.mark.asyncio

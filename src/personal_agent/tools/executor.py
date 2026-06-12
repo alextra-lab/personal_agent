@@ -337,6 +337,7 @@ class ToolExecutionLayer:
                 tool_name=tool_name,
                 error=error_msg,
                 trace_id=trace_ctx.trace_id,
+                session_id=session_id,
             )
             return ToolResult(
                 tool_name=tool_name,
@@ -474,6 +475,7 @@ class ToolExecutionLayer:
                 error=str(e),
                 latency_ms=latency_ms,
                 trace_id=trace_ctx.trace_id,
+                session_id=session_id,
                 span_id=span_id,
                 exc_info=True,
             )

@@ -509,6 +509,7 @@ class LiteLLMClient:
                 log.error(
                     "litellm_refund_after_failure_failed",
                     trace_id=trace_id,
+                    session_id=trace_ctx.session_id,
                     reservation_id=str(reservation_id),
                     error=str(refund_exc),
                 )
@@ -516,6 +517,7 @@ class LiteLLMClient:
                 "litellm_request_failed",
                 model=self._litellm_model,
                 trace_id=trace_id,
+                session_id=trace_ctx.session_id,
                 error=str(e),
                 exc_info=True,
             )
@@ -590,6 +592,7 @@ class LiteLLMClient:
             log.error(
                 "litellm_commit_failed",
                 trace_id=trace_id,
+                session_id=trace_ctx.session_id,
                 reservation_id=str(reservation_id),
                 cost=cost,
                 error=str(commit_exc),

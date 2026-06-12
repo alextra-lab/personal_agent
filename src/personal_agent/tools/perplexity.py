@@ -108,6 +108,7 @@ async def perplexity_query_executor(
 
     model = _MODE_TO_MODEL[mode]
     trace_id = ctx.trace_id
+    session_id = ctx.session_id
 
     log.info(
         "perplexity_query_started",
@@ -141,7 +142,12 @@ async def perplexity_query_executor(
                 except Exception:
                     reason = resp.text[:500]
                 msg = f"Perplexity API returned HTTP {resp.status_code}: {reason}"
-                log.error("perplexity_query_http_error", trace_id=trace_id, status=resp.status_code)
+                log.error(
+                    "perplexity_query_http_error",
+                    trace_id=trace_id,
+                    session_id=session_id,
+                    status=resp.status_code,
+                )
                 raise ToolExecutionError(msg)
 
             data = resp.json()
@@ -150,16 +156,19 @@ async def perplexity_query_executor(
         raise
     except httpx.ConnectError as exc:
         msg = f"Cannot connect to Perplexity API at {settings.perplexity_base_url}."
-        log.error("perplexity_query_connect_failed", trace_id=trace_id, error=msg)
+        log.error(
+            "perplexity_query_connect_failed", trace_id=trace_id, session_id=session_id, error=msg
+        )
         raise ToolExecutionError(msg) from exc
     except httpx.TimeoutException as exc:
         msg = f"Perplexity API request timed out after {settings.perplexity_timeout_seconds}s."
-        log.error("perplexity_query_timeout", trace_id=trace_id)
+        log.error("perplexity_query_timeout", trace_id=trace_id, session_id=session_id)
         raise ToolExecutionError(msg) from exc
     except Exception as exc:
         log.error(
             "perplexity_query_failed",
             trace_id=trace_id,
+            session_id=session_id,
             mode=mode,
             error=str(exc),
             exc_info=True,

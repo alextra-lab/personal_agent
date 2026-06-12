@@ -187,3 +187,80 @@ async def test_legacy_litellm_events_are_not_emitted() -> None:
     event_names = {event for event, _ in calls}
     assert "litellm_request_start" not in event_names
     assert "litellm_request_complete" not in event_names
+
+
+async def _call_respond_failing(captured_error_calls: list[tuple]) -> None:
+    """Run LiteLLMClient.respond() where ``litellm.acompletion`` raises.
+
+    The ``log.error`` calls are captured into ``captured_error_calls`` as
+    ``(event, kwargs)`` tuples so error-path field threading can be asserted.
+    """
+    from personal_agent.llm_client.litellm_client import LiteLLMClient
+    from personal_agent.llm_client.types import LLMClientError, ModelRole
+    from personal_agent.telemetry.trace import TraceContext
+
+    mock_gate = MagicMock()
+    mock_gate.reserve = AsyncMock(return_value="res-001")
+    mock_gate.refund = AsyncMock()
+
+    mock_tracker = AsyncMock()
+    mock_tracker.connect = AsyncMock()
+    mock_tracker.disconnect = AsyncMock()
+
+    mock_log = MagicMock()
+
+    def _capture_error(event: str, **kwargs: object) -> None:
+        captured_error_calls.append((event, kwargs))
+
+    mock_log.info = MagicMock()
+    mock_log.warning = MagicMock()
+    mock_log.error = MagicMock(side_effect=_capture_error)
+
+    client = LiteLLMClient(
+        model_id="claude-sonnet-4-6",
+        provider="anthropic",
+        max_tokens=256,
+        budget_role="main_inference",
+    )
+
+    with (
+        patch("personal_agent.llm_client.litellm_client.log", mock_log),
+        patch("litellm.acompletion", AsyncMock(side_effect=RuntimeError("upstream 500"))),
+        patch("personal_agent.cost_gate.get_default_gate", return_value=mock_gate),
+        patch(
+            "personal_agent.cost_gate.load_budget_config",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "personal_agent.llm_client.cost_estimator.estimate_reservation_for_call",
+            return_value=Decimal("0.01"),
+        ),
+        patch(
+            "personal_agent.llm_client.history_sanitiser.sanitise_messages",
+            side_effect=lambda msgs, trace_id: (msgs, []),
+        ),
+        patch(
+            "personal_agent.llm_client.cost_tracker.CostTrackerService",
+            return_value=mock_tracker,
+        ),
+        patch(
+            "personal_agent.config.settings.get_settings",
+            return_value=MagicMock(anthropic_api_key="test-key", openai_api_key=None),
+        ),
+    ):
+        with pytest.raises(LLMClientError):
+            await client.respond(
+                role=ModelRole.PRIMARY,
+                messages=[{"role": "user", "content": "hello"}],
+                trace_ctx=TraceContext.new_trace(session_id="sess-552"),
+            )
+
+
+@pytest.mark.asyncio
+async def test_litellm_request_failed_includes_session_id() -> None:
+    """FRE-552: litellm_request_failed carries session_id from the trace context."""
+    calls: list[tuple] = []
+    await _call_respond_failing(calls)
+    failed = [kwargs for event, kwargs in calls if event == "litellm_request_failed"]
+    assert failed, f"litellm_request_failed not found in: {[e for e, _ in calls]}"
+    assert failed[0]["session_id"] == "sess-552"

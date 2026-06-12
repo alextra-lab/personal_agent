@@ -599,6 +599,7 @@ class LocalLLMClient:
                     exception_message=str(e),
                     traceback=tb.format_exc(),
                     trace_id=trace_ctx.trace_id,
+                    session_id=trace_ctx.session_id,
                 )
                 last_error = LLMClientError(f"Unexpected error: {e}")
                 break
@@ -615,6 +616,7 @@ class LocalLLMClient:
             error=str(last_error) if last_error else "Unknown error",
             latency_ms=duration_ms,
             trace_id=trace_ctx.trace_id,
+            session_id=trace_ctx.session_id,
             span_id=span_id,
         )
 

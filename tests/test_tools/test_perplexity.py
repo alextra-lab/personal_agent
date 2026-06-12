@@ -8,12 +8,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.perplexity import perplexity_query_executor, perplexity_query_tool
-from personal_agent.telemetry.trace import TraceContext
-
 
 _CTX = TraceContext.new_trace()
+
 
 def _mock_response(status_code: int = 200, json_body: dict | None = None) -> MagicMock:
     mock_resp = MagicMock(spec=httpx.Response)
@@ -86,7 +86,7 @@ async def test_missing_api_key_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_ask_mode_success() -> None:
-    """ask mode calls sonar model and returns answer + citations."""
+    """Ask mode calls sonar model and returns answer + citations."""
     body = _perplexity_response("Python is a programming language.", ["https://python.org"])
     resp = _mock_response(200, body)
     with patch("personal_agent.tools.perplexity.settings") as mock_settings:
@@ -105,7 +105,7 @@ async def test_ask_mode_success() -> None:
 
 @pytest.mark.asyncio
 async def test_reason_mode_uses_correct_model() -> None:
-    """reason mode uses sonar-reasoning model."""
+    """Reason mode uses sonar-reasoning model."""
     body = _perplexity_response("Reasoning answer.")
     resp = _mock_response(200, body)
     with patch("personal_agent.tools.perplexity.settings") as mock_settings:
@@ -115,7 +115,9 @@ async def test_reason_mode_uses_correct_model() -> None:
         with patch("personal_agent.tools.perplexity.httpx.AsyncClient") as mock_cls:
             client = _mock_client(resp)
             mock_cls.return_value = client
-            result = await perplexity_query_executor(query="Compare A vs B", mode="reason", ctx=_CTX)
+            result = await perplexity_query_executor(
+                query="Compare A vs B", mode="reason", ctx=_CTX
+            )
 
     assert result["model"] == "sonar-reasoning"
     assert result["mode"] == "reason"
@@ -128,7 +130,7 @@ async def test_reason_mode_uses_correct_model() -> None:
 
 @pytest.mark.asyncio
 async def test_research_mode_uses_correct_model() -> None:
-    """research mode uses sonar-deep-research model."""
+    """Research mode uses sonar-deep-research model."""
     body = _perplexity_response("Deep research answer.")
     resp = _mock_response(200, body)
     with patch("personal_agent.tools.perplexity.settings") as mock_settings:
@@ -137,7 +139,9 @@ async def test_research_mode_uses_correct_model() -> None:
         mock_settings.perplexity_timeout_seconds = 90
         with patch("personal_agent.tools.perplexity.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_client(resp)
-            result = await perplexity_query_executor(query="Survey of LLMs", mode="research", ctx=_CTX)
+            result = await perplexity_query_executor(
+                query="Survey of LLMs", mode="research", ctx=_CTX
+            )
 
     assert result["model"] == "sonar-deep-research"
 
@@ -190,3 +194,69 @@ async def test_connect_error_raises() -> None:
             mock_cls.return_value = client
             with pytest.raises(ToolExecutionError, match="Cannot connect"):
                 await perplexity_query_executor(query="What is Python?", ctx=_CTX)
+
+
+# ── FRE-552: session_id threading on error events ──────────────────────────
+#
+# These assert error-path field threading by patching the module logger
+# (capturing log.error calls). The patch-the-logger seam is robust under the
+# shared suite, where structlog's cache_logger_on_first_use makes
+# structlog.testing.capture_logs() unreliable for a pre-materialized logger.
+
+
+def _capturing_log() -> tuple[MagicMock, list[tuple[str, dict]]]:
+    """Return a mock module logger and the list its error calls land in."""
+    calls: list[tuple[str, dict]] = []
+    mock_log = MagicMock()
+    mock_log.error = MagicMock(side_effect=lambda event, **kw: calls.append((event, kw)))
+    return mock_log, calls
+
+
+@pytest.mark.asyncio
+async def test_timeout_error_logs_session_id() -> None:
+    """perplexity_query_timeout carries session_id from the trace context."""
+    ctx = TraceContext.new_trace(session_id="sess-552")
+    client = AsyncMock()
+    client.post = AsyncMock(side_effect=httpx.TimeoutException("slow"))
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    mock_log, calls = _capturing_log()
+    with patch("personal_agent.tools.perplexity.settings") as mock_settings:
+        mock_settings.perplexity_api_key = "test-key"
+        mock_settings.perplexity_base_url = "https://api.perplexity.ai"
+        mock_settings.perplexity_timeout_seconds = 90
+        with (
+            patch("personal_agent.tools.perplexity.httpx.AsyncClient") as mock_cls,
+            patch("personal_agent.tools.perplexity.log", mock_log),
+        ):
+            mock_cls.return_value = client
+            with pytest.raises(ToolExecutionError):
+                await perplexity_query_executor(query="What is Python?", ctx=ctx)
+    timeout = [kw for event, kw in calls if event == "perplexity_query_timeout"]
+    assert timeout, "expected a perplexity_query_timeout event"
+    assert timeout[0]["session_id"] == "sess-552"
+
+
+@pytest.mark.asyncio
+async def test_connect_error_logs_session_id() -> None:
+    """perplexity_query_connect_failed carries session_id from the trace context."""
+    ctx = TraceContext.new_trace(session_id="sess-552")
+    client = AsyncMock()
+    client.post = AsyncMock(side_effect=httpx.ConnectError("refused"))
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    mock_log, calls = _capturing_log()
+    with patch("personal_agent.tools.perplexity.settings") as mock_settings:
+        mock_settings.perplexity_api_key = "test-key"
+        mock_settings.perplexity_base_url = "https://api.perplexity.ai"
+        mock_settings.perplexity_timeout_seconds = 90
+        with (
+            patch("personal_agent.tools.perplexity.httpx.AsyncClient") as mock_cls,
+            patch("personal_agent.tools.perplexity.log", mock_log),
+        ):
+            mock_cls.return_value = client
+            with pytest.raises(ToolExecutionError):
+                await perplexity_query_executor(query="What is Python?", ctx=ctx)
+    connect = [kw for event, kw in calls if event == "perplexity_query_connect_failed"]
+    assert connect, "expected a perplexity_query_connect_failed event"
+    assert connect[0]["session_id"] == "sess-552"

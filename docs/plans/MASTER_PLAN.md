@@ -77,6 +77,13 @@ Four threads carved from the FRE-389 on-device review (2026-05-28). All **Approv
 
 ## Pending Verification
 
+- **FRE-523** ⏳ OPEN — deployed 2026-06-12 (PR #208, `46a68c1`); code/ES verified live, but **functional AC needs a real eval run** (cannot be confirmed from a health check). **Remaining step (owner-driven eval pass):**
+  1. Run an eval pass with `channel=EVAL` against the deployed gateway (e.g. the `fre453-baseline` set). Use the owner's designated test email — never the injected CC userEmail.
+  2. **AC-1:** confirm `agent-captains-captures-*` **and** `agent-captains-captures-subagents-*` contain docs for the run's traces, and the consolidator wrote Turn/Entity nodes to Neo4j for those eval traces (the bug was 0/18 extraction on `fre453-baseline-02`).
+  3. **AC-4:** confirm those capture docs carry `eval_mode:true` and the KG `TurnNode.properties.eval_mode` is `true`.
+  4. **AC-3:** run a **second** eval pass; confirm it recalls content from the first run's sessions (cross-run recall probe — feeds ADR-0087 / FRE-435).
+  5. **AC-2** already covered (unchanged `tools/linear.py` gate + regression test). Sanity: confirm **no** Linear issues were filed off eval prompts (promotion skip).
+  - On all green → close **FRE-523 Done** with the evidence snippet; bump this section. If captures don't appear or KG stays empty → file a follow-up, do **not** mark Done.
 - **FRE-468** ✅ DONE — post-deploy verified 2026-06-04: no Anthropic 400, `cache_read_tokens=17,772` on round 2, `cache_control_cap_enforced` never fired. Fix confirmed live.
 - **FRE-473** ✅ DONE — post-deploy verified 2026-06-04: `cache_read_tokens=17,772` unchanged vs FRE-468 baseline; no §D2 regression; persisted history now provider-neutral.
 - **FRE-408** ✅ DONE (owner accepted real-telemetry equivalent — 3 buckets on real ES traces). Optional Mac harness smoke remains belt-and-suspenders, not blocking.

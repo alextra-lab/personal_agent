@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import UUID
 
 from personal_agent.llm_client import ModelRole
 from personal_agent.orchestrator.expansion_types import SubAgentMode
@@ -60,7 +61,9 @@ class SubAgentResult:
     (stored in Elasticsearch for observability).
 
     Attributes:
-        task_id: Unique identifier for this sub-agent invocation.
+        task_id: Unique identifier for this sub-agent invocation. A ``UUID`` so it can
+            key the ``(trace_id, task_id)`` route-trace segment row (ADR-0088, FRE-517);
+            stringified at wire/log/ES boundaries.
         spec_task: Original task string from the SubAgentSpec.
         summary: Compact distillation for the parent agent's synthesis context.
             Should be ≤ 500 tokens to keep synthesis context manageable.
@@ -76,7 +79,7 @@ class SubAgentResult:
             turn meter ``ctx.turn_cost_usd`` by the executor (FRE-501).
     """
 
-    task_id: str
+    task_id: UUID
     spec_task: str
     summary: str
     full_output: str

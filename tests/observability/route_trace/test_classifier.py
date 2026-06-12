@@ -26,7 +26,7 @@ from personal_agent.orchestrator.sub_agent_types import SubAgentResult
 def _sub(success: bool = True) -> SubAgentResult:
     """Build a minimal SubAgentResult for classifier tests."""
     return SubAgentResult(
-        task_id="t1",
+        task_id=uuid4(),
         spec_task="do x",
         summary="s",
         full_output="full",

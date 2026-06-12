@@ -187,7 +187,7 @@ def _emit_sub_agent_capture(
     capture = SubAgentCapture(
         trace_id=trace_id,
         session_id=session_id,
-        task_id=result.task_id,
+        task_id=str(result.task_id),
         timestamp=datetime.now(timezone.utc),
         spec_task=spec.task,
         mode=spec.mode.value,
@@ -232,7 +232,10 @@ async def run_sub_agent(
     Returns:
         SubAgentResult with summary, metrics, and success status.
     """
-    task_id = f"sub-{uuid.uuid4().hex[:12]}"
+    # FRE-517: real UUID so it can key the (trace_id, task_id) route-trace segment row.
+    # Stringified once for every wire/log/ES boundary; only SubAgentResult keeps the UUID.
+    task_id = uuid.uuid4()
+    task_id_str = str(task_id)
     start_ms = int(time.monotonic() * 1000)
 
     # Build system prompt: base + optional skill index inherited from parent (Phase B).
@@ -246,7 +249,7 @@ async def run_sub_agent(
 
     logger.info(
         "sub_agent_start",
-        task_id=task_id,
+        task_id=task_id_str,
         task=spec.task,
         output_format=spec.output_format,
         max_tokens=spec.max_tokens,
@@ -281,7 +284,7 @@ async def run_sub_agent(
                 llm_client=llm_client,
                 spec=spec,
                 trace_id=trace_id,
-                task_id=task_id,
+                task_id=task_id_str,
                 session_id=session_id,
             )
             # ADR-0086 D4 / owner steer (2026-06-05): no premature digest. Keep the
@@ -389,7 +392,7 @@ async def run_sub_agent(
     _digest_chars = len(result.summary)
     logger.info(
         "sub_agent_complete",
-        task_id=task_id,
+        task_id=task_id_str,
         success=result.success,
         duration_ms=result.duration_ms,
         token_count=result.token_count,

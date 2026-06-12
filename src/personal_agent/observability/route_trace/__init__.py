@@ -20,7 +20,10 @@ References:
     - ``docs/architecture_decisions/ADR-0074-*`` (identity / joinability)
 """
 
-from personal_agent.observability.route_trace.assembler import assemble_route_trace
+from personal_agent.observability.route_trace.assembler import (
+    assemble_route_trace,
+    assemble_sub_agent_route_trace,
+)
 from personal_agent.observability.route_trace.classifier import (
     classify_orchestration_event,
 )
@@ -39,6 +42,7 @@ __all__ = [
     "RouteTraceLedger",
     "RouteTraceRow",
     "assemble_route_trace",
+    "assemble_sub_agent_route_trace",
     "classify_orchestration_event",
     "get_route_trace_ledger",
     "route_trace_ledger",

@@ -71,10 +71,19 @@ _INSERT_SQL = """
     ON CONFLICT (trace_id, task_id) DO NOTHING
 """
 
-_SELECT_SQL = "SELECT * FROM route_traces WHERE trace_id = $1"
+# All rows for a trace (FRE-517): the turn-level row (task_id NULL) first, then per-topology
+# segment rows in chronological order. NULLS FIRST would sort segments by UUID lexically, not by
+# time — ``(task_id IS NOT NULL)`` puts the NULL row first and keeps segments ``created_at``-ordered.
+_SELECT_SQL = (
+    "SELECT * FROM route_traces WHERE trace_id = $1 "
+    "ORDER BY (task_id IS NOT NULL), created_at ASC, task_id ASC"
+)
 
+# Turn-level dashboards stay turn-level (FRE-517): ``task_id IS NULL`` excludes segment rows so
+# the FRE-514 session view keeps one row per turn (a no-op for pre-FRE-517 data).
 _SELECT_BY_SESSION_SQL = (
-    "SELECT * FROM route_traces WHERE session_id = $1 ORDER BY created_at DESC LIMIT $2"
+    "SELECT * FROM route_traces WHERE session_id = $1 AND task_id IS NULL "
+    "ORDER BY created_at DESC LIMIT $2"
 )
 
 # Deterministic "label-lie candidate" predicate (FRE-514): the gateway-declared expansion
@@ -232,21 +241,23 @@ class RouteTraceLedger:
             gateway_label=row.gateway_label,
         )
 
-    async def get_by_trace_id(self, trace_id: UUID) -> RouteTraceRow | None:
-        """Read a single route-trace row back by ``trace_id``.
+    async def get_by_trace_id(self, trace_id: UUID) -> list[RouteTraceRow]:
+        """Read all route-trace rows for a ``trace_id`` — turn-level + segments (FRE-517).
+
+        Generalizes the FRE-452 one-row-per-trace read to the ADR-0088 per-topology fan-out:
+        a trace returns its turn-level row (``task_id`` NULL) first, then one segment row per
+        sub-agent (``task_id`` set), in chronological order.
 
         Args:
             trace_id: The turn trace identifier.
 
         Returns:
-            The reconstructed :class:`RouteTraceRow`, or ``None`` if absent/unconnected.
+            All rows for the trace (turn-level first), or an empty list when absent/unconnected.
         """
         if not self.pool:
-            return None
-        record = await self.pool.fetchrow(_SELECT_SQL, trace_id)
-        if record is None:
-            return None
-        return _row_from_record(record)
+            return []
+        records = await self.pool.fetch(_SELECT_SQL, trace_id)
+        return [_row_from_record(r) for r in records]
 
     async def list_by_session_id(self, session_id: UUID, limit: int = 50) -> list[RouteTraceRow]:
         """Read a session's route-trace rows, newest first (FRE-514).
@@ -295,7 +306,9 @@ class RouteTraceLedger:
         """
         if not self.pool:
             return []
-        clauses: list[str] = []
+        # Turn-level only (FRE-517): segment rows (task_id set) never surface in the recent
+        # dashboard. Always present, so the remaining filters compose onto it with AND.
+        clauses: list[str] = ["task_id IS NULL"]
         if fallback_triggered:
             clauses.append("fallback_triggered = TRUE")
         if not_reconciled:

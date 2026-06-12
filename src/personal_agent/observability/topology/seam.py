@@ -32,6 +32,7 @@ from personal_agent.events.models import (
 )
 from personal_agent.observability.route_trace import (
     assemble_route_trace,
+    assemble_sub_agent_route_trace,
     get_route_trace_ledger,
 )
 
@@ -120,6 +121,7 @@ async def _write_durable_row(ctx: ExecutionContext, topology: str) -> float:
     Returns:
         ``SUM(api_costs WHERE trace_id)`` for the turn (``0.0`` on any failure).
     """
+    cost = 0.0
     try:
         ledger = get_route_trace_ledger()
         trace_uuid = UUID(str(ctx.trace_id))
@@ -134,14 +136,48 @@ async def _write_durable_row(ctx: ExecutionContext, topology: str) -> float:
             topology=topology,
         )
         await ledger.write(row)
-        return cost
     except Exception as e:
         log.warning(
             "route_trace_write_failed",
             trace_id=getattr(ctx, "trace_id", None),
             error=str(e),
         )
-        return 0.0
+        return cost
+    # Per-topology segment rows (FRE-517): written in a separate, isolated pass so a bad
+    # segment can never corrupt the already-fetched authoritative cost this returns.
+    await _write_segment_rows(ctx)
+    return cost
+
+
+async def _write_segment_rows(ctx: ExecutionContext) -> None:
+    """Write one ``(trace_id, task_id)`` route-trace row per sub-agent (ADR-0088, FRE-517).
+
+    Each segment is wrapped individually so one failed write never drops the rest, and the
+    whole pass is best-effort so a telemetry failure can never break the turn. ``ON CONFLICT
+    (trace_id, task_id)`` makes a re-run idempotent. ``CancelledError`` still propagates.
+
+    Args:
+        ctx: The completed turn's execution context (segments read from ``sub_agent_results``).
+    """
+    subs = getattr(ctx, "sub_agent_results", None) or []
+    if not subs:
+        return
+    ledger = get_route_trace_ledger()
+    for sub in subs:
+        # A segment row is keyed by (trace_id, task_id); a sub without a task_id would
+        # collide with the turn-level NULL key, so skip it (real SubAgentResults always
+        # carry a UUID — this only guards malformed/partial stand-ins).
+        if getattr(sub, "task_id", None) is None:
+            continue
+        try:
+            await ledger.write(assemble_sub_agent_route_trace(ctx, sub))
+        except Exception as e:
+            log.warning(
+                "route_trace_segment_write_failed",
+                trace_id=getattr(ctx, "trace_id", None),
+                task_id=str(getattr(sub, "task_id", "")),
+                error=str(e),
+            )
 
 
 @asynccontextmanager

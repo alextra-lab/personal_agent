@@ -89,12 +89,15 @@ curl -X POST \
 
 ### Route-trace ledger (per-turn stimulus → model-path → result-type)
 
-The route-trace ledger (FRE-452 / ADR-0088) records **one Postgres row per turn**: what the
-gateway decided (the deterministic-shell `gateway_label`) vs what the harness actually did
-(`orchestration_event`), joinable to `api_costs` on `trace_id`. Rows are returned as a bare
-list of the seam-neutral `RouteTraceRow` shape. Scope: `observations:read`.
+The route-trace ledger (FRE-452 / ADR-0088) records what the gateway decided (the
+deterministic-shell `gateway_label`) vs what the harness actually did (`orchestration_event`),
+joinable to `api_costs` on `trace_id`. A turn is **one turn-level row** (`task_id` null) plus
+**one segment row per sub-agent** (`task_id` set), the ADR-0088 per-topology fan-out (FRE-517).
+Rows are returned as a bare list of the seam-neutral `RouteTraceRow` shape. The `session` and
+`recent` views are **turn-level only** (segments excluded). Scope: `observations:read`.
 
-**Single turn (GET /observations/route-traces/{trace_id})** — 404 if absent/malformed:
+**All rows for a trace — turn-level + segments (GET /observations/route-traces/{trace_id})** —
+returns a list (turn-level first); 404 if absent/malformed:
 
 ```bash
 curl -H "Authorization: Bearer $SESHAT_API_TOKEN" \

@@ -203,18 +203,21 @@ async def list_route_traces_by_session(
 async def get_route_trace(
     trace_id: str,
     token: TokenInfo = Depends(require_scope("observations:read")),  # noqa: B008
-) -> dict[str, Any]:
-    """Return a single route-trace row by trace id.
+) -> list[dict[str, Any]]:
+    """Return all route-trace rows for a trace — turn-level + segments (FRE-517).
+
+    The ADR-0088 per-topology fan-out means a trace has one turn-level row (``task_id`` null)
+    plus one segment row per sub-agent, so this returns a list (turn-level first).
 
     Args:
         trace_id: The turn trace identifier (UUID string).
         token: Validated bearer token with ``observations:read`` scope.
 
     Returns:
-        The serialized route-trace row.
+        The serialized route-trace rows for the trace, turn-level first.
 
     Raises:
-        HTTPException(404): When ``trace_id`` is malformed or no row exists (existence is
+        HTTPException(404): When ``trace_id`` is malformed or no rows exist (existence is
             not leaked — both map to 404).
     """
     ledger = _get_ledger()
@@ -229,7 +232,7 @@ async def get_route_trace(
         token_name=token.name,
         request_trace_id=ctx.trace_id,
     )
-    row = await ledger.get_by_trace_id(tid)
-    if row is None:
+    rows = await ledger.get_by_trace_id(tid)
+    if not rows:
         raise not_found("route_trace")
-    return _serialize_row(row)
+    return [_serialize_row(r) for r in rows]

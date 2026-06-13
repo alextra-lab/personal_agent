@@ -1113,12 +1113,19 @@ class InsightsEngine:
                 await self._cost_tracker.disconnect()
 
     def _index_insights(self, insights: list[Insight], days: int) -> None:
-        """Index generated insights into `agent-insights-*` for dashboarding."""
+        """Index generated insights into `agent-insights-*` for dashboarding.
+
+        Monthly partitioning (FRE-543): insights are low-volume, so a daily
+        suffix over the 365-day retention would create hundreds of tiny
+        single-shard indices (ES over-sharding). A ``YYYY-MM`` suffix keeps ~12
+        well-sized indices live; the ``agent-insights-*`` template/ILM pattern
+        still matches.
+        """
         if not insights:
             return
         now = datetime.now(timezone.utc)
-        date_str = now.strftime("%Y-%m-%d")
-        index_name = f"{INSIGHTS_INDEX_PREFIX}-{date_str}"
+        month_str = now.strftime("%Y-%m")
+        index_name = f"{INSIGHTS_INDEX_PREFIX}-{month_str}"
         for insight in insights:
             document = {
                 "timestamp": now.isoformat(),

@@ -308,3 +308,33 @@ class TestCreateCaptainLogProposalsFingerprinted:
         assert pc.fingerprint == _pattern_fingerprint(
             "delegation", "delegation_success_rate", insight.title
         )
+
+
+class TestIndexInsightsPartitioning:
+    """_index_insights writes to a monthly index (FRE-543)."""
+
+    def test_index_name_is_monthly(self) -> None:
+        """The insights index suffix is YYYY-MM (monthly), not YYYY-MM-DD (daily)."""
+        from personal_agent.insights import engine as engine_mod
+
+        eng = InsightsEngine.__new__(InsightsEngine)  # no deps needed for this path
+        insight = Insight(
+            insight_type="cost_anomaly",
+            title="t",
+            summary="s",
+            confidence=0.9,
+            evidence={"ratio": 2.0},
+        )
+        captured: list[str] = []
+        with patch.object(
+            engine_mod, "schedule_es_index", side_effect=lambda idx, _doc: captured.append(idx)
+        ):
+            eng._index_insights([insight], days=7)
+
+        assert len(captured) == 1
+        index_name = captured[0]
+        assert index_name.startswith("agent-insights-")
+        suffix = index_name.removeprefix("agent-insights-")
+        # Monthly: exactly YYYY-MM (two dash-separated parts), not a daily YYYY-MM-DD.
+        assert len(suffix.split("-")) == 2, f"expected monthly YYYY-MM, got {index_name!r}"
+        datetime.strptime(suffix, "%Y-%m")  # parses as a month

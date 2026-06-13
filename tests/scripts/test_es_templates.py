@@ -226,6 +226,72 @@ def test_setup_script_registration_parity() -> None:
         assert (ES_DIR / name).exists(), f"{name} is PUT by script but missing on disk"
 
 
+# --------------------------------------------------------------------------- #
+# ILM + retention for the daily/monthly diagnostic families (FRE-543).
+# --------------------------------------------------------------------------- #
+
+# (policy file, policy name, template file, retention_days)
+ILM_FAMILIES = [
+    ("insights-ilm-policy.json", "agent-insights-policy", "insights-index-template.json", 365),
+    (
+        "monitors-slm-health-ilm-policy.json",
+        "agent-monitors-slm-health-policy",
+        "monitors-slm-health-index-template.json",
+        90,
+    ),
+]
+
+
+@pytest.mark.parametrize("policy_file, policy_name, template_file, retention_days", ILM_FAMILIES)
+def test_ilm_policy_is_minage_delete_not_rollover(
+    policy_file: str, policy_name: str, template_file: str, retention_days: int
+) -> None:
+    """Each family's ILM policy deletes by min_age (no rollover) at its retention window."""
+    policy = _load(policy_file)["policy"]
+    phases = policy["phases"]
+
+    # Delete phase exists, deletes, and its min_age matches the documented retention.
+    delete = phases["delete"]
+    assert "delete" in delete["actions"], f"{policy_file}: delete phase must delete"
+    assert delete["min_age"] == f"{retention_days}d", (
+        f"{policy_file}: delete min_age must be {retention_days}d"
+    )
+
+    # No rollover anywhere — these are date-partitioned indices with no write-alias.
+    for phase_name, phase in phases.items():
+        assert "rollover" not in phase.get("actions", {}), (
+            f"{policy_file}: {phase_name} must not use rollover (no write-alias)"
+        )
+
+    # Retention is recorded in _meta so the window is self-documenting (acceptance crit).
+    assert policy["_meta"]["retention_days"] == retention_days, (
+        f"{policy_file}: _meta.retention_days must record {retention_days}"
+    )
+
+
+@pytest.mark.parametrize("policy_file, policy_name, template_file, retention_days", ILM_FAMILIES)
+def test_ilm_template_references_policy(
+    policy_file: str, policy_name: str, template_file: str, retention_days: int
+) -> None:
+    """The family template binds new indices to its ILM policy."""
+    settings = _load(template_file)["template"]["settings"]
+    assert settings.get("index.lifecycle.name") == policy_name, (
+        f"{template_file} must set index.lifecycle.name={policy_name}"
+    )
+
+
+@pytest.mark.parametrize("policy_file, policy_name, template_file, retention_days", ILM_FAMILIES)
+def test_ilm_policy_registered_in_setup_script(
+    policy_file: str, policy_name: str, template_file: str, retention_days: int
+) -> None:
+    """setup-elasticsearch.sh PUTs each policy and points at its file."""
+    script = SETUP_SCRIPT.read_text()
+    assert f"/_ilm/policy/{policy_name}" in script, f"{policy_name} not PUT by setup script"
+    assert f"docker/elasticsearch/{policy_file}" in script, (
+        f"{policy_file} path not referenced by setup script"
+    )
+
+
 def test_retired_captains_template_is_torn_down() -> None:
     """The retired straddling template is DELETEd, never PUT."""
     script = SETUP_SCRIPT.read_text()

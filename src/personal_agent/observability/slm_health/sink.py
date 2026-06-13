@@ -23,16 +23,21 @@ log = get_logger(__name__)
 
 
 def index_name_for(snapshot: SlmHealthSnapshot, *, prefix: str) -> str:
-    """Compute the daily index name for a snapshot doc.
+    """Compute the monthly index name for a snapshot doc.
+
+    Monthly partitioning (FRE-543): at ~288 probes/day, daily indices over the
+    90-day retention would create ~90 tiny single-shard indices (ES
+    over-sharding). A monthly suffix keeps ~4 well-sized indices live and is
+    still matched by the ``agent-monitors-slm-health-*`` template/ILM pattern.
 
     Args:
         snapshot: The snapshot to store.
         prefix: Elasticsearch index prefix (e.g. ``"agent-monitors-slm-health"``).
 
     Returns:
-        Index name suffixed by the UTC probe date in ``YYYY.MM.DD`` form.
+        Index name suffixed by the UTC probe month in ``YYYY.MM`` form.
     """
-    return f"{prefix}-{snapshot.probed_at.strftime('%Y.%m.%d')}"
+    return f"{prefix}-{snapshot.probed_at.strftime('%Y.%m')}"
 
 
 async def write_result(

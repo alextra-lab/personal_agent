@@ -169,6 +169,21 @@ ILM policy: `docker/elasticsearch/ilm-policy.json` (30 day retention)
 
 Index template: `docker/elasticsearch/index-template.json`
 
+#### ILM policies per family
+
+Each daily/monthly family that needs retention has its own ILM policy (registered by
+`scripts/setup-elasticsearch.sh`, attached via `index.lifecycle.name` in the family template):
+
+| Family | Policy file | Partition | Retention |
+|--------|-------------|-----------|-----------|
+| `agent-logs-*` | `ilm-policy.json` | daily (rollover 7d/1gb) | 30d |
+| `agent-monitors-joinability-*` | `monitors-joinability-ilm-policy.json` | daily (rollover) | 180d |
+| `agent-insights-*` | `insights-ilm-policy.json` | monthly (`min_age` delete) | 365d |
+| `agent-monitors-slm-health-*` | `monitors-slm-health-ilm-policy.json` | monthly (`min_age` delete) | 90d |
+
+Low-volume diagnostic families (insights, slm-health) partition **monthly** and delete by
+`min_age` from index creation — no rollover write-alias — to avoid over-sharding (FRE-543).
+
 ## Benefits
 
 ### Before (File-Only Logging)

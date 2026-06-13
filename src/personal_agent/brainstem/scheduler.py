@@ -93,6 +93,17 @@ class BrainstemScheduler:
         self.last_consolidation: datetime | None = None
         self.last_request_time: datetime | None = None
         self._active_request_count = 0
+        # Consolidation observability (FRE-560): a perpetually-skipping scheduler
+        # stalled silently for 15h because skip reasons were debug-only. These
+        # counters feed a periodic INFO ``consolidation_health`` line.
+        self._consolidations_run = 0
+        self._consolidation_skips_active = 0
+        self._consolidation_skips_min_interval = 0
+        self._consolidation_coalesced = 0
+        self._consolidation_in_progress = False
+        self._last_request_captured_at: datetime | None = None
+        self._started_at: datetime | None = None
+        self._last_health_emit: tuple[int, int, int, int] | None = None
         self._lifecycle_task: asyncio.Task[None] | None = None
         self.metrics_daemon = metrics_daemon
 
@@ -169,6 +180,7 @@ class BrainstemScheduler:
             return
 
         self.running = True
+        self._started_at = datetime.now(timezone.utc)
         log.info("brainstem_scheduler_started", trace_id=start_trace_id)
 
         # Data lifecycle loop (hourly disk check, daily archive, weekly purge)
@@ -231,6 +243,7 @@ class BrainstemScheduler:
         if not settings.enable_second_brain:
             return
 
+        self._last_request_captured_at = datetime.now(timezone.utc)
         log.info(
             "event_request_captured_received",
             trace_id=trace_id,
@@ -268,7 +281,22 @@ class BrainstemScheduler:
         Returns:
             True if conditions are met for consolidation.
         """
+        # Cloud / remote-inference deployment (FRE-560): consolidation runs on the
+        # gateway and its entity extraction is a cloud API (gpt-5.4-nano), so it
+        # does not compete with user inference for any local GPU and there is no
+        # idle to wait for. Consolidate on every captured event — the active-request
+        # gate, min-interval throttle and host-resource guards below are all
+        # local-inference concerns. The single-flight guard in
+        # _trigger_consolidation coalesces bursts (e.g. eval runs). Previously the
+        # active-request gate sat ahead of this switch and, because request.captured
+        # is published while its own request is still in flight, skipped 100% of the
+        # time — stalling the KG write pipeline.
+        if not self.resource_gating_enabled:
+            return True
+
+        # --- Local-inference deployment only: defer to protect the on-device GPU. ---
         if self._active_request_count > 0:
+            self._consolidation_skips_active += 1
             log.debug(
                 "consolidation_skipped_active_requests",
                 active_request_count=self._active_request_count,
@@ -280,10 +308,14 @@ class BrainstemScheduler:
         if self.last_consolidation:
             time_since_last = (datetime.now(timezone.utc) - self.last_consolidation).total_seconds()
             if time_since_last < self.min_consolidation_interval_seconds:
+                self._consolidation_skips_min_interval += 1
+                log.debug(
+                    "consolidation_skipped_min_interval",
+                    seconds_since_last=time_since_last,
+                    min_interval=self.min_consolidation_interval_seconds,
+                    trace_id=trace_id,
+                )
                 return False
-
-        if not self.resource_gating_enabled:
-            return True
 
         # Check idle time
         if self.last_request_time:
@@ -357,17 +389,34 @@ class BrainstemScheduler:
                 (ADR-0074 §I3). Threaded from ``on_request_captured`` or
                 minted by ad-hoc callers.
         """
+        # Single-flight (FRE-560): the event-driven path can fire on every captured
+        # event, so coalesce concurrent triggers into the running pass rather than
+        # starting overlapping consolidations over the same on-disk captures.
+        if self._consolidation_in_progress:
+            self._consolidation_coalesced += 1
+            log.debug("consolidation_already_in_progress", trace_id=trace_id)
+            return
+
+        self._consolidation_in_progress = True
         log.info("consolidation_triggered", trace_id=trace_id)
 
         try:
             if not self.consolidator:
                 self.consolidator = SecondBrainConsolidator()
 
+            # should_pause cooperatively yields to in-flight requests to protect the
+            # on-device GPU in the local-inference deployment. In cloud (resource
+            # gating off) entity extraction is a cloud API, so there is no GPU to
+            # protect — pass None so the pass runs to completion (FRE-560).
+            should_pause = (
+                (lambda: self._active_request_count > 0) if self.resource_gating_enabled else None
+            )
+
             # Consolidate recent captures (last 7 days, up to 50 captures)
             result = await self.consolidator.consolidate_recent_captures(
                 days=7,
                 limit=50,
-                should_pause=lambda: self._active_request_count > 0,
+                should_pause=should_pause,
             )
 
             # Only mark a consolidation interval when real captures were found.
@@ -377,6 +426,7 @@ class BrainstemScheduler:
             if result.get("captures_processed", 0) > 0:
                 self.last_consolidation = datetime.now(timezone.utc)
 
+            self._consolidations_run += 1
             log.info(
                 "consolidation_completed",
                 **result,
@@ -393,6 +443,8 @@ class BrainstemScheduler:
                 exc_info=True,
                 trace_id=trace_id,
             )
+        finally:
+            self._consolidation_in_progress = False
 
     async def _publish_consolidation_completed(
         self, result: dict[str, Any], *, trace_id: str | None = None
@@ -431,6 +483,49 @@ class BrainstemScheduler:
                 trace_id=trace_id,
             )
 
+    def _emit_consolidation_health(self, *, now: datetime, trace_id: str | None = None) -> None:
+        """Emit a ``consolidation_health`` INFO line when consolidation state changed.
+
+        A perpetually-skipping consolidation scheduler stalled silently for ~15h
+        (FRE-560) because skip reasons were debug-only. This surfaces the standing
+        counters at INFO, but only when one has moved since the last emit — so an
+        idle scheduler stays quiet while a stalled-but-receiving one is loud.
+
+        Args:
+            now: Current UTC instant (passed in so the lifecycle loop's clock is reused).
+            trace_id: Enclosing lifecycle-iteration trace id (ADR-0074 §I3).
+        """
+        snap = (
+            self._consolidations_run,
+            self._consolidation_skips_active,
+            self._consolidation_skips_min_interval,
+            self._consolidation_coalesced,
+        )
+        if snap == self._last_health_emit:
+            return
+        self._last_health_emit = snap
+        log.info(
+            "consolidation_health",
+            consolidations_run=snap[0],
+            skips_active_requests=snap[1],
+            skips_min_interval=snap[2],
+            coalesced=snap[3],
+            active_request_count=self._active_request_count,
+            consolidation_in_progress=self._consolidation_in_progress,
+            seconds_since_last_consolidation=(
+                (now - self.last_consolidation).total_seconds() if self.last_consolidation else None
+            ),
+            last_request_captured_at=(
+                self._last_request_captured_at.isoformat()
+                if self._last_request_captured_at
+                else None
+            ),
+            scheduler_uptime_s=(
+                (now - self._started_at).total_seconds() if self._started_at else None
+            ),
+            trace_id=trace_id,
+        )
+
     async def _lifecycle_loop(self) -> None:
         """Run data lifecycle tasks: hourly disk check, daily 2AM archive, weekly Sunday 3AM purge."""
         while self.running:
@@ -440,6 +535,10 @@ class BrainstemScheduler:
 
                 now = datetime.now(timezone.utc)
                 lifecycle_enabled = getattr(settings, "data_lifecycle_enabled", True)
+
+                # Consolidation health (FRE-560): surface a perpetually-skipping
+                # scheduler at INFO without DEBUG. Emitted only on state change.
+                self._emit_consolidation_health(now=now, trace_id=iteration_trace_id)
 
                 # Hourly: disk check (and alert if >80%)
                 if lifecycle_enabled and (

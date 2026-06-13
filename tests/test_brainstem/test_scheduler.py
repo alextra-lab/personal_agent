@@ -411,3 +411,126 @@ class TestQualityMonitorScheduling:
         scheduler.quality_monitor.check_entity_extraction_quality.assert_awaited_once()
         scheduler.quality_monitor.check_graph_health.assert_awaited_once()
         scheduler.quality_monitor.detect_anomalies.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+class TestConsolidationCloudPath:
+    """FRE-560: in cloud (resource_gating_enabled=False) consolidation must fire
+    on every captured event regardless of in-flight request count or interval.
+
+    The bug: the active-request gate was a universal guard ahead of the
+    resource-gating switch, so the event-driven trigger (published while its own
+    request is still in flight) was skipped 100% of the time and the KG write
+    pipeline stalled.
+    """
+
+    async def test_cloud_consolidates_even_with_active_request(self, scheduler):
+        """gating off + a request in flight + no prior consolidation → True."""
+        scheduler.resource_gating_enabled = False
+        scheduler.notify_request_start()  # count == 1 (the triggering request)
+        assert await scheduler._should_consolidate() is True
+
+    async def test_cloud_ignores_min_interval(self, scheduler):
+        """gating off → the min-interval throttle does not apply (dropped in cloud)."""
+        scheduler.resource_gating_enabled = False
+        scheduler.last_consolidation = datetime.now(timezone.utc)  # just ran
+        assert await scheduler._should_consolidate() is True
+
+    async def test_local_still_blocks_on_active_request(self, scheduler):
+        """gating on → active-request guard still defers (local-MLX unchanged)."""
+        scheduler.resource_gating_enabled = True
+        scheduler.notify_request_start()
+        scheduler.last_request_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+        with patch("personal_agent.brainstem.scheduler.poll_system_metrics") as m:
+            m.return_value = {"perf_system_cpu_load": 20.0, "perf_system_mem_used": 40.0}
+            assert await scheduler._should_consolidate() is False
+        assert scheduler._consolidation_skips_active >= 1
+
+    async def test_on_request_captured_triggers_in_cloud(self, scheduler):
+        """on_request_captured drains via _trigger_consolidation even mid-request."""
+        scheduler.resource_gating_enabled = False
+        scheduler.notify_request_start()  # count == 1
+        with (
+            patch("personal_agent.brainstem.scheduler.settings") as mock_settings,
+            patch.object(scheduler, "_trigger_consolidation", new=AsyncMock()) as mock_trigger,
+        ):
+            mock_settings.enable_second_brain = True
+            await scheduler.on_request_captured(trace_id="t-1", session_id="s-1")
+            mock_trigger.assert_awaited_once()
+        assert scheduler._last_request_captured_at is not None
+
+    async def test_should_pause_is_none_in_cloud(self, scheduler):
+        """gating off → consolidator runs with should_pause=None (no GPU to protect)."""
+        scheduler.resource_gating_enabled = False
+        mock_consolidator = AsyncMock()
+        mock_consolidator.consolidate_recent_captures.return_value = {"captures_processed": 1}
+        scheduler.consolidator = mock_consolidator
+
+        await scheduler._trigger_consolidation()
+
+        call_kwargs = mock_consolidator.consolidate_recent_captures.call_args.kwargs
+        assert call_kwargs["should_pause"] is None
+
+    async def test_should_pause_callable_in_local_reflects_active_count(self, scheduler):
+        """gating on → should_pause is a callable that is True while a request is active."""
+        scheduler.resource_gating_enabled = True
+        mock_consolidator = AsyncMock()
+        mock_consolidator.consolidate_recent_captures.return_value = {"captures_processed": 1}
+        scheduler.consolidator = mock_consolidator
+
+        await scheduler._trigger_consolidation()
+
+        should_pause = mock_consolidator.consolidate_recent_captures.call_args.kwargs["should_pause"]
+        assert callable(should_pause)
+        assert should_pause() is False
+        scheduler.notify_request_start()
+        assert should_pause() is True
+
+    async def test_single_flight_guard_coalesces(self, scheduler):
+        """A second trigger while one is in progress is dropped (and counted)."""
+        mock_consolidator = AsyncMock()
+        mock_consolidator.consolidate_recent_captures.return_value = {"captures_processed": 1}
+        scheduler.consolidator = mock_consolidator
+        scheduler._consolidation_in_progress = True
+
+        await scheduler._trigger_consolidation()
+
+        mock_consolidator.consolidate_recent_captures.assert_not_called()
+        assert scheduler._consolidation_coalesced >= 1
+
+    async def test_consolidation_run_counter_increments(self, scheduler):
+        """A completed consolidation increments the run counter."""
+        mock_consolidator = AsyncMock()
+        mock_consolidator.consolidate_recent_captures.return_value = {"captures_processed": 3}
+        scheduler.consolidator = mock_consolidator
+
+        before = scheduler._consolidations_run
+        await scheduler._trigger_consolidation()
+        assert scheduler._consolidations_run == before + 1
+        assert scheduler._consolidation_in_progress is False  # reset in finally
+
+    async def test_health_emit_only_on_state_change(self, scheduler):
+        """_emit_consolidation_health logs a consolidation_health line only when counters move."""
+        import structlog
+
+        scheduler._started_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+        now = datetime.now(timezone.utc)
+
+        with structlog.testing.capture_logs() as cap1:
+            scheduler._emit_consolidation_health(now=now, trace_id="h-1")
+        health = [e for e in cap1 if e.get("event") == "consolidation_health"]
+        assert len(health) == 1
+        assert "consolidations_run" in health[0]
+        assert "skips_active_requests" in health[0]
+        assert "scheduler_uptime_s" in health[0]
+
+        # No change → no emit.
+        with structlog.testing.capture_logs() as cap2:
+            scheduler._emit_consolidation_health(now=now, trace_id="h-2")
+        assert [e for e in cap2 if e.get("event") == "consolidation_health"] == []
+
+        # Counter moves → emit again.
+        scheduler._consolidations_run += 1
+        with structlog.testing.capture_logs() as cap3:
+            scheduler._emit_consolidation_health(now=now, trace_id="h-3")
+        assert [e for e in cap3 if e.get("event") == "consolidation_health"]

@@ -21,6 +21,10 @@
         "result_type":             { "type": "keyword" },
         "task_type":               { "type": "keyword" },
         "complexity":              { "type": "keyword" },
+        "model_role":              { "type": "keyword" },
+        "intent_confidence":       { "type": "float" },
+        "decomposition_strategy":  { "type": "keyword" },
+        "decomposition_reason":    { "type": "keyword", "ignore_above": 1024 },
         "authoritative_cost_usd":  { "type": "double" },
         "input_tokens":            { "type": "long" },
         "output_tokens":           { "type": "long" },
@@ -29,7 +33,7 @@
     }
   },
   "_meta": {
-    "description": "Execution-topology projection of the Postgres route-trace ledger (FRE-548 / ADR-0088). One doc per (trace_id, task_id): the turn-level row (role=primary, task_id absent) plus one segment per sub-agent (role=sub_agent), emitted on-write at the observe_topology seam to index agent-topology-YYYY-MM-DD. dynamic:false with an explicit schema — join keys keyword, authoritative_cost_usd double, latency_total_ms float — so accidental extra fields are stored-not-indexed rather than auto-mistyped. Unblocks the FRE-537 execution-topology Kibana panels.",
+    "description": "Execution-topology projection of the Postgres route-trace ledger (FRE-548 / ADR-0088). One doc per (trace_id, task_id): the turn-level row (role=primary, task_id absent) plus one segment per sub-agent (role=sub_agent), emitted on-write at the observe_topology seam to index agent-topology-YYYY-MM-DD. dynamic:false with an explicit schema — join keys keyword, authoritative_cost_usd double, latency_total_ms float — so accidental extra fields are stored-not-indexed rather than auto-mistyped. Routing surface (FRE-545): model_role/decomposition_strategy/decomposition_reason (keyword) + intent_confidence (float) make the tier-routing decision (FRE-432 gap) measurable. Unblocks the FRE-537 / FRE-539 execution-topology + Routing Decisions Kibana panels.",
     "managed_by": "scripts/setup-elasticsearch.sh"
   }
 }

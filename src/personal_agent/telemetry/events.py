@@ -107,12 +107,6 @@ APPROVAL_DENIED = "approval_denied"
 SESSION_CREATED = "session_created"
 SESSION_CLOSED = "session_closed"
 
-# Routing events (Day 11.5)
-ROUTING_DECISION = "routing_decision"
-ROUTING_DELEGATION = "routing_delegation"
-ROUTING_HANDLED = "routing_handled"
-ROUTING_PARSE_ERROR = "routing_parse_error"
-
 # Captain's Log events (Day 24-25)
 CAPTAINS_LOG_ENTRY_CREATED = "captains_log_entry_created"
 CAPTAINS_LOG_ENTRY_COMMITTED = "captains_log_entry_committed"

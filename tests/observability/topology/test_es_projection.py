@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 import personal_agent.observability.topology.es_projection as proj
-
 from personal_agent.observability.route_trace.types import RouteTraceRow
 
 
@@ -31,6 +30,11 @@ def _turn_level_row(**overrides: object) -> RouteTraceRow:
         input_tokens=100,
         output_tokens=50,
         latency_total_ms=12.5,
+        # Routing surface (FRE-545).
+        model_role="primary",
+        intent_confidence=0.82,
+        decomposition_strategy="single",
+        decomposition_reason="memory_recall_always_single",
     )
     base.update(overrides)
     return RouteTraceRow(**base)  # type: ignore[arg-type]
@@ -102,6 +106,29 @@ def test_doc_timestamp_falls_back_when_created_at_none() -> None:
     doc = proj.build_topology_doc(row, topology="primary")
     # A fallback timestamp is present and ES-parseable (ISO with T).
     assert "T" in doc["@timestamp"]
+
+
+def test_turn_level_doc_includes_routing_fields() -> None:
+    """FRE-545: the turn-level row projects the four populated routing fields."""
+    row = _turn_level_row()
+    doc = proj.build_topology_doc(row, topology="primary")
+
+    assert doc["model_role"] == "primary"  # the tier — keyword (always primary today = the gap)
+    assert isinstance(doc["intent_confidence"], float)
+    assert doc["intent_confidence"] == 0.82
+    assert doc["decomposition_strategy"] == "single"
+    assert doc["decomposition_reason"] == "memory_recall_always_single"
+
+
+def test_segment_doc_omits_gateway_routing_fields() -> None:
+    """FRE-545: a segment carries only model_role; gateway-turn routing fields are omitted."""
+    row = _segment_row()
+    doc = proj.build_topology_doc(row, topology="hybrid_fanout")
+
+    assert doc["model_role"] == "sub_agent"
+    assert "intent_confidence" not in doc
+    assert "decomposition_strategy" not in doc
+    assert "decomposition_reason" not in doc
 
 
 # ---------------------------------------------------------------------------

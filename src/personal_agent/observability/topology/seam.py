@@ -35,6 +35,7 @@ from personal_agent.observability.route_trace import (
     assemble_sub_agent_route_trace,
     get_route_trace_ledger,
 )
+from personal_agent.observability.topology.es_projection import project_route_trace_to_es
 
 if TYPE_CHECKING:
     from personal_agent.orchestrator.types import ExecutionContext
@@ -136,6 +137,9 @@ async def _write_durable_row(ctx: ExecutionContext, topology: str) -> float:
             topology=topology,
         )
         await ledger.write(row)
+        # FRE-548: project the same in-hand row to the dedicated agent-topology-* ES index
+        # (non-blocking, best-effort — cannot raise into the turn).
+        project_route_trace_to_es(row, topology=topology)
     except Exception as e:
         log.warning(
             "route_trace_write_failed",
@@ -145,11 +149,11 @@ async def _write_durable_row(ctx: ExecutionContext, topology: str) -> float:
         return cost
     # Per-topology segment rows (FRE-517): written in a separate, isolated pass so a bad
     # segment can never corrupt the already-fetched authoritative cost this returns.
-    await _write_segment_rows(ctx)
+    await _write_segment_rows(ctx, topology)
     return cost
 
 
-async def _write_segment_rows(ctx: ExecutionContext) -> None:
+async def _write_segment_rows(ctx: ExecutionContext, topology: str) -> None:
     """Write one ``(trace_id, task_id)`` route-trace row per sub-agent (ADR-0088, FRE-517).
 
     Each segment is wrapped individually so one failed write never drops the rest, and the
@@ -158,6 +162,8 @@ async def _write_segment_rows(ctx: ExecutionContext) -> None:
 
     Args:
         ctx: The completed turn's execution context (segments read from ``sub_agent_results``).
+        topology: The resolved execution-topology label, threaded onto each segment's ES
+            projection (FRE-548).
     """
     subs = getattr(ctx, "sub_agent_results", None) or []
     if not subs:
@@ -170,7 +176,10 @@ async def _write_segment_rows(ctx: ExecutionContext) -> None:
         if getattr(sub, "task_id", None) is None:
             continue
         try:
-            await ledger.write(assemble_sub_agent_route_trace(ctx, sub))
+            seg_row = assemble_sub_agent_route_trace(ctx, sub)
+            await ledger.write(seg_row)
+            # FRE-548: project the segment row to ES (non-blocking, best-effort).
+            project_route_trace_to_es(seg_row, topology=topology)
         except Exception as e:
             log.warning(
                 "route_trace_segment_write_failed",

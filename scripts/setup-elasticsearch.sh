@@ -152,6 +152,16 @@ put_resource "Index template: user-turn-ratings-template" \
   "/_index_template/user-turn-ratings-template" \
   "$PROJECT_ROOT/docker/elasticsearch/user-turn-ratings-index-template.json"
 
+# 7b. Execution-topology projection template (FRE-548 / ADR-0088). Projects the
+#     Postgres route-trace ledger row (turn-level + per-sub-agent segments) to
+#     agent-topology-*. dynamic:false with an explicit schema keeps join keys
+#     (trace_id, task_id) as keyword, authoritative_cost_usd as double, and
+#     latency_total_ms as float — the FRE-537 panel constraint. Unblocks the
+#     execution-topology Kibana view deferred from FRE-537.
+put_resource "Index template: agent-topology-template" \
+  "/_index_template/agent-topology-template" \
+  "$PROJECT_ROOT/docker/elasticsearch/topology-index-template.json"
+
 # 7. Initial write-alias index — only create if absent. The HEAD probe uses
 #    `-f` so a 404 is reported as a non-fatal exit; we then PUT.
 echo "Bootstrap write-alias index: agent-logs-000001"

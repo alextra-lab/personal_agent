@@ -44,7 +44,19 @@ Update docs the change touches (skill docs, READMEs, doc-strings).
 `make test` (module then full) · `make mypy` · `make ruff-check` + `make ruff-format` ·
 `pre-commit run --all-files`.
 
-## 9 — PR — then STOP
+## 9 — PR + final ticket comment for master — then STOP
 Open the PR with `.github/PULL_REQUEST_TEMPLATE.md`. Pre-merge checklist ONLY (see lifecycle-rules
-PR hygiene). Push the branch. **STOP. Do not merge, deploy, close the ticket, or edit MASTER_PLAN** —
-that is master's role.
+PR hygiene). Push the branch.
+
+**Then post a final comment on the Linear ticket addressed to master** (`save_comment` on the
+issue) — this is required, not optional. It carries everything master needs that does NOT belong
+in the PR's pre-merge checklist:
+- the **post-deploy runbook** (exact ES/Kibana/migration/verification steps, in order);
+- any **safety constraints / gotchas** (e.g. "do NOT back-attach existing indices", "register the
+  template before first write", "verify the code is generating the logs");
+- **what to verify live** to prove the AC (commands + expected output);
+- discovered follow-up tickets filed;
+- the Linear auto-Done caveat if the deploy will be batched.
+Master reads this comment by default at the gate, so it is the handoff channel.
+
+**STOP. Do not merge, deploy, close the ticket, or edit MASTER_PLAN** — that is master's role.

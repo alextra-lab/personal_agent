@@ -8,7 +8,11 @@ description: Use in the master session to integrate a ready PR — analyze (code
 Read `.claude/skills/lifecycle-rules.md` first. Argument: a PR number, or omitted (scan open PRs).
 
 ## 1 — Pick the PR
-`gh pr list` (or use the given number). Read PR body, commits, linked ticket.
+`gh pr list` (or use the given number). Read PR body, commits, and the linked ticket —
+**including its comment thread** (`list_comments` on the issue), by default, every time. Comments
+carry the live decision trail (owner steers, scope changes, post-deploy runbooks, "do X not Y"
+constraints, prior-deploy evidence) that the PR body often does NOT restate. Surface anything in
+the comments that bears on correctness / scope / acceptance / how to deploy before merging.
 
 ## 2 — Analyze the diff
 - Correctness: invoke the **code-review** skill on the diff.

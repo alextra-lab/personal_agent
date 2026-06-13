@@ -115,12 +115,20 @@ put_resource "Index template: agent-captains-subagents-template" \
   "$PROJECT_ROOT/docker/elasticsearch/captains-subagents-index-template.json"
 
 # 3b. Insights engine template (FRE-534/A2 — family previously untemplated).
+#     ILM (FRE-543): monthly agent-insights-YYYY-MM, delete at 365d (min_age).
+put_resource "ILM policy: agent-insights-policy" \
+  "/_ilm/policy/agent-insights-policy" \
+  "$PROJECT_ROOT/docker/elasticsearch/insights-ilm-policy.json"
 put_resource "Index template: agent-insights-template" \
   "/_index_template/agent-insights-template" \
   "$PROJECT_ROOT/docker/elasticsearch/insights-index-template.json"
 
 # 3c. SLM health probe template (FRE-534/A2 / ADR-0083 — previously untemplated;
 #     trace_id was ES-default text, breaking exact-term joins).
+#     ILM (FRE-543): monthly agent-monitors-slm-health-YYYY.MM, delete at 90d (min_age).
+put_resource "ILM policy: agent-monitors-slm-health-policy" \
+  "/_ilm/policy/agent-monitors-slm-health-policy" \
+  "$PROJECT_ROOT/docker/elasticsearch/monitors-slm-health-ilm-policy.json"
 put_resource "Index template: agent-monitors-slm-health-template" \
   "/_index_template/agent-monitors-slm-health-template" \
   "$PROJECT_ROOT/docker/elasticsearch/monitors-slm-health-index-template.json"

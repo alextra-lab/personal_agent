@@ -1,0 +1,28 @@
+{
+  "policy": {
+    "_meta": {
+      "description": "ILM for agent-monitors-slm-health-* (monthly index agent-monitors-slm-health-YYYY.MM; ~288 probe snapshots/day, operational health diagnostics). min_age-based delete from index creation (no rollover write-alias). Retention: 90d (a quarter of capacity/latency trend). Authored in FRE-543; the family had no lifecycle policy before and accreted indices forever.",
+      "retention_days": 90,
+      "managed_by": "scripts/setup-elasticsearch.sh"
+    },
+    "phases": {
+      "hot": {
+        "min_age": "0ms",
+        "actions": {
+          "set_priority": { "priority": 100 }
+        }
+      },
+      "warm": {
+        "min_age": "7d",
+        "actions": {
+          "forcemerge": { "max_num_segments": 1 },
+          "set_priority": { "priority": 50 }
+        }
+      },
+      "delete": {
+        "min_age": "90d",
+        "actions": { "delete": {} }
+      }
+    }
+  }
+}

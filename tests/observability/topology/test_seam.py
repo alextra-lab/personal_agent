@@ -212,3 +212,49 @@ async def test_seam_reraises_cancelled_after_writing_row(
 
     # The durable row is still attempted on cancellation.
     ledger.write.assert_awaited_once()
+
+
+async def test_seam_projects_turn_level_and_segments_to_es(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-548: the seam projects the turn-level row + each segment row to ES."""
+    ledger = _fake_ledger()
+    bus = AsyncMock()
+    _patch(monkeypatch, ledger, bus)
+    projected: list[tuple[object, str]] = []
+    monkeypatch.setattr(
+        seam_mod,
+        "project_route_trace_to_es",
+        lambda row, *, topology: projected.append((row, topology)),
+    )
+    sub_a, sub_b = _sub_result(), _sub_result()
+    ctx = _ctx(sub_agent_results=[sub_a, sub_b])
+
+    async with observe_topology(ctx):
+        pass
+
+    # 1 turn-level + 2 segments, each with the resolved topology threaded through.
+    assert len(projected) == 3
+    assert all(topology == "primary" for _, topology in projected)
+    rows = [row for row, _ in projected]
+    assert rows[0].task_id is None  # turn-level first
+    assert {r.task_id for r in rows[1:]} == {sub_a.task_id, sub_b.task_id}
+
+
+async def test_seam_projection_failure_does_not_break_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A raising projector must not break the turn (defence-in-depth over its own guard)."""
+    ledger = _fake_ledger()
+    bus = AsyncMock()
+    _patch(monkeypatch, ledger, bus)
+
+    def _boom(row: object, *, topology: str) -> None:
+        raise RuntimeError("es projection blew up")
+
+    monkeypatch.setattr(seam_mod, "project_route_trace_to_es", _boom)
+    ctx = _ctx(sub_agent_results=[_sub_result()])
+
+    # Must not raise despite the projector failing on both the turn-level and segment rows.
+    async with observe_topology(ctx):
+        pass

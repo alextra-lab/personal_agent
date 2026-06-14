@@ -38,9 +38,13 @@ TOPOLOGY_INDEX_PREFIX = "agent-topology"
 def build_topology_doc(row: RouteTraceRow, *, topology: str) -> dict[str, Any]:
     """Build the explicit-typed ES document for one route-trace row.
 
-    Pure (no I/O). Fields that are ``None`` (a turn-level row's ``task_id`` is not set; a
-    segment row has no ``latency_total_ms`` / ``task_type`` / ``complexity``) are **omitted**
-    rather than emitted as ``null``, so the dedicated index never carries an off-type null.
+    Pure (no I/O). Path-dependent fields are **omitted** rather than emitted as ``null`` when
+    they are ``None`` — a turn-level row has no ``task_id``; a segment row has no
+    ``latency_total_ms`` / ``task_type`` / ``complexity`` / gateway-routing fields
+    (``intent_confidence`` / ``decomposition_strategy`` / ``decomposition_reason``) — so the
+    dedicated index never carries an off-type null on those. (``session_id`` is the one
+    exception: it is an ADR-0074 identity field, effectively always present, and is left in the
+    base document.)
 
     Args:
         row: The assembled route-trace row (turn-level or per-sub-agent segment).
@@ -75,6 +79,18 @@ def build_topology_doc(row: RouteTraceRow, *, topology: str) -> dict[str, Any]:
         doc["complexity"] = row.complexity
     if row.latency_total_ms is not None:
         doc["latency_total_ms"] = float(row.latency_total_ms)
+    # Routing surface (FRE-545): the model-path fields the ledger actually captures. The
+    # gateway-turn fields (intent_confidence / decomposition_*) are None on segment rows
+    # (a sub-agent has no gateway decision) and so omitted; model_role is set on both
+    # (the selected tier on the turn-level row, "sub_agent" on segments).
+    if row.model_role is not None:
+        doc["model_role"] = row.model_role
+    if row.intent_confidence is not None:
+        doc["intent_confidence"] = float(row.intent_confidence)
+    if row.decomposition_strategy is not None:
+        doc["decomposition_strategy"] = row.decomposition_strategy
+    if row.decomposition_reason is not None:
+        doc["decomposition_reason"] = row.decomposition_reason
     return doc
 
 

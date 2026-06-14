@@ -126,18 +126,22 @@ curl -H "Authorization: Bearer $SESHAT_API_TOKEN" \
   "$SESHAT_API_URL/observations/route-traces/recent?label_lie=true&limit=25"
 ```
 
-### Execution-topology ES projection (`agent-topology-*`, FRE-548)
+### Execution-topology ES projection (`agent-topology-*`, FRE-548 / FRE-545)
 
 The seam also projects each completed turn's route-trace row to a dedicated, Kibana-readable
 index **`agent-topology-*`** (one doc per `(trace_id, task_id)`): the turn-level row
 (`role: primary`, no `task_id`) plus one per sub-agent (`role: sub_agent`). Explicit schema
 (`dynamic: false`): `trace_id`/`task_id`/`session_id`/`topology`/`role`/`gateway_label`/
 `result_type`/`task_type`/`complexity` (keyword), `authoritative_cost_usd` (double),
-`input_tokens`/`output_tokens` (long), `latency_total_ms` (float), `@timestamp` (date). Use it
-for topology distribution, primary-vs-sub-agent rows, and authoritative cost per topology.
+`input_tokens`/`output_tokens` (long), `latency_total_ms` (float), `@timestamp` (date). The
+**routing surface** (FRE-545) adds `model_role`/`decomposition_strategy`/`decomposition_reason`
+(keyword) + `intent_confidence` (float) — `model_role` is the selected tier (always `primary`
+today; the FRE-432 gap). Use it for topology distribution, primary-vs-sub-agent rows, authoritative
+cost per topology, and the routing-decision surface.
 
 ```bash
 curl "http://elasticsearch:9200/agent-topology-*/_search?q=topology:hybrid_fanout"
+curl "http://elasticsearch:9200/agent-topology-*/_search?q=role:primary%20AND%20model_role:primary"
 ```
 
 ---

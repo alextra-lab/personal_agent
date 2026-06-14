@@ -277,6 +277,22 @@ The FRE-325 update intentionally kept `_should_consolidate()`'s host-resource ga
 
 ---
 
+## Addendum (2026-06-14, FRE-560) — the active-request & min-interval gates are now local-inference-only
+
+The decision above stated that under remote-inference deployment, safety was "carried entirely by the universal guards (`_active_request_count > 0` and `min_consolidation_interval_seconds`)." **That framing was wrong, and it hid a total outage.**
+
+**What FRE-560 found:** consolidation is purely event-driven (`_should_consolidate` has one caller, `on_request_captured`). The `_active_request_count > 0` guard sat **ahead of** the `resource_gating_enabled` switch as a *universal* gate. But `request.captured` is published from inside request handling, **while the request itself is still counted in-flight** — so the consumer always saw `count ≥ 1` and skipped. Result: **0 consolidations in ~15.5h** on the cloud-sim gateway (`consolidation_triggered`=0 across 32 received events); nothing reached Neo4j for eval *or* real turns. The min-interval gate was vacuous because `last_consolidation` is only set after a successful run, which never happened. The skip was `log.debug`, invisible at INFO — so it stalled silently.
+
+**The fix (owner decision):** hoist `if not resource_gating_enabled: return True` to the **top** of `_should_consolidate`. The active-request guard, the min-interval throttle, **and** the host-resource guards are now **all local-inference-only** concerns (they protect a co-resident MLX GPU). Under remote inference, entity extraction is a cloud API (`gpt-5.4-nano`) with no local contention and no idle to wait for, so **cloud consolidates on every captured event**, with:
+
+- a **single-flight guard** (`_consolidation_in_progress`) that coalesces bursts (e.g. eval runs) into the running pass rather than starting overlapping consolidations over the same on-disk captures;
+- `should_pause=None` in cloud (the cooperative-yield-to-active-requests behaviour is local-inference-only);
+- a `consolidation_health` **INFO** line (emitted on counter state-change) so a perpetually-skipping scheduler is loud, never silent again.
+
+Local-MLX behaviour is unchanged: with `resource_gating_enabled=true`, the active-request / min-interval / host-resource gates all still apply. Code: `brainstem/scheduler.py` (`_should_consolidate`, `_trigger_consolidation`); regression tests in `tests/test_brainstem/test_scheduler.py`. Verified live: the morning capture backlog drained on the first post-deploy consolidation (615 entities; eval + non-eval `Turn` nodes with correct `eval_mode` provenance).
+
+---
+
 ## References
 
 - [Redis Streams documentation](https://redis.io/docs/data-types/streams/)

@@ -133,20 +133,23 @@ Lane O (Observability)
 1. **FRE-544** dyn-field bound (T1) ← next → 2. **FRE-559** ILM user-turn-ratings (T2; ⚠️ 90d vs 365d retention — owner decides in-ticket) → 3. **FRE-546** cost-cache Kibana import fix (T2·Bug) → 4. **FRE-550** joinability breakdown panels (T2) → 5. **FRE-556** guard manual ES test vs prod :9200 (T3) → 6. **FRE-558** setup-es additive live-index mappings (T2; retires the manual deploy step).
 
 **Lane B — Observability/topology/eval/ledger + Artifact** (projector · route-trace ledger · eval harness · artifact_tools · PWA):
-1. **FRE-545** routing → ES ledger projection (T2; reuses 548) ← next → 2. **FRE-557** projector-health counter (T2) → 3. **FRE-507** verify live cost-meter parity + NoOpBus-down decision (T2; needs a live decomposed turn — no ADR) → 4. **FRE-541** eval conversation driver (T1) → 5. **FRE-453** canonical eval set (after 541) → 6. **FRE-522** eval⇄PWA cross-links → 7. **FRE-542** PWA gap-aware client dedup → 8. **FRE-551** artifact E2E extend (three.js/fonts) → 9. **FRE-554** session-scoped meter (⚠️ **interview owner before coding**).
+1. **FRE-545** routing → ES ledger projection (T2; reuses 548) ← next → 2. **FRE-557** projector-health counter (T2) → 3. **FRE-507** verify live cost-meter parity + NoOpBus-down decision (T2; needs a live decomposed turn — no ADR) → 4. **FRE-522** eval⇄PWA cross-links → 5. **FRE-542** PWA gap-aware client dedup → 6. **FRE-551** artifact E2E extend (three.js/fonts). *(541 + 554 pulled to the adr session — spec-first; 453 follows once 541's taxonomy amendment lands.)*
 
-**In flight / special routing:**
-- ✅ **FRE-560** — Done (PR #214, deployed+verified); its build worktree is now **free** → both lanes open.
-- **FRE-523** — In Progress; KG-half AC-1/AC-4 now met (560 drained the backlog); only AC-3 (owner-run pass-2) remains (procedure in § Pending Verification).
-- **FRE-488** (Memory Recall harness, Approved) — buildable standalone (`scripts/eval/fre435_memory_recall/`), but real baselines (489–491) are **gated on 560**; route to the adr session or a standalone worktree, **not** Lane A/B.
-- **FRE-489/490/491/493/494** — Needs Approval, **HELD behind 560** (a baseline over an empty KG is meaningless). FRE-435 umbrella In Progress (adr/Opus).
-- Turn Cost/Reliability closes (477/487/497/474) — out of the two-stream scope; Turn projects wind down separately (497/474 → adr session).
+**adr session (worktree-adrs) — observability spec-first (owner: "finish infrastructure + observability first"):**
+- **FRE-541** ← next — eval conversation driver + new `clarification_requested` result type; author the `RESULT_TYPE_TAXONOMY_SPEC.md` amendment (entry condition; distinct from the held-open Socratic loop) before build implements the driver. **Unblocks FRE-453.**
+- **FRE-554** — session-scoped meter redesign; **interview owner first**, then author the spec → build implements.
+
+**In flight / parked:**
+- ✅ **FRE-560** — Done (PR #214, deployed+verified). KG write pipeline healthy.
+- **FRE-523** — In Progress; KG-half AC-1/AC-4 met (560 drained the backlog); only AC-3 (owner-run pass-2) remains (§ Pending Verification).
+- **Memory Recall program (FRE-488/489/490/491/493/494)** — **PARKED until the infra+observability streams finish** (owner decision 2026-06-14). Now technically unblocked (560 populates the KG; 488 Approved + meaningful; 493/494 are ADR/research) — re-assess 489–491 when the streams complete.
+- Turn Cost/Reliability closes (477/487/497/474) — out of scope; Turn projects wind down separately.
 
 **Collision rules:** topology projector (545/557/507) stays in Lane B, serial — different files from FRE-560 (scheduler/executor/app), so they may run concurrently. PWA is shared (522/542/554) — one lane owns it at a time, bump `CACHE_NAME` on shell deploys. `pytest` lock = one `make test`. Merge server-side; deploy one-at-a-time from main.
 
 **Capstone (LAST, either worktree once free):** **FRE-555** flip reconciliation checker → hard CI gate — **gated on ALL emit-gaps merged** (544/545/546/550/558/559). Closes Telemetry Surface Audit + realizes ADR-0090 D5.
 
-**Worktree assignment now:** FRE-560 is Done — **both build worktrees free**. Run **Lane A → 544** and **Lane B → 545** in parallel (file-disjoint).
+**Session assignment now (2026-06-14):** **build → Lane A → FRE-544** · **build2 → Lane B → FRE-545** · **adr → FRE-541** (then 554). Lanes A/B file-disjoint → parallel. Memory Recall parked until streams finish.
 
 **Collision rule:** anything touching the topology projector/ledger (517, 548) stays in B and serial. PWA is shared (522/532/PWA-side of 551) — one lane at a time. `pytest` lock = one `make test` at a time. Master merges server-side + deploys one-at-a-time from main.
 

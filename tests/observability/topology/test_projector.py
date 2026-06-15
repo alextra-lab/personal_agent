@@ -405,10 +405,13 @@ async def test_rolling_counter_time_heartbeat(monkeypatch: pytest.MonkeyPatch) -
     import structlog
 
     _capture(monkeypatch)
-    # Count threshold high so only the time heartbeat can fire.
+    # Count threshold high so only the time heartbeat can fire; zero seconds so any elapsed
+    # time triggers it deterministically. (Do NOT set _last_rolling_emit to a literal like
+    # 0.0 — time.monotonic()'s reference is arbitrary, so on a freshly-booted runner the
+    # delta can be < the threshold and the heartbeat would never fire.)
     monkeypatch.setattr(projector_mod, "_ROLLING_EMIT_EVERY", 10_000)
+    monkeypatch.setattr(projector_mod, "_ROLLING_EMIT_SECONDS", 0.0)
     proj = TurnObservationProjector()
-    proj._last_rolling_emit = 0.0  # far in the past → elapsed >> _ROLLING_EMIT_SECONDS
 
     with structlog.testing.capture_logs() as logs:
         await proj.handle(

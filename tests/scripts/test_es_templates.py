@@ -119,6 +119,82 @@ def test_logs_denial_reason_stays_keyword() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# agent-logs field-growth bound (FRE-544 / ADR-0090 Guarded-dynamic + cap).
+# --------------------------------------------------------------------------- #
+
+
+def _settings(template: dict) -> dict:
+    return template["template"].get("settings", {})
+
+
+def test_logs_has_total_fields_cap_that_does_not_drop_docs() -> None:
+    """agent-logs caps mapped fields and skips (not drops) beyond the cap (FRE-544)."""
+    s = _settings(_load("index-template.json"))
+    assert s.get("index.mapping.total_fields.limit") == 300, (
+        "agent-logs must cap dynamic field growth at 300"
+    )
+    # ignore_dynamic_beyond_limit=true → over-cap docs index (fields skipped to _source),
+    # never rejected. Required: dropping telemetry docs is unacceptable for a catch-all.
+    assert s.get("index.mapping.total_fields.ignore_dynamic_beyond_limit") is True, (
+        "must skip over-cap dynamic fields, not reject the document"
+    )
+
+
+def test_logs_stays_guarded_dynamic_not_locked() -> None:
+    """agent-logs stays dynamic:true (ADR-0090 Guarded-dynamic), keeping dynamic_templates live."""
+    m = _load("index-template.json")["template"]["mappings"]
+    assert m.get("dynamic") in (True, "true"), (
+        "agent-logs must remain dynamic:true (Guarded-dynamic)"
+    )
+    assert m.get("dynamic_templates"), "dynamic_templates must remain (string/numeric safety)"
+
+
+def test_logs_arguments_subtree_collapsed() -> None:
+    """The arguments.* sprawl subtree is dynamic:false with its referenced subfields kept."""
+    args = _props(_load("index-template.json")).get("arguments", {})
+    assert args.get("type") == "object"
+    assert args.get("dynamic") is False, "arguments must be dynamic:false to stop tool-arg sprawl"
+    sub = args.get("properties", {})
+    for f in ("name", "title", "trace_id"):
+        assert sub.get(f, {}).get("type") == "keyword", f"arguments.{f} must stay keyword"
+    # trace_id is a join key — keyword exact-match (ADR-0074).
+    assert sub["trace_id"]["type"] == "keyword"
+
+
+def test_logs_dashboard_referenced_fields_are_explicit() -> None:
+    """All promoted dashboard-referenced fields are explicit so the cap can't skip a panel field."""
+    props = _props(_load("index-template.json"))
+    scalars = {
+        "attempt_number": "long",
+        "cpu_load": "float",
+        "memory_used": "float",
+        "from_state": "keyword",
+        "role": "keyword",
+        "target_agent": "keyword",
+        "title": "keyword",
+        "trimmed": "boolean",
+    }
+    for field, typ in scalars.items():
+        assert props.get(field, {}).get("type") == typ, f"{field} must be explicit {typ}"
+    # nested referenced fields
+    assert props["context_messages"]["properties"]["role"]["type"] == "keyword"
+    assert props["messages_preview"]["properties"]["role"]["type"] == "keyword"
+    assert props["phases"]["properties"]["offset_ms"]["type"] == "float"
+    ps = props["phases_summary"]["properties"]
+    for phase in ("llm_inference", "other", "persistence", "setup", "synthesis", "tool_execution"):
+        assert ps[phase]["properties"]["duration_ms"]["type"] == "float", (
+            f"phases_summary.{phase}.duration_ms must be explicit float"
+        )
+
+
+def test_logs_event_keys_stay_keyword() -> None:
+    """event/event_type remain keyword (FRE-407/409 split — must not regress)."""
+    props = _props(_load("index-template.json"))
+    assert props.get("event", {}).get("type") == "keyword"
+    assert props.get("event_type", {}).get("type") == "keyword"
+
+
+# --------------------------------------------------------------------------- #
 # New family templates — insights + slm-health.
 # --------------------------------------------------------------------------- #
 

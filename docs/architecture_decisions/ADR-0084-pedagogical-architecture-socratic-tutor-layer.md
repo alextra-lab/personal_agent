@@ -2,6 +2,7 @@
 
 **Status:** Accepted — 2026-06-03
 **Related:** ADR-0082 (superseded for the pedagogical routing question — see D6), ADR-0033 (multi-provider model taxonomy — defines `primary` / `sub_agent` tiers), ADR-0074 (identity / joinability — the emit-site discipline the M2 instrument inherits), FRE-447, Seshat Pedagogical Architecture project, `docs/research/2026-06-03-pedagogical-architecture-origins.md`, `docs/specs/PEDAGOGICAL_NORTH_STAR.md`
+**Amendments:** ADR-0091 (2026-06-14) — adds the **turn completion-status layer** to the §D4 taxonomy (third, orthogonal layer; see §D4 "Completion status").
 
 > **ADR numbering note:** FRE-447, FRE-432, and the project description reference this ADR as "ADR-0083".
 > ADR-0083 was assigned to the adaptive-limits / SLM-health observability work (FRE-399, 2026-06-02).
@@ -132,13 +133,18 @@ A `sub_agent` that can correctly serve a full learner turn in the Socratic conte
 That is a second primary-class model profile, not a tier swap. It requires independent design,
 evaluation, and an ADR. Until that work is done, `sub_agent` stays on the HYBRID path only.
 
-### D4 — Result type taxonomy (canonical, two-layer separation)
+### D4 — Result type taxonomy (canonical, multi-layer separation)
+
+> **Layer count (amended by ADR-0091, 2026-06-14).** As originally accepted this section defined a
+> **two-layer** taxonomy (orchestration events + pedagogical outcomes). ADR-0091 adds a third,
+> orthogonal **completion-status** layer (below). Where older text in this ADR or in
+> `RESULT_TYPE_TAXONOMY_SPEC.md` still says "two-layer," read it as superseded by this amendment.
 
 The measurement framework proposed in ADR-0082 conflated orchestration facts with learner-facing
 outcomes. A turn can both execute delegation *and* produce a recall check — conflating these makes
 measurement muddy and hides the pedagogically important signal.
 
-**Canonical two-layer taxonomy:**
+**Canonical taxonomy (orchestration events + pedagogical outcomes + completion status):**
 
 **Orchestration events** (what the harness did):
 
@@ -164,6 +170,20 @@ measurement muddy and hides the pedagogically important signal.
 | `learner_state_updated` | The learner model was updated with new engagement signal |
 | `synthesis_performed` | Multiple prior concepts connected into a new structure |
 | `misalignment_detected` | A divergence between the learner's model and the actual concept was identified |
+
+**Completion status** (did the exchange finish, and if not, why?) — *added by ADR-0091 (2026-06-14);
+a third, orthogonal layer.* A labelled turn/conversation carries exactly one:
+
+| Status | Meaning |
+|---|---|
+| `natural_end` | The conversation reached a natural conclusion |
+| `clarification_requested` | The turn paused, **blocked on the user**, for information it cannot proceed without (a continuation signal, never a quality verdict; distinct from `open_thread_preserved`, where the *tutor* defers a thread while the turn still concludes) |
+| `incomplete` | The conversation did not conclude within bounds (turn-cap exhausted or errored) |
+
+The three layers are assigned **independently**. Pedagogical outcomes are scored **only** on
+`natural_end` conversations; a `clarification_requested` turn is a correct pause carried forward by
+the eval driver, never a pedagogical-outcome miss. See **ADR-0091** for the layer's definition,
+the eval conversation driver, and the detection contract.
 
 **The measurement question is not** "did the turn finish?" **It is:** did the turn preserve
 continuity, ask the right kind of question, strengthen recall, extract useful structure, and

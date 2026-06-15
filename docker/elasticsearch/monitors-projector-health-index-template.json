@@ -1,0 +1,31 @@
+{
+  "index_patterns": ["agent-monitors-projector-health-*"],
+  "priority": 110,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.codec": "best_compression",
+      "index.refresh_interval": "5s"
+    },
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "@timestamp":               { "type": "date" },
+        "trace_id":                 { "type": "keyword" },
+        "session_id":               { "type": "keyword" },
+        "topology":                 { "type": "keyword" },
+        "events_received":          { "type": "long" },
+        "model_calls_received":     { "type": "long" },
+        "projector_live_cost_usd":  { "type": "double" },
+        "cost_authoritative_usd":   { "type": "double" },
+        "cost_delta_usd":           { "type": "double" },
+        "observation_complete":     { "type": "boolean" }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Live-projector bus-delivery health, one doc per (trace_id) at turn completion (FRE-557 / ADR-0088 D6 sink 2). model_calls_received vs COUNT(api_costs WHERE trace_id) detects bus/stream:turn.observed delivery loss to the projector — ORTHOGONAL to the route-trace ledger's cost_reconciled (which is per-loop accumulator drift, ADR-0088 D3). projector_live_cost_usd is the bus-accumulated live meter captured BEFORE the authoritative reconcile. observation_complete=false ⇒ the obs was freshly created at completion (evicted mid-turn / never-seen) so its counters are untrustworthy. dynamic:false with an explicit schema — join key keyword, *_usd double, counters long — no dynamic-mapping trap. Index agent-monitors-projector-health-YYYY-MM-DD.",
+    "managed_by": "scripts/setup-elasticsearch.sh"
+  }
+}

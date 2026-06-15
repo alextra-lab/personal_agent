@@ -17,10 +17,14 @@ a transport failure can never break the consumer loop.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
 
 import structlog
 
+from personal_agent.captains_log.es_indexer import schedule_es_index
 from personal_agent.events.models import (
     EventBase,
     ModelCallCompletedEvent,
@@ -38,6 +42,15 @@ log = structlog.get_logger(__name__)
 # (process crash mid-turn) would otherwise leak an entry. Evicting the oldest beyond this
 # cap keeps the projector memory-stable without a TTL sweeper.
 _MAX_TRACKED_TRACES = 2000
+
+# FRE-557 projector-health rolling counter cadence: emit a rolling snapshot every N events
+# OR every T seconds of activity (whichever first), so low-volume instances still heartbeat.
+# Process-local + reset on restart — an operational gauge, not a durable counter.
+_ROLLING_EMIT_EVERY = 1000
+_ROLLING_EMIT_SECONDS = 300.0
+
+# FRE-557 dedicated per-trace bus-delivery health index (one doc per trace at completion).
+_HEALTH_INDEX_PREFIX = "agent-monitors-projector-health"
 
 
 @dataclass
@@ -62,6 +75,10 @@ class TurnObservation:
         output_tokens: Accumulated completion tokens from model-call events.
         degradations: Human-readable degradation markers raised this turn.
         degraded: Whether any degradation has been reported.
+        events_received: Count of ``stream:turn.observed`` events the projector received for
+            this trace (FRE-557 bus-delivery health).
+        model_calls_received: Count of ``ModelCallCompletedEvent``s received for this trace —
+            compared offline to ``COUNT(api_costs WHERE trace_id)`` to detect delivery loss.
     """
 
     trace_id: str
@@ -79,14 +96,20 @@ class TurnObservation:
     output_tokens: int = 0
     degradations: list[str] = field(default_factory=list)
     degraded: bool = False
+    events_received: int = 0
+    model_calls_received: int = 0
 
 
 class TurnObservationProjector:
     """Consumes ``stream:turn.observed`` and emits ``turn_status`` (ADR-0088 D4)."""
 
     def __init__(self) -> None:
-        """Initialise an empty per-trace observation map."""
+        """Initialise an empty per-trace observation map and process-local counters."""
         self._by_trace: dict[str, TurnObservation] = {}
+        # FRE-557 global rolling counters (process-local; reset on restart).
+        self._events_received_total: int = 0
+        self._events_by_type: dict[str, int] = {}
+        self._last_rolling_emit: float = time.monotonic()
 
     def _observation(self, trace_id: str, session_id: str) -> TurnObservation:
         """Return (creating if needed) the observation for a trace."""
@@ -95,8 +118,17 @@ class TurnObservationProjector:
             if len(self._by_trace) >= _MAX_TRACKED_TRACES:
                 # Evict the oldest tracked trace (insertion order) to stay bounded.
                 oldest = next(iter(self._by_trace))
-                del self._by_trace[oldest]
-                log.debug("turn_projector_evicted_stale_trace", trace_id=oldest)
+                evicted = self._by_trace.pop(oldest)
+                # FRE-557: a mid-turn eviction of an *active* trace would later produce a
+                # zero-counter health doc with no signal of loss — make it loud.
+                if evicted.events_received > 0:
+                    log.warning(
+                        "projector_evicted_active_trace",
+                        trace_id=oldest,
+                        events_received=evicted.events_received,
+                    )
+                else:
+                    log.debug("turn_projector_evicted_stale_trace", trace_id=oldest)
             obs = TurnObservation(trace_id=trace_id, session_id=session_id)
             self._by_trace[trace_id] = obs
         return obs
@@ -108,11 +140,20 @@ class TurnObservationProjector:
             event: A parsed turn-observed event. Unknown event types are ignored (the
                 stream is single-purpose, but the consumer tolerates additions).
         """
+        # FRE-557: count every received event (incl. unknown types) for the rolling
+        # bus-delivery gauge, before per-type dispatch.
+        self._events_received_total += 1
+        name = type(event).__name__
+        self._events_by_type[name] = self._events_by_type.get(name, 0) + 1
+        self._maybe_emit_rolling()
+
         if isinstance(event, TopologyEnteredEvent):
             obs = self._observation(event.trace_id, event.session_id)
+            obs.events_received += 1
             obs.topology = event.topology
         elif isinstance(event, TurnProgressEvent):
             obs = self._observation(event.trace_id, event.session_id)
+            obs.events_received += 1
             obs.tool_iteration = event.tool_iteration
             obs.tool_iteration_max = event.tool_iteration_max
             obs.context_tokens = event.context_tokens
@@ -125,6 +166,7 @@ class TurnObservationProjector:
             # persist until TurnCompletedEvent pops the whole trace (do not pop per sub-agent
             # — removing both numerator and denominator would mask completed work).
             obs = self._observation(event.trace_id, event.session_id)
+            obs.events_received += 1
             obs.sub_agent_iterations[event.task_id] = max(
                 obs.sub_agent_iterations.get(event.task_id, 0), event.iteration
             )
@@ -133,6 +175,8 @@ class TurnObservationProjector:
             )
         elif isinstance(event, ModelCallCompletedEvent):
             obs = self._observation(event.trace_id, event.session_id)
+            obs.events_received += 1
+            obs.model_calls_received += 1
             obs.live_cost_usd += event.cost_usd
             obs.input_tokens += event.input_tokens
             obs.output_tokens += event.output_tokens
@@ -140,12 +184,27 @@ class TurnObservationProjector:
                 obs.topology = event.topology
         elif isinstance(event, TurnDegradedEvent):
             obs = self._observation(event.trace_id, event.session_id)
+            obs.events_received += 1
             obs.degraded = True
             obs.degradations.append(f"{event.where}: {event.reason}")
         elif isinstance(event, TurnCompletedEvent):
+            # FRE-557: was the full lifecycle observed, or is this obs about to be freshly
+            # created (evicted mid-turn / never-seen-until-completion)? Captured before
+            # _observation so the health doc can flag untrustworthy counters.
+            observation_complete = event.trace_id in self._by_trace
             obs = self._observation(event.trace_id, event.session_id)
+            obs.events_received += 1
             obs.topology = event.topology
             obs.phase = "completed"
+            # FRE-557: capture the bus-accumulated live cost BEFORE the authoritative
+            # overwrite — that is what the UI meter actually showed.
+            projector_live_cost_usd = obs.live_cost_usd
+            self._emit_turn_health(
+                obs,
+                projector_live_cost_usd=projector_live_cost_usd,
+                cost_authoritative_usd=event.cost_authoritative_usd,
+                observation_complete=observation_complete,
+            )
             # Authoritative wins (ADR-0088 D3): reconcile the live meter to SUM(api_costs).
             obs.live_cost_usd = event.cost_authoritative_usd
             await self._emit(obs)
@@ -185,4 +244,77 @@ class TurnObservationProjector:
                 "turn_status_emit_failed",
                 trace_id=obs.trace_id,
                 session_id=obs.session_id,
+            )
+
+    def _maybe_emit_rolling(self) -> None:
+        """Emit the rolling bus-delivery gauge every N events or T seconds (FRE-557).
+
+        Event-driven (no background task): fires when the event count crosses
+        ``_ROLLING_EMIT_EVERY`` **or** ``_ROLLING_EMIT_SECONDS`` have elapsed since the last
+        emit — so a low-volume instance still heartbeats on its next event. Process-local and
+        reset on restart; this is an operational gauge for systemic delivery loss, not a
+        durable per-trace counter (a trace seen *zero* times is invisible here — see the
+        per-trace health doc + the offline reconciliation query).
+        """
+        now = time.monotonic()
+        if (
+            self._events_received_total % _ROLLING_EMIT_EVERY == 0
+            or now - self._last_rolling_emit >= _ROLLING_EMIT_SECONDS
+        ):
+            self._last_rolling_emit = now
+            log.info(
+                "projector_events_rolling",
+                events_total=self._events_received_total,
+                by_type=dict(self._events_by_type),
+                tracked_traces=len(self._by_trace),
+            )
+
+    def _emit_turn_health(
+        self,
+        obs: TurnObservation,
+        *,
+        projector_live_cost_usd: float,
+        cost_authoritative_usd: float,
+        observation_complete: bool,
+    ) -> None:
+        """Project per-trace bus-delivery health to ``agent-monitors-projector-health-*``.
+
+        Non-blocking + best-effort (the whole body is guarded — ``schedule_es_index`` only
+        guards the scheduled write, not the synchronous doc build). Idempotent on
+        ``doc_id = trace_id``. Carries the projector's bus-accumulated live cost (pre-reconcile)
+        alongside the authoritative sum so an undercount is attributable to delivery loss
+        (``model_calls_received`` < ``COUNT(api_costs WHERE trace_id)``) rather than the
+        ledger's accumulator drift (``cost_reconciled = FALSE`` — a separate, orthogonal axis).
+
+        Args:
+            obs: The completed turn's observation.
+            projector_live_cost_usd: Bus-accumulated live cost captured before the
+                authoritative reconcile-overwrite.
+            cost_authoritative_usd: ``SUM(api_costs)`` carried on the completion event.
+            observation_complete: ``False`` when the obs was freshly created at completion
+                (evicted mid-turn / never-seen-until-completion) → counters untrustworthy.
+        """
+        try:
+            ts = datetime.now(timezone.utc).isoformat()
+            doc: dict[str, Any] = {
+                "@timestamp": ts,
+                "trace_id": obs.trace_id,
+                "session_id": obs.session_id,
+                "topology": obs.topology,
+                "events_received": obs.events_received,
+                "model_calls_received": obs.model_calls_received,
+                "projector_live_cost_usd": float(projector_live_cost_usd),
+                "cost_authoritative_usd": float(cost_authoritative_usd),
+                "cost_delta_usd": round(
+                    float(projector_live_cost_usd) - float(cost_authoritative_usd), 6
+                ),
+                "observation_complete": observation_complete,
+            }
+            index_name = f"{_HEALTH_INDEX_PREFIX}-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
+            schedule_es_index(index_name, doc, doc_id=obs.trace_id)
+        except Exception as e:
+            log.warning(
+                "projector_health_emit_failed",
+                trace_id=obs.trace_id,
+                error=str(e),
             )

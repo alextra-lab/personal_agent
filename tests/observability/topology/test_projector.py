@@ -259,3 +259,187 @@ async def test_emit_is_best_effort(monkeypatch: pytest.MonkeyPatch) -> None:
 
     # A failing transport must not propagate out of the consumer handler.
     await proj.handle(TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="primary"))
+
+
+# ---------------------------------------------------------------------------
+# FRE-557 — projector-health counters
+# ---------------------------------------------------------------------------
+
+
+def _capture_health(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Patch schedule_es_index in the projector and capture (index, doc, doc_id)."""
+    calls: list[dict[str, Any]] = []
+
+    def _fake(index_name, document, es_handler=None, doc_id=None):  # type: ignore[no-untyped-def]
+        calls.append({"index": index_name, "doc": document, "doc_id": doc_id})
+
+    monkeypatch.setattr(projector_mod, "schedule_es_index", _fake)
+    return calls
+
+
+async def test_handle_counts_events_per_trace(monkeypatch: pytest.MonkeyPatch) -> None:
+    _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="decompose"))
+    for _ in range(2):
+        await proj.handle(
+            ModelCallCompletedEvent(
+                trace_id="t-1", session_id="s-1", cost_usd=0.01, input_tokens=1, output_tokens=1
+            )
+        )
+
+    obs = proj._by_trace["t-1"]
+    assert obs.events_received == 3
+    assert obs.model_calls_received == 2
+
+
+async def test_turn_completed_emits_health_doc(monkeypatch: pytest.MonkeyPatch) -> None:
+    _capture(monkeypatch)
+    calls = _capture_health(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="primary"))
+    for _ in range(2):
+        await proj.handle(
+            ModelCallCompletedEvent(
+                trace_id="t-1", session_id="s-1", cost_usd=0.01, input_tokens=1, output_tokens=1
+            )
+        )
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id="t-1", session_id="s-1", topology="primary", cost_authoritative_usd=0.05
+        )
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["index"].startswith("agent-monitors-projector-health-")
+    assert calls[0]["doc_id"] == "t-1"
+    doc = calls[0]["doc"]
+    assert doc["trace_id"] == "t-1" and doc["session_id"] == "s-1"
+    assert doc["model_calls_received"] == 2
+    assert doc["events_received"] == 4  # topology + 2 model calls + completed
+    # The projector's bus-accumulated live cost is captured BEFORE the authoritative overwrite.
+    assert doc["projector_live_cost_usd"] == pytest.approx(0.02)
+    assert doc["cost_authoritative_usd"] == pytest.approx(0.05)
+    assert doc["cost_delta_usd"] == pytest.approx(-0.03)
+    assert doc["observation_complete"] is True
+    assert "T" in doc["@timestamp"]
+
+
+async def test_health_emit_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    _capture(monkeypatch)
+
+    def _boom(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError("es down")
+
+    monkeypatch.setattr(projector_mod, "schedule_es_index", _boom)
+    proj = TurnObservationProjector()
+
+    await proj.handle(TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="primary"))
+    # A failing health emit must not break the consumer or skip eviction.
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id="t-1", session_id="s-1", topology="primary", cost_authoritative_usd=0.0
+        )
+    )
+    assert "t-1" not in proj._by_trace
+
+
+async def test_completion_without_prior_events_flags_incomplete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _capture(monkeypatch)
+    calls = _capture_health(monkeypatch)
+    proj = TurnObservationProjector()
+
+    # Only the completion event arrives — the projector never saw this trace's earlier events.
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id="t-99", session_id="s-1", topology="primary", cost_authoritative_usd=0.4
+        )
+    )
+
+    doc = calls[0]["doc"]
+    assert doc["observation_complete"] is False
+    assert doc["model_calls_received"] == 0
+
+
+async def test_global_counter_counts_unknown_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    from personal_agent.events.models import EventBase
+
+    class _UnknownEvent(EventBase):
+        event_type: str = "unknown_test_event"
+        source_component: str = "test"
+        trace_id: str = "t-1"
+        session_id: str = "s-1"
+
+    await proj.handle(_UnknownEvent())
+
+    assert proj._events_received_total == 1
+    assert "t-1" not in proj._by_trace  # unknown events create no per-trace observation
+
+
+async def test_rolling_counter_emits_every_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+    import structlog
+
+    _capture(monkeypatch)
+    monkeypatch.setattr(projector_mod, "_ROLLING_EMIT_EVERY", 3)
+    proj = TurnObservationProjector()
+
+    with structlog.testing.capture_logs() as logs:
+        for _ in range(3):
+            await proj.handle(
+                TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="primary")
+            )
+
+    rolling = [e for e in logs if e.get("event") == "projector_events_rolling"]
+    assert len(rolling) == 1
+    assert rolling[0]["events_total"] == 3
+
+
+async def test_rolling_counter_time_heartbeat(monkeypatch: pytest.MonkeyPatch) -> None:
+    import structlog
+
+    _capture(monkeypatch)
+    # Count threshold high so only the time heartbeat can fire; zero seconds so any elapsed
+    # time triggers it deterministically. (Do NOT set _last_rolling_emit to a literal like
+    # 0.0 — time.monotonic()'s reference is arbitrary, so on a freshly-booted runner the
+    # delta can be < the threshold and the heartbeat would never fire.)
+    monkeypatch.setattr(projector_mod, "_ROLLING_EMIT_EVERY", 10_000)
+    monkeypatch.setattr(projector_mod, "_ROLLING_EMIT_SECONDS", 0.0)
+    proj = TurnObservationProjector()
+
+    with structlog.testing.capture_logs() as logs:
+        await proj.handle(
+            TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="primary")
+        )
+
+    assert any(e.get("event") == "projector_events_rolling" for e in logs)
+
+
+async def test_eviction_of_active_trace_warns(monkeypatch: pytest.MonkeyPatch) -> None:
+    import structlog
+
+    _capture(monkeypatch)
+    monkeypatch.setattr(projector_mod, "_MAX_TRACKED_TRACES", 2)
+    proj = TurnObservationProjector()
+
+    # t-1 becomes active (a model call → events_received > 0), then two more traces evict it.
+    await proj.handle(
+        ModelCallCompletedEvent(
+            trace_id="t-1", session_id="s-1", cost_usd=0.01, input_tokens=1, output_tokens=1
+        )
+    )
+    with structlog.testing.capture_logs() as logs:
+        await proj.handle(
+            TopologyEnteredEvent(trace_id="t-2", session_id="s-1", topology="primary")
+        )
+        await proj.handle(
+            TopologyEnteredEvent(trace_id="t-3", session_id="s-1", topology="primary")
+        )
+
+    assert any(e.get("event") == "projector_evicted_active_trace" for e in logs)

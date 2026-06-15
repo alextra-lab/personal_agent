@@ -144,6 +144,26 @@ curl "http://elasticsearch:9200/agent-topology-*/_search?q=topology:hybrid_fanou
 curl "http://elasticsearch:9200/agent-topology-*/_search?q=role:primary%20AND%20model_role:primary"
 ```
 
+### Live-projector bus-delivery health (`agent-monitors-projector-health-*`, FRE-557)
+
+One doc per trace at completion, measuring whether the live projector actually **received** the
+best-effort `stream:turn.observed` events (ADR-0088 D6 sink 2). Fields (`dynamic: false`):
+`trace_id`/`session_id`/`topology` (keyword), `events_received`/`model_calls_received` (long),
+`projector_live_cost_usd`/`cost_authoritative_usd`/`cost_delta_usd` (double), `observation_complete`
+(boolean), `@timestamp` (date).
+
+**This is orthogonal to `not_reconciled`.** `cost_reconciled = FALSE` (on `route_traces`) means the
+*durable per-loop accumulator* (`ctx.turn_cost_usd`) drifted from `SUM(api_costs)` — nothing to do
+with the bus. The projector counter measures the *separate* bus/live path: when
+`model_calls_received < COUNT(api_costs WHERE trace_id)` the live UI meter undercounted because bus
+events were dropped. `observation_complete=false` ⇒ counters untrustworthy (eviction/late-attach).
+A trace the projector saw *zero* times emits **no** doc — detect those by reconciliation: traces in
+`api_costs` with no `agent-monitors-projector-health` doc.
+
+```bash
+curl "http://elasticsearch:9200/agent-monitors-projector-health-*/_search?q=observation_complete:true"
+```
+
 ---
 
 ## 🚫 Planned — not implemented (do not call)

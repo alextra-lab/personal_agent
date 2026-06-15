@@ -160,6 +160,14 @@ put_resource "Index template: user-turn-ratings-template" \
   "/_index_template/user-turn-ratings-template" \
   "$PROJECT_ROOT/docker/elasticsearch/user-turn-ratings-index-template.json"
 
+# 7c. Live-projector bus-delivery health template (FRE-557 / ADR-0088 D6). One doc per
+#     trace at turn completion; model_calls_received vs COUNT(api_costs) detects
+#     stream:turn.observed delivery loss to the projector (orthogonal to cost_reconciled
+#     accumulator drift). dynamic:false explicit schema — join key keyword, *_usd double.
+put_resource "Index template: agent-monitors-projector-health-template" \
+  "/_index_template/agent-monitors-projector-health-template" \
+  "$PROJECT_ROOT/docker/elasticsearch/monitors-projector-health-index-template.json"
+
 # 7b. Execution-topology projection template (FRE-548 / ADR-0088). Projects the
 #     Postgres route-trace ledger row (turn-level + per-sub-agent segments) to
 #     agent-topology-*. dynamic:false with an explicit schema keeps join keys

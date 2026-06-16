@@ -797,7 +797,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # ADR-0088: cg:turn-projector — the sole emitter of turn_status (FRE-513).
         # Consumes stream:turn.observed and projects the live meter. Live-only; under
         # NoOpBus (not RedisStreamBus) this block is skipped and the durable route-trace
-        # + api_costs writes still happen (ADR-0088 D8).
+        # + api_costs writes still happen (ADR-0088 D8). FRE-507: the resulting dark meter
+        # is accepted graceful degradation (no in-band fallback — see projector.py docstring).
         if settings.turn_projector_enabled:
             from personal_agent.observability.topology.projector import (
                 TurnObservationProjector,

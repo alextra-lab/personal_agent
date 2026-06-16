@@ -13,6 +13,18 @@ hard-enforced cost boundary) and reconciles to the authoritative sum at ``turn.c
 This is a **live-only** consumer (ADR-0088 D6 sink 2): durability lives in the seam's
 direct route-trace write + ``api_costs``. Every ``emit_turn_status`` call is best-effort so
 a transport failure can never break the consumer loop.
+
+Bus-down behaviour (FRE-507): under ``NoOpBus`` (Redis down or the flag off) the live meter
+goes **dark** — publishes are discarded and this consumer is not even wired (``service/app.py``
+only subscribes it on the ``RedisStreamBus`` branch). That is accepted graceful degradation,
+*not* a data risk: the durable cost path is decoupled from the bus (``cost_tracker`` writes the
+``api_costs`` row before the best-effort publish, authoritative cost == ``SUM(api_costs)``, and
+the seam's route-trace write is bus-independent — D8), so a dark meter loses only the live
+cosmetic cadence, never durable data. The in-band fallback (a direct ``emit_turn_status`` when
+the bus is a ``NoOpBus``) is *declined* — not because it could not deliver (the WS carrier is
+Redis-independent) but because it would re-introduce a **second** ``turn_status`` writer at the
+cost boundary, breaking this projector's sole-emitter contract (the scattered in-band emits
+ADR-0088 removed, FRE-501). A degraded-mode cosmetic gain is not worth forking that invariant.
 """
 
 from __future__ import annotations

@@ -260,7 +260,10 @@ async def submit_turn_rating(
     )
 
     # --- Persist: ES (source of truth, idempotent overwrite) ---
-    index_name = f"user-turn-ratings-{now.strftime('%Y.%m.%d')}"
+    # Monthly partitioning (FRE-559): one low-volume index per month keeps the
+    # 365d ILM-retained family from over-sharding, and re-rates within the month
+    # overwrite by doc_id=trace_id. ILM (user-turn-ratings-policy) governs deletion.
+    index_name = f"user-turn-ratings-{now.strftime('%Y.%m')}"
     es_doc = turn_rating.to_es_doc()
     schedule_es_index(index_name, es_doc, doc_id=trace_id)
     log.info(

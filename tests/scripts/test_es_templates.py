@@ -315,6 +315,12 @@ ILM_FAMILIES = [
         "monitors-slm-health-index-template.json",
         90,
     ),
+    (
+        "user-turn-ratings-ilm-policy.json",
+        "user-turn-ratings-policy",
+        "user-turn-ratings-index-template.json",
+        365,
+    ),
 ]
 
 

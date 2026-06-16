@@ -6,7 +6,8 @@
       "number_of_shards": 1,
       "number_of_replicas": 0,
       "index.codec": "best_compression",
-      "index.refresh_interval": "5s"
+      "index.refresh_interval": "5s",
+      "index.lifecycle.name": "user-turn-ratings-policy"
     },
     "mappings": {
       "dynamic": false,
@@ -23,8 +24,8 @@
     }
   },
   "_meta": {
-    "description": "Per-turn user value ratings (FRE-407). One doc per assistant turn keyed on trace_id — re-rate overwrites. prompt_* fields are best-effort write-time denorms from agent-logs-* model_call_completed; nulls are recovered at read time by the Insights consumer. dynamic:false prevents prompt_component_ids from drifting to text. Retention: 90 days (ground-truth labels). Managed by scripts/setup-elasticsearch.sh.",
+    "description": "Per-turn user value ratings (FRE-407). Monthly index user-turn-ratings-YYYY.MM (FRE-559). One doc per assistant turn keyed on trace_id — re-rate overwrites within the month's index. prompt_* fields are best-effort write-time denorms from agent-logs-* model_call_completed; nulls are recovered at read time by the Insights consumer. dynamic:false prevents prompt_component_ids from drifting to text. Retention: 365 days (ground-truth labels), enforced by ILM policy user-turn-ratings-policy (FRE-559) — the prose 90d was never enforced. Managed by scripts/setup-elasticsearch.sh.",
     "managed_by": "scripts/setup-elasticsearch.sh",
-    "retention_days": 90
+    "retention_days": 365
   }
 }

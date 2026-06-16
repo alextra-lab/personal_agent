@@ -1,0 +1,28 @@
+{
+  "policy": {
+    "_meta": {
+      "description": "ILM for user-turn-ratings-* (monthly index user-turn-ratings-YYYY.MM; per-turn ground-truth value labels, one doc per trace_id, re-rate overwrites). min_age-based delete from index creation (no rollover write-alias). Retention: 365d (ground-truth labels train the pedagogical/quality model and are the join target for prompt-version analysis — kept to the same horizon as agent-insights-*). warm forcemerge fires at 32d, not the sibling 7d, so the current monthly index is closed before merge (avoids forcemerging a still-written index). Authored in FRE-559; the family documented retention_days:90 in prose but no policy enforced it.",
+      "retention_days": 365,
+      "managed_by": "scripts/setup-elasticsearch.sh"
+    },
+    "phases": {
+      "hot": {
+        "min_age": "0ms",
+        "actions": {
+          "set_priority": { "priority": 100 }
+        }
+      },
+      "warm": {
+        "min_age": "32d",
+        "actions": {
+          "forcemerge": { "max_num_segments": 1 },
+          "set_priority": { "priority": 50 }
+        }
+      },
+      "delete": {
+        "min_age": "365d",
+        "actions": { "delete": {} }
+      }
+    }
+  }
+}

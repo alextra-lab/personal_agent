@@ -131,14 +131,14 @@ Lane O (Observability)
 ### Two-worktree dispatch (2026-06-13 refresh) — file-domain split, no A/B collision
 
 **Lane A — Telemetry surface** (ES templates · Kibana · cost_gate · tools governance; local-mostly):
-1. **FRE-544** ✅ dyn-field bound (PR #218, deployed) → **2. FRE-559** ILM user-turn-ratings ← next (T2; ⚠️ 90d vs 365d retention — owner decides in-ticket) → 3. **FRE-546** cost-cache Kibana import fix (T2·Bug) → 4. **FRE-550** joinability breakdown panels (T2) → 5. **FRE-556** guard manual ES test vs prod :9200 (T3) → 6. **FRE-558** setup-es additive live-index mappings (T2; retires the manual deploy step).
+1. **FRE-544** ✅ dyn-field bound (PR #218, deployed) → **2. FRE-559** ILM user-turn-ratings ← next (T2; ⚠️ 90d vs 365d retention — owner decides in-ticket) → 3. **FRE-546** cost-cache Kibana import fix (T2·Bug) → 4. **FRE-550** joinability breakdown panels (T2) → 5. **FRE-556** guard manual ES test vs prod :9200 (T3) → 6. **FRE-558** setup-es additive live-index mappings (T2) → 7. **FRE-567** generic numeric dynamic_template (T2; sibling of 544).
 
 **Lane B — Observability/topology/eval/ledger + Artifact** (projector · route-trace ledger · eval harness · artifact_tools · PWA):
-1. **FRE-545** ✅ (PR #215) → 2. **FRE-557** ✅ projector-health counter (PR #217, deployed; live-doc pending) → **3. FRE-507** verify live cost-meter parity ← next + NoOpBus-down decision (T2; needs a live decomposed turn — no ADR) → 4. **FRE-522** eval⇄PWA cross-links → 5. **FRE-542** PWA gap-aware client dedup → 6. **FRE-551** artifact E2E extend. **ADR-0091 eval-validity chain (Approved):** 561 (taxonomy-spec mirror, doc) ∥ 562 (dataset) → 563 (driver+detector) → 564 (report+validation) → **FRE-453** (canonical eval set, finally meaningful). *(554 → adr session, spec-first.)*
+1. **FRE-545** ✅ → 2. **FRE-557** ✅ (deployed; live-doc pending) → **3. FRE-507** verify cost-meter parity + NoOpBus decision ← next → 4. **FRE-522** eval⇄PWA → 5. **FRE-542** PWA dedup → 6. **FRE-551** artifact E2E → **FRE-566** zero-delivery monitor. **ADR-0091 eval-validity chain (Approved):** 561 ∥ 562 → 563 → 564 → **FRE-453**. **ADR-0092 meter chain (Approved):** 568 → 570 → {571 · 572 · 573}.
 
 **adr session (worktree-adrs) — observability spec-first (owner: "finish infrastructure + observability first"):**
 - ✅ **FRE-541** — **ADR-0091 shipped** (PR #216, Proposed; amends ADR-0084 §D4). Umbrella stays In Progress; impl now in 561–564. → **FRE-561/562/563/564 Approved 2026-06-15** — the eval-validity build chain → **Lane B** (serial: **561** doc-mirror T3 ∥ **562** dataset → **563** driver+detector → **564** report+validation; **564 unblocks FRE-453**).
-- ✅ **FRE-554** — **ADR-0092 shipped** (PR #219, Proposed; owner-interviewed). Done. → spawned **FRE-568/570/571/572/573 (Needs Approval)** impl chain + **FRE-569** (mechanism-C carve-out, T1) — Observability; need owner approval to dispatch. adr session now free.
+- ✅ **FRE-554** — **ADR-0092 shipped** (PR #219, Proposed; owner-interviewed). Done. → impl chain **Approved 2026-06-16 → Lane B**: **568** (projector session agg) → **570** (A/B/D markers + 4 fields) → {**571** ES maps · **572** backend monitors · **573** PWA two-lane}. **FRE-569** (mechanism-C carve-out, T1) **HELD** (Needs Approval — owner deferred; C parked). adr session now free.
 
 **In flight / parked:**
 - ✅ **FRE-560** — Done (PR #214, deployed+verified). KG write pipeline healthy.

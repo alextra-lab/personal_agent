@@ -154,8 +154,14 @@ put_resource "Index template: slm-requests-template" \
 
 # 7. Per-turn user value ratings template (FRE-407). dynamic:false keeps
 #    prompt_component_ids as keyword (array) so mean-by-component aggregations
-#    work. Retention: 90 days — ground-truth labels are worth keeping longer
-#    than operational logs. Re-rate overwrites the doc (doc_id=trace_id).
+#    work. Re-rate overwrites the doc (doc_id=trace_id).
+#    ILM (FRE-559): monthly user-turn-ratings-YYYY.MM, delete at 365d (min_age) —
+#    ground-truth labels kept to the agent-insights-* horizon. ILM is now the sole
+#    deleter (the lifecycle_manager 90d sweep override was removed). PUT the policy
+#    before the template so new indices bind on creation.
+put_resource "ILM policy: user-turn-ratings-policy" \
+  "/_ilm/policy/user-turn-ratings-policy" \
+  "$PROJECT_ROOT/docker/elasticsearch/user-turn-ratings-ilm-policy.json"
 put_resource "Index template: user-turn-ratings-template" \
   "/_index_template/user-turn-ratings-template" \
   "$PROJECT_ROOT/docker/elasticsearch/user-turn-ratings-index-template.json"

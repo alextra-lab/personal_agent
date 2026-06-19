@@ -44,13 +44,13 @@ _KATEX_CSS = b"@font-face{font-family:KaTeX_Main;src:url(fonts/KaTeX_Test.woff2)
 _CHART_JS = b"window.Chart=function(){};Chart.getChart=function(){return null};"
 _FONT = b"wOF2\x00\x01synthetic-font-bytes"
 
-_KATEX_JS_PATH = "lib/katex@0.16.11/katex.min.js"
-_KATEX_CSS_PATH = "lib/katex@0.16.11/katex.min.css"
+_KATEX_JS_PATH = "lib/katex@0.16.47/katex.min.js"
+_KATEX_CSS_PATH = "lib/katex@0.16.47/katex.min.css"
 _CHART_JS_PATH = "lib/chartjs@4.4.7/chart.umd.js"
 
 _CDN_BASE = "https://cdn.jsdelivr.net/npm"
-_KATEX_CSS_CDN = f"{_CDN_BASE}/katex@0.16.11/dist/katex.min.css"
-_FONT_CDN = f"{_CDN_BASE}/katex@0.16.11/dist/fonts/KaTeX_Test.woff2"
+_KATEX_CSS_CDN = f"{_CDN_BASE}/katex@0.16.47/dist/katex.min.css"
+_FONT_CDN = f"{_CDN_BASE}/katex@0.16.47/dist/fonts/KaTeX_Test.woff2"
 
 
 class _FakeFetcher:
@@ -89,7 +89,7 @@ def _sub_map() -> SubstitutionMap:
                 _KATEX_JS_PATH,
                 "script",
                 _KATEX_JS,
-                cdn=f"{_CDN_BASE}/katex@0.16.11/dist/katex.min.js",
+                cdn=f"{_CDN_BASE}/katex@0.16.47/dist/katex.min.js",
             ),
             _KATEX_CSS_PATH: _asset(_KATEX_CSS_PATH, "style", _KATEX_CSS, cdn=_KATEX_CSS_CDN),
             _CHART_JS_PATH: _asset(
@@ -172,7 +172,7 @@ async def test_build_fixtures_writes_mirror_and_self_contained_standalone(tmp_pa
     assert (tmp_path / _KATEX_JS_PATH).read_bytes() == _KATEX_JS
     assert (tmp_path / _KATEX_CSS_PATH).read_bytes() == _KATEX_CSS
     assert (tmp_path / _CHART_JS_PATH).read_bytes() == _CHART_JS
-    assert (tmp_path / "lib/katex@0.16.11/fonts/KaTeX_Test.woff2").read_bytes() == _FONT
+    assert (tmp_path / "lib/katex@0.16.47/fonts/KaTeX_Test.woff2").read_bytes() == _FONT
 
     # The standalone is self-contained: no /lib/ refs survive, libs inlined,
     # the font baked as a data: URI.

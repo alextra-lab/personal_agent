@@ -372,7 +372,7 @@ def _lib_headers(content_type: str | None, *, nosniff: bool = True) -> list[tupl
 
 
 SCRIPT_ASSET = LibAsset(name="chartjs", path="chartjs@4.4.7/chart.umd.js", kind="script")
-STYLE_ASSET = LibAsset(name="katex", path="katex@0.16.11/katex.min.css", kind="style")
+STYLE_ASSET = LibAsset(name="katex", path="katex@0.16.47/katex.min.css", kind="style")
 FONT_ASSET = LibAsset(
     name="jetbrains-mono",
     path="fonts/jetbrains-mono@2.304/jetbrains-mono.woff2",

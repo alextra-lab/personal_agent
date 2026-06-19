@@ -2,8 +2,8 @@
   "description": "Curated artifact toolkit /lib/ manifest (ADR-0089 Addendum A · FRE-527). Single cross-repo lockstep source: the personal_agent_secrets Worker must host exactly these origin + paths, and `make verify-lib` asserts each serves the correct executable/typed MIME + nosniff + reachability under the artifact CSP. Sole writer: the public-repo build session; hosting-determined values are confirmed by the hosting CC via the FRE-527 ticket, not edited here directly. Provenance: three.js is a bespoke esbuild IIFE/global build (REVISION 171, eval-free); font bytes are Fontsource variable-font packaging (@fontsource-variable/<family>, latin wght-normal) of the named OFL families, so the @<version> path label is the upstream OFL family version (a stable immutable pin key), not the Fontsource package version; paged.js is eval_gated pending FRE-531 runtime confirmation under the live CSP (static analysis: eval-free). Per-asset SRI + CDN substitution provenance lives in the substitution map (personal_agent_secrets).",
   "origin": "https://artifacts.frenchforet.com",
   "assets": [
-    {"name": "katex", "path": "katex@0.16.11/katex.min.js", "kind": "script"},
-    {"name": "katex", "path": "katex@0.16.11/katex.min.css", "kind": "style"},
+    {"name": "katex", "path": "katex@0.16.47/katex.min.js", "kind": "script"},
+    {"name": "katex", "path": "katex@0.16.47/katex.min.css", "kind": "style"},
     {"name": "chartjs", "path": "chartjs@4.4.7/chart.umd.js", "kind": "script"},
     {"name": "highlightjs", "path": "highlightjs@11.9.0/highlight.min.js", "kind": "script"},
     {"name": "highlightjs", "path": "highlightjs@11.9.0/github-dark.min.css", "kind": "style"},

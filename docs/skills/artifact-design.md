@@ -98,8 +98,8 @@ pins (ADR-0089 A3) — never edit a version in place. Source of truth:
 ### KaTeX → math / formula typesetting (MIT)
 
 ```html
-<link rel="stylesheet" href="https://artifacts.frenchforet.com/lib/katex@0.16.11/katex.min.css">
-<script src="https://artifacts.frenchforet.com/lib/katex@0.16.11/katex.min.js"></script>
+<link rel="stylesheet" href="https://artifacts.frenchforet.com/lib/katex@0.16.47/katex.min.css">
+<script src="https://artifacts.frenchforet.com/lib/katex@0.16.47/katex.min.js"></script>
 ```
 
 ```html

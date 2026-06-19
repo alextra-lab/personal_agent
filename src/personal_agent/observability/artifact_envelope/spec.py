@@ -102,7 +102,7 @@ class LibAsset:
 
     Attributes:
         name: Library name (e.g. ``"katex"``), for reporting.
-        path: Path relative to ``/lib/`` (e.g. ``"katex@0.16.11/katex.min.js"``).
+        path: Path relative to ``/lib/`` (e.g. ``"katex@0.16.47/katex.min.js"``).
         kind: Whether the asset is loaded as a script, stylesheet, or font.
         eval_gated: True for an asset still pending eval-free confirmation under
             the CSP (e.g. paged.js); excluded from the default assert set.

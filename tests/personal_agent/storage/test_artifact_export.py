@@ -119,17 +119,17 @@ async def test_inline_script_preserves_type_attribute() -> None:
 async def test_inline_style_inlines_css_and_subresource_fonts() -> None:
     css = b'@font-face{font-family:"KaTeX_Main";src:url(fonts/KaTeX_Main.woff2) format("woff2")}'
     font = b"\x00woff2-bytes\x00"
-    cdn = "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"
+    cdn = "https://cdn.jsdelivr.net/npm/katex@0.16.47/dist/katex.min.css"
     asset = _asset(
-        "lib/katex@0.16.11/katex.min.css", "style", sri=compute_sri(css), cdn=cdn, cors=True
+        "lib/katex@0.16.47/katex.min.css", "style", sri=compute_sri(css), cdn=cdn, cors=True
     )
     fetcher = _FakeFetcher(
         {
             cdn: css,
-            "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/fonts/KaTeX_Main.woff2": font,
+            "https://cdn.jsdelivr.net/npm/katex@0.16.47/dist/fonts/KaTeX_Main.woff2": font,
         }
     )
-    html = f'<link rel="stylesheet" href="{_ORIGIN}/lib/katex@0.16.11/katex.min.css">'
+    html = f'<link rel="stylesheet" href="{_ORIGIN}/lib/katex@0.16.47/katex.min.css">'
 
     out = await export_artifact_html(html=html, mode="inline", sub_map=_map(asset), fetcher=fetcher)
 
@@ -142,12 +142,12 @@ async def test_inline_style_inlines_css_and_subresource_fonts() -> None:
 @pytest.mark.asyncio
 async def test_inline_css_subresource_rejected_when_extension_not_allowed() -> None:
     css = b"body{background:url(evil.js)}"
-    cdn = "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"
+    cdn = "https://cdn.jsdelivr.net/npm/katex@0.16.47/dist/katex.min.css"
     asset = _asset(
-        "lib/katex@0.16.11/katex.min.css", "style", sri=compute_sri(css), cdn=cdn, cors=True
+        "lib/katex@0.16.47/katex.min.css", "style", sri=compute_sri(css), cdn=cdn, cors=True
     )
     fetcher = _FakeFetcher({cdn: css})
-    html = f'<link rel="stylesheet" href="{_ORIGIN}/lib/katex@0.16.11/katex.min.css">'
+    html = f'<link rel="stylesheet" href="{_ORIGIN}/lib/katex@0.16.47/katex.min.css">'
 
     out = await export_artifact_html(html=html, mode="inline", sub_map=_map(asset), fetcher=fetcher)
 
@@ -160,12 +160,12 @@ async def test_inline_css_subresource_rejected_when_extension_not_allowed() -> N
 @pytest.mark.asyncio
 async def test_inline_css_subresource_rejected_on_base_escape() -> None:
     css = b"body{src:url(../../../../etc/passwd.woff2)}"
-    cdn = "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"
+    cdn = "https://cdn.jsdelivr.net/npm/katex@0.16.47/dist/katex.min.css"
     asset = _asset(
-        "lib/katex@0.16.11/katex.min.css", "style", sri=compute_sri(css), cdn=cdn, cors=True
+        "lib/katex@0.16.47/katex.min.css", "style", sri=compute_sri(css), cdn=cdn, cors=True
     )
     fetcher = _FakeFetcher({cdn: css})
-    html = f'<link rel="stylesheet" href="{_ORIGIN}/lib/katex@0.16.11/katex.min.css">'
+    html = f'<link rel="stylesheet" href="{_ORIGIN}/lib/katex@0.16.47/katex.min.css">'
 
     out = await export_artifact_html(html=html, mode="inline", sub_map=_map(asset), fetcher=fetcher)
 
@@ -206,11 +206,11 @@ async def test_inline_katex_chartjs_zero_origin_refs() -> None:
     katex_js = b"window.katex={render(){}};"
     chart_js = b"window.Chart=function(){};"
     katex_css = b'.katex{font-family:"KaTeX_Main"}'
-    cdn_css = "https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"
+    cdn_css = "https://cdn.jsdelivr.net/npm/katex@0.16.47/dist/katex.min.css"
     sub_map = _map(
-        _asset("lib/katex@0.16.11/katex.min.js", "script", sri=compute_sri(katex_js)),
+        _asset("lib/katex@0.16.47/katex.min.js", "script", sri=compute_sri(katex_js)),
         _asset(
-            "lib/katex@0.16.11/katex.min.css",
+            "lib/katex@0.16.47/katex.min.css",
             "style",
             sri=compute_sri(katex_css),
             cdn=cdn_css,
@@ -220,15 +220,15 @@ async def test_inline_katex_chartjs_zero_origin_refs() -> None:
     )
     fetcher = _FakeFetcher(
         {
-            f"{_ORIGIN}/lib/katex@0.16.11/katex.min.js": katex_js,
+            f"{_ORIGIN}/lib/katex@0.16.47/katex.min.js": katex_js,
             cdn_css: katex_css,
             f"{_ORIGIN}/lib/chartjs@4.4.7/chart.umd.js": chart_js,
         }
     )
     html = (
         "<html><head>"
-        f'<link rel="stylesheet" href="{_ORIGIN}/lib/katex@0.16.11/katex.min.css">'
-        f'<script src="{_ORIGIN}/lib/katex@0.16.11/katex.min.js"></script>'
+        f'<link rel="stylesheet" href="{_ORIGIN}/lib/katex@0.16.47/katex.min.css">'
+        f'<script src="{_ORIGIN}/lib/katex@0.16.47/katex.min.js"></script>'
         f'<script src="{_ORIGIN}/lib/chartjs@4.4.7/chart.umd.js"></script>'
         "</head><body><canvas></canvas></body></html>"
     )
@@ -325,7 +325,7 @@ def test_load_real_substitution_map_shape() -> None:
     sub_map = load_substitution_map()
     assert sub_map.origin == _ORIGIN
 
-    katex_css = sub_map.by_lib_path["lib/katex@0.16.11/katex.min.css"]
+    katex_css = sub_map.by_lib_path["lib/katex@0.16.47/katex.min.css"]
     assert katex_css.public_cdn_url is not None
     assert katex_css.cors_verified is True
     assert katex_css.sri.startswith("sha384-")

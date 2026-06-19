@@ -136,6 +136,32 @@ class RouteTraceLedger:
             self.pool = None
             log.info("route_trace_ledger_disconnected")
 
+    async def fetch_session_costs_by_trace(self, session_id: str) -> dict[str, float]:
+        """Return ``{trace_id_str: SUM(cost_usd)}`` from ``api_costs`` for a session.
+
+        Groups by ``trace_id`` so the projector can build its idempotent
+        ``dict[trace_id, cost]`` without a bare ``SUM`` that would hide per-trace
+        overwrite semantics (ADR-0092 §D2/§D4).
+
+        Args:
+            session_id: The session UUID as a string.
+
+        Returns:
+            Mapping of trace-id strings to their summed cost; empty on any failure.
+        """
+        if not self.pool:
+            return {}
+        try:
+            sid = UUID(session_id)
+        except ValueError:
+            return {}
+        rows = await self.pool.fetch(
+            "SELECT trace_id, COALESCE(SUM(cost_usd), 0) AS cost "
+            "FROM api_costs WHERE session_id = $1 GROUP BY trace_id",
+            sid,
+        )
+        return {str(r["trace_id"]): float(r["cost"]) for r in rows}
+
     async def fetch_authoritative_cost(self, trace_id: UUID) -> tuple[float, int, int]:
         """Return ``SUM(cost_usd, input_tokens, output_tokens)`` from ``api_costs``.
 

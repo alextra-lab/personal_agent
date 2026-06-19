@@ -272,6 +272,41 @@ async def test_get_by_trace_id_empty_when_unconnected() -> None:
     assert await ledger.get_by_trace_id(uuid4()) == []
 
 
+# ---------------------------------------------------------------------------
+# FRE-568 — fetch_session_costs_by_trace (ADR-0092 §D2/§D4 hydration read)
+# ---------------------------------------------------------------------------
+
+
+async def test_fetch_session_costs_by_trace_groups_by_trace_id() -> None:
+    """Returns a {trace_id_str: cost} map grouped by trace_id, not a bare SUM."""
+    ledger = RouteTraceLedger()
+    pool = MagicMock()
+
+    tid1 = uuid4()
+    tid2 = uuid4()
+    pool.fetch = AsyncMock(
+        return_value=[
+            {"trace_id": tid1, "cost": 0.5},
+            {"trace_id": tid2, "cost": 0.3},
+        ]
+    )
+    ledger.pool = pool
+
+    result = await ledger.fetch_session_costs_by_trace(str(uuid4()))
+
+    pool.fetch.assert_awaited_once()
+    sql = pool.fetch.call_args.args[0]
+    assert "GROUP BY trace_id" in sql
+    assert "session_id = $1" in sql
+    assert result == {str(tid1): pytest.approx(0.5), str(tid2): pytest.approx(0.3)}
+
+
+async def test_fetch_session_costs_by_trace_empty_when_unconnected() -> None:
+    ledger = RouteTraceLedger()
+    ledger.pool = None
+    assert await ledger.fetch_session_costs_by_trace(str(uuid4())) == {}
+
+
 @pytest.mark.integration
 async def test_write_read_roundtrip_and_idempotency() -> None:
     """Real round-trip against the isolated test substrate (requires make test-infra-up)."""

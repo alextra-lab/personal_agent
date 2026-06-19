@@ -800,11 +800,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # + api_costs writes still happen (ADR-0088 D8). FRE-507: the resulting dark meter
         # is accepted graceful degradation (no in-band fallback — see projector.py docstring).
         if settings.turn_projector_enabled:
+            from personal_agent.observability.route_trace import get_route_trace_ledger
             from personal_agent.observability.topology.projector import (
                 TurnObservationProjector,
             )
 
-            _turn_projector = TurnObservationProjector()
+            _ledger = get_route_trace_ledger()
+
+            async def _hydrate_session_costs(session_id: str) -> dict[str, float]:
+                return await _ledger.fetch_session_costs_by_trace(session_id)
+
+            _turn_projector = TurnObservationProjector(hydration_source=_hydrate_session_costs)
             await active_bus.subscribe(
                 stream=STREAM_TURN_OBSERVED,
                 group=CG_TURN_PROJECTOR,

@@ -86,10 +86,11 @@ dev = [
 # Dependency overrides (security)
 # -----------------------------
 # Force minimum secure versions for transitive dependencies (see pip-audit / Dependabot).
-# diskcache CVE-2025-69872: no fixed release on PyPI yet (monitor upstream).
 [tool.uv]
 override-dependencies = [
-  "aiohttp>=3.13.4",  # CVE-2026-22815, CVE-2026-34513–34520, CVE-2026-34525
+  "aiohttp>=3.14.1",  # FRE-579 Dependabot — 11 advisories (CRLF, WS, redirect, DoS, deserialization; was 3.13.4)
+  "idna>=3.15",  # FRE-579 Dependabot — PYSEC-2026-215 crafted input DoS
+  "pip>=26.1",  # FRE-579 Dependabot — untrusted control sphere + tar/zip interpretation (was 26.0.1)
   "cryptography>=48.0.1",  # FRE-578 Dependabot — vulnerable OpenSSL in wheels (was 46.0.7)
   "mako>=1.3.12",  # CVE in TemplateLookup path handling (Windows-only, bump for hygiene)
   "python-multipart>=0.0.30",  # FRE-578 Dependabot — quadratic-time DoS via semicolon (was 0.0.27)

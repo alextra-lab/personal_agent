@@ -325,7 +325,7 @@ def test_load_real_substitution_map_shape() -> None:
     sub_map = load_substitution_map()
     assert sub_map.origin == _ORIGIN
 
-    katex_css = sub_map.by_lib_path["lib/katex@0.16.11/katex.min.css"]
+    katex_css = sub_map.by_lib_path["lib/katex@0.16.47/katex.min.css"]
     assert katex_css.public_cdn_url is not None
     assert katex_css.cors_verified is True
     assert katex_css.sri.startswith("sha384-")

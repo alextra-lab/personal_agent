@@ -51,10 +51,11 @@ dependencies = [
   "neo4j>=5.15.0",        # Neo4j driver for knowledge graph
   # Claude API (Phase 2.2 - second brain). Optional at runtime: only loaded when using Claude.
   "anthropic>=0.18.0",
-  "litellm>=1.83.7",
+  "cryptography>=48.0.1",  # FRE-578 Dependabot — vulnerable OpenSSL in wheels; direct dep for test RSA key gen
+  "litellm>=1.84.0",  # FRE-578 Dependabot — auth bypass via host-header injection
   # Event bus (ADR-0041 — Redis Streams)
   "redis[hiredis]>=5.0.0",
-  "python-multipart>=0.0.26",
+  "python-multipart>=0.0.30",  # FRE-578 Dependabot — quadratic-time DoS via semicolon querystring
   # Artifact substrate (ADR-0069 — R2-backed storage via S3 SDK)
   "aiobotocore>=2.13.0",
   "pytest>=9.0.3",
@@ -89,9 +90,11 @@ dev = [
 [tool.uv]
 override-dependencies = [
   "aiohttp>=3.13.4",  # CVE-2026-22815, CVE-2026-34513–34520, CVE-2026-34525
-  "cryptography>=46.0.7",  # CVE-2026-26007, CVE-2026-34073
+  "cryptography>=48.0.1",  # FRE-578 Dependabot — vulnerable OpenSSL in wheels (was 46.0.7)
   "mako>=1.3.12",  # CVE in TemplateLookup path handling (Windows-only, bump for hygiene)
-  "python-multipart>=0.0.27",  # GHSA-pp6c-gr5w-3c5g — unbounded multipart headers DoS on /chat
+  "python-multipart>=0.0.30",  # FRE-578 Dependabot — quadratic-time DoS via semicolon (was 0.0.27)
+  "pyjwt>=2.13.0",  # FRE-578 Dependabot — public-key JWK accepted as HMAC secret
+  "starlette>=1.3.1",  # FRE-578 Dependabot — SSRF via StaticFiles + form() limit bypass
   "pygments>=2.20.0",  # CVE-2026-4539
   "requests>=2.33.0",  # CVE-2026-25645
   "urllib3>=2.7.0",  # CVE-2026-44431 — sensitive headers leak via low-level proxied redirects

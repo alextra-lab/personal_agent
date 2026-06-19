@@ -130,11 +130,13 @@ Lane O (Observability)
 
 ### Two-worktree dispatch (2026-06-13 refresh) — file-domain split, no A/B collision
 
+*Model per ticket (Tier→model, MODEL_ROUTING_POLICY): **[O]** Opus · **[S]** Sonnet · **[H]** Haiku. Escalate Sonnet→Opus on 3 failed attempts / API-shift.*
+
 **Lane A — Telemetry surface** (ES templates · Kibana · cost_gate · tools governance; local-mostly):
-1. **FRE-544** ✅ dyn-field bound (PR #218, deployed) → **2. FRE-559** ILM user-turn-ratings ← next (T2; ⚠️ 90d vs 365d retention — owner decides in-ticket) → 3. **FRE-546** cost-cache Kibana import fix (T2·Bug) → 4. **FRE-550** joinability breakdown panels (T2) → 5. **FRE-556** guard manual ES test vs prod :9200 (T3) → 6. **FRE-558** setup-es additive live-index mappings (T2) → 7. **FRE-567** generic numeric dynamic_template (T2; sibling of 544).
+1. FRE-544 ✅ → 2. FRE-559 ✅ (deployed) → **3. FRE-546 [S]** cost-cache Kibana import fix (Bug) ← next → 4. **FRE-550 [S]** joinability breakdown panels → 5. **FRE-556 [H]** guard manual ES test vs prod :9200 → 6. **FRE-558 [S]** setup-es additive live-index mappings → 7. **FRE-567 [S]** generic numeric dynamic_template.
 
 **Lane B — Observability/topology/eval/ledger + Artifact** (projector · route-trace ledger · eval harness · artifact_tools · PWA):
-1. **FRE-545** ✅ → 2. **FRE-557** ✅ (deployed; live-doc pending) → **3. FRE-507** verify cost-meter parity + NoOpBus decision ← next → 4. **FRE-522** eval⇄PWA → 5. **FRE-542** PWA dedup → 6. **FRE-551** artifact E2E → **FRE-566** zero-delivery monitor. **ADR-0091 eval-validity chain (Approved):** 561 ∥ 562 → 563 → 564 → **FRE-453**. **ADR-0092 meter chain (Approved):** 568 → 570 → {571 · 573} → **[compression cluster] 576 → 577** → 572 *(572 consumes 577's occupancy data)*.
+1. FRE-545 ✅ → 2. FRE-557 ✅ → 3. FRE-507 ✅ → **4. FRE-568 [S]** projector session agg ← next → **FRE-570 [S]** A/B/D markers → {**571 [H]** ES maps · **573 [S]** PWA two-lane} → **576 [O]** compression audit → **577 [S]** occupancy eval → **572 [S]** severity. Also queued: **FRE-522 [S]** eval⇄PWA · **FRE-542 [S]** PWA dedup · **FRE-551 [S]** artifact E2E · **FRE-566 [S]** zero-delivery monitor · **ADR-0091 eval chain:** **561 [H]** ∥ **562 [S]** → **563 [S]** → **564 [S]** → **FRE-453 [S]**.
 
 **adr session (worktree-adrs) — observability spec-first (owner: "finish infrastructure + observability first"):**
 - ✅ **FRE-541** — **ADR-0091 shipped** (PR #216, Proposed; amends ADR-0084 §D4). Umbrella stays In Progress; impl now in 561–564. → **FRE-561/562/563/564 Approved 2026-06-15** — the eval-validity build chain → **Lane B** (serial: **561** doc-mirror T3 ∥ **562** dataset → **563** driver+detector → **564** report+validation; **564 unblocks FRE-453**).
@@ -155,9 +157,9 @@ Lane O (Observability)
 
 **Capstone (LAST, either worktree once free):** **FRE-555** flip reconciliation checker → hard CI gate — **gated on ALL emit-gaps merged** (544/545/546/550/558/559). Closes Telemetry Surface Audit + realizes ADR-0090 D5.
 
-**Stream C — Dependency-security remediation (SOLO, scheduled AFTER Lanes A/B complete; owner directive 2026-06-19):** **FRE-578** (Approved, Security project) — remediate Dependabot: **1 critical (litellm auth-bypass) + 7 high** (pyjwt HS256-forgery, starlette ×2, cryptography/OpenSSL, python-multipart DoS, undici, vite); 24 moderate + 12 low → follow-on. Runs **solo** (one worktree, not parallel — shared lockfiles, isolated verification). Python tranche (`uv.lock`) + PWA tranche (`package-lock.json`) as separate PRs; litellm/starlette bumps may escalate to Opus if APIs shift. Begins once A **and** B are drained.
+**Stream C — Dependency-security remediation (SOLO, scheduled AFTER Lanes A/B complete; owner directive 2026-06-19):** **FRE-578 [S]** (Approved, Security project; ⚠️ litellm/starlette bumps escalate **[S]→[O]** if APIs shift) — remediate Dependabot: **1 critical (litellm auth-bypass) + 7 high** (pyjwt HS256-forgery, starlette ×2, cryptography/OpenSSL, python-multipart DoS, undici, vite); 24 moderate + 12 low → follow-on. Runs **solo** (one worktree, not parallel — shared lockfiles, isolated verification). Python tranche (`uv.lock`) + PWA tranche (`package-lock.json`) as separate PRs; litellm/starlette bumps may escalate to Opus if APIs shift. Begins once A **and** B are drained.
 
-**Session assignment now (2026-06-17):** **build → Lane A → FRE-546** · **build2 → Lane B → FRE-568** (ADR-0092 meter chain — fixes the live meter-visibility issues; carries the 576/577 compression cluster after 570) · **adr free**. Lanes A/B file-disjoint → parallel. **Then Stream C (FRE-578, solo).** Memory Recall parked until streams finish.
+**Session assignment now (2026-06-17):** **build → Lane A → FRE-546 [Sonnet]** · **build2 → Lane B → FRE-568 [Sonnet]** (ADR-0092 meter chain — fixes the live meter-visibility issues; carries the 576[Opus]/577 compression cluster after 570) · **adr free**. Lanes A/B file-disjoint → parallel. **Then Stream C → FRE-578 [Sonnet], solo.** Memory Recall parked until streams finish.
 
 **Collision rule:** anything touching the topology projector/ledger (517, 548) stays in B and serial. PWA is shared (522/532/PWA-side of 551) — one lane at a time. `pytest` lock = one `make test` at a time. Master merges server-side + deploys one-at-a-time from main.
 

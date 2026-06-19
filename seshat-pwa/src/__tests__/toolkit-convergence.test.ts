@@ -23,8 +23,8 @@ const pkg = JSON.parse(
 const all = { ...pkg.dependencies, ...pkg.devDependencies };
 
 describe('toolkit convergence — versions aligned to the artifact /lib/ pins', () => {
-  it('pins katex to the toolkit version (0.16.47)', () => {
-    expect(pkg.dependencies.katex).toBe('^0.16.47');
+  it('pins katex to the toolkit version (0.16.11)', () => {
+    expect(pkg.dependencies.katex).toBe('0.16.11');
   });
 
   it('pins highlight.js to the toolkit version (11.9.0)', () => {

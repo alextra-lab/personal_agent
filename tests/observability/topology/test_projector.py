@@ -421,6 +421,135 @@ async def test_rolling_counter_time_heartbeat(monkeypatch: pytest.MonkeyPatch) -
     assert any(e.get("event") == "projector_events_rolling" for e in logs)
 
 
+# ---------------------------------------------------------------------------
+# FRE-568 — session-aggregate: session cost + context occupancy (ADR-0092 §D2/§D3/§D4)
+# ---------------------------------------------------------------------------
+
+
+async def test_session_cost_accumulates_across_turns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two completed traces for the same session sum into session_cost_usd (D2)."""
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id="t-1", session_id="s-1", topology="primary", cost_authoritative_usd=0.5
+        )
+    )
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id="t-2", session_id="s-1", topology="primary", cost_authoritative_usd=0.3
+        )
+    )
+
+    assert emitted[-1]["session_cost_usd"] == pytest.approx(0.8)
+
+
+async def test_session_cost_set_not_added_on_replay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Completing the same trace_id twice overwrites (set, never +=) — no double-count (D2)."""
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id="t-1", session_id="s-1", topology="primary", cost_authoritative_usd=0.5
+        )
+    )
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id="t-1", session_id="s-1", topology="primary", cost_authoritative_usd=0.5
+        )
+    )
+
+    assert emitted[-1]["session_cost_usd"] == pytest.approx(0.5)
+
+
+async def test_session_context_carries_across_turns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """context_tokens from an earlier turn is still surfaced as session_context_tokens
+    on a subsequent event that does not update context_tokens (D3).
+    """
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(
+        TurnProgressEvent(
+            trace_id="t-1",
+            session_id="s-1",
+            tool_iteration=1,
+            tool_iteration_max=25,
+            context_tokens=8000,
+            context_max=40000,
+        )
+    )
+    # A new trace completes — no progress event for it; context_tokens from t-1 must carry.
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id="t-1", session_id="s-1", topology="primary", cost_authoritative_usd=0.1
+        )
+    )
+    await proj.handle(TopologyEnteredEvent(trace_id="t-2", session_id="s-1", topology="primary"))
+
+    assert emitted[-1]["session_context_tokens"] == 8000
+
+
+async def test_hydration_restores_session_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On first touch the hydration source populates historical costs (D4)."""
+    emitted = _capture(monkeypatch)
+
+    async def _source(session_id: str) -> dict[str, float]:
+        return {"t-hist-1": 0.5, "t-hist-2": 0.3}
+
+    proj = TurnObservationProjector(hydration_source=_source)
+
+    # First event for s-1 triggers hydration.
+    await proj.handle(TopologyEnteredEvent(trace_id="t-new", session_id="s-1", topology="primary"))
+    assert emitted[-1]["session_cost_usd"] == pytest.approx(0.8)
+
+    # A new live completion is added on top.
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id="t-new", session_id="s-1", topology="primary", cost_authoritative_usd=0.2
+        )
+    )
+    assert emitted[-1]["session_cost_usd"] == pytest.approx(1.0)
+
+
+async def test_hydration_no_double_count_with_live(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Live completion for a trace already in the hydrated set overwrites (live wins) (D4)."""
+    emitted = _capture(monkeypatch)
+
+    async def _source(session_id: str) -> dict[str, float]:
+        # t-1 hydrated as 0.5 (partial — captured before the turn fully closed)
+        return {"t-1": 0.5}
+
+    proj = TurnObservationProjector(hydration_source=_source)
+
+    # Trigger hydration.
+    await proj.handle(TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="primary"))
+    # Live completion for the same trace at the authoritative (final) value.
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id="t-1", session_id="s-1", topology="primary", cost_authoritative_usd=0.7
+        )
+    )
+
+    assert emitted[-1]["session_cost_usd"] == pytest.approx(0.7)
+
+
+async def test_hydration_best_effort_source_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failing hydration source must not propagate — projector continues carry-only (D4)."""
+    emitted = _capture(monkeypatch)
+
+    async def _boom(session_id: str) -> dict[str, float]:
+        raise RuntimeError("db down")
+
+    proj = TurnObservationProjector(hydration_source=_boom)
+
+    await proj.handle(TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="primary"))
+
+    assert emitted[-1]["session_cost_usd"] == pytest.approx(0.0)
+
+
 async def test_eviction_of_active_trace_warns(monkeypatch: pytest.MonkeyPatch) -> None:
     import structlog
 

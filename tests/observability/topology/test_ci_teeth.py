@@ -146,3 +146,30 @@ def test_model_sdk_confined_to_llm_client() -> None:
         "model SDK imported outside llm_client/ (route model calls through "
         f"CostTrackerService.record_api_call instead): {offenders}"
     )
+
+
+# -- (d) ADR-0088 D4 — projector is the sole emit_turn_status caller --------------------
+
+
+def test_emit_turn_status_called_only_from_projector() -> None:
+    """Only ``observability/topology/projector.py`` may call ``emit_turn_status``.
+
+    ADR-0088 D4: the projector is the sole ``turn_status`` emitter. Any second call site
+    would fork the sole-emitter invariant that this file enforces.  The definition in
+    ``transport/agui/transport.py`` is explicitly excluded (it *defines* the function, not
+    calls it).
+    """
+    # Matches bare invocations: emit_turn_status( — not the async def line.
+    pattern = re.compile(r"(?<!async def )(?<!def )\bemit_turn_status\s*\(")
+    _SOLE_CALLER = "observability/topology/projector.py"
+    offenders: list[str] = []
+    for py in _SRC_ROOT.rglob("*.py"):
+        rel = py.relative_to(_SRC_ROOT).as_posix()
+        if rel == _SOLE_CALLER:
+            continue
+        if pattern.search(py.read_text(encoding="utf-8")):
+            offenders.append(rel)
+    assert not offenders, (
+        "emit_turn_status called outside the projector — ADR-0088 D4 sole-emitter "
+        f"invariant violated: {offenders}"
+    )

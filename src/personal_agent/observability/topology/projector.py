@@ -30,6 +30,7 @@ ADR-0088 removed, FRE-501). A degraded-mode cosmetic gain is not worth forking t
 from __future__ import annotations
 
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -55,6 +56,10 @@ log = structlog.get_logger(__name__)
 # cap keeps the projector memory-stable without a TTL sweeper.
 _MAX_TRACKED_TRACES = 2000
 
+# ADR-0092 §D4: parallel bound for the session-aggregate map.  Active sessions rarely
+# exceed a handful; 2000 matches the per-trace cap so eviction is consistent.
+_MAX_TRACKED_SESSIONS = 2000
+
 # FRE-557 projector-health rolling counter cadence: emit a rolling snapshot every N events
 # OR every T seconds of activity (whichever first), so low-volume instances still heartbeat.
 # Process-local + reset on restart — an operational gauge, not a durable counter.
@@ -63,6 +68,29 @@ _ROLLING_EMIT_SECONDS = 300.0
 
 # FRE-557 dedicated per-trace bus-delivery health index (one doc per trace at completion).
 _HEALTH_INDEX_PREFIX = "agent-monitors-projector-health"
+
+# ADR-0092 §D4: injected async callable that hydrates a session's historical cost map.
+# ``session_id -> {trace_id_str: cost_usd}``.  ``None`` means carry-only (no read).
+SessionCostHydrator = Callable[[str], Awaitable[dict[str, float]]]
+
+
+@dataclass
+class SessionAggregate:
+    """Per-session state the projector carries across turns (ADR-0092 §D2/§D3/§D4).
+
+    Attributes:
+        session_id: Owning session identifier.
+        costs: Idempotent ``{trace_id_str: authoritative_cost_usd}`` map (set, never ``+=``).
+            The surfaced ``session_cost_usd`` is ``sum(costs.values())``.
+        context_tokens: Latest ``context_tokens`` seen for this session; carried across turns
+            so the session lane never resets to zero on new user input (D3).
+        hydrated: ``True`` once the one-per-session substrate hydration has run.
+    """
+
+    session_id: str
+    costs: dict[str, float] = field(default_factory=dict)
+    context_tokens: int = 0
+    hydrated: bool = False
 
 
 @dataclass
@@ -115,13 +143,70 @@ class TurnObservation:
 class TurnObservationProjector:
     """Consumes ``stream:turn.observed`` and emits ``turn_status`` (ADR-0088 D4)."""
 
-    def __init__(self) -> None:
-        """Initialise an empty per-trace observation map and process-local counters."""
+    def __init__(self, hydration_source: SessionCostHydrator | None = None) -> None:
+        """Initialise observation maps and process-local counters.
+
+        Args:
+            hydration_source: Optional async callable ``(session_id) -> {trace_id: cost}``
+                used to restore historical session cost on first touch (ADR-0092 §D4).
+                ``None`` means carry-only — the session aggregate starts empty and grows
+                only from live ``turn.completed`` events.
+        """
         self._by_trace: dict[str, TurnObservation] = {}
+        # ADR-0092 §D4: session-scoped aggregate map (persists across turns).
+        self._by_session: dict[str, SessionAggregate] = {}
+        self._hydration_source = hydration_source
         # FRE-557 global rolling counters (process-local; reset on restart).
         self._events_received_total: int = 0
         self._events_by_type: dict[str, int] = {}
         self._last_rolling_emit: float = time.monotonic()
+
+    async def _ensure_session(self, session_id: str) -> SessionAggregate:
+        """Return (creating if needed) the session aggregate, hydrating on first touch.
+
+        Hydration runs at most once per session per process lifetime.  A failing hydration
+        source is swallowed (best-effort) so the projector continues in carry-only mode.
+        LRU-evicts the oldest session beyond ``_MAX_TRACKED_SESSIONS``; cost is recoverable
+        (re-hydrated on next touch), ``context_tokens`` is process-local and resets to 0.
+
+        Args:
+            session_id: The session identifier string.
+
+        Returns:
+            The ``SessionAggregate`` for this session.
+        """
+        sess = self._by_session.get(session_id)
+        if sess is None:
+            if len(self._by_session) >= _MAX_TRACKED_SESSIONS:
+                oldest_key = next(iter(self._by_session))
+                self._by_session.pop(oldest_key)
+                log.debug("projector_evicted_session", session_id=oldest_key)
+            sess = SessionAggregate(session_id=session_id)
+            self._by_session[session_id] = sess
+            await self._hydrate(sess)
+        return sess
+
+    async def _hydrate(self, sess: SessionAggregate) -> None:
+        """Populate ``sess.costs`` from the hydration source (once per session).
+
+        Uses ``setdefault`` so a trace already written by a live ``turn.completed`` in this
+        process (possible only if the projector created the session entry and then
+        immediately re-hydrated, which cannot happen given single-consumer ordering) is
+        never overwritten.  In practice the first-touch path always calls this on a fresh
+        ``SessionAggregate`` with an empty ``costs`` dict.
+
+        Args:
+            sess: The freshly-created ``SessionAggregate`` to populate.
+        """
+        sess.hydrated = True
+        if self._hydration_source is None:
+            return
+        try:
+            historical = await self._hydration_source(sess.session_id)
+            for tid, cost in historical.items():
+                sess.costs.setdefault(tid, cost)
+        except Exception:
+            log.debug("projector_hydration_failed", session_id=sess.session_id)
 
     def _observation(self, trace_id: str, session_id: str) -> TurnObservation:
         """Return (creating if needed) the observation for a trace."""
@@ -160,16 +245,20 @@ class TurnObservationProjector:
         self._maybe_emit_rolling()
 
         if isinstance(event, TopologyEnteredEvent):
+            sess = await self._ensure_session(event.session_id)
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
             obs.topology = event.topology
         elif isinstance(event, TurnProgressEvent):
+            sess = await self._ensure_session(event.session_id)
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
             obs.tool_iteration = event.tool_iteration
             obs.tool_iteration_max = event.tool_iteration_max
             obs.context_tokens = event.context_tokens
             obs.context_max = event.context_max
+            # ADR-0092 §D3: carry the latest context occupancy across turns (no reset-to-0).
+            sess.context_tokens = event.context_tokens
             if event.topology is not None:
                 obs.topology = event.topology
         elif isinstance(event, SubAgentProgressEvent):
@@ -177,6 +266,7 @@ class TurnObservationProjector:
             # stale/reordered best-effort tick can never drop the surfaced count. Entries
             # persist until TurnCompletedEvent pops the whole trace (do not pop per sub-agent
             # — removing both numerator and denominator would mask completed work).
+            sess = await self._ensure_session(event.session_id)
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
             obs.sub_agent_iterations[event.task_id] = max(
@@ -186,6 +276,7 @@ class TurnObservationProjector:
                 obs.sub_agent_iteration_max.get(event.task_id, 0), event.iteration_max
             )
         elif isinstance(event, ModelCallCompletedEvent):
+            sess = await self._ensure_session(event.session_id)
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
             obs.model_calls_received += 1
@@ -195,6 +286,7 @@ class TurnObservationProjector:
             if event.topology is not None:
                 obs.topology = event.topology
         elif isinstance(event, TurnDegradedEvent):
+            sess = await self._ensure_session(event.session_id)
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
             obs.degraded = True
@@ -204,6 +296,7 @@ class TurnObservationProjector:
             # created (evicted mid-turn / never-seen-until-completion)? Captured before
             # _observation so the health doc can flag untrustworthy counters.
             observation_complete = event.trace_id in self._by_trace
+            sess = await self._ensure_session(event.session_id)
             obs = self._observation(event.trace_id, event.session_id)
             obs.events_received += 1
             obs.topology = event.topology
@@ -219,6 +312,8 @@ class TurnObservationProjector:
             )
             # Authoritative wins (ADR-0088 D3): reconcile the live meter to SUM(api_costs).
             obs.live_cost_usd = event.cost_authoritative_usd
+            # ADR-0092 §D2: idempotent session cost roll-up (set, never +=).
+            sess.costs[event.trace_id] = event.cost_authoritative_usd
             await self._emit(obs)
             self._by_trace.pop(event.trace_id, None)
             return
@@ -234,6 +329,11 @@ class TurnObservationProjector:
         # summed only here. With no sub-agent ticks the dicts are empty → primary values.
         tool_iteration = obs.tool_iteration + sum(obs.sub_agent_iterations.values())
         tool_iteration_max = obs.tool_iteration_max + sum(obs.sub_agent_iteration_max.values())
+        # ADR-0092 §D2/§D3: session-lane fields (zero when no aggregate yet — shouldn't
+        # occur in practice since _ensure_session always precedes _emit).
+        sess = self._by_session.get(obs.session_id)
+        session_cost_usd = round(sum(sess.costs.values()), 6) if sess else 0.0
+        session_context_tokens = sess.context_tokens if sess else 0
         try:
             await emit_turn_status(
                 session_id=obs.session_id,
@@ -249,6 +349,9 @@ class TurnObservationProjector:
                     "topology": obs.topology,
                     "degraded": obs.degraded,
                     "degradations": list(obs.degradations),
+                    # ADR-0092 §D2/§D3 session lane.
+                    "session_cost_usd": session_cost_usd,
+                    "session_context_tokens": session_context_tokens,
                 },
             )
         except Exception:

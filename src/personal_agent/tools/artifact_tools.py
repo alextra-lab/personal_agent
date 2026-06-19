@@ -987,8 +987,8 @@ asset by its EXACT absolute, version-pinned URL below (a relative path will \
 not load). Reach for one only when the document genuinely needs it; otherwise \
 inline your own code.
   * Math (KaTeX) — render TeX/LaTeX:
-    <link rel="stylesheet" href="https://artifacts.frenchforet.com/lib/katex@0.16.11/katex.min.css">
-    <script src="https://artifacts.frenchforet.com/lib/katex@0.16.11/katex.min.js"></script>
+    <link rel="stylesheet" href="https://artifacts.frenchforet.com/lib/katex@0.16.47/katex.min.css">
+    <script src="https://artifacts.frenchforet.com/lib/katex@0.16.47/katex.min.js"></script>
   * Data viz (Chart.js — global `Chart`) — charts/graphs from inline data:
     <script src="https://artifacts.frenchforet.com/lib/chartjs@4.4.7/chart.umd.js"></script>
   * 3-D (three.js — global `THREE`, r171) — scenes/geometry; build meshes in \

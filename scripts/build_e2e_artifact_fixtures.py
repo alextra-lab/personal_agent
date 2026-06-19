@@ -62,8 +62,8 @@ _CSS_URL_RE = re.compile(r"""url\(\s*(['"]?)(?P<url>[^'")]+)\1\s*\)""", re.IGNOR
 _SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.\-]*:", re.IGNORECASE)
 
 # Real curated-toolkit pins exercised by the harness (mirror the manifest paths).
-_KATEX_CSS = "lib/katex@0.16.11/katex.min.css"
-_KATEX_JS = "lib/katex@0.16.11/katex.min.js"
+_KATEX_CSS = "lib/katex@0.16.47/katex.min.css"
+_KATEX_JS = "lib/katex@0.16.47/katex.min.js"
 _CHART_JS = "lib/chartjs@4.4.7/chart.umd.js"
 _PAGEDJS = "lib/pagedjs@0.4.3/paged.polyfill.min.js"
 

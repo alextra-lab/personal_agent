@@ -39,6 +39,9 @@ import structlog
 
 from personal_agent.captains_log.es_indexer import schedule_es_index
 from personal_agent.events.models import (
+    CompactionAMarkerEvent,
+    CompactionBMarkerEvent,
+    CompactionDMarkerEvent,
     EventBase,
     ModelCallCompletedEvent,
     SubAgentProgressEvent,
@@ -69,14 +72,44 @@ _ROLLING_EMIT_SECONDS = 300.0
 # FRE-557 dedicated per-trace bus-delivery health index (one doc per trace at completion).
 _HEALTH_INDEX_PREFIX = "agent-monitors-projector-health"
 
-# ADR-0092 §D4: injected async callable that hydrates a session's historical cost map.
-# ``session_id -> {trace_id_str: cost_usd}``.  ``None`` means carry-only (no read).
-SessionCostHydrator = Callable[[str], Awaitable[dict[str, float]]]
+
+@dataclass
+class SessionHydration:
+    """Substrate data returned by the hydration source on first session touch (ADR-0092 §D4).
+
+    All set fields use ``frozenset`` so the caller cannot mutate the returned data;
+    the projector copies them into mutable ``set`` fields on :class:`SessionAggregate`.
+
+    Attributes:
+        costs: ``{trace_id_str: authoritative_cost_usd}`` from ``api_costs``.
+        compaction_b_ids: Fact-identity strings for prior B (within-session compression)
+            events, keyed by the ``WithinSessionCompressionEvent.event_id`` used as
+            ``CompactionBMarkerEvent.fact_id``.  Empty frozenset = carry-only.
+        compaction_d_ids: Fact-identity strings for prior D (frozen-reset) events,
+            keyed by ``"{trace_id}:D"``.  Empty frozenset = carry-only.
+        quality_alert_ids: Fact-identity strings for prior A (gateway budget compaction)
+            incidents, keyed by ``"{trace_id}:A"``.  Empty frozenset = carry-only.
+    """
+
+    costs: dict[str, float] = field(default_factory=dict)
+    compaction_b_ids: frozenset[str] = field(default_factory=frozenset)
+    compaction_d_ids: frozenset[str] = field(default_factory=frozenset)
+    quality_alert_ids: frozenset[str] = field(default_factory=frozenset)
+
+
+# ADR-0092 §D4: injected async callable that hydrates a session's historical state.
+# Returns a :class:`SessionHydration` with costs + compaction identity sets.
+# ``None`` means carry-only (no substrate read; all sets start empty).
+SessionHydrator = Callable[[str], Awaitable[SessionHydration]]
+
+# Backward-compatible alias so existing call sites that annotated SessionCostHydrator
+# continue to type-check without changes.  Deprecated: migrate to SessionHydrator.
+SessionCostHydrator = SessionHydrator
 
 
 @dataclass
 class SessionAggregate:
-    """Per-session state the projector carries across turns (ADR-0092 §D2/§D3/§D4).
+    """Per-session state the projector carries across turns (ADR-0092 §D2/§D3/§D4/§D5-D7).
 
     Attributes:
         session_id: Owning session identifier.
@@ -85,12 +118,26 @@ class SessionAggregate:
         context_tokens: Latest ``context_tokens`` seen for this session; carried across turns
             so the session lane never resets to zero on new user input (D3).
         hydrated: ``True`` once the one-per-session substrate hydration has run.
+        compaction_b_ids: Identity set for B (within-session compression) passes (§D6).
+            One entry per ``CompactionBMarkerEvent.fact_id``; ``len()`` = ⟳ count.
+        compaction_d_ids: Identity set for D (frozen cache reset) events (§D7).
+            One entry per ``CompactionDMarkerEvent.fact_id``; ``len()`` = ↻ count.
+        quality_alert_ids: Persistent identity set for A (gateway budget compaction)
+            incidents (§D5).  One entry per ``CompactionAMarkerEvent.fact_id``;
+            ``len()`` = ``quality_alert_count``.
+        quality_alert: Transient this-turn A alert dict; ``None`` when no A fired this turn
+            or after the next clean ``turn.completed`` (§D5).
     """
 
     session_id: str
     costs: dict[str, float] = field(default_factory=dict)
     context_tokens: int = 0
     hydrated: bool = False
+    # ADR-0092 §D6/§D7/§D5 compaction identity sets
+    compaction_b_ids: set[str] = field(default_factory=set)
+    compaction_d_ids: set[str] = field(default_factory=set)
+    quality_alert_ids: set[str] = field(default_factory=set)
+    quality_alert: dict[str, Any] | None = None
 
 
 @dataclass
@@ -119,6 +166,8 @@ class TurnObservation:
             this trace (FRE-557 bus-delivery health).
         model_calls_received: Count of ``ModelCallCompletedEvent``s received for this trace —
             compared offline to ``COUNT(api_costs WHERE trace_id)`` to detect delivery loss.
+        compaction_a_fired: Whether a gateway budget compaction (A) fired this turn — used
+            at ``turn.completed`` to decide whether to clear the transient ``quality_alert``.
     """
 
     trace_id: str
@@ -138,19 +187,22 @@ class TurnObservation:
     degraded: bool = False
     events_received: int = 0
     model_calls_received: int = 0
+    compaction_a_fired: bool = False
 
 
 class TurnObservationProjector:
     """Consumes ``stream:turn.observed`` and emits ``turn_status`` (ADR-0088 D4)."""
 
-    def __init__(self, hydration_source: SessionCostHydrator | None = None) -> None:
+    def __init__(self, hydration_source: SessionHydrator | None = None) -> None:
         """Initialise observation maps and process-local counters.
 
         Args:
-            hydration_source: Optional async callable ``(session_id) -> {trace_id: cost}``
-                used to restore historical session cost on first touch (ADR-0092 §D4).
+            hydration_source: Optional async callable ``(session_id) -> SessionHydration``
+                used to restore historical session state on first touch (ADR-0092 §D4).
                 ``None`` means carry-only — the session aggregate starts empty and grows
-                only from live ``turn.completed`` events.
+                only from live events.  The old ``SessionCostHydrator`` signature
+                (``dict[str, float]``) is no longer supported; callers should return
+                a :class:`SessionHydration` wrapping the cost dict.
         """
         self._by_trace: dict[str, TurnObservation] = {}
         # ADR-0092 §D4: session-scoped aggregate map (persists across turns).
@@ -187,13 +239,12 @@ class TurnObservationProjector:
         return sess
 
     async def _hydrate(self, sess: SessionAggregate) -> None:
-        """Populate ``sess.costs`` from the hydration source (once per session).
+        """Populate session aggregate from the hydration source (once per session).
 
-        Uses ``setdefault`` so a trace already written by a live ``turn.completed`` in this
-        process (possible only if the projector created the session entry and then
-        immediately re-hydrated, which cannot happen given single-consumer ordering) is
-        never overwritten.  In practice the first-touch path always calls this on a fresh
-        ``SessionAggregate`` with an empty ``costs`` dict.
+        Uses ``setdefault`` on costs so a trace already written by a live ``turn.completed``
+        in this process is never overwritten.  Compaction identity sets are merged with
+        ``update`` — the live marker path uses ``add``, so hydrated + live facts converge
+        idempotently (ADR-0092 §D4).
 
         Args:
             sess: The freshly-created ``SessionAggregate`` to populate.
@@ -202,9 +253,12 @@ class TurnObservationProjector:
         if self._hydration_source is None:
             return
         try:
-            historical = await self._hydration_source(sess.session_id)
-            for tid, cost in historical.items():
+            hydration = await self._hydration_source(sess.session_id)
+            for tid, cost in hydration.costs.items():
                 sess.costs.setdefault(tid, cost)
+            sess.compaction_b_ids.update(hydration.compaction_b_ids)
+            sess.compaction_d_ids.update(hydration.compaction_d_ids)
+            sess.quality_alert_ids.update(hydration.quality_alert_ids)
         except Exception:
             log.debug("projector_hydration_failed", session_id=sess.session_id)
 
@@ -291,6 +345,31 @@ class TurnObservationProjector:
             obs.events_received += 1
             obs.degraded = True
             obs.degradations.append(f"{event.where}: {event.reason}")
+        elif isinstance(event, CompactionBMarkerEvent):
+            # ADR-0092 §D6: fold B (within-session compression) into the session aggregate.
+            sess = await self._ensure_session(event.session_id)
+            obs = self._observation(event.trace_id, event.session_id)
+            obs.events_received += 1
+            sess.compaction_b_ids.add(event.fact_id)
+        elif isinstance(event, CompactionDMarkerEvent):
+            # ADR-0092 §D7: fold D (frozen cache reset) into the session aggregate.
+            sess = await self._ensure_session(event.session_id)
+            obs = self._observation(event.trace_id, event.session_id)
+            obs.events_received += 1
+            sess.compaction_d_ids.add(event.fact_id)
+        elif isinstance(event, CompactionAMarkerEvent):
+            # ADR-0092 §D5: fold A (gateway budget compaction) into the session aggregate.
+            # Updates both the persistent quality_alert_ids count and the transient
+            # quality_alert dict; the transient field is cleared at the next clean turn.
+            sess = await self._ensure_session(event.session_id)
+            obs = self._observation(event.trace_id, event.session_id)
+            obs.events_received += 1
+            obs.compaction_a_fired = True
+            sess.quality_alert_ids.add(event.fact_id)
+            sess.quality_alert = {
+                "severity": event.severity,
+                "phases_fired": list(event.phases_fired),
+            }
         elif isinstance(event, TurnCompletedEvent):
             # FRE-557: was the full lifecycle observed, or is this obs about to be freshly
             # created (evicted mid-turn / never-seen-until-completion)? Captured before
@@ -314,6 +393,9 @@ class TurnObservationProjector:
             obs.live_cost_usd = event.cost_authoritative_usd
             # ADR-0092 §D2: idempotent session cost roll-up (set, never +=).
             sess.costs[event.trace_id] = event.cost_authoritative_usd
+            # ADR-0092 §D5: clear transient quality_alert when this turn had no A firing.
+            if not obs.compaction_a_fired:
+                sess.quality_alert = None
             await self._emit(obs)
             self._by_trace.pop(event.trace_id, None)
             return
@@ -334,6 +416,11 @@ class TurnObservationProjector:
         sess = self._by_session.get(obs.session_id)
         session_cost_usd = round(sum(sess.costs.values()), 6) if sess else 0.0
         session_context_tokens = sess.context_tokens if sess else 0
+        # ADR-0092 §D5/§D6/§D7: compaction lane fields.
+        compaction_count = len(sess.compaction_b_ids) if sess else 0
+        cache_reset_count = len(sess.compaction_d_ids) if sess else 0
+        quality_alert_count = len(sess.quality_alert_ids) if sess else 0
+        quality_alert = sess.quality_alert if sess else None
         try:
             await emit_turn_status(
                 session_id=obs.session_id,
@@ -352,6 +439,11 @@ class TurnObservationProjector:
                     # ADR-0092 §D2/§D3 session lane.
                     "session_cost_usd": session_cost_usd,
                     "session_context_tokens": session_context_tokens,
+                    # ADR-0092 §D5/§D6/§D7 compaction lane.
+                    "compaction_count": compaction_count,
+                    "cache_reset_count": cache_reset_count,
+                    "quality_alert_count": quality_alert_count,
+                    "quality_alert": quality_alert,
                 },
             )
         except Exception:

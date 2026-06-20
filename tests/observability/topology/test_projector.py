@@ -494,10 +494,12 @@ async def test_session_context_carries_across_turns(monkeypatch: pytest.MonkeyPa
 
 async def test_hydration_restores_session_cost(monkeypatch: pytest.MonkeyPatch) -> None:
     """On first touch the hydration source populates historical costs (D4)."""
+    from personal_agent.observability.topology.projector import SessionHydration
+
     emitted = _capture(monkeypatch)
 
-    async def _source(session_id: str) -> dict[str, float]:
-        return {"t-hist-1": 0.5, "t-hist-2": 0.3}
+    async def _source(session_id: str) -> SessionHydration:
+        return SessionHydration(costs={"t-hist-1": 0.5, "t-hist-2": 0.3})
 
     proj = TurnObservationProjector(hydration_source=_source)
 
@@ -516,11 +518,13 @@ async def test_hydration_restores_session_cost(monkeypatch: pytest.MonkeyPatch) 
 
 async def test_hydration_no_double_count_with_live(monkeypatch: pytest.MonkeyPatch) -> None:
     """Live completion for a trace already in the hydrated set overwrites (live wins) (D4)."""
+    from personal_agent.observability.topology.projector import SessionHydration
+
     emitted = _capture(monkeypatch)
 
-    async def _source(session_id: str) -> dict[str, float]:
+    async def _source(session_id: str) -> SessionHydration:
         # t-1 hydrated as 0.5 (partial — captured before the turn fully closed)
-        return {"t-1": 0.5}
+        return SessionHydration(costs={"t-1": 0.5})
 
     proj = TurnObservationProjector(hydration_source=_source)
 
@@ -538,9 +542,11 @@ async def test_hydration_no_double_count_with_live(monkeypatch: pytest.MonkeyPat
 
 async def test_hydration_best_effort_source_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """A failing hydration source must not propagate — projector continues carry-only (D4)."""
+    from personal_agent.observability.topology.projector import SessionHydration
+
     emitted = _capture(monkeypatch)
 
-    async def _boom(session_id: str) -> dict[str, float]:
+    async def _boom(session_id: str) -> SessionHydration:
         raise RuntimeError("db down")
 
     proj = TurnObservationProjector(hydration_source=_boom)
@@ -572,3 +578,246 @@ async def test_eviction_of_active_trace_warns(monkeypatch: pytest.MonkeyPatch) -
         )
 
     assert any(e.get("event") == "projector_evicted_active_trace" for e in logs)
+
+
+# ---------------------------------------------------------------------------
+# FRE-570 — compaction markers A/B/D + projector folding (ADR-0092 §D5-D8)
+# ---------------------------------------------------------------------------
+
+
+async def test_compaction_b_fold_increments_compaction_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each CompactionBMarkerEvent fact_id adds to compaction_count (§D6)."""
+    from personal_agent.events.models import CompactionBMarkerEvent
+
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="primary"))
+    await proj.handle(
+        CompactionBMarkerEvent(trace_id="t-1", session_id="s-1", trigger="hard", fact_id="b-fact-1")
+    )
+    await proj.handle(
+        CompactionBMarkerEvent(trace_id="t-1", session_id="s-1", trigger="soft", fact_id="b-fact-2")
+    )
+
+    assert emitted[-1]["compaction_count"] == 2
+    assert emitted[-1]["cache_reset_count"] == 0
+
+
+async def test_compaction_b_disjoint_from_d(monkeypatch: pytest.MonkeyPatch) -> None:
+    """B and D fact_ids are stored in separate sets — no cross-contamination (§D6/§D7)."""
+    from personal_agent.events.models import CompactionBMarkerEvent, CompactionDMarkerEvent
+
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="primary"))
+    await proj.handle(
+        CompactionBMarkerEvent(trace_id="t-1", session_id="s-1", trigger="hard", fact_id="t-1:b")
+    )
+    await proj.handle(
+        CompactionDMarkerEvent(
+            trace_id="t-1",
+            session_id="s-1",
+            reason="optimum",
+            optimal_run_length=12.0,
+            fact_id="t-1:D",
+        )
+    )
+
+    assert emitted[-1]["compaction_count"] == 1
+    assert emitted[-1]["cache_reset_count"] == 1
+
+
+async def test_compaction_d_fold_increments_cache_reset_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CompactionDMarkerEvent increments cache_reset_count (§D7)."""
+    from personal_agent.events.models import CompactionDMarkerEvent
+
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="primary"))
+    await proj.handle(
+        CompactionDMarkerEvent(
+            trace_id="t-1",
+            session_id="s-1",
+            reason="token_ceiling",
+            optimal_run_length=8.0,
+            fact_id="t-1:D",
+        )
+    )
+
+    assert emitted[-1]["cache_reset_count"] == 1
+    assert emitted[-1]["compaction_count"] == 0
+
+
+async def test_compaction_a_sets_transient_alert_and_persistent_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CompactionAMarkerEvent sets quality_alert (transient) + quality_alert_count (§D5)."""
+    from personal_agent.events.models import CompactionAMarkerEvent
+
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="primary"))
+    await proj.handle(
+        CompactionAMarkerEvent(
+            trace_id="t-1",
+            session_id="s-1",
+            phases_fired=(1, 2),
+            severity="high",
+            fact_id="t-1:A",
+        )
+    )
+
+    last = emitted[-1]
+    assert last["quality_alert_count"] == 1
+    assert last["quality_alert"] is not None
+    assert last["quality_alert"]["severity"] == "high"
+    assert last["quality_alert"]["phases_fired"] == [1, 2]
+
+
+async def test_compaction_a_alert_clears_on_next_clean_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """quality_alert is cleared when the subsequent turn.completed had no A firing (§D5)."""
+    from personal_agent.events.models import CompactionAMarkerEvent
+
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    # Turn 1: A fires → alert set.
+    await proj.handle(TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="primary"))
+    await proj.handle(
+        CompactionAMarkerEvent(
+            trace_id="t-1",
+            session_id="s-1",
+            phases_fired=(1, 2),
+            severity="high",
+            fact_id="t-1:A",
+        )
+    )
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id="t-1", session_id="s-1", topology="primary", cost_authoritative_usd=0.1
+        )
+    )
+    # quality_alert_count persists; quality_alert clears after t-1 completion since A fired.
+    # (the clear only happens if this turn had NO A — t-1 DID have A, so alert stays).
+    # Turn 2: no A → alert must clear at turn.completed.
+    await proj.handle(TopologyEnteredEvent(trace_id="t-2", session_id="s-1", topology="primary"))
+    await proj.handle(
+        TurnCompletedEvent(
+            trace_id="t-2", session_id="s-1", topology="primary", cost_authoritative_usd=0.05
+        )
+    )
+
+    last = emitted[-1]
+    # Persistent count still 1 (from turn 1).
+    assert last["quality_alert_count"] == 1
+    # Transient alert cleared because turn 2 had no A.
+    assert last["quality_alert"] is None
+
+
+async def test_compaction_fact_id_dedup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The same fact_id arriving twice is counted once (set semantics) (§D4)."""
+    from personal_agent.events.models import CompactionBMarkerEvent
+
+    emitted = _capture(monkeypatch)
+    proj = TurnObservationProjector()
+
+    await proj.handle(TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="primary"))
+    await proj.handle(
+        CompactionBMarkerEvent(
+            trace_id="t-1", session_id="s-1", trigger="hard", fact_id="duplicate-fact"
+        )
+    )
+    await proj.handle(
+        CompactionBMarkerEvent(
+            trace_id="t-1", session_id="s-1", trigger="hard", fact_id="duplicate-fact"
+        )
+    )
+
+    assert emitted[-1]["compaction_count"] == 1
+
+
+async def test_hydration_restores_compaction_b_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hydration populates compaction_b_ids; live marker adds to it idempotently (§D4)."""
+    from personal_agent.events.models import CompactionBMarkerEvent
+    from personal_agent.observability.topology.projector import SessionHydration
+
+    emitted = _capture(monkeypatch)
+
+    async def _source(session_id: str) -> SessionHydration:
+        return SessionHydration(
+            costs={},
+            compaction_b_ids=frozenset({"hist-b-1", "hist-b-2"}),
+        )
+
+    proj = TurnObservationProjector(hydration_source=_source)
+
+    await proj.handle(TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="primary"))
+    # Count starts at 2 from hydration.
+    assert emitted[-1]["compaction_count"] == 2
+
+    # A new live B marker with a fresh fact_id adds a third entry.
+    await proj.handle(
+        CompactionBMarkerEvent(trace_id="t-1", session_id="s-1", trigger="soft", fact_id="live-b-3")
+    )
+    assert emitted[-1]["compaction_count"] == 3
+
+    # Re-emitting a hydrated fact_id does not double-count.
+    await proj.handle(
+        CompactionBMarkerEvent(trace_id="t-1", session_id="s-1", trigger="soft", fact_id="hist-b-1")
+    )
+    assert emitted[-1]["compaction_count"] == 3
+
+
+async def test_sole_emitter_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The projector remains the only caller of emit_turn_status (ADR-0088 D4)."""
+    from personal_agent.events.models import (
+        CompactionAMarkerEvent,
+        CompactionBMarkerEvent,
+        CompactionDMarkerEvent,
+    )
+
+    call_count = 0
+
+    async def _counting_emit(*, session_id: str, value: dict[str, Any]) -> None:
+        nonlocal call_count
+        call_count += 1
+
+    monkeypatch.setattr(projector_mod, "emit_turn_status", _counting_emit)
+    proj = TurnObservationProjector()
+
+    events_to_handle = [
+        TopologyEnteredEvent(trace_id="t-1", session_id="s-1", topology="primary"),
+        CompactionBMarkerEvent(trace_id="t-1", session_id="s-1", trigger="hard", fact_id="b1"),
+        CompactionDMarkerEvent(
+            trace_id="t-1",
+            session_id="s-1",
+            reason="optimum",
+            optimal_run_length=10.0,
+            fact_id="d1",
+        ),
+        CompactionAMarkerEvent(
+            trace_id="t-1",
+            session_id="s-1",
+            phases_fired=(1, 2),
+            severity="high",
+            fact_id="a1",
+        ),
+        TurnCompletedEvent(
+            trace_id="t-1", session_id="s-1", topology="primary", cost_authoritative_usd=0.1
+        ),
+    ]
+    for ev in events_to_handle:
+        await proj.handle(ev)
+
+    # emit_turn_status called exactly once per event that emits (all 5 above).
+    assert call_count == len(events_to_handle)

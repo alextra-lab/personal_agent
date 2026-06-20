@@ -14,12 +14,18 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from personal_agent.config.settings import get_settings
-from personal_agent.observability.joinability.result import ResultDoc
+from personal_agent.observability.joinability.result import (
+    ResultDoc,
+    substrate_docs_from_result,
+)
 from personal_agent.observability.joinability.sampling import (
     pick_session,
     seed_for,
 )
-from personal_agent.observability.joinability.sink import write_result
+from personal_agent.observability.joinability.sink import (
+    write_result,
+    write_substrate_results,
+)
 from personal_agent.observability.joinability.walk import JoinabilityWalk
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.trace import SystemTraceContext
@@ -113,6 +119,23 @@ async def run_scheduled_probe(*, es_client: "AsyncElasticsearch | None") -> Resu
                     error=str(exc),
                     trace_id=ctx.trace_id,
                 )
+            # Flat per-substrate projection (FRE-550) for the legacy-aggs
+            # dashboard panels — the run doc's nested arrays can't be aggregated.
+            sub_docs = substrate_docs_from_result(doc)
+            if sub_docs:
+                try:
+                    await write_substrate_results(
+                        es_client,
+                        sub_docs,
+                        prefix=settings.joinability_probe_index_prefix,
+                        trace_id=ctx.trace_id,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "joinability_probe_substrate_es_write_failed",
+                        error=str(exc),
+                        trace_id=ctx.trace_id,
+                    )
         return doc
     finally:
         await _close(pg_pool, neo4j_driver, redis)

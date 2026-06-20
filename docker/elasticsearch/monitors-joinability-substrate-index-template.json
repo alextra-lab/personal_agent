@@ -1,0 +1,33 @@
+{
+  "index_patterns": ["agent-monitors-joinability-substrate-*"],
+  "priority": 200,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.codec": "best_compression",
+      "index.refresh_interval": "10s",
+      "index.lifecycle.name": "agent-monitors-joinability-policy"
+    },
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "run_id":              { "type": "keyword" },
+        "started_at":          { "type": "date" },
+        "substrate":           { "type": "keyword" },
+        "status":              { "type": "keyword" },
+        "expected":            { "type": "keyword" },
+        "observed_count":      { "type": "long" },
+        "duration_ms":         { "type": "float" },
+        "error":               { "type": "text" },
+        "orphan_count":        { "type": "long" },
+        "orphan_red_count":    { "type": "long" },
+        "orphan_yellow_count": { "type": "long" }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Per-substrate joinability probe flat projection (FRE-550 / ADR-0074). One doc per (run, substrate). priority 200 so it strictly outranks the dynamic:false parent agent-monitors-joinability-* (priority 100) template, which would otherwise shadow these fields.",
+    "managed_by": "scripts/setup-elasticsearch.sh"
+  }
+}

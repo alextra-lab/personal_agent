@@ -143,6 +143,14 @@ put_resource "Index template: agent-monitors-joinability-template" \
   "/_index_template/agent-monitors-joinability-template" \
   "$PROJECT_ROOT/docker/elasticsearch/monitors-joinability-index-template.json"
 
+# 5b. Per-substrate joinability flat projection template (FRE-550). priority 200
+#     so it strictly outranks the dynamic:false parent agent-monitors-joinability-*
+#     (priority 100) template for the -substrate-* indices. Shares the joinability
+#     ILM policy registered above.
+put_resource "Index template: agent-monitors-joinability-substrate-template" \
+  "/_index_template/agent-monitors-joinability-substrate-template" \
+  "$PROJECT_ROOT/docker/elasticsearch/monitors-joinability-substrate-index-template.json"
+
 # 6. SLM request telemetry template (FRE-411). The slm_server shipper has no
 #    template of its own, so without this the daily slm-requests-* index gets
 #    default dynamic mapping (text join keys) and exact-match term joins on

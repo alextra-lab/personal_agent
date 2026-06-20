@@ -34,29 +34,52 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DASHBOARD_FILE = REPO_ROOT / "config" / "kibana" / "dashboards" / "monitors_joinability_slm.ndjson"
 IMPORT_SCRIPT = REPO_ROOT / "config" / "kibana" / "import_dashboards.sh"
+JOINABILITY_TEMPLATE = (
+    REPO_ROOT / "docker" / "elasticsearch" / "monitors-joinability-index-template.json"
+)
+SUBSTRATE_TEMPLATE = (
+    REPO_ROOT / "docker" / "elasticsearch" / "monitors-joinability-substrate-index-template.json"
+)
 
-# The two self-contained monitor index-patterns this dashboard defines inline,
-# each with its own time field (these docs carry NO @timestamp).
+# The monitor index-patterns this dashboard defines inline, each with its own
+# time field (these docs carry NO @timestamp).
 EXPECTED_INDEX_PATTERNS = {
     "agent-monitors-joinability-pattern": "started_at",
     "agent-monitors-slm-health-pattern": "probed_at",
+    # FRE-550 flat per-substrate projection.
+    "agent-monitors-joinability-substrate-pattern": "started_at",
 }
 
-# Every aggregation must reference one of these verified-safe fields. Anything
-# else (notably ``status``, ``status.keyword``, ``error``) is the straddle trap.
-SAFE_AGG_FIELDS = frozenset(
-    {
-        # joinability (bare keyword / float / date — consistent across all indices)
-        "outcome",
-        "source",
-        "duration_ms",
-        "started_at",
-        # slm health (boolean / float / date — consistent across the straddle)
-        "reachable",
-        "probe_latency_ms",
-        "probed_at",
-    }
-)
+# Every aggregation must reference a verified-safe field **for its own index
+# pattern**. The set is per-pattern, not global: ``status`` is straddle-safe on
+# the FRE-550 substrate index (single bare-keyword mapping from index creation)
+# but is the straddle trap on the SLM-health index, so it must never leak into
+# the SLM safe set. Source of truth: live _field_caps + per-index _mapping in
+# docs/research/2026-06-09-fre-538-monitors-dashboard.md (+ FRE-550 template).
+SAFE_AGG_FIELDS_BY_PATTERN: dict[str, frozenset[str]] = {
+    # joinability run doc (bare keyword / float / date — consistent everywhere)
+    "agent-monitors-joinability-pattern": frozenset(
+        {"outcome", "source", "duration_ms", "started_at"}
+    ),
+    # slm health (boolean / float / date — consistent across the straddle)
+    "agent-monitors-slm-health-pattern": frozenset({"reachable", "probe_latency_ms", "probed_at"}),
+    # FRE-550 flat substrate projection — explicit-mapped keyword/long/float
+    # from index creation (priority-200 template, dynamic:false). ``status`` is
+    # straddle-safe HERE because this index has a single bare-keyword mapping.
+    "agent-monitors-joinability-substrate-pattern": frozenset(
+        {
+            "substrate",
+            "status",
+            "expected",
+            "duration_ms",
+            "started_at",
+            "observed_count",
+            "orphan_count",
+            "orphan_red_count",
+            "orphan_yellow_count",
+        }
+    ),
+}
 
 
 def _objects() -> list[dict]:
@@ -94,10 +117,12 @@ def _agg_fields(viz: dict) -> list[str]:
 
 
 def test_ndjson_is_valid_and_has_one_dashboard() -> None:
-    """The file parses as NDJSON and contains one dashboard + 7 viz + 1 search."""
+    """The file parses as NDJSON and contains one dashboard + 10 viz + 1 search."""
     objs = _objects()
     assert len(_by_type(objs, "dashboard")) == 1, "exactly one dashboard object expected"
-    assert len(_by_type(objs, "visualization")) == 7, "expected seven visualization panels"
+    assert len(_by_type(objs, "visualization")) == 10, (
+        "expected ten visualization panels (7 original + 3 FRE-550 substrate)"
+    )
     assert len(_by_type(objs, "search")) == 1, "expected one saved search panel"
 
 
@@ -147,22 +172,31 @@ def test_panel_references_resolve() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_aggregations_only_use_straddle_safe_fields() -> None:
-    """No panel aggregates on a straddled or ``.keyword`` field.
+def _pattern_of(viz: dict) -> str:
+    """The single index-pattern id a visualization references."""
+    refs = [r["id"] for r in viz["references"] if r["type"] == "index-pattern"]
+    assert len(refs) == 1, f"{viz['id']} must reference exactly one index-pattern, got {refs}"
+    return refs[0]
 
-    Pins every aggregation to the verified-safe field set so the SLM-health
-    ``status``/``error`` straddle (and the bare-keyword ``.keyword`` trap) can
-    never silently empty a panel.
+
+def test_aggregations_only_use_straddle_safe_fields() -> None:
+    """No panel aggregates on a straddled or ``.keyword`` field — per pattern.
+
+    The safe set is resolved from each viz's **own** index-pattern, so the
+    SLM-health ``status``/``error`` straddle stays blocked even though
+    ``status`` is legitimately aggregatable on the FRE-550 substrate index.
     """
     for viz in _by_type(_objects(), "visualization"):
+        pattern = _pattern_of(viz)
+        safe = SAFE_AGG_FIELDS_BY_PATTERN[pattern]
         for field in _agg_fields(viz):
             assert not field.endswith(".keyword"), (
                 f"{viz['id']} aggregates on {field!r}; a ``.keyword`` agg is the "
                 f"straddle/A1 trap — use the bare field or a saved-search _source column"
             )
-            assert field in SAFE_AGG_FIELDS, (
-                f"{viz['id']} aggregates on {field!r}, which is not in the verified "
-                f"straddle-safe set {sorted(SAFE_AGG_FIELDS)} (status/error are straddled)"
+            assert field in safe, (
+                f"{viz['id']} (pattern {pattern}) aggregates on {field!r}, which is not "
+                f"in its straddle-safe set {sorted(safe)}"
             )
 
 
@@ -176,3 +210,55 @@ def test_registered_in_import_script() -> None:
     assert "monitors_joinability_slm.ndjson" in IMPORT_SCRIPT.read_text(), (
         "monitors_joinability_slm.ndjson must be appended to FILES in import_dashboards.sh"
     )
+
+
+# --------------------------------------------------------------------------- #
+# FRE-550 substrate ES template — mapping + priority traps.
+# --------------------------------------------------------------------------- #
+
+
+def test_substrate_template_duration_ms_is_float() -> None:
+    """``duration_ms`` is mapped ``float`` (not the long-trap default).
+
+    A first sub-millisecond value written under dynamic mapping would freeze the
+    field as ``long`` and silently truncate every later float; the explicit
+    ``float`` mapping is the guard (the FRE-534/536 float→long trap).
+    """
+    tmpl = json.loads(SUBSTRATE_TEMPLATE.read_text())
+    props = tmpl["template"]["mappings"]["properties"]
+    assert props["duration_ms"]["type"] == "float"
+
+
+def test_substrate_template_outranks_parent() -> None:
+    """Substrate template priority strictly exceeds the parent's.
+
+    ``agent-monitors-joinability-substrate-*`` is a strict subset of the parent
+    ``agent-monitors-joinability-*`` pattern. The parent is ``dynamic:false``
+    with no substrate-field properties, so if it won the match every substrate
+    field would be silently dropped. A strictly higher priority guarantees the
+    substrate template wins for the ``-substrate-*`` indices.
+    """
+    parent = json.loads(JOINABILITY_TEMPLATE.read_text())
+    substrate = json.loads(SUBSTRATE_TEMPLATE.read_text())
+    assert substrate["priority"] > parent["priority"], (
+        f"substrate priority {substrate['priority']} must exceed parent "
+        f"{parent['priority']} or the dynamic:false parent shadows the fields"
+    )
+
+
+def test_substrate_template_keyword_agg_fields_explicit() -> None:
+    """Every field the dashboard aggregates on is explicitly mapped (not dropped).
+
+    ``dynamic:false`` means an unmapped field is silently not indexed, so a
+    terms/avg agg on it returns nothing. Pin that the substrate template maps
+    each field the substrate panels aggregate on.
+    """
+    tmpl = json.loads(SUBSTRATE_TEMPLATE.read_text())
+    props = tmpl["template"]["mappings"]["properties"]
+    substrate_agg_fields = SAFE_AGG_FIELDS_BY_PATTERN[
+        "agent-monitors-joinability-substrate-pattern"
+    ]
+    for field in substrate_agg_fields:
+        assert field in props, (
+            f"{field!r} aggregated by a panel but unmapped (dynamic:false drops it)"
+        )

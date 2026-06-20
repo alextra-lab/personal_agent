@@ -111,6 +111,106 @@ class ResultDoc(BaseModel):
     kind: str = "system:joinability_probe"
 
 
+class SubstrateResultDoc(BaseModel):
+    """Flat per-``(run, substrate)`` projection of one :class:`ResultDoc`.
+
+    Written to ``agent-monitors-joinability-substrate-YYYY.MM.DD`` (one doc per
+    substrate per probe run) so legacy Kibana aggregation visualizations can
+    break joinability detail down by substrate, status, and orphan severity.
+    The run doc keeps ``orphans`` / ``substrate_checks`` as ``nested`` arrays,
+    which legacy aggs cannot bucket — this flattening (FRE-550 / ADR-0074) is
+    additive, not a replacement.
+
+    Attributes:
+        run_id: Parent :attr:`ResultDoc.run_id` — the join key back to the run.
+        started_at: Copied from the parent run; the index-pattern time field.
+        substrate: Substrate identifier, e.g. ``"postgres.api_costs"``.
+        status: The substrate check status — ``"green"`` / ``"yellow"`` /
+            ``"red"`` / ``"skipped"``.
+        expected: ``"required"`` / ``"conditional"`` / ``"absent_ok"``.
+        observed_count: Rows / docs / nodes the walk found for this substrate.
+        duration_ms: Wall-clock time to walk this substrate.
+        error: Error string when the substrate could not be reached.
+        orphan_count: Total orphans attributed to this substrate.
+        orphan_red_count: Hard-violation orphans on this substrate.
+        orphan_yellow_count: Soft-violation orphans on this substrate.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str
+    started_at: datetime
+    substrate: str
+    status: Literal["green", "yellow", "red", "skipped"]
+    expected: Literal["required", "conditional", "absent_ok"]
+    observed_count: int
+    duration_ms: float
+    error: str | None = None
+    orphan_count: int = 0
+    orphan_red_count: int = 0
+    orphan_yellow_count: int = 0
+
+
+def substrate_docs_from_result(result: ResultDoc) -> list[SubstrateResultDoc]:
+    """Flatten a :class:`ResultDoc` into one doc per substrate check.
+
+    Orphans are matched to their substrate by :attr:`Orphan.substrate`. Orphans
+    whose substrate is not among ``result.substrate_checks`` are silently
+    dropped (defensive — every orphan-emitting walk also appends a check for the
+    same substrate, so this should not occur in practice).
+
+    The walk appends exactly one :class:`SubstrateCheck` per substrate, so the
+    sink can derive a unique ES doc id ``{run_id}::{substrate}``. To keep that
+    contract honest, this factory **enforces** substrate uniqueness here — the
+    single chokepoint — raising ``ValueError`` on a duplicate rather than
+    letting the sink silently overwrite a sibling doc downstream. A future walk
+    regression that emits a duplicate substrate then fails the probe run loudly
+    instead of dropping dashboard rows.
+
+    Args:
+        result: Completed run-level result document.
+
+    Returns:
+        One :class:`SubstrateResultDoc` per check in ``result.substrate_checks``
+        (order preserved).
+
+    Raises:
+        ValueError: If two substrate checks share a ``substrate`` value (would
+            collide on the ``{run_id}::{substrate}`` ES doc id).
+    """
+    substrates = [c.substrate for c in result.substrate_checks]
+    if len(substrates) != len(set(substrates)):
+        dupes = sorted({s for s in substrates if substrates.count(s) > 1})
+        raise ValueError(
+            f"duplicate substrate(s) in result {result.run_id}: {dupes} — "
+            f"would collide on the substrate-doc id"
+        )
+
+    orphans_by_substrate: dict[str, list[Orphan]] = {}
+    for orphan in result.orphans:
+        orphans_by_substrate.setdefault(orphan.substrate, []).append(orphan)
+
+    docs: list[SubstrateResultDoc] = []
+    for check in result.substrate_checks:
+        sub_orphans = orphans_by_substrate.get(check.substrate, [])
+        docs.append(
+            SubstrateResultDoc(
+                run_id=result.run_id,
+                started_at=result.started_at,
+                substrate=check.substrate,
+                status=check.status,
+                expected=check.expected,
+                observed_count=check.observed_count,
+                duration_ms=check.duration_ms,
+                error=check.error,
+                orphan_count=len(sub_orphans),
+                orphan_red_count=sum(1 for o in sub_orphans if o.severity == "red"),
+                orphan_yellow_count=sum(1 for o in sub_orphans if o.severity == "yellow"),
+            )
+        )
+    return docs
+
+
 def aggregate_outcome(
     checks: Sequence[SubstrateCheck],
     orphans: Iterable[Orphan],

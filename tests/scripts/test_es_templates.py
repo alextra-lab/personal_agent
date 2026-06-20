@@ -388,3 +388,56 @@ def test_retired_captains_template_is_torn_down() -> None:
     for line in script.splitlines():
         if "/_index_template/agent-captains-template" in line and "X PUT" in line:
             pytest.fail(f"retired template is still PUT: {line.strip()}")
+
+
+# --------------------------------------------------------------------------- #
+# FRE-558 — live-index mapping apply (idempotent post-template patch).
+# --------------------------------------------------------------------------- #
+
+
+def test_apply_live_index_mapping_function_exists() -> None:
+    """setup-elasticsearch.sh declares an apply_live_index_mapping bash function."""
+    assert "apply_live_index_mapping" in SETUP_SCRIPT.read_text()
+
+
+def test_field_caps_validation_present() -> None:
+    """setup-elasticsearch.sh validates applied mappings via _field_caps."""
+    assert "_field_caps" in SETUP_SCRIPT.read_text()
+
+
+def test_all_template_puts_paired_with_live_mapping() -> None:
+    """Every index template PUT is wrapped so the live write index is also patched.
+
+    All 12 template registrations must go through put_and_apply_template (which
+    calls apply_live_index_mapping) rather than bare put_resource, so no family
+    is silently left with a stale live-index mapping after a re-deploy.
+    """
+    script = SETUP_SCRIPT.read_text()
+    for line in script.splitlines():
+        if 'put_resource "Index template:' in line:
+            pytest.fail(
+                f"Template PUT not wrapped for live-index patch: {line.strip()}\n"
+                "Use put_and_apply_template instead of put_resource for index templates."
+            )
+
+
+def test_live_mapping_skips_gracefully_on_404() -> None:
+    """apply_live_index_mapping returns 0 (skip) when the alias has no write index yet.
+
+    Families that use date-partitioned indices (no ILM write alias) must not cause
+    the script to fail — they simply have no live write index to patch.
+    """
+    script = SETUP_SCRIPT.read_text()
+    lines = script.splitlines()
+    # At least one "404" check must lead to return 0 (skip) in nearby context.
+    found_skip = False
+    for i, line in enumerate(lines):
+        if '"404"' in line or "'404'" in line:
+            context = "\n".join(lines[max(0, i - 2) : min(len(lines), i + 5)])
+            if "return 0" in context:
+                found_skip = True
+                break
+    assert found_skip, (
+        'Script must have at least one path where http_status=="404" leads to return 0 '
+        "(skip). apply_live_index_mapping must skip cleanly when the alias is absent."
+    )

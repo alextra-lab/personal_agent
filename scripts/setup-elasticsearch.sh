@@ -71,6 +71,163 @@ delete_resource() {
   fi
 }
 
+apply_live_index_mapping() {
+  # Args: <write-alias> <template-file>
+  #
+  # Idempotently patches the current live write index with the explicit
+  # properties declared in the template (additive only — ES rejects type
+  # conflicts, which we surface as hard errors so they are never silently
+  # skipped). Families without a write alias (date-partitioned indices) 404
+  # on the alias lookup and are skipped cleanly.
+  #
+  # Intentionally applies only .template.mappings.properties, NOT
+  # dynamic_templates or dynamic mode — those govern new-index creation only
+  # and cannot be meaningfully back-applied to a live index.
+  local alias="$1"
+  local template_file="$2"
+  local resp http_status resp_body live_index mapping_body
+
+  # 1. Resolve the live write index for this alias.
+  if ! resp=$(curl -sS -w '\nHTTP_STATUS:%{http_code}' "$ES_URL/_alias/$alias" 2>&1); then
+    echo "  ✗ apply_live_index_mapping [$alias]: curl failed: $resp"
+    failures=$((failures + 1))
+    return 1
+  fi
+  http_status="${resp##*HTTP_STATUS:}"
+  resp_body="${resp%$'\n'HTTP_STATUS:*}"
+
+  if [[ "$http_status" == "404" ]]; then
+    echo "  → [$alias] no write alias yet — skipping live-index mapping"
+    return 0
+  fi
+  if [[ ! "$http_status" =~ ^2[0-9][0-9]$ ]]; then
+    echo "  ✗ apply_live_index_mapping [$alias]: GET /_alias HTTP $http_status — $resp_body"
+    failures=$((failures + 1))
+    return 1
+  fi
+
+  live_index=$(python3 -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+for idx, idata in data.items():
+    for aname, ainfo in idata.get('aliases', {}).items():
+        if ainfo.get('is_write_index', False):
+            print(idx)
+            sys.exit(0)
+" <<< "$resp_body")
+
+  if [[ -z "$live_index" ]]; then
+    echo "  → [$alias] no is_write_index:true entry — skipping"
+    return 0
+  fi
+
+  # 2. Extract properties from the template (single source of truth).
+  mapping_body=$(python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    tpl = json.load(f)
+props = tpl.get('template', {}).get('mappings', {}).get('properties', {})
+print(json.dumps({'properties': props}))
+" "$template_file")
+
+  # 3. PUT mapping — additive only; ES rejects type conflicts with a 4xx so
+  #    they surface here as hard errors (increment failures, don't swallow).
+  echo "  → Patching live write index: $live_index"
+  if ! resp=$(curl -sS -w '\nHTTP_STATUS:%{http_code}' -X PUT "$ES_URL/$live_index/_mapping" \
+      -H 'Content-Type: application/json' \
+      -d "$mapping_body" 2>&1); then
+    echo "  ✗ apply_live_index_mapping [$alias]: PUT /_mapping curl failed: $resp"
+    failures=$((failures + 1))
+    return 1
+  fi
+  http_status="${resp##*HTTP_STATUS:}"
+  resp_body="${resp%$'\n'HTTP_STATUS:*}"
+
+  if [[ ! "$http_status" =~ ^2[0-9][0-9]$ ]]; then
+    echo "  ✗ apply_live_index_mapping [$alias]: PUT /$live_index/_mapping HTTP $http_status — $resp_body"
+    failures=$((failures + 1))
+    return 1
+  fi
+  echo "  ✓ Mapping patched on $live_index"
+
+  # 4. _field_caps assertion — every templated scalar leaf field must resolve
+  #    to its declared type. Skip fields absent from _field_caps (no docs yet).
+  #    Object/nested containers are excluded; they do not appear as typed leaves.
+  if ! resp=$(curl -sS -w '\nHTTP_STATUS:%{http_code}' \
+      "$ES_URL/$live_index/_field_caps?fields=*" 2>&1); then
+    echo "  ✗ apply_live_index_mapping [$alias]: _field_caps curl failed: $resp"
+    failures=$((failures + 1))
+    return 1
+  fi
+  http_status="${resp##*HTTP_STATUS:}"
+  resp_body="${resp%$'\n'HTTP_STATUS:*}"
+
+  if [[ ! "$http_status" =~ ^2[0-9][0-9]$ ]]; then
+    echo "  ✗ apply_live_index_mapping [$alias]: _field_caps HTTP $http_status — $resp_body"
+    failures=$((failures + 1))
+    return 1
+  fi
+
+  local validation_result
+  if ! validation_result=$(python3 -c "
+import json, sys
+
+with open(sys.argv[1]) as f:
+    tpl = json.load(f)
+props = tpl.get('template', {}).get('mappings', {}).get('properties', {})
+caps = json.loads(sys.stdin.read()).get('fields', {})
+
+def check(props, prefix=''):
+    mismatches = []
+    for name, defn in props.items():
+        path = (prefix + '.' + name) if prefix else name
+        ftype = defn.get('type')
+        sub = defn.get('properties')
+        if sub:
+            mismatches.extend(check(sub, path))
+        elif ftype and ftype not in ('object', 'nested') and path in caps:
+            actual = list(caps[path].keys())
+            if ftype not in actual:
+                mismatches.append(f'{path}: declared={ftype} actual={actual}')
+    return mismatches
+
+mm = check(props)
+if mm:
+    for m in mm:
+        print('MISMATCH ' + m)
+    sys.exit(1)
+print('OK')
+" "$template_file" <<< "$resp_body" 2>&1); then
+    echo "  ✗ _field_caps type mismatch on $live_index:"
+    echo "$validation_result" | sed 's/^/    /'
+    failures=$((failures + 1))
+    return 1
+  fi
+  echo "  ✓ _field_caps verified on $live_index"
+}
+
+put_and_apply_template() {
+  # Args: same as put_resource — <label> <url-path> <template-file>
+  #
+  # PUTs the index template then idempotently applies its explicit field
+  # mappings to the current live write index (see apply_live_index_mapping).
+  # Uses 'if put_resource ...' rather than a bare call so that a template PUT
+  # failure increments failures without exiting the script under set -e, then
+  # skips the live-index patch (no point patching if the template didn't update).
+  if put_resource "$1" "$2" "$3"; then
+    local alias
+    alias=$(python3 -c "
+import sys
+pattern = open(sys.argv[1]).read()
+import json
+tpl = json.loads(pattern)
+p = tpl.get('index_patterns', [''])[0]
+print(p.rstrip('*').rstrip('-'))
+" "$3")
+    apply_live_index_mapping "$alias" "$3"
+  fi
+}
+
 echo "=== Setting up Elasticsearch at $ES_URL ==="
 
 # Wait for Elasticsearch to be ready (max 60s — fail fast if unreachable).
@@ -92,7 +249,7 @@ put_resource "ILM policy: agent-logs-policy" \
   "$PROJECT_ROOT/docker/elasticsearch/ilm-policy.json"
 
 # 2. Index template for agent-logs-* (PUT replaces — idempotent)
-put_resource "Index template: agent-logs-template" \
+put_and_apply_template "Index template: agent-logs-template" \
   "/_index_template/agent-logs-template" \
   "$PROJECT_ROOT/docker/elasticsearch/index-template.json"
 
@@ -103,14 +260,14 @@ put_resource "Index template: agent-logs-template" \
 #    be DELETEd first or the PUTs below fail with an equal-priority conflict.
 delete_resource "Retire template: agent-captains-template" \
   "/_index_template/agent-captains-template"
-put_resource "Index template: agent-captains-captures-template" \
+put_and_apply_template "Index template: agent-captains-captures-template" \
   "/_index_template/agent-captains-captures-template" \
   "$PROJECT_ROOT/docker/elasticsearch/captains-captures-index-template.json"
-put_resource "Index template: agent-captains-reflections-template" \
+put_and_apply_template "Index template: agent-captains-reflections-template" \
   "/_index_template/agent-captains-reflections-template" \
   "$PROJECT_ROOT/docker/elasticsearch/captains-reflections-index-template.json"
 # Sub-agent captures: priority 120 so it out-ranks the captures-* glob (110).
-put_resource "Index template: agent-captains-subagents-template" \
+put_and_apply_template "Index template: agent-captains-subagents-template" \
   "/_index_template/agent-captains-subagents-template" \
   "$PROJECT_ROOT/docker/elasticsearch/captains-subagents-index-template.json"
 
@@ -119,7 +276,7 @@ put_resource "Index template: agent-captains-subagents-template" \
 put_resource "ILM policy: agent-insights-policy" \
   "/_ilm/policy/agent-insights-policy" \
   "$PROJECT_ROOT/docker/elasticsearch/insights-ilm-policy.json"
-put_resource "Index template: agent-insights-template" \
+put_and_apply_template "Index template: agent-insights-template" \
   "/_index_template/agent-insights-template" \
   "$PROJECT_ROOT/docker/elasticsearch/insights-index-template.json"
 
@@ -129,7 +286,7 @@ put_resource "Index template: agent-insights-template" \
 put_resource "ILM policy: agent-monitors-slm-health-policy" \
   "/_ilm/policy/agent-monitors-slm-health-policy" \
   "$PROJECT_ROOT/docker/elasticsearch/monitors-slm-health-ilm-policy.json"
-put_resource "Index template: agent-monitors-slm-health-template" \
+put_and_apply_template "Index template: agent-monitors-slm-health-template" \
   "/_index_template/agent-monitors-slm-health-template" \
   "$PROJECT_ROOT/docker/elasticsearch/monitors-slm-health-index-template.json"
 
@@ -139,7 +296,7 @@ put_resource "ILM policy: agent-monitors-joinability-policy" \
   "$PROJECT_ROOT/docker/elasticsearch/monitors-joinability-ilm-policy.json"
 
 # 5. Joinability probe index template.
-put_resource "Index template: agent-monitors-joinability-template" \
+put_and_apply_template "Index template: agent-monitors-joinability-template" \
   "/_index_template/agent-monitors-joinability-template" \
   "$PROJECT_ROOT/docker/elasticsearch/monitors-joinability-index-template.json"
 
@@ -147,7 +304,7 @@ put_resource "Index template: agent-monitors-joinability-template" \
 #     so it strictly outranks the dynamic:false parent agent-monitors-joinability-*
 #     (priority 100) template for the -substrate-* indices. Shares the joinability
 #     ILM policy registered above.
-put_resource "Index template: agent-monitors-joinability-substrate-template" \
+put_and_apply_template "Index template: agent-monitors-joinability-substrate-template" \
   "/_index_template/agent-monitors-joinability-substrate-template" \
   "$PROJECT_ROOT/docker/elasticsearch/monitors-joinability-substrate-index-template.json"
 
@@ -156,7 +313,7 @@ put_resource "Index template: agent-monitors-joinability-substrate-template" \
 #    default dynamic mapping (text join keys) and exact-match term joins on
 #    trace_id/span_id silently return nothing — the exact failure mode this
 #    script's header warns about.
-put_resource "Index template: slm-requests-template" \
+put_and_apply_template "Index template: slm-requests-template" \
   "/_index_template/slm-requests-template" \
   "$PROJECT_ROOT/docker/elasticsearch/slm-requests-index-template.json"
 
@@ -170,7 +327,7 @@ put_resource "Index template: slm-requests-template" \
 put_resource "ILM policy: user-turn-ratings-policy" \
   "/_ilm/policy/user-turn-ratings-policy" \
   "$PROJECT_ROOT/docker/elasticsearch/user-turn-ratings-ilm-policy.json"
-put_resource "Index template: user-turn-ratings-template" \
+put_and_apply_template "Index template: user-turn-ratings-template" \
   "/_index_template/user-turn-ratings-template" \
   "$PROJECT_ROOT/docker/elasticsearch/user-turn-ratings-index-template.json"
 
@@ -178,7 +335,7 @@ put_resource "Index template: user-turn-ratings-template" \
 #     trace at turn completion; model_calls_received vs COUNT(api_costs) detects
 #     stream:turn.observed delivery loss to the projector (orthogonal to cost_reconciled
 #     accumulator drift). dynamic:false explicit schema — join key keyword, *_usd double.
-put_resource "Index template: agent-monitors-projector-health-template" \
+put_and_apply_template "Index template: agent-monitors-projector-health-template" \
   "/_index_template/agent-monitors-projector-health-template" \
   "$PROJECT_ROOT/docker/elasticsearch/monitors-projector-health-index-template.json"
 
@@ -188,7 +345,7 @@ put_resource "Index template: agent-monitors-projector-health-template" \
 #     (trace_id, task_id) as keyword, authoritative_cost_usd as double, and
 #     latency_total_ms as float — the FRE-537 panel constraint. Unblocks the
 #     execution-topology Kibana view deferred from FRE-537.
-put_resource "Index template: agent-topology-template" \
+put_and_apply_template "Index template: agent-topology-template" \
   "/_index_template/agent-topology-template" \
   "$PROJECT_ROOT/docker/elasticsearch/topology-index-template.json"
 

@@ -162,13 +162,15 @@ async def _run_compression(
         return FALLBACK_MARKER
 
     # Recover the inserted summary marker from the compressed list.  Per
-    # ``_assemble_compressed`` it is the unique system message starting
+    # ``_assemble_compressed`` it is the unique SUMMARY_ROLE message starting
     # with the canonical "## Conversation Summary" header from
-    # ``_COMPRESSOR_SYSTEM_PROMPT``.
+    # ``_COMPRESSOR_SYSTEM_PROMPT``.  SUMMARY_ROLE = "assistant" (FRE-576 F2).
+    from personal_agent.orchestrator.within_session_compression import SUMMARY_ROLE  # noqa: PLC0415
+
     for msg in compressed:
         content = msg.get("content")
         if (
-            msg.get("role") == "system"
+            msg.get("role") == SUMMARY_ROLE
             and isinstance(content, str)
             and content.lstrip().startswith("## Conversation Summary")
         ):

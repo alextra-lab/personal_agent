@@ -10,7 +10,8 @@ import pytest
 
 from personal_agent.config import settings
 from personal_agent.governance.models import Mode
-from personal_agent.orchestrator import Channel, executor as ex
+from personal_agent.orchestrator import Channel
+from personal_agent.orchestrator import executor as ex
 from personal_agent.orchestrator.types import ExecutionContext
 from personal_agent.orchestrator.within_session_compression import FrozenResetResult
 
@@ -100,6 +101,8 @@ async def test_maybe_frozen_reset_fires_and_stashes_highlights(
             "min_run_turns": 1,
             "reset_cost_tokens": 1.0,
             "delta_turn_tokens": 1.0,
+            "quality_token_weight": 4000.0,
+            "quality_slope": 0.0,
         },
     )
     monkeypatch.setattr(

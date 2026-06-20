@@ -942,6 +942,10 @@ def _derive_reset_inputs(messages: list[dict[str, Any]], backend: str) -> dict[s
         "reset_cost_tokens": reset_cost,
         "delta_turn_tokens": delta_turn,
         "quality_token_weight": settings.cache_quality_token_weight,
+        # quality_slope: not yet wired from FRE-554/570/572 quality signals;
+        # 0.0 means the scheduler runs in the token-ceiling-only degenerate
+        # case (c = Δ_turn, quality penalty term = 0) (FRE-576 F3).
+        "quality_slope": 0.0,
     }
 
 
@@ -961,13 +965,42 @@ async def _maybe_frozen_reset(ctx: ExecutionContext) -> None:
     if not settings.cache_frozen_layout_enabled or not ctx.session_id:
         return
 
-    from personal_agent.orchestrator.cache_reset_scheduler import should_reset  # noqa: PLC0415
+    import math  # noqa: PLC0415
+
+    from personal_agent.orchestrator.cache_reset_scheduler import (  # noqa: PLC0415
+        marginal_hold_cost,
+        should_reset,
+    )
     from personal_agent.orchestrator.within_session_compression import (  # noqa: PLC0415
         build_frozen_reset,
     )
 
     backend = _frozen_backend()
-    decision = should_reset(**_derive_reset_inputs(ctx.messages, backend))
+    inputs = _derive_reset_inputs(ctx.messages, backend)
+    decision = should_reset(**inputs)
+
+    # Log every evaluation so quality_slope inertness and L* are observable
+    # even when no reset fires (FRE-576 F3).
+    _c = marginal_hold_cost(
+        inputs["delta_turn_tokens"],
+        inputs.get("quality_slope", 0.0),
+        inputs["quality_token_weight"],
+    )
+    log.info(
+        "cache_reset_decision",
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        backend=backend,
+        should_reset=decision.should_reset,
+        reason=decision.reason,
+        optimal_run_length=(
+            decision.optimal_run_length if decision.optimal_run_length != math.inf else None
+        ),
+        quality_slope=inputs.get("quality_slope", 0.0),
+        marginal_hold_cost=round(_c, 2),
+        turns_since_reset=inputs["turns_since_reset"],
+    )
+
     if not decision.should_reset:
         return
 
@@ -1833,6 +1866,10 @@ async def step_init(
         # turn) is itself a cache-buster and is removed — compaction becomes the
         # scheduled reset below. apply_context_window then keeps only its pure
         # truncation role.
+        # Dead-by-default: cache_frozen_layout_enabled=True (production default)
+        # makes _summary always None; compressed_summary is the legacy pre-ADR-0081
+        # path and maybe_trigger_compression is also gated on the same flag
+        # (FRE-576 F4).
         _summary = (
             compression_manager.get_summary(ctx.session_id)
             if ctx.session_id and not settings.cache_frozen_layout_enabled

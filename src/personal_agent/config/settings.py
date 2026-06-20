@@ -834,7 +834,9 @@ class AppConfig(BaseSettings):
         description=(
             "w_q (ADR-0081 §D3): token-equivalent of one FRE-407 quality point, used "
             "in the scheduler's marginal hold cost c = Δ_turn + w_q·Q_slope. Tuned "
-            "post-deploy against the A/B harness."
+            "post-deploy against the A/B harness. "
+            "Currently inert — quality_slope is hardwired to 0.0 pending the "
+            "per-compaction quality signal from FRE-554/570/572 (FRE-576 F3)."
         ),
     )
 

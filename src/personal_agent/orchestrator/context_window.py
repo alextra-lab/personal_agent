@@ -78,6 +78,9 @@ def apply_context_window(
         compressed_summary: Pre-computed summary of earlier turns from async
             compression (ADR-0038). When provided and turns are evicted, this
             replaces the static ``[Earlier messages truncated]`` marker.
+            Dead-by-default when ``cache_frozen_layout_enabled=True`` (the
+            production default); the executor gate is in
+            ``executor.step_context_window`` (FRE-576 F4).
 
     Returns:
         Trimmed message list that fits the available budget.

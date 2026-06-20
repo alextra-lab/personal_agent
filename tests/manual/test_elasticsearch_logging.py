@@ -6,6 +6,10 @@ This script tests that:
 3. No feedback loop occurs
 
 Run with: uv run python tests/manual/test_elasticsearch_logging.py
+
+The script refuses to write to the production Elasticsearch (:9200) unless
+AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE=1 is set. To target the test stack,
+set AGENT_ELASTICSEARCH_URL=http://localhost:9201 (requires make test-infra-up).
 """
 
 import asyncio
@@ -19,17 +23,40 @@ import pytest
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root / "src"))
 
+from personal_agent.config import settings  # noqa: E402
+from personal_agent.config._substrate_fingerprint import is_prod_elasticsearch_url  # noqa: E402
 from personal_agent.telemetry import add_elasticsearch_handler, get_logger  # noqa: E402
 from personal_agent.telemetry.es_handler import ElasticsearchHandler  # noqa: E402
+
+
+def _check_not_prod_es(url: str) -> None:
+    """Refuse to run against the prod ES fingerprint unless explicitly bypassed.
+
+    Args:
+        url: Elasticsearch base URL to check.
+
+    Raises:
+        RuntimeError: When the URL matches the prod fingerprint and
+            AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE is not set.
+    """
+    if is_prod_elasticsearch_url(url) and not settings.allow_test_writes_to_prod_substrate:
+        raise RuntimeError(
+            f"Refusing to write test events to prod Elasticsearch ({url!r}). "
+            "Set AGENT_ELASTICSEARCH_URL=http://localhost:9201 (test stack; "
+            "requires make test-infra-up) or "
+            "AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE=1 to bypass."
+        )
 
 
 @pytest.mark.asyncio
 async def test_logging():
     """Test Elasticsearch logging with rich structured data."""
+    _check_not_prod_es(settings.elasticsearch_url)
+
     log = get_logger(__name__)
 
     print("🔧 Connecting to Elasticsearch...")
-    es_handler = ElasticsearchHandler("http://localhost:9200")  # fre-375-allow: manual utility script, uses test stack via conftest
+    es_handler = ElasticsearchHandler(settings.elasticsearch_url)
 
     if not await es_handler.connect():
         print("❌ Failed to connect to Elasticsearch")
@@ -118,7 +145,7 @@ async def test_logging():
     print("   4. Go to: Analytics > Discover")
     print("   5. Filter by: event: test_* (to see these test logs)")
     print("\n🔍 Or query directly:")
-    print('   curl "http://localhost:9200/agent-logs-*/_search?q=event:test_*&pretty"')  # fre-375-allow: manual utility script, uses test stack via conftest
+    print(f'   curl "{settings.elasticsearch_url}/agent-logs-*/_search?q=event:test_*&pretty"')
 
     return True
 
@@ -132,7 +159,7 @@ async def query_test_logs():
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(
-                "http://localhost:9200/agent-logs-*/_search",  # fre-375-allow: manual utility script, uses test stack via conftest
+                f"{settings.elasticsearch_url}/agent-logs-*/_search",
                 params={
                     "q": "event:test_*",
                     "size": 10,

@@ -14,6 +14,12 @@ window).  Distinct fingerprints by construction; ADR-0030 dedup at
 Also exposes an ``IncidentTracker`` singleton that Stage 7 (Budget) reads
 under the ``context_quality_governance_*`` flags to tighten ``max_tokens``
 for sessions with sustained incident counts (Phase 2 governance).
+
+Additionally records gateway budget compaction incidents (ADR-0092 §D5, FRE-572):
+``BudgetCompactionIncident`` / ``record_budget_compaction_incident`` write a
+separate ``BCOMP-*.jsonl`` durable file + structlog event when a budget trim
+drops content.  These are intentionally NOT registered with ``IncidentTracker``
+(different concern; registering them would cause circular Stage 7 tightening).
 """
 
 from __future__ import annotations
@@ -25,7 +31,7 @@ from collections import OrderedDict, deque
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import structlog
 
@@ -352,3 +358,80 @@ def reset_incident_tracker() -> None:
     """Reset the process-global ``IncidentTracker`` (test-only convenience)."""
     global _global_incident_tracker
     _global_incident_tracker = None
+
+
+# ---------------------------------------------------------------------------
+# ADR-0092 §D5 — Gateway budget compaction incident (FRE-572)
+# Separate from CompactionQualityIncident / IncidentTracker: budget compaction
+# is a content-loss event, NOT a recall-quality overlap; registering it with
+# IncidentTracker would cause circular Stage 7 budget tightening.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BudgetCompactionIncident:
+    """One gateway budget compaction incident (ADR-0092 §D5, FRE-572).
+
+    Recorded when ``apply_budget`` trims the assembled context (phase 1: history,
+    phase 2: memory, phase 3: tool defs). Distinct from ``CompactionQualityIncident``
+    (which detects dropped entities mentioned again by the user).
+
+    Attributes:
+        trace_id: Turn trace identifier.
+        session_id: Owning session identifier.
+        phases_fired: Trimming phases that ran, e.g. ``(1,)``, ``(1, 2)``, ``(1, 2, 3)``.
+        severity: ``"high"`` when phase 2 (memory-context drop) fired; ``"low"`` otherwise.
+        detected_at: UTC timestamp of the compaction event.
+    """
+
+    trace_id: str
+    session_id: str
+    phases_fired: tuple[int, ...]
+    severity: Literal["high", "low"]
+    detected_at: datetime
+
+
+def _bcomp_jsonl_line(incident: BudgetCompactionIncident) -> str:
+    payload = {
+        "trace_id": incident.trace_id,
+        "session_id": incident.session_id,
+        "phases_fired": list(incident.phases_fired),
+        "severity": incident.severity,
+        "detected_at": incident.detected_at.isoformat(),
+    }
+    return json.dumps(payload, sort_keys=True)
+
+
+async def record_budget_compaction_incident(
+    incident: BudgetCompactionIncident,
+    *,
+    output_dir: Path | None = None,
+) -> None:
+    """Record a gateway budget compaction incident (ADR-0092 §D5, FRE-572).
+
+    Writes a durable JSONL line to ``BCOMP-<YYYY-MM-DD>.jsonl`` then emits a
+    structlog event (routed to Elasticsearch by the existing log handler) so the
+    incident is queryable.  Best-effort: callers wrap in their own ``try/except``
+    so a write failure never blocks the gateway turn.
+
+    Args:
+        incident: The detected budget compaction incident.
+        output_dir: Override for the JSONL output directory.  Defaults to
+            ``telemetry/context_quality``.
+    """
+    target_dir = output_dir or _default_output_dir()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    day = incident.detected_at.astimezone(timezone.utc).strftime("%Y-%m-%d")
+    fp = target_dir / f"BCOMP-{day}.jsonl"
+    with fp.open("a", encoding="utf-8") as fh:
+        fh.write(_bcomp_jsonl_line(incident))
+        fh.write("\n")
+
+    log.info(
+        "budget_compaction_incident",
+        trace_id=incident.trace_id,
+        session_id=incident.session_id,
+        phases_fired=list(incident.phases_fired),
+        severity=incident.severity,
+        detected_at=incident.detected_at.isoformat(),
+    )

@@ -202,6 +202,28 @@ async def run_gateway_pipeline(
         except Exception:
             pass  # best-effort; never block the gateway turn
 
+        # ADR-0092 §D5: durable backend incident — separate try/except so a marker
+        # publish failure never skips the incident record (FRE-572).
+        try:
+            from datetime import datetime, timezone  # noqa: PLC0415
+
+            from personal_agent.telemetry.context_quality import (  # noqa: PLC0415
+                BudgetCompactionIncident,
+                record_budget_compaction_incident,
+            )
+
+            await record_budget_compaction_incident(
+                BudgetCompactionIncident(
+                    trace_id=trace_id,
+                    session_id=session_id,
+                    phases_fired=_phases,
+                    severity=_severity,
+                    detected_at=datetime.now(timezone.utc),
+                )
+            )
+        except Exception:
+            pass  # best-effort; never block the gateway turn
+
     # Track degraded memory.
     # Only flag degradation for MEMORY_RECALL (other intents return None by design).
     if (

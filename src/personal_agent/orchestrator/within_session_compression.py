@@ -44,7 +44,10 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 
-SUMMARY_ROLE = "system"
+# NOT "system": _validate_and_fix_conversation_roles keeps only the first
+# system message and silently drops later ones.  An assistant-role recap
+# survives role-fixing in place, matching FROZEN_RECAP_ROLE (FRE-576 F2).
+SUMMARY_ROLE = "assistant"
 
 
 # ---------------------------------------------------------------------------
@@ -408,6 +411,10 @@ async def compress_in_place(
         min_tokens=tail_token_floor,
         min_turns=min_tail_turns,
     )
+    # Trim any leading non-user messages from the tail so the assistant-role
+    # summary never lands immediately before another assistant message.
+    # Matches the build_frozen_reset behaviour (FRE-576 F2).
+    tail = _tail_starting_on_user(tail)
     tail_idx_start = len(messages) - len(tail) if tail else len(messages)
     middle = messages[head_len:tail_idx_start]
 

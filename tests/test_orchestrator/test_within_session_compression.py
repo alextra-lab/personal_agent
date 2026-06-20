@@ -19,6 +19,7 @@ from personal_agent.orchestrator.context_window import (
     compute_prefix_hash,
     estimate_messages_tokens,
 )
+from personal_agent.orchestrator.executor import _validate_and_fix_conversation_roles
 
 
 def _msg(role: str, content: str, **extra: Any) -> dict[str, Any]:
@@ -249,8 +250,9 @@ class TestCompressInPlace:
         assert compressed[1] == messages[1]
         # KV cache prefix invariant
         assert compute_prefix_hash(compressed[0]) == prefix_before
-        # Summary marker is right after the head
-        assert compressed[2]["role"] == "system"
+        # Summary marker is right after the head; role must be "assistant" so
+        # it survives _validate_and_fix_conversation_roles (FRE-576 F2).
+        assert compressed[2]["role"] == "assistant"
         assert compressed[2]["content"].startswith("## Conversation Summary")
         # Tail keeps the last user message verbatim
         assert messages[-1] in compressed
@@ -348,3 +350,71 @@ class TestCompressInPlace:
 
         assert isinstance(compressed, list)
         assert record.trigger == "soft"
+
+
+# ---------------------------------------------------------------------------
+# F2 regression — summary role must survive _validate_and_fix_conversation_roles
+# ---------------------------------------------------------------------------
+
+
+class TestSummaryRoleSurvivesRoleFixer:
+    """FRE-576 F2: the within-session summary must not be dropped by the role-fixer.
+
+    _validate_and_fix_conversation_roles keeps only the first system message
+    and silently discards later ones.  If SUMMARY_ROLE is "system" the recap
+    inserted mid-list is deleted before the LLM sees it.  After the fix
+    (SUMMARY_ROLE = "assistant") the recap survives.
+    """
+
+    @pytest.mark.asyncio
+    async def test_summary_role_survives_role_fixer(self) -> None:
+        messages: list[dict[str, Any]] = [
+            _msg("system", "persona block"),
+            _msg("user", "start task"),
+        ]
+        for i in range(5):
+            messages.append(
+                _msg(
+                    "assistant",
+                    f"step {i}",
+                    tool_calls=[{"id": f"tc-{i}", "function": {"name": "es", "arguments": "{}"}}],
+                )
+            )
+            messages.append(_msg("tool", "r" * 6000, tool_call_id=f"tc-{i}"))
+        messages.append(_msg("user", "final question"))
+
+        summary_text = "## Conversation Summary\n- Decisions: ran 5 es queries"
+
+        async def fake_compress(
+            msgs: list, trace_id: str = "", session_id: str | None = None
+        ) -> str:
+            return summary_text
+
+        with patch(
+            "personal_agent.orchestrator.context_compressor.compress_turns",
+            side_effect=fake_compress,
+        ):
+            compressed, record = await wsc.compress_in_place(
+                messages,
+                trace_id="t1",
+                session_id="s1",
+                trigger="hard",
+                bus=None,
+                pre_pass_threshold_tokens=200,
+                min_tail_tokens=20,
+                min_tail_turns=2,
+            )
+
+        assert record.summariser_called is True
+
+        # Summary must survive the role-fixer applied before every LLM dispatch.
+        fixed = _validate_and_fix_conversation_roles(compressed)
+        summary_contents = [
+            m["content"]
+            for m in fixed
+            if isinstance(m.get("content"), str) and "## Conversation Summary" in m["content"]
+        ]
+        assert summary_contents, (
+            "within-session summary was dropped by _validate_and_fix_conversation_roles — "
+            f"SUMMARY_ROLE={wsc.SUMMARY_ROLE!r} is being stripped"
+        )

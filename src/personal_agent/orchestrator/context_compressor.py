@@ -179,7 +179,7 @@ async def compress_turns(
                 {"role": "system", "content": _COMPRESSOR_SYSTEM_PROMPT},
                 {"role": "user", "content": formatted},
             ],
-            max_tokens=512,
+            max_tokens=320,  # ≤200 words ≈ 260-300 tokens; 320 enforces the prompt cap (FRE-576 F5)
             temperature=0.2,
             timeout_s=25.0,
             trace_ctx=compress_ctx,

@@ -53,7 +53,8 @@ class TestGetSummary:
         summary_text = "## Conversation Summary\n- Decisions: foo"
         compressed = [
             {"role": "system", "content": "sys"},
-            {"role": "system", "content": summary_text},
+            # SUMMARY_ROLE = "assistant" (FRE-576 F2) — role-fixer drops later system msgs
+            {"role": "assistant", "content": summary_text},
             {"role": "user", "content": "tail"},
         ]
 
@@ -127,7 +128,8 @@ class TestMaybeTriggerCompression:
 
         fake_compress = AsyncMock(
             return_value=(
-                [{"role": "system", "content": "## Conversation Summary\nx"}],
+                # SUMMARY_ROLE = "assistant" (FRE-576 F2)
+                [{"role": "assistant", "content": "## Conversation Summary\nx"}],
                 _record(summariser_called=True),
             )
         )

@@ -28,12 +28,18 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Literal
 
 from personal_agent.config.settings import get_settings
-from personal_agent.observability.joinability.result import ResultDoc
+from personal_agent.observability.joinability.result import (
+    ResultDoc,
+    substrate_docs_from_result,
+)
 from personal_agent.observability.joinability.sampling import (
     pick_session,
     seed_for,
 )
-from personal_agent.observability.joinability.sink import write_result
+from personal_agent.observability.joinability.sink import (
+    write_result,
+    write_substrate_results,
+)
 from personal_agent.observability.joinability.walk import JoinabilityWalk
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.trace import SystemTraceContext
@@ -316,6 +322,24 @@ async def _run(args: argparse.Namespace) -> int:
                     error=str(exc),
                     trace_id=ctx.trace_id,
                 )
+            # Flat per-substrate projection (FRE-550) so legacy Kibana aggs can
+            # break joinability detail down by substrate / status / orphan
+            # severity (the run doc's nested arrays can't be aggregated).
+            sub_docs = substrate_docs_from_result(doc)
+            if sub_docs:
+                try:
+                    await write_substrate_results(
+                        es,
+                        sub_docs,
+                        prefix=settings.joinability_probe_index_prefix,
+                        trace_id=ctx.trace_id,
+                    )
+                except Exception as exc:  # noqa: BLE001 — sink failure is logged, not fatal
+                    log.warning(
+                        "joinability_probe_substrate_es_write_failed",
+                        error=str(exc),
+                        trace_id=ctx.trace_id,
+                    )
         if args.dry_run:
             sys.stdout.write(doc.model_dump_json(indent=2) + "\n")
 

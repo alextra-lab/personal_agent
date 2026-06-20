@@ -7,9 +7,13 @@ stays substrate-agnostic and can be unit-tested without an ES dependency.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from personal_agent.observability.joinability.result import ResultDoc
+from personal_agent.observability.joinability.result import (
+    ResultDoc,
+    SubstrateResultDoc,
+)
 from personal_agent.telemetry import get_logger
 
 if TYPE_CHECKING:
@@ -64,4 +68,59 @@ async def write_result(
         outcome=doc.outcome,
         sampled_session_id=doc.sampled_session_id,
         trace_id=doc.trace_id,
+    )
+
+
+def substrate_index_name_for(doc: SubstrateResultDoc, *, prefix: str) -> str:
+    """Compute the daily index name for a flat per-substrate doc.
+
+    Args:
+        doc: Flat per-substrate result document.
+        prefix: Base joinability prefix (e.g. ``agent-monitors-joinability``);
+            the ``-substrate-`` suffix is appended here so the run-doc and
+            substrate-doc indices share a single settings key.
+
+    Returns:
+        ``{prefix}-substrate-YYYY.MM.DD`` (UTC date from ``started_at``).
+    """
+    return f"{prefix}-substrate-{doc.started_at.strftime('%Y.%m.%d')}"
+
+
+async def write_substrate_results(
+    es: "AsyncElasticsearch",
+    docs: Sequence[SubstrateResultDoc],
+    *,
+    prefix: str,
+    trace_id: str,
+) -> None:
+    """Write flat per-substrate docs to ES — one per ``(run, substrate)``.
+
+    Document id is ``{run_id}::{substrate}`` (deterministic and idempotent, so
+    a re-run of the same probe overwrites rather than duplicates). Substrate
+    uniqueness within a run is enforced upstream by
+    :func:`substrate_docs_from_result`, so the id never collides.
+
+    Args:
+        es: Connected AsyncElasticsearch client.
+        docs: Flat substrate docs from :func:`substrate_docs_from_result`.
+        prefix: Base index prefix (e.g. ``agent-monitors-joinability``).
+        trace_id: The probe run's ``SystemTraceContext`` trace id, for the
+            structured completion log (the docs themselves carry ``run_id``).
+
+    Raises:
+        elasticsearch.ApiError: When an index operation fails. The caller logs
+            and swallows — a substrate-doc write failure must not abort the
+            brainstem scheduler loop (mirrors the :func:`write_result` contract).
+    """
+    for doc in docs:
+        await es.index(
+            index=substrate_index_name_for(doc, prefix=prefix),
+            id=f"{doc.run_id}::{doc.substrate}",
+            document=doc.model_dump(mode="json"),
+        )
+    log.info(
+        "joinability_substrate_docs_indexed",
+        count=len(docs),
+        run_id=docs[0].run_id if docs else None,
+        trace_id=trace_id,
     )

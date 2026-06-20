@@ -339,6 +339,15 @@ put_and_apply_template "Index template: agent-monitors-projector-health-template
   "/_index_template/agent-monitors-projector-health-template" \
   "$PROJECT_ROOT/docker/elasticsearch/monitors-projector-health-index-template.json"
 
+# 7b-ii. Cache-reset cadence monitor (ADR-0092 §D7, FRE-572). One doc per
+#     frozen-reset firing: actual_turns vs l_star (ADR-0081 computed optimum).
+#     dynamic:false — explicit double for l_star/deviation_turns guards the
+#     first-value-0.0-to-long trap; l_star/deviation_turns are null when
+#     optimal_run_length=inf (no hold-cost pressure).
+put_and_apply_template "Index template: agent-monitors-cache-reset-cadence-template" \
+  "/_index_template/agent-monitors-cache-reset-cadence-template" \
+  "$PROJECT_ROOT/docker/elasticsearch/monitors-cache-reset-cadence-index-template.json"
+
 # 7b. Execution-topology projection template (FRE-548 / ADR-0088). Projects the
 #     Postgres route-trace ledger row (turn-level + per-sub-agent segments) to
 #     agent-topology-*. dynamic:false with an explicit schema keeps join keys

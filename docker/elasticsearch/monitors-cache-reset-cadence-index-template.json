@@ -1,0 +1,29 @@
+{
+  "index_patterns": ["agent-monitors-cache-reset-cadence-*"],
+  "priority": 110,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.codec": "best_compression",
+      "index.refresh_interval": "5s"
+    },
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "@timestamp":      { "type": "date" },
+        "trace_id":        { "type": "keyword" },
+        "session_id":      { "type": "keyword" },
+        "backend":         { "type": "keyword" },
+        "reason":          { "type": "keyword" },
+        "actual_turns":    { "type": "integer" },
+        "l_star":          { "type": "double" },
+        "deviation_turns": { "type": "double" }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Cache-reset cadence monitor, one doc per frozen-reset firing (ADR-0092 §D7, FRE-572). actual_turns = turns elapsed since last reset; l_star = ADR-0081 computed optimum L* (null when optimal_run_length=inf, i.e. no hold-cost pressure); deviation_turns = actual_turns - l_star (positive = reset too late, negative = too early; null when l_star is null). backend keyword allows per-backend aggregation (llamacpp vs mlx asymmetry). dynamic:false — explicit double for l_star/deviation_turns guards the first-value-0.0-to-long dynamic-mapping trap. Index pattern agent-monitors-cache-reset-cadence-YYYY-MM-DD.",
+    "managed_by": "scripts/setup-elasticsearch.sh"
+  }
+}

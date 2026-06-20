@@ -949,6 +949,55 @@ def _derive_reset_inputs(messages: list[dict[str, Any]], backend: str) -> dict[s
     }
 
 
+def _emit_cadence_monitor_doc(
+    trace_id: str,
+    session_id: str,
+    backend: str,
+    actual_turns: int,
+    optimal_run_length: float,
+    reason: str,
+) -> None:
+    """Emit a cadence monitor ES doc when a frozen reset fires (ADR-0092 §D7, FRE-572).
+
+    Writes to ``agent-monitors-cache-reset-cadence-<date>`` so Kibana can aggregate
+    ``actual_turns`` vs ``l_star`` (the computed ADR-0081 optimum) and validate
+    whether the scheduler fires at the right cadence in production.
+
+    ``l_star`` and ``deviation_turns`` are ``None`` when ``optimal_run_length``
+    is ``math.inf`` (no hold-cost pressure, only the token ceiling drives resets).
+
+    Args:
+        trace_id: Turn trace identifier.
+        session_id: Owning session identifier.
+        backend: SLM backend label (``"llamacpp"`` / ``"mlx"``).
+        actual_turns: Turns elapsed since the last reset (from ``turns_since_reset``).
+        optimal_run_length: The computed ``L*`` from :func:`should_reset`.
+        reason: Reset decision reason (``"optimum"`` / ``"token_ceiling"``).
+    """
+    import math  # noqa: PLC0415
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    from personal_agent.captains_log.es_indexer import schedule_es_index  # noqa: PLC0415
+
+    ts = datetime.now(timezone.utc)
+    l_star: float | None = None if math.isinf(optimal_run_length) else optimal_run_length
+    deviation: float | None = (
+        round(actual_turns - optimal_run_length, 2) if l_star is not None else None
+    )
+    index_name = f"agent-monitors-cache-reset-cadence-{ts.strftime('%Y-%m-%d')}"
+    doc = {
+        "@timestamp": ts.isoformat(),
+        "trace_id": trace_id,
+        "session_id": session_id,
+        "backend": backend,
+        "actual_turns": actual_turns,
+        "l_star": l_star,
+        "deviation_turns": deviation,
+        "reason": reason,
+    }
+    schedule_es_index(index_name, doc, doc_id=f"{trace_id}:D")
+
+
 async def _maybe_frozen_reset(ctx: ExecutionContext) -> None:
     """Fire a scheduled frozen-prefix reset when the scheduler decides to.
 
@@ -1018,7 +1067,17 @@ async def _maybe_frozen_reset(ctx: ExecutionContext) -> None:
         backend=backend,
         reason=decision.reason,
         optimal_run_length=decision.optimal_run_length,
+        turns_since_reset=inputs["turns_since_reset"],
         output_messages=len(result.messages),
+    )
+    # ADR-0092 §D7: cadence monitor ES doc — actual vs L* for Kibana aggregation.
+    _emit_cadence_monitor_doc(
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        backend=backend,
+        actual_turns=inputs["turns_since_reset"],
+        optimal_run_length=decision.optimal_run_length,
+        reason=decision.reason,
     )
     # ADR-0092 §D8: emit D marker on stream:turn.observed so the projector can fold it
     # into the session aggregate as a cache_reset_count entry (dedup by fact_id).

@@ -166,6 +166,9 @@ telemetry/evaluation/fre433-cache-ab/
 # FRE-453 canonical eval set run outputs (raw runs never committed; curated summaries only)
 telemetry/evaluation/fre453-canonical-evalset/
 
+# FRE-577 occupancy curve eval run outputs (regeneratable)
+telemetry/evaluation/eval-04b-occupancy-curve/
+
 # deploy-approval-gate runtime sentinel (never committed)
 .claude/.deploy-approved
 

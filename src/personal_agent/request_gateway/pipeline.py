@@ -12,7 +12,7 @@ Runs the deterministic pre-LLM pipeline:
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 import structlog
@@ -166,7 +166,41 @@ async def run_gateway_pipeline(
         context=context,
         max_tokens=max_context_tokens,
         trace_id=trace_id,
+        session_id=session_id,
     )
+
+    # ADR-0092 §D8: emit A marker on stream:turn.observed when budget compaction fired.
+    if context.trimmed and context.overflow_action:
+        _phases: tuple[int, ...]
+        action = context.overflow_action
+        if action == "dropped_tool_definitions":
+            _phases = (1, 2, 3)
+        elif action == "dropped_memory_context":
+            _phases = (1, 2)
+        else:
+            _phases = (1,)
+        _severity: Literal["high", "low"] = "high" if 2 in _phases else "low"
+        try:
+            from personal_agent.config import settings as _cfg  # noqa: PLC0415
+            from personal_agent.events import get_event_bus  # noqa: PLC0415
+            from personal_agent.events.models import (  # noqa: PLC0415
+                STREAM_TURN_OBSERVED,
+                CompactionAMarkerEvent,
+            )
+
+            await get_event_bus().publish(
+                STREAM_TURN_OBSERVED,
+                CompactionAMarkerEvent(
+                    trace_id=trace_id,
+                    session_id=session_id,
+                    phases_fired=_phases,
+                    severity=_severity,
+                    fact_id=f"{trace_id}:A",
+                ),
+                maxlen=_cfg.turn_observed_stream_maxlen,
+            )
+        except Exception:
+            pass  # best-effort; never block the gateway turn
 
     # Track degraded memory.
     # Only flag degradation for MEMORY_RECALL (other intents return None by design).

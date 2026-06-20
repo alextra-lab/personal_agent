@@ -987,6 +987,28 @@ async def _maybe_frozen_reset(ctx: ExecutionContext) -> None:
         optimal_run_length=decision.optimal_run_length,
         output_messages=len(result.messages),
     )
+    # ADR-0092 §D8: emit D marker on stream:turn.observed so the projector can fold it
+    # into the session aggregate as a cache_reset_count entry (dedup by fact_id).
+    try:
+        from personal_agent.events import get_event_bus  # noqa: PLC0415
+        from personal_agent.events.models import (  # noqa: PLC0415
+            STREAM_TURN_OBSERVED,
+            CompactionDMarkerEvent,
+        )
+
+        await get_event_bus().publish(
+            STREAM_TURN_OBSERVED,
+            CompactionDMarkerEvent(
+                trace_id=ctx.trace_id,
+                session_id=ctx.session_id,
+                reason=decision.reason,
+                optimal_run_length=float(decision.optimal_run_length),
+                fact_id=f"{ctx.trace_id}:D",
+            ),
+            maxlen=settings.turn_observed_stream_maxlen,
+        )
+    except Exception:
+        pass  # best-effort; never block the executor turn
 
 
 def _fallback_reply_from_tool_results(ctx: ExecutionContext, *, lead: str | None = None) -> str:

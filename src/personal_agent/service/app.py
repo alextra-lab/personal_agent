@@ -802,15 +802,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         if settings.turn_projector_enabled:
             from personal_agent.observability.route_trace import get_route_trace_ledger
             from personal_agent.observability.topology.projector import (
+                SessionHydration,
                 TurnObservationProjector,
             )
 
             _ledger = get_route_trace_ledger()
 
-            async def _hydrate_session_costs(session_id: str) -> dict[str, float]:
-                return await _ledger.fetch_session_costs_by_trace(session_id)
+            async def _hydrate_session(session_id: str) -> SessionHydration:
+                costs = await _ledger.fetch_session_costs_by_trace(session_id)
+                # B/D/A compaction identity sets start carry-only — no durable substrate
+                # query yet; a follow-up ticket will wire ES/JSONL reads (ADR-0092 §D4).
+                return SessionHydration(costs=costs)
 
-            _turn_projector = TurnObservationProjector(hydration_source=_hydrate_session_costs)
+            _turn_projector = TurnObservationProjector(hydration_source=_hydrate_session)
             await active_bus.subscribe(
                 stream=STREAM_TURN_OBSERVED,
                 group=CG_TURN_PROJECTOR,

@@ -1079,6 +1079,112 @@ class SubAgentProgressEvent(EventBase):
     iteration_max: int
 
 
+# ---------------------------------------------------------------------------
+# ADR-0092 — Context-compaction observability markers (FRE-570)
+# All three publish to STREAM_TURN_OBSERVED so the sole-emitter projector
+# can fold them into session-aggregate identity sets without a second
+# turn_status writer (ADR-0088 D4, ADR-0092 §D8).
+# ---------------------------------------------------------------------------
+
+
+class CompactionAMarkerEvent(EventBase):
+    """Marker: gateway budget compaction fired this turn (ADR-0092 §D5/§D8).
+
+    Emitted best-effort from ``request_gateway/pipeline.py`` after
+    ``apply_budget`` trims the assembled context.  Published to
+    ``stream:turn.observed`` so the projector can fold it into the session
+    aggregate as a ``quality_alert_ids`` identity entry (dedup by ``fact_id``).
+
+    Attributes:
+        trace_id: Turn trace identifier (required).
+        session_id: Owning session identifier (required).
+        task_id: Sub-task identifier when applicable; ``None`` at gateway stage.
+        topology: Active topology label when known; typically ``None`` here.
+        model_role: Model tier when known; typically ``None`` here.
+        phases_fired: Which trimming phases ran, e.g. ``(1,)``, ``(1, 2)``,
+            ``(1, 2, 3)`` — derived from ``overflow_action``.
+        severity: ``"high"`` when phase 2 (memory-context drop) fired;
+            ``"low"`` otherwise (history-trim or tool-def-drop only).
+        fact_id: Stable dedup key, ``"{trace_id}:A"`` — at most one A marker
+            per turn.
+    """
+
+    event_type: Literal["turn.compaction_a_fired"] = "turn.compaction_a_fired"
+    source_component: str = "request_gateway.pipeline"
+    trace_id: str
+    session_id: str
+    task_id: str | None = None
+    topology: str | None = None
+    model_role: str | None = None
+    phases_fired: tuple[int, ...]
+    severity: Literal["high", "low"]
+    fact_id: str
+
+
+class CompactionBMarkerEvent(EventBase):
+    """Marker: within-session compression pass completed (ADR-0092 §D6/§D8).
+
+    Emitted best-effort from ``telemetry/within_session_compression.py`` in
+    ``record_compression`` — alongside the existing ``WithinSessionCompressionEvent``
+    on its own stream — and published to ``stream:turn.observed`` so the
+    projector folds it into ``compaction_b_ids`` (dedup by ``fact_id``).
+
+    Attributes:
+        trace_id: Turn trace identifier (required).
+        session_id: Owning session identifier (required).
+        task_id: Sub-task identifier; ``None`` for top-level compression.
+        topology: Active topology label when known; typically ``None`` here.
+        model_role: Model tier when known; typically ``None`` here.
+        trigger: ``"soft"`` (async between turns) or ``"hard"`` (sync mid-turn).
+        fact_id: ``event_id`` of the ``WithinSessionCompressionEvent`` emitted
+            in the same call — guarantees dedup against hydration (§D4).
+    """
+
+    event_type: Literal["turn.compaction_b_fired"] = "turn.compaction_b_fired"
+    source_component: str = "orchestrator.within_session_compression"
+    trace_id: str
+    session_id: str
+    task_id: str | None = None
+    topology: str | None = None
+    model_role: str | None = None
+    trigger: Literal["soft", "hard"]
+    fact_id: str
+
+
+class CompactionDMarkerEvent(EventBase):
+    """Marker: cache-aware frozen reset fired this turn (ADR-0092 §D7/§D8).
+
+    Emitted best-effort from ``orchestrator/executor.py`` in
+    ``_maybe_frozen_reset`` after the reset completes and is published to
+    ``stream:turn.observed`` so the projector folds it into
+    ``compaction_d_ids`` (dedup by ``fact_id``).
+
+    Attributes:
+        trace_id: Turn trace identifier (required).
+        session_id: Owning session identifier (required).
+        task_id: Sub-task identifier; ``None`` for the primary executor path.
+        topology: Active topology label when known.
+        model_role: Model tier when known.
+        reason: Reset decision reason from :class:`~personal_agent.orchestrator
+            .cache_reset_scheduler.ResetDecision` (``"token_ceiling"`` /
+            ``"optimum"``).
+        optimal_run_length: The computed ``L*`` at reset time.
+        fact_id: Stable dedup key, ``"{trace_id}:D"`` — at most one D marker
+            per turn.
+    """
+
+    event_type: Literal["turn.compaction_d_fired"] = "turn.compaction_d_fired"
+    source_component: str = "orchestrator.executor"
+    trace_id: str
+    session_id: str
+    task_id: str | None = None
+    topology: str | None = None
+    model_role: str | None = None
+    reason: str
+    optimal_run_length: float
+    fact_id: str
+
+
 def parse_stream_event(payload: dict[str, Any]) -> EventBase:
     """Deserialize a stream JSON payload into the correct event subclass.
 
@@ -1145,4 +1251,10 @@ def parse_stream_event(payload: dict[str, Any]) -> EventBase:
         return TurnProgressEvent.model_validate(payload)
     if raw_type == "turn.sub_agent_progress":
         return SubAgentProgressEvent.model_validate(payload)
+    if raw_type == "turn.compaction_a_fired":
+        return CompactionAMarkerEvent.model_validate(payload)
+    if raw_type == "turn.compaction_b_fired":
+        return CompactionBMarkerEvent.model_validate(payload)
+    if raw_type == "turn.compaction_d_fired":
+        return CompactionDMarkerEvent.model_validate(payload)
     raise ValueError(f"unknown event_type: {raw_type!r}")

@@ -80,13 +80,27 @@ class TestDualWrite:
         payload = json.loads(line)
         assert payload["session_id"] == "s1"
 
-        # Bus publish was called with the right stream + event class
-        bus.publish.assert_awaited_once()
-        args, _ = bus.publish.call_args
-        stream_name, event = args
-        assert stream_name == STREAM_CONTEXT_WITHIN_SESSION_COMPRESSED
-        assert isinstance(event, WithinSessionCompressionEvent)
-        assert event.tokens_saved == 4700
+        # Two publishes: (1) original B event, (2) ADR-0092 §D8 B marker on turn.observed.
+        from personal_agent.events.models import (  # noqa: PLC0415
+            STREAM_TURN_OBSERVED,
+            CompactionBMarkerEvent,
+        )
+
+        assert bus.publish.await_count == 2
+
+        # First call: existing WithinSessionCompressionEvent on its own stream.
+        first_args, _ = bus.publish.call_args_list[0]
+        assert first_args[0] == STREAM_CONTEXT_WITHIN_SESSION_COMPRESSED
+        assert isinstance(first_args[1], WithinSessionCompressionEvent)
+        assert first_args[1].tokens_saved == 4700
+
+        # Second call: CompactionBMarkerEvent on stream:turn.observed (§D8).
+        second_args, _ = bus.publish.call_args_list[1]
+        assert second_args[0] == STREAM_TURN_OBSERVED
+        assert isinstance(second_args[1], CompactionBMarkerEvent)
+        assert second_args[1].trigger == "hard"
+        # fact_id is the WithinSessionCompressionEvent's event_id.
+        assert second_args[1].fact_id == first_args[1].event_id
 
     @pytest.mark.asyncio
     async def test_durable_failure_propagates(
@@ -132,9 +146,7 @@ class TestDualWrite:
 
 class TestAppendDurable:
     def test_per_day_filename(self, tmp_path: Path) -> None:
-        rec = _record(
-            compressed_at=datetime(2026, 5, 1, 23, 59, 59, tzinfo=timezone.utc)
-        )
+        rec = _record(compressed_at=datetime(2026, 5, 1, 23, 59, 59, tzinfo=timezone.utc))
         path = _append_durable(rec, tmp_path)
         assert path.name == "WSC-2026-05-01.jsonl"
 

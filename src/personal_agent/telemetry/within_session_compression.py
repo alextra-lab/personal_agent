@@ -151,6 +151,11 @@ async def record_compression(
     if bus is None:
         return
 
+    from personal_agent.events.models import (  # noqa: PLC0415
+        STREAM_TURN_OBSERVED,
+        CompactionBMarkerEvent,
+    )
+
     event = WithinSessionCompressionEvent(
         trace_id=record.trace_id,
         session_id=record.session_id,
@@ -169,6 +174,31 @@ async def record_compression(
     except Exception as exc:
         log.warning(
             "within_session_compression_publish_failed",
+            trace_id=record.trace_id,
+            session_id=record.session_id,
+            error=str(exc),
+        )
+
+    # ADR-0092 §D8: publish B marker to stream:turn.observed so the projector
+    # can fold it into the session aggregate without a second turn_status emitter.
+    # fact_id = event.event_id guarantees dedup against hydration (§D4).
+    # Separate try/except so a marker failure does not mask the primary publish.
+    from personal_agent.config import settings as _settings  # noqa: PLC0415
+
+    try:
+        await bus.publish(
+            STREAM_TURN_OBSERVED,
+            CompactionBMarkerEvent(
+                trace_id=record.trace_id,
+                session_id=record.session_id,
+                trigger=record.trigger,
+                fact_id=event.event_id,
+            ),
+            maxlen=_settings.turn_observed_stream_maxlen,
+        )
+    except Exception as exc:
+        log.warning(
+            "compaction_b_marker_publish_failed",
             trace_id=record.trace_id,
             session_id=record.session_id,
             error=str(exc),

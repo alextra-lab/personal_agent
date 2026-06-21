@@ -34,5 +34,18 @@ Open the ADR PR (docs). Pre-merge checklist only.
 File the implementation tickets in Linear: Needs Approval, under a Linear project, sequenced with
 dependencies. The owner approves → the build session picks them up.
 
+## 6 — Handoff comment for master — then STOP
+**Post a final comment on the ADR's Linear ticket addressed to master** (`save_comment` on the ADR
+umbrella issue) — required, not optional. It carries what master needs at the integration gate that
+does NOT belong in the ADR PR's pre-merge checklist:
+- the **intended ADR status** on merge (Proposed / Accepted / Implemented) and any status-field change
+  master should make;
+- the **implementation tickets filed + sequence/dependencies** (so master can track the chain);
+- any **doc-drift** master should reconcile (related ADRs, MASTER_PLAN, CLAUDE.md status);
+- **your context disposition for the next ADR** — kept or cleared (`/clear`), and why.
+Master reads this comment by default at the gate, so it is the handoff channel.
+
+**STOP. Never edit `src/`, never merge, never deploy, never edit MASTER_PLAN** — that is master's role.
+
 ## Boundary
 Never edit `src/`, never merge, never deploy, never edit MASTER_PLAN.

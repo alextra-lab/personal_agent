@@ -56,7 +56,11 @@ in the PR's pre-merge checklist:
   template before first write", "verify the code is generating the logs");
 - **what to verify live** to prove the AC (commands + expected output);
 - discovered follow-up tickets filed;
-- the Linear auto-Done caveat if the deploy will be batched.
+- the Linear auto-Done caveat if the deploy will be batched;
+- **your context disposition for the next ticket** — whether you want your context **kept** (the next
+  queued ticket is a direct follow-on — same files/feature, multi-phase, regression test for what you
+  just built, depends on a fresh discovery) or **cleared** (`/clear` — different area; you know your own
+  context best). State it plainly, e.g. "FRE-X next: keep — shares this refactor" / "clear before next".
 Master reads this comment by default at the gate, so it is the handoff channel.
 
 **STOP. Do not merge, deploy, close the ticket, or edit MASTER_PLAN** — that is master's role.

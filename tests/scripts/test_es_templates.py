@@ -68,6 +68,37 @@ def test_logs_has_ms_fields_as_float_rule() -> None:
     assert rule["mapping"]["type"] == "float"
 
 
+def test_logs_has_numeric_ratios_as_float_rule() -> None:
+    """agent-logs covers generic numerics (ratio/rate/score/pct/cost) -> float (ADR-0090 D2).
+
+    A new, not-yet-explicit float field first seen as a bare ``0`` would otherwise
+    infer ``long`` and truncate every later non-integer value (the float->long trap).
+    The rule must fire on the float-quantity name families and must NOT swallow
+    genuine integer counters (``*_count``, ``iteration``, ``max_iterations``).
+    Mirrors the agent-insights ``cost_ratio_as_float`` rule.
+    """
+    tpl = _load("index-template.json")
+    rule = _dynamic_rule(tpl, "numeric_ratios_as_float")
+    assert rule is not None, "numeric_ratios_as_float rule missing (float->long trap, ADR-0090 D2)"
+    assert rule["mapping"]["type"] == "float"
+    compiled = re.compile(rule["match"])
+    for leaf in (
+        "cache_hit_ratio",
+        "success_rate",
+        "quality_score",
+        "completion_pct",
+        "completion_percent",
+        "extra_cost_usd",
+        "confidence",
+        "model_confidence",
+    ):
+        assert compiled.match(leaf), f"numeric_ratios_as_float should map leaf {leaf!r} -> float"
+    for counter in ("widget_count", "retry_count", "iteration", "max_iterations", "total_steps"):
+        assert not compiled.match(counter), (
+            f"numeric_ratios_as_float must NOT coerce integer counter {counter!r} to float"
+        )
+
+
 def test_logs_threshold_floats_are_explicit() -> None:
     """The three threshold fields are pinned float, not dynamic long."""
     props = _props(_load("index-template.json"))

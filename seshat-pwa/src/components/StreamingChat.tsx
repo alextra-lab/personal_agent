@@ -25,6 +25,8 @@ import { TurnStatusBar } from './TurnStatusBar';
 
 const PROFILE_STORAGE_KEY = 'seshat_profile';
 const LAST_SESSION_KEY = 'seshat_last_session_id';
+// FRE-575 (fold-in to FRE-573): per-session key for last completed engagement tool state.
+const toolStateKey = (sid: string) => `seshat-tool-state-${sid}`;
 
 interface StreamingChatProps {
   /** Session ID sourced from the /c/[sessionId] URL param. */
@@ -173,12 +175,36 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
         // FRE-426: seed the status bar so context + cost show on mount/switch,
         // before the first live turn_status. Corrected by the next turn.
         if (s.context_tokens !== undefined && s.context_max !== undefined) {
+          // FRE-575 (fold-in to FRE-573): restore last completed engagement tool
+          // state from localStorage so the engagement lane doesn't show 0/6 on
+          // remount (e.g. after navigating to an artifact and back).
+          let restoredTool = { tool_iteration: 0, tool_iteration_max: 6 };
+          if (typeof window !== 'undefined' && sessionId) {
+            try {
+              const raw = localStorage.getItem(toolStateKey(sessionId));
+              if (raw) {
+                const parsed = JSON.parse(raw) as { tool_iteration: number; tool_iteration_max: number };
+                if (typeof parsed.tool_iteration === 'number' && typeof parsed.tool_iteration_max === 'number') {
+                  restoredTool = parsed;
+                }
+              }
+            } catch {
+              // Corrupt localStorage entry — keep defaults.
+            }
+          }
           seedTurnStatus({
             context_tokens: s.context_tokens,
             context_max: s.context_max,
-            tool_iteration: 0,
-            tool_iteration_max: 6,
+            tool_iteration: restoredTool.tool_iteration,
+            tool_iteration_max: restoredTool.tool_iteration_max,
             turn_cost_usd: s.cost_usd ?? 0,
+            // ADR-0092 session lane — corrected by first live turn_status.
+            session_cost_usd: s.cost_usd ?? 0,
+            session_context_tokens: s.context_tokens,
+            compaction_count: 0,
+            cache_reset_count: 0,
+            quality_alert_count: 0,
+            quality_alert: null,
           });
         }
       })

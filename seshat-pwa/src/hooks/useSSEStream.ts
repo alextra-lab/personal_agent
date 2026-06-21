@@ -121,6 +121,9 @@ export function useSSEStream(): UseSSEStreamReturn {
   // it here so the DONE handler can stamp it onto the completed assistant message
   // (the rating control joins on trace_id).
   const currentTurnTraceIdRef = useRef<string>('');
+  // FRE-575 (fold-in to FRE-573): track latest turn_status so DONE can persist
+  // tool state to localStorage for engagement-lane remount restore.
+  const lastTurnStatusRef = useRef<TurnStatus | null>(null);
 
   // --------------------------------------------------------------------------
   // Event dispatch
@@ -187,7 +190,9 @@ export function useSSEStream(): UseSSEStreamReturn {
       case 'STATE_DELTA': {
         const { key, value } = event.data as { key: string; value: unknown };
         if (key === 'turn_status' && value !== null && typeof value === 'object') {
-          setTurnStatus(value as TurnStatus);
+          const next = value as TurnStatus;
+          lastTurnStatusRef.current = next;
+          setTurnStatus(next);
           // FRE-407: capture the turn's trace_id for the DONE handler to stamp.
           const tid = (value as { trace_id?: unknown }).trace_id;
           if (typeof tid === 'string' && tid.length > 0) {
@@ -331,6 +336,24 @@ export function useSSEStream(): UseSSEStreamReturn {
           return prev;
         });
         currentTurnTraceIdRef.current = '';
+        // FRE-575 (fold-in to FRE-573): persist the completed engagement's tool
+        // state so the engagement lane restores on remount (e.g. artifact → back).
+        // Write on every DONE; remove the key for zero-tool turns to avoid stale data.
+        if (typeof window !== 'undefined' && currentSessionRef.current) {
+          const ts = lastTurnStatusRef.current;
+          const storageKey = `seshat-tool-state-${currentSessionRef.current}`;
+          if (ts && ts.tool_iteration > 0) {
+            localStorage.setItem(
+              storageKey,
+              JSON.stringify({
+                tool_iteration: ts.tool_iteration,
+                tool_iteration_max: ts.tool_iteration_max,
+              }),
+            );
+          } else {
+            localStorage.removeItem(storageKey);
+          }
+        }
         break;
       }
     }
@@ -351,6 +374,7 @@ export function useSSEStream(): UseSSEStreamReturn {
       }
       currentContentRef.current = '';
       currentSessionRef.current = sessionId;
+      lastTurnStatusRef.current = null;
 
       // Optimistically add the user message.
       const userMessage: ChatMessage = {

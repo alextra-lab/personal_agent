@@ -209,13 +209,28 @@ export interface ResolvedConstraint {
   resolution: ConstraintResolvedData['resolution'];
 }
 
-/** Live per-turn metrics for the status bar (STATE_DELTA key=turn_status). */
+/**
+ * Live metrics for the two-lane status bar (STATE_DELTA key=turn_status).
+ *
+ * Session lane (ADR-0092 §D9): persists across turns — cumulative cost,
+ * context occupancy, and the three per-mechanism compaction signals.
+ * Engagement lane: per-harness-run tool count (FRE-553).
+ */
 export interface TurnStatus {
+  // Engagement lane — per-harness-run, resets on next user input
   context_tokens: number;
   context_max: number;
   tool_iteration: number;
   tool_iteration_max: number;
   turn_cost_usd: number;
+  // Session lane — persists across turns (ADR-0092 §D9)
+  session_cost_usd: number;
+  session_context_tokens: number;
+  compaction_count: number;
+  cache_reset_count: number;
+  quality_alert_count: number;
+  /** Transient this-turn A alert; null when no gateway budget compaction fired. */
+  quality_alert: { severity: string; phases_fired: string[] } | null;
 }
 
 /**

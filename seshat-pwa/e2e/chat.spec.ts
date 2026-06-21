@@ -155,7 +155,7 @@ test.describe('TurnStatusBar live update', () => {
     await sendChatMessage(page, 'check status');
     const ws = await wsReady;
 
-    // Push a turn_status STATE_DELTA with known values.
+    // Push a turn_status STATE_DELTA with known values (ADR-0092 two-lane fields).
     serverSend(ws, {
       type: 'STATE_DELTA',
       data: {
@@ -167,16 +167,26 @@ test.describe('TurnStatusBar live update', () => {
           tool_iteration_max: 10,
           turn_cost_usd: 0.05,
           trace_id: 'trace-e2e',
+          // ADR-0092 session lane
+          session_cost_usd: 0.12,
+          session_context_tokens: 25000,
+          compaction_count: 0,
+          cache_reset_count: 0,
+          quality_alert_count: 0,
+          quality_alert: null,
         },
       },
       session_id: TEST_SESSION,
       seq: 1,
     });
 
-    // The "ctx" label from TurnStatusBar should be visible.
+    // Session lane: "ctx" label and context percentage.
     await expect(page.getByText('ctx')).toBeVisible();
-    // Percentage text should appear.
     await expect(page.getByText(/25%/)).toBeVisible();
+    // Session lane: cumulative cost.
+    await expect(page.getByText('$0.12')).toBeVisible();
+    // Engagement lane: tool count.
+    await expect(page.getByText(/tools 3\/10/)).toBeVisible();
   });
 });
 

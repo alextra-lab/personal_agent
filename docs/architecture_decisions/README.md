@@ -83,7 +83,7 @@ This directory contains Architecture Decision Records for the Personal Agent (Se
 |-----|-------|--------|
 | [ADR-0051](ADR-0051-cloud-profile-orchestrator-dispatch.md) | Cloud Profile Orchestrator Dispatch via ContextVar | Accepted (Implemented) |
 | [ADR-0052](ADR-0052-seshat-owner-identity-primitive.md) | Seshat Owner Identity Primitive | Proposed |
-| [ADR-0053](ADR-0053-gate-feedback-monitoring.md) | Deterministic Gate Feedback-Loop Monitoring Framework | Proposed |
+| [ADR-0053](ADR-0053-gate-feedback-monitoring.md) | Deterministic Gate Feedback-Loop Monitoring Framework | Parked (scheduled — FRE-582 / FRE-589) |
 | [ADR-0062](ADR-0062-tool-loop-gate.md) | Tool Loop Gate — Per-Tool FSM-Based Loop Detection | Accepted (Implemented) |
 
 ### Seshat v2 Architecture (ADR-0043 – ADR-0050)

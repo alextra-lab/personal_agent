@@ -1,6 +1,7 @@
 # ADR-0040: Linear as Async Feedback Channel for Self-Improvement
 
 **Status**: Accepted (Phases 1–2 implemented April 2026; Phase 3 meta-learning pending)  
+**Shipped-vs-aspirational line** (sharpened 2026-06-21, FRE-582): the *human-closed* loop — reflect → dedup → promote → Linear → verdict → suppress — **ships and runs**; the *autonomous* self-implementation step (Phase 3) **does not**, and its prerequisites are unmet. Per "earn autonomy by being observable," a proposal acceptance-rate signal (FRE-586) is the evidence that must precede any Phase-3 move. See `docs/research/2026-06-21-fre-582-feedback-loops-proposal-analysis.md`.  
 **Date**: 2026-04-01  
 **Deciders**: Project owner  
 **Extends**: ADR-0030 (Captain's Log Dedup & Self-Improvement Pipeline)  

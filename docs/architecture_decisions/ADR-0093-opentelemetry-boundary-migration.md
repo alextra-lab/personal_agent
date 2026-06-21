@@ -1,6 +1,6 @@
 # ADR-0093 — OpenTelemetry at the Substrate Boundary (adopt the data model + GenAI semantic conventions + an exporter at the seam; keep the in-process layer)
 
-**Status:** Proposed — 2026-06-20
+**Status:** Accepted (with scope change) — 2026-06-21 (FRE-582). D1/D2 accepted & sequenced (FRE-583); D3 (OTLP exporter) parked behind FRE-588 (stand up an EDOT/OTLP intake on existing Elastic as the trace backend); D4 confirmed-deferred; D5 adopted. Originally Proposed 2026-06-20. Decision log: `docs/research/2026-06-21-fre-582-feedback-loops-proposal-analysis.md`.
 **Related:** ADR-0004 (telemetry & metrics strategy), ADR-0020 (request traceability — `RequestTimer`, spans/phases), ADR-0074 (end-to-end traceability & joinability — the identity tuple across PG/ES/Neo4j/Redis), ADR-0088 (execution-topology observability), ADR-0090 (telemetry surface contract — emit ↔ mapping ↔ display reconciliation), ADR-0068 (self-telemetry data plane). Origin: external "Feedback Loops" course (Unit 11), which uses PA as its worked example; see `docs/research/2026-06-20-feedback-loops-course-findings.md`.
 **Project:** Observability Foundation (L0/L1)
 
@@ -20,7 +20,9 @@ model and full control of the shape without taking the SDK as a runtime dependen
 ### Why revisit now
 
 Signal already crosses substrates. ADR-0074's joinability walker walks one session across
-**Postgres ↔ Elasticsearch ↔ Neo4j ↔ Redis** asserting the identity tuple matches. As soon as a run
+**Postgres ↔ Elasticsearch ↔ Neo4j ↔ Redis** asserting the identity tuple is *present and threaded*
+(per-key reachability + identity-field non-nullity; cross-substrate *value*-coherence is a known gap
+being closed under FRE-585 — see the FRE-582 decision log). As soon as a run
 spans more than one process/service, a bespoke trace format costs:
 
 1. **Bespoke parsing** at every consumer (dashboards, the self-telemetry tool path, eval read-back).
@@ -50,7 +52,10 @@ A **boundary migration**, explicitly *not* a wholesale SDK adoption:
 
 - **D3 — Add an OTLP exporter at the substrate seam.** A thin exporter/collector hop so spans can
   reach a standard backend without changing in-process call sites. Elasticsearch logging stays as-is;
-  this is additive.
+  this is additive. **PARKED (FRE-582, 2026-06-21)** behind a concrete enabling step: FRE-588 stands
+  up an EDOT Collector (or APM Server OTLP intake) against the existing self-hosted Elasticsearch as
+  the standard trace backend, with the Kibana APM/Traces UI rendering spans. D3 lands once FRE-588
+  proves the intake path and the D1/D2 spans are flowing — it is not in-scope now.
 
 - **D4 — Do NOT take the full OTel SDK as an in-process dependency yet.** The thin-deps value holds
   for a single-owner, single-process harness. Revisit D4 only if PA grows to multiple services that
@@ -87,7 +92,10 @@ A **boundary migration**, explicitly *not* a wholesale SDK adoption:
 ## Notes
 
 This ADR arose from an external review (the Feedback Loops course, Unit 11), not an internal
-incident, so it is filed **Proposed** for the owner's consideration rather than as an accepted
-decision. The companion findings note (`docs/research/2026-06-20-feedback-loops-course-findings.md`)
-lists the lower-priority items the same review surfaced. The recommended sequence is to land the
-D1/D2 attribute mapping first (immediate payoff, reversible) and defer the D3 exporter.
+incident. It was filed **Proposed** for the owner's consideration and was **Accepted (with scope
+change) on 2026-06-21 under FRE-582**: D1/D2 accepted & sequenced (FRE-583), D3 parked behind FRE-588,
+D4 confirmed-deferred, D5 adopted. The companion findings note
+(`docs/research/2026-06-20-feedback-loops-course-findings.md`) lists the lower-priority items the
+same review surfaced; the full per-finding decision log is
+`docs/research/2026-06-21-fre-582-feedback-loops-proposal-analysis.md`. The decided sequence lands
+the D1/D2 attribute mapping first (immediate payoff, reversible) and defers the D3 exporter.

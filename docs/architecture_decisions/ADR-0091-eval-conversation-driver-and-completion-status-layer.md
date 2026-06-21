@@ -1,6 +1,6 @@
 # ADR-0091 — Eval Conversation Driver and Turn Completion-Status Layer
 
-**Status:** Proposed — 2026-06-14
+**Status:** Accepted — 2026-06-21 (FRE-582; status reconciled — being implemented via FRE-541, In Progress). Originally Proposed 2026-06-14.
 **Related:** ADR-0084 (**amends §D4** — adds the completion-status layer to the result-type taxonomy), `docs/specs/RESULT_TYPE_TAXONOMY_SPEC.md` (FRE-451, mirrors §D4), FRE-541 (this ADR), FRE-453 (the canonical eval set this unblocks), FRE-523 (eval-mode validity sibling), `docs/specs/PEDAGOGICAL_NORTH_STAR.md`, `scripts/eval/fre453_canonical_evalset/`
 **Project:** Observability Foundation (L0/L1)
 

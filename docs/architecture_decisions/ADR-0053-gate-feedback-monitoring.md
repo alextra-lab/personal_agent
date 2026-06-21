@@ -1,6 +1,6 @@
 # ADR-0053: Deterministic Gate Feedback-Loop Monitoring Framework
 
-**Status**: Proposed
+**Status**: Parked (scheduled) — 2026-06-21 (FRE-582; owner ruling "park but schedule — it must be in the planning"). Revisit via FRE-589 (planning + design) after FRE-583 (OTel attribute map) and FRE-585 (joinability value-coherence) land. Originally Proposed 2026-04-22. Decision log: `docs/research/2026-06-21-fre-582-feedback-loops-proposal-analysis.md`.
 **Date**: 2026-04-22
 **Deciders**: Project owner
 **Depends on**: ADR-0041 (Event Bus — Redis Streams), ADR-0043 (Three-Layer Separation)

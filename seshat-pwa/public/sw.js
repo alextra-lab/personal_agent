@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v22-artifact-export';
+const CACHE_NAME = 'seshat-v23-turnstatusbar-two-lane';
 
 const PRECACHE_URLS = [
   '/',

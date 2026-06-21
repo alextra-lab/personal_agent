@@ -1,11 +1,12 @@
 /**
  * Playwright e2e tests for the PWA chat interface (FRE-400 WS3).
  *
- * All four scenarios mock the backend entirely:
+ * All five scenarios mock the backend entirely:
  *   1. Constraint pause → DecisionCard → CONSTRAINT_DECISION → CONSTRAINT_RESOLVED
  *   2. Send → Stop → USER_CANCEL
- *   3. turn_status STATE_DELTA → TurnStatusBar thresholds
+ *   3. turn_status STATE_DELTA → TurnStatusBar two-lane render
  *   4. RUN_ERROR → ClassifiedErrorCard → Retry re-sends
+ *   5. TurnStatusBar remount resilience — artifact → conversation view-switch (FRE-584)
  *
  * No live Seshat server is required. The WebSocket is intercepted via
  * page.routeWebSocket(); REST endpoints via page.route().
@@ -245,5 +246,119 @@ test.describe('RUN_ERROR error card', () => {
     await expect
       .poll(() => chatStreamCallCount, { timeout: 3_000 })
       .toBeGreaterThan(countBefore);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. TurnStatusBar remount resilience — artifact → conversation (FRE-584)
+// ---------------------------------------------------------------------------
+// Regression guard for the real bug (trace 0b959afd, 2026-06-17): navigating
+// from the conversation to the artifact view and back reset the meter to 0.
+// FRE-573 fixed this via localStorage persist (DONE) + seedTurnStatus restore.
+// ---------------------------------------------------------------------------
+
+test.describe('TurnStatusBar remount resilience', () => {
+  test('session lane and engagement lane survive artifact → conversation view-switch', async ({
+    page,
+  }) => {
+    // Base REST stubs (GET /sessions/{id} → 404 by default).
+    await stubRest(page);
+
+    // Override: return session hydration data so seedTurnStatus fires on remount.
+    // Registered after stubRest → takes priority (Playwright routes are LIFO).
+    await page.route(`http://localhost:9000/api/v1/sessions/${TEST_SESSION}`, (route) =>
+      route.fulfill({
+        json: {
+          id: TEST_SESSION,
+          mode: 'local',
+          channel: null,
+          execution_profile: 'local',
+          message_count: 2,
+          title: 'Test session',
+          created_at: new Date().toISOString(),
+          last_active_at: new Date().toISOString(),
+          context_tokens: 25000,
+          context_max: 100000,
+          cost_usd: 0.47,
+        },
+      }),
+    );
+
+    // Stub the artifacts index endpoint (body.items shape per listArtifacts()).
+    await page.route('http://localhost:9000/api/v1/artifacts*', (route) =>
+      route.fulfill({ json: { items: [] } }),
+    );
+
+    const { wsReady } = await stubWebSocket(page);
+
+    await page.goto(CHAT_URL);
+    await page.waitForSelector('[placeholder="Message Seshat..."]');
+
+    // Wait for getSession hydration to complete before pushing any WS events.
+    // This guarantees seedTurnStatus(tool_iteration=0) has already fired,
+    // eliminating the race where a late seed overwrites a live STATE_DELTA.
+    await expect(page.getByText('$0.47')).toBeVisible({ timeout: 5_000 });
+
+    // Start a turn and open the WebSocket.
+    await sendChatMessage(page, 'run task with tools');
+    const ws = await wsReady;
+    await expect(page.getByLabel('Stop generating')).toBeVisible({ timeout: 3_000 });
+
+    // Push a turn_status with tool_iteration > 0 and full session-lane fields.
+    serverSend(ws, {
+      type: 'STATE_DELTA',
+      data: {
+        key: 'turn_status',
+        value: {
+          context_tokens: 25000,
+          context_max: 100000,
+          tool_iteration: 4,
+          tool_iteration_max: 6,
+          turn_cost_usd: 0.18,
+          trace_id: 'trace-remount-e2e',
+          session_cost_usd: 0.47,
+          session_context_tokens: 25000,
+          compaction_count: 0,
+          cache_reset_count: 0,
+          quality_alert_count: 0,
+          quality_alert: null,
+        },
+      },
+      session_id: TEST_SESSION,
+      seq: 1,
+    });
+
+    // Verify the two-lane bar is showing live values before navigation.
+    await expect(page.getByText('$0.47')).toBeVisible();
+    await expect(page.getByText(/tools 4\/6/)).toBeVisible();
+
+    // Send DONE — useSSEStream writes { tool_iteration: 4, tool_iteration_max: 6 }
+    // to localStorage synchronously inside the DONE handler.
+    serverSend(ws, {
+      type: 'DONE',
+      session_id: TEST_SESSION,
+      seq: 2,
+      data: {},
+    });
+    // Wait for isStreaming=false (Send button returns) — DONE handler has fired
+    // and localStorage has been written before React commits this re-render.
+    await expect(page.getByLabel('Send message')).toBeVisible({ timeout: 3_000 });
+
+    // Navigate to the artifacts view — unmounts StreamingChat and TurnStatusBar.
+    await page.goto('/artifacts');
+    await expect(page.getByRole('heading', { name: 'Artifacts' })).toBeVisible();
+
+    // Navigate back — remounts StreamingChat; getSession hydration + localStorage
+    // restore run inside the mount useEffect (StreamingChat.tsx seedTurnStatus).
+    await page.goto(CHAT_URL);
+    await page.waitForSelector('[placeholder="Message Seshat..."]');
+
+    // Session lane must be restored from FRE-426 hydration, not reset to 0.
+    await expect(page.getByText('$0.47')).toBeVisible();
+    await expect(page.getByText(/25%/)).toBeVisible();
+
+    // Engagement lane must be restored from localStorage, not show 0/6.
+    await expect(page.getByText(/tools 4\/6/)).toBeVisible();
+    await expect(page.getByText(/tools 0\/6/)).not.toBeVisible({ timeout: 1_000 });
   });
 });

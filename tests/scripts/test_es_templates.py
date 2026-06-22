@@ -125,6 +125,42 @@ def test_logs_cost_gate_money_fields_are_double() -> None:
         assert props.get(field, {}).get("type") == "double", f"{field} must be double"
 
 
+def test_logs_adr0092_turn_status_session_fields_explicit() -> None:
+    """ADR-0092 turn_status session fields are explicitly mapped (FRE-571, ADR-0090 D6).
+
+    FRE-570 added six session-scoped fields to the ``turn_status`` projector payload
+    (``observability/topology/projector.py``). The agent-logs Guarded-dynamic done-bar
+    (ADR-0090 §D6) requires each trap-class field to be explicitly mapped so it is never
+    silently coerced if it ever lands in ``agent-logs-*``:
+
+    * ``session_cost_usd`` → ``double`` — money; defeats the float->long trap and matches
+      every sibling ``*_usd`` field (see ``test_logs_cost_gate_money_fields_are_double``).
+    * ``session_context_tokens`` → ``long`` — token magnitude (matches ``total_tokens``).
+    * ``compaction_count`` / ``cache_reset_count`` / ``quality_alert_count`` → ``integer``
+      (matches the ``*_count`` convention).
+    * ``quality_alert`` → ``object`` carrying ``severity`` (keyword; ``"high"``/``"low"``
+      literal) and ``phases_fired`` (integer; emitted as a list of phase IDs).
+    """
+    props = _props(_load("index-template.json"))
+    assert props.get("session_cost_usd", {}).get("type") == "double", (
+        "session_cost_usd must be double (money; float->long trap)"
+    )
+    assert props.get("session_context_tokens", {}).get("type") == "long", (
+        "session_context_tokens must be long"
+    )
+    for field in ("compaction_count", "cache_reset_count", "quality_alert_count"):
+        assert props.get(field, {}).get("type") == "integer", f"{field} must be integer"
+    qa = props.get("quality_alert", {})
+    assert qa.get("type") == "object", "quality_alert must be an explicit object"
+    qa_props = qa.get("properties", {})
+    assert qa_props.get("severity", {}).get("type") == "keyword", (
+        "quality_alert.severity must be keyword"
+    )
+    assert qa_props.get("phases_fired", {}).get("type") == "integer", (
+        "quality_alert.phases_fired must be integer"
+    )
+
+
 def test_logs_free_text_covers_genuine_long_text_leaves() -> None:
     """free_text maps the genuine long-text leaves to text."""
     tpl = _load("index-template.json")

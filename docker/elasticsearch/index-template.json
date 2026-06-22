@@ -160,6 +160,18 @@
         "cap_usd":                { "type": "double" },
         "utilization_ratio":      { "type": "double" },
         "window_start":           { "type": "date" },
+        "session_cost_usd":       { "type": "double" },
+        "session_context_tokens": { "type": "long" },
+        "compaction_count":       { "type": "integer" },
+        "cache_reset_count":      { "type": "integer" },
+        "quality_alert_count":    { "type": "integer" },
+        "quality_alert": {
+          "type": "object",
+          "properties": {
+            "severity":     { "type": "keyword" },
+            "phases_fired": { "type": "integer" }
+          }
+        },
         "prompt_callsite":           { "type": "keyword" },
         "prompt_component_ids":      { "type": "keyword" },
         "prompt_static_prefix_hash": { "type": "keyword" },
@@ -215,7 +227,7 @@
     }
   },
   "_meta": {
-    "description": "agent-logs-* telemetry catch-all. ADR-0090 Guarded-dynamic discipline (dynamic:true + dynamic_templates covering strings/numerics + explicit props for every known numeric/long-text/join field), bounded by FRE-544: index.mapping.total_fields.limit=300 with ignore_dynamic_beyond_limit=true so over-cap dynamic leaves are skipped to _source (never drop the doc). Numeric coverage (FRE-567, ADR-0090 D2): ms_fields_as_float (*_ms/_seconds/_latency/_duration/_offset) + numeric_ratios_as_float (*_ratio/_rate/_score/_pct/_percent/_cost_usd/confidence/*_confidence) pin a new unlisted float-quantity field first-seen as 0 to float, defeating the float->long trap; integer counters (*_count/iteration/max_iterations) are intentionally left to long. The arguments.* tool-call subtree is dynamic:false (kept name/title/trace_id) to stop the fastest-growing sprawl source. All dashboard-referenced fields are explicit so the cap can never skip a panel field. FRE-534/536 trap fixes preserved. Drift enforcement: FRE-540 reconciliation checker (ADR-0090 D5). Existing 768-field indices age out via the 30d ILM (ilm-policy.json); the bound applies to new daily indices.",
+    "description": "agent-logs-* telemetry catch-all. ADR-0090 Guarded-dynamic discipline (dynamic:true + dynamic_templates covering strings/numerics + explicit props for every known numeric/long-text/join field), bounded by FRE-544: index.mapping.total_fields.limit=300 with ignore_dynamic_beyond_limit=true so over-cap dynamic leaves are skipped to _source (never drop the doc). Numeric coverage (FRE-567, ADR-0090 D2): ms_fields_as_float (*_ms/_seconds/_latency/_duration/_offset) + numeric_ratios_as_float (*_ratio/_rate/_score/_pct/_percent/_cost_usd/confidence/*_confidence) pin a new unlisted float-quantity field first-seen as 0 to float, defeating the float->long trap; integer counters (*_count/iteration/max_iterations) are intentionally left to long. ADR-0092 turn_status session fields (FRE-571, ADR-0090 D6): session_cost_usd (double, money — matches the *_usd convention, defeats float->long), session_context_tokens (long), compaction_count/cache_reset_count/quality_alert_count (integer), quality_alert (object: severity keyword + phases_fired integer) are pinned explicitly so they are never silently coerced if they reach this catch-all (today they flow only to Postgres session_events + live WS, not ES — pre-positioned per Guarded-dynamic). The arguments.* tool-call subtree is dynamic:false (kept name/title/trace_id) to stop the fastest-growing sprawl source. All dashboard-referenced fields are explicit so the cap can never skip a panel field. FRE-534/536 trap fixes preserved. Drift enforcement: FRE-540 reconciliation checker (ADR-0090 D5). Existing 768-field indices age out via the 30d ILM (ilm-policy.json); the bound applies to new daily indices.",
     "managed_by": "scripts/setup-elasticsearch.sh",
     "total_fields_limit": 300
   }

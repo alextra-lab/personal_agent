@@ -212,18 +212,26 @@ export function connectWebSocket(
   let connecting = false;
   let connectGeneration = 0;
 
+  // Keep same key for backward compat — semantics change from max-seen to
+  // last-dispatched (ackSeq). Safe: conservative reconnect watermark on first
+  // reconnect after upgrade (server replays from the stored value).
   const seqKey = `seshat_last_seq_${sessionId}`;
 
-  function getLastSeq(): number {
+  function getAckSeq(): number {
     if (typeof localStorage === 'undefined') return 0;
     const stored = localStorage.getItem(seqKey);
     return stored ? parseInt(stored, 10) || 0 : 0;
   }
 
-  function setLastSeq(seq: number): void {
+  function setAckSeq(seq: number): void {
     if (typeof localStorage === 'undefined') return;
     localStorage.setItem(seqKey, String(seq));
   }
+
+  // Out-of-order buffer: keyed by seq, cleared on every reconnect.
+  // Prevents the FRE-518 failure mode where seq=2 arriving before seq=1 caused
+  // seq=1 to be permanently dropped (and replayed from wrong watermark).
+  const pendingBuf = new Map<number, AGUIEvent>();
 
   function persistSeqOnHide(): void {
     // last_seq is already persisted on each event; this is a safety net
@@ -242,6 +250,7 @@ export function connectWebSocket(
 
     connecting = true;
     const generation = ++connectGeneration;
+    pendingBuf.clear();
 
     try {
       const ticket = await getWSTicket(sessionId);
@@ -259,7 +268,7 @@ export function connectWebSocket(
           return;
         }
         backoffMs = 1000;
-        const lastSeq = getLastSeq();
+        const lastSeq = getAckSeq();
         ws?.send(JSON.stringify({ type: 'CONNECT', last_seq: lastSeq }));
 
         // Start PING heartbeat
@@ -275,8 +284,31 @@ export function connectWebSocket(
         try {
           const parsed = JSON.parse(ev.data as string) as AGUIEvent;
           if (parsed.seq != null) {
-            if (parsed.seq <= getLastSeq()) return;
-            setLastSeq(parsed.seq);
+            const seq = parsed.seq;
+            const ackSeq = getAckSeq();
+            if (seq <= ackSeq || pendingBuf.has(seq)) return; // duplicate
+            pendingBuf.set(seq, parsed);
+            // Drain contiguous run starting from ackSeq+1
+            let next = ackSeq + 1;
+            while (pendingBuf.has(next)) {
+              onEvent(pendingBuf.get(next)!);
+              pendingBuf.delete(next);
+              setAckSeq(next);
+              next = getAckSeq() + 1;
+            }
+            return;
+          }
+          // seq == null: DONE, PONG, REPLAY_GAP
+          if (parsed.type === 'DONE' && pendingBuf.size > 0) {
+            // Cold-start fallback: global Postgres seq may not start at ackSeq+1
+            // (e.g. fresh client with ackSeq=0 but first event has seq=5000).
+            // Flush all buffered events in seq order, then dispatch DONE.
+            const sortedKeys = [...pendingBuf.keys()].sort((a, b) => a - b);
+            for (const k of sortedKeys) {
+              onEvent(pendingBuf.get(k)!);
+              setAckSeq(k);
+            }
+            pendingBuf.clear();
           }
           onEvent(parsed);
         } catch {

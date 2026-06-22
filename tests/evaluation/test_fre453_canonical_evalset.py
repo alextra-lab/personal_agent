@@ -356,12 +356,14 @@ class TestRenderer:
                 }
             ],
             evalset=evalset,
+            pwa_url="https://seshat.example.com",
         )
         assert "trivial_conversational" in md
         assert "MATCH" in md
         assert "- [ ]" in md  # fillable rubric boxes
         assert "Coverage matrix" in md
         assert "Backend surfaces" in md
+        assert "/c/" in md  # FRE-522: session deep-link rendered
 
     def _render_single(self, evalset: EvalSet, case: EvalCase, row: RouteTraceRow) -> str:
         evaluation = evaluate_case(case, row)

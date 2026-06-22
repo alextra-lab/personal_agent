@@ -92,6 +92,11 @@ export function SessionList({ currentSessionId, onSelect }: SessionListProps) {
             >
               <p className={['text-sm font-medium truncate', isActive ? 'text-slate-100' : 'text-slate-300'].join(' ')}>
                 {s.title ?? '(empty session)'}
+                {s.channel === 'EVAL' && (
+                  <span className="ml-1.5 text-[10px] font-mono text-sky-400/70 border border-sky-400/30 rounded px-1">
+                    EVAL
+                  </span>
+                )}
               </p>
               <p className="text-xs text-slate-500 mt-0.5">
                 {formatRelativeTime(s.last_active_at)} · {s.message_count} {s.message_count === 1 ? 'msg' : 'msgs'}

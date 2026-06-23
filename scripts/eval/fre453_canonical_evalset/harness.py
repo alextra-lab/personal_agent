@@ -717,6 +717,7 @@ def render_markdown(
     results: Sequence[Mapping[str, object]],
     evalset: EvalSet,
     sweep: Sequence[SurfaceObservation] = (),
+    pwa_url: str = "https://seshat.frenchforet.com",
 ) -> str:
     """Render the structured run report as markdown.
 
@@ -726,6 +727,8 @@ def render_markdown(
             ``response_text``, ``background`` (row may be ``None`` on timeout).
         evalset: The loaded eval set (for the coverage matrix).
         sweep: Post-run scheduled-surface observations.
+        pwa_url: Base URL of the PWA (default: production). Used to render
+            clickable session deep-links in the report.
 
     Returns:
         The markdown report.
@@ -753,7 +756,10 @@ def render_markdown(
             continue
         assert isinstance(row, RouteTraceRow)
         assert isinstance(evaluation, CaseEvaluation)
-        lines.append(f"- trace_id: `{row.trace_id}`  ·  session_id: `{row.session_id}`")
+        lines.append(
+            f"- trace_id: `{row.trace_id}`  ·  "
+            f"session: [{row.session_id}]({pwa_url}/c/{row.session_id})"
+        )
         if evaluation.route_mismatch_candidate:
             lines.append(
                 "- ⚠ **structural route-mismatch candidate** (declared strategy vs actual "
@@ -917,6 +923,7 @@ async def amain(args: argparse.Namespace) -> int:
         "profile": args.profile,
         "timestamp": window_start,
         "chat_url": args.chat_url,
+        "pwa_url": args.pwa_url,
         "logs_index": logs_index,
         "case_count": len(cases),
     }
@@ -962,7 +969,9 @@ async def amain(args: argparse.Namespace) -> int:
             indent=2,
         )
     )
-    (out_dir / f"{stem}.md").write_text(render_markdown(run_meta, results, evalset, sweep))
+    (out_dir / f"{stem}.md").write_text(
+        render_markdown(run_meta, results, evalset, sweep, pwa_url=args.pwa_url)
+    )
     log.info("report_written", out=str(out_dir / f"{stem}.md"), cases=len(results))
 
     missing = [r["case"].id for r in results if r["row"] is None]  # type: ignore[union-attr]
@@ -985,6 +994,11 @@ def main() -> int:
         help="Path to dataset.yaml.",
     )
     p.add_argument("--chat-url", default=DEFAULT_CHAT_URL, help="Service /chat URL.")
+    p.add_argument(
+        "--pwa-url",
+        default="https://seshat.frenchforet.com",
+        help="PWA base URL for session deep-links in the report (default: production).",
+    )
     p.add_argument(
         "--auth-email", default=None, help="CF-Access email to impersonate for loopback calls."
     )

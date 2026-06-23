@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v23-turnstatusbar-two-lane';
+const CACHE_NAME = 'seshat-v24-gap-dedup-eval-badge';
 
 const PRECACHE_URLS = [
   '/',

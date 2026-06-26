@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v24-gap-dedup-eval-badge';
+const CACHE_NAME = 'seshat-v25-dedup-coldstart-guard';
 
 const PRECACHE_URLS = [
   '/',

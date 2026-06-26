@@ -465,9 +465,9 @@ class FeedbackPoller:
             )
         _save_poller_state(self._state_path, state)
 
-        # Daily budget log (non-archived count)
+        # Daily budget log (open-issue count)
         try:
-            n = await self._client.count_non_archived_issues(settings.linear_team_name)
+            n = await self._client.count_open_issues(settings.linear_team_name)
             if n > settings.issue_budget_threshold - 20:
                 log.warning(
                     "issue_budget_warning",

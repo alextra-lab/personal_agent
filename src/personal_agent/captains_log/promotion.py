@@ -278,9 +278,7 @@ class PromotionPipeline:
 
         if self._create_issue_fn is not None and self._linear_client is not None:
             try:
-                count = await self._linear_client.count_non_archived_issues(
-                    settings.linear_team_name
-                )
+                count = await self._linear_client.count_open_issues(settings.linear_team_name)
                 if count > settings.issue_budget_threshold:
                     log.warning(
                         "issue_budget_promotion_paused",

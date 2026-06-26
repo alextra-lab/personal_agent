@@ -338,6 +338,14 @@ services:
       # feedback_history_dir() → /app/telemetry/feedback_history (disk-durable records)
       # poller_state_path()   → /app/telemetry/feedback_poller_state.json (at-most-once dedup)
       - seshat_feedback_history_cloud:/app/telemetry/feedback_history
+      # ADR-0054: the durable JSONL leg of the Wave-3 self-improvement streams must
+      # survive container recreation (FRE-598). Without these the *.jsonl dual-write
+      # lives only in the ephemeral container layer (lost on rebuild). Data also lands
+      # in Redis + ES, but the on-disk JSONL is the ADR-0054 durable source of truth.
+      - seshat_graph_quality_cloud:/app/telemetry/graph_quality       # ADR-0060 Stream 8
+      - seshat_context_quality_cloud:/app/telemetry/context_quality   # ADR-0059
+      - seshat_error_patterns_cloud:/app/telemetry/error_patterns     # ADR-0056
+      - seshat_freshness_review_cloud:/app/telemetry/freshness_review  # ADR-0060 Stream 6
       # Shared workspace volume for run_python sandbox scratch dirs.
       # Mounted at the same path used by AGENT_SANDBOX_SCRATCH_ROOT.
       - seshat_workspace_cloud:/app/agent_workspace
@@ -485,6 +493,17 @@ volumes:
   # Feedback history + poller state (ADR-0054 disk-durable records, persisted)
   # poller_state_path() now lives inside feedback_history/ so one volume covers both.
   seshat_feedback_history_cloud:
+    driver: local
+
+  # ADR-0054 durable JSONL legs of the Wave-3 self-improvement streams (FRE-598).
+  # Previously written to the ephemeral container layer and lost on recreation.
+  seshat_graph_quality_cloud:
+    driver: local
+  seshat_context_quality_cloud:
+    driver: local
+  seshat_error_patterns_cloud:
+    driver: local
+  seshat_freshness_review_cloud:
     driver: local
 
   # Shared workspace for run_python sandbox scratch dirs (FRE-261 Step 5)

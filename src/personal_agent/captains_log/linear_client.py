@@ -19,6 +19,11 @@ log = get_logger(__name__)
 
 _LINEAR_URL = "https://api.linear.app/graphql"
 
+# Linear workflow-state types considered terminal (no longer open work). FRE-598:
+# excluded from the open-issue backpressure count because Linear keeps Done/Canceled
+# issues non-archived while their project stays open, which would inflate the gate.
+_TERMINAL_STATE_TYPES: tuple[str, ...] = ("completed", "canceled", "duplicate")
+
 # Module-level caches — avoids repeated API round-trips within a process lifetime.
 _lc_team_id: str | None = None
 _lc_state_ids: dict[str, str] = {}
@@ -504,10 +509,18 @@ class LinearClient:
         nodes = issues_data.get("nodes") or []
         return [_normalize_issue_node(n) for n in nodes if isinstance(n, dict)]
 
-    async def count_non_archived_issues(
+    async def count_open_issues(
         self, team: str, page_limit: int = 250, *, trace_id: str | None = None
     ) -> int:
-        """Count non-archived issues for a team (paginated).
+        """Count open (non-terminal) issues for a team (paginated).
+
+        FRE-598: the promotion budget gate (ADR-0040) measures backpressure —
+        "is there already too much *open* work?". A plain non-archived count is
+        the wrong metric: Linear does not archive Done/Canceled issues while
+        their project stays open, so completed work inflates the count
+        indefinitely and can wedge the gate shut. This counts only issues whose
+        workflow-state type is non-terminal (excludes
+        ``completed``/``canceled``/``duplicate``) via ``state.type.nin``.
 
         Args:
             team: Team name.
@@ -515,13 +528,16 @@ class LinearClient:
             trace_id: Originating request trace_id for log correlation (ADR-0074 §I3).
 
         Returns:
-            Total issue count (capped at 10 000).
+            Open issue count (capped at 10 000).
         """
         total = 0
         cursor: str | None = None
         while True:
             variables: dict[str, Any] = {
-                "filter": {"team": {"name": {"eq": team}}},
+                "filter": {
+                    "team": {"name": {"eq": team}},
+                    "state": {"type": {"nin": list(_TERMINAL_STATE_TYPES)}},
+                },
                 "first": page_limit,
                 "orderBy": "updatedAt",
                 "includeArchived": False,

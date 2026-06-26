@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v25-dedup-coldstart-guard';
+const CACHE_NAME = 'seshat-v26-session-turn-count';
 
 const PRECACHE_URLS = [
   '/',

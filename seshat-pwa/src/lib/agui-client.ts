@@ -417,6 +417,8 @@ export interface SessionSummary {
   /** Server-authoritative execution profile (ADR-0079 / FRE-419). */
   execution_profile: ExecutionProfile;
   message_count: number;
+  /** Number of user turns (user-role messages only) in this session (FRE-521). */
+  turn_count?: number;
   title: string | null;
   /** Current context size + window for status-bar hydration (FRE-426). */
   context_tokens?: number;

@@ -99,7 +99,7 @@ export function SessionList({ currentSessionId, onSelect }: SessionListProps) {
                 )}
               </p>
               <p className="text-xs text-slate-500 mt-0.5">
-                {formatRelativeTime(s.last_active_at)} · {s.message_count} {s.message_count === 1 ? 'msg' : 'msgs'}
+                {formatRelativeTime(s.last_active_at)} · {s.turn_count ?? 0} {(s.turn_count ?? 0) === 1 ? 'turn' : 'turns'}
               </p>
             </button>
           </li>

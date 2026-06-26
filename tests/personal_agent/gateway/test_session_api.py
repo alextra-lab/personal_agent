@@ -123,6 +123,7 @@ def test_list_sessions_returns_list() -> None:
     assert len(data) == 2
     assert "session_id" in data[0]
     assert "message_count" in data[0]
+    assert "turn_count" in data[0]
     # Hotfix invariant: user_id MUST be threaded to the repository.
     list_recent_mock.assert_awaited_once()
     assert list_recent_mock.await_args.kwargs.get("user_id") == _TEST_USER_ID
@@ -358,6 +359,45 @@ def test_list_sessions_truncates_title() -> None:
     # 60 chars + the single '…' character = 61 characters total
     assert len(data[0]["title"]) == 61
     assert data[0]["title"].endswith("…")
+
+
+# ---------------------------------------------------------------------------
+# Turn count (FRE-521)
+# ---------------------------------------------------------------------------
+
+
+def test_list_sessions_turn_count_counts_only_user_messages() -> None:
+    """GET /sessions turn_count counts user-role messages only, not assistant/tool/system."""
+    db_session = AsyncMock()
+    session_model = _make_session_model(
+        messages=[
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+            {"role": "user", "content": "What is Python?"},
+            {"role": "tool", "content": "tool output"},
+            {"role": "assistant", "content": "Python is a language"},
+            {"role": "user", "content": "Thanks"},
+        ]
+    )
+
+    with ExitStack() as stack:
+        stack.enter_context(_patched_user_resolver())
+        stack.enter_context(
+            patch(
+                "personal_agent.service.repositories.session_repository.SessionRepository.list_recent",
+                new_callable=AsyncMock,
+                return_value=[session_model],
+            )
+        )
+        app = _build_app_with_db_factory(db_session)
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get("/api/v1/sessions", headers=_AUTH_HEADERS)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    # 3 user messages, 2 assistant, 1 tool — turn_count must be 3 only
+    assert data[0]["turn_count"] == 3
+    assert data[0]["message_count"] == 6
 
 
 # ---------------------------------------------------------------------------

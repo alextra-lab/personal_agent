@@ -18,7 +18,10 @@ and tell the owner (ADR authoring is Opus-only).
 
 ## 1 — Discuss first
 Collaborate with the owner on the decision. Do NOT write any file until the decision is settled
-(discussion-mode default).
+(discussion-mode default). If this work has an Approved ADR ticket (e.g. FRE-582), **set it →
+In Progress** now (`save_issue state="In Progress"`) — Linear is disconnected from GitHub
+(2026-06-26), so status no longer moves automatically; the working session owns the In Progress
+transition, master owns Done.
 
 ## 2 — Write the ADR
 Author the best, complete ADR in the project ADR format under `docs/architecture_decisions/`.

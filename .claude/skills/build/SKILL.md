@@ -17,6 +17,9 @@ Read `.claude/skills/lifecycle-rules.md` first. Argument: a Linear issue ID (e.g
 
 ## 1 — Ticket
 `get_issue(<id>)` on FrenchForest; must be `Approved`. If `Needs Approval`, STOP and tell the owner.
+Then **set the ticket → In Progress** (`save_issue state="In Progress"`). Linear is disconnected from
+GitHub (2026-06-26) — nothing auto-moves status anymore, so the session doing the work owns the
+In Progress transition; master owns the Done transition at the gate.
 
 ## 2 — Scope
 Read ticket body + linked ADRs + specs. Summarize scope in 3–5 bullets.

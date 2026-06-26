@@ -99,6 +99,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
   const {
     messages,
     isStreaming,
+    isReconnecting,
     activeTools,
     turnStatus,
     serverProfile,
@@ -339,6 +340,12 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
 
       {/* Message list */}
       <main className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
+        {/* FRE-236: reconnecting banner — shown when WS was lost mid-turn */}
+        {isReconnecting && (
+          <div className="sticky top-0 z-10 px-4 py-2 bg-amber-900/80 backdrop-blur-sm text-amber-200 text-xs text-center border-b border-amber-800/50">
+            Reconnecting…
+          </div>
+        )}
         {isLoadingHistory ? (
           <div className="flex flex-col items-center justify-center h-full text-slate-500 gap-2">
             <p className="text-sm">Loading conversation…</p>

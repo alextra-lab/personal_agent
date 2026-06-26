@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 
 import {
   BudgetDeniedError,
@@ -24,6 +24,13 @@ import type {
   ToolCall,
   TurnStatus,
 } from '@/lib/types';
+
+// --------------------------------------------------------------------------
+// Constants
+// --------------------------------------------------------------------------
+
+/** localStorage key for persisting the in-progress assistant draft on visibility hide. */
+const DRAFT_KEY = (sid: string) => `seshat_bg_draft_${sid}`;
 
 // --------------------------------------------------------------------------
 // Hook return type
@@ -78,6 +85,11 @@ export interface UseSSEStreamReturn {
   /** Replace the message list with a server-hydrated history. */
   seedMessages: (msgs: ChatMessage[]) => void;
   seedTurnStatus: (status: TurnStatus) => void;
+  /**
+   * True while the WebSocket was lost mid-turn and we are waiting to reconnect.
+   * The UI shows a "Reconnecting…" banner while this is set (FRE-236).
+   */
+  isReconnecting: boolean;
 }
 
 // --------------------------------------------------------------------------
@@ -111,6 +123,8 @@ export function useSSEStream(): UseSSEStreamReturn {
   const [pendingApproval, setPendingApproval] = useState<ToolApprovalRequestData | null>(null);
   const [budgetDenied, setBudgetDenied] = useState<BudgetDeniedError | null>(null);
   const [classifiedError, setClassifiedError] = useState<ClassifiedErrorData | null>(null);
+  // FRE-236: true while WS was lost mid-turn and we are waiting to reconnect.
+  const [isReconnecting, setIsReconnecting] = useState(false);
 
   // Refs that survive re-renders without causing them.
   const streamRef = useRef<StreamConnection | null>(null);
@@ -124,6 +138,39 @@ export function useSSEStream(): UseSSEStreamReturn {
   // FRE-575 (fold-in to FRE-573): track latest turn_status so DONE can persist
   // tool state to localStorage for engagement-lane remount restore.
   const lastTurnStatusRef = useRef<TurnStatus | null>(null);
+  // FRE-236: mirrors isStreaming state for use in non-React closures (event handlers).
+  // Must be updated alongside every setIsStreaming call.
+  const isStreamingRef = useRef(false);
+
+  // FRE-236: persist the in-progress draft to localStorage on visibility hide so
+  // a kill+relaunch can detect that a turn was in-flight and the relaunch hydration
+  // should treat the last message as authoritative (not phantom-draft).
+  useEffect(() => {
+    const persistDraft = () => {
+      const sid = currentSessionRef.current;
+      const content = currentContentRef.current;
+      if (isStreamingRef.current && sid && content) {
+        try {
+          localStorage.setItem(DRAFT_KEY(sid), JSON.stringify({ content, at: new Date().toISOString() }));
+        } catch {
+          // Quota exceeded — skip draft persistence.
+        }
+      }
+    };
+    const onVisChange = () => {
+      if (document.visibilityState === 'hidden') persistDraft();
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisChange);
+      window.addEventListener('pagehide', persistDraft);
+    }
+    return () => {
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisChange);
+        window.removeEventListener('pagehide', persistDraft);
+      }
+    };
+  }, []); // reads only stable refs — no deps needed
 
   // --------------------------------------------------------------------------
   // Event dispatch
@@ -244,6 +291,7 @@ export function useSSEStream(): UseSSEStreamReturn {
       case 'CANCELLED': {
         setCancelled(true);
         setPendingConstraint(null);
+        isStreamingRef.current = false; // FRE-236: keep ref in sync
         setIsStreaming(false);
         break;
       }
@@ -257,6 +305,7 @@ export function useSSEStream(): UseSSEStreamReturn {
           actions: Array.isArray(data.actions) ? data.actions : [],
           partial: Boolean(data.partial),
         });
+        isStreamingRef.current = false; // FRE-236: keep ref in sync
         setIsStreaming(false);
         setActiveTools([]);
         break;
@@ -272,6 +321,7 @@ export function useSSEStream(): UseSSEStreamReturn {
           options,
           sessionId: event.session_id,
         });
+        isStreamingRef.current = false; // FRE-236: keep ref in sync
         setIsStreaming(false);
         break;
       }
@@ -318,7 +368,13 @@ export function useSSEStream(): UseSSEStreamReturn {
         break;
 
       case 'DONE': {
+        isStreamingRef.current = false; // FRE-236: keep ref in sync
         setIsStreaming(false);
+        setIsReconnecting(false); // FRE-236: clear reconnect banner on turn completion
+        // FRE-236: clear any draft persisted during a background-hide event.
+        if (currentSessionRef.current) {
+          localStorage.removeItem(DRAFT_KEY(currentSessionRef.current));
+        }
         setActiveTools([]);
         // FRE-407: the turn is complete — mark the assistant message complete
         // (unconditionally) and stamp its trace_id so TurnRating can render.
@@ -376,6 +432,10 @@ export function useSSEStream(): UseSSEStreamReturn {
       currentSessionRef.current = sessionId;
       lastTurnStatusRef.current = null;
 
+      // FRE-236: clear any stale draft and reconnect state from a previous turn.
+      localStorage.removeItem(DRAFT_KEY(sessionId));
+      setIsReconnecting(false);
+
       // Optimistically add the user message.
       const userMessage: ChatMessage = {
         id: generateUUID(),
@@ -384,6 +444,7 @@ export function useSSEStream(): UseSSEStreamReturn {
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, userMessage]);
+      isStreamingRef.current = true; // FRE-236: keep ref in sync
       setIsStreaming(true);
       setPendingInterrupt(null);
       setPendingApproval(null);
@@ -407,6 +468,18 @@ export function useSSEStream(): UseSSEStreamReturn {
           // WS error — connection may have dropped.
           // Reconnect logic is handled inside connectWebSocket.
         },
+        {
+          // FRE-236: set isReconnecting when WS drops unexpectedly mid-turn.
+          onWsDisconnected: () => {
+            if (isStreamingRef.current) {
+              setIsReconnecting(true);
+            }
+          },
+          // FRE-236: clear isReconnecting when WS (re)connects.
+          onWsConnected: () => {
+            setIsReconnecting(false);
+          },
+        },
       );
 
       // 2. Send the message (triggers backend processing).
@@ -416,6 +489,7 @@ export function useSSEStream(): UseSSEStreamReturn {
       try {
         await sendChatMessage({ message: text, sessionId, profile, clientMsgId });
       } catch (err) {
+        isStreamingRef.current = false; // FRE-236: keep ref in sync
         setIsStreaming(false);
         streamRef.current?.close();
         streamRef.current = null;
@@ -448,6 +522,7 @@ export function useSSEStream(): UseSSEStreamReturn {
       });
     }
     setPendingInterrupt(null);
+    isStreamingRef.current = true; // FRE-236: keep ref in sync
     setIsStreaming(true);
   }, [pendingInterrupt]);
 
@@ -510,7 +585,9 @@ export function useSSEStream(): UseSSEStreamReturn {
   const disconnect = useCallback(() => {
     streamRef.current?.close();
     streamRef.current = null;
+    isStreamingRef.current = false; // FRE-236: keep ref in sync
     setIsStreaming(false);
+    setIsReconnecting(false);
   }, []);
 
   const clearMessages = useCallback(() => {
@@ -534,6 +611,7 @@ export function useSSEStream(): UseSSEStreamReturn {
   return {
     messages,
     isStreaming,
+    isReconnecting,
     activeTools,
     turnStatus,
     serverProfile,

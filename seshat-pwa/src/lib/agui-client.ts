@@ -16,16 +16,35 @@
 
 import type { AGUIEvent, ClientMessage, ExecutionProfile } from './types';
 
-/** Base URL for the Seshat backend. Defaults to localhost in dev. */
-export const SESHAT_API =
-  process.env.NEXT_PUBLIC_SESHAT_URL ?? 'http://localhost:9000';
+/**
+ * Base URL for the Seshat backend.
+ *
+ * Initialized to localhost for dev. In production, RuntimeConfigProvider
+ * calls initAguiConfig() via useLayoutEffect before any child useEffect
+ * fires, setting this to the value of SESHAT_URL from the runtime env (FRE-339).
+ */
+export let SESHAT_API = 'http://localhost:9000';
 
 /**
  * Bearer token for gateway authentication.
- * Baked into the bundle at build time via NEXT_PUBLIC_GATEWAY_TOKEN.
- * Empty string in local dev — gateway auth is disabled locally.
+ * Empty in dev — gateway auth is disabled locally. Set at runtime by
+ * initAguiConfig() from GATEWAY_TOKEN env via the Server Component (FRE-339).
  */
-const GATEWAY_TOKEN = process.env.NEXT_PUBLIC_GATEWAY_TOKEN ?? '';
+let GATEWAY_TOKEN = '';
+
+/**
+ * Initialize the agui-client with runtime config values.
+ *
+ * Called by RuntimeConfigProvider (useLayoutEffect) before any child
+ * useEffect runs, so all subsequent API calls use the correct URL and token.
+ *
+ * @param seshatUrl - Base URL for the Seshat backend.
+ * @param gatewayToken - Bearer token for gateway auth (empty in dev).
+ */
+export function initAguiConfig(seshatUrl: string, gatewayToken: string): void {
+  SESHAT_API = seshatUrl;
+  GATEWAY_TOKEN = gatewayToken;
+}
 
 /** Returns auth headers when a token is configured; empty object otherwise. */
 export function authHeaders(): Record<string, string> {

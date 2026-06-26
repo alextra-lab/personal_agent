@@ -378,15 +378,15 @@ services:
 
   # Seshat PWA (Next.js)
   # Purpose: Mobile-first chat UI served via Caddy
-  # Bakes NEXT_PUBLIC_SESHAT_URL=http://172.25.0.10 at build time
+  # SESHAT_URL and GATEWAY_TOKEN are runtime env vars — image is portable (FRE-339).
   # Resource limit: 256MB RAM, 0.5 CPU
   seshat-pwa:
     build:
       context: .
       dockerfile: Dockerfile.pwa
-      args:
-        NEXT_PUBLIC_SESHAT_URL: "https://agent.frenchforet.com"
-        NEXT_PUBLIC_GATEWAY_TOKEN: ${GATEWAY_TOKEN_PWA}
+    environment:
+      SESHAT_URL: "https://agent.frenchforet.com"
+      GATEWAY_TOKEN: ${GATEWAY_TOKEN_PWA}
     container_name: cloud-sim-seshat-pwa
     ports:
       - "127.0.0.1:3000:3000"

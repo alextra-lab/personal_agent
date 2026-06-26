@@ -9,7 +9,7 @@ const nextConfig = {
       ? [
           {
             source: '/api/seshat/:path*',
-            destination: `${process.env.NEXT_PUBLIC_SESHAT_URL || 'http://localhost:9000'}/:path*`,
+            destination: `${process.env.SESHAT_URL || 'http://localhost:9000'}/:path*`,
           },
         ]
       : [];

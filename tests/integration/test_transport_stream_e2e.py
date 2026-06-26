@@ -42,15 +42,25 @@ async def _postgres_available() -> bool:
         return False
 
 
+# Fixed test user so the sessions.user_id FK (FRE-591) is satisfied without
+# depending on any pre-seeded data.
+_TEST_USER_ID = UUID("00000000-0000-0000-0000-000000000591")
+
+
 async def _create_session(session_id: UUID) -> None:
     """Insert a minimal session row so session_events FK constraint is satisfied."""
     async with AsyncSessionLocal() as db:
+        # Seed the FK target first (sessions.user_id NOT NULL → users, FRE-591).
+        await db.execute(
+            text("INSERT INTO users (user_id, email) VALUES (:uid, :email) ON CONFLICT DO NOTHING"),
+            {"uid": _TEST_USER_ID, "email": "transport-e2e@test.local"},
+        )
         await db.execute(
             text(
-                "INSERT INTO sessions (session_id, mode) VALUES (:sid, 'NORMAL') "
-                "ON CONFLICT DO NOTHING"
+                "INSERT INTO sessions (session_id, mode, user_id) "
+                "VALUES (:sid, 'NORMAL', :uid) ON CONFLICT DO NOTHING"
             ),
-            {"sid": session_id},
+            {"sid": session_id, "uid": _TEST_USER_ID},
         )
         await db.commit()
 

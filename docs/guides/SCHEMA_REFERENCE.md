@@ -557,6 +557,7 @@ Connection: `AGENT_DATABASE_URL` environment variable (Pydantic settings).
 | `created_at` | `timestamptz` | no | — | Session creation time |
 | `last_active_at` | `timestamptz` | no | — | Last activity time |
 | `mode` | `varchar(20)` | no | `'NORMAL'` | Session mode (`NORMAL` \| `DEBUG`) |
+| `user_id` | `uuid` | no | — | Session owner; FK → `users(user_id)`, index `ix_sessions_user_id` (FRE-591) |
 | `channel` | `varchar(50)` | yes | `NULL` | Client identifier (`pwa`, `cli`, etc.) |
 | `metadata` | `jsonb` | no | `'{}'` | Arbitrary client metadata |
 | `messages` | `jsonb` | no | `'[]'` | Array of `{role, content, timestamp, metadata}` objects |

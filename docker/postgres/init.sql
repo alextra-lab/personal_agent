@@ -13,6 +13,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     channel VARCHAR(50),
     metadata JSONB DEFAULT '{}',
     messages JSONB DEFAULT '[]',
+    -- Session owner (FRE-591). Declared NOT NULL + FK in SessionModel and
+    -- inserted by SessionRepository.create; the FK is added after the users
+    -- table below (sessions is created first). Mirrors
+    -- docker/postgres/migrations/0011_sessions_user_id.sql.
+    user_id UUID NOT NULL,
     primary_model_at_creation VARCHAR(120),
     model_config_path VARCHAR(255),
     -- Server-authoritative execution profile (ADR-0079 / FRE-416). Explicit
@@ -21,6 +26,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE INDEX idx_sessions_last_active ON sessions(last_active_at DESC);
+-- ix_ name matches the prod/SQLAlchemy index so migration 0011 is a no-op there.
+CREATE INDEX IF NOT EXISTS ix_sessions_user_id ON sessions(user_id);
 
 -- Metrics table (time-series style)
 CREATE TABLE IF NOT EXISTS metrics (
@@ -322,6 +329,12 @@ CREATE TABLE IF NOT EXISTS users (
     display_name TEXT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- sessions.user_id FK (FRE-591) — declared here, not inline in the sessions
+-- block above, because sessions is created before users. Mirrors prod and
+-- docker/postgres/migrations/0011_sessions_user_id.sql.
+ALTER TABLE sessions
+    ADD CONSTRAINT sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(user_id);
 
 -- ===========================================================================
 -- Artifact substrate (ADR-0069 / FRE-227)

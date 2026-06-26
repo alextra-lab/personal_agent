@@ -38,6 +38,8 @@ async def _try_open_pool() -> Any | None:
 SESSION_ID = uuid.uuid4()
 TRACE_A = uuid.uuid4()
 TRACE_B = uuid.uuid4()
+# Fixed test user so the sessions.user_id FK (FRE-591) is satisfied.
+USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000591")
 
 
 async def _seed(pool: Any) -> None:
@@ -45,18 +47,25 @@ async def _seed(pool: Any) -> None:
     async with pool.acquire() as conn:
         await conn.execute("DELETE FROM api_costs WHERE session_id = $1", SESSION_ID)
         await conn.execute("DELETE FROM sessions WHERE session_id = $1", SESSION_ID)
+        # Seed the FK target first (sessions.user_id NOT NULL → users, FRE-591).
+        await conn.execute(
+            "INSERT INTO users (user_id, email) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            USER_ID,
+            "joinability-walk@test.local",
+        )
         await conn.execute(
             """
             INSERT INTO sessions (
                 session_id, created_at, last_active_at, mode, channel,
-                metadata, messages,
+                metadata, messages, user_id,
                 primary_model_at_creation, model_config_path
             ) VALUES ($1, $2, $2, 'NORMAL', 'cli',
-                      '{}'::jsonb, '[]'::jsonb,
+                      '{}'::jsonb, '[]'::jsonb, $3,
                       'test-model', 'config/models/test.yaml')
             """,
             SESSION_ID,
             datetime.now(timezone.utc) - timedelta(minutes=15),
+            USER_ID,
         )
         for trace_id in (TRACE_A, TRACE_B):
             await conn.execute(

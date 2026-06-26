@@ -1,0 +1,480 @@
+# FRE-489 — bespoke live-corpus recall GATE set (ADR-0087 §D2, primary gate).
+#
+# This is the labelled set that decides "did we fix the owner's problem." It is
+# loadable by the FRE-488 harness (scripts/eval/fre435_memory_recall/harness.py)
+# through the same ProbeCase schema as the seed set.
+#
+# PROVENANCE & CURATION DISCIPLINE (read before editing)
+# ------------------------------------------------------
+# Cases are GROUNDED in Seshat's own live corpus but are CURATED + PARAPHRASED —
+# never verbatim transcripts. The repo is public, so:
+#   * no private conversation text is copied in,
+#   * no PII / names / injected CC email / deployment identifiers appear,
+#   * raw run dumps are never committed (telemetry/ is gitignored).
+#
+# How the real grounding was found (read-only, 2026-06-26):
+#   * Neo4j (live): `MATCH (s:Session)-[:DISCUSSES]->(e:Entity)` grouped by
+#     entity to find topics discussed across >=2 sessions — the real multi-session
+#     threads the owner returns to: neuroplasticity (a chapter being written),
+#     game theory (Prisoner's Dilemma / Battle of the Sexes / Tit-for-Tat),
+#     consciousness / Orch-OR, the EM spectrum & cosmology (CMB, gamma rays),
+#     optics (diffraction limit), cooking (hummus), history/archaeology
+#     (Minoans on Crete, the Yamnaya), and the agent's own architecture.
+#   * Elasticsearch `agent-captains-captures-*`: phrase search over
+#     `assistant_response` for real "no prior / no record / haven't discussed"
+#     denials — both genuine false negatives (memory present yet denied) and
+#     correct abstentions (topics truly never discussed → the controls below).
+#
+# Each case = (history setup, query, expected recall). `seed_entities` reproduce
+# the paraphrased setup so replay mode can land them; `expected.entity_names` are
+# the labels scored against the actual recall() return.
+#
+# REFERENTIAL-QUERY DISCIPLINE (codex review): a `query` must NOT contain the
+# name of its `expected` entity. Naming the target makes the case pass on a dumb
+# substring match (and trivially under keyword-only/zero-vector recall), so it
+# cannot discriminate a real semantic-recall failure — which defeats the gate.
+# Queries describe the concept ("the faint leftover radiation from the early
+# universe"); recall must map that to the stored entity.
+#
+# Tag taxonomy:
+#   role     : positive | false-negative | control
+#   pedagogy : pedagogical + one of {active-recall-due, thread-branch, cross-domain}
+#   domain   : physics | cosmology | game-theory | cooking | history |
+#              agent-arch | neuroscience | philosophy
+
+cases:
+  # =====================================================================
+  # PEDAGOGICAL — the three §D6 sub-types (ADR-0084 quality bar)
+  # =====================================================================
+  - case_id: ped-active-recall-neuroplasticity
+    note: >
+      Active recall of a DUE concept at session open (FRE-457 opening ritual).
+      The owner is writing a chapter on neuroplasticity across several sessions;
+      a strong recall surfaces it instead of starting cold.
+    tags: [pedagogical, active-recall-due, neuroscience, false-negative]
+    seed_entities:
+      - name: Neuroplasticity
+        entity_type: concept
+        description: >
+          The brain's ability to reorganise its structure and connections with
+          experience; the subject of a chapter the user is drafting.
+    history:
+      - user: "I'm drafting a chapter and want to get neuroplasticity right."
+        assistant: >
+          Neuroplasticity is the brain's capacity to rewire — strengthening
+          used connections and pruning unused ones as you learn.
+    query: "Let's pick up where we left off — what was the core idea on the chapter topic I'm writing?"
+    expected:
+      entity_names: [Neuroplasticity]
+      must_not_deny: true
+
+  - case_id: ped-thread-branch-game-theory
+    note: >
+      Thread-pulling (FRE-461): the game-theory thread branches into several
+      games; recall must surface the RIGHT branch (the coordination game, not the
+      defection one), not just "game theory" generically.
+    tags: [pedagogical, thread-branch, game-theory, false-negative]
+    seed_entities:
+      - name: Game Theory
+        entity_type: concept
+        description: The study of strategic decision-making among rational agents.
+      - name: Prisoner's Dilemma
+        entity_type: concept
+        description: A game where individually rational defection yields a collectively worse outcome.
+      - name: Battle of the Sexes
+        entity_type: concept
+        description: A coordination game where two players prefer to act together but disagree on which activity.
+    history:
+      - user: "Walk me through the main games again."
+        assistant: >
+          We covered the Prisoner's Dilemma (a defection problem) and the Battle
+          of the Sexes (a coordination problem).
+    query: "In our game-theory thread, which game was the coordination problem — not the defection one?"
+    expected:
+      entity_names: [Battle of the Sexes]
+      must_not_deny: true
+
+  - case_id: ped-cross-domain-diffraction-em
+    note: >
+      Cross-thread correlation (FRE-461): the optics thread (diffraction limit)
+      and the cosmology/EM thread were separate; recall must find the cross-domain
+      link (both turn on wavelength).
+    tags: [pedagogical, cross-domain, physics]
+    seed_entities:
+      - name: Diffraction Limit
+        entity_type: concept
+        description: >
+          The wavelength-and-aperture bound on the smallest resolvable feature in
+          an optical system.
+      - name: Electromagnetic Spectrum
+        entity_type: concept
+        description: The range of all electromagnetic radiation ordered by wavelength/frequency.
+    history:
+      - user: "Does the diffraction limit relate to the spectrum stuff we discussed?"
+        assistant: >
+          Yes — both are governed by wavelength: the diffraction limit scales with
+          the wavelength of light, the same quantity that orders the EM spectrum.
+    query: >
+      Two separate things we worked through both came down to wavelength — the
+      bound on how finely a lens can resolve, and the way radiation is ordered by
+      frequency. How did we connect them?
+    expected:
+      entity_names: [Diffraction Limit, Electromagnetic Spectrum]
+      must_not_deny: true
+
+  # =====================================================================
+  # FALSE-NEGATIVE recall — prior context exists; the system must NOT deny
+  # (the owner's headline symptom). Grounded in real multi-session topics.
+  # =====================================================================
+  - case_id: fn-diffraction-limit
+    note: The ADR-0087 worked example — the real optics discussion must surface, not be denied.
+    tags: [false-negative, positive, physics]
+    seed_entities:
+      - name: Diffraction Limit
+        entity_type: concept
+        description: The wavelength/numerical-aperture bound on optical resolution.
+      - name: Numerical Aperture
+        entity_type: concept
+        description: A lens's light-gathering and resolving measure.
+    history:
+      - user: "Why can't a microscope resolve arbitrarily small features?"
+        assistant: >
+          Because of the diffraction limit — resolution is bounded by the
+          wavelength of light over roughly twice the numerical aperture.
+    query: "What did we say sets the smallest feature a microscope can resolve?"
+    expected:
+      entity_names: [Diffraction Limit]
+      must_not_deny: true
+
+  - case_id: fn-orch-or-consciousness
+    note: Real consciousness/Orch-OR thread (5+ sessions) must surface on recall.
+    tags: [false-negative, philosophy]
+    seed_entities:
+      - name: Orch-OR
+        entity_type: concept
+        description: >
+          Orchestrated Objective Reduction — a theory that consciousness arises
+          from quantum processes in neuronal microtubules.
+      - name: Consciousness
+        entity_type: concept
+        description: The subject of inquiry into subjective experience.
+    history:
+      - user: "Remind me of that quantum theory of mind."
+        assistant: >
+          Orch-OR proposes consciousness emerges from quantum state reductions in
+          microtubules inside neurons.
+    query: "What was the consciousness theory we discussed involving quantum effects in microtubules?"
+    expected:
+      entity_names: [Orch-OR]
+      must_not_deny: true
+
+  - case_id: fn-cmb-cosmology
+    note: Real cosmology thread (CMB across 4 sessions).
+    tags: [false-negative, cosmology]
+    seed_entities:
+      - name: Cosmic Microwave Background
+        entity_type: concept
+        description: Relic radiation from the early universe, observed as a near-uniform microwave glow.
+      - name: Big Bang
+        entity_type: concept
+        description: The prevailing cosmological model of the universe's origin and expansion.
+    history:
+      - user: "Tell me about that leftover radiation from the early universe."
+        assistant: >
+          The cosmic microwave background is relic light released when the
+          universe cooled enough for atoms to form.
+    query: "What did we cover about that faint leftover radiation from the early universe?"
+    expected:
+      entity_names: [Cosmic Microwave Background]
+      must_not_deny: true
+
+  - case_id: fn-hummus-cooking
+    note: Real cooking thread (hummus recipe across 5 sessions) — non-technical domain coverage.
+    tags: [false-negative, cooking]
+    seed_entities:
+      - name: Hummus
+        entity_type: topic
+        description: A chickpea-and-tahini dip refined as a recurring recipe.
+      - name: Tahini
+        entity_type: topic
+        description: A sesame-seed paste that gives hummus its nutty depth.
+    history:
+      - user: "Let's get back to that dip recipe."
+        assistant: >
+          The hummus we worked out leans on plenty of tahini, lemon, and a long
+          blend for smoothness.
+    query: "What was that chickpea-dip recipe we kept refining?"
+    expected:
+      entity_names: [Hummus]
+      must_not_deny: true
+
+  - case_id: fn-minoans-history
+    note: >
+      Real history/archaeology thread (the owner explicitly tested integration of
+      the Crete/Minoans discussion). Must surface, not deny.
+    tags: [false-negative, history]
+    seed_entities:
+      - name: Minoan Civilization
+        entity_type: concept
+        description: A Bronze Age Aegean civilization centred on Crete.
+      - name: Crete
+        entity_type: concept
+        description: The Aegean island home of the Minoan palaces.
+    history:
+      - user: "Back to the Bronze Age Aegean — the palace culture on that island."
+        assistant: >
+          The Minoan civilization on Crete built palace complexes like Knossos and
+          left the still-undeciphered Linear A script.
+    query: "Bring back what we discussed about that Bronze Age palace civilization on the big Aegean island."
+    expected:
+      entity_names: [Minoan Civilization]
+      must_not_deny: true
+
+  - case_id: fn-yamnaya-history
+    note: Real history thread (Yamnaya / Indo-European origins).
+    tags: [false-negative, history]
+    seed_entities:
+      - name: Yamnaya
+        entity_type: concept
+        description: A Bronze Age steppe pastoralist culture linked to the spread of Indo-European languages.
+      - name: Indo-European Languages
+        entity_type: concept
+        description: A large language family whose spread is associated with steppe migrations.
+    history:
+      - user: "Who were those steppe people tied to language spread?"
+        assistant: >
+          The Yamnaya — Bronze Age steppe pastoralists whose migrations are
+          associated with the spread of Indo-European languages.
+    query: "We discussed a Bronze Age steppe people linked to Indo-European languages — who were they?"
+    expected:
+      entity_names: [Yamnaya]
+      must_not_deny: true
+
+  - case_id: fn-tit-for-tat-game-theory
+    note: Real game-theory thread — the repeated-PD winning strategy.
+    tags: [false-negative, game-theory]
+    seed_entities:
+      - name: Tit-for-Tat
+        entity_type: concept
+        description: A repeated-game strategy that cooperates first, then mirrors the opponent's last move.
+      - name: Prisoner's Dilemma
+        entity_type: concept
+        description: The defection game whose iterated form rewards conditional cooperation.
+    history:
+      - user: "Which strategy did well in the repeated version?"
+        assistant: >
+          Tit-for-tat — start by cooperating, then copy whatever the opponent did
+          last turn.
+    query: "What strategy did we say wins the repeated Prisoner's Dilemma by mirroring the opponent?"
+    expected:
+      entity_names: [Tit-for-Tat]
+      must_not_deny: true
+
+  - case_id: fn-knowledge-graph-agent-arch
+    note: Real agent-architecture thread (the system's own knowledge graph memory).
+    tags: [false-negative, agent-arch]
+    seed_entities:
+      - name: Knowledge Graph
+        entity_type: concept
+        description: The graph memory structure storing entities and relationships across sessions.
+      - name: Memory Promotion
+        entity_type: concept
+        description: The pipeline promoting episodic interactions into semantic facts.
+    history:
+      - user: "How does your long-term memory actually work?"
+        assistant: >
+          Conversations are distilled into a knowledge graph of entities and
+          relationships, promoted from episodic to semantic memory.
+    query: "How did we describe the agent's long-term memory that links entities and relationships across sessions?"
+    expected:
+      entity_names: [Knowledge Graph]
+      must_not_deny: true
+
+  - case_id: fn-taskstate-agent-arch
+    note: Real agent-architecture thread (the orchestrator FSM / TaskState).
+    tags: [false-negative, agent-arch]
+    seed_entities:
+      - name: TaskState
+        entity_type: concept
+        description: The top-level orchestrator finite-state machine driving the request lifecycle.
+      - name: Finite State Machine
+        entity_type: concept
+        description: A model of behaviour as states and transitions.
+    history:
+      - user: "What drives the task lifecycle in the harness?"
+        assistant: >
+          A finite-state machine — the TaskState enum moves the request through
+          init, tool execution, synthesis, and terminal states.
+    query: "What's the state machine that drives the task lifecycle we went over?"
+    expected:
+      entity_names: [TaskState]
+      must_not_deny: true
+
+  - case_id: fn-nash-prisoners-dilemma
+    note: Real game-theory thread — the PD equilibrium concept.
+    tags: [false-negative, game-theory]
+    seed_entities:
+      - name: Nash Equilibrium
+        entity_type: concept
+        description: A strategy profile where no player gains by unilaterally deviating.
+      - name: Prisoner's Dilemma
+        entity_type: concept
+        description: A game whose dominant-strategy outcome is mutual defection.
+    history:
+      - user: "Why do both players defect even though it's worse for them?"
+        assistant: >
+          Because mutual defection is the Nash equilibrium — neither can improve by
+          switching alone.
+    query: "In the game where rational self-interest makes both defect, what did we call the equilibrium?"
+    expected:
+      entity_names: [Nash Equilibrium]
+      must_not_deny: true
+
+  - case_id: fn-gamma-em-spectrum
+    note: Real cosmology/physics thread — the EM spectrum's high-energy band.
+    tags: [false-negative, physics, cosmology]
+    seed_entities:
+      - name: Gamma Rays
+        entity_type: concept
+        description: The highest-energy, shortest-wavelength band of the electromagnetic spectrum.
+      - name: Electromagnetic Spectrum
+        entity_type: concept
+        description: All electromagnetic radiation ordered by wavelength.
+    history:
+      - user: "Which radiation did we say sits at the top end of the spectrum?"
+        assistant: >
+          Gamma rays — the highest-energy, shortest-wavelength end of the EM
+          spectrum.
+    query: "Which band did we say has the highest energy in the EM spectrum?"
+    expected:
+      entity_names: [Gamma Rays]
+      must_not_deny: true
+
+  - case_id: fn-hard-problem-consciousness
+    note: Real philosophy thread — the hard problem of consciousness.
+    tags: [false-negative, philosophy]
+    seed_entities:
+      - name: Hard Problem of Consciousness
+        entity_type: concept
+        description: The difficulty of explaining why physical processes give rise to subjective experience.
+      - name: Consciousness
+        entity_type: concept
+        description: The phenomenon of subjective experience.
+    history:
+      - user: "What did we call the deep puzzle about subjective experience?"
+        assistant: >
+          The hard problem of consciousness — why and how physical processes
+          produce first-person experience at all.
+    query: "What did we call the difficulty of explaining subjective experience?"
+    expected:
+      entity_names: [Hard Problem of Consciousness]
+      must_not_deny: true
+
+  - case_id: fn-tahini-cooking
+    note: Real cooking thread — a specific sub-ingredient detail must surface.
+    tags: [false-negative, cooking]
+    seed_entities:
+      - name: Tahini
+        entity_type: topic
+        description: A sesame paste central to the hummus recipe's flavour.
+      - name: Hummus
+        entity_type: topic
+        description: The chickpea dip the tahini goes into.
+    history:
+      - user: "What gave the dip that nutty depth again?"
+        assistant: "Tahini — the sesame paste we leaned on for the hummus."
+    query: "What ingredient did we say gives the hummus its nutty depth?"
+    expected:
+      entity_names: [Tahini]
+      must_not_deny: true
+
+  - case_id: fn-battle-of-sexes-coordination
+    note: Real game-theory thread — the coordination game by description.
+    tags: [false-negative, game-theory]
+    seed_entities:
+      - name: Battle of the Sexes
+        entity_type: concept
+        description: A coordination game where two players prefer being together but rank the joint activities differently.
+      - name: Coordination Game
+        entity_type: concept
+        description: A game class where players benefit from matching choices.
+    history:
+      - user: "Which game was the one about wanting to be together but disagreeing on the activity?"
+        assistant: "That's the Battle of the Sexes — a coordination game."
+    query: "What did we call the game about two people wanting to be together but preferring different activities?"
+    expected:
+      entity_names: [Battle of the Sexes]
+      must_not_deny: true
+
+  # =====================================================================
+  # FALSE-NEGATIVE DESPITE MEMORY PRESENT — the real "mem_found > 0 but the
+  # system still denies the specific item" pattern seen in the captures (H4).
+  # The session mixes many topics; recall must pull the one science thread.
+  # =====================================================================
+  - case_id: fn-mixed-session-pull-neuroscience
+    note: >
+      Real pattern: a session dominated by infra/diagnostics chatter that also
+      touched one science concept. Memory is plainly NON-empty, yet the system
+      tends to deny the specific item. Recall must pull neuroplasticity out.
+    tags: [false-negative, neuroscience, agent-arch]
+    seed_entities:
+      - name: Neuroplasticity
+        entity_type: concept
+        description: The brain's capacity to rewire with experience (raised amid an infra-heavy session).
+      - name: Elasticsearch
+        entity_type: technology
+        description: Search/analytics engine discussed for log storage in the same session.
+      - name: Redis
+        entity_type: technology
+        description: In-memory store discussed in the same session.
+    history:
+      - user: "Between all the infra debugging we also went off on a brain tangent — what was it?"
+        assistant: "We detoured into neuroplasticity — how the brain rewires with use."
+    query: "Amid all the infrastructure talk, we also touched one neuroscience concept — what was it?"
+    expected:
+      entity_names: [Neuroplasticity]
+      must_not_deny: true
+
+  # =====================================================================
+  # CONTROLS — true negatives. Nothing relevant was ever discussed, so the
+  # correct behaviour is to surface nothing; a denial is acceptable
+  # (must_not_deny: false). Grounded in real correct-abstention captures.
+  # These guard against a system (or metric layer) that "recalls" everything.
+  # =====================================================================
+  - case_id: ctrl-travel-plans
+    note: >
+      Real correct-abstention (from a live capture): the user's travel was never
+      discussed, so denial is correct — this must NOT count as a false negative.
+    tags: [control, abstention]
+    seed_entities:
+      - name: Hummus
+        entity_type: topic
+        description: An unrelated decoy topic that exists in memory.
+    query: "Do you know where I'll be traveling next month?"
+    expected:
+      entity_names: []
+      must_not_deny: false
+
+  - case_id: ctrl-unscoped-project
+    note: A project never scoped in any session — correct to abstain.
+    tags: [control, abstention]
+    seed_entities:
+      - name: Knowledge Graph
+        entity_type: concept
+        description: An unrelated decoy topic that exists in memory.
+    query: "What did we conclude about the warehouse-robotics project?"
+    expected:
+      entity_names: []
+      must_not_deny: false
+
+  - case_id: ctrl-personal-detail
+    note: A personal detail never shared — correct to abstain (no PII stored or asked-for value).
+    tags: [control, abstention]
+    seed_entities:
+      - name: Tahini
+        entity_type: topic
+        description: An unrelated decoy topic that exists in memory.
+    query: "What's my sibling's name?"
+    expected:
+      entity_names: []
+      must_not_deny: false

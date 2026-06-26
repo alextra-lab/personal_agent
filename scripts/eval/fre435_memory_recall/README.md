@@ -24,7 +24,8 @@ behaviour** — the harness only calls existing `src` APIs.
 | `scoring.py` | `flatten_recall` (namespace/order/dedup a recall result) + `score_case` (pure) |
 | `report.py` | `RunReport`/`CaseResult` + `aggregate` + JSON/markdown rendering |
 | `harness.py` | The I/O driver (CLI) |
-| `seed_probe.yaml` | Tiny seed set proving the instrument runs |
+| `seed_probe.yaml` | Tiny seed set proving the instrument runs (FRE-488) |
+| `bespoke_probe.yaml` | **The recall GATE set** — ~21 curated cases mined from the live corpus (FRE-489) |
 
 ## Run protocol
 
@@ -40,8 +41,25 @@ uv run python scripts/eval/fre435_memory_recall/harness.py \
 make test-infra-down
 ```
 
+Run the **gate** set with `--probe-set scripts/eval/fre435_memory_recall/bespoke_probe.yaml`.
+
 Output: `telemetry/evaluation/fre435-memory-recall/<run-id>.{json,md}` (gitignored —
 **raw runs are never committed; curated summaries only**).
+
+### The gate set (`bespoke_probe.yaml`, FRE-489)
+
+The ADR-0087 §D2 primary gate — ~21 cases **grounded in Seshat's own live corpus
+but curated/paraphrased** (the repo is public: no verbatim transcripts, no PII).
+It spans the owner's real multi-session threads (neuroplasticity, game theory,
+consciousness/Orch-OR, the EM spectrum & cosmology, optics, cooking, history, the
+agent's own architecture), includes the three §D6 pedagogical sub-types
+(active-recall-of-a-due-concept, thread-branch retrieval, cross-domain match),
+real false-negative failures, and true-negative abstention controls.
+
+Two disciplines are enforced by `tests/evaluation/test_fre435_bespoke_probeset.py`:
+a **PII denylist** over every authored string, and **referential queries** — a
+query never names its expected entity (else a dumb substring match passes and the
+gate can't discriminate a real recall failure).
 
 ### Write modes
 

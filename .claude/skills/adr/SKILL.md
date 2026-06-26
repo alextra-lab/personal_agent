@@ -14,7 +14,11 @@ and tell the owner (ADR authoring is Opus-only).
    - `git status --short` is empty
    - the current per-ADR branch is merged (or there is nothing unpushed: `git rev-list --count @{u}..HEAD` is `0`)
 3. Cut a fresh branch off latest main: `git switch -c <next-adr-slug> origin/main`.
-4. Retire the merged branch: `git branch -d <merged-adr-branch>` (lowercase `-d` refuses if unmerged).
+4. **Retire the merged branch — local THEN remote** (so branches don't pile up on origin). The lowercase
+   `-d` is the verification: it refuses if unmerged, so only a merged branch is deleted; run the remote
+   delete only after `-d` succeeds.
+   - `git branch -d <merged-adr-branch>`
+   - `git push origin --delete <merged-adr-branch>`
 
 ## 1 — Discuss first
 Collaborate with the owner on the decision. Do NOT write any file until the decision is settled

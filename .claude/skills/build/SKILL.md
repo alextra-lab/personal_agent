@@ -7,13 +7,19 @@ description: Use in the build session to ship a Linear FRE ticket from Approved 
 
 Read `.claude/skills/lifecycle-rules.md` first. Argument: a Linear issue ID (e.g. `FRE-471`), or omitted (pick the top Approved ticket from MASTER_PLAN).
 
-## Step 0 — Fresh-start (worktree reset)
-1. `git fetch origin`
+## Step 0 — Fresh-start (worktree reset + retire the merged branch)
+1. `git fetch --prune origin`
 2. Safety gate — BOTH must hold, else STOP and surface:
    - `git status --short` is empty
-   - `git rev-list --count @{u}..HEAD` is `0` (nothing unpushed)
-3. Sync the persistent branch: `git merge --ff-only origin/main` then `git push origin worktree-build`.
-4. Confirm branch + worktree (`git worktree list`, `git branch --show-current`); paste.
+   - the current per-ticket branch is merged (or nothing unpushed: `git rev-list --count @{u}..HEAD` is `0`)
+3. Cut a fresh branch off latest main for the new ticket: `git switch -c fre-<id>-<slug> origin/main`.
+4. **Retire the now-merged previous branch — local THEN remote** (so branches don't pile up on origin).
+   The lowercase `-d` is the verification: it refuses on an unmerged branch, so only a merged branch is
+   ever deleted; run the remote delete only after `-d` succeeds. **Never** delete the
+   `worktree-build` / `worktree-build2` / `worktree-adrs` anchors.
+   - `git branch -d <merged-branch>`
+   - `git push origin --delete <merged-branch>`
+5. Confirm branch + worktree (`git worktree list`, `git branch --show-current`); paste.
 
 ## 1 — Ticket
 `get_issue(<id>)` on FrenchForest; must be `Approved`. If `Needs Approval`, STOP and tell the owner.

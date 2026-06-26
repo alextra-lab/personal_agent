@@ -24,14 +24,18 @@ Report-only / environment-gated checks (never affect exit code, clearly separate
 4. **Repo template ↔ live mapping.** When ``--es-url`` is reachable, compare ``GET /<family>/_mapping``
    against the repo template. Environment-gated; cannot run in the hermetic pass.
 
-Phasing (ADR-0090 D5): ships in **report mode** (exit 0) while FRE-534/535 burn down the grandfathered
-baseline drift. ``--gate`` makes the floor checks (1–2) fail the build; a follow-up ticket flips CI to
-``--gate`` once the affected families are triaged green.
+Phasing (ADR-0090 D5): shipped in **report mode** while FRE-534/535 burned the baseline down. FRE-555
+flips CI to ``--gate`` with a small committed **allowlist** of reviewed-correct / deferred exceptions
+(``scripts/audit/telemetry_surface_baseline.json``): the gate fails only on *new* drift whose
+``(check, klass, family, field, source)`` key is not allowlisted. ``--write-baseline`` regenerates the
+file locally (CI never invokes it, so new findings are never silently grandfathered).
 
 Usage::
 
     python scripts/audit/telemetry_surface_check.py            # report mode, exit 0
     python scripts/audit/telemetry_surface_check.py --gate     # exit 1 on any floor finding
+    python scripts/audit/telemetry_surface_check.py --gate --baseline scripts/audit/telemetry_surface_baseline.json  # gate on new drift only
+    python scripts/audit/telemetry_surface_check.py --write-baseline scripts/audit/telemetry_surface_baseline.json   # regenerate the allowlist
     python scripts/audit/telemetry_surface_check.py --es-url http://localhost:9200  # + live check
 
 Reuses the validated FRE-533 primitives (``flatten_properties``, ``Template``/``DynamicRule``,
@@ -233,11 +237,14 @@ def load_template_file(path: Path) -> LoadedTemplate:
     rules, text_kw = _build_rules(dyn_templates)
     catch_all_type, catch_all_kw = _string_catch_all(dyn_templates)
     template = Template(str(path), mappings.get("dynamic", True), explicit, rules)
+    # ADR-0090 D2 `_meta` is valid at either the composable-template root (the FRE-534 convention,
+    # stored as template metadata by `PUT /_index_template/...`) or under `mappings` (index-mapping
+    # metadata). Accept both — checking only `mappings` false-flagged every template (FRE-555).
     return LoadedTemplate(
         path=str(path.relative_to(REPO)) if path.is_relative_to(REPO) else str(path),
         index_patterns=tuple(data.get("index_patterns", [])),
         priority=int(data.get("priority", 0)),
-        has_meta="_meta" in mappings,
+        has_meta="_meta" in mappings or "_meta" in data,
         template=template,
         text_rules_with_keyword=frozenset(text_kw),
         string_catch_all_type=catch_all_type,
@@ -738,6 +745,103 @@ def run_checks(
     return report
 
 
+# ---------------------------------------------------------------------------
+# Baseline allowlist (FRE-555) — gate on *new* drift only
+# ---------------------------------------------------------------------------
+
+FindingKey = tuple[str, str, str, str, str]
+
+
+def finding_key(f: Finding) -> FindingKey:
+    """Stable identity of a finding for baseline matching: everything but the volatile ``detail``.
+
+    ``source`` is part of the key so ``mapping-dashboard`` grandfathering stays *panel-specific* — a
+    new broken panel referencing an already-allowlisted field is new drift, not silently accepted.
+    For ``trap-lint`` ``source == family`` (the template path), so it is redundant-but-harmless.
+
+    Args:
+        f: The finding to key.
+
+    Returns:
+        The ``(check, klass, family, field, source)`` tuple.
+    """
+    return (f.check, f.klass, f.family, f.field, f.source)
+
+
+def load_baseline(path: Path) -> set[FindingKey]:
+    """Load a committed allowlist of accepted floor findings.
+
+    The file is a JSON list of objects carrying at least ``check``/``klass``/``family``/``field``/
+    ``source``; any extra keys (``detail``, ``note``) are ignored so the file can self-document *why*
+    each entry is an accepted exception.
+
+    Args:
+        path: Path to the baseline JSON.
+
+    Returns:
+        The set of :func:`finding_key` tuples the baseline grandfathers.
+
+    Raises:
+        FileNotFoundError: If ``path`` does not exist (a ``--baseline`` typo must fail loudly, never
+            silently grandfather nothing).
+    """
+    entries = json.loads(path.read_text())
+    return {(e["check"], e["klass"], e["family"], e["field"], e["source"]) for e in entries}
+
+
+def diff_baseline(
+    floor: Sequence[Finding], baseline: set[FindingKey]
+) -> tuple[list[Finding], list[Finding], set[FindingKey]]:
+    """Partition floor findings against a baseline allowlist.
+
+    Args:
+        floor: The current floor findings.
+        baseline: The allowlisted finding keys.
+
+    Returns:
+        ``(new, grandfathered, stale)`` — ``new`` are findings whose key is *not* allowlisted (these
+        gate); ``grandfathered`` are allowlisted findings still present; ``stale`` are allowlist keys
+        no longer produced (a fix landed — report so the entry can be pruned, but never gate on it).
+    """
+    new: list[Finding] = []
+    grandfathered: list[Finding] = []
+    present: set[FindingKey] = set()
+    for f in floor:
+        key = finding_key(f)
+        present.add(key)
+        (grandfathered if key in baseline else new).append(f)
+    stale = baseline - present
+    return new, grandfathered, stale
+
+
+def write_baseline(path: Path, floor: Sequence[Finding]) -> None:
+    """Write the current floor findings to ``path`` as a deterministic, self-documenting allowlist.
+
+    Local-only regeneration helper — CI never invokes this (it only passes ``--baseline``), so new
+    findings are never silently grandfathered. Entries are sorted and carry ``detail`` for readability;
+    a human adds a ``note`` explaining *why* each is an accepted exception.
+
+    Args:
+        path: Destination JSON path.
+        floor: The floor findings to snapshot.
+    """
+    rows = sorted(
+        (
+            {
+                "check": f.check,
+                "klass": f.klass,
+                "family": f.family,
+                "field": f.field,
+                "source": f.source,
+                "detail": f.detail,
+            }
+            for f in floor
+        ),
+        key=lambda r: (r["check"], r["family"], r["field"], r["klass"]),
+    )
+    path.write_text(json.dumps(rows, indent=2) + "\n")
+
+
 def _print_section(title: str, findings: Sequence[Finding]) -> None:
     """Print a grouped findings section to stdout."""
     print(f"\n## {title} — {len(findings)} finding(s)")
@@ -768,17 +872,58 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument(
         "--es-url", default=None, help="enable the environment-gated live-mapping check"
     )
+    ap.add_argument(
+        "--baseline",
+        type=Path,
+        default=None,
+        help="JSON allowlist of accepted floor findings; with --gate, fail only on NEW (un-allowlisted) drift",
+    )
+    ap.add_argument(
+        "--write-baseline",
+        type=Path,
+        default=None,
+        help="write the current floor findings to this path as a fresh allowlist and exit 0 (local-only helper)",
+    )
     args = ap.parse_args(argv)
 
     report = run_checks(args.templates_dir, args.dashboards_dir, args.es_url)
 
+    if args.write_baseline is not None:
+        write_baseline(args.write_baseline, report.floor)
+        print(f"wrote {len(report.floor)} floor finding(s) to {args.write_baseline}")
+        return 0
+
     print("# FRE-540 telemetry surface reconciliation (ADR-0090 D5)")
+    mode = "GATE" if args.gate else "report-only"
+    baseline_note = f" · baseline: {args.baseline}" if args.baseline else ""
     print(
-        f"mode: {'GATE' if args.gate else 'report-only'} · templates: {args.templates_dir} · dashboards: {args.dashboards_dir}"
+        f"mode: {mode}{baseline_note} · templates: {args.templates_dir} · dashboards: {args.dashboards_dir}"
     )
-    _print_section("FLOOR — mapping↔dashboard + trap-class lint (gate-able)", report.floor)
     _print_section("REPORT-ONLY — emit→mapping + live-mapping (never gated)", report.report_only)
 
+    if args.baseline is not None:
+        baseline = load_baseline(args.baseline)
+        new, grandfathered, stale = diff_baseline(report.floor, baseline)
+        _print_section("FLOOR — NEW drift (gate-able)", new)
+        print(f"\n## ALLOWLISTED — accepted exceptions in {args.baseline} — {len(grandfathered)}")
+        if stale:
+            print(
+                f"\n## STALE allowlist entries (finding fixed — prune from baseline) — {len(stale)}"
+            )
+            for key in sorted(stale):
+                print(f"    {key[1]}: {key[3]}  ({key[2]})")
+        if args.gate and new:
+            print(f"\nFAIL (gate): {len(new)} NEW floor finding(s) not in the baseline.")
+            return 1
+        if args.gate:
+            print(f"\nPASS (gate): no new drift; {len(grandfathered)} allowlisted exception(s).")
+        else:
+            print(
+                f"\nreport-only: {len(new)} new + {len(grandfathered)} allowlisted floor finding(s); not gating."
+            )
+        return 0
+
+    _print_section("FLOOR — mapping↔dashboard + trap-class lint (gate-able)", report.floor)
     if args.gate and report.floor:
         print(f"\nFAIL (gate): {len(report.floor)} floor finding(s).")
         return 1

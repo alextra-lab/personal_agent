@@ -62,7 +62,7 @@
         "timestamp":            { "type": "date" },
         "insight_type":         { "type": "keyword" },
         "record_type":          { "type": "keyword" },
-        "title":                { "type": "text" },
+        "title":                { "type": "text", "fields": { "keyword": { "type": "keyword", "ignore_above": 1024 } } },
         "summary":              { "type": "text" },
         "confidence":           { "type": "float" },
         "actionable":           { "type": "boolean" },
@@ -82,7 +82,7 @@
     }
   },
   "_meta": {
-    "description": "Insights engine records (FRE-407 family). Daily index agent-insights-YYYY-MM-DD. Authored in FRE-534/A2 — the family previously had no template, so every field worked by first-value dynamic inference. evidence.component_id is keyword (was text under ES-default → the prompt-component join key was tokenised); *_cost_usd/ratio/confidence are pinned float so a stray 0 cannot flip them to long.",
+    "description": "Insights engine records (FRE-407 family). Daily index agent-insights-YYYY-MM-DD. Authored in FRE-534/A2 — the family previously had no template, so every field worked by first-value dynamic inference. evidence.component_id is keyword (was text under ES-default → the prompt-component join key was tokenised); *_cost_usd/ratio/confidence are pinned float so a stray 0 cannot flip them to long. title carries a keyword subfield (FRE-555) so the Insights Engine 'Anomalies' panel can terms-aggregate on title.keyword; the 'Insight count by type' panel aggregates on the bare keyword insight_type.",
     "managed_by": "scripts/setup-elasticsearch.sh"
   }
 }

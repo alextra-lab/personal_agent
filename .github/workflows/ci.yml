@@ -143,13 +143,15 @@ jobs:
       - name: ruff format (check only)
         run: uv tool run ruff format --check src/
 
-  # ── Telemetry surface reconciliation (ADR-0090 D5, report-only) ──────────────
+  # ── Telemetry surface reconciliation (ADR-0090 D5, GATE) ─────────────────────
   # Hermetic static check: ES index templates ↔ Kibana dashboard NDJSON + trap-class
-  # mapping lint. Report-only (no `--gate`) → non-blocking while FRE-534/535 burn down
-  # the grandfathered baseline drift. A follow-up ticket flips this to `--gate` once the
-  # affected families are triaged green (ADR-0090 D5 phasing).
+  # mapping lint. Hard gate (FRE-555): fails on any floor finding whose (check, klass,
+  # family, field, source) key is NOT in the committed allowlist. The baseline grand-
+  # fathers only reviewed-correct exceptions (name-heuristic false positives) + the two
+  # *_ms→float fixes deferred to a reindex follow-up — each annotated with its rationale
+  # in scripts/audit/telemetry_surface_baseline.json. New/changed drift fails the build.
   telemetry-surface:
-    name: Telemetry surface reconciliation (report-only)
+    name: Telemetry surface reconciliation (gate)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -166,8 +168,8 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Reconcile emit ↔ mapping ↔ dashboard (report mode)
-        run: uv run python -m scripts.audit.telemetry_surface_check
+      - name: Reconcile emit ↔ mapping ↔ dashboard (gate on new drift)
+        run: uv run python -m scripts.audit.telemetry_surface_check --gate --baseline scripts/audit/telemetry_surface_baseline.json
 
   # ── PWA unit tests ──────────────────────────────────────────────────────────
   # WS2 (Vitest component tests) — added once `make test-pwa` is wired in PR2.

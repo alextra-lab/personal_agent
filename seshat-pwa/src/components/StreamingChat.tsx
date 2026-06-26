@@ -59,6 +59,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [lastUserMessage, setLastUserMessage] = useState<string>('');
+  const [sessionTurnCount, setSessionTurnCount] = useState<number | null>(null);
 
   useEffect(() => {
     if (!isDrawerOpen) return;
@@ -169,6 +170,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
       .then((s) => {
         if (cancelled || s === null) return;
         setProfile(s.execution_profile);
+        if (s.turn_count !== undefined) setSessionTurnCount(s.turn_count);
         if (typeof window !== 'undefined') {
           localStorage.setItem(PROFILE_STORAGE_KEY, s.execution_profile);
         }
@@ -319,6 +321,11 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
             </svg>
           </button>
           <h1 className="text-base font-semibold text-slate-100">Seshat</h1>
+          {sessionTurnCount !== null && sessionTurnCount > 0 && (
+            <span className="text-xs text-slate-500">
+              {sessionTurnCount} {sessionTurnCount === 1 ? 'turn' : 'turns'}
+            </span>
+          )}
         </div>
         {messages.length > 0 && (
           <button

@@ -445,5 +445,6 @@ def _session_to_dict(session: Any) -> dict[str, Any]:
         # ADR-0079: server-authoritative execution profile for PWA hydration.
         "execution_profile": getattr(session, "execution_profile", "local") or "local",
         "message_count": len(msgs),
+        "turn_count": sum(1 for m in msgs if m.get("role") == "user"),
         "title": _extract_title(msgs),
     }

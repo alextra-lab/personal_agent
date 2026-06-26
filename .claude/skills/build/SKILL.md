@@ -24,10 +24,21 @@ In Progress transition; master owns the Done transition at the gate.
 ## 2 — Scope
 Read ticket body + linked ADRs + specs. Summarize scope in 3–5 bullets.
 
-## 3 — Plan + codex review
-Write a plan: atomic steps, exact file paths, exact test commands. Then invoke **codex:rescue**
-to review the plan (approach second-opinion). Revise per findings. Get explicit owner approval
-before coding. (One phase = one PR — see halt conditions.)
+## 3 — Plan + (risk-tiered) codex review
+Write a plan: atomic steps, exact file paths, exact test commands.
+
+**Self-classify the work from the Step-2 scope (you have the most context here — master does not pre-route this):**
+- **Trivial** — mechanical only: docs / config / test-only / a one-liner; **no `src/` logic change, no
+  schema / security / cost / memory / new-ADR-implementation**. → **skip codex plan-review**; the Approved
+  ticket is sufficient authorization, proceed straight to TDD.
+- **Standard / Complex** — touches `src/` logic, schema, security, cost, memory, a new ADR's
+  implementation, or multi-file behavior. → **codex plan-review REQUIRED**: invoke **codex:rescue** on the
+  plan (approach second-opinion), revise per findings, and get explicit owner approval before coding.
+
+**When in doubt, treat as Standard and run codex** — bias toward review. The owner/master may override per
+ticket in the dispatch with `[codex: required]` (force it) or `[codex: skip]` (force-skip) when they know
+something the scope doesn't show. Master backstops this at the gate — a mis-tiered Standard change that
+skipped codex gets bounced. (One phase = one PR — see halt conditions.)
 
 ## 4 — TDD implement
 Failing test first → confirm it fails → implement. Standards (`.claude/CLAUDE.md`) + ADR-0074

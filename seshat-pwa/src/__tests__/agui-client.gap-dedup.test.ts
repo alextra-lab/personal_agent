@@ -201,6 +201,35 @@ describe('FRE-542 gap-aware client dedup', () => {
   });
 
   describe('cold-start fallback (DONE flush)', () => {
+    it('mid-stream gap at DONE (ackSeq > 0) does NOT advance ackSeq past missing seq', async () => {
+      // Scenario: client has dispatched seq=1 (ackSeq=1), seq=3 arrived and is
+      // buffered, but seq=2 (the gap) never arrived before DONE.
+      // The DONE flush must NOT fire — ackSeq must stay at 1 so reconnect
+      // replays from seq=2 and fills the gap.
+      localStorage.setItem(SEQ_KEY, '1');
+      const received: unknown[] = [];
+      const conn = connectWebSocket(SESSION, (ev) => received.push(ev));
+      await flushAsync();
+      lastFakeWS!.triggerOpen();
+
+      lastFakeWS!.triggerMessage(makeEvent(3)); // buffered — gap at seq=2
+      expect(received).toHaveLength(0);
+      expect(localStorage.getItem(SEQ_KEY)).toBe('1'); // ackSeq unmoved
+
+      lastFakeWS!.triggerMessage(makeDone());
+      // DONE must NOT flush over the gap: ackSeq stays at 1, DONE is dispatched
+      expect(localStorage.getItem(SEQ_KEY)).toBe('1');
+      // seq=3 must NOT have been dispatched (still behind the gap)
+      const seqNums = received
+        .map((e) => (e as { seq?: number }).seq)
+        .filter((s) => s != null);
+      expect(seqNums).not.toContain(3);
+      // DONE itself is still dispatched to the UI
+      expect(received.some((e) => (e as { type: string }).type === 'DONE')).toBe(true);
+
+      conn.close();
+    });
+
     it('events stuck in buffer are flushed in seq order on DONE', async () => {
       // Simulate cold start: ackSeq=0 from storage but server-assigned seqs
       // start at a high global value (not contiguous from 1).

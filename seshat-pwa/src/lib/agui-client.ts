@@ -299,10 +299,11 @@ export function connectWebSocket(
             return;
           }
           // seq == null: DONE, PONG, REPLAY_GAP
-          if (parsed.type === 'DONE' && pendingBuf.size > 0) {
-            // Cold-start fallback: global Postgres seq may not start at ackSeq+1
-            // (e.g. fresh client with ackSeq=0 but first event has seq=5000).
-            // Flush all buffered events in seq order, then dispatch DONE.
+          if (parsed.type === 'DONE' && getAckSeq() === 0 && pendingBuf.size > 0) {
+            // Cold-start fallback only (ackSeq===0): global Postgres seq may not
+            // start at ackSeq+1 (e.g. fresh client with ackSeq=0 but first event
+            // has seq=5000). For ackSeq>0, leave the buffer so reconnect replay
+            // can fill the genuine gap — do NOT advance ackSeq past the hole.
             const sortedKeys = [...pendingBuf.keys()].sort((a, b) => a - b);
             for (const k of sortedKeys) {
               onEvent(pendingBuf.get(k)!);

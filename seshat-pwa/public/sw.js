@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v27-ios-bg-resilience';
+const CACHE_NAME = 'seshat-v28-runtime-config';
 
 const PRECACHE_URLS = [
   '/',

@@ -1,0 +1,47 @@
+[
+  {
+    "check": "trap-lint",
+    "klass": "numeric-as-long",
+    "family": "docker/elasticsearch/captains-captures-index-template.json",
+    "field": "metrics_summary.threshold_violations",
+    "source": "docker/elasticsearch/captains-captures-index-template.json",
+    "note": "ACCEPTED — reviewed-correct (FRE-555). This is a COUNT of threshold violations; integer is intentional (the template _meta pins metrics_summary.* float/integer to defend against stray-0 type flips). FLOAT_HINT false-fires on the word 'threshold'; no static linter can tell a threshold count from a threshold value.",
+    "detail": "'metrics_summary.threshold_violations' is numeric/duration-named but mapped 'integer'; a non-integer value is rejected or truncated (the 0.0→long trap)"
+  },
+  {
+    "check": "trap-lint",
+    "klass": "numeric-as-long",
+    "family": "docker/elasticsearch/index-template.json",
+    "field": "latency_ms",
+    "source": "docker/elasticsearch/index-template.json",
+    "note": "DEFERRED — genuine *_ms→float fix, but a type change on the hot agent-logs index that ES rejects in place (needs reindex/rollover). Tracked by FRE-599; drop this entry when that ships.",
+    "detail": "'latency_ms' is numeric/duration-named but mapped 'long'; a non-integer value is rejected or truncated (the 0.0→long trap)"
+  },
+  {
+    "check": "trap-lint",
+    "klass": "numeric-as-long",
+    "family": "docker/elasticsearch/index-template.json",
+    "field": "probe_duration_ms",
+    "source": "docker/elasticsearch/index-template.json",
+    "note": "DEFERRED — genuine *_ms→float fix, but a type change on the hot agent-logs index that ES rejects in place (needs reindex/rollover). Tracked by FRE-599; drop this entry when that ships.",
+    "detail": "'probe_duration_ms' is numeric/duration-named but mapped 'integer'; a non-integer value is rejected or truncated (the 0.0→long trap)"
+  },
+  {
+    "check": "trap-lint",
+    "klass": "long-text-ignore-above",
+    "family": "docker/elasticsearch/index-template.json",
+    "field": "reason",
+    "source": "docker/elasticsearch/index-template.json",
+    "note": "ACCEPTED — reviewed-correct (FRE-555). agent-logs 'reason' holds short categorical enums (e.g. 'archive_disabled', 'no_es_client', 'no_trace_ids'); keyword ignore_above:1024 is never exceeded and is the right mapping for exact-match aggregation. TEXT_TRAP_HINT false-fires on the word 'reason'.",
+    "detail": "long-text field 'reason' is keyword ignore_above:1024; values over the limit are silently dropped from the index"
+  },
+  {
+    "check": "trap-lint",
+    "klass": "long-text-ignore-above",
+    "family": "docker/elasticsearch/topology-index-template.json",
+    "field": "decomposition_reason",
+    "source": "docker/elasticsearch/topology-index-template.json",
+    "note": "ACCEPTED — reviewed-correct (FRE-555). topology 'decomposition_reason' is a short routing-decision categorical (keyword, per the template _meta routing-surface note); ignore_above:1024 is never exceeded. TEXT_TRAP_HINT false-fires on the word 'reason'.",
+    "detail": "long-text field 'decomposition_reason' is keyword ignore_above:1024; values over the limit are silently dropped from the index"
+  }
+]

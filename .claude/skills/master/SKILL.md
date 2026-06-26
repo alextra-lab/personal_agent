@@ -37,12 +37,26 @@ checklist); CI green.
 ## 5 — Merge
 `gh pr merge <n> --merge` with a review summary; `git pull` on main.
 
-## 6 — Ask before deploy
-Ask the owner: **"deploy now?"** Do NOT deploy on your own initiative. If yes, write the approval
-sentinel so the gate allows exactly one deploy:
-`touch .claude/.deploy-approved`
+## 6 — Deploy authorization (standing classes vs ask)
+Owner granted **standing approval (2026-06-26)** for three low-risk, reversible deploy classes —
+deploy these **without asking**, then verify + report:
+- **PWA-only rebuild** (`ENV=cloud make rebuild SERVICE=seshat-pwa`) — bump `CACHE_NAME` first.
+- **Additive ES-template** (`setup-elasticsearch.sh`) — *new/additive fields only, NO type change*.
+- **Kibana dashboard import** (`import_dashboards.sh`).
 
-## 7 — Deploy + verify (only after "yes")
+**Always ASK ("deploy now?") — do NOT deploy on your own initiative — for everything else, in particular:**
+- **`seshat-gateway` rebuild** (backend code — running agent / cost / memory / emit sites)
+- **ES type-change or reindex** (the FRE-599 class — ES rejects in place / risks data)
+- **Postgres schema / migration**
+- **Anything touching `cost_gate` / budget / governance** (standing budget rule)
+- Anything you are unsure how to classify → treat as ask.
+
+Either way, write the approval sentinel so the gate allows exactly one deploy:
+`touch .claude/.deploy-approved`. For a standing-class deploy, note in your report that it ran under
+standing approval (which class). For concurrent-session safety, still confirm timing if another session
+is active.
+
+## 7 — Deploy + verify
 - `ENV=cloud make rebuild SERVICE=seshat-gateway` (VPS; `make deploy` is Mac-only).
 - `curl -s http://localhost:9001/health` + curl the affected endpoint; paste status + body.
 - If the PR touched an emit site / schema / cost / memory write: run

@@ -24,9 +24,14 @@ they MUST NOT restate or fork these rules. Coding standards live in `.claude/CLA
 - New issues are created in state "Needs Approval", under a Linear project.
 
 ## Deploy
-- Deploy is a master-only, owner-approved action. Approving a PR or a fix does NOT
-  authorize a deploy. Confirm deploy timing explicitly, especially with a concurrent
-  session active.
+- Deploy is a master-only action. Owner granted **standing approval (2026-06-26)** for three
+  low-risk, reversible classes — master deploys these WITHOUT asking, then verifies + reports:
+  **PWA-only rebuild · additive ES-template (no type change) · Kibana dashboard import** (see
+  `/master` Step 6).
+- For everything else — `seshat-gateway` rebuild, ES type-change/reindex, Postgres schema/migration,
+  cost/budget/governance — **ask first; do NOT deploy on your own initiative.** Approving a PR or a fix
+  does NOT authorize an always-ask-class deploy. Confirm deploy timing explicitly, especially with a
+  concurrent session active.
 
 ## Halt conditions (stop and surface; do not work around)
 - Ticket not `Approved`.

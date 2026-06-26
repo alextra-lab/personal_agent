@@ -183,6 +183,14 @@ export interface StreamConnection {
   send: (msg: ClientMessage) => void;
 }
 
+/** Optional lifecycle callbacks for connectWebSocket (FRE-236). */
+export interface ConnectWebSocketOpts {
+  /** Called when the WebSocket opens (initial connect or reconnect). */
+  onWsConnected?: () => void;
+  /** Called when the WebSocket closes unexpectedly (not intentional, not superseded). */
+  onWsDisconnected?: () => void;
+}
+
 /**
  * Connect to the AG-UI WebSocket for a session.
  *
@@ -203,6 +211,7 @@ export function connectWebSocket(
   sessionId: string,
   onEvent: AGUIEventHandler,
   onError?: ErrorHandler,
+  opts?: ConnectWebSocketOpts,
 ): StreamConnection {
   let ws: WebSocket | null = null;
   let pingInterval: ReturnType<typeof setInterval> | null = null;
@@ -216,6 +225,10 @@ export function connectWebSocket(
   // last-dispatched (ackSeq). Safe: conservative reconnect watermark on first
   // reconnect after upgrade (server replays from the stored value).
   const seqKey = `seshat_last_seq_${sessionId}`;
+
+  // FRE-236: track when we went hidden with the WS open so we can include
+  // hidden_duration_ms in the next CONNECT payload for telemetry.
+  let hiddenAt: number | null = null;
 
   function getAckSeq(): number {
     if (typeof localStorage === 'undefined') return 0;
@@ -236,6 +249,10 @@ export function connectWebSocket(
   function persistSeqOnHide(): void {
     // last_seq is already persisted on each event; this is a safety net
     // for iOS PWA suspension where the event loop may not run.
+    // FRE-236: also record when we went hidden with an open WS for telemetry.
+    if (ws?.readyState === WebSocket.OPEN) {
+      hiddenAt = Date.now();
+    }
   }
 
   async function connect(): Promise<void> {
@@ -269,7 +286,13 @@ export function connectWebSocket(
         }
         backoffMs = 1000;
         const lastSeq = getAckSeq();
-        ws?.send(JSON.stringify({ type: 'CONNECT', last_seq: lastSeq }));
+        // FRE-236: include hidden_duration_ms when reconnecting after a visibility hide.
+        const connectPayload: Record<string, unknown> = { type: 'CONNECT', last_seq: lastSeq };
+        if (hiddenAt !== null) {
+          connectPayload['hidden_duration_ms'] = Date.now() - hiddenAt;
+          hiddenAt = null;
+        }
+        ws?.send(JSON.stringify(connectPayload));
 
         // Start PING heartbeat
         if (pingInterval) clearInterval(pingInterval);
@@ -278,6 +301,9 @@ export function connectWebSocket(
             ws.send(JSON.stringify({ type: 'PING' }));
           }
         }, 25000);
+
+        // FRE-236: notify the hook that the WS is (re)connected.
+        opts?.onWsConnected?.();
       };
 
       ws.onmessage = (ev: MessageEvent) => {
@@ -321,6 +347,8 @@ export function connectWebSocket(
         cleanup();
         if (generation !== connectGeneration) return;
         if (closed || ev.code === WS_CLOSE_SUPERSEDED) return;
+        // FRE-236: notify the hook of an unexpected disconnect.
+        opts?.onWsDisconnected?.();
         scheduleReconnect();
       };
 

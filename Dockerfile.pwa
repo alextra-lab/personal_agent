@@ -1,8 +1,8 @@
 # Dockerfile.pwa — Next.js PWA for Seshat
 #
 # Multi-stage build: deps → builder → runner (standalone).
-# NEXT_PUBLIC_SESHAT_URL is baked in at build time by Next.js — pass via
-# docker-compose build arg. Defaults to the Caddy static IP on cloud-sim.
+# SESHAT_URL and GATEWAY_TOKEN are runtime env vars — set in docker-compose
+# environment:, NOT build args. The image is portable across deployments (FRE-339).
 #
 # Build time: ~2-3 minutes (npm install + next build)
 # Image size:  ~200MB (node:20-alpine + standalone output)
@@ -18,12 +18,6 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY seshat-pwa/ .
-
-ARG NEXT_PUBLIC_SESHAT_URL=http://172.25.0.10
-ENV NEXT_PUBLIC_SESHAT_URL=${NEXT_PUBLIC_SESHAT_URL}
-
-ARG NEXT_PUBLIC_GATEWAY_TOKEN=""
-ENV NEXT_PUBLIC_GATEWAY_TOKEN=${NEXT_PUBLIC_GATEWAY_TOKEN}
 
 ENV NEXT_TELEMETRY_DISABLED=1
 

@@ -5,10 +5,10 @@
 > **Last updated**: 2026-06-26 (master). **Header changelog trimmed** — the full historical ship/deploy narrative (back to ~2026-06-07) is archived verbatim in [`completed/2026-06-26-master-header-archive.md`](completed/2026-06-26-master-header-archive.md). This header is **current-state only**; the sections below are the live plan.
 >
 > **Now (2026-06-26):** Three stream sessions self-dispatch — **build** (Stream A: backend/ES) · **build2** (Stream B: PWA) · **adr** (ADRs); **master** is sole gateway to `main` + deploy approver (standing-class deploys: PWA rebuild · additive ES-template · Kibana import — everything else asks).
-> **Shipped today:** FRE-236 (iOS bg SSE resilience — PWA v27 deployed) · FRE-591 (`sessions.user_id` schema divergence — merged; prod no-op) · ADR-0095 (delegation boundary — Proposed, PR #251) · FRE-557 + FRE-523 closed (523 AC-3 cross-run-recall re-homed to FRE-435). FRE-606 approved.
+> **Shipped today:** FRE-236 (iOS bg SSE — PWA v27) · FRE-591 (`sessions.user_id` schema — prod no-op) · FRE-606 (schema-parity guard — test-only; CI-inert → follow-up **FRE-619**) · FRE-394 (PWA SW registration wired — deployed; CACHE_NAME bumps now actually function) · ADR-0094/0095/0096 (arch-review forks — all Proposed) · FRE-557 + FRE-523 closed (523 AC-3 re-homed to FRE-435).
 > **Pending verification:** none master-side. Owner-gated: FRE-435 cross-run recall (needs a live eval pass-2).
-> **Arch-review forks (2026-06-26):** ADR-0094 / ADR-0095 Proposed; ADR-0096 (memory-access) pending — adr session.
-> **Streams next:** build → FRE-606 · build2 → owner's PWA pick (rec. FRE-394) · adr → ADR-0096. Live queues below: § Immediately Actionable · § Needs Approval · § Active ADRs.
+> **Arch-review forks (2026-06-26):** ADR-0094 / 0095 / 0096 all **Proposed** (triage §4 fork complete); impl tickets Needs-Approval (0095→FRE-608+; 0096→FRE-613+, chain gated on FRE-593).
+> **Streams next:** build → owner's pick (FRE-619 CI-wiring · or Approved queue) · build2 → owner's PWA pick · adr → cleared (triage forks done). Live queues below: § Immediately Actionable · § Needs Approval · § Active ADRs.
 
 ---
 
@@ -327,6 +327,7 @@ FRE-391 (dynamic max_tokens) — independent; addresses artifact-truncation root
 
 | ADR | Title | Status |
 |-----|-------|--------|
+| **0096** | **Memory Access Model: Coordinated Hybrid** | **Proposed 2026-06-26 (PR #254, arch-review ADR #3/final). Refutes the review's "active-vs-passive, pick one" framing — both paths are on + uncoordinated; assigns roles instead: passive=ambient floor (ADR-0081), active=on-demand precision (via ADR-0095 tool boundary), + de-dup coordination. Measure-first: D1 access-path attribution + de-dup → D2 tune the mix (**hard prereq FRE-593**) → D3 consolidation-quality lean (research). Umbrella FRE-618; impl FRE-613–617 Needs-Approval (whole chain gated on FRE-593). Completes the triage §4 fork (0094/0095/0096).** |
 | **0095** | **Delegation Boundary: Per-Worker Routing + Grammar-Constrained Sub-Agent Output** | **Proposed 2026-06-26 (PR #251, arch-review ADR #2; sibling of 0094). D1 grammar/json-schema constrained local sub-agent decoding (reliability, no money axis — upstream fix for FRE-502) → D2 flag-gated per-tool-class sizing/routing → D3 salience-aware escalation research. Umbrella FRE-607; impl FRE-608/609/610/611 Needs-Approval. Chain: ADR-0094 P1 (FRE-601) → 0095 P1 (608)+P2 (609) → P3 (610); only D1 has no 0094 dependency. Only ADR-0096 (memory-access) remains of the triage §4 fork.** |
 | **0094** | **Deterministic Local/Cloud Execution-Profile Routing** | **Proposed 2026-06-26 (PR #247, arch-review ADR #1). Observe→route→escalate, local-biased; D1 per-call profile recording → D2 flag-gated `auto` recommendation → D3 escalation research. Defers per-call "cloud brain/local hands" to ADR-0095. Impl tickets filed Needs-Approval; EVAL-3 validates.** |
 | **0093** | **OpenTelemetry at the Substrate Boundary** | **Accepted (with scope change) 2026-06-21 (FRE-582, PR #238). D1/D2 accepted & sequenced (FRE-583); D3 OTLP exporter parked behind FRE-588 (EDOT/Elastic trace backend); D4 confirmed-deferred; D5 adopted. Originally Proposed 2026-06-20 (PR #236).** |

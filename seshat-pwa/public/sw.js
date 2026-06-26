@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v26-session-turn-count';
+const CACHE_NAME = 'seshat-v27-ios-bg-resilience';
 
 const PRECACHE_URLS = [
   '/',

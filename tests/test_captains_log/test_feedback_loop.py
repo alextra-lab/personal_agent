@@ -72,7 +72,7 @@ async def test_feedback_poller_emits_new_label(tmp_path: pathlib.Path) -> None:
             "updatedAt": "2026-04-01T00:00:00Z",
         }
     )
-    client.count_non_archived_issues = AsyncMock(return_value=10)
+    client.count_open_issues = AsyncMock(return_value=10)
 
     poller = FeedbackPoller(client, state_path=state_path)
     events = await poller.check_for_feedback()

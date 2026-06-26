@@ -449,11 +449,11 @@ class TestListIssues:
         assert result == []
 
 
-# ── count_non_archived_issues ─────────────────────────────────────────────────
+# ── count_open_issues ─────────────────────────────────────────────────────────
 
 
-class TestCountNonArchivedIssues:
-    """Test the count_non_archived_issues operation."""
+class TestCountOpenIssues:
+    """Test the count_open_issues operation (FRE-598: open-work backpressure metric)."""
 
     @pytest.mark.asyncio
     async def test_count_single_page(self) -> None:
@@ -468,7 +468,7 @@ class TestCountNonArchivedIssues:
             }
         )
         with _make_httpx_patch([resp]):
-            count = await client.count_non_archived_issues("FrenchForest")
+            count = await client.count_open_issues("FrenchForest")
         assert count == 3
 
     @pytest.mark.asyncio
@@ -492,8 +492,31 @@ class TestCountNonArchivedIssues:
             }
         )
         with _make_httpx_patch([page1, page2]):
-            count = await client.count_non_archived_issues("FrenchForest", page_limit=2)
+            count = await client.count_open_issues("FrenchForest", page_limit=2)
         assert count == 3
+
+    @pytest.mark.asyncio
+    async def test_filter_excludes_terminal_state_types(self) -> None:
+        """The GraphQL filter scopes to the team and excludes terminal state types.
+
+        FRE-598: Linear does not archive Done/Canceled issues while their project
+        stays open, so a "non-archived" count is dominated by terminal work. The
+        open-work backpressure metric must exclude ``completed``/``canceled``/
+        ``duplicate`` state types via ``state.type.nin``.
+        """
+        client = LinearClient()
+        captured: dict[str, Any] = {}
+
+        async def _capture(query: str, variables: dict[str, Any]) -> dict[str, Any]:
+            captured["variables"] = variables
+            return {"issues": {"nodes": [], "pageInfo": {"hasNextPage": False}}}
+
+        with patch.object(client, "_call", side_effect=_capture):
+            await client.count_open_issues("FrenchForest")
+
+        filt = captured["variables"]["filter"]
+        assert filt["team"] == {"name": {"eq": "FrenchForest"}}
+        assert filt["state"] == {"type": {"nin": ["completed", "canceled", "duplicate"]}}
 
 
 # ── update_issue ──────────────────────────────────────────────────────────────

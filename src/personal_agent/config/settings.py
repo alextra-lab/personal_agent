@@ -1218,7 +1218,11 @@ class AppConfig(BaseSettings):
         default=200,
         ge=50,
         le=250,
-        description="Pause promotion when non-archived Linear issues exceed this count",
+        description=(
+            "Pause promotion when open (non-terminal) Linear issues exceed this count. "
+            "FRE-598: counts open work only — Done/Canceled issues stay non-archived "
+            "while their project is open, so a raw non-archived count would wedge the gate."
+        ),
     )
     promotion_initial_cap: int = Field(
         default=5,

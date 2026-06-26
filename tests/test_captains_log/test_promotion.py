@@ -346,7 +346,7 @@ class TestPromotionPipelineRun:
 
         mock_create = AsyncMock(return_value="FF-1")
         lc = MagicMock()
-        lc.count_non_archived_issues = AsyncMock(return_value=201)
+        lc.count_open_issues = AsyncMock(return_value=201)
         lc.list_issues = AsyncMock(return_value=[])
 
         with patch.object(promotion_module.settings, "issue_budget_threshold", 200):
@@ -372,7 +372,7 @@ class TestPromotionPipelineRun:
         mock_create = AsyncMock(side_effect=AssertionError("save_issue should not be called"))
 
         lc = MagicMock()
-        lc.count_non_archived_issues = AsyncMock(return_value=50)
+        lc.count_open_issues = AsyncMock(return_value=50)
         lc.list_issues = AsyncMock(
             return_value=[
                 {

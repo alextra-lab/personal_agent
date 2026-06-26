@@ -42,16 +42,24 @@ Wire the existing Captain's Log promotion pipeline to Linear (replacing dry-run 
 
 ## 3. Linear Budget Constraints
 
-**Free tier**: 250 non-archived issues, 2 teams, 5,000 API requests/hour. Archived issues are preserved indefinitely and remain searchable — they just don't count toward the 250 limit.
+> **Update 2026-06-26 (FRE-598):** the workspace is on a **paid Linear plan** — there is **no
+> hard non-archived-issue cap** (the free tier's 250-issue limit no longer binds). The promotion
+> budget gate is therefore **not** a billing constraint; it is a **self-imposed review-bandwidth
+> backpressure** so the agent never auto-files more *open* work than a human can triage. It now
+> counts **open (non-terminal) issues** — `count_open_issues`, excluding Done/Canceled/Duplicate —
+> because Linear keeps terminal issues non-archived while their project is open, so a raw
+> non-archived count would wedge the gate shut on completed work. The threshold (200) is a tunable
+> review-bandwidth knob, not a plan limit.
 
-**Current usage** (as of 2026-04-01):
-- 156 non-archived issues (94 slots remaining)
-- 112 are Done/Canceled (archivable → would free to 206 slots)
-- 0 issues created by the promotion pipeline (all dry-run)
+**Historical context (free tier)**: the original design targeted the free tier — 250 non-archived
+issues, 2 teams, 5,000 API requests/hour — where archived issues didn't count toward the 250 limit.
+The history-preservation strategy below remains valuable independent of plan.
 
 ### The core tension
 
-Archiving frees slots, but feedback history (labels applied, comments, re-evaluation threads) is valuable training data for the meta-learning layer. We can't treat archived issues as disposable — they contain the human signal that makes this loop useful.
+Feedback history (labels applied, comments, re-evaluation threads) is valuable training data for the
+meta-learning layer. Even though a paid plan removes the archival pressure, we still don't treat
+archived issues as disposable — they contain the human signal that makes this loop useful.
 
 ### History preservation strategy
 
@@ -88,9 +96,9 @@ This means the insights engine can analyze feedback patterns from local history 
 - **Archive on Rejected/Duplicate**: Free the slot immediately after capture
 - **Approved stays active**: Represents validated work — archive only when moved to Done
 - **Deferred stays active**: Until revisit date (default 90 days), then capture and archive
-- **Monitor count**: Daily feedback poll checks non-archived count; pause promotion if > 200
+- **Monitor count**: Daily feedback poll checks the open-issue count (FRE-598: non-terminal states only — excludes Done/Canceled/Duplicate, which Linear keeps non-archived while the project is open); pause promotion if > 200
 - **Initial promotion cap**: 5 issues per pipeline run (down from default 20)
-- **Upgrade signal**: If budget becomes a recurring constraint and the loop is proving valuable, upgrade to Basic ($10/mo, unlimited issues)
+- **Plan**: paid Linear plan (unlimited issues) — the 200 gate is review-bandwidth backpressure, not a billing limit. Retune the threshold to match human triage capacity, not a plan cap.
 
 ---
 
@@ -649,7 +657,7 @@ promotion_initial_cap: int = Field(
 - **Proposal quality**: acceptance rate over time, by category
 - **Feedback latency**: time-to-first-feedback distribution
 - **Model suitability signal**: Deepen frequency over time (declining = model is improving or adequate; rising = model needs upgrading)
-- **Budget health**: non-archived issue count trend
+- **Budget health**: open (non-terminal) issue count trend
 
 ---
 
@@ -813,7 +821,7 @@ After 4 weeks of operation:
 - [ ] Project owner has applied feedback labels to at least 5 proposals
 - [ ] Acceptance rate is tracked and visible in insights output
 - [ ] At least 1 Deepen cycle has produced a noticeably better re-analysis
-- [ ] No issue budget warnings (staying under 200 non-archived)
+- [ ] No issue budget warnings (staying under 200 open/non-terminal)
 - [ ] The project owner can articulate whether the proposals are useful
 
 ---

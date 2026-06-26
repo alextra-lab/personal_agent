@@ -1,0 +1,82 @@
+# FRE-488 — tiny SEED probe set (proves the harness runs end-to-end).
+#
+# This is NOT the gate set. The real labelled bespoke gate (mined from Seshat's
+# own corpus, incl. the real "no prior discussions" failures + >=3 pedagogical
+# cases) is FRE-489 and loads through this same schema.
+#
+# Anti-vacuous-green discipline (codex review): the seed deliberately contains
+#   * a case with a non-empty expected-recall set (gate metric needs it),
+#   * a case carrying an expected write (replay seed -> write-completeness),
+#   * a case engineered to MISS (queried entity is never seeded) so a broken
+#     metric pipeline cannot pass the AC on vacuous data.
+
+cases:
+  - case_id: seed-diffraction-recall
+    note: >
+      Positive recall — the setup discusses the diffraction limit and the query
+      asks about it. Expected: the system surfaces it (does not deny). Mirrors
+      the ADR-0087 worked example.
+    tags: [positive, false-negative]
+    seed_entities:
+      - name: Diffraction Limit
+        entity_type: concept
+        description: >
+          The smallest resolvable feature in an optical system, set by the
+          wavelength of light and the numerical aperture of the lens.
+      - name: Numerical Aperture
+        entity_type: concept
+        description: A measure of a lens's light-gathering ability and resolving power.
+    seed_relationships:
+      - source: Diffraction Limit
+        rel_type: DEPENDS_ON
+        target: Numerical Aperture
+    history:
+      - user: "What sets the smallest feature a microscope can resolve?"
+        assistant: >
+          The diffraction limit does: resolution is bounded by the wavelength of
+          light divided by roughly twice the numerical aperture of the objective.
+    query: "What did we say about the diffraction limit?"
+    expected:
+      entity_names: [Diffraction Limit]
+      must_not_deny: true
+
+  - case_id: seed-pedagogical-spaced-recall
+    note: >
+      Pedagogical-shaped — active recall of a previously-discussed (due) concept
+      at session open (ADR-0084 opening ritual). Sets the recall@k bar for
+      "concept due for review".
+    tags: [pedagogical, positive]
+    seed_entities:
+      - name: Spaced Repetition
+        entity_type: concept
+        description: >
+          A learning technique that schedules reviews at increasing intervals to
+          exploit the spacing effect and strengthen long-term retention.
+    history:
+      - user: "How should I schedule reviews so I actually remember things?"
+        assistant: >
+          Use spaced repetition — review at expanding intervals so each recall
+          lands just before you would have forgotten.
+    query: "Remind me what we covered on how to schedule reviews."
+    expected:
+      entity_names: [Spaced Repetition]
+      must_not_deny: true
+
+  - case_id: seed-abstention-control
+    note: >
+      True-negative control — the query asks about a topic that was NEVER
+      discussed, so correct behaviour is to surface nothing and a denial is
+      acceptable (must_not_deny: false). Expected recall is empty, so recall@k is
+      None and excluded from the aggregate; this exercises the abstention path
+      and guards against a metric layer that scores everything as a hit. (The
+      gate set, FRE-489, adds non-empty-but-wrong misses mined from the real
+      corpus — those need live retrieval to land deterministically.)
+    tags: [control, abstention]
+    seed_entities:
+      - name: Photosynthesis
+        entity_type: concept
+        description: The process by which plants convert light into chemical energy.
+    query: "What did we discuss about quantum chromodynamics?"
+    expected:
+      entity_names: []
+      must_not_deny: false

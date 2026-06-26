@@ -7,8 +7,9 @@
 > **Now (2026-06-26):** Three stream sessions self-dispatch — **build** (Stream A: backend/ES) · **build2** (Stream B: PWA) · **adr** (ADRs); **master** is sole gateway to `main` + deploy approver (standing-class deploys: PWA rebuild · additive ES-template · Kibana import — everything else asks).
 > **Shipped today:** FRE-236 (iOS bg SSE — PWA v27) · FRE-591 (`sessions.user_id` schema — prod no-op) · FRE-606 (schema-parity guard — test-only; CI-inert → follow-up **FRE-619**) · FRE-394 (PWA SW registration wired — deployed; CACHE_NAME bumps now actually function) · ADR-0094/0095/0096 (arch-review forks — all Proposed) · FRE-557 + FRE-523 closed (523 AC-3 re-homed to FRE-435).
 > **Pending verification:** none master-side. Owner-gated: FRE-435 cross-run recall (needs a live eval pass-2).
-> **Arch-review forks (2026-06-26):** ADR-0094 / 0095 / 0096 all **Proposed** (triage §4 fork complete); impl tickets Needs-Approval (0095→FRE-608+; 0096→FRE-613+, chain gated on FRE-593).
-> **Streams next:** build → owner's pick (FRE-619 CI-wiring · or Approved queue) · build2 → owner's PWA pick · adr → cleared (triage forks done). Live queues below: § Immediately Actionable · § Needs Approval · § Active ADRs.
+> **Arch-review forks (2026-06-26):** ADR-0094 / 0095 / 0096 all **Proposed** — **owner reviewing ~2026-06-27**; impl tickets stay Needs-Approval pending acceptance (0094→FRE-601 · 0095→FRE-608 · 0096→FRE-613, all gated on acceptance; 0096 chain also needs FRE-593).
+> **Approved this pass (owner):** FRE-593 (context-occupancy emit — unlocks 0096 chain) · FRE-489 (recall probe set — feeds FRE-435) · FRE-619 (CI-wire parity guard) · FRE-612 (SCHEMA_REFERENCE doc) · FRE-585 (joinability value-coherence).
+> **Streams next:** build → Approved queue (FRE-488/489 recall · 619 · 605 · 593/585) · build2 → owner's PWA pick (FRE-339 runtime-config / 395 ESLint) · **adr → triage the auto-generated anomaly batch** FRE-423/424/425/428/429/430 ([knowledge]/[reliability]) + FRE-446 ([cost]): assess real-vs-noise, dedupe, recommend approve/cancel/merge (owner directive 2026-06-26). Live queues below: § Immediately Actionable · § Needs Approval · § Active ADRs.
 
 ---
 

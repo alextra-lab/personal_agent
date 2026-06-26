@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 
 import './globals.css';
+import { RegisterSW } from '@/components/RegisterSW';
 // Curated artifact toolkit alignment (FRE-532): bundle our own pinned copies of
 // the toolkit's chat-render stylesheets, ordered after Tailwind layers.
 import 'katex/dist/katex.min.css';
@@ -47,6 +48,7 @@ export default function RootLayout({ children }: RootLayoutProps) {
   return (
     <html lang="en" className="dark h-full">
       <body className="h-full bg-slate-900 text-slate-100 antialiased">
+        <RegisterSW />
         {children}
       </body>
     </html>

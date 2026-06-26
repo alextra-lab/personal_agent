@@ -202,6 +202,7 @@ curl http://localhost:9200/_cluster/health
 - [ ] No Alembic migrations — schema changes go in `docker/postgres/init.sql` + `docker/postgres/migrations/`
 - [ ] One pytest process at a time (`.claude/hooks/check-pytest-lock.sh` enforces)
 - [ ] New tools use Tier 1/2; Tier 3 (MCP) requires ADR justification
+- [ ] **PWA changes**: `cd seshat-pwa && npm run lint` exits 0 (mirrors backend `ruff-check`; FRE-395)
 
 ---
 

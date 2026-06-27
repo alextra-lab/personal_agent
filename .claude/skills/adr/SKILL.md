@@ -31,7 +31,7 @@ transition, master owns Done.
 Author the best, complete ADR in the project ADR format under `docs/architecture_decisions/`.
 
 **Every ADR MUST carry a Verification / Acceptance-Criteria section** — the upstream half of the
-master acceptance-criteria gate (master SKILL Step 4). Each criterion is a **testable, falsifiable
+master acceptance-criteria gate (master SKILL Step 4). Each criterion is a **testable, discriminating
 invariant stated at the outcome altitude** — the observable result that proves the decision delivered,
 NOT a restatement of the mechanism. State *how* each is checked, reusing existing instrumentation
 where it exists (a Neo4j/ES query, the joinability probe, a test assertion, a curl) so it is provable

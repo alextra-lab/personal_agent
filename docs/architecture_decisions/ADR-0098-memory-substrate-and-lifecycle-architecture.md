@@ -1,6 +1,6 @@
 # ADR-0098 — Memory Substrate & Lifecycle Architecture (Core/Docs topology; the living-knowledge model)
 
-**Status:** Proposed — 2026-06-27
+**Status:** Accepted — 2026-06-27 (owner greenlight; build wave FRE-637–642 Approved, FRE-643 Tier-3 deferred-with-trigger)
 **Implements:** ADR-0097 (Ingested-Knowledge Taxonomy — *vocabulary*; this ADR is the *how*: storage, joins, aging, scale)
 **Supersedes:** ADR-0071 (the architecture half — "two-source one-gate"; the taxonomy half went to ADR-0097)
 **Related:** ADR-0052 (Owner Identity Primitive — the `is_owner` anchor + dedup-exclusion invariant this ADR extends to protect the soul subgraph), ADR-0087 (Memory Recall Quality — the pillar this lands under; a de-polluted, correctly-classified store is a recall-quality lever), ADR-0096 (Memory Access Model — *how* memory is retrieved; this ADR decides *what is stored and how it lives*, 0096 decides the access posture over it), ADR-0042 (KG freshness — the decay/access primitive the class-aware lifecycle consumes), ADR-0073 (cross-fact constraint layer — the thin contradiction-handling slice this ADR generalizes into correction), ADR-0069/0070 (R2 artifact substrate + output channels — the cold store transcripts and documents offload to), ADR-0035 (entity dedup at ingest — kept and hardened), the pedagogical north star (Socratic tutor: World know-how + the owner's Stance toward it + cross-thread insight).

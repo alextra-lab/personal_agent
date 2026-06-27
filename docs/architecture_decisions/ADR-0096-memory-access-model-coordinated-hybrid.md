@@ -1,7 +1,21 @@
 # ADR-0096 — Memory Access Model: Coordinated Hybrid (Passive Ambient Floor + Active On-Demand Retrieval)
 
 **Status:** Proposed — 2026-06-26
-**Related:** ADR-0087 (memory-recall quality program, FRE-435 — the pillar this lands under; this ADR decides the *access posture*, ADR-0087 owns *recall quality*), ADR-0081 (frozen append-only layout — passive memory is injected into the **volatile tail** / last user message, after the cacheable-prefix capture point; the access model must not perturb that), ADR-0095 (delegation boundary — owns the sub-agent tool boundary **and** the grammar-constrained digest mechanism; `recall_personal_history` is already in its discovery `_DISCOVERY_TOOL_ALLOWLIST`; **this ADR forward-points to 0095 for the active-retrieval mechanics and does not re-author them**), ADR-0026 (the `search_memory` native tool this ADR governs the default exposure of), ADR-0039 (proactive memory — the one *flag-gated* passive source, default off), ADR-0042 (KG freshness via `memory.accessed` / `AccessContext` — the existing emit-site the access-path attribution rides), ADR-0047 (context compaction — the `_extract_entity_ids` capture of *dropped* memory is the de-dup seam this ADR reuses) / ADR-0059 (recall controller — consumer of that capture), ADR-0090 (telemetry surface contract — ES mapping discipline for the access-path field), ADR-0074 (identity / joinability — emit-site discipline so the per-path attribution joins the turn). **Hard prerequisite:** FRE-593 (per-request context-window occupancy breakdown — memory / tool-output / reasoning tokens; the decision input this ADR's Phase-2 mix is gated on; still *Needs Approval*). **Reconciles (does not duplicate):** FRE-502 (planner reliability — *why* passive injection is the deterministic floor: a weak local brain cannot be trusted to *decide* to retrieve), FRE-577 (long-session occupancy curve — the budget-pressure regime where passive↔active competition actually bites). Sibling forks from the 2026-06-26 architecture-review triage (`docs/superpowers/plans/the-following-information-comes-logical-pie.md` §4): ADR-0094 (turn-level execution profile), ADR-0095 (per-worker delegation boundary). **Validation:** EVAL-2 (memory access-mode A/B — the context-pressure gate).
+**Related (dependency map):**
+- **ADR-0087** — memory-recall quality program (FRE-435); the pillar this lands under. This ADR owns the *access posture*; 0087 owns *recall quality*.
+- **ADR-0081** — cache-aware **prompt layout** (KV-cache reuse). Passive memory lands in the **volatile tail** / last user message, after the cacheable-prefix capture point; the access model must not perturb that. *(Disambiguation: 0081's "frozen append-only" is **prompt-cache layout** — NOT ADR-0098's retired "first-write-wins" KG-write freeze. Same word, different layer.)*
+- **ADR-0095** — delegation boundary; owns the sub-agent tool boundary + grammar-constrained digest. `recall_personal_history` is already in its discovery `_DISCOVERY_TOOL_ALLOWLIST`. This ADR **forward-points** to 0095 for active-retrieval mechanics and does not re-author them.
+- **ADR-0026** — the `search_memory` native tool whose default exposure this ADR governs.
+- **ADR-0039** — proactive memory; the one *flag-gated* passive source (default off).
+- **ADR-0042** — KG freshness via `memory.accessed` / `AccessContext`; the emit-site the access-path attribution rides.
+- **ADR-0047 / ADR-0059** — context compaction's `_extract_entity_ids` capture of *dropped* memory is the de-dup seam this ADR reuses (0047); the recall controller (0059) consumes that capture.
+- **ADR-0090** — telemetry surface contract; ES mapping discipline for the access-path field.
+- **ADR-0074** — identity / joinability; emit-site discipline so per-path attribution joins the turn.
+
+**Hard prerequisite:** FRE-593 (per-request context-window occupancy breakdown — the Phase-2 mix decision input; still *Needs Approval*).
+**Reconciles (does not duplicate):** FRE-502 (why passive injection is the deterministic floor — a weak local brain can't be trusted to decide to retrieve) · FRE-577 (long-session occupancy curve — where passive↔active competition bites).
+**Sibling forks** (2026-06-26 architecture-review triage, `docs/superpowers/plans/the-following-information-comes-logical-pie.md` §4): ADR-0094 (turn-level execution profile) · ADR-0095 (per-worker delegation boundary).
+**Validation:** EVAL-2 (memory access-mode A/B — the context-pressure gate).
 
 ---
 

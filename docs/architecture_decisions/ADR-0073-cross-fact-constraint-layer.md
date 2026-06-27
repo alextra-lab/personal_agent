@@ -1,6 +1,6 @@
 # ADR-0073: Cross-Fact Constraint Layer for Memory Pipeline
 
-**Status:** Proposed
+**Status:** Implemented — FRE-374 shipped (render-time empty-description filter). *(Backing model ADR-0071 since superseded by ADR-0097 taxonomy + ADR-0098 architecture; this constraint slice is generalized into ADR-0098 D2 correction.)*
 **Date:** 2026-05-22
 **Issue:** FRE-374
 **Supersedes:** —

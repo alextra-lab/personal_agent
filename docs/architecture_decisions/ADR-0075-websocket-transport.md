@@ -1,6 +1,6 @@
 # ADR-0075: WebSocket Transport + Durable Channel
 
-**Status:** Proposed
+**Status:** Implemented — FRE-388 shipped (SSE→WS, Postgres replay buffer, ticket auth)
 **Date:** 2026-05-27
 **Issue:** FRE-388
 **Supersedes:** ADR-0046 (AG-UI SSE transport)

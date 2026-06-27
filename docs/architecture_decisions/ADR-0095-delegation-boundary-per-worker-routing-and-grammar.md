@@ -1,7 +1,21 @@
 # ADR-0095 — Delegation Boundary: Per-Worker Execution-Profile Routing + Grammar-Constrained Sub-Agent Output
 
 **Status:** Proposed — 2026-06-26
-**Related:** ADR-0094 (deterministic local/cloud execution-profile routing — owns the **turn-level** profile and explicitly defers the **per-worker** "cloud brain / local hands" refinement to *this* ADR; its Phase-1 per-call record is the plumbing this ADR refines with no re-work), ADR-0082 (tier-aware model selection — the orthogonal *role* axis, `model_tier` never shipped), ADR-0033 (multi-provider model taxonomy — defines `primary`/`sub_agent` roles, `provider_type`, and the `get_llm_client_for_key` profile-bypass seam this ADR routes through), ADR-0086 (HYBRID/DECOMPOSE + the `TOOLED_SEQUENTIAL` discovery sub-agent surface and `_DISCOVERY_TOOL_ALLOWLIST` this ADR sizes per-tool-class), ADR-0036 (sub-agent execution modes — `PARALLEL_INFERENCE` vs `TOOLED_SEQUENTIAL`), ADR-0088 (execution-topology observability contract — `report_degradation` is the seam a salience/shape failure must call; the `agent-topology-*` per-segment row already carries the per-worker provider), ADR-0090 (telemetry surface contract — mapping discipline for any attribution field added here), ADR-0074 (identity / joinability — emit-site discipline for per-worker attribution), ADR-0065 (cost gate — `get_llm_client_for_key` already carries `budget_role`, so a cloud-routed worker is reservation-attributable), ADR-0029/ADR-0023 (local-server concurrency + thinking/instruct serving — the constraint that today's local `primary` and `sub_agent` are the *same* weights). **Reconciles (does not duplicate):** FRE-502 (planner reliability — schema-fail → tool-less fallback; the *downstream* symptom this ADR's grammar guarantee fixes *upstream*), FRE-492 (HITL dynamic allow-gate for discovery sub-agents — successor to the static `_DISCOVERY_TOOL_ALLOWLIST`; shares the tool-class taxonomy introduced here), FRE-495 (local sub_agent `context_length` — orthogonal sizing of context, not model), FRE-432 (standing tier-routing gap). Sibling forks from the 2026-06-26 architecture-review triage (`docs/superpowers/plans/the-following-information-comes-logical-pie.md` §4): ADR-0094 (turn-level profile, the axis this refines per-worker), ADR-0096 (memory access model). **Validation:** EVAL-4 (sized-worker quality A/B — the salience gate).
+**Related (dependency map):**
+- **ADR-0094** — deterministic local/cloud execution-profile routing; owns the **turn-level** profile and defers the **per-worker** "cloud brain / local hands" refinement to *this* ADR. Its Phase-1 per-call record is the plumbing this ADR refines.
+- **ADR-0082** — tier-aware model selection; the orthogonal *role* axis (`model_tier` never shipped).
+- **ADR-0033** — multi-provider model taxonomy; defines `primary`/`sub_agent` roles, `provider_type`, and the `get_llm_client_for_key` profile-bypass seam this ADR routes through.
+- **ADR-0086** — HYBRID/DECOMPOSE + the `TOOLED_SEQUENTIAL` discovery sub-agent surface and `_DISCOVERY_TOOL_ALLOWLIST` this ADR sizes per-tool-class.
+- **ADR-0036** — sub-agent execution modes (`PARALLEL_INFERENCE` vs `TOOLED_SEQUENTIAL`).
+- **ADR-0088** — execution-topology observability contract; `report_degradation` is the seam a salience/shape failure must call; the `agent-topology-*` per-segment row carries the per-worker provider.
+- **ADR-0090** — telemetry surface contract; mapping discipline for attribution fields.
+- **ADR-0074** — identity / joinability; emit-site discipline for per-worker attribution.
+- **ADR-0065** — cost gate; `get_llm_client_for_key` carries `budget_role`, so a cloud-routed worker is reservation-attributable.
+- **ADR-0029 / ADR-0023** — local-server concurrency + thinking/instruct serving; the constraint that today's local `primary` and `sub_agent` are the *same* weights.
+
+**Reconciles (does not duplicate):** FRE-502 (schema-fail → tool-less fallback; the downstream symptom this ADR's grammar guarantee fixes upstream) · FRE-492 (HITL dynamic allow-gate — successor to the static allowlist) · FRE-495 (local sub_agent `context_length` — orthogonal context sizing) · FRE-432 (standing tier-routing gap).
+**Sibling forks** (2026-06-26 architecture-review triage, `docs/superpowers/plans/the-following-information-comes-logical-pie.md` §4): ADR-0094 (turn-level profile, the axis this refines per-worker) · ADR-0096 (memory access model).
+**Validation:** EVAL-4 (sized-worker quality A/B — the salience gate).
 
 ---
 

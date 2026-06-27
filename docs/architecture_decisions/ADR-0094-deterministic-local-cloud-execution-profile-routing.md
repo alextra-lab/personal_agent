@@ -1,7 +1,19 @@
 # ADR-0094 — Deterministic Local/Cloud Execution-Profile Routing
 
 **Status:** Proposed — 2026-06-26
-**Related:** ADR-0079 (server-authoritative execution profile — the session-persisted `local`/`cloud` pill this ADR extends), ADR-0082 (tier-aware model selection — the *orthogonal* axis: which role runs, primary-thinking vs sub_agent-instruct; its `model_tier` plumbing never shipped), ADR-0033 (multi-provider model taxonomy — defines `primary`/`sub_agent` roles and `provider_type`), ADR-0086 (HYBRID/DECOMPOSE routing for artifact builds — the expansion strategies this profile decision must compose with), ADR-0088 (execution-topology observability contract — the `agent-topology-*` projection that must carry the profile), ADR-0074 (identity / joinability — the emit-site discipline), ADR-0090 (telemetry surface contract — the ES mapping discipline for the new field), ADR-0065 (cost gate — the `$2/session` cloud cap the fan-out interacts with), FRE-432 (the standing tier-routing gap), EVAL-3 (the brain-vs-architecture A/B that validates this ADR). Sibling forks from the 2026-06-26 architecture-review triage: ADR-0095 (delegation boundary / per-sub-agent sizing — the *per-worker* refinement this ADR explicitly defers to), ADR-0096 (memory access model).
+**Related (dependency map):**
+- **ADR-0079** — server-authoritative execution profile; the session-persisted `local`/`cloud` pill this ADR extends.
+- **ADR-0082** — tier-aware model selection; the *orthogonal* axis (which role runs, primary-thinking vs sub_agent-instruct). Its `model_tier` plumbing never shipped.
+- **ADR-0033** — multi-provider model taxonomy; defines `primary`/`sub_agent` roles and `provider_type`.
+- **ADR-0086** — HYBRID/DECOMPOSE routing for artifact builds; the expansion strategies this profile decision must compose with.
+- **ADR-0088** — execution-topology observability contract; the `agent-topology-*` projection that must carry the profile.
+- **ADR-0074** — identity / joinability; emit-site discipline.
+- **ADR-0090** — telemetry surface contract; ES mapping discipline for the new field.
+- **ADR-0065** — cost gate; the `$2/session` cloud cap the fan-out interacts with.
+
+**Reconciles:** FRE-432 (the standing tier-routing gap).
+**Validation:** EVAL-3 (brain-vs-architecture A/B).
+**Sibling forks** (2026-06-26 architecture-review triage): ADR-0095 (delegation boundary / per-worker sizing — the per-worker refinement this ADR defers to) · ADR-0096 (memory access model).
 
 ---
 

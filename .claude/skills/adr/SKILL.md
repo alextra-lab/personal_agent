@@ -28,7 +28,12 @@ In Progress** now (`save_issue state="In Progress"`) — Linear is disconnected 
 transition, master owns Done.
 
 ## 2 — Write the ADR
-Author the best, complete ADR in the project ADR format under `docs/architecture_decisions/`.
+Start from **`docs/architecture_decisions/ADR_TEMPLATE.md`** — the project ADR format (mirrors the
+`alextra-lab/ai_operations` canonical). Author the best, complete ADR under
+`docs/architecture_decisions/`. **Two structural rules history kept drifting from:** the **References**
+section is a bulleted list, one ref per line — **never** a run-on `**Related:**` paragraph; and **keep
+your own Status line current** — never cite another ADR by a stale status. The template also requires
+**≥2 Alternatives Considered** (with why-rejected) — not a single option presented as a pure win.
 
 **Every ADR MUST carry a Verification / Acceptance-Criteria section** — the upstream half of the
 master acceptance-criteria gate (master SKILL Step 4). Each criterion is a **testable, discriminating

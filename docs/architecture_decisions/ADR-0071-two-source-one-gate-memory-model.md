@@ -1,6 +1,7 @@
 # ADR-0071: Two-Source One-Gate Memory Model
 
-**Status**: Proposed
+**Status**: Superseded by ADR-0097 (taxonomy) + ADR-0098 (architecture)
+**Superseded**: 2026-06-27 — this ADR conflated *what kinds of knowledge exist* (taxonomy) with *how to store them* (architecture), and assumed every document is a source of personal facts. The taxonomy is replaced by ADR-0097; the architecture is replaced by ADR-0098. Retained for historical reference and inbound links (FRE-369 and related ADRs).
 **Date**: 2026-05-21
 **Amended**: 2026-05-22 — entity-extraction model reference corrected; vision-fleet state recorded; D11 (vision-handling abstraction) added; cloud-profile compression calibration noted as related follow-up
 **Deciders**: Project owner

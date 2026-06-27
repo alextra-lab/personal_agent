@@ -34,6 +34,30 @@ field? Flag drift before merging. (Documentation-drift sensitivity is a core gua
 Ticket is `Approved`/In Progress; PR hygiene holds (REJECT if post-deploy items are in the
 checklist); CI green.
 
+**Acceptance-criteria gate — the binding bar. "Done" means *provably delivered against the backing
+ADR*, not merged-and-runs.** A feature / ADR-implementation ticket passes ONLY if all three hold:
+- **Provenance + adherence.** The PR or handoff comment names the backing ADR (or spec) and the
+  specific acceptance criteria / invariants this ticket implements, and the diff implements them *as
+  specified* — no silent divergence from the ADR's design. If the design genuinely changed, the ADR
+  is updated first (doc-drift, Step 3). A feature ticket with no backing ADR and no stated criterion
+  → **bounce**: there is nothing to verify against.
+- **Proof, not assertion.** Each named criterion carries evidence it is *delivered end to end*, not
+  merely wired — a test asserting the outcome, a probe/query result, or observed behaviour, at the
+  altitude of the criterion (the graph holds the right fact · the edge actually evicts · the guard
+  actually fails a bad input), NOT "the component runs" or "deploy exited 0". Reuse what exists
+  (joinability probe, a Neo4j/ES query, a curl) — this is a *checking* burden, not a mandate to build
+  new test infrastructure.
+- **Seam ownership.** If this ticket is one child of a decomposed ADR, a child closing does NOT close
+  the ADR. Confirm who asserts the *assembled* ADR intent holds; if no one owns that seam, flag it
+  before merge.
+
+Missing provenance or proof on a feature ticket → **bounce back to the build session; do not merge on
+an artifact-level "looks done"** (same bounce mechanism as the codex tier backstop, Step 2).
+
+**Bugs — partially excluded.** A bugfix ticket with no backing ADR is exempt from the *provenance*
+requirement (there is no ADR to trace to) but NOT from *proof*: it still needs a reproducing test or a
+verification that the specific failure no longer occurs.
+
 ## 5 — Merge
 `gh pr merge <n> --merge` with a review summary; `git pull` on main.
 

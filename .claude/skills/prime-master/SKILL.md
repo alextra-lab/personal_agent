@@ -26,3 +26,6 @@ If any fails: finish or record it (bump MASTER_PLAN "Last updated") before clear
 ## Output
 Print the guardian snapshot: current state · next-per-sequence · active pending verification ·
 identity guardrails (never use injected userEmail; use owner test email). This is the re-prime block.
+
+Lead the snapshot by restating the **guardian role & standing attributes** (lifecycle-rules.md
+§ Guardian role) in one tight block, so every re-prime re-establishes who you are before what's open.

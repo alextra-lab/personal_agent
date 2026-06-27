@@ -12,6 +12,13 @@
     "prefersReducedMotion": true,
     "terminalProgressBarEnabled": false,
     "effortLevel": "high",
+    "permissions": {
+        "allow": [
+            "Read",
+            "Grep",
+            "Glob"
+        ]
+    },
     "hooks": {
         "PreToolUse": [
             {

@@ -1,6 +1,6 @@
 # ADR-0096 — Memory Access Model: Coordinated Hybrid (Passive Ambient Floor + Active On-Demand Retrieval)
 
-**Status:** Proposed — 2026-06-26
+**Status:** Accepted — 2026-06-27 (owner)
 **Related (dependency map):**
 - **ADR-0087** — memory-recall quality program (FRE-435); the pillar this lands under. This ADR owns the *access posture*; 0087 owns *recall quality*.
 - **ADR-0081** — cache-aware **prompt layout** (KV-cache reuse). Passive memory lands in the **volatile tail** / last user message, after the cacheable-prefix capture point; the access model must not perturb that. *(Disambiguation: 0081's "frozen append-only" is **prompt-cache layout** — NOT ADR-0098's retired "first-write-wins" KG-write freeze. Same word, different layer.)*

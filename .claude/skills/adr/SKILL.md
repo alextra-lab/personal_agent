@@ -39,6 +39,14 @@ without new test infrastructure.
 - Good (outcome): "owner facts are queryable from the `is_owner:true` node" · "a dormant edge past
   TTL is actually evicted, not just flagged" · "the guard fails CI on a known-bad input".
 - Bad (mechanism, not outcome): "the curation gate is wired in" · "the freshness consumer runs".
+
+**No-BS bar — the criterion must be able to fail.** Before accepting any criterion, ask: *could a
+broken or half-finished implementation still satisfy it?* If yes, it is BS — rewrite it until only a
+working outcome passes. Reject the usual fakes: existence-checks standing in for behaviour ("the field
+exists" vs "the field holds the *right* value"), "tests pass" where no test asserts the actual
+invariant, vanity counts decoupled from the outcome, and any line that just restates the task. A
+criterion no plausible bug can violate verifies nothing. Codex enforces this at Step 3.
+
 If a criterion genuinely cannot be made checkable, say so and explain why — an un-testable decision is
 a design smell to surface, not paper over.
 

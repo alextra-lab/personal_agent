@@ -30,16 +30,35 @@ transition, master owns Done.
 ## 2 — Write the ADR
 Author the best, complete ADR in the project ADR format under `docs/architecture_decisions/`.
 
+**Every ADR MUST carry a Verification / Acceptance-Criteria section** — the upstream half of the
+master acceptance-criteria gate (master SKILL Step 4). Each criterion is a **testable, falsifiable
+invariant stated at the outcome altitude** — the observable result that proves the decision delivered,
+NOT a restatement of the mechanism. State *how* each is checked, reusing existing instrumentation
+where it exists (a Neo4j/ES query, the joinability probe, a test assertion, a curl) so it is provable
+without new test infrastructure.
+- Good (outcome): "owner facts are queryable from the `is_owner:true` node" · "a dormant edge past
+  TTL is actually evicted, not just flagged" · "the guard fails CI on a known-bad input".
+- Bad (mechanism, not outcome): "the curation gate is wired in" · "the freshness consumer runs".
+If a criterion genuinely cannot be made checkable, say so and explain why — an un-testable decision is
+a design smell to surface, not paper over.
+
 ## 3 — Codex iterative review
 Invoke **codex:rescue** to review the ADR. Revise per findings. Repeat until no blocking findings,
-**max 3 rounds**. Log each round's findings in the PR description.
+**max 3 rounds**. Log each round's findings in the PR description. **Codex must explicitly check the
+acceptance criteria are testable and outcome-level** — could a build session prove each, and would a
+bad implementation fail it? Treat any mechanism-restatement or un-checkable criterion as a blocking
+finding.
 
 ## 4 — PR
 Open the ADR PR (docs). Pre-merge checklist only.
 
 ## 5 — Implementation tickets
 File the implementation tickets in Linear: Needs Approval, under a Linear project, sequenced with
-dependencies. The owner approves → the build session picks them up.
+dependencies. The owner approves → the build session picks them up. **Each ticket carries the slice of
+the ADR's acceptance criteria it must satisfy + how each is proven** — so criteria flow unbroken
+ADR → ticket → build handoff → master gate, and no child is "done" without its invariant shown.
+**Name who owns the assembled-ADR seam** — the criterion that holds only once all children land — so
+a decomposed ADR does not close just because its last child did.
 
 ## 6 — Handoff comment for master — then STOP
 **Post a final comment on the ADR's Linear ticket addressed to master** (`save_comment` on the ADR

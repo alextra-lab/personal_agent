@@ -28,7 +28,11 @@ GitHub (2026-06-26) — nothing auto-moves status anymore, so the session doing 
 In Progress transition; master owns the Done transition at the gate.
 
 ## 2 — Scope
-Read ticket body + linked ADRs + specs. Summarize scope in 3–5 bullets.
+Read ticket body + linked ADRs + specs. Summarize scope in 3–5 bullets. **Pull out the acceptance
+criteria this ticket carries from the backing ADR (adr SKILL Step 5) — the testable, outcome-level
+invariants you must prove. They are the definition of done.** If a feature ticket names none and it is
+not a standalone bug, get them from the ADR or flag the gap before coding — master will bounce a PR
+with no provable criteria.
 
 ## 3 — Plan + (risk-tiered) codex review
 Write a plan: atomic steps, exact file paths, exact test commands.
@@ -47,8 +51,10 @@ something the scope doesn't show. Master backstops this at the gate — a mis-ti
 skipped codex gets bounced. (One phase = one PR — see halt conditions.)
 
 ## 4 — TDD implement
-Failing test first → confirm it fails → implement. Standards (`.claude/CLAUDE.md`) + ADR-0074
-identity threading on every new `log.*` / `bus.publish` / Cypher `MERGE|CREATE`.
+Failing test first → confirm it fails → implement. **Each acceptance criterion from Step 2 gets a
+test or probe that asserts the *outcome* — the invariant actually holds — not that the component is
+wired; this is the proof master's gate reads.** Standards (`.claude/CLAUDE.md`) + ADR-0074 identity
+threading on every new `log.*` / `bus.publish` / Cypher `MERGE|CREATE`.
 
 ## 5 — Follow-up tickets
 File any discovered work as new issues — Needs Approval, under a Linear project (default: the
@@ -71,6 +77,11 @@ PR hygiene). Push the branch.
 **Then post a final comment on the Linear ticket addressed to master** (`save_comment` on the
 issue) — this is required, not optional. It carries everything master needs that does NOT belong
 in the PR's pre-merge checklist:
+- **acceptance-criteria proof** (the master gate's input — master SKILL Step 4): the backing ADR + the
+  specific criteria this ticket implements, and for each, the evidence it is delivered end to end
+  (test name + result, probe/query output, or observed behaviour at the criterion's altitude). Without
+  it master bounces the PR. *(Standalone bug: the reproducing test / verification stands in for ADR
+  provenance.)*
 - the **post-deploy runbook** (exact ES/Kibana/migration/verification steps, in order);
 - any **safety constraints / gotchas** (e.g. "do NOT back-attach existing indices", "register the
   template before first write", "verify the code is generating the logs");

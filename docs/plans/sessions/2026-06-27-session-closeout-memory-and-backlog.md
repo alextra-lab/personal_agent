@@ -30,12 +30,12 @@ Full anatomy in memory `project_kg_memory_system_broken_anatomy`. Summary:
 
 **Key principle:** *freshness ≠ correctness.* Decay/eviction fixes UNUSED data; wrong-but-active facts need the GATE + extraction correctness + a correctability escape. Also: the local model **hallucinates graph reads** — always verify KG claims against Neo4j.
 
-### 2b · The harness manufactures tickets that bury the owner (the meta-problem)
-The Captain's-Log / brainstem self-improvement pipeline auto-creates Linear tickets, currently **8 live in Needs-Approval**:
-- `[performance]` ×6 (FRE-623–628) — reflection proposals to change prompt components.
-- `[knowledge]` ×2 — FRE-622 (ADR-0042 dormant-edge review), FRE-629 (extraction-spike anomaly).
+### 2b · The real meta-problem is the development workflow (not the harness)
+**Corrected diagnosis (owner, 2026-06-27).** The harness created only **8** tickets — it is *not* the source of the backlog, and the backlog is not the problem. The problem is the **development workflow**: incomplete or improper implementations pass as "Done," and every thread we pull surfaces another one ("tickets from tickets"). The backlog is a *symptom*.
 
-All carry only the generic `Improvement` label, **no project, no tier, no "auto-generated" marker** → indistinguishable from human tickets, unhomed, buried. This is the same pipeline PR #255's brief reframes as a *category error* (detect = trigger; deliver = investigated proposal, not a raw ticket), the same gate FRE-598 unwedged, and the detector FRE-620 fixes.
+Tonight's own evidence: ADR-0052 (shipped split), ADR-0042 (Accepted/implemented but not delivering), FRE-228 (Done but undelivered), FRE-606 (Done but CI-inert), FRE-489 (MERGED to the wrong base). None failed for lack of ability — they failed because **"Done" never had to mean "verified working."** That missing gate is the root cause; the backlog and the tickets-from-tickets are what it produces.
+
+Two *minor* sub-items (hygiene, not the fix): the 8 harness auto-tickets ([performance]×6 FRE-623–628, [knowledge]×2 FRE-622/629) carry no project/tier/auto-marker → unhomed; and the [performance] tickets report a *signal* ("reflection proposed changing `tool_use_rules` 11×") with **no diagnosis** (what's wrong, why, what change) — a trigger dressed as a proposal.
 
 ---
 
@@ -52,10 +52,11 @@ All carry only the generic `Improvement` label, **no project, no tier, no "auto-
 - Plus existing: FRE-620 (KGQ detector fix), FRE-621 (graph hygiene) — both belong to this cluster.
 - **Owner decision:** true auto-evict/promote exceeds ADR-0042's deliberate "propose-for-review" stance → a small ADR-0042 *amendment* if wanted (not blocking the five).
 
-### B · Harness-ticket visibility + backlog control (**recommended; not yet filed — deliberately not adding to the approval pile**)
-1. **Mark auto-created tickets at creation** — a distinct label (e.g. `auto:captains-log`) + a project, so they're visible and filterable, never indistinguishable from human tickets.
-2. **Triage/cull the current 8** (FRE-622–629) — home the [knowledge] ones to Memory Recall Quality; route or close the [performance] prompt-reflection ones (decide their home: ADR-0058 self-improvement / ADR-0078 prompt-mgmt).
-3. **The real fix is PR #255's self-diagnosing `/adr` cycle** — detect→investigated-proposal under deterministic gating, so the harness stops dumping raw tickets for the owner to triage. Greenlight that cycle when ready.
+### B · Development-workflow quality — **the root problem (dedicated thread)**
+The backlog is a *symptom* of incomplete implementations passing the gate. This is a dev-best-practices / definition-of-done problem, to be worked in a **dedicated thread** (not patched here). Threads to pull:
+- What **"Done" must mean** — verification-before-done; why bad/incomplete work passes review (depth vs. trust).
+- The **tickets-from-tickets / WIP-sprawl** dynamic; **scope discipline** (finish-before-start); whether planning is too scattered across parallel streams.
+- *Minor hygiene sub-item* (not the cure): label harness auto-tickets + give them a project, make the [performance] proposals state a concrete diagnosis, and triage the current 8.
 
 ### C · Owner decisions pending (no master action until then)
 - Read **ADR-0094 / 0095 / 0096** → then approve their P1s (FRE-601 · 608 · 613).

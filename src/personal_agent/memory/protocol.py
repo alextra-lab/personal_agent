@@ -175,6 +175,7 @@ class MemoryProtocol(Protocol):
         trace_id: str,
         user_id: UUID | None = None,
         authenticated: bool = False,
+        query_text: str | None = None,
     ) -> BroadRecallResult:
         """Broad recall for open-ended memory queries.
 
@@ -185,6 +186,10 @@ class MemoryProtocol(Protocol):
             trace_id: Trace identifier for observability.
             user_id: Optional user UUID for scoped recall.
             authenticated: Whether the caller is authenticated.
+            query_text: Optional original query text (ADR-0100 FRE-654). When
+                provided and relevance-bounded recall is enabled, the broad path
+                surfaces vector-relevant entities across all time, not just within
+                the recency window. None reproduces legacy behaviour.
 
         Returns:
             BroadRecallResult with entities grouped by type and recent sessions.

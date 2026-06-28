@@ -101,6 +101,7 @@ class MemoryServiceAdapter:
         trace_id: str,
         user_id: "UUID | None" = None,
         authenticated: bool = False,
+        query_text: str | None = None,
     ) -> BroadRecallResult:
         """Broad recall delegating to query_memory_broad().
 
@@ -111,6 +112,8 @@ class MemoryServiceAdapter:
             trace_id: Request trace identifier.
             user_id: Authenticated user UUID for visibility scoping (FRE-229).
             authenticated: Whether the request carries a verified identity (FRE-229).
+            query_text: Optional original query text threaded to the relevance-bounded
+                broad path (ADR-0100 FRE-654). None reproduces legacy behaviour.
 
         Returns:
             Broad recall result with entities grouped by type.
@@ -123,6 +126,7 @@ class MemoryServiceAdapter:
             trace_id=trace_id,
             user_id=user_id,
             authenticated=authenticated,
+            query_text=query_text,
         )
         entities = raw.get("entities", [])
         entities_by_type: dict[str, list[dict[str, object]]] = {}

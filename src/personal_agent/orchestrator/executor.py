@@ -2001,6 +2001,8 @@ async def step_init(
                             entity_types=entity_type_hints or None,
                             recency_days=90,
                             limit=20,
+                            trace_id=ctx.trace_id,
+                            query_text=ctx.user_message,
                         )
                         ctx.memory_context = _format_broad_recall(broad)
                         conversations_found = len(ctx.memory_context)

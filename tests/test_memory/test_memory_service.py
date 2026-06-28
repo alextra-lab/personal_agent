@@ -598,6 +598,69 @@ class TestMemoryQueries:
         assert await _run(True) == await _run(False)
 
     @pytest.mark.asyncio
+    async def test_query_memory_broad_flag_off_excludes_old_entity(
+        self, memory_service, clean_test_data, monkeypatch
+    ):
+        """ADR-0100 AC-1b control: flag off, the broad path omits an entity discussed only >90 days ago."""
+        monkeypatch.setattr(
+            get_settings(), "relevance_bounded_recall_enabled", False, raising=False
+        )
+        entity = f"AC1bTopic_{uuid.uuid4().hex[:8]}"
+        await memory_service.create_conversation(
+            ConversationNode(
+                conversation_id=str(uuid.uuid4()),
+                timestamp=datetime.now() - timedelta(days=120),
+                user_message=f"Old discussion of {entity}",
+                assistant_response=f"{entity} notes.",
+                key_entities=[entity],
+            )
+        )
+
+        broad = await memory_service.query_memory_broad(
+            recency_days=90, limit=20, query_text=f"tell me about {entity}"
+        )
+        names = [e.get("name") for e in broad.get("entities", [])]
+        assert entity not in names
+
+    @pytest.mark.asyncio
+    async def test_query_memory_broad_flag_on_surfaces_old_entity(
+        self, memory_service, clean_test_data, monkeypatch
+    ):
+        """ADR-0100 AC-1b: flag on + query_text, a >90-day-old entity surfaces by name in entities."""
+        monkeypatch.setattr(get_settings(), "relevance_bounded_recall_enabled", True, raising=False)
+        entity = f"AC1bTopic_{uuid.uuid4().hex[:8]}"
+        await memory_service.create_conversation(
+            ConversationNode(
+                conversation_id=str(uuid.uuid4()),
+                timestamp=datetime.now() - timedelta(days=120),
+                user_message=f"Old discussion of {entity}",
+                assistant_response=f"{entity} notes.",
+                key_entities=[entity],
+            )
+        )
+
+        async def _nonzero_embedding(*_args, **_kwargs):
+            return [0.1, 0.2, 0.3, 0.4]
+
+        async def _fake_vector_candidates(_session, _embedding, _top_k):
+            # The vector index reports this old entity as relevant across all time.
+            return [{"name": entity, "score": 0.9}]
+
+        with (
+            patch("personal_agent.memory.service.generate_embedding", _nonzero_embedding),
+            patch.object(
+                memory_service,
+                "_query_entity_vector_candidates",
+                _fake_vector_candidates,
+            ),
+        ):
+            broad = await memory_service.query_memory_broad(
+                recency_days=90, limit=20, query_text=f"tell me about {entity}"
+            )
+        names = [e.get("name") for e in broad.get("entities", [])]
+        assert entity in names, "the >90-day entity did not surface — broad seam not landed"
+
+    @pytest.mark.asyncio
     async def test_get_user_interests(self, memory_service, clean_test_data):
         """Test retrieving user interests (entities by mention count)."""
         prefix = f"test_{uuid.uuid4().hex[:6]}_"

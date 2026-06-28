@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from personal_agent.events import AccessContext
+from personal_agent.memory.proactive_types import ProactiveMemorySuggestions
 from personal_agent.memory.protocol import (
     BroadRecallResult,
     Episode,
@@ -15,8 +17,6 @@ from personal_agent.memory.protocol import (
     MemoryType,
     RecallScope,
 )
-from personal_agent.events import AccessContext
-from personal_agent.memory.proactive_types import ProactiveMemorySuggestions
 from personal_agent.memory.protocol_adapter import MemoryServiceAdapter
 
 
@@ -217,6 +217,7 @@ class TestProtocolIsRuntimeCheckable:
                 recency_days: int,
                 limit: int,
                 trace_id: str,
+                query_text: str | None = None,
             ) -> BroadRecallResult:
                 return BroadRecallResult(
                     entities_by_type={}, recent_sessions=[], total_entity_count=0
@@ -226,8 +227,11 @@ class TestProtocolIsRuntimeCheckable:
                 return "ep-1"
 
             async def promote(
-                self, entity_name: str, confidence: float,
-                source_turn_ids: list[str], trace_id: str,
+                self,
+                entity_name: str,
+                confidence: float,
+                source_turn_ids: list[str],
+                trace_id: str,
             ) -> bool:
                 return True
 
@@ -309,6 +313,29 @@ class TestMemoryServiceAdapter:
             trace_id="test",
             user_id=None,
             authenticated=False,
+            query_text=None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_recall_broad_forwards_query_text(self) -> None:
+        """ADR-0100 FRE-654: recall_broad threads query_text into query_memory_broad."""
+        mock_service = MagicMock()
+        mock_service.query_memory_broad = AsyncMock(
+            return_value={"entities": [], "sessions": [], "turns_summary": []}
+        )
+        adapter = MemoryServiceAdapter(service=mock_service)
+
+        await adapter.recall_broad(
+            entity_types=None,
+            recency_days=90,
+            limit=20,
+            trace_id="test",
+            query_text="what have I asked about reranking",
+        )
+
+        assert (
+            mock_service.query_memory_broad.call_args.kwargs["query_text"]
+            == "what have I asked about reranking"
         )
 
     @pytest.mark.asyncio
@@ -364,7 +391,8 @@ class TestMemoryServiceAdapterSlice2:
 
         adapter = MemoryServiceAdapter(service=mock_service)
         episode = Episode(
-            turn_id="turn-real-001", session_id="sess-001",
+            turn_id="turn-real-001",
+            session_id="sess-001",
             timestamp=datetime.now(tz=timezone.utc),
             user_message="Tell me about Neo4j",
             assistant_response="Neo4j is a graph database.",
@@ -381,7 +409,9 @@ class TestMemoryServiceAdapterSlice2:
 
         adapter = MemoryServiceAdapter(service=mock_service)
         result = await adapter.promote(
-            entity_name="Neo4j", confidence=0.85,
-            source_turn_ids=["t1"], trace_id="t",
+            entity_name="Neo4j",
+            confidence=0.85,
+            source_turn_ids=["t1"],
+            trace_id="t",
         )
         assert result is True

@@ -71,8 +71,11 @@ Update docs the change touches (skill docs, READMEs, doc-strings).
 `pre-commit run --all-files`.
 
 ## 9 — PR + final ticket comment for master — then STOP
-Open the PR with `.github/PULL_REQUEST_TEMPLATE.md`. Pre-merge checklist ONLY (see lifecycle-rules
-PR hygiene). Push the branch.
+**Sync to latest main FIRST** (prevents a stale-base collision / a DIRTY PR at master's gate when a
+sibling PR merged during your session): `git fetch origin && git rebase origin/main` — resolve any
+conflicts **in-session** (you have the context; master won't), re-run the Step 8 quality gates, then
+`git push --force-with-lease`. Then open the PR with `.github/PULL_REQUEST_TEMPLATE.md`. Pre-merge
+checklist ONLY (see lifecycle-rules PR hygiene).
 
 **Then post a final comment on the Linear ticket addressed to master** (`save_comment` on the
 issue) — this is required, not optional. It carries everything master needs that does NOT belong

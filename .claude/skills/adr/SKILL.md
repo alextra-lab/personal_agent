@@ -63,7 +63,9 @@ bad implementation fail it? Treat any mechanism-restatement or un-checkable crit
 finding.
 
 ## 4 — PR
-Open the ADR PR (docs). Pre-merge checklist only.
+**Sync to latest main FIRST** (a sibling PR may have merged during your session): `git fetch origin &&
+git rebase origin/main` — resolve any conflicts in-session, then `git push --force-with-lease`. Then
+open the ADR PR (docs). Pre-merge checklist only.
 
 ## 5 — Implementation tickets
 File the implementation tickets in Linear: Needs Approval, under a Linear project, sequenced with

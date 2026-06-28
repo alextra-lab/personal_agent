@@ -59,7 +59,10 @@ requirement (there is no ADR to trace to) but NOT from *proof*: it still needs a
 verification that the specific failure no longer occurs.
 
 ## 5 — Merge
-`gh pr merge <n> --merge` with a review summary; `git pull` on main.
+`gh pr merge <n> --merge --delete-branch` with a review summary; `git pull` on main. **`--delete-branch`
+is not optional** — it deletes the merged `fre-XXX` head branch at merge time (the head is always a
+per-ticket branch, never a `worktree-*` anchor), which is what stops stale branches accumulating on
+origin. (Repo also has auto-delete-head-branches on as a backstop.)
 
 ## 6 — Deploy authorization (standing classes vs ask)
 Owner granted **standing approval (2026-06-26)** for three low-risk, reversible deploy classes —

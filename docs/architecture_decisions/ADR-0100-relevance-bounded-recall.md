@@ -278,11 +278,10 @@ infrastructure.
 - **AC-1b — `query_memory_broad` recalls an out-of-window topic after the seam change.**
   With the flag on and `query_text` threaded into the broad path, a FRE-489 `MEMORY_RECALL`-
   style probe whose relevant turn is **>90 days old** appears in `recall_broad()` results —
-  specifically as a matching entity name in the result's **`entities`** field (or the
-  corresponding entry in **`turns_summary`**). **Check:** broad-path probe case; assert the
-  >90-day positive's entity name is present in `entities`. *Fails if* the broad path still
-  returns only within-window entities — proves the broad seam change actually landed, not just
-  the `query_memory` half.
+  asserted as a matching entity name in the result's **`entities`** field. **Check:**
+  broad-path probe case; assert the >90-day positive's entity name is present in `entities`.
+  *Fails if* the broad path still returns only within-window entities — proves the broad seam
+  change actually landed, not just the `query_memory` half.
 
 - **AC-2 — The returned sequence is ordered by relevance, not timestamp (defect 3).** When a
   highly-relevant **old** turn and a weakly-relevant **recent** turn are both candidates, the

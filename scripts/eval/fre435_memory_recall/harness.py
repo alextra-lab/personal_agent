@@ -45,6 +45,7 @@ import os
 # after the first import is a no-op. ``setdefault`` lets the caller pre-override.
 _TEST_SUBSTRATE_ENV = {
     "APP_ENV": "test",
+    "AGENT_MODEL_CONFIG_PATH": "config/models.cloud.yaml",
     "AGENT_NEO4J_URI": "bolt://localhost:7688",
     "AGENT_ELASTICSEARCH_URL": "http://localhost:9201",
     "AGENT_DATABASE_URL": (
@@ -76,8 +77,9 @@ from scripts.eval.fre435_memory_recall.report import (  # noqa: E402
 )
 from scripts.eval.fre435_memory_recall.scoring import flatten_recall, score_case  # noqa: E402
 
-from personal_agent.config import settings  # noqa: E402
+from personal_agent.config import load_model_config, settings  # noqa: E402
 from personal_agent.config.env_loader import Environment  # noqa: E402
+from personal_agent.llm_client.models import ModelConfig  # noqa: E402
 from personal_agent.memory.embeddings import generate_embedding  # noqa: E402
 from personal_agent.memory.fact import PromotionCandidate  # noqa: E402
 from personal_agent.memory.models import Entity, Relationship, TurnNode  # noqa: E402
@@ -95,6 +97,59 @@ DEFAULT_PROBE_SET = "scripts/eval/fre435_memory_recall/seed_probe.yaml"
 DEFAULT_OUT = "telemetry/evaluation/fre435-memory-recall"
 DEFAULT_K_SWEEP = (1, 3, 5, 10)
 DEFAULT_PROD_K = 5
+_PROD_MODEL_CONFIG_PATH = Path("config/models.cloud.yaml")
+_PIPELINE_ROLES = ("entity_extraction_role", "captains_log_role", "insights_role")
+
+
+def _pipeline_role_values(config: ModelConfig) -> dict[str, str]:
+    """Return the configured model role values used by the pipeline."""
+    return {role: getattr(config, role) for role in _PIPELINE_ROLES}
+
+
+def _check_model_config_fidelity() -> None:
+    """Verify the active eval model config matches the production baseline.
+
+    Raises:
+        RuntimeError: If active pipeline roles diverge from production and the
+            divergence was not explicitly declared.
+    """
+    active_cfg = load_model_config()
+    prod_cfg = load_model_config(_PROD_MODEL_CONFIG_PATH)
+    active_roles = _pipeline_role_values(active_cfg)
+    prod_roles = _pipeline_role_values(prod_cfg)
+    log.info(
+        "eval_model_config_active",
+        **active_roles,
+        config_path=str(settings.model_config_path),
+    )
+
+    divergent = {
+        role: {"active": active_roles[role], "prod": prod_roles[role]}
+        for role in _PIPELINE_ROLES
+        if active_roles[role] != prod_roles[role]
+    }
+    if not divergent:
+        return
+
+    if os.environ.get("EVAL_MODEL_CONFIG_ALLOW_DIVERGE") == "1":
+        log.warning(
+            "eval_model_config_divergence_declared",
+            divergent_roles=sorted(divergent),
+            active_roles=active_roles,
+            prod_roles=prod_roles,
+            config_path=str(settings.model_config_path),
+            prod_config_path=str(_PROD_MODEL_CONFIG_PATH),
+        )
+        return
+
+    details = "; ".join(
+        f"{role}: active={values['active']!r}, prod={values['prod']!r}"
+        for role, values in sorted(divergent.items())
+    )
+    raise RuntimeError(
+        "Active eval model config diverges from production for pipeline roles: "
+        f"{details}. Set EVAL_MODEL_CONFIG_ALLOW_DIVERGE=1 to declare this divergence."
+    )
 
 
 async def detect_embedding_backend() -> str:
@@ -480,6 +535,8 @@ async def run(args: argparse.Namespace) -> int:
         Process exit code (0 on success, non-zero on a substrate failure).
     """
     cases = load_probe_set(Path(args.probe_set))
+    _check_model_config_fidelity()
+    active_cfg = load_model_config()
     k_sweep = tuple(sorted({*args.k_sweep, args.prod_k}))
     service = MemoryService()  # fre-375-allow: settings-driven; module top pins the test substrate (:7688/:9201/:5433) + APP_ENV=test
     if not await service.connect():
@@ -505,6 +562,7 @@ async def run(args: argparse.Namespace) -> int:
         embedding_backend=embedding_backend,
         wipe_between_cases=args.wipe_between_cases,
         distractor_background=len(distractors),
+        extraction_model=active_cfg.entity_extraction_role,
         cases=len(cases),
     )
 

@@ -615,6 +615,10 @@ class AppConfig(BaseSettings):
             "Constant-time compared via secrets.compare_digest on the gateway side."
         ),
     )
+    upload_max_size_bytes: int = Field(
+        default=52_428_800,  # 50 MiB
+        description="Maximum allowed user-upload file size in bytes (FRE-369).",
+    )
     artifact_envelope_probe_enabled: bool = Field(
         default=True,
         description=(

@@ -275,6 +275,36 @@ class R2ArtifactStore:
             )
             raise ArtifactStoreError(f"R2 delete failed for {r2_key}: {exc}") from exc
 
+    async def head(self, r2_key: str, *, trace_id: str | None = None) -> dict[str, object]:
+        """Return HEAD metadata for the object at ``r2_key``.
+
+        Args:
+            r2_key: Object key to inspect.
+            trace_id: Originating request trace_id for failure logs.
+
+        Returns:
+            Dict with at least ``content_length: int`` and ``content_type: str``.
+
+        Raises:
+            ArtifactStoreError: When the object does not exist or on network error.
+        """
+        client = await self._get_client()
+        try:
+            response = await client.head_object(Bucket=self._bucket, Key=r2_key)
+            return {
+                "content_length": response.get("ContentLength", 0),
+                "content_type": response.get("ContentType", ""),
+            }
+        except (ClientError, BotoCoreError) as exc:
+            log.info(
+                "artifact_store_head_failed",
+                bucket=self._bucket,
+                r2_key=r2_key,
+                error=str(exc),
+                trace_id=trace_id,
+            )
+            raise ArtifactStoreError(f"R2 head failed for {r2_key}: {exc}") from exc
+
     async def generate_presigned_put_url(
         self,
         *,

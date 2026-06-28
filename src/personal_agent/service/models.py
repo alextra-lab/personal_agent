@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, Field
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -369,6 +370,8 @@ class ArtifactModel(Base):
     # tags TEXT[] and embedding vector(1024) are managed at the SQL layer.
     created_by = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False)
+    # FRE-369: TRUE while the browser upload is in-flight; FALSE once /complete fires.
+    upload_pending = Column(Boolean, nullable=False, default=False)
 
 
 # ============================================================================

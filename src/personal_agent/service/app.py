@@ -129,6 +129,89 @@ async def _append_assistant_message_background(
         _pending_append_tasks.pop(sid, None)
 
 
+async def _validate_attachments(
+    attachments_json: str | None,
+    *,
+    user_id: UUID,
+    trace_id: str,
+) -> list[dict[str, str]]:
+    """Parse attachment JSON and return only rows owned by user_id with upload_pending=FALSE.
+
+    Args:
+        attachments_json: JSON-encoded list of ``{artifact_id, content_type, title}``,
+            or ``None`` / empty string when the turn has no attachments.
+        user_id: The authenticated caller's UUID.
+        trace_id: Request trace id for log correlation.
+
+    Returns:
+        Validated attachment dicts (empty list if none pass).
+    """
+    import json as _json  # noqa: PLC0415
+
+    if not attachments_json:
+        return []
+    try:
+        items: list[dict[str, str]] = _json.loads(attachments_json)
+    except (ValueError, TypeError):
+        log.warning("chat_stream.invalid_attachments_json", trace_id=trace_id)
+        return []
+    if not items:
+        return []
+
+    valid: list[dict[str, str]] = []
+    async with AsyncSessionLocal() as db:
+        for att in items:
+            aid = att.get("artifact_id", "")
+            if not aid:
+                continue
+            from sqlalchemy import text as _text  # noqa: PLC0415
+
+            result = await db.execute(
+                _text(
+                    "SELECT id, content_type, title FROM artifacts "
+                    "WHERE id = :id AND user_id = :uid AND upload_pending = FALSE"
+                ),
+                {"id": aid, "uid": str(user_id)},
+            )
+            row = result.first()
+            if row:
+                valid.append(
+                    {
+                        "artifact_id": str(row.id),
+                        "content_type": row.content_type or "",
+                        "title": row.title or str(row.id),
+                    }
+                )
+    return valid
+
+
+def _augment_message_with_attachments(
+    message: str,
+    attachments: list[dict[str, str]],
+) -> str:
+    """Prepend attachment context to ``message`` for the orchestrator.
+
+    Does NOT mutate the message stored in DB or passed to ``run_gateway_pipeline``.
+    Called AFTER intent classification so gateway routing is unaffected.
+
+    Args:
+        message: Original user message text.
+        attachments: Validated attachment dicts from ``_validate_attachments``.
+
+    Returns:
+        Augmented message string, or ``message`` unchanged when ``attachments`` is empty.
+    """
+    if not attachments:
+        return message
+    lines = ["[Attachments — call artifact_read(artifact_id) to read content:]"]
+    for att in attachments:
+        lines.append(
+            f"  - artifact_id: {att['artifact_id']}, "
+            f"content_type: {att['content_type']}, filename: {att['title']}"
+        )
+    return "\n".join(lines) + "\n\n" + message
+
+
 async def _process_chat_stream_background(
     session_id: str,
     message: str,
@@ -138,6 +221,7 @@ async def _process_chat_stream_background(
     user_email: str | None = None,
     user_display_name: str | None = None,
     client_msg_id: str | None = None,
+    attachments_json: str | None = None,
 ) -> None:
     """Run the full orchestrator pipeline and push the result to the SSE queue.
 
@@ -154,6 +238,9 @@ async def _process_chat_stream_background(
         user_display_name: Display name from the users table, if set (FRE-213).
         client_msg_id: Client-provided idempotency key (FRE-392); used to release
             the dedup entry when the task completes so retries work immediately.
+        attachments_json: JSON-encoded list of completed upload dicts (FRE-369),
+            or ``None``. Injected into the orchestrator message AFTER gateway
+            classification so TaskType routing is unaffected.
     """
     from personal_agent.config.profile import load_profile, set_current_profile
 
@@ -260,6 +347,14 @@ async def _process_chat_stream_background(
                 error=sanitize_error_message(e),
             )
 
+        # ── Attachment injection (FRE-369) ───────────────────────────────
+        # Validate ownership + completeness AFTER gateway classification, so that
+        # attachment context does NOT pollute TaskType routing.
+        validated_attachments = await _validate_attachments(
+            attachments_json, user_id=user_id, trace_id=trace_id
+        )
+        orchestrator_message = _augment_message_with_attachments(message, validated_attachments)
+
         # ── Orchestrator ─────────────────────────────────────────────────
         response_content = ""
         request_started = False
@@ -281,7 +376,7 @@ async def _process_chat_stream_background(
 
             result = await orchestrator.handle_user_request(
                 session_id=session_id,
-                user_message=message,
+                user_message=orchestrator_message,
                 mode=None,
                 channel=None,
                 trace_id=trace_id,
@@ -1025,12 +1120,30 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     dedup_cleanup_task = asyncio.create_task(_dedup_cleanup_loop())
 
+    # Upload pending-row expiry cleanup task (FRE-369)
+    from personal_agent.service.uploads_router import (  # noqa: PLC0415
+        expire_pending_uploads,
+    )
+
+    async def _upload_expiry_loop() -> None:
+        while True:
+            await asyncio.sleep(1800)  # every 30 min
+            try:
+                n = await expire_pending_uploads(AsyncSessionLocal)
+                if n:
+                    log.info("upload_expiry_cleaned", count=n)
+            except Exception:
+                log.exception("upload_expiry_failed")
+
+    upload_expiry_task = asyncio.create_task(_upload_expiry_loop())
+
     yield
 
     # Shutdown
     log.info("service_shutting_down")
     ws_cleanup_task.cancel()
     dedup_cleanup_task.cancel()
+    upload_expiry_task.cancel()
 
     # Stop event bus consumers first (before scheduler)
     if consumer_runner is not None:
@@ -1176,6 +1289,11 @@ app.include_router(transport_router)
 from personal_agent.service.artifacts_router import router as artifacts_router  # noqa: E402
 
 app.include_router(artifacts_router)
+
+# FRE-369 — user upload presign/complete endpoints.
+from personal_agent.service.uploads_router import router as uploads_router  # noqa: E402
+
+app.include_router(uploads_router)
 
 # FRE-368 — client-side telemetry for ADR-0070 D8 measurement (card_click events).
 from personal_agent.service.telemetry_router import router as telemetry_router  # noqa: E402
@@ -1880,6 +1998,7 @@ async def chat_stream_endpoint(
     session_id: str = Form(...),
     profile: str | None = Form(default=None),
     client_msg_id: str | None = Form(default=None),
+    attachments: str | None = Form(default=None),
     request_user: RequestUser = Depends(get_request_user),  # noqa: B008
 ) -> dict[str, str]:
     """AG-UI fire-and-forget chat endpoint for the PWA.
@@ -1901,6 +2020,9 @@ async def chat_stream_endpoint(
         client_msg_id: Optional client-generated idempotency key (UUID v4).
             When provided, duplicate submissions within the TTL window are
             detected and silently ignored (FRE-392).
+        attachments: JSON-encoded list of completed upload dicts (FRE-369),
+            or ``None``. Forwarded to the background task; injected into the
+            orchestrator message after gateway classification.
         request_user: Resolved user identity (injected by FastAPI).
 
     Returns:
@@ -1945,6 +2067,7 @@ async def chat_stream_endpoint(
             user_email=request_user.email,
             user_display_name=request_user.display_name,
             client_msg_id=client_msg_id,
+            attachments_json=attachments,
         )
     )
 

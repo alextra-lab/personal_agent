@@ -8,6 +8,7 @@ import {
   getSessionMessages,
   sendChatMessage,
   type StreamConnection,
+  type UploadedAttachment,
 } from '@/lib/agui-client';
 import { generateUUID } from '@/lib/uuid';
 import type {
@@ -72,7 +73,7 @@ export interface UseSSEStreamReturn {
   classifiedError: ClassifiedErrorData | null;
   /** Dismiss the ClassifiedErrorCard (user action or next send). */
   dismissClassifiedError: () => void;
-  sendMessage: (text: string, sessionId: string, profile: ExecutionProfile) => Promise<void>;
+  sendMessage: (text: string, sessionId: string, profile: ExecutionProfile, attachments?: UploadedAttachment[]) => Promise<void>;
   resolveInterrupt: (choice: string) => void;
   /** Post an approve/deny decision for the current pendingApproval. */
   handleApprovalDecision: (decision: 'approve' | 'deny') => void;
@@ -420,7 +421,7 @@ export function useSSEStream(): UseSSEStreamReturn {
   // --------------------------------------------------------------------------
 
   const sendMessage = useCallback(
-    async (text: string, sessionId: string, profile: ExecutionProfile) => {
+    async (text: string, sessionId: string, profile: ExecutionProfile, attachments?: UploadedAttachment[]) => {
       // Close any existing stream.
       streamRef.current?.close();
       streamRef.current = null;
@@ -487,7 +488,7 @@ export function useSSEStream(): UseSSEStreamReturn {
       // a second POST that might arrive if the WS reconnects mid-request (FRE-392).
       const clientMsgId = generateUUID();
       try {
-        await sendChatMessage({ message: text, sessionId, profile, clientMsgId });
+        await sendChatMessage({ message: text, sessionId, profile, clientMsgId, attachments });
       } catch (err) {
         isStreamingRef.current = false; // FRE-236: keep ref in sync
         setIsStreaming(false);

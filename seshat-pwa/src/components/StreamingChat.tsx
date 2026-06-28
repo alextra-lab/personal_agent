@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 
 import Link from 'next/link';
 
-import { getSession, getSessionMessages, setSessionProfile } from '@/lib/agui-client';
+import { getSession, getSessionMessages, setSessionProfile, type UploadedAttachment } from '@/lib/agui-client';
 import { generateUUID } from '@/lib/uuid';
 import type { ExecutionProfile } from '@/lib/types';
 import { useSSEStream } from '@/hooks/useSSEStream';
@@ -225,13 +225,13 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, activeTools, pendingConstraint, classifiedError]);
 
-  const handleSend = (text: string) => {
+  const handleSend = (text: string, attachments: UploadedAttachment[]) => {
     if (!sessionId) return;
     localStorage.setItem(LAST_SESSION_KEY, sessionId);
     setLastUserMessage(text);
     // ADR-0079: send the pill so a NEW session is established with the user's
     // selection; the server ignores it for an existing session (stored wins).
-    sendMessage(text, sessionId, profile);
+    sendMessage(text, sessionId, profile, attachments);
   };
 
   const handleInterruptChoice = (choice: string) => {
@@ -388,7 +388,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
                     lastUserMessage
                       ? () => {
                           dismissClassifiedError();
-                          handleSend(lastUserMessage);
+                          handleSend(lastUserMessage, []);
                         }
                       : undefined
                   }
@@ -397,7 +397,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
                       ? () => {
                           dismissClassifiedError();
                           handleProfileChange('cloud');
-                          handleSend(lastUserMessage);
+                          handleSend(lastUserMessage, []);
                         }
                       : undefined
                   }

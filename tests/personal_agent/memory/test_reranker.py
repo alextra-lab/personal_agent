@@ -110,6 +110,63 @@ class TestRerank:
         assert results[0].document == "a"
 
 
+_CF_HEADERS = {"CF-Access-Client-Id": "id", "CF-Access-Client-Secret": "sec"}
+
+
+class TestCfAccessInjection:
+    """CF-Access injection for the reranker path (FRE-656).
+
+    The reranker must send CF-Access headers to the Access-gated Mac SLM gateway,
+    and only to it (gated by hostname).
+    """
+
+    def _mock_client(self) -> AsyncMock:
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.json.return_value = {"results": []}
+        client = AsyncMock()
+        client.__aenter__ = AsyncMock(return_value=client)
+        client.__aexit__ = AsyncMock(return_value=False)
+        client.post = AsyncMock(return_value=resp)
+        return client
+
+    @pytest.mark.asyncio
+    async def test_slm_endpoint_gets_cf_headers(self) -> None:
+        client = self._mock_client()
+        with (
+            patch(
+                "personal_agent.memory.reranker._get_reranker_config",
+                return_value=("Voodisss/Qwen3-Reranker-4B", "https://slm.frenchforet.com/v1"),
+            ),
+            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch(
+                "personal_agent.memory.reranker.cf_access_service_token_headers",
+                return_value=dict(_CF_HEADERS),
+            ),
+        ):
+            await rerank("q", ["a"])
+
+        assert client.post.call_args.kwargs["headers"] == _CF_HEADERS
+
+    @pytest.mark.asyncio
+    async def test_non_slm_endpoint_no_cf_headers(self) -> None:
+        client = self._mock_client()
+        with (
+            patch(
+                "personal_agent.memory.reranker._get_reranker_config",
+                return_value=("ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF", "http://localhost:8504/v1"),
+            ),
+            patch("personal_agent.memory.reranker.httpx.AsyncClient", return_value=client),
+            patch(
+                "personal_agent.memory.reranker.cf_access_service_token_headers",
+                return_value=dict(_CF_HEADERS),
+            ),
+        ):
+            await rerank("q", ["a"])
+
+        assert client.post.call_args.kwargs["headers"] == {}
+
+
 class TestPassthrough:
     def test_preserves_order(self) -> None:
         results = _passthrough(["first", "second", "third"])

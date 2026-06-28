@@ -173,6 +173,7 @@ async def _query_memory_for_intent(
                 trace_id=trace_id,
                 user_id=user_id,
                 authenticated=authenticated,
+                query_text=user_message,
             )
             return _format_broad_recall_context(broad)
 

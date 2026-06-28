@@ -1905,6 +1905,39 @@ class MemoryService:
             )
             return MemoryQueryResult()
 
+    async def _query_entity_vector_candidates(
+        self,
+        session: Any,
+        query_embedding: list[float],
+        top_k: int,
+    ) -> list[dict[str, Any]]:
+        """Run the entity_embedding vector index query, returning {name, score} rows.
+
+        Shared seam for relevance-keyed candidate generation on the recall paths
+        (ADR-0100). Extracted so the broad-path flag-on branch is unit-testable
+        without a live embedder.
+
+        Args:
+            session: An open Neo4j async session.
+            query_embedding: The query embedding vector.
+            top_k: Number of nearest entities to return.
+
+        Returns:
+            List of {"name": str, "score": float} rows ordered by score desc.
+        """
+        result = await session.run(
+            """
+            CALL db.index.vector.queryNodes('entity_embedding', $top_k, $embedding)
+            YIELD node, score
+            RETURN node.name AS name, score
+            ORDER BY score DESC
+            """,
+            top_k=top_k,
+            embedding=query_embedding,
+        )
+        rows: list[dict[str, Any]] = await result.data()
+        return rows
+
     async def query_memory_broad(
         self,
         entity_types: list[str] | None = None,
@@ -1915,6 +1948,7 @@ class MemoryService:
         session_id: str | None = None,
         user_id: UUID | None = None,
         authenticated: bool = False,
+        query_text: str | None = None,
     ) -> dict[str, Any]:
         """Broad memory recall: return entities and session summaries (ADR-0025).
 
@@ -1930,10 +1964,19 @@ class MemoryService:
             session_id: Optional session identifier for event correlation.
             user_id: Authenticated user UUID for visibility scoping (FRE-229).
             authenticated: Whether the request carries a verified identity (FRE-229).
+            query_text: Optional original user query text (ADR-0100 FRE-654). When
+                provided and relevance_bounded_recall_enabled is on, the entity
+                candidate set is the union of the recency window and the
+                vector-relevant entities across all time (the 90-day cutoff is
+                demoted to a ranking signal, not a hard gate). Default off / None
+                reproduces legacy recency-only behaviour exactly.
 
         Returns:
             Dict with keys:
-              - entities: list of {name, type, mentions, description}
+              - entities: list of {name, type, mentions, description}. Note: under
+                the relevance-bounded path, ``mentions`` for a vector-surfaced
+                out-of-window entity counts all-time turns (an ordering hint, not a
+                gate), whereas non-vector entities count within the recency window.
               - sessions: list of {session_id, dominant_entities, turn_count, started_at}
               - turns_summary: list of recent turn summaries
         """
@@ -1944,10 +1987,64 @@ class MemoryService:
         turn_vis_frag, vis_params = _build_visibility_filter("t", user_id, authenticated)
         sess_vis_frag, _ = _build_visibility_filter("s", user_id, authenticated)
 
+        current_settings = get_settings()
+        relevance_bounded = current_settings.relevance_bounded_recall_enabled and bool(query_text)
+
         try:
             async with self.driver.session() as db_session:
-                # Entities (optionally filtered by type)
-                if entity_types:
+                # Relevance-keyed candidate entities (ADR-0100): vector top-k over
+                # entity_embedding, floor-filtered. Empty when the flag is off, no
+                # query_text, or the embedding is unavailable — in which case the
+                # entity query below collapses to the legacy recency-only path.
+                relevant_entity_names: list[str] = []
+                entity_scores: dict[str, float] = {}
+                if relevance_bounded and query_text:
+                    try:
+                        query_embedding = await generate_embedding(query_text, mode="query")
+                        if any(x != 0.0 for x in query_embedding):
+                            rows = await self._query_entity_vector_candidates(
+                                db_session,
+                                query_embedding,
+                                current_settings.proactive_memory_vector_top_k,
+                            )
+                            relevant_entity_names, entity_scores = _filter_entities_by_floor(
+                                rows, current_settings.recall_similarity_floor
+                            )
+                    except Exception as vec_exc:
+                        log.warning(
+                            "broad_vector_search_failed",
+                            error=str(vec_exc),
+                            trace_id=trace_id,
+                        )
+
+                # Entities: legacy recency-only, or (flag on) recency-window UNION
+                # vector-relevant entities across all time, ranked by relevance.
+                if relevance_bounded:
+                    entity_type_clause = (
+                        "AND e.entity_type IN $entity_types\n" if entity_types else ""
+                    )
+                    entity_q = f"""
+                        MATCH (e:Entity)<-[:DISCUSSES]-(t:Turn)
+                        WHERE {turn_vis_frag}
+                          {entity_type_clause}
+                          AND (t.timestamp >= $cutoff OR e.name IN $relevant_entity_names)
+                        WITH e, count(t) AS mentions,
+                             coalesce($entity_scores[e.name], 0.0) AS escore
+                        RETURN e.name AS name, e.entity_type AS type,
+                               e.description AS description, mentions
+                        ORDER BY escore DESC, mentions DESC LIMIT $limit
+                    """
+                    params: dict[str, Any] = {
+                        "cutoff": cutoff,
+                        "limit": limit,
+                        "relevant_entity_names": relevant_entity_names,
+                        "entity_scores": entity_scores,
+                        **vis_params,
+                    }
+                    if entity_types:
+                        params["entity_types"] = entity_types
+                    r = await db_session.run(entity_q, **params)
+                elif entity_types:
                     entity_q = f"""
                         MATCH (e:Entity)<-[:DISCUSSES]-(t:Turn)
                         WHERE {turn_vis_frag}

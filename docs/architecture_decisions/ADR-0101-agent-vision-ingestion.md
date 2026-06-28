@@ -60,8 +60,9 @@ Two distinct missing pieces, and a deeper truth behind both:
 - The wire message format already supports content blocks: `content` is `list[dict[str, Any]]`-shaped
   and the Anthropic prompt-cache plumbing already sends `content` as a *list of blocks*
   (`litellm_client.py:57-61`). An `image_url` block flows end-to-end on the cloud path without a type
-  fight. The narrow constraint is the persisted `Message` model (`service/models.py:130`,
-  `content: str`).
+  fight. The first schema constraint to widen is the persisted `Message` model
+  (`service/models.py:130`, `content: str`); a broader str-assuming surface is enumerated under
+  Negative Consequences.
 - `handle_user_request` (`orchestrator/orchestrator.py:38`) carries **no** `attachments` parameter;
   `ExecutionContext` carries none; the new user turn is appended as a bare string
   (`executor.py:1741`). The structured carrier does not exist yet — this is exactly FRE-661's scope.
@@ -306,8 +307,11 @@ profiles.
   `ExecutionContext`.
 - `orchestrator/executor.py` — `ExecutionContext` attachment field; turn-assembly injection at the
   `ctx.messages.append({"role":"user", ...})` site (`executor.py:1741`); routing seam at
-  `_determine_initial_model_role` (`executor.py:1309`); block-aware `_validate_and_fix_conversation_roles`
-  (`executor.py:633`) and debug log (`executor.py:2731-2740`).
+  `_determine_initial_model_role` (`executor.py:1309`); **all** str-assuming content sites made
+  block-aware via a shared accessor — the full set is enumerated under Negative Consequences
+  (`_validate_and_fix_conversation_roles`, duplicate-role merge, no-think suffix, frozen-context
+  inlining, expansion-query read, debug log, plus `context_window.py` token estimation), not just the
+  two obvious ones.
 - `service/app.py` — pass the validated structured attachment list (not the augmented string); retire
   `_augment_message_with_attachments` from the orchestrator path.
 - `service/models.py` — widen `Message.content` to `str | list[<block>]`.

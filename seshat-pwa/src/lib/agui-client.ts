@@ -62,6 +62,93 @@ function wsBaseUrl(): string {
 // Chat message dispatch
 // --------------------------------------------------------------------------
 
+// --------------------------------------------------------------------------
+// User uploads (FRE-369 / ADR-0069)
+// --------------------------------------------------------------------------
+
+/** An attachment that has successfully completed the presign→upload→complete flow. */
+export interface UploadedAttachment {
+  artifact_id: string;
+  content_type: string;
+  title: string;
+}
+
+/** Per-file upload state tracked by ChatInput. */
+export interface UploadState {
+  /** Client-side UUID for list key (distinct from artifact_id, which is set post-presign). */
+  id: string;
+  file: File;
+  status: 'uploading' | 'complete' | 'error';
+  artifact_id?: string;
+  error?: string;
+}
+
+interface _PresignResponse {
+  artifact_id: string;
+  upload_url: string;
+  expires_in: number;
+}
+
+/**
+ * Mint a presigned R2 PUT URL for ``file``.
+ *
+ * @returns The presign response with artifact_id and upload_url.
+ * @throws Error when the backend rejects the request (415, 413, 502, …).
+ */
+export async function presignUpload(file: File): Promise<_PresignResponse> {
+  const resp = await fetch(`${SESHAT_API}/api/uploads/presign`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({
+      filename: file.name,
+      content_type: file.type,
+      size_hint: file.size,
+    }),
+  });
+  if (!resp.ok) {
+    throw new Error(`Presign failed: ${resp.status} ${resp.statusText}`);
+  }
+  return resp.json() as Promise<_PresignResponse>;
+}
+
+/**
+ * Upload ``file`` bytes directly to R2 via the presigned PUT URL.
+ *
+ * @throws Error on non-2xx R2 response.
+ */
+export async function uploadToR2(uploadUrl: string, file: File): Promise<void> {
+  const resp = await fetch(uploadUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': file.type },
+    body: file,
+  });
+  if (!resp.ok) {
+    throw new Error(`R2 upload failed: ${resp.status}`);
+  }
+}
+
+/**
+ * Call /complete to verify the R2 object and clear upload_pending.
+ *
+ * @returns The completed attachment metadata.
+ * @throws Error when backend returns 404 / 502 / 413.
+ */
+export async function completeUpload(artifactId: string): Promise<UploadedAttachment> {
+  const resp = await fetch(`${SESHAT_API}/api/uploads/${artifactId}/complete`, {
+    method: 'POST',
+    credentials: 'include',
+  });
+  if (!resp.ok) {
+    throw new Error(`Complete failed: ${resp.status} ${resp.statusText}`);
+  }
+  const body = (await resp.json()) as { artifact_id: string; content_type: string; title: string };
+  return { artifact_id: body.artifact_id, content_type: body.content_type, title: body.title };
+}
+
+// No cancelUpload: cancellation is client-side only (remove chip).
+// Pending rows are cleaned up server-side by the expiry background task.
+
 export interface SendMessageOptions {
   message: string;
   sessionId: string;
@@ -74,6 +161,8 @@ export interface SendMessageOptions {
   profile?: ExecutionProfile;
   /** Client-generated idempotency key (UUID v4) — deduplicated server-side (FRE-392). */
   clientMsgId?: string;
+  /** Completed uploads to attach to this turn (FRE-369). */
+  attachments?: UploadedAttachment[];
 }
 
 /**
@@ -124,7 +213,7 @@ export async function sendChatMessage(opts: SendMessageOptions): Promise<void> {
   // a NEW session is established with the user's selection; the server ignores
   // it for an existing session (stored value wins). The toggle is the canonical
   // mutator via setSessionProfile (PATCH).
-  const { message, sessionId, profile, clientMsgId } = opts;
+  const { message, sessionId, profile, clientMsgId, attachments } = opts;
 
   const params: Record<string, string> = { message, session_id: sessionId };
   if (profile) {
@@ -132,6 +221,9 @@ export async function sendChatMessage(opts: SendMessageOptions): Promise<void> {
   }
   if (clientMsgId) {
     params['client_msg_id'] = clientMsgId;
+  }
+  if (attachments && attachments.length > 0) {
+    params['attachments'] = JSON.stringify(attachments);
   }
 
   const resp = await fetch(`${SESHAT_API}/chat/stream`, {

@@ -275,25 +275,55 @@ class R2ArtifactStore:
             )
             raise ArtifactStoreError(f"R2 delete failed for {r2_key}: {exc}") from exc
 
+    async def head(self, r2_key: str, *, trace_id: str | None = None) -> dict[str, object]:
+        """Return HEAD metadata for the object at ``r2_key``.
+
+        Args:
+            r2_key: Object key to inspect.
+            trace_id: Originating request trace_id for failure logs.
+
+        Returns:
+            Dict with at least ``content_length: int`` and ``content_type: str``.
+
+        Raises:
+            ArtifactStoreError: When the object does not exist or on network error.
+        """
+        client = await self._get_client()
+        try:
+            response = await client.head_object(Bucket=self._bucket, Key=r2_key)
+            return {
+                "content_length": response.get("ContentLength", 0),
+                "content_type": response.get("ContentType", ""),
+            }
+        except (ClientError, BotoCoreError) as exc:
+            log.info(
+                "artifact_store_head_failed",
+                bucket=self._bucket,
+                r2_key=r2_key,
+                error=str(exc),
+                trace_id=trace_id,
+            )
+            raise ArtifactStoreError(f"R2 head failed for {r2_key}: {exc}") from exc
+
     async def generate_presigned_put_url(
         self,
         *,
         r2_key: str,
         content_type: str,
-        max_size: int,
         expires_in: int = 900,
         trace_id: str | None = None,
     ) -> str:
         """Mint a presigned PUT URL the browser can upload to directly.
 
         Used by FRE-369's user-upload flow. The presigned URL embeds the
-        bucket, key, expected content-type, and a content-length cap so a
-        misbehaving client cannot exfiltrate or oversize-bomb the bucket.
+        bucket, key, and required content-type. Size enforcement is done
+        server-side by ``/complete`` via a HEAD check — ContentLength is NOT
+        signed because SigV4 treats it as an exact-match, which would cause
+        every upload whose size differs from the signed value to fail 403.
 
         Args:
             r2_key: Destination object key.
             content_type: Required MIME type the uploader must use.
-            max_size: Content-length cap embedded in the URL.
             expires_in: URL lifetime in seconds.
             trace_id: Originating request trace_id, threaded onto failure logs
                 for §I3 identity threading.
@@ -309,7 +339,6 @@ class R2ArtifactStore:
                     "Bucket": self._bucket,
                     "Key": r2_key,
                     "ContentType": content_type,
-                    "ContentLength": max_size,
                 },
                 ExpiresIn=expires_in,
                 HttpMethod="PUT",

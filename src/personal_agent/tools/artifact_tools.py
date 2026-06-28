@@ -636,7 +636,8 @@ async def artifact_read_executor(
                 FROM artifacts
                 WHERE id = :artifact_id
                   AND user_id = :user_id
-                  AND type = 'artifact'
+                  AND type IN ('artifact', 'upload')
+                  AND upload_pending = FALSE
                 """
             ),
             {

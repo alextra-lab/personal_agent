@@ -212,6 +212,7 @@ async def resolve_artifact(
         ).where(
             ArtifactModel.id == artifact_id,
             ArtifactModel.user_id == user_id,
+            ArtifactModel.upload_pending == False,  # noqa: E712
         )
     )
     row = result.one_or_none()
@@ -269,6 +270,7 @@ async def list_artifacts(
             FROM artifacts
             WHERE user_id = :user_id
               AND type = :type
+              AND upload_pending = FALSE
               AND (CAST(:prefix AS TEXT) IS NULL OR slug LIKE :prefix || '%')
               AND (CAST(:since AS TEXT) IS NULL OR created_at > CAST(:since AS TIMESTAMPTZ))
             ORDER BY created_at DESC
@@ -319,6 +321,7 @@ async def get_artifact_metadata(
             FROM artifacts
             WHERE id = :artifact_id
               AND user_id = :user_id
+              AND upload_pending = FALSE
             """
         ),
         {
@@ -440,6 +443,7 @@ async def export_artifact(
             FROM artifacts
             WHERE id = :artifact_id
               AND user_id = :user_id
+              AND upload_pending = FALSE
             """
         ),
         {"artifact_id": artifact_id, "user_id": user_id},

@@ -62,7 +62,9 @@ verification that the specific failure no longer occurs.
 `gh pr merge <n> --merge --delete-branch` with a review summary; `git pull` on main. **`--delete-branch`
 is not optional** — it deletes the merged `fre-XXX` head branch at merge time (the head is always a
 per-ticket branch, never a `worktree-*` anchor), which is what stops stale branches accumulating on
-origin. (Repo also has auto-delete-head-branches on as a backstop.)
+origin. (A repo-level "auto-delete head branches" backstop is **not** on — the PAT lacks admin to
+toggle it; the owner can enable it once in GitHub → Settings → General. Until then, `--delete-branch`
+is the only mechanism — really do not omit it.)
 
 ## 6 — Deploy authorization (standing classes vs ask)
 Owner granted **standing approval (2026-06-26)** for three low-risk, reversible deploy classes —

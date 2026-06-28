@@ -6,6 +6,7 @@ They test CRUD operations, queries, and connection handling.
 
 import uuid
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
@@ -17,6 +18,7 @@ from personal_agent.memory.models import (
     MemoryQuery,
     Relationship,
 )
+from personal_agent.memory.reranker import RerankResult
 from personal_agent.memory.service import MemoryService
 
 # Note: Tests use unique IDs (uuid) for entity names to avoid interference
@@ -501,6 +503,99 @@ class TestMemoryQueries:
 
         returned_ids = {c.conversation_id for c in result.conversations}
         assert old_positive.conversation_id in returned_ids
+
+    @pytest.mark.asyncio
+    async def test_query_memory_old_relevant_turn_survives_same_entity_crowding(
+        self, memory_service, clean_test_data, monkeypatch
+    ):
+        """ADR-0100 AC-2/AC-3 same-entity: an old content-relevant turn ranks into the returned set.
+
+        This is the proof the single-seed AC tests cannot give: with > limit candidates under
+        ONE entity, the relevance signal (reranker) must lift the old turn past [:limit], not
+        recency. Embedder/reranker are mocked for a deterministic content signal.
+        """
+        monkeypatch.setattr(get_settings(), "relevance_bounded_recall_enabled", True, raising=False)
+        entity = f"AC2Topic_{uuid.uuid4().hex[:8]}"
+        marker = f"signal_{uuid.uuid4().hex[:6]}"
+
+        old_relevant = ConversationNode(
+            conversation_id=str(uuid.uuid4()),
+            timestamp=datetime.now() - timedelta(days=200),
+            user_message=f"Old but on-point discussion: {marker} about {entity}",
+            assistant_response=f"{entity} deep notes.",
+            key_entities=[entity],
+        )
+        await memory_service.create_conversation(old_relevant)
+        # Eight recent turns under the SAME entity, none matching the query marker.
+        for i in range(8):
+            await memory_service.create_conversation(
+                ConversationNode(
+                    conversation_id=str(uuid.uuid4()),
+                    timestamp=datetime.now() - timedelta(minutes=i),
+                    user_message=f"Recent unrelated chatter #{i} about {entity}",
+                    assistant_response=f"{entity} aside {i}.",
+                    key_entities=[entity],
+                )
+            )
+
+        async def _zero_embedding(*_args, **_kwargs):
+            return [0.0, 0.0, 0.0, 0.0]
+
+        async def _fake_rerank(query, documents, top_k=None):
+            # Score the marker-bearing (old, relevant) document highest.
+            return [
+                RerankResult(index=i, score=1.0 if marker in doc else 0.0, document=doc)
+                for i, doc in enumerate(documents)
+            ]
+
+        with (
+            patch("personal_agent.memory.service.generate_embedding", _zero_embedding),
+            patch("personal_agent.memory.reranker.rerank", _fake_rerank),
+        ):
+            result = await memory_service.query_memory(
+                MemoryQuery(entity_names=[entity], recency_days=30, limit=3),
+                query_text=f"tell me about {marker}",
+            )
+
+        returned_ids = [c.conversation_id for c in result.conversations]
+        assert old_relevant.conversation_id in returned_ids, (
+            "old-but-relevant turn was sliced out by [:limit] despite the relevance signal"
+        )
+        # Blocker 5: quality metrics / result reflect the post-slice set, not the candidate set.
+        assert len(result.relevance_scores) == len(result.conversations) <= 3
+
+    @pytest.mark.asyncio
+    async def test_query_memory_flag_on_id_lookup_not_reordered(
+        self, memory_service, clean_test_data, monkeypatch
+    ):
+        """ADR-0100 scope: flag-on id lookups use the legacy path, unchanged by the reorder.
+
+        The relevance reorder is gated on entity recall, not just the flag, so direct id
+        lookups (and the bare fallback) keep legacy timestamp-DESC behaviour under the flag.
+        """
+        ids = []
+        base = datetime.now()
+        for i in range(3):
+            cid = str(uuid.uuid4())
+            ids.append(cid)
+            await memory_service.create_conversation(
+                ConversationNode(
+                    conversation_id=cid,
+                    timestamp=base - timedelta(hours=i),
+                    user_message=f"id-lookup turn {i}",
+                    key_entities=[],
+                )
+            )
+
+        async def _run(flag: bool) -> list[str]:
+            monkeypatch.setattr(
+                get_settings(), "relevance_bounded_recall_enabled", flag, raising=False
+            )
+            res = await memory_service.query_memory(MemoryQuery(conversation_ids=ids, limit=10))
+            return [c.conversation_id for c in res.conversations]
+
+        # Flag on must produce the identical (legacy timestamp-DESC) order as flag off.
+        assert await _run(True) == await _run(False)
 
     @pytest.mark.asyncio
     async def test_get_user_interests(self, memory_service, clean_test_data):

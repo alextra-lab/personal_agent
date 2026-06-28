@@ -1607,8 +1607,15 @@ class MemoryService:
                 for vr in vector_results:
                     if "name" in vr and "score" in vr:
                         vector_scores[vr["name"]] = float(vr["score"])
-                relevant_entity_names, _ = _filter_entities_by_floor(
+                relevant_entity_names, floored_vector_scores = _filter_entities_by_floor(
                     vector_results, current_settings.recall_similarity_floor
+                )
+                # Apply the similarity floor consistently to the scores used for
+                # ranking (not just candidacy): under the flag, a below-floor entity
+                # must not boost relevance ranking either, or the floor would not keep
+                # junk out (AC-4). Flag off keeps legacy full-score behaviour.
+                vector_scores_for_ranking = (
+                    floored_vector_scores if relevance_bounded else vector_scores
                 )
 
                 # Build Cypher query dynamically based on query parameters
@@ -1618,11 +1625,22 @@ class MemoryService:
 
                 if relevance_bounded and entity_recall:
                     # ADR-0100: relevance-keyed candidate generation. Union the
-                    # entity-name/type match with vector-matched entities, drop the
-                    # recency cutoff, and bound turn expansion *per entity* so that
-                    # recent distractors under other entities cannot crowd out the
-                    # relevant old turn (Gate-B fix). LIMIT is applied after
-                    # relevance ranking (defect 3), not by this query.
+                    # entity-name/type match with vector-matched entities and bound
+                    # turn expansion *per entity* (most-recent) so recent distractors
+                    # under other entities cannot crowd out the relevant old turn.
+                    #
+                    # Contract (ADR-0100 §2/§3, AC-1a): recency_days is DEMOTED to a
+                    # ranking weight on this path — it no longer gates candidacy, so
+                    # the cutoff clause is intentionally absent. recency_days is still
+                    # honoured as a recency component inside _calculate_relevance_scores.
+                    # Callers needing a hard time window must not rely on recency_days
+                    # under the flag (tracked follow-up for the rollout ticket).
+                    #
+                    # The candidate set is ordered by entity relevance (explicit name
+                    # match = 1.0, else the floored vector score) then recency BEFORE
+                    # the candidate_cap, so the cap keeps the most relevant turns
+                    # rather than an arbitrary slice. Final per-turn relevance ranking
+                    # and the result LIMIT are applied in Python after scoring.
                     if query.entity_names:
                         entity_predicate = "e.name IN $entity_names"
                         cypher_parts.append("entity_names: $entity_names")
@@ -1633,11 +1651,15 @@ class MemoryService:
                     MATCH (c:Turn)-[:DISCUSSES]->(e:Entity)
                     WHERE {vis_frag}
                     AND ({entity_predicate} OR e.name IN $relevant_entity_names)
-                    WITH e, c
+                    WITH e, c,
+                         CASE WHEN {entity_predicate} THEN 1.0
+                              ELSE coalesce($entity_scores[e.name], 0.0) END AS escore
                     ORDER BY c.timestamp DESC
-                    WITH e, collect(DISTINCT c)[0..$per_entity_cap] AS turns
+                    WITH e, escore, collect(DISTINCT c)[0..$per_entity_cap] AS turns
                     UNWIND turns AS c
-                    RETURN DISTINCT c
+                    WITH c, max(escore) AS turn_rel
+                    ORDER BY turn_rel DESC, c.timestamp DESC
+                    RETURN c
                     LIMIT $candidate_cap
                     """
                 else:
@@ -1697,8 +1719,9 @@ class MemoryService:
                     params["trace_ids"] = query.trace_ids
                 if relevance_bounded and entity_recall:
                     params["relevant_entity_names"] = relevant_entity_names
-                    params["per_entity_cap"] = max(query.limit, 10)
-                    params["candidate_cap"] = 500
+                    params["entity_scores"] = floored_vector_scores
+                    params["per_entity_cap"] = current_settings.recall_per_entity_turn_cap
+                    params["candidate_cap"] = current_settings.recall_candidate_cap
                 elif query.recency_days:
                     params["cutoff_date"] = cutoff_date
 
@@ -1761,19 +1784,26 @@ class MemoryService:
                 relevance_scores = await self._calculate_relevance_scores(
                     conversations,
                     query,
-                    vector_scores=vector_scores,
+                    vector_scores=vector_scores_for_ranking,
                     reranker_scores=reranker_scores,
                     trace_id=trace_id,
                 )
 
                 candidate_set_size = len(conversations)
-                if relevance_bounded:
+                if relevance_bounded and entity_recall:
                     # ADR-0100 defect 3: order returned turns by combined relevance
                     # and apply the result limit *after* ranking, not after the
-                    # timestamp ordering of the candidate query.
+                    # timestamp ordering of the candidate query. Gated on entity_recall
+                    # so flag-on id-lookups / bare-fallback (legacy Cypher) are untouched.
                     conversations = _rank_conversations_by_relevance(
                         conversations, relevance_scores
                     )[: query.limit]
+                    # Restrict the score map to the returned set so downstream
+                    # consumers (quality metrics, MemoryQueryResult, the recall event)
+                    # report the post-slice count, not the full candidate set.
+                    relevance_scores = {
+                        c.turn_id: relevance_scores.get(c.turn_id, 0.0) for c in conversations
+                    }
 
                 # Emit the live recall telemetry event in both flag states (pure
                 # observability — never alters the recall result; wrapped so a
@@ -1786,7 +1816,7 @@ class MemoryService:
                         **_build_memory_recall_event(
                             returned=conversations,
                             candidate_set_size=candidate_set_size,
-                            vector_scores=vector_scores,
+                            vector_scores=vector_scores_for_ranking,
                             vector_entity_count=len(relevant_entity_names),
                             recall_latency_ms=(time.perf_counter() - recall_start) * 1000.0,
                             similarity_floor=current_settings.recall_similarity_floor,

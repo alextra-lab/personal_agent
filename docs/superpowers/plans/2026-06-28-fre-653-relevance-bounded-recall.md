@@ -100,3 +100,15 @@ ES mapping audit: `python3 -c` walk of every new field through `index-template.j
 
 ## Out of scope (do NOT touch)
 `query_memory_broad`, `context.py`/`protocol_adapter.py` threading, weight re-tuning, floor calibration, A/B run, rollout. Default off; no deploy.
+
+## Master review corrections (PR #268 round 1 → round 2)
+
+A high-effort workflow review (master) surfaced 6 confirmed flag-on correctness defects. All fixed:
+
+1. **recency_days contract (silent drop).** Documented the contract explicitly in `query_memory`: under the flag, on the entity-recall path, `recency_days` is demoted to a ranking weight (no candidacy gate) per ADR-0100 §2/§3 + AC-1a. The automatic callers pass it as a default; the explicit-window tool case is filed as **FRE-658** for the rollout ticket.
+2. **candidate_cap had no top-level ORDER BY → arbitrary slice before ranking.** The candidate Cypher now computes a per-turn relevance key (`escore`: explicit name-match = 1.0, else floored vector score) and `ORDER BY turn_rel DESC, c.timestamp DESC` **before** `LIMIT $candidate_cap`, so the cap keeps the most-relevant turns. (Dynamic map-param subscript `$entity_scores[e.name]` verified on Neo4j 5.)
+3. **AC tests seeded only one turn.** Added `test_query_memory_old_relevant_turn_survives_same_entity_crowding`: 8 recent + 1 old turn under the **same** entity, limit 3, mocked embedder/reranker give the old turn the content signal → it survives `[:limit]`. The proof the ticket lacked.
+4. **Floor not applied to ranking scores.** `vector_scores_for_ranking = floored_vector_scores when flag on` — a below-floor entity no longer boosts ranking (AC-4 consistency).
+5. **Quality metrics on pre-slice set.** After ranking+slice, `relevance_scores` is restricted to the returned set, so `_log_query_quality_metrics`, `MemoryQueryResult`, and `memory_query_completed` all report the post-slice count (asserted in the new test: `len(relevance_scores) == len(conversations) <= limit`).
+6. **Reorder gated only on the flag.** Now gated on `relevance_bounded and entity_recall`, so flag-on id-lookups/bare-fallback keep legacy behaviour (`test_query_memory_flag_on_id_lookup_not_reordered`).
+7. **(rec) Magic numbers → settings.** `recall_per_entity_turn_cap` (10) and `recall_candidate_cap` (500) are now config Fields alongside `recall_similarity_floor`, so FRE-655 can calibrate without a code change.

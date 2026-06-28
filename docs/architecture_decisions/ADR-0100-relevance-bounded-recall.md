@@ -35,10 +35,22 @@ of any semantic step:
   relevant older turn → **wrong-but-recent** context.
 
 The vector index then runs (`db.index.vector.queryNodes('entity_embedding', …)`,
-`service.py:1539`) but only populates a `vector_scores` dict used to *re-rank the turns the
-recency Cypher already returned*. FRE-491 measured the right entity ranked **#1 at 0.82
-cosine** — semantically perfect, yet unrecallable because it was never a candidate.
-Embeddings and the write path are **not** the bottleneck.
+`service.py:1539`) but only populates a `vector_scores` dict — and, critically, **that score
+is never applied to the output ordering.** `_calculate_relevance_scores` returns a
+`{turn_id: score}` dict (`service.py:1595`), but the returned `conversations` list keeps the
+Cypher order — timestamp DESC — all the way from `result.values()` (`service.py:1503`) to the
+`MemoryQueryResult` (`service.py:1630`); nothing sorts by relevance. So there are **three
+compounding defects**, not two:
+
+1. **Recency candidacy gate** (Gate A above) — old turns are never candidates.
+2. **Recency-ordered LIMIT** (Gate B above) — recent turns crowd the candidate set.
+3. **Unused relevance ordering** — even the candidates that *do* get scored are returned in
+   timestamp order, not relevance order. Fixing only (1) and (2) without (3) would still
+   surface relevant-old behind recent-but-less-relevant.
+
+FRE-491 measured the right entity ranked **#1 at 0.82 cosine** — semantically perfect, yet
+unrecallable because it was never a candidate. Embeddings and the write path are **not** the
+bottleneck.
 
 **What needs to be decided:** how to make automatic recall select candidates by *relevance*
 rather than *recency*, without (a) unbounded candidate-set growth as the KG accumulates,
@@ -46,9 +58,14 @@ rather than *recency*, without (a) unbounded candidate-set growth as the KG accu
 facts. The fix must be simple, measurable, and reversible.
 
 **A correct pattern already exists in-repo.** `MemoryService.suggest_proactive_raw`
-(`service.py:237`) generates candidates vector-first (`queryNodes(entity_embedding, $top_k)`,
-bounded by `proactive_memory_vector_top_k`) with **no recency gate**. This ADR brings the
-recency-gated paths into line with that pattern rather than inventing a new mechanism.
+(`service.py:237`) generates **entity candidates vector-first** (`queryNodes(entity_embedding,
+$top_k)`, bounded by `proactive_memory_vector_top_k`) with **no recency gate**. This ADR brings
+the recency-gated paths into line with that pattern rather than inventing a new mechanism.
+(Note the scope of the reuse: `suggest_proactive_raw` is vector-first for *entity candidacy*,
+but then picks the single most-recent turn *per entity* (`collect(t)[0]` after
+`ORDER BY t.timestamp DESC`, `service.py:280`). The recall paths return turns directly, so the
+fix must apply relevance ordering at the *turn* level — per-entity recency there is a
+tiebreaker, not the selection key.)
 
 **Adjacent decision context.** ADR-0098 (Accepted 2026-06-27) made facts *living Claims*
 with bitemporal supersession + contradiction detection — that layer now owns
@@ -73,10 +90,11 @@ default-off flag.** Four coupled changes, converging on the existing
 2. **Drop the hard recency pre-filter.** Remove `AND c.timestamp >= $cutoff_date` from the
    automatic recall candidate Cypher. `recency_days` no longer gates candidacy.
 
-3. **Recency becomes a ranking signal, not a gate.** Recency is folded into
-   `_calculate_relevance_scores` as a *weight* alongside the vector and reranker scores, so
-   recent-and-relevant wins ties while old-and-highly-relevant is no longer denied. `LIMIT`
-   is applied **after** relevance ranking, not after `ORDER BY timestamp DESC`.
+3. **Recency becomes a ranking signal, not a gate — and relevance ordering is actually
+   applied.** Recency is folded into `_calculate_relevance_scores` as a *weight* alongside the
+   vector and reranker scores. The returned `conversations` are then **sorted by that combined
+   score** (fixing defect 3 — today the scores are computed but discarded for ordering), and
+   `LIMIT` is applied **after** relevance ranking, not after `ORDER BY timestamp DESC`.
 
 4. **A calibrated similarity floor as the safety gate.** A new config value
    `recall_similarity_floor` (cosine threshold) drops candidates below a relevance bar — the
@@ -84,6 +102,16 @@ default-off flag.** Four coupled changes, converging on the existing
    floor is **config-driven and embedder-calibrated, never hardcoded**, because score
    distributions shift per embedding model (forward-compat for any future embedder swap —
    see ADR References, the embedder-quality follow-on).
+
+**Two paths, one bounded seam change for the broad path.** `query_memory` already accepts
+`query_text` and embeds it, so changes (1)–(3) apply directly. `query_memory_broad` (the
+`MEMORY_RECALL` intent path, `service.py:1676`) currently has **no `query_text`/embedding
+parameter and no vector step** — its candidate generation is recency-only Cypher. Bringing it
+onto the relevance-keyed path requires a **bounded signature change**: thread `query_text`
+from `recall_broad` / `context.py` into `query_memory_broad`, generate candidates via the same
+`entity_embedding` vector top-k, and demote its 90-day window to a weight. This is carried as
+its **own sequenced implementation ticket** so the API change is explicit and independently
+provable (see Verification AC-1b).
 
 **Scale safety.** Candidate-set size is bounded by `proactive_memory_vector_top_k` (ANN
 top-k), so cost is **invariant to KG growth** — we replace a time-bound with a relevance-
@@ -206,10 +234,17 @@ ceiling). See References.
 ## Implementation Notes
 
 **Files affected:**
-- `src/personal_agent/memory/service.py` — `query_memory` (candidate Cypher: union vector
-  top-k + entity match, drop `cutoff_date` clause, LIMIT-after-ranking) and
-  `query_memory_broad` (same de-gate); `_calculate_relevance_scores` (recency weight); emit
-  `memory_recall` event.
+- `src/personal_agent/memory/service.py` —
+  - `query_memory`: candidate Cypher = union of vector top-k + entity match, drop the
+    `cutoff_date` clause; **sort returned `conversations` by the combined relevance score**
+    (fix defect 3 — scores are currently computed at `:1595` but discarded for ordering);
+    LIMIT after ranking; emit the `memory_recall` event.
+  - `query_memory_broad`: **signature change** — add a `query_text: str | None` param, embed
+    it, generate candidates via `entity_embedding` vector top-k, demote the 90-day window to a
+    weight (own ticket; AC-1b).
+  - `_calculate_relevance_scores`: fold recency in as a weight.
+- `src/personal_agent/memory/protocol_adapter.py` / `request_gateway/context.py` — thread
+  `query_text` into the broad path (`recall_broad`).
 - `src/personal_agent/memory/protocol.py` — `recency_days` semantics note (no longer a hard
   gate on the automatic path; retained for explicit time-scoped queries).
 - `src/personal_agent/config/settings.py` — new `relevance_bounded_recall_enabled: bool`
@@ -231,47 +266,63 @@ infrastructure.
 
 **How will we know this decision actually delivered — not just merged?**
 
-- **AC-1 — A relevant memory older than the legacy window is recalled.** With the flag on, a
-  FRE-489 probe positive whose source turn is **>30 days old** (and **>90 days** for the
-  broad/`MEMORY_RECALL` path) appears in `recall()` / `recall_broad()` results.
-  **Check:** harness run on the bespoke probe; assert the old positive is present.
-  *Fails if* the >window positive is absent — i.e. the exact pre-fix false-negative. A
-  fix that merely raised the window to *N* days still fails for a positive older than *N*.
+- **AC-1a — `query_memory` recalls a relevant turn older than the legacy 30-day window.**
+  With the flag on, a FRE-489 probe positive whose source turn is **>30 days old** appears in
+  `recall()` results. **Check:** harness run on the bespoke probe; assert the old positive is
+  present. *Fails if* the >window positive is absent — the exact pre-fix false-negative. A fix
+  that merely raised the window to *N* days still fails for a positive older than *N*.
 
-- **AC-2 — Candidate selection is relevance-bounded, not time-bounded (no crowding).**
-  Inserting *M* recent distractors does not evict an old relevant positive.
-  **Check:** FRE-489 run sweeping `distractor_background_n`; assert recall@5 for an old
-  positive stays ≥ baseline as *M* grows. *Fails if* recall@5 degrades with more recent
-  distractors (the Gate-B symptom). A timestamp-ordered LIMIT cannot pass this.
+- **AC-1b — `query_memory_broad` recalls an out-of-window topic after the seam change.**
+  With the flag on and `query_text` threaded into the broad path, a FRE-489 `MEMORY_RECALL`-
+  style probe whose relevant turn is **>90 days old** appears in `recall_broad()` results.
+  **Check:** broad-path probe case; assert the >90-day topic is present. *Fails if* the broad
+  path still returns only within-window entities — proves the broad seam change actually
+  landed, not just the `query_memory` half.
 
-- **AC-3 — The similarity floor keeps junk out.** A query with no semantically-relevant
-  memory returns empty, not low-similarity noise.
-  **Check:** FRE-489 negative case (query unrelated to corpus); assert 0 entities above
-  `recall_similarity_floor`. *Fails if* below-floor matches are surfaced. Guards against
-  "relevance-keyed = surface anything".
+- **AC-2 — The returned sequence is ordered by relevance, not timestamp (defect 3).** When a
+  highly-relevant **old** turn and a weakly-relevant **recent** turn are both candidates, the
+  old-relevant turn ranks **ahead of** the recent-irrelevant one in the returned order.
+  **Check:** FRE-489 fixture with one old-relevant + one recent-irrelevant turn; assert the
+  result index of the old-relevant turn < that of the recent one. *Fails if* output stays in
+  timestamp order — catches a fix that de-gates candidacy but leaves the discarded-score bug.
 
-- **AC-4 — Candidate-set size is bounded by top-k regardless of corpus size.**
-  **Check:** the emitted `memory_recall` event's `candidate_set_size` ≤
-  `proactive_memory_vector_top_k` across probe runs at two corpus sizes (e.g. 1× and 5×).
-  *Fails if* `candidate_set_size` grows with corpus size — the scaling failure Option 2
-  would exhibit.
+- **AC-3 — No recency crowding.** Inserting *M* recent distractors does not evict an old
+  relevant positive. **Check:** FRE-489 run sweeping `distractor_background_n`; assert
+  recall@5 for the old positive stays ≥ baseline as *M* grows. *Fails if* recall@5 degrades
+  with more recent distractors (the Gate-B symptom). A timestamp-ordered LIMIT cannot pass.
 
-- **AC-5 — The empty-recall ("no prior discussions") rate is observable live.**
-  **Check:** query Elasticsearch for the `memory_recall` event; it carries an
-  empty-result flag/counter distinguishing empty from non-empty recall. *Fails if* no
-  emitted field lets you count empty recalls in prod. This is the standing regression watch.
+- **AC-4 — The similarity floor keeps junk out.** A query with no semantically-relevant
+  memory returns empty, not low-similarity noise. **Check:** FRE-489 negative case (query
+  unrelated to corpus); assert 0 turns above `recall_similarity_floor`. *Fails if* below-floor
+  matches are surfaced. Guards against "relevance-keyed = surface anything".
 
-- **AC-6 — Default-off and exactly reversible.** With `relevance_bounded_recall_enabled` off,
-  recall reproduces legacy behaviour.
-  **Check:** run the FRE-489 baseline with the flag off; assert the pre-fix false-negative
-  (AC-1's positive absent) reproduces and metrics match the FRE-491 baseline. *Fails if* the
-  off-state diverges from legacy — meaning the flag does not cleanly gate the change.
+- **AC-5 — Recall is scale-invariant, and the top-k cap is a true ceiling.** At 5× corpus
+  size (more recent turns added), recall@5 for an out-of-window positive is **unchanged**
+  *and* the emitted `candidate_set_size` ≤ `proactive_memory_vector_top_k`. **Check:** probe
+  at 1× and 5×; assert both conjuncts. *Fails if* recall@5 drops at 5× (a recency-first impl
+  degrades as recent distractors accumulate) — the **recall-invariance conjunct is the
+  discriminator; the count alone is insufficient** (a timestamp scan capped at top-k also
+  hits the count, but fails the recall conjunct).
+
+- **AC-6 — The empty-recall ("no prior discussions") signal is correct, not just present.**
+  **Check:** (a) empty-corpus fixture → the `memory_recall` event has `empty_result = true`
+  **and** the returned payload is empty; (b) non-empty fixture with a known positive →
+  `empty_result = false` **and** the payload is non-empty. Both verified in the FRE-489 run.
+  *Fails if* the flag value disagrees with the actual payload — an existence-only check (field
+  emitted but wrong) does not pass. This is the standing prod regression watch.
+
+- **AC-7 — Default-off and exactly reversible.** With `relevance_bounded_recall_enabled` off,
+  recall reproduces legacy behaviour. **Check:** run the FRE-489 baseline with the flag off;
+  assert the pre-fix false-negative (AC-1a's positive absent) reproduces and metrics match the
+  FRE-491 baseline. *Fails if* the off-state diverges from legacy — the flag does not cleanly
+  gate the change.
 
 **Seam owner (decomposed ADR):** the assembled intent — *relevance-bounded recall delivers
-across both live recall paths with the floor and telemetry in place, verified on FRE-489 with
-the flag on* — is asserted by the **verification/rollout ticket (FRE-NEW-3 below)**, and
-master gates it at integration. The ADR does **not** close when the last child merges; it
-closes when FRE-NEW-3 shows AC-1…AC-6 holding together with the flag on.
+across **both** live recall paths (`query_memory` + `query_memory_broad`), with relevance
+ordering, the floor, and correct telemetry in place, verified on FRE-489 with the flag on* —
+is asserted by the **verification/rollout ticket** (the last child below), and master gates it
+at integration. The ADR does **not** close when the last child merges; it closes when that
+ticket shows AC-1a…AC-7 holding together with the flag on.
 
 ---
 

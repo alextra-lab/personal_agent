@@ -532,6 +532,18 @@ class AppConfig(BaseSettings):
         default=10,
         description="Number of top candidates to re-score with reranker",
     )
+    reranker_input_cap: int = Field(
+        default=50,
+        ge=1,
+        description=(
+            "FRE-672: max candidates passed *into* the cross-attention reranker per "
+            "recall. The reranker cross-attends over every document it receives, so "
+            "its latency scales with this cap, not with recall_candidate_cap. Only "
+            "the top-N candidates by vector score are reranked; the rest pass through "
+            "on their vector+recency score. Small by design (positives sit in the "
+            "high-vector-score head); calibrated against recall@5 in FRE-655's A/B."
+        ),
+    )
 
     # --- Relevance-bounded recall (ADR-0100 / FRE-653) ---
     relevance_bounded_recall_enabled: bool = Field(

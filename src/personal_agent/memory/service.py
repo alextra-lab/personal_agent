@@ -108,6 +108,48 @@ def _rank_conversations_by_relevance(
     )
 
 
+def _select_rerank_candidates(
+    conversations: Sequence[TurnNode],
+    vector_scores: dict[str, float],
+    input_cap: int,
+) -> list[int]:
+    """Select indices of the top-N candidates by vector score for reranking (FRE-672).
+
+    The cross-attention reranker cross-attends over every document it is sent, so its
+    latency scales with the candidate count (FRE-656: ~4.4 s over the 500-turn set).
+    Most candidates are low-vector-score distractors the reranker will not promote.
+    This bounds the reranker input to the ``input_cap`` candidates with the highest
+    vector score — where cross-attention adjudication adds value — and lets the rest
+    pass through on their existing vector+recency score (they receive no reranker
+    score, so ``_calculate_relevance_scores`` scores them on the non-reranker path).
+
+    A conversation's vector score is the max cosine similarity across its
+    ``key_entities`` (0.0 if none matched the vector query), mirroring
+    ``_calculate_relevance_scores``. The sort is stable, so equal-score turns keep
+    their input (candidate-query) order.
+
+    Args:
+        conversations: Candidate turns, in candidate-query order.
+        vector_scores: Map of entity name to cosine similarity from the vector query.
+        input_cap: Max number of candidate indices to return.
+
+    Returns:
+        Indices into ``conversations`` of the top-``input_cap`` candidates by vector
+        score, in descending score order.
+    """
+
+    def _conv_vector_score(conv: TurnNode) -> float:
+        hits = [vector_scores[e] for e in conv.key_entities if e in vector_scores]
+        return max(hits) if hits else 0.0
+
+    ranked = sorted(
+        range(len(conversations)),
+        key=lambda i: _conv_vector_score(conversations[i]),
+        reverse=True,
+    )
+    return ranked[:input_cap]
+
+
 def _filter_entities_by_floor(
     vector_results: Sequence[dict[str, Any]],
     floor: float,
@@ -1754,25 +1796,38 @@ class MemoryService:
                             )
                         )
 
-                # --- Reranker: re-score candidates via cross-attention ---
+                # --- Reranker: re-score top-N candidates via cross-attention (FRE-672) ---
+                # The reranker cross-attends over every document it receives, so its
+                # cost scales with candidate count, not with recall_candidate_cap. Bound
+                # the input to the top-N by vector score; the rest pass through on their
+                # vector+recency score (no reranker_scores entry → non-reranker path).
                 reranker_scores: dict[str, float] = {}
                 if current_settings.reranker_enabled and query_text and len(conversations) > 1:
                     try:
                         from personal_agent.memory.reranker import rerank  # noqa: PLC0415
 
-                        docs = [c.summary or c.user_message or "" for c in conversations]
+                        rerank_indices = _select_rerank_candidates(
+                            conversations,
+                            vector_scores_for_ranking,
+                            current_settings.reranker_input_cap,
+                        )
+                        docs = [
+                            conversations[i].summary or conversations[i].user_message or ""
+                            for i in rerank_indices
+                        ]
                         rerank_results = await rerank(
                             query=query_text,
                             documents=docs,
                             top_k=current_settings.reranker_top_k,
                         )
-                        # Map conversation turn_id to normalized reranker score
+                        # rr.index is into the bounded docs list; map back to conversations.
                         if rerank_results:
                             max_score = max(r.score for r in rerank_results)
                             for rr in rerank_results:
-                                if rr.index < len(conversations):
+                                if rr.index < len(rerank_indices):
+                                    conv_idx = rerank_indices[rr.index]
                                     norm = rr.score / max_score if max_score > 0 else 0.0
-                                    reranker_scores[conversations[rr.index].turn_id] = norm
+                                    reranker_scores[conversations[conv_idx].turn_id] = norm
                     except Exception as rerank_exc:
                         log.warning(
                             "reranker_integration_failed",

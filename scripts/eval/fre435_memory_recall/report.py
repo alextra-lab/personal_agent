@@ -77,6 +77,11 @@ class RunReport:
         k_sweep: The ``k`` values swept.
         probe_set: Path/label of the probe set used.
         cases: Per-case results.
+        wipe_between_cases: Whether the substrate was wiped before each case
+            (FRE-491 per-case isolation). A run *without* it shares one graph
+            across all cases, so reused entity names cross-contaminate and the
+            numbers are not a valid per-case baseline — the stamp keeps that
+            from being misread (codex plan-review, FRE-491).
     """
 
     run_id: str
@@ -87,6 +92,8 @@ class RunReport:
     k_sweep: tuple[int, ...]
     probe_set: str
     cases: tuple[CaseResult, ...]
+    wipe_between_cases: bool = False
+    distractor_background_n: int = 0
 
 
 @dataclass(frozen=True)
@@ -174,6 +181,8 @@ def render_json(report: RunReport) -> str:
             "prod_k": report.prod_k,
             "k_sweep": list(report.k_sweep),
             "probe_set": report.probe_set,
+            "wipe_between_cases": report.wipe_between_cases,
+            "distractor_background_n": report.distractor_background_n,
         },
         "aggregate": asdict(agg),
         "cases": [_case_to_dict(c) for c in report.cases],
@@ -203,6 +212,18 @@ def render_markdown(report: RunReport) -> str:
         f"- **write_mode**: `{report.write_mode}`",
         f"- **embedding_backend**: `{report.embedding_backend}`"
         + ("  ⚠️ keyword-only (no vector search)" if report.embedding_backend != "real" else ""),
+        "- **isolation**: "
+        + (
+            "per-case isolation (substrate wiped before each case)"
+            if report.wipe_between_cases
+            else "⚠️ NO per-case isolation — shared graph, cases cross-contaminate"
+        ),
+        f"- **distractor_background**: {report.distractor_background_n} live Turns"
+        + (
+            "  (recency-window pressure)"
+            if report.distractor_background_n
+            else "  ⚠️ none — recall is near-trivial under per-case isolation"
+        ),
         f"- **prod_k**: {report.prod_k} · **k_sweep**: {list(report.k_sweep)}",
         f"- **timestamp**: {report.timestamp}",
         "",

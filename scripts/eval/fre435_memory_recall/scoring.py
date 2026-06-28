@@ -78,10 +78,19 @@ def flatten_recall(
         pairs.append((f"{ENTITY_NS}{raw.strip().lower()}", (score, -index)))
     for index, episode in enumerate(episodes):
         raw = _episode_key(episode)
-        if raw is None:
-            continue
-        score = relevance_scores.get(raw, -math.inf)
-        pairs.append((f"{EPISODE_NS}{raw}", (score, -(index + len(entities)))))
+        order = -(index + len(entities))
+        score = relevance_scores.get(raw, -math.inf) if raw is not None else -math.inf
+        if raw is not None:
+            pairs.append((f"{EPISODE_NS}{raw}", (score, order)))
+        # Episode-centric recall (FRE-491): query_memory never returns entities
+        # directly — the entities a recalled Turn surfaces are its key_entities.
+        # Emit them in the entity namespace, ranked by the episode's relevance,
+        # so an expected entity scores a hit when a Turn that discusses it is
+        # recalled. Dedup (first occurrence wins) keeps the best-ranked instance.
+        for key_entity in episode.get("key_entities", []) or []:
+            name = str(key_entity).strip()
+            if name:
+                pairs.append((f"{ENTITY_NS}{name.lower()}", (score, order)))
 
     pairs.sort(key=lambda p: p[1], reverse=True)
     ordered: list[str] = []

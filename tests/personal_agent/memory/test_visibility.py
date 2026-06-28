@@ -15,14 +15,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 
 from personal_agent.memory.models import MemoryQuery, Visibility
 from personal_agent.memory.protocol import MemoryRecallQuery
 from personal_agent.memory.service import MemoryService, _build_visibility_filter
-
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -71,6 +70,20 @@ class TestBuildVisibilityFilter:
         frag, params = _build_visibility_filter("t", uid, True)
         assert params["vis_authenticated"] is True
         assert params["vis_user_id"] == str(uid)
+
+    def test_authenticated_without_user_id_grants_group(self) -> None:
+        """Group memory is revealed on the `authenticated` flag alone (FRE-673).
+
+        user_id is not required for group access — intended FRE-229 group semantics
+        (group = shared, not per-user). Locked so the executor threading fix (which
+        may pass user_id=None, authenticated=True) cannot silently change the
+        visibility surface.
+        """
+        frag, params = _build_visibility_filter("t", None, True)
+        # The group clause grants on the authenticated flag, not on a user_id match.
+        assert "t.visibility = 'group' AND $vis_authenticated = true" in frag
+        assert params["vis_authenticated"] is True
+        assert params["vis_user_id"] == ""
 
     def test_null_grace_clause_present(self) -> None:
         """IS NULL clause is present as a grace period for un-backfilled nodes."""
@@ -500,8 +513,9 @@ class TestConsolidatorVisibility:
         The test is retained as a documentation placeholder only; it asserts the
         ValidationError is raised when None is supplied.
         """
-        from personal_agent.captains_log.capture import TaskCapture
         import pydantic
+
+        from personal_agent.captains_log.capture import TaskCapture
 
         with pytest.raises(pydantic.ValidationError):
             TaskCapture(

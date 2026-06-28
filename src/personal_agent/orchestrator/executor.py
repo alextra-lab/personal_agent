@@ -2003,6 +2003,10 @@ async def step_init(
                             limit=20,
                             trace_id=ctx.trace_id,
                             query_text=ctx.user_message,
+                            # FRE-673: thread request identity so 'group'-visibility
+                            # memory is revealed by the chokepoint filter (FRE-229).
+                            user_id=ctx.user_id,
+                            authenticated=ctx.authenticated,
                         )
                         ctx.memory_context = _format_broad_recall(broad)
                         conversations_found = len(ctx.memory_context)
@@ -2041,6 +2045,10 @@ async def step_init(
                             query,
                             feedback_key=ctx.session_id,
                             query_text=ctx.user_message,
+                            # FRE-673: thread request identity so 'group'-visibility
+                            # memory is revealed by the chokepoint filter (FRE-229).
+                            user_id=ctx.user_id,
+                            authenticated=ctx.authenticated,
                         )
                         ctx.memory_context = [
                             {

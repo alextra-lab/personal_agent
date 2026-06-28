@@ -19,9 +19,10 @@ instead of the JPEG.
 The failure is a chain of three layers, each verified in code:
 
 1. **Upload stores bytes in R2.** `uploads_router.py` persists the `artifacts` row with the
-   browser-declared `content_type` (`image/png|jpeg|gif|webp`, `application/pdf` all allowlisted at
-   `uploads_router.py:46-59`); the bytes land in R2 via the presigned PUT. The metadata canon is
-   Postgres (`docker/postgres/init.sql:349-365`).
+   browser-declared `content_type` (the upload allowlist at `uploads_router.py:46-59` includes
+   `image/png|jpeg|gif|webp`, `image/svg+xml`, `application/pdf`, and text types — this ADR's v1 scope
+   is the raster image subset plus PDF); the bytes land in R2 via the presigned PUT. The metadata
+   canon is Postgres (`docker/postgres/init.sql:349-365`).
 2. **Attachment is flattened to a text pointer.** `service/app.py:187-211`
    (`_augment_message_with_attachments`) *prepends a plain-text block* to the user message —
    `"[Attachments — call artifact_read(artifact_id) to read content:]"` — and passes the augmented
@@ -67,12 +68,17 @@ Two distinct missing pieces, and a deeper truth behind both:
 - `_determine_initial_model_role` (`executor.py:1309`) always returns `PRIMARY`; the model is
   profile-bound. There is **no `supports_vision` flag** in `ModelDefinition`
   (`llm_client/models.py`) or `config/models.yaml`.
-- **Both profiles' primaries are vision-capable.** The Qwen3.6-35B-A3B models (`primary`,
-  `sub_agent`) are served by the SLM Server **remotely via the tunnel** (not on the VPS — the VPS
-  hardware envelope is irrelevant to vision), and are vision-capable. The cloud Claude models
-  (`claude_sonnet`, `claude_haiku`) are vision-capable. Therefore vision is available on whichever
-  profile is active, and **an attached image follows the same trust boundary the turn's text already
-  crosses — no new data-egress boundary is introduced.**
+- **Vision capability is a deployment property, not yet modeled in config.** Per the owner, the
+  Qwen3.6-35B-A3B models (`primary`, `sub_agent`) are served by the SLM Server **remotely via the
+  tunnel** (not on the VPS — the VPS hardware envelope is irrelevant to vision) and are vision-capable
+  on the deployed build; the cloud Claude models (`claude_sonnet`, `claude_haiku`) are vision-capable.
+  This is **not verifiable from the repository** — there is no capability metadata on
+  `ModelDefinition` today, which is precisely the gap this ADR closes by adding a `supports_vision`
+  flag that *records* the deployed reality. Routing keys off that declared flag, never off a hardcoded
+  model name or an unverifiable assumption. The data-egress property holds independently of the flag:
+  **an attached image follows the same trust boundary the turn's text already crosses** (it goes to
+  whatever model the turn's profile already routes to — own SLM server on local, Anthropic on cloud),
+  so vision introduces **no new data-egress boundary**.
 
 ---
 
@@ -122,12 +128,21 @@ blocks) to `ModelDefinition`, set on the model definitions in `config/models.yam
 `primary`, `sub_agent`, `claude_sonnet`, `claude_haiku`). When a turn carries an attachment, the
 routing/turn-assembly layer **asserts the selected model supports the required modality**:
 
-- If the selected model is capable → proceed (the common case: both profile primaries are vision
-  capable, so no escalation is needed).
-- If not capable → escalate to a capable model under the profile's escalation policy, or, when none
-  is reachable, **fail with a clear `AttachmentUnsupported` error surfaced to the user** — never
-  silently send an image to a blind model. `ExecutionContext` gains the attachment metadata so the
-  routing seam (`_determine_initial_model_role` / its successor) can read it.
+- If the selected model is capable → proceed (the expected common case once the flags are set, since
+  the deployed primaries are vision-capable).
+- If not capable and the active profile permits cloud escalation (`cloud.yaml`:
+  `allow_cloud_escalation: true`, `escalation_model: claude_sonnet`) → escalate to the capable
+  escalation model.
+- If not capable and the active profile **forbids** escalation (`local.yaml`:
+  `allow_cloud_escalation: false`, no escalation model) → there is **no silent fallback and no
+  cross-boundary escalation**: the turn **fails fast with a clear, user-visible `AttachmentUnsupported`
+  error** naming the unsupported modality. The local-first boundary is never crossed implicitly to
+  service an attachment.
+
+`ExecutionContext` gains the attachment metadata so the routing seam (`_determine_initial_model_role`
+/ its successor) can read it. The text-pointer augmentation is **not** retained as a degraded fallback
+(that would silently reproduce the FRE-369 failure); an unsupported/mismatched attachment is rejected
+explicitly, not quietly downgraded.
 
 ### 6. Guardrails (fail-closed)
 
@@ -253,10 +268,18 @@ profiles.
 
 ### Negative Consequences
 
-- **Content type widening.** `Message.content` (`service/models.py:130`) moves from `str` to
-  `str | list[<block>]`; any code assuming string content must be audited. `history_sanitiser.py:259`
-  already type-guards; `_validate_and_fix_conversation_roles` (`executor.py:633`) and the debug log at
-  `executor.py:2731-2740` assume `str(content)` and must be made block-aware.
+- **Content type widening — a non-trivial blast radius.** `Message.content` (`service/models.py:130`)
+  moves from `str` to `str | list[<block>]`, and **`LLMResponse.content` (`llm_client/types.py:81`)
+  remains `str`** — the widening is inbound-only and the audit must confirm no inbound path assumes
+  `str`. `history_sanitiser.py:259` already type-guards, but a review pass surfaced multiple sites
+  that stringify or assume `str` content and would silently corrupt or drop a block list. The audit
+  must cover **all** content-touching sites; the known set so far:
+  `_validate_and_fix_conversation_roles` (`executor.py:633`) and the debug log
+  (`executor.py:2731-2740`); the no-think suffix injection (`executor.py:806-808`); frozen
+  volatile-context inlining (`executor.py:885-887`); the expansion-query content read that collapses
+  to `""` (`executor.py:1857`); duplicate-role merge via string interpolation
+  (`executor.py:716-719`); and token estimation that stringifies rather than counting image tokens
+  (`context_window.py:30-32`). This is a dedicated audit-and-harden ticket, not a three-line fix.
 - **Cost.** Image and document blocks consume vision tokens; the cost gate (ADR-0065) must meter
   attachment blocks. Large rasterized PDFs multiply token cost per page (hence the page cap).
 - **New dependency.** PDF rasterization needs a server-side PDF→image renderer.
@@ -268,9 +291,9 @@ profiles.
 | Risk | Severity | Mitigation |
 |------|----------|------------|
 | A non-vision model silently receives an image and hallucinates | High | Routing asserts `supports_vision`; on failure escalate or raise `AttachmentUnsupported` — fail-closed, never silent (AC-4) |
-| `content` widening breaks str-assuming code paths | Medium | Audit the three known sites (`history_sanitiser`, `_validate_and_fix_conversation_roles`, debug log); add a block-aware accessor; tests over assembled `request_messages` (AC-3) |
+| `content` widening breaks str-assuming code paths | Medium-High | Dedicated audit ticket over **all** content-stringifying sites (the known set: `history_sanitiser`, `_validate_and_fix_conversation_roles`, debug log, no-think suffix, frozen-context inlining, expansion-query read, duplicate-role merge, token estimation); add a single block-aware text accessor used everywhere; tests over assembled `request_messages` (AC-3) and over each audited site with list content |
 | Oversized/many-page attachment blows context or cost | Medium | Per-image size/dimension cap + downscale, max images/turn, max PDF pages, total payload cap, fail-closed guard (AC-7) |
-| Declared `content_type` is wrong (no server-side magic-byte sniff today) | Low | Resolution validates the declared type against the allowlist before constructing a block; mismatched/unsupported types fall back to the text-pointer behavior with a clear note rather than crashing |
+| Declared `content_type` is wrong (no server-side magic-byte sniff today) | Low | Resolution validates the declared type against the allowlist before constructing a block; mismatched/unsupported types are **rejected with a clear, user-visible error** (fail-closed) — never silently downgraded to the text-pointer behavior |
 | Local SLM rejects `image_url` blocks for a given model build | Low | Capability flag reflects the deployed build; if a profile's model is not actually vision-capable, set its flag false and routing escalates/raises rather than failing opaquely |
 
 ---
@@ -327,23 +350,33 @@ outcome.
   that, given a profile whose primary has `supports_vision=false`, the router either escalates to a
   vision-capable model or raises `AttachmentUnsupported` — and a non-vision model never receives an
   image block. *Fails if* a model with `supports_vision=false` is handed an image block.
-- **AC-5 (clean task description — FRE-661 folded)** — `ctx.user_message` and the Captain's Log
-  `task_description` for an attachment turn equal the user's original message, with no
-  `"[Attachments —"` preamble. **Check:** query the captured turn (Captain's Log / Postgres) and
-  assert the stored task description contains no attachment-preamble substring. *Fails if* the
-  augmented string is captured anywhere as the task description.
+- **AC-5 (clean task description — FRE-661 folded)** — For an attachment turn, the captured task text
+  equals the user's original submitted message **byte-for-byte**, and attachment metadata appears
+  **only** in the structured attachment carrier field. **Check:** assert `TaskCapture.user_message`
+  (`captains_log/capture.py`) and any persisted task description are byte-for-byte equal to the
+  original submitted user text; assert no artifact ID, content-type, filename, or stringified block
+  appears in that field, and that attachment metadata is present in the structured carrier. *Fails if*
+  the captured text differs from the original by any byte (preamble, appended IDs, or a stringified
+  block list) — not merely if the exact `"[Attachments —"` preamble is present.
 - **AC-6 (PDF delivered)** — A turn with a PDF attachment yields a response conditioned on PDF
   content. **Check:** a live turn with a test PDF containing a unique marker (text or figure present
   only in the PDF); assert the response references it. *Fails if* the PDF is ignored or the turn
   errors.
-- **AC-7 (guardrail fails closed)** — An oversized image or over-page-count PDF is downscaled below
-  the cap or rejected — never sent unbounded. **Check:** a unit test feeds an input exceeding the
-  configured cap and asserts it is downscaled below the cap or rejected with a clear error. *Fails if*
-  an arbitrarily large payload passes through unbounded.
-- **AC-8 (artifact_read honesty)** — `artifact_read` on an image artifact no longer presents
-  `public_url` as the way for the agent to read content. **Check:** call `artifact_read` on an image
-  artifact and assert the tool result does not direct the agent to fetch/open the URL for byte access.
-  *Fails if* it still instructs the agent to fetch the CF-Access URL for content.
+- **AC-7 (every guardrail dimension fails closed)** — For **each** configured cap — per-image byte
+  size, per-image pixel dimension, images-per-turn, PDF page count, and total per-turn payload — an
+  over-limit input is either transformed below the limit before the model call or rejected with a
+  user-visible error; the over-limit bytes never reach the model. **Check:** one parametrized test per
+  cap dimension feeds an input exceeding that specific cap and asserts (a) the resolved block is below
+  the cap or the turn is rejected, and (b) the over-limit content is absent from the assembled
+  `request_messages`. *Fails if* any single dimension (e.g. page count or multi-attachment total)
+  passes through unbounded while another is enforced.
+- **AC-8 (artifact_read honesty)** — For a binary/image artifact, `artifact_read` exposes no
+  agent-readable field that presents a URL as a byte/content-access path. **Check:** call
+  `artifact_read` on an image artifact and assert that any URL in the result is **either absent from
+  the agent-readable content or explicitly marked human-display-only** (e.g. a `human_display_url`
+  key, not a bare `public_url`), and that no returned field describes the URL as a way to read/fetch
+  the bytes. *Fails if* a bare `public_url` (or any field) remains that an agent would reasonably read
+  as a fetchable content source — the absence of the word "fetch" is not enough.
 
 **Seam owner (decomposed ADR):** the assembled intent is **AC-1 + AC-3 + AC-4 together** — structured
 attachment → resolved block → vision-capable model → response conditioned on the image, end to end.

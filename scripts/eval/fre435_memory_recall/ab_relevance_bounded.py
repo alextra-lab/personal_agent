@@ -175,9 +175,7 @@ def _set_flag(enabled: bool, floor: float) -> None:
 async def run(args: argparse.Namespace) -> int:
     """Drive the A/B and write the report."""
     cases = load_probe_set(Path(args.probe_set))
-    service = (
-        MemoryService()
-    )  # fre-375-allow: module top pins test substrate (:7688) + APP_ENV=test
+    service = MemoryService()  # fre-375-allow: test stack pinned module-top (:7688)
     if not await service.connect():
         log.error("memory_service_unreachable", uri=os.environ.get("AGENT_NEO4J_URI"))
         return 2
@@ -288,9 +286,7 @@ async def calibrate(args: argparse.Namespace) -> int:
     exclude). That negative distribution is what AC-4 turns on.
     """
     cases = load_probe_set(Path(args.probe_set))
-    service = (
-        MemoryService()
-    )  # fre-375-allow: module top pins test substrate (:7688) + APP_ENV=test
+    service = MemoryService()  # fre-375-allow: test stack pinned module-top (:7688)
     if not await service.connect() or not await service.ensure_vector_index():
         log.error("calibrate_substrate_unavailable")
         return 2

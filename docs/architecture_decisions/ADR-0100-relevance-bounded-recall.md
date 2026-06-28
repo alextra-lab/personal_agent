@@ -224,7 +224,7 @@ ceiling). See References.
 |------|----------|------------|
 | Floor set too low → low-relevance noise surfaced | Medium | Calibrate on FRE-489 negatives; AC-3 asserts negatives return empty; config-driven, tunable without redeploy of logic |
 | Floor set too high → relevant turns dropped (regression) | Medium | A/B recall@k on FRE-489 before rollout; default-off flag; AC-1/AC-2 gate |
-| Candidate set grows with KG (scaling) | Medium | Hard top-k bound (`proactive_memory_vector_top_k`); AC-4 asserts `candidate_set_size ≤ top_k` independent of corpus size |
+| Candidate set grows with KG (scaling) | Medium | Hard top-k bound (`proactive_memory_vector_top_k`); AC-5 asserts recall@5 invariance at 5× corpus (the behavioral discriminator) plus `candidate_set_size ≤ top_k` |
 | Stale facts surfaced now that time no longer filters | Low | Correctness owned by ADR-0098 Claims (supersession + contradiction); recency retained as ranking weight |
 | Hot-path latency regression from more reranking | Low | top-k cap + Stage-7 token trimming; `memory_recall` latency telemetry watched post-rollout |
 | Embedder swap later silently breaks a hardcoded floor | Low | Floor is config-driven + embedder-calibrated by contract (Decision §4) |
@@ -266,18 +266,23 @@ infrastructure.
 
 **How will we know this decision actually delivered — not just merged?**
 
-- **AC-1a — `query_memory` recalls a relevant turn older than the legacy 30-day window.**
-  With the flag on, a FRE-489 probe positive whose source turn is **>30 days old** appears in
-  `recall()` results. **Check:** harness run on the bespoke probe; assert the old positive is
-  present. *Fails if* the >window positive is absent — the exact pre-fix false-negative. A fix
-  that merely raised the window to *N* days still fails for a positive older than *N*.
+- **AC-1a — `query_memory` recall is invariant to the `recency_days` value (the cutoff is
+  *gone*, not merely *widened*).** With the flag on, a FRE-489 probe positive whose source
+  turn is older than 30 days appears in `recall()` results when `recency_days` is set to
+  **1, 30, and 365** alike. **Check:** run the probe at all three cutoff values; assert the
+  positive is present in all three result sets. *Fails if* the result changes with the cutoff
+  — which is exactly what a surviving recency gate does (at `recency_days=1` it excludes the
+  turn) and what a fix that merely raised the window to *N* days does. Only a vector-first
+  candidate set is invariant to the cutoff value.
 
 - **AC-1b — `query_memory_broad` recalls an out-of-window topic after the seam change.**
   With the flag on and `query_text` threaded into the broad path, a FRE-489 `MEMORY_RECALL`-
-  style probe whose relevant turn is **>90 days old** appears in `recall_broad()` results.
-  **Check:** broad-path probe case; assert the >90-day topic is present. *Fails if* the broad
-  path still returns only within-window entities — proves the broad seam change actually
-  landed, not just the `query_memory` half.
+  style probe whose relevant turn is **>90 days old** appears in `recall_broad()` results —
+  specifically as a matching entity name in the result's **`entities`** field (or the
+  corresponding entry in **`turns_summary`**). **Check:** broad-path probe case; assert the
+  >90-day positive's entity name is present in `entities`. *Fails if* the broad path still
+  returns only within-window entities — proves the broad seam change actually landed, not just
+  the `query_memory` half.
 
 - **AC-2 — The returned sequence is ordered by relevance, not timestamp (defect 3).** When a
   highly-relevant **old** turn and a weakly-relevant **recent** turn are both candidates, the
@@ -313,8 +318,8 @@ infrastructure.
 
 - **AC-7 — Default-off and exactly reversible.** With `relevance_bounded_recall_enabled` off,
   recall reproduces legacy behaviour. **Check:** run the FRE-489 baseline with the flag off;
-  assert the pre-fix false-negative (AC-1a's positive absent) reproduces and metrics match the
-  FRE-491 baseline. *Fails if* the off-state diverges from legacy — the flag does not cleanly
+  assert the pre-fix false-negative (the >30-day positive from AC-1a is absent under the
+  default 30-day cutoff) reproduces and metrics match the FRE-491 baseline. *Fails if* the off-state diverges from legacy — the flag does not cleanly
   gate the change.
 
 **Seam owner (decomposed ADR):** the assembled intent — *relevance-bounded recall delivers

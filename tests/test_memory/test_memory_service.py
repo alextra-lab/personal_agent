@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import pytest
 import pytest_asyncio
 
+from personal_agent.config.settings import get_settings
 from personal_agent.memory.models import (
     ConversationNode,
     Entity,
@@ -172,9 +173,7 @@ class TestEntityManagement:
         assert record["mc"] >= 2
 
     @pytest.mark.asyncio
-    async def test_entity_access_tracking_on_creation(
-        self, memory_service, clean_test_data
-    ):
+    async def test_entity_access_tracking_on_creation(self, memory_service, clean_test_data):
         """Test that entity nodes are created with access-tracking properties (FRE-161)."""
         unique_name = f"AccessTrack_{uuid.uuid4().hex[:8]}"
         entity = Entity(
@@ -207,9 +206,7 @@ class TestEntityManagement:
         assert record["last_access_context"] == "created"
 
     @pytest.mark.asyncio
-    async def test_entity_access_tracking_defaults(
-        self, memory_service, clean_test_data
-    ):
+    async def test_entity_access_tracking_defaults(self, memory_service, clean_test_data):
         """Test that entities without explicit access-tracking properties default correctly."""
         # Create an entity with very unique name to minimize dedup
         unique_name = f"NoEmbedTest_{uuid.uuid4().hex}"
@@ -279,9 +276,7 @@ class TestRelationships:
         assert rel_id is not None
 
     @pytest.mark.asyncio
-    async def test_relationship_access_tracking_on_creation(
-        self, memory_service, clean_test_data
-    ):
+    async def test_relationship_access_tracking_on_creation(self, memory_service, clean_test_data):
         """Test that relationship properties include access-tracking (FRE-161)."""
         # Create source and target entities
         source_name = f"Source_{uuid.uuid4().hex[:8]}"
@@ -419,6 +414,93 @@ class TestMemoryQueries:
 
         assert len(result.conversations) == 1
         assert result.conversations[0].conversation_id == recent_conversation.conversation_id
+
+    @pytest.mark.asyncio
+    async def test_query_memory_flag_off_reproduces_cutoff(
+        self, memory_service, clean_test_data, monkeypatch
+    ):
+        """ADR-0100 AC-7: flag off keeps a >30-day positive absent at the default cutoff."""
+        monkeypatch.setattr(
+            get_settings(), "relevance_bounded_recall_enabled", False, raising=False
+        )
+        entity = f"AC7Topic_{uuid.uuid4().hex[:8]}"
+        old_turn = ConversationNode(
+            conversation_id=str(uuid.uuid4()),
+            timestamp=datetime.now() - timedelta(days=45),
+            user_message=f"Old discussion of {entity}",
+            assistant_response=f"{entity} notes.",
+            key_entities=[entity],
+        )
+        await memory_service.create_conversation(old_turn)
+
+        result = await memory_service.query_memory(
+            MemoryQuery(entity_names=[entity], recency_days=30, limit=10)
+        )
+
+        returned_ids = {c.conversation_id for c in result.conversations}
+        assert old_turn.conversation_id not in returned_ids
+
+    @pytest.mark.asyncio
+    async def test_query_memory_relevance_bounded_invariant_to_recency(
+        self, memory_service, clean_test_data, monkeypatch
+    ):
+        """ADR-0100 AC-1a: flag on surfaces a >30-day positive at recency_days 1, 30 and 365."""
+        monkeypatch.setattr(get_settings(), "relevance_bounded_recall_enabled", True, raising=False)
+        entity = f"AC1aTopic_{uuid.uuid4().hex[:8]}"
+        old_turn = ConversationNode(
+            conversation_id=str(uuid.uuid4()),
+            timestamp=datetime.now() - timedelta(days=120),
+            user_message=f"Old discussion of {entity}",
+            assistant_response=f"{entity} notes.",
+            key_entities=[entity],
+        )
+        await memory_service.create_conversation(old_turn)
+
+        for cutoff in (1, 30, 365):
+            result = await memory_service.query_memory(
+                MemoryQuery(entity_names=[entity], recency_days=cutoff, limit=10)
+            )
+            returned_ids = {c.conversation_id for c in result.conversations}
+            assert old_turn.conversation_id in returned_ids, (
+                f"old positive missing at recency_days={cutoff} (cutoff not removed)"
+            )
+
+    @pytest.mark.asyncio
+    async def test_query_memory_distractors_do_not_evict(
+        self, memory_service, clean_test_data, monkeypatch
+    ):
+        """ADR-0100 AC-3: recent distractors under another entity do not evict the old positive."""
+        monkeypatch.setattr(get_settings(), "relevance_bounded_recall_enabled", True, raising=False)
+        positive_entity = f"AC3Positive_{uuid.uuid4().hex[:8]}"
+        noise_entity = f"AC3Noise_{uuid.uuid4().hex[:8]}"
+
+        old_positive = ConversationNode(
+            conversation_id=str(uuid.uuid4()),
+            timestamp=datetime.now() - timedelta(days=200),
+            user_message=f"Old discussion of {positive_entity}",
+            assistant_response=f"{positive_entity} notes.",
+            key_entities=[positive_entity],
+        )
+        await memory_service.create_conversation(old_positive)
+
+        # Many recent distractor turns under a different entity.
+        for i in range(15):
+            await memory_service.create_conversation(
+                ConversationNode(
+                    conversation_id=str(uuid.uuid4()),
+                    timestamp=datetime.now() - timedelta(minutes=i),
+                    user_message=f"Recent chatter about {noise_entity} #{i}",
+                    assistant_response=f"{noise_entity} reply {i}.",
+                    key_entities=[noise_entity],
+                )
+            )
+
+        result = await memory_service.query_memory(
+            MemoryQuery(entity_names=[positive_entity], recency_days=30, limit=5)
+        )
+
+        returned_ids = {c.conversation_id for c in result.conversations}
+        assert old_positive.conversation_id in returned_ids
 
     @pytest.mark.asyncio
     async def test_get_user_interests(self, memory_service, clean_test_data):

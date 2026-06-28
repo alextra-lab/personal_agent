@@ -58,6 +58,36 @@ def test_flatten_cross_namespace_no_collision() -> None:
     assert set(ids) == {"episode:t1", "entity:t1"}
 
 
+def test_flatten_surfaces_episode_key_entities() -> None:
+    """A recalled episode contributes its key_entities as entity ids (FRE-491).
+
+    query_memory never returns entities directly; the entities a recalled Turn
+    surfaces are its key_entities. An expected entity must score a hit when a
+    Turn that discusses it is recalled.
+    """
+    ids = flatten_recall(
+        episodes=[{"turn_id": "t1", "key_entities": ["Diffraction Limit"]}],
+        entities=[],
+        relevance_scores={},
+    )
+    assert "entity:diffraction limit" in ids
+    assert "episode:t1" in ids
+
+
+def test_flatten_episode_entities_inherit_episode_rank() -> None:
+    """Episode-derived entity ids rank by the recalling episode's relevance."""
+    ids = flatten_recall(
+        episodes=[
+            {"turn_id": "hi", "key_entities": ["Wanted"]},
+            {"turn_id": "lo", "key_entities": ["Other"]},
+        ],
+        entities=[],
+        relevance_scores={"hi": 0.9, "lo": 0.1},
+    )
+    # The high-relevance episode's entity must precede the low one's.
+    assert ids.index("entity:wanted") < ids.index("entity:other")
+
+
 # ---------------------------------------------------------------------------
 # score_case
 # ---------------------------------------------------------------------------

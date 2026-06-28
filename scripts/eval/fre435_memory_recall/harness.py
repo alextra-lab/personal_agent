@@ -60,10 +60,13 @@ import argparse  # noqa: E402
 import asyncio  # noqa: E402
 import sys  # noqa: E402
 import uuid  # noqa: E402
-from datetime import datetime, timezone  # noqa: E402
+from collections.abc import Sequence  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
 from pathlib import Path  # noqa: E402
+from typing import Any  # noqa: E402
 
 import structlog  # noqa: E402
+from neo4j import AsyncGraphDatabase as Neo4jAsyncGraphDatabase  # noqa: E402
 from scripts.eval.fre435_memory_recall.metrics import WriteOutcome  # noqa: E402
 from scripts.eval.fre435_memory_recall.probes import ProbeCase, load_probe_set  # noqa: E402
 from scripts.eval.fre435_memory_recall.report import (  # noqa: E402
@@ -73,9 +76,11 @@ from scripts.eval.fre435_memory_recall.report import (  # noqa: E402
 )
 from scripts.eval.fre435_memory_recall.scoring import flatten_recall, score_case  # noqa: E402
 
+from personal_agent.config import settings  # noqa: E402
+from personal_agent.config.env_loader import Environment  # noqa: E402
 from personal_agent.memory.embeddings import generate_embedding  # noqa: E402
 from personal_agent.memory.fact import PromotionCandidate  # noqa: E402
-from personal_agent.memory.models import Entity, Relationship  # noqa: E402
+from personal_agent.memory.models import Entity, Relationship, TurnNode  # noqa: E402
 from personal_agent.memory.promote import run_promotion_pipeline  # noqa: E402
 from personal_agent.memory.protocol import MemoryRecallQuery  # noqa: E402
 from personal_agent.memory.protocol_adapter import MemoryServiceAdapter  # noqa: E402
@@ -107,10 +112,194 @@ async def detect_embedding_backend() -> str:
     return "real" if any(v != 0.0 for v in vec) else "zero-vector"
 
 
+#: Per-case isolation wipe. ``DETACH DELETE`` removes nodes + relationships but
+#: leaves schema (the ``entity_embedding`` vector index, constraints) intact, so
+#: the next case still has a working vector recall path.
+WIPE_CYPHER = "MATCH (n) DETACH DELETE n"
+
+
+async def wipe_substrate(service: MemoryService, trace_id: str) -> None:
+    """Wipe all graph data for per-case isolation (FRE-491; codex plan-review).
+
+    The bespoke gate reuses entity names across cases under first-write-wins, so
+    without a wipe an earlier case can satisfy a later case's query (false pass)
+    or freeze its description (false fail), and the true-negative abstention
+    controls get polluted by every prior case's entities. Wiping before each
+    case makes every case start from an empty graph — the precondition for a
+    valid per-case baseline.
+
+    Guarded to the FRE-375 **test** substrate: refuses unless ``environment`` is
+    ``TEST`` (belt-and-suspenders with ``MemoryService.connect``'s prod-URI
+    refusal), since a ``DETACH DELETE`` is irreversible.
+
+    Args:
+        service: A connected memory service pinned to the test substrate.
+        trace_id: Identity to thread onto the wipe for event correlation.
+
+    Raises:
+        RuntimeError: If not on the TEST substrate, or the service is not
+            connected.
+    """
+    if settings.environment != Environment.TEST:
+        raise RuntimeError(
+            "wipe_substrate refused: environment is "
+            f"{settings.environment!r}, not TEST — per-case isolation only runs "
+            "against the FRE-375 test stack (Neo4j:7688 / ES:9201 / Postgres:5433)."
+        )
+    if service.driver is None:
+        raise RuntimeError("wipe_substrate: memory service is not connected")
+    async with service.driver.session() as session:
+        await session.run(WIPE_CYPHER)
+    log.info("harness_substrate_wiped", trace_id=trace_id)
+
+
+#: Live corpus the distractor background is mined from (read-only). Overridable so
+#: nothing about the deployment is hard-coded into the public repo.
+DISTRACTOR_LIVE_NEO4J_URI = os.environ.get(
+    "FRE435_LIVE_NEO4J_URI",
+    "bolt://localhost:7687",  # fre-375-allow: READ-ONLY distractor mine (ADR-0087 §D7); never writes to prod
+)
+
+
+async def fetch_live_distractors(limit: int) -> list[dict[str, Any]]:
+    """Read real Turns from the live corpus (READ-ONLY) for a distractor background.
+
+    Per-case isolation leaves one candidate Turn, so the recency-ordered
+    candidate gate (``MATCH (c:Turn) ... ORDER BY timestamp DESC LIMIT k``) is
+    never under pressure and recall is trivially ~1.0 (FRE-491 codex review).
+    Loading real recent Turns as a background reproduces the owner's actual
+    failure mode: an older relevant Turn falling outside the recency window.
+
+    ADR-0087 §D7 permits read-only retrieval probes against live. Raw turn text is
+    **never committed** — it lands only in the ephemeral test graph; the gitignored
+    run report carries aggregates only.
+
+    Args:
+        limit: Number of recent live Turns to fetch (``<= 0`` returns none).
+
+    Returns:
+        Turn dicts with ``turn_id``/``user_message``/``assistant_response``/
+        ``key_entities``.
+    """
+    if limit <= 0:
+        return []
+    if Neo4jAsyncGraphDatabase is None:
+        raise RuntimeError("neo4j driver unavailable for distractor fetch")
+    password = os.environ.get("AGENT_NEO4J_PASSWORD") or settings.neo4j_password
+    driver = Neo4jAsyncGraphDatabase.driver(  # fre-375-allow: READ-ONLY distractor mine (ADR-0087 §D7); separate driver, never writes
+        DISTRACTOR_LIVE_NEO4J_URI, auth=(settings.neo4j_user, password)
+    )
+    try:
+        async with driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (t:Turn)
+                WHERE t.user_message IS NOT NULL
+                  AND t.key_entities IS NOT NULL AND size(t.key_entities) > 0
+                RETURN t.turn_id AS turn_id,
+                       t.user_message AS user_message,
+                       t.assistant_response AS assistant_response,
+                       t.key_entities AS key_entities
+                ORDER BY t.timestamp DESC
+                LIMIT $limit
+                """,
+                limit=limit,
+            )
+            rows = [dict(record) async for record in result]
+    finally:
+        await driver.close()
+    log.info("distractors_fetched", count=len(rows), uri=DISTRACTOR_LIVE_NEO4J_URI)
+    return rows
+
+
+async def load_distractors(
+    service: MemoryService,
+    rows: Sequence[dict[str, Any]],
+    base_time: datetime,
+    trace_id: str,
+) -> None:
+    """Replay distractor Turns into the test graph, newer than the case Turn.
+
+    Each distractor is timestamped strictly after ``base_time`` so the case's own
+    (older) relevant Turn sinks *behind* them in the recency-ordered candidate
+    window. When the background exceeds the retrieval limit the relevant Turn is
+    never fetched — the recency-first/semantic-second failure (FRE-491).
+
+    Args:
+        service: Connected memory service (test substrate).
+        rows: Distractor turn dicts from :func:`fetch_live_distractors`.
+        base_time: The case Turn's timestamp; distractors are placed after it.
+        trace_id: Identity to thread onto each write.
+    """
+    for index, row in enumerate(rows):
+        await store_turn(
+            service,
+            turn_id=f"distractor:{row['turn_id']}:{index}",
+            session_id="fre435-distractor",
+            trace_id=trace_id,
+            sequence=index,
+            user_message=row.get("user_message") or "",
+            assistant_response=row.get("assistant_response"),
+            key_entities=list(row.get("key_entities") or []),
+            timestamp=base_time + timedelta(hours=1, seconds=index),
+        )
+
+
+async def store_turn(
+    service: MemoryService,
+    *,
+    turn_id: str,
+    session_id: str,
+    trace_id: str,
+    sequence: int,
+    user_message: str,
+    assistant_response: str | None,
+    key_entities: Sequence[str],
+    timestamp: datetime,
+) -> None:
+    """Store a ``:Turn`` the way the production write path does.
+
+    The recall path (``query_memory``) retrieves ``:Turn`` nodes and surfaces the
+    entities they ``DISCUSS`` via ``key_entities``; it never returns bare entity
+    nodes (FRE-491 — verified in code). Seeding only entities therefore measured
+    an empty recall path. Reproducing the real ``create_conversation`` structure
+    (Turn + ``key_entities`` + ``Turn-[:DISCUSSES]->Entity``) is what makes the
+    harness exercise the path the system actually uses.
+
+    Args:
+        service: Connected memory service.
+        turn_id: Unique turn id (also the DISCUSSES anchor).
+        session_id: Originating session id.
+        trace_id: Identity to thread onto the write (ADR-0074).
+        sequence: Position within the session (for ordering).
+        user_message: The setup turn's user text.
+        assistant_response: The setup turn's assistant text (may be ``None``).
+        key_entities: Canonical names of the entities this turn discusses.
+        timestamp: Turn timestamp (the recall MATCH orders by it).
+    """
+    turn = TurnNode(
+        turn_id=turn_id,
+        trace_id=trace_id,
+        session_id=session_id,
+        sequence_number=sequence,
+        timestamp=timestamp,
+        user_message=user_message,
+        assistant_response=assistant_response,
+        key_entities=list(key_entities),
+    )
+    await service.create_conversation(turn)
+
+
 async def seed_replay(
     service: MemoryService, case: ProbeCase, trace_id: str, session_id: str
 ) -> WriteOutcome:
     """Seed a case's pre-extracted entities/relationships directly (offline).
+
+    Entities are created first (so the ``Entity.embedding`` vector index has
+    vectors to rank on), then the setup turns are stored via the production
+    ``create_conversation`` path so the entities are reachable through
+    ``Turn-[:DISCUSSES]->Entity`` (FRE-491). A case with no history still seeds a
+    single Turn from its entities so the prior discussion exists to be recalled.
 
     Args:
         service: Connected memory service.
@@ -144,6 +333,35 @@ async def seed_replay(
             relationship_type=rel.rel_type,
         )
         await service.create_relationship(relationship, trace_id=trace_id)
+
+    # Store the setup turns so the seeded entities are retrievable (FRE-491).
+    key_entities = list(canonical.values()) or [s.name for s in case.seed_entities]
+    now = datetime.now(timezone.utc)
+    if case.history:
+        for index, turn in enumerate(case.history):
+            await store_turn(
+                service,
+                turn_id=f"{session_id}:{index}",
+                session_id=session_id,
+                trace_id=trace_id,
+                sequence=index,
+                user_message=turn.user,
+                assistant_response=turn.assistant,
+                key_entities=key_entities,
+                timestamp=now + timedelta(seconds=index),
+            )
+    elif key_entities:
+        await store_turn(
+            service,
+            turn_id=f"{session_id}:0",
+            session_id=session_id,
+            trace_id=trace_id,
+            sequence=0,
+            user_message="; ".join(s.description or s.name for s in case.seed_entities),
+            assistant_response=None,
+            key_entities=key_entities,
+            timestamp=now,
+        )
     return WriteOutcome(
         extraction_fired=bool(case.seed_entities),
         entities_landed=landed,
@@ -179,6 +397,7 @@ async def seed_extract(
         entities = result.get("entities", []) or []
         extracted_total += len(entities)
         turn_id = f"{session_id}:{index}"
+        turn_entity_names: list[str] = []
         for ent in entities:
             name = str(ent.get("name", "")).strip()
             if not name:
@@ -195,6 +414,7 @@ async def seed_extract(
             )
             if created:
                 landed += 1
+            turn_entity_names.append(name)
             candidates.append(
                 PromotionCandidate(
                     entity_name=name,
@@ -206,6 +426,19 @@ async def seed_extract(
                     description=entity.description,
                 )
             )
+        # Store the turn via the production write path so the extracted entities
+        # are reachable through Turn-[:DISCUSSES]->Entity (FRE-491).
+        await store_turn(
+            service,
+            turn_id=turn_id,
+            session_id=session_id,
+            trace_id=trace_id,
+            sequence=index,
+            user_message=turn.user,
+            assistant_response=turn.assistant,
+            key_entities=turn_entity_names,
+            timestamp=now + timedelta(seconds=index),
+        )
     if candidates:
         await run_promotion_pipeline(service, candidates, trace_id)
     return WriteOutcome(
@@ -252,13 +485,26 @@ async def run(args: argparse.Namespace) -> int:
     if not await service.connect():
         log.error("memory_service_unreachable", uri=os.environ.get("AGENT_NEO4J_URI"))
         return 2
+    # The Entity.embedding vector index is the retrieval path's substrate. A
+    # freshly-rebuilt test Neo4j has none, so vector search would silently fall
+    # back to keyword-only and turn every case into a false negative (FRE-491:
+    # caught when the seed AC's zero-vector run never needed the index). It is a
+    # schema object, so the per-case DETACH DELETE wipe preserves it — ensure it
+    # once, here, before any case runs.
+    if not await service.ensure_vector_index():
+        log.error("vector_index_unavailable", uri=os.environ.get("AGENT_NEO4J_URI"))
+        await service.disconnect()
+        return 3
     adapter = MemoryServiceAdapter(service)
     embedding_backend = await detect_embedding_backend()
+    distractors = await fetch_live_distractors(args.distractor_background)
     log.info(
         "harness_start",
         run_id=args.run_id,
         write_mode=args.write_mode,
         embedding_backend=embedding_backend,
+        wipe_between_cases=args.wipe_between_cases,
+        distractor_background=len(distractors),
         cases=len(cases),
     )
 
@@ -267,10 +513,18 @@ async def run(args: argparse.Namespace) -> int:
         for case in cases:
             trace_id = str(uuid.uuid4())
             session_id = f"fre435-{args.run_id}-{case.case_id}"
+            if args.wipe_between_cases:
+                await wipe_substrate(service, trace_id)
+            # Capture the case time BEFORE seeding so the distractor background
+            # (placed an hour later) is strictly newer than the case's own Turn —
+            # sinking the relevant Turn behind the recency window (FRE-491).
+            case_time = datetime.now(timezone.utc)
             if args.write_mode == "extract":
                 write_outcome = await seed_extract(service, case, trace_id, session_id)
             else:
                 write_outcome = await seed_replay(service, case, trace_id, session_id)
+            if distractors:
+                await load_distractors(service, distractors, case_time, trace_id)
             retrieved, denied = await retrieve(adapter, case, trace_id, max(k_sweep))
             case_result = score_case(
                 case=case,
@@ -301,6 +555,8 @@ async def run(args: argparse.Namespace) -> int:
         k_sweep=k_sweep,
         probe_set=args.probe_set,
         cases=tuple(results),
+        wipe_between_cases=args.wipe_between_cases,
+        distractor_background_n=len(distractors),
     )
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -320,6 +576,26 @@ def main() -> int:
         default="replay",
         choices=["replay", "extract"],
         help="replay = seed entities offline; extract = real extraction+promotion (needs SLM).",
+    )
+    parser.add_argument(
+        "--wipe-between-cases",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Wipe the test substrate before each case for per-case isolation "
+            "(default on; required for a valid baseline — FRE-491 codex review). "
+            "Use --no-wipe-between-cases only for a deliberate cross-contamination probe."
+        ),
+    )
+    parser.add_argument(
+        "--distractor-background",
+        type=int,
+        default=0,
+        help=(
+            "Number of real live Turns (read-only) to load as a recency-window "
+            "distractor background after each case seed (FRE-491). 0 = pure "
+            "isolation (recall is near-trivial); sweep this to find the recall cliff."
+        ),
     )
     parser.add_argument("--out", default=DEFAULT_OUT, help="Output directory (gitignored).")
     parser.add_argument(

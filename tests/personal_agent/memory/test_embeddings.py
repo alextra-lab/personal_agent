@@ -156,6 +156,88 @@ class TestGenerateEmbeddingsBatch:
             assert all(x == 0.0 for e in embeddings for x in e)
 
 
+_CF_HEADERS = {"CF-Access-Client-Id": "id", "CF-Access-Client-Secret": "sec"}
+
+
+class TestCfAccessInjection:
+    """CF-Access injection + per-endpoint client for the embedding path (FRE-656).
+
+    The embedding client must send CF-Access headers to the Access-gated Mac SLM
+    gateway, and only to it, and must use a distinct client per endpoint (the old
+    module-global singleton bound to the first endpoint and ignored the rest).
+    """
+
+    def _fake_ctor(self, captured: list[dict[str, object]]):
+        def ctor(**kwargs: object) -> MagicMock:
+            captured.append(kwargs)
+            client = MagicMock()
+            client.embeddings.create = AsyncMock(return_value=_mock_response([[0.1] * 4]))
+            return client
+
+        return ctor
+
+    @pytest.mark.asyncio
+    async def test_slm_endpoint_gets_cf_headers(self) -> None:
+        from personal_agent.memory.embeddings import _call_embeddings_api
+
+        captured: list[dict[str, object]] = []
+        with (
+            patch.dict("personal_agent.memory.embeddings._openai_clients", {}, clear=True),
+            patch("openai.AsyncOpenAI", side_effect=self._fake_ctor(captured)),
+            patch(
+                "personal_agent.memory.embeddings.cf_access_service_token_headers",
+                return_value=dict(_CF_HEADERS),
+            ),
+        ):
+            await _call_embeddings_api(["x"], "m", "https://slm.frenchforet.com/v1")
+
+        sent = captured[0]["default_headers"]
+        assert sent["CF-Access-Client-Id"] == "id"
+        assert sent["CF-Access-Client-Secret"] == "sec"
+        # SDK default UA is WAF-blocked on the gateway → must be overridden.
+        assert sent["User-Agent"] == "seshat-memory/1.0"
+
+    @pytest.mark.asyncio
+    async def test_non_slm_endpoint_no_cf_headers(self) -> None:
+        from personal_agent.memory.embeddings import _call_embeddings_api
+
+        captured: list[dict[str, object]] = []
+        with (
+            patch.dict("personal_agent.memory.embeddings._openai_clients", {}, clear=True),
+            patch("openai.AsyncOpenAI", side_effect=self._fake_ctor(captured)),
+            patch(
+                "personal_agent.memory.embeddings.cf_access_service_token_headers",
+                return_value=dict(_CF_HEADERS),
+            ),
+        ):
+            await _call_embeddings_api(["x"], "m", "http://embeddings:8503/v1")
+
+        # Gated by hostname: even with creds available, the internal Docker
+        # endpoint must not receive the service token.
+        assert captured[0]["default_headers"] == {}
+
+    @pytest.mark.asyncio
+    async def test_distinct_client_per_endpoint(self) -> None:
+        from personal_agent.memory.embeddings import _call_embeddings_api
+
+        captured: list[dict[str, object]] = []
+        with (
+            patch.dict("personal_agent.memory.embeddings._openai_clients", {}, clear=True),
+            patch("openai.AsyncOpenAI", side_effect=self._fake_ctor(captured)),
+            patch(
+                "personal_agent.memory.embeddings.cf_access_service_token_headers",
+                return_value={},
+            ),
+        ):
+            await _call_embeddings_api(["x"], "m", "http://embeddings:8503/v1")
+            await _call_embeddings_api(["x"], "m", "https://slm.frenchforet.com/v1")
+
+        assert [c["base_url"] for c in captured] == [
+            "http://embeddings:8503/v1",
+            "https://slm.frenchforet.com/v1",
+        ]
+
+
 class TestCosineSimilarity:
     def test_identical_vectors(self) -> None:
         assert cosine_similarity([1.0, 0.0], [1.0, 0.0]) == pytest.approx(1.0)

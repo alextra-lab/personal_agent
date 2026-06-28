@@ -21,8 +21,14 @@ import httpx
 import structlog
 
 from personal_agent.config import get_settings
+from personal_agent.service.cf_service_token import cf_access_service_token_headers
 
 logger = structlog.get_logger(__name__)
+
+# Hostname of the Access-gated Mac SLM gateway (mirrors llm_client/client.py:58).
+# Requests to it must carry the CF-Access service token; the internal Docker
+# reranker (reranker:8504) must not. (FRE-656)
+_SLM_TUNNEL_HOSTNAME = "slm.frenchforet.com"
 
 
 @dataclass(frozen=True)
@@ -93,6 +99,8 @@ async def rerank(
         logger.warning("reranker_config_missing")
         return _passthrough(documents)
 
+    headers = cf_access_service_token_headers() if _SLM_TUNNEL_HOSTNAME in endpoint else {}
+
     start = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -104,6 +112,7 @@ async def rerank(
                     "documents": list(documents),
                     "top_n": top_k,
                 },
+                headers=headers,
             )
             resp.raise_for_status()
             data = resp.json()

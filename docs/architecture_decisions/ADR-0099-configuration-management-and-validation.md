@@ -1,6 +1,6 @@
 # ADR-0099 — Configuration Management & Validation (single-source role matrix · profile-divergence policy · cross-config validator)
 
-**Status:** Proposed — 2026-06-28
+**Status:** Accepted — 2026-06-28 (owner; impl chain FRE-648 → 649 → 650 Approved, 651/652 to follow)
 **Date:** 2026-06-28
 **Deciders:** Project owner (authorized 2026-06-28, FRE-644)
 **Extends:** ADR-0007 (Unified Configuration Management — established `AppConfig` as the typed-scalar authority and "secrets in `.env` only"), ADR-0031 (Model Configuration Consolidation — made `models.yaml` the source of truth for model *identity*; this ADR fixes the drift that re-entered through *role assignment*)

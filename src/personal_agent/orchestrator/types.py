@@ -224,6 +224,9 @@ class ExecutionContext:
 
     # FRE-229: owning user UUID — passed from the authenticated request for TaskCapture
     user_id: UUID | None = None
+    # FRE-673: whether the request carries a verified identity (CF Access). Threaded into
+    # memory-recall visibility scoping so 'group'-visibility memory is revealed (FRE-229).
+    authenticated: bool = False
     # FRE-213: user email + display name for the operator stanza (ADR-0052)
     user_email: str | None = None
     user_display_name: str | None = None

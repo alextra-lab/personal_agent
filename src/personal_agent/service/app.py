@@ -384,6 +384,7 @@ async def _process_chat_stream_background(
                 user_id=user_id,
                 user_email=user_email,
                 user_display_name=user_display_name,
+                authenticated=True,
             )
             response_content = result.get("reply", "No response generated")
 
@@ -1809,6 +1810,7 @@ async def chat(
             user_email=request_user.email,
             user_display_name=request_user.display_name,
             eval_mode=(channel.upper() == "EVAL"),
+            authenticated=True,
         )
 
         response_content = result.get("reply", "No response generated")

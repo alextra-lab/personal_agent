@@ -4,6 +4,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
@@ -19,6 +20,7 @@ from personal_agent.orchestrator.executor import (
     _format_broad_recall,
     _validate_and_fix_conversation_roles,
     execute_task_safe,
+    step_init,
 )
 from personal_agent.orchestrator.session import SessionManager
 from personal_agent.orchestrator.types import ExecutionContext, TaskState
@@ -1078,3 +1080,81 @@ class TestRoleValidatorMergeBug:
         assert out[asst_idxs[0]]["tool_calls"][0]["id"] == "R1"
         assert out[asst_idxs[1]]["tool_calls"][0]["id"] == "R2"
         assert "synthesis" in out[asst_idxs[2]]["content"]
+
+
+class TestExecutorRecallIdentityThreading:
+    """Executor inline recall path threads request identity (FRE-673).
+
+    The inline enrichment runs only when ``gateway_output is None``. Before the
+    fix both query_memory and query_memory_broad were called without identity, so
+    the visibility filter dropped 100% of 'group' memory → candidate_set_size=0.
+    """
+
+    @staticmethod
+    def _make_ctx(message: str, uid) -> ExecutionContext:
+        return ExecutionContext(
+            session_id="sess-673",
+            trace_id="trace-673",
+            user_message=message,
+            mode=Mode.NORMAL,
+            channel=Channel.CHAT,
+            gateway_output=None,  # forces the inline enrichment path
+            user_id=uid,
+            authenticated=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_entity_path_threads_identity(self) -> None:
+        """Entity-name recall passes ctx.user_id + ctx.authenticated to query_memory."""
+        from personal_agent.config import settings
+
+        uid = uuid4()
+        mock_memory = MagicMock()
+        mock_memory.connected = True
+        mock_memory.query_memory = AsyncMock(return_value=MemoryQueryResult())
+        mock_memory.query_memory_broad = AsyncMock(return_value={})
+
+        ctx = self._make_ctx("Tell me about Athens", uid)
+        trace_ctx = TraceContext(trace_id="trace-673", user_id=uid, session_id="sess-673")
+
+        with (
+            patch.object(settings, "enable_memory_graph", True),
+            patch("personal_agent.service.app.memory_service", mock_memory),
+            patch(
+                "personal_agent.orchestrator.executor.is_memory_recall_query", return_value=False
+            ),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        mock_memory.query_memory.assert_awaited_once()
+        kwargs = mock_memory.query_memory.call_args.kwargs
+        assert kwargs.get("user_id") == uid
+        assert kwargs.get("authenticated") is True
+
+    @pytest.mark.asyncio
+    async def test_broad_path_threads_identity(self) -> None:
+        """Broad recall passes ctx.user_id + ctx.authenticated to query_memory_broad."""
+        from personal_agent.config import settings
+
+        uid = uuid4()
+        mock_memory = MagicMock()
+        mock_memory.connected = True
+        mock_memory.query_memory = AsyncMock(return_value=MemoryQueryResult())
+        mock_memory.query_memory_broad = AsyncMock(
+            return_value={"entities": [], "sessions": [], "turns_summary": []}
+        )
+
+        ctx = self._make_ctx("What have we discussed before?", uid)
+        trace_ctx = TraceContext(trace_id="trace-673", user_id=uid, session_id="sess-673")
+
+        with (
+            patch.object(settings, "enable_memory_graph", True),
+            patch("personal_agent.service.app.memory_service", mock_memory),
+            patch("personal_agent.orchestrator.executor.is_memory_recall_query", return_value=True),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        mock_memory.query_memory_broad.assert_awaited_once()
+        kwargs = mock_memory.query_memory_broad.call_args.kwargs
+        assert kwargs.get("user_id") == uid
+        assert kwargs.get("authenticated") is True

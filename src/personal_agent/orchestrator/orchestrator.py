@@ -48,6 +48,7 @@ class Orchestrator:
         user_email: str | None = None,
         user_display_name: str | None = None,
         eval_mode: bool = False,
+        authenticated: bool = False,
     ) -> OrchestratorResult:
         """Top-level entrypoint for a single user turn.
 
@@ -72,6 +73,9 @@ class Orchestrator:
             user_display_name: Display name from the users table, if set (FRE-213).
             eval_mode: When True, side-effecting tools (e.g. create_linear_issue)
                 refuse to execute. Set by the /chat endpoint when channel=EVAL.
+            authenticated: Whether the request carries a verified CF Access identity.
+                Threaded into the executor's memory-recall visibility scoping so
+                'group'-visibility memory is revealed (FRE-229 / FRE-673).
 
         Returns:
             OrchestratorResult with reply, steps, and trace_id.
@@ -118,6 +122,7 @@ class Orchestrator:
             user_email=user_email,
             user_display_name=user_display_name,
             eval_mode=eval_mode,
+            authenticated=authenticated,
         )
 
         # Execute task

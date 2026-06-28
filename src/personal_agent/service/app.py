@@ -7,7 +7,7 @@ from typing import Any, AsyncGenerator, cast
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, Form, HTTPException
+from fastapi import Depends, FastAPI, Form, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -158,30 +158,29 @@ async def _validate_attachments(
     if not items:
         return []
 
+    ids = [att.get("artifact_id", "") for att in items if att.get("artifact_id")]
+    if not ids:
+        return []
+
+    from sqlalchemy import text as _text  # noqa: PLC0415
+
     valid: list[dict[str, str]] = []
     async with AsyncSessionLocal() as db:
-        for att in items:
-            aid = att.get("artifact_id", "")
-            if not aid:
-                continue
-            from sqlalchemy import text as _text  # noqa: PLC0415
-
-            result = await db.execute(
-                _text(
-                    "SELECT id, content_type, title FROM artifacts "
-                    "WHERE id = :id AND user_id = :uid AND upload_pending = FALSE"
-                ),
-                {"id": aid, "uid": str(user_id)},
+        result = await db.execute(
+            _text(
+                "SELECT id, content_type, title FROM artifacts "
+                "WHERE id = ANY(:ids) AND user_id = :uid AND upload_pending = FALSE"
+            ),
+            {"ids": ids, "uid": str(user_id)},
+        )
+        for row in result.fetchall():
+            valid.append(
+                {
+                    "artifact_id": str(row.id),
+                    "content_type": row.content_type or "",
+                    "title": row.title or str(row.id),
+                }
             )
-            row = result.first()
-            if row:
-                valid.append(
-                    {
-                        "artifact_id": str(row.id),
-                        "content_type": row.content_type or "",
-                        "title": row.title or str(row.id),
-                    }
-                )
     return valid
 
 
@@ -2052,6 +2051,20 @@ async def chat_stream_endpoint(
             original_trace_id=dedup.original_trace_id,
         )
         return {"session_id": session_id, "status": "streaming", "deduplicated": "true"}
+
+    # Validate attachments JSON before task launch so we can surface a 422 (FRE-369).
+    # Per-row ownership filtering happens inside the background task after the gateway
+    # pipeline (so TaskType routing is unaffected).
+    if attachments:
+        import json as _json  # noqa: PLC0415
+
+        try:
+            _json.loads(attachments)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="attachments must be valid JSON",
+            ) from exc
 
     resolved_profile = await _resolve_session_profile(
         session_id, profile, request_user.user_id, trace_id=trace_id

@@ -92,6 +92,15 @@ export function ChatInput({
       for (const file of Array.from(files)) {
         if (ACCEPTED_TYPE_SET.has(file.type)) {
           void startUpload(file);
+        } else {
+          // Show a visible error chip rather than silently dropping the file.
+          // Browsers report empty type for .md, .csv, OS-drag, and extensionless sources.
+          const clientId = crypto.randomUUID();
+          const label = file.type ? `unsupported type: ${file.type}` : 'unknown file type';
+          setUploads((prev) => [
+            ...prev,
+            { id: clientId, file, status: 'error', error: label },
+          ]);
         }
       }
     },

@@ -175,7 +175,6 @@ async def presign_upload(
         upload_url = await store.generate_presigned_put_url(
             r2_key=r2_key,
             content_type=body.content_type,
-            max_size=max_size,
             expires_in=_PRESIGN_EXPIRY_SECONDS,
         )
     except ArtifactStoreError as exc:
@@ -293,8 +292,29 @@ async def complete_upload(
         )
 
     actual_size: int = int(head.get("content_length", 0))
+    if actual_size == 0:
+        # Empty object: either the upload never arrived or HEAD propagation lag.
+        # Delete the R2 object to avoid orphaning zero-byte objects.
+        try:
+            await store.delete(r2_key=row.r2_key)
+        except ArtifactStoreError:
+            pass  # best-effort; pending row expires in 30 min regardless
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Uploaded object is empty; upload may not have reached R2 yet",
+        )
     max_size = settings.upload_max_size_bytes
     if actual_size > max_size:
+        # Oversized: delete both the R2 object and the pending DB row.
+        try:
+            await store.delete(r2_key=row.r2_key)
+        except ArtifactStoreError:
+            pass  # best-effort
+        await db.execute(
+            text("DELETE FROM artifacts WHERE id = :id AND user_id = :uid"),
+            {"id": str(artifact_id), "uid": str(request_user.user_id)},
+        )
+        await db.commit()
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"Uploaded file size {actual_size} exceeds maximum {max_size}",
@@ -334,7 +354,11 @@ async def complete_upload(
 
 
 async def expire_pending_uploads(db_factory: Any) -> int:
-    """Delete pending upload rows older than ``_UPLOAD_EXPIRY_MINUTES`` minutes.
+    """Expire pending upload rows and delete their R2 objects.
+
+    Finds rows older than ``_UPLOAD_EXPIRY_MINUTES`` minutes, deletes their
+    R2 objects (best-effort), then removes the DB rows. This prevents
+    abandoned uploads from orphaning objects in R2.
 
     Args:
         db_factory: Callable that returns an async context manager yielding
@@ -343,8 +367,36 @@ async def expire_pending_uploads(db_factory: Any) -> int:
     Returns:
         Number of rows deleted.
     """
+    store = _get_store()
+
     async with db_factory() as db:
+        # Fetch r2_keys first so we can clean up R2 before deleting the rows.
         result = await db.execute(
+            text(
+                f"""
+                SELECT r2_key FROM artifacts
+                 WHERE upload_pending = TRUE
+                   AND created_at < NOW() - INTERVAL '{_UPLOAD_EXPIRY_MINUTES} minutes'
+                """
+            )
+        )
+        rows = result.fetchall() if hasattr(result, "fetchall") else []
+        # Real SQLAlchemy rows support index access (r[0]) and attribute access (r.r2_key);
+        # use getattr with fallback so the stub and real rows both work.
+        r2_keys = [
+            getattr(r, "r2_key", None) or (r[0] if hasattr(r, "__getitem__") else None)
+            for r in rows
+        ]
+        r2_keys = [k for k in r2_keys if k]
+
+        if store is not None:
+            for r2_key in r2_keys:
+                try:
+                    await store.delete(r2_key=r2_key)
+                except ArtifactStoreError:
+                    pass  # best-effort; log is emitted inside delete()
+
+        del_result = await db.execute(
             text(
                 f"""
                 DELETE FROM artifacts
@@ -354,4 +406,4 @@ async def expire_pending_uploads(db_factory: Any) -> int:
             )
         )
         await db.commit()
-        return getattr(result, "rowcount", 0)
+        return getattr(del_result, "rowcount", 0)

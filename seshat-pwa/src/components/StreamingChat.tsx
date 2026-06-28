@@ -59,6 +59,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [lastUserMessage, setLastUserMessage] = useState<string>('');
+  const [lastAttachments, setLastAttachments] = useState<UploadedAttachment[]>([]);
   const [sessionTurnCount, setSessionTurnCount] = useState<number | null>(null);
 
   useEffect(() => {
@@ -229,6 +230,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
     if (!sessionId) return;
     localStorage.setItem(LAST_SESSION_KEY, sessionId);
     setLastUserMessage(text);
+    setLastAttachments(attachments);
     // ADR-0079: send the pill so a NEW session is established with the user's
     // selection; the server ignores it for an existing session (stored wins).
     sendMessage(text, sessionId, profile, attachments);
@@ -388,7 +390,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
                     lastUserMessage
                       ? () => {
                           dismissClassifiedError();
-                          handleSend(lastUserMessage, []);
+                          handleSend(lastUserMessage, lastAttachments);
                         }
                       : undefined
                   }
@@ -397,7 +399,7 @@ export function StreamingChat({ sessionId }: StreamingChatProps) {
                       ? () => {
                           dismissClassifiedError();
                           handleProfileChange('cloud');
-                          handleSend(lastUserMessage, []);
+                          handleSend(lastUserMessage, lastAttachments);
                         }
                       : undefined
                   }

@@ -36,9 +36,7 @@ def test_build_r2_key_happy_path() -> None:
         slug="release-notes",
         ext="md",
     )
-    expected = (
-        f"note/{_USER}/{_SESSION}/{_ART}_release-notes.md"
-    )
+    expected = f"note/{_USER}/{_SESSION}/{_ART}_release-notes.md"
     assert key == expected
 
 
@@ -283,14 +281,19 @@ async def test_delete_is_idempotent_via_client() -> None:
 
 
 @pytest.mark.asyncio
-async def test_presigned_put_url_includes_content_length_cap() -> None:
+async def test_presigned_put_url_does_not_sign_content_length() -> None:
+    """ContentLength must NOT appear in the SigV4-signed Params.
+
+    SigV4 treats ContentLength as an exact match: signing max_size means every
+    upload whose actual size differs from max_size fails with 403
+    SignatureDoesNotMatch.  Size enforcement belongs at /complete (HEAD check).
+    """
     fake = _FakeS3Client()
     store = _store_with(fake)
 
     url = await store.generate_presigned_put_url(
         r2_key="upload/u/GLOBAL/a.png",
         content_type="image/png",
-        max_size=2_000_000,
         expires_in=600,
     )
 
@@ -300,7 +303,7 @@ async def test_presigned_put_url_includes_content_length_cap() -> None:
     assert params["Bucket"] == "artifacts-test"
     assert params["Key"] == "upload/u/GLOBAL/a.png"
     assert params["ContentType"] == "image/png"
-    assert params["ContentLength"] == 2_000_000
+    assert "ContentLength" not in params, "ContentLength must not be signed (SigV4 exact-match bug)"
     assert fake.presign_calls[0]["ExpiresIn"] == 600
     assert fake.presign_calls[0]["HttpMethod"] == "PUT"
 
@@ -330,7 +333,9 @@ async def test_context_manager_opens_and_closes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_artifact_store_returns_none_when_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_get_artifact_store_returns_none_when_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Substrate gate: missing env vars => no singleton."""
     import personal_agent.storage.artifact_store as mod
 

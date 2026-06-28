@@ -59,6 +59,9 @@ class _StubSession:
             def fetchone(self) -> SimpleNamespace | None:
                 return self._r
 
+            def fetchall(self) -> list[Any]:
+                return [self._r] if self._r is not None else []
+
             def one_or_none(self) -> SimpleNamespace | None:
                 return self._r
 
@@ -150,6 +153,39 @@ async def test_presign_returns_url_and_artifact_id(monkeypatch: pytest.MonkeyPat
     assert "upload_url" in body
     assert "artifact_id" in body
     assert body["upload_url"] == "https://r2.example.com/presigned"
+
+
+@pytest.mark.asyncio
+async def test_presign_does_not_sign_content_length(monkeypatch: pytest.MonkeyPatch) -> None:
+    """generate_presigned_put_url must NOT receive max_size / ContentLength.
+
+    SigV4 signs ContentLength as an exact match; signing the cap value causes
+    every upload whose actual size differs from max_size to receive 403
+    SignatureDoesNotMatch from R2.  This test locks in the fix (FRE-369 review).
+    """
+    import personal_agent.service.uploads_router as mod
+
+    store = AsyncMock()
+    store.generate_presigned_put_url = AsyncMock(return_value="https://r2.example.com/presigned")
+    monkeypatch.setattr(mod, "_get_store", lambda: store)
+
+    session = _StubSession()
+    artifact_id = uuid4()
+    session.enqueue(_pending_row(artifact_id))
+
+    app = _build_app(session, store_mock=store)
+    with TestClient(app) as client:
+        client.post(
+            "/api/uploads/presign",
+            json={"filename": "photo.png", "content_type": "image/png", "size_hint": 1024},
+            headers={"Authorization": f"Bearer {_JWT}"},
+        )
+
+    call_kwargs = store.generate_presigned_put_url.call_args.kwargs
+    assert "max_size" not in call_kwargs, "max_size must not be passed — SigV4 exact-match bug"
+    # ContentLength must not appear anywhere in kwargs
+    for key in call_kwargs:
+        assert "content_length" not in key.lower(), f"ContentLength-like kwarg found: {key!r}"
 
 
 @pytest.mark.asyncio
@@ -388,12 +424,20 @@ async def test_complete_cross_user_isolation(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
-async def test_expire_pending_uploads_deletes_old_rows() -> None:
-    """expire_pending_uploads() executes a DELETE and returns the row count."""
-    from personal_agent.service.uploads_router import expire_pending_uploads
+async def test_expire_pending_uploads_deletes_old_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """expire_pending_uploads() fetches r2_keys, deletes R2 objects, deletes DB rows."""
+    import personal_agent.service.uploads_router as mod
+    from personal_agent.service.uploads_router import expire_pending_uploads  # noqa: PLC0415
+
+    store = AsyncMock()
+    store.delete = AsyncMock(return_value=None)
+    monkeypatch.setattr(mod, "_get_store", lambda: store)
 
     deleted_count = 3
     session = _StubSession()
+    # First execute: SELECT r2_key — returns one row with an r2_key
+    session.enqueue(SimpleNamespace(r2_key="upload/user/GLOBAL/abc.png"))
+    # Second execute: DELETE — returns rowcount
     session.enqueue(SimpleNamespace(rowcount=deleted_count))
 
     # Must be sync callable returning an async context manager (like AsyncSessionLocal).
@@ -403,6 +447,8 @@ async def test_expire_pending_uploads_deletes_old_rows() -> None:
     # The function signature accepts an AsyncSessionLocal-like factory
     n = await expire_pending_uploads(_factory)
     assert n == deleted_count
+    # R2 delete was called for the orphaned object
+    store.delete.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

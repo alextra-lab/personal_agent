@@ -310,20 +310,20 @@ class R2ArtifactStore:
         *,
         r2_key: str,
         content_type: str,
-        max_size: int,
         expires_in: int = 900,
         trace_id: str | None = None,
     ) -> str:
         """Mint a presigned PUT URL the browser can upload to directly.
 
         Used by FRE-369's user-upload flow. The presigned URL embeds the
-        bucket, key, expected content-type, and a content-length cap so a
-        misbehaving client cannot exfiltrate or oversize-bomb the bucket.
+        bucket, key, and required content-type. Size enforcement is done
+        server-side by ``/complete`` via a HEAD check — ContentLength is NOT
+        signed because SigV4 treats it as an exact-match, which would cause
+        every upload whose size differs from the signed value to fail 403.
 
         Args:
             r2_key: Destination object key.
             content_type: Required MIME type the uploader must use.
-            max_size: Content-length cap embedded in the URL.
             expires_in: URL lifetime in seconds.
             trace_id: Originating request trace_id, threaded onto failure logs
                 for §I3 identity threading.
@@ -339,7 +339,6 @@ class R2ArtifactStore:
                     "Bucket": self._bucket,
                     "Key": r2_key,
                     "ContentType": content_type,
-                    "ContentLength": max_size,
                 },
                 ExpiresIn=expires_in,
                 HttpMethod="PUT",

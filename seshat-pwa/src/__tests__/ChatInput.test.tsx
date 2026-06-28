@@ -50,7 +50,7 @@ describe('ChatInput — Send button (not streaming)', () => {
     const textarea = screen.getByPlaceholderText('Message Seshat...');
     fireEvent.change(textarea, { target: { value: '  hello  ' } });
     fireEvent.submit(textarea.closest('form')!);
-    expect(DEFAULT_PROPS.onSend).toHaveBeenCalledWith('hello');
+    expect(DEFAULT_PROPS.onSend).toHaveBeenCalledWith('hello', []);
   });
 
   it('does not call onSend when text is empty', () => {

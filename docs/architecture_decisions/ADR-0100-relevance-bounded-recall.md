@@ -1,6 +1,6 @@
 # ADR-0100: Memory Recall — Relevance-Bounded Candidate Generation
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-06-28
 **Deciders:** Owner, Architect (adr session)
 **Tags:** memory, retrieval, neo4j, recall-quality, performance
@@ -357,6 +357,14 @@ ticket shows AC-1a…AC-7 holding together with the flag on.
 **Changed By:** Architect (adr session)
 **Reason:** Routed Phase-2 fix for the memory-recall symptom, scoped by FRE-491 evidence
 (H4 — query-layer recency gating). Authored for FRE-494.
+
+### 2026-06-28 - Accepted
+**Changed By:** Owner
+**Reason:** Approved after review. Decision and verification criteria sound; addresses the
+volumetry/performance constraint (top-k bounded candidate set, recency demoted to a ranking
+weight, calibrated similarity floor) without unbounding the scan. Implementation chain
+FRE-653 → FRE-654 → FRE-655 Approved for build; FRE-655 owns the assembled seam. FRE-656
+(embedder benchmark) held Needs Approval — gated behind FRE-655.
 
 ---
 

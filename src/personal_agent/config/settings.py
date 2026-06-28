@@ -533,6 +533,51 @@ class AppConfig(BaseSettings):
         description="Number of top candidates to re-score with reranker",
     )
 
+    # --- Relevance-bounded recall (ADR-0100 / FRE-653) ---
+    relevance_bounded_recall_enabled: bool = Field(
+        default=False,
+        description=(
+            "ADR-0100: build the query_memory candidate set by relevance "
+            "(vector top-k over entity_embedding unioned with the entity-name "
+            "match, recency cutoff removed, recency demoted to a ranking weight) "
+            "instead of by recency. Default off reproduces legacy recency-gated "
+            "recall exactly."
+        ),
+    )
+    recall_similarity_floor: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "ADR-0100: minimum cosine similarity for a vector-expanded recall "
+            "candidate entity. Config-driven and embedder-calibrated — never "
+            "hardcoded. Entities below the floor are dropped before turn "
+            "expansion. 0.0 = no floor (legacy-equivalent); calibrated in FRE-655."
+        ),
+    )
+    recall_per_entity_turn_cap: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description=(
+            "ADR-0100: max turns expanded per candidate entity (most-recent), "
+            "before relevance ranking. Bounds the candidate set so distractors "
+            "under other entities cannot crowd out the relevant turn. "
+            "Config-driven so FRE-655 can calibrate without a code change."
+        ),
+    )
+    recall_candidate_cap: int = Field(
+        default=500,
+        ge=1,
+        le=5000,
+        description=(
+            "ADR-0100: hard backstop on total relevance-bounded recall candidates "
+            "after per-entity expansion. The candidate set is ordered by entity "
+            "relevance (then recency) before this cap, so the cap keeps the most "
+            "relevant turns. Config-driven so FRE-655 can calibrate it."
+        ),
+    )
+
     # --- Artifact substrate (ADR-0069 / FRE-227) ---
     # R2 (Cloudflare) holds the bytes; Postgres holds the metadata canon.
     # The agent talks to R2 via aiobotocore. The cloud-side Worker resolves

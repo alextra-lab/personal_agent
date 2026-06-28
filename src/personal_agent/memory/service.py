@@ -1,5 +1,7 @@
 """Neo4j memory service for knowledge graph operations."""
 
+import statistics
+import time
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -18,6 +20,7 @@ from personal_agent.events import (
     MemoryAccessedEvent,
     get_event_bus,
 )
+from personal_agent.llm_client.token_counter import estimate_tokens
 from personal_agent.memory.embeddings import generate_embedding
 from personal_agent.memory.fact import PromotionCandidate
 from personal_agent.memory.freshness_aggregate import (
@@ -78,6 +81,122 @@ def _build_visibility_filter(
     )
     params: dict[str, Any] = {"vis_authenticated": authenticated, "vis_user_id": user_id_str}
     return fragment, params
+
+
+def _rank_conversations_by_relevance(
+    conversations: Sequence[TurnNode],
+    relevance_scores: dict[str, float],
+) -> list[TurnNode]:
+    """Sort conversations by combined relevance score, descending (ADR-0100 defect 3).
+
+    The legacy recall path returns turns in Cypher (timestamp) order even though
+    relevance scores are computed; this applies those scores to the ordering.
+    The sort is stable, so equal-score turns keep their input order, and a turn
+    with no score is treated as 0.0.
+
+    Args:
+        conversations: Candidate turns to order.
+        relevance_scores: Map of turn_id to combined relevance score (0.0-1.0).
+
+    Returns:
+        A new list ordered by descending relevance score.
+    """
+    return sorted(
+        conversations,
+        key=lambda c: relevance_scores.get(c.turn_id, 0.0),
+        reverse=True,
+    )
+
+
+def _filter_entities_by_floor(
+    vector_results: Sequence[dict[str, Any]],
+    floor: float,
+) -> tuple[list[str], dict[str, float]]:
+    """Keep only vector-matched entities at or above the similarity floor (ADR-0100).
+
+    The floor is the safety gate that replaces the recency filter on the
+    vector-expanded branch: entities whose cosine similarity is below it are
+    dropped before turn expansion, so a relevance-keyed candidate set does not
+    admit junk (AC-4). Malformed rows (missing name or score) are skipped.
+
+    Args:
+        vector_results: Rows from the entity_embedding vector query, each with
+            ``name`` and ``score`` keys.
+        floor: Minimum cosine similarity (0.0 = no floor).
+
+    Returns:
+        Tuple of (entity names at/above the floor, name->score map).
+    """
+    names: list[str] = []
+    scores: dict[str, float] = {}
+    for row in vector_results:
+        name = row.get("name")
+        score = row.get("score")
+        if name is None or score is None:
+            continue
+        if float(score) >= floor:
+            names.append(name)
+            scores[name] = float(score)
+    return names, scores
+
+
+def _build_memory_recall_event(
+    returned: Sequence[TurnNode],
+    candidate_set_size: int,
+    vector_scores: dict[str, float],
+    vector_entity_count: int,
+    recall_latency_ms: float,
+    similarity_floor: float,
+    relevance_bounded_enabled: bool,
+) -> dict[str, Any]:
+    """Assemble the ``memory_recall`` telemetry event payload (ADR-0100).
+
+    Mirrors the FRE-435 harness metrics into the live recall path so recall
+    regressions — chiefly the "no prior discussions" false negative — are
+    visible in production. The ``empty_result`` flag is derived from the actual
+    returned payload (AC-6), not asserted independently.
+
+    Args:
+        returned: The turns actually returned after ranking and limiting.
+        candidate_set_size: Number of candidate turns before ranking/limit.
+        vector_scores: Map of entity name to cosine score from the vector query.
+        vector_entity_count: Number of entities that passed the similarity floor.
+        recall_latency_ms: Wall-clock latency of the recall, in milliseconds.
+        similarity_floor: The similarity floor in effect for this recall.
+        relevance_bounded_enabled: Whether the relevance-bounded flag was on.
+
+    Returns:
+        A dict of event fields for ``log.info("memory_recall", ...)``.
+    """
+    scores = list(vector_scores.values())
+    top_vector_score = max(scores) if scores else 0.0
+    median_vector_score = statistics.median(scores) if scores else 0.0
+
+    recency_span_seconds = 0.0
+    if len(returned) > 1:
+        timestamps = [
+            c.timestamp.astimezone(timezone.utc).replace(tzinfo=None)
+            if c.timestamp.tzinfo is not None
+            else c.timestamp
+            for c in returned
+        ]
+        recency_span_seconds = (max(timestamps) - min(timestamps)).total_seconds()
+
+    recalled_token_count = sum(estimate_tokens(c.summary or c.user_message or "") for c in returned)
+
+    return {
+        "candidate_set_size": candidate_set_size,
+        "result_count": len(returned),
+        "empty_result": len(returned) == 0,
+        "top_vector_score": round(top_vector_score, 4),
+        "median_vector_score": round(median_vector_score, 4),
+        "vector_entity_count": vector_entity_count,
+        "recency_span_seconds": round(recency_span_seconds, 3),
+        "recall_latency_ms": round(recall_latency_ms, 3),
+        "recalled_token_count": recalled_token_count,
+        "similarity_floor": round(similarity_floor, 4),
+        "relevance_bounded_enabled": relevance_bounded_enabled,
+    }
 
 
 class MemoryService:
@@ -1440,46 +1559,148 @@ class MemoryService:
 
         try:
             async with self.driver.session() as session:
+                current_settings = get_settings()
+                relevance_bounded = current_settings.relevance_bounded_recall_enabled
+                recall_start = time.perf_counter()
+
+                # --- Hybrid: vector similarity search over entity_embedding ---
+                # Runs before candidate generation so relevance-bounded recall can
+                # union vector-matched entities into the candidate set (ADR-0100),
+                # not merely re-score recency-selected survivors.
+                vector_results: list[Any] = []
+                if query_text:
+                    try:
+                        query_embedding = await generate_embedding(query_text, mode="query")
+                        if any(x != 0.0 for x in query_embedding):
+                            vec_top_k = (
+                                current_settings.proactive_memory_vector_top_k
+                                if relevance_bounded
+                                else min(query.limit, 20)
+                            )
+                            vector_result = await session.run(
+                                """
+                                CALL db.index.vector.queryNodes(
+                                    'entity_embedding', $top_k, $embedding
+                                )
+                                YIELD node, score
+                                RETURN node.name AS name,
+                                       node.entity_type AS entity_type,
+                                       node.description AS description,
+                                       score
+                                ORDER BY score DESC
+                                """,
+                                top_k=vec_top_k,
+                                embedding=query_embedding,
+                            )
+                            vector_results = await vector_result.data()
+                    except Exception as vec_exc:
+                        log.warning(
+                            "vector_search_failed",
+                            error=str(vec_exc),
+                            query_text_length=len(query_text),
+                            trace_id=trace_id,
+                        )
+
+                # Build vector_scores for relevance calculation; floor-filter to
+                # the candidate entities for relevance-bounded candidate generation.
+                vector_scores: dict[str, float] = {}
+                for vr in vector_results:
+                    if "name" in vr and "score" in vr:
+                        vector_scores[vr["name"]] = float(vr["score"])
+                relevant_entity_names, floored_vector_scores = _filter_entities_by_floor(
+                    vector_results, current_settings.recall_similarity_floor
+                )
+                # Apply the similarity floor consistently to the scores used for
+                # ranking (not just candidacy): under the flag, a below-floor entity
+                # must not boost relevance ranking either, or the floor would not keep
+                # junk out (AC-4). Flag off keeps legacy full-score behaviour.
+                vector_scores_for_ranking = (
+                    floored_vector_scores if relevance_bounded else vector_scores
+                )
+
                 # Build Cypher query dynamically based on query parameters
                 cypher_parts = []
+                entity_recall = bool(query.entity_names or query.entity_types)
+                cutoff_date = ""
 
-                # Build main query - find turns related to entities
-                if query.entity_names or query.entity_types:
+                if relevance_bounded and entity_recall:
+                    # ADR-0100: relevance-keyed candidate generation. Union the
+                    # entity-name/type match with vector-matched entities and bound
+                    # turn expansion *per entity* (most-recent) so recent distractors
+                    # under other entities cannot crowd out the relevant old turn.
+                    #
+                    # Contract (ADR-0100 §2/§3, AC-1a): recency_days is DEMOTED to a
+                    # ranking weight on this path — it no longer gates candidacy, so
+                    # the cutoff clause is intentionally absent. recency_days is still
+                    # honoured as a recency component inside _calculate_relevance_scores.
+                    # Callers needing a hard time window must not rely on recency_days
+                    # under the flag (tracked follow-up for the rollout ticket).
+                    #
+                    # The candidate set is ordered by entity relevance (explicit name
+                    # match = 1.0, else the floored vector score) then recency BEFORE
+                    # the candidate_cap, so the cap keeps the most relevant turns
+                    # rather than an arbitrary slice. Final per-turn relevance ranking
+                    # and the result LIMIT are applied in Python after scoring.
+                    if query.entity_names:
+                        entity_predicate = "e.name IN $entity_names"
+                        cypher_parts.append("entity_names: $entity_names")
+                    else:
+                        entity_predicate = "e.entity_type IN $entity_types"
+                        cypher_parts.append("entity_types: $entity_types")
                     base_query = f"""
                     MATCH (c:Turn)-[:DISCUSSES]->(e:Entity)
                     WHERE {vis_frag}
-                    AND """
-                    if query.entity_names:
-                        base_query += "e.name IN $entity_names"
-                        cypher_parts.append("entity_names: $entity_names")
-                    elif query.entity_types:
-                        base_query += "e.entity_type IN $entity_types"
-                        cypher_parts.append("entity_types: $entity_types")
-                elif query.conversation_ids or query.trace_ids:
-                    # Direct turn/trace lookup (conversation_ids maps to turn_id)
-                    base_query = f"MATCH (c:Turn) WHERE {vis_frag} AND "
-                    if query.conversation_ids:
-                        base_query += "c.turn_id IN $conversation_ids"
-                        cypher_parts.append("conversation_ids: $conversation_ids")
-                    elif query.trace_ids:
-                        base_query += "c.trace_id IN $trace_ids"
-                        cypher_parts.append("trace_ids: $trace_ids")
+                    AND ({entity_predicate} OR e.name IN $relevant_entity_names)
+                    WITH e, c,
+                         CASE WHEN {entity_predicate} THEN 1.0
+                              ELSE coalesce($entity_scores[e.name], 0.0) END AS escore
+                    ORDER BY c.timestamp DESC
+                    WITH e, escore, collect(DISTINCT c)[0..$per_entity_cap] AS turns
+                    UNWIND turns AS c
+                    WITH c, max(escore) AS turn_rel
+                    ORDER BY turn_rel DESC, c.timestamp DESC
+                    RETURN c
+                    LIMIT $candidate_cap
+                    """
                 else:
-                    base_query = f"MATCH (c:Turn) WHERE {vis_frag}"
+                    # Legacy recency-keyed candidate generation (flag off, or no
+                    # relevance signal: direct id lookups and the bare fallback).
+                    if query.entity_names or query.entity_types:
+                        base_query = f"""
+                        MATCH (c:Turn)-[:DISCUSSES]->(e:Entity)
+                        WHERE {vis_frag}
+                        AND """
+                        if query.entity_names:
+                            base_query += "e.name IN $entity_names"
+                            cypher_parts.append("entity_names: $entity_names")
+                        elif query.entity_types:
+                            base_query += "e.entity_type IN $entity_types"
+                            cypher_parts.append("entity_types: $entity_types")
+                    elif query.conversation_ids or query.trace_ids:
+                        # Direct turn/trace lookup (conversation_ids maps to turn_id)
+                        base_query = f"MATCH (c:Turn) WHERE {vis_frag} AND "
+                        if query.conversation_ids:
+                            base_query += "c.turn_id IN $conversation_ids"
+                            cypher_parts.append("conversation_ids: $conversation_ids")
+                        elif query.trace_ids:
+                            base_query += "c.trace_id IN $trace_ids"
+                            cypher_parts.append("trace_ids: $trace_ids")
+                    else:
+                        base_query = f"MATCH (c:Turn) WHERE {vis_frag}"
 
-                # Add WHERE clauses for recency
-                if query.recency_days:
-                    cutoff_date = (
-                        datetime.utcnow() - timedelta(days=query.recency_days)
-                    ).isoformat()
-                    base_query += " AND c.timestamp >= $cutoff_date"
+                    # Add WHERE clauses for recency
+                    if query.recency_days:
+                        cutoff_date = (
+                            datetime.utcnow() - timedelta(days=query.recency_days)
+                        ).isoformat()
+                        base_query += " AND c.timestamp >= $cutoff_date"
 
-                # Add ordering and limiting
-                base_query += """
-                RETURN DISTINCT c
-                ORDER BY c.timestamp DESC
-                LIMIT $limit
-                """
+                    # Add ordering and limiting
+                    base_query += """
+                    RETURN DISTINCT c
+                    ORDER BY c.timestamp DESC
+                    LIMIT $limit
+                    """
 
                 # Execute query
                 params: dict[str, Any] = {
@@ -1496,7 +1717,12 @@ class MemoryService:
                     params["conversation_ids"] = query.conversation_ids
                 if query.trace_ids:
                     params["trace_ids"] = query.trace_ids
-                if query.recency_days:
+                if relevance_bounded and entity_recall:
+                    params["relevant_entity_names"] = relevant_entity_names
+                    params["entity_scores"] = floored_vector_scores
+                    params["per_entity_cap"] = current_settings.recall_per_entity_turn_cap
+                    params["candidate_cap"] = current_settings.recall_candidate_cap
+                elif query.recency_days:
                     params["cutoff_date"] = cutoff_date
 
                 result = await session.run(base_query, parameters=params)
@@ -1528,45 +1754,8 @@ class MemoryService:
                             )
                         )
 
-                # --- Hybrid: vector similarity search ---
-                vector_results: list[Any] = []
-                if query_text:
-                    try:
-                        query_embedding = await generate_embedding(query_text, mode="query")
-                        if any(x != 0.0 for x in query_embedding):
-                            vector_result = await session.run(
-                                """
-                                CALL db.index.vector.queryNodes(
-                                    'entity_embedding', $top_k, $embedding
-                                )
-                                YIELD node, score
-                                RETURN node.name AS name,
-                                       node.entity_type AS entity_type,
-                                       node.description AS description,
-                                       score
-                                ORDER BY score DESC
-                                """,
-                                top_k=min(query.limit, 20),
-                                embedding=query_embedding,
-                            )
-                            vector_results = await vector_result.data()
-                    except Exception as vec_exc:
-                        log.warning(
-                            "vector_search_failed",
-                            error=str(vec_exc),
-                            query_text_length=len(query_text),
-                            trace_id=trace_id,
-                        )
-
-                # Build vector_scores dict for relevance calculation
-                vector_scores: dict[str, float] = {}
-                for vr in vector_results:
-                    if "name" in vr and "score" in vr:
-                        vector_scores[vr["name"]] = float(vr["score"])
-
                 # --- Reranker: re-score candidates via cross-attention ---
                 reranker_scores: dict[str, float] = {}
-                current_settings = get_settings()
                 if current_settings.reranker_enabled and query_text and len(conversations) > 1:
                     try:
                         from personal_agent.memory.reranker import rerank  # noqa: PLC0415
@@ -1595,10 +1784,53 @@ class MemoryService:
                 relevance_scores = await self._calculate_relevance_scores(
                     conversations,
                     query,
-                    vector_scores=vector_scores,
+                    vector_scores=vector_scores_for_ranking,
                     reranker_scores=reranker_scores,
                     trace_id=trace_id,
                 )
+
+                candidate_set_size = len(conversations)
+                if relevance_bounded and entity_recall:
+                    # ADR-0100 defect 3: order returned turns by combined relevance
+                    # and apply the result limit *after* ranking, not after the
+                    # timestamp ordering of the candidate query. Gated on entity_recall
+                    # so flag-on id-lookups / bare-fallback (legacy Cypher) are untouched.
+                    conversations = _rank_conversations_by_relevance(
+                        conversations, relevance_scores
+                    )[: query.limit]
+                    # Restrict the score map to the returned set so downstream
+                    # consumers (quality metrics, MemoryQueryResult, the recall event)
+                    # report the post-slice count, not the full candidate set.
+                    relevance_scores = {
+                        c.turn_id: relevance_scores.get(c.turn_id, 0.0) for c in conversations
+                    }
+
+                # Emit the live recall telemetry event in both flag states (pure
+                # observability — never alters the recall result; wrapped so a
+                # telemetry failure cannot break recall). Mirrors the FRE-435
+                # harness metrics into prod so the "no prior discussions" false
+                # negative becomes measurable (ADR-0100).
+                try:
+                    log.info(
+                        "memory_recall",
+                        **_build_memory_recall_event(
+                            returned=conversations,
+                            candidate_set_size=candidate_set_size,
+                            vector_scores=vector_scores_for_ranking,
+                            vector_entity_count=len(relevant_entity_names),
+                            recall_latency_ms=(time.perf_counter() - recall_start) * 1000.0,
+                            similarity_floor=current_settings.recall_similarity_floor,
+                            relevance_bounded_enabled=relevance_bounded,
+                        ),
+                        trace_id=trace_id,
+                        session_id=session_id,
+                    )
+                except Exception as recall_evt_exc:
+                    log.warning(
+                        "memory_recall_event_failed",
+                        error=str(recall_evt_exc),
+                        trace_id=trace_id,
+                    )
 
                 accessed_entity_ids = list(query.entity_names or [])
                 for conversation in conversations:

@@ -85,6 +85,10 @@
                     {
                         "type": "command",
                         "command": ".claude/hooks/deploy-approval-gate.sh"
+                    },
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/block-direct-main-push.sh"
                     }
                 ]
             },

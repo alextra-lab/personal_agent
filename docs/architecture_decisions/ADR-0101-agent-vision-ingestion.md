@@ -3,7 +3,7 @@
 **Status:** Proposed
 **Date:** 2026-06-28
 **Deciders:** lextra (owner), Seshat architecture
-**Tags:** uploads, vision, multimodal, model-routing, orchestrator, r2
+**Tags:** uploads, vision, images, model-routing, orchestrator, r2
 
 ---
 
@@ -418,7 +418,8 @@ isolation.
 ### 2026-06-28 - Proposed
 **Changed By:** lextra (adr session, Opus)
 **Reason:** Design pass for FRE-662. Turn-assembly resolution + capability-driven routing; folds
-FRE-661 as the structured-attachment carrier; scope raster + PDF, current-turn.
+FRE-661 as the structured-attachment carrier; scope raster + PDF, current-turn. *(Scope superseded by
+the 2026-06-29 update below — narrowed to images.)*
 
 ### 2026-06-29 - Scope narrowed to images
 **Changed By:** lextra (adr session, Opus)

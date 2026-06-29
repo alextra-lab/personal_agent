@@ -158,6 +158,10 @@ async def search_memory_executor(
                 query_text=query_text,
                 access_context=AccessContext.TOOL_CALL,
                 trace_id=trace_id,
+                # FRE-673: thread request identity so the FRE-229 visibility filter
+                # reveals 'group'-visibility memory on this agent-invoked recall path.
+                user_id=getattr(ctx, "user_id", None),
+                authenticated=getattr(ctx, "authenticated", False),
             )
             output = {
                 "matched_turns": [
@@ -181,6 +185,10 @@ async def search_memory_executor(
                 limit=limit,
                 access_context=AccessContext.TOOL_CALL,
                 trace_id=trace_id,
+                # FRE-673: thread request identity so the FRE-229 visibility filter
+                # reveals 'group'-visibility memory on this agent-invoked recall path.
+                user_id=getattr(ctx, "user_id", None),
+                authenticated=getattr(ctx, "authenticated", False),
             )
             output = {
                 "entities": broad.get("entities", []),

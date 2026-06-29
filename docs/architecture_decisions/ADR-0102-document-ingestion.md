@@ -1,6 +1,6 @@
 # ADR-0102: Document Ingestion (PDF) — Tiered, Capability-Routed Strategy
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-06-29
 **Deciders:** lextra (owner), Seshat architecture
 **Tags:** uploads, documents, pdf, vision, text-extraction, model-routing, orchestrator, r2, licensing
@@ -583,6 +583,15 @@ gate:
 ---
 
 ## Status Updates
+
+### 2026-06-29 - Accepted
+**Changed By:** lextra (owner; recorded by master at the merge gate)
+**Reason:** Owner accepted after the master gate merged PR #280. Implementation chain FRE-681→689
+unlocked from Needs Approval, but **dependency-gated**: the whole chain hard-depends on the ADR-0101
+image chain landing first, and the cost/override/joinability tickets should reuse the shared control
+spine being added to ADR-0101 (amendment in flight). Only **FRE-681** (license-clean PDF utility,
+independent, "can start early") is dispatchable now; FRE-682→689 stay Needs Approval until the
+ADR-0101 image chain unblocks. AC-SEAM (FRE-689) remains the single seam that closes this ADR.
 
 ### 2026-06-29 - Proposed
 **Changed By:** lextra (adr session, Opus)

@@ -184,7 +184,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0099](ADR-0099-configuration-management-and-validation.md) | Configuration Management & Validation (single-source role matrix + validator) | Accepted |
 | [ADR-0100](ADR-0100-relevance-bounded-recall.md) | Memory Recall — Relevance-Bounded Candidate Generation | Accepted |
 | [ADR-0101](ADR-0101-agent-vision-ingestion.md) | Agent Vision Ingestion of Uploaded Images | Proposed |
-| [ADR-0102](ADR-0102-document-ingestion.md) | Document Ingestion (PDF) — tiered, capability-routed | Proposed |
+| [ADR-0102](ADR-0102-document-ingestion.md) | Document Ingestion (PDF) — tiered, capability-routed | Accepted |
 
 ### Supplementary
 

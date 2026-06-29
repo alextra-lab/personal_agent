@@ -17,7 +17,7 @@ FROM ubuntu:24.04 AS builder
 # Pin to a specific commit so rebuilds are reproducible.
 # To update: change LLAMA_CPP_REF to the desired commit SHA or tag,
 # then run: make rebuild SERVICE=embeddings && make rebuild SERVICE=reranker
-ARG LLAMA_CPP_REF=277a105
+ARG LLAMA_CPP_REF=277a105dc8f8643dab54331926a9830860a03292
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \

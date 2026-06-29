@@ -196,6 +196,7 @@ services:
       - "--cache-type-v"
       - "q8_0"
       - "--flash-attn"
+      - "on"
       - "--threads"
       - "4"
     volumes:
@@ -235,6 +236,7 @@ services:
       - "--cache-type-v"
       - "q8_0"
       - "--flash-attn"
+      - "on"
       - "--ubatch-size"
       - "1024"
       - "--parallel"

@@ -56,6 +56,10 @@ doesn't have to. Your standing mandate:
 - Deferred or parked work is marked deferred, NEVER Done.
 - New issues are created in state "Needs Approval", under a Linear project.
 
+### Evidence contract (proof of Done)
+
+A ticket is Done only when its claim maps to durable evidence. Done means a merged PR whose branch maps to the ticket (fre-XXX); if the ticket cites a backing ADR with acceptance criteria, those are separately proven. A MASTER_PLAN narrative state must match current Linear state plus merged-PR evidence. Deployed-at-SHA means git log of main equals the claimed SHA and health is green. UNVERIFIABLE (no source to check) is a first-class verdict, never silently treated as PASS. scripts/reconcile_board.py is the deterministic check.
+
 ## Deploy
 - Deploy is a master-only action. Owner granted **standing approval (2026-06-26)** for three
   low-risk, reversible classes — master deploys these WITHOUT asking, then verifies + reports:

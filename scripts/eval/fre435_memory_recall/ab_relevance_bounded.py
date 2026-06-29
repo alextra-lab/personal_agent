@@ -57,9 +57,17 @@ from scripts.eval.fre435_memory_recall.harness import (  # noqa: E402
     seed_replay,
     wipe_substrate,
 )
+from scripts.eval.fre435_memory_recall.keyword_baseline import (  # noqa: E402
+    fractional_recall_at_k,
+)
 from scripts.eval.fre435_memory_recall.metrics import recall_at_k  # noqa: E402
 from scripts.eval.fre435_memory_recall.probes import ProbeCase, load_probe_set  # noqa: E402
 from scripts.eval.fre435_memory_recall.scoring import flatten_recall  # noqa: E402
+from scripts.eval.fre435_memory_recall.semantic_report import (  # noqa: E402
+    aggregate_by_register,
+    control_abstention,
+    register_delta,
+)
 
 from personal_agent.config import settings  # noqa: E402
 from personal_agent.memory.embeddings import generate_embedding  # noqa: E402
@@ -72,6 +80,8 @@ log = structlog.get_logger(__name__)
 
 DEFAULT_PROBE_SET = "scripts/eval/fre435_memory_recall/bespoke_probe.yaml"
 DEFAULT_OUT = "telemetry/evaluation/fre435-memory-recall"
+#: Recall cut-offs for the FRE-670 three-arm comparison (matches keyword_baseline.py).
+_SEMANTIC_K = (1, 5)
 
 
 @dataclass
@@ -300,6 +310,14 @@ async def calibrate(args: argparse.Namespace) -> int:
         positives: list[float] = []
         negatives: list[float] = []
         rows_out: list[dict[str, float | str]] = []
+        # FRE-670 — co-resident vector recall, the vector arm of the three-arm
+        # comparison. `_query_entity_vector_candidates` ranks the query against
+        # ALL co-seeded entities (the same 54-note corpus BM25 ranks over in
+        # keyword_baseline.py), so recall here is apples-to-apples with the BM25
+        # column (codex review #1: a wipe-per-case `ab` run would let the vector
+        # path face only one note and win trivially).
+        per_case_recall: list[tuple[str, dict[int, float]]] = []
+        control_cosines: list[float] = []
         for case in cases:
             embedding = await generate_embedding(case.query, mode="query")
             if not any(x != 0.0 for x in embedding):
@@ -330,6 +348,19 @@ async def calibrate(args: argparse.Namespace) -> int:
                     "top_negative_cosine": max(neg) if neg else -1.0,
                 }
             )
+            # Per-case recall (positives) / abstention cosine (controls).
+            ranked = [str(r.get("name", "")).strip().lower() for r in rows]
+            register = next(
+                (t.split(":", 1)[1] for t in case.tags if t.startswith("register:")), "unknown"
+            )
+            recall_expected = {n.strip().lower() for n in case.expected.entity_names if n.strip()}
+            if "type:control" in case.tags:
+                control_cosines.append(float(rows[0]["score"]) if rows else 0.0)
+            elif recall_expected:
+                recall_by_k = {
+                    k: fractional_recall_at_k(ranked, recall_expected, k) for k in _SEMANTIC_K
+                }
+                per_case_recall.append((register, recall_by_k))
             log.info(
                 "calibrate_case",
                 case=case.case_id,
@@ -353,8 +384,22 @@ async def calibrate(args: argparse.Namespace) -> int:
         "proposed_floor_fpr": proposal.false_positive_rate,
         "rows": rows_out,
     }
+    # FRE-670 three-arm vector report: per-register recall + control abstention.
+    semantic = aggregate_by_register(per_case_recall, _SEMANTIC_K)
+    abstained, controls_total = control_abstention(control_cosines, proposal.floor)
+    payload["semantic_recall"] = {
+        "overall": semantic["overall"],
+        "by_register": semantic["by_register"],
+        "register_delta_at_5": register_delta(semantic["by_register"], 5),
+        "control_abstention": {
+            "abstained": abstained,
+            "total": controls_total,
+            "floor": proposal.floor,
+        },
+    }
     (out_dir / f"calibrate-{args.run_id}.json").write_text(json.dumps(payload, indent=2))
 
+    _print_semantic_recall(semantic, abstained, controls_total, proposal.floor)
     print("\n=== FRE-655 floor calibration (co-resident, cross-case negatives) ===")
     print(f"cases_scored={len(rows_out)}")
     print(
@@ -374,6 +419,33 @@ async def calibrate(args: argparse.Namespace) -> int:
         print(f"    {p.floor:.2f}: {p.recall:.2f} / {p.false_positive_rate:.2f}")
     log.info("calibrate_done")
     return 0
+
+
+def _print_semantic_recall(
+    semantic: dict[str, dict[str, dict[int, float]]],
+    abstained: int,
+    controls_total: int,
+    floor: float,
+) -> None:
+    """Emit the FRE-670 vector arm: per-register recall@k + control abstention."""
+    overall = semantic["overall"]
+    by_register = semantic["by_register"]
+    ks = " ".join(f"@{k}={overall[k]:.3f}" for k in sorted(overall))
+    print("\n=== FRE-670 VECTOR ARM (co-resident recall over the 54-note corpus) ===")
+    print(f"positives recall {ks}")
+    for register in sorted(by_register):
+        reg = by_register[register]
+        rk = " ".join(f"@{k}={reg[k]:.3f}" for k in sorted(reg))
+        print(f"  register:{register:8s} recall {rk}")
+    delta = register_delta(by_register, 5)
+    if delta is not None:
+        print(f"  register delta @5 (natural − imagery): {delta:+.3f}")
+    if controls_total:
+        print(f"controls: abstained (top cosine < floor {floor:.3f}) {abstained}/{controls_total}")
+    print(
+        "AC2 (FRE-670): this vector recall@5 must land MATERIALLY ABOVE the BM25 keyword "
+        "recall@5 (keyword_baseline.py) on the positives."
+    )
 
 
 def _print_summary(report: ABReport, positives: list[float], negatives: list[float]) -> None:

@@ -61,6 +61,42 @@ a **PII denylist** over every authored string, and **referential queries** — a
 query never names its expected entity (else a dumb substring match passes and the
 gate can't discriminate a real recall failure).
 
+### The semantic split (`semantic_probe.yaml`, FRE-670)
+
+The FRE-489 gate is **lexical masked as semantic** — its queries share
+description-level vocabulary with the stored text, so BM25 beats the vector path
+(recall@5 1.00 vs 0.72) and 0.6B/4B embedders score identically (FRE-656). The
+FRE-670 split (54 cases) fixes that: queries are **vocabulary-divergent** (imagery /
+paraphrase, near-zero surface overlap with the note text), so keyword search falls
+over and the vector path must do real semantic matching. It adds a `register:`
+(natural vs imagery) and `type:` (positive vs control) tag taxonomy; disciplines are
+enforced by `tests/evaluation/test_fre670_semantic_probe.py` (referential + a
+content-token-Jaccard divergence guard, plus the PII denylist).
+
+**Three-arm comparison** (test substrate only; the acceptance bar is BM25 recall@5
+landing *materially below* the vector arms on the positives):
+
+```bash
+export AGENT_NEO4J_PASSWORD=<test :7688 password>   # from .env NEO4J_PASSWORD
+export AGENT_NEO4J_USER=neo4j
+
+# Arm A — BM25 keyword baseline (standing lexical-leakage guard; --probe-agnostic)
+uv run python scripts/eval/fre435_memory_recall/keyword_baseline.py \
+    --probe scripts/eval/fre435_memory_recall/semantic_probe.yaml
+
+# Arms B/C — vector path, co-resident recall over the same 54-note corpus
+scripts/eval/fre435_memory_recall/run_embedder_benchmark.sh 0.6b calibrate \
+    --probe-set scripts/eval/fre435_memory_recall/semantic_probe.yaml
+# 4B additionally needs CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET (tunnelled slm endpoint)
+scripts/eval/fre435_memory_recall/run_embedder_benchmark.sh 4b calibrate \
+    --probe-set scripts/eval/fre435_memory_recall/semantic_probe.yaml
+```
+
+The `calibrate` pass co-seeds all cases (no per-case wipe) so the vector arm ranks
+against the same corpus BM25 does — the comparison is apples-to-apples. Each arm
+reports recall@1/@5, the natural-vs-imagery register delta, and control abstention.
+Result writeup: `docs/research/2026-06-29-fre-670-semantic-probe.md`.
+
 ### Write modes
 
 - `--write-mode replay` (default, offline) — seeds the case's pre-extracted

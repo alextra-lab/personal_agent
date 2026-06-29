@@ -1,0 +1,877 @@
+# FRE-670 — vocabulary-divergent (semantic) recall probe split (ADR-0087 §D2 extension).
+#
+# WHY THIS PROBE EXISTS
+# ---------------------
+# The FRE-489 gate (bespoke_probe.yaml) is lexical-masked-as-semantic: its queries are
+# oblique about entity NAMES but share DESCRIPTION-level vocabulary with the stored note
+# text, so a plain BM25 keyword search beats the vector path (R@5 1.00 vs 0.72, FRE-656)
+# and the 0.6B and 4B embedders score identically. This split is engineered so BM25
+# CANNOT ride surface overlap: the queries describe their targets in imagery / paraphrase,
+# sharing near-zero content vocabulary with the stored text. AC2 = BM25 recall@5 lands
+# materially BELOW vector recall@5 on the positives (see tests/evaluation/
+# test_fre670_semantic_probe.py for the structural guarantees).
+#
+# PROVENANCE & PII DISCIPLINE (read before editing)
+# -------------------------------------------------
+# Owner-authored, prod-grounded query set (telemetry/archive/fre670_probe_queries.md —
+# gitignored, the auditable provenance record). The committed file is PARAPHRASED: the
+# repo is public, so no PII / personal names / home locations / verbatim transcripts. Most
+# cases are public-knowledge facts the owner happened to discuss (Knossos, King Charles III,
+# Rayleigh scattering, Kafka log compaction) and are kept verbatim; only the home location,
+# a travel companion, the two true-negative control names, and a creative-writing project
+# are genericized.
+#
+# ANTI-GAMING DISCIPLINE: the note text (seed_entities[].description) describes the real
+# STORED CONTENT in its own factual/domain vocabulary — it does NOT echo the query's
+# imagery. Divergence between query and note comes from the owner's oblique phrasing, never
+# from rewriting notes toward the bar (codex plan-review 2026-06-29).
+#
+# TAG TAXONOMY
+#   type:positive | type:control
+#   register:natural (everyday phrasing) | register:imagery (oblique / metaphor)
+#   theme:<n>  (health crete venice history science cars music csirt location affairs writing cs)
+#   pair:<id>  (links a natural case to its imagery twin — the register-delta measurement)
+#   compound   (multi-fact: ≥2 expected entities; hit = primary + ≥1 supporting)
+#   trap:over-recall (control engineered to tempt a wrong recall from a co-resident topic)
+#   true-negative    (control whose topic is genuinely absent from the corpus)
+#
+# Controls carry NO seed_entities and empty `expected` (must_not_deny: false): the
+# over-recall traps get their teeth from the co-resident positives (e.g. Egypt history is
+# a positive, so the "future Egypt trip" trap has a tempting near-neighbour to resist).
+
+cases:
+  # =====================================================================
+  # THEME 1 — Health & Diet
+  # =====================================================================
+  - case_id: h1-calcification-diet
+    tags: [type:positive, register:imagery, theme:health, compound, pair:dash]
+    note: Compound — a dietary pattern plus a specific food, queried via imagery.
+    seed_entities:
+      - name: DASH diet
+        entity_type: concept
+        description: >
+          A low-salt, plant-forward regimen clinically shown to reduce hypertension and
+          recommended against arterial calcification.
+      - name: natto
+        entity_type: concept
+        description: >
+          Fermented soybeans; the densest dietary source of long-chain menaquinone, which
+          keeps calcium deposited in bone instead of vessel walls.
+    query: >
+      Which subtle change in my eating pattern did we say could slow the buildup of mineral
+      crust inside the heart-feeding pipes — the one involving a fermented bean dish and a
+      particular tender salad leaf?
+    expected:
+      entity_names: [DASH diet, natto]
+      must_not_deny: true
+
+  - case_id: h2-mk7-molecule
+    tags: [type:positive, register:imagery, theme:health]
+    note: Single target — a vitamer, named only by its biochemistry and food sources.
+    seed_entities:
+      - name: vitamin K2 MK-7
+        entity_type: concept
+        description: >
+          A menaquinone vitamer with a long isoprenoid chain and an extended half-life; abundant
+          in matured cheese and natto; activates the protein that sequesters calcium into bone.
+    query: >
+      What long-tailed, fat-loving molecule from aged cheeses and sticky fermented beans did we
+      discuss as a guardian against hard deposits in the blood channels?
+    expected:
+      entity_names: [vitamin K2 MK-7]
+      must_not_deny: true
+
+  - case_id: h3-hummus-technique
+    tags: [type:positive, register:imagery, theme:health]
+    note: Single target — a cooking technique, queried as imagery of texture.
+    seed_entities:
+      - name: baking soda hummus technique
+        entity_type: concept
+        description: >
+          For an ultra-smooth chickpea purée, simmer with a little sodium bicarbonate and emulsify
+          the tahini with acid first; this dissolves the husks for a velvety, non-bitter result.
+    query: >
+      When we tuned that creamy legume spread, what trick with soaking, an alkaline pinch and
+      the order of blending did we say removes harshness and gives it a silk-like texture?
+    expected:
+      entity_names: [baking soda hummus technique]
+      must_not_deny: true
+
+  - case_id: h4-ratatouille-method
+    tags: [type:positive, register:imagery, theme:health, pair:ratatouille]
+    note: Imagery twin of h5 — same dish, oblique phrasing.
+    seed_entities:
+      - name: ratatouille
+        entity_type: concept
+        description: >
+          A Provençal medley of aubergine, courgette, pepper and tomato; the components are
+          sautéed individually for best results, and the aubergine peel is retained for its
+          antioxidant nasunin.
+    query: >
+      In our discussion of a Southern coastal vegetable stew, what did we decide about cooking
+      each element separately and keeping the purple skin for its protective pigment?
+    expected:
+      entity_names: [ratatouille]
+      must_not_deny: true
+
+  - case_id: h5-ratatouille-plain
+    tags: [type:positive, register:natural, theme:health, pair:ratatouille]
+    note: Natural twin of h4 — everyday phrasing of the same target.
+    seed_entities:
+      - name: ratatouille
+        entity_type: concept
+        description: >
+          A Provençal vegetable dish, also the title of an animated film, that the owner prepared
+          from garden produce.
+    query: "What is the name of that dish I prepared with all the vegetables? It was a movie name too."
+    expected:
+      entity_names: [ratatouille]
+      must_not_deny: true
+
+  - case_id: h6-dash-plain
+    tags: [type:positive, register:natural, theme:health, pair:dash]
+    note: Natural twin of h1 — everyday phrasing of the dietary pattern.
+    seed_entities:
+      - name: DASH diet
+        entity_type: concept
+        description: >
+          A reduced-sodium dietary regimen recommended for cardiovascular health, whose name is an
+          acronym written in capital letters.
+    query: "What food regime did you advise for my health — named after a sentence marker, a hyphen or something?"
+    expected:
+      entity_names: [DASH diet]
+      must_not_deny: true
+
+  - case_id: h7-legumes-plain
+    tags: [type:positive, register:natural, theme:health]
+    note: Natural single — links a food class to a health concern (seed S4).
+    seed_entities:
+      - name: arterial calcification
+        entity_type: concept
+        description: >
+          Calcium hardening of the arteries; the owner's flagged concern, addressed with a
+          pulse-rich regimen (chickpeas and red beans).
+    query: "What did we say about legumes and my health?"
+    expected:
+      entity_names: [arterial calcification]
+      must_not_deny: true
+
+  # =====================================================================
+  # THEME 2 — Travel: Crete & Greece
+  # =====================================================================
+  - case_id: c1-airline-img
+    tags: [type:positive, register:imagery, theme:crete, compound, pair:airline]
+    note: Compound — a regional carrier plus a language-practice detail, via imagery.
+    seed_entities:
+      - name: SkyExpress
+        entity_type: concept
+        description: A Greek domestic carrier used for the Heraklion leg of an April trip.
+      - name: live Greek phrase practice
+        entity_type: concept
+        description: Rehearsing newly-learned Hellenic vocabulary aloud en route.
+    query: >
+      On that spring flight from a French seaport to a big island in the eastern sea, what short
+      local airline hop did we use, and how did we test language skills while crossing the waves?
+    expected:
+      entity_names: [SkyExpress, live Greek phrase practice]
+      must_not_deny: true
+
+  - case_id: c2-airline-plain
+    tags: [type:positive, register:natural, theme:crete, pair:airline]
+    note: Natural twin of c1 — distractor risk is a similarly-named national carrier.
+    seed_entities:
+      - name: SkyExpress
+        entity_type: concept
+        description: >
+          The small regional carrier flown to the largest Aegean island, near a famous volcanic
+          caldera; not to be confused with the larger national flag carrier.
+    query: "What airline did we fly to that island near Santorini?"
+    expected:
+      entity_names: [SkyExpress]
+      must_not_deny: true
+
+  - case_id: c3-chania-greeneyes
+    tags: [type:positive, register:imagery, theme:crete]
+    note: Single — a planned-but-unreached town, tied to an admixture observation.
+    seed_entities:
+      - name: Chania
+        entity_type: concept
+        description: >
+          A Cretan harbour settlement on the original itinerary that was ultimately skipped; noted
+          for residents with pale irises, suggesting Anatolian ancestry.
+    query: >
+      Which hillside town we planned but never reached did we associate with light-eyed islanders
+      whose look hinted at influences from lands further east?
+    expected:
+      entity_names: [Chania]
+      must_not_deny: true
+
+  - case_id: c4-margarites-ceramics
+    tags: [type:positive, register:imagery, theme:crete, compound]
+    note: Compound — a pottery village and a specific workshop.
+    seed_entities:
+      - name: Margarites
+        entity_type: concept
+        description: A Cretan settlement renowned for handmade earthenware, close to a Venetian-era abbey.
+      - name: Ilys Ceramics
+        entity_type: concept
+        description: An artisan earthenware studio in that settlement.
+    query: >
+      What small pottery village near a historic monastery did we mark as a place to see clay work,
+      and which workshop name stood out there?
+    expected:
+      entity_names: [Margarites, Ilys Ceramics]
+      must_not_deny: true
+
+  - case_id: c5-knossos-lineara
+    tags: [type:positive, register:imagery, theme:crete]
+    note: Single — a Bronze-Age palace tied to an undeciphered script.
+    seed_entities:
+      - name: Knossos
+        entity_type: concept
+        description: A maze-like Minoan citadel on Crete, linked to a still-unread script (Linear A).
+    query: "Which palace-like ruin with concentric rooms did we connect to an undeciphered sign system?"
+    expected:
+      entity_names: [Knossos]
+      must_not_deny: true
+
+  - case_id: c6-greek-migration-plain
+    tags: [type:positive, register:natural, theme:crete]
+    note: Natural single — a relational hop from a migration thread to a country (seed S3).
+    seed_entities:
+      - name: Egypt
+        entity_type: concept
+        description: >
+          The North-African civilization the Bronze-Age islanders traded with; the endpoint of a
+          migration / trade thread discussed across sessions.
+    query: "Our talk about the Greek migration — which African country did it lead to?"
+    expected:
+      entity_names: [Egypt]
+      must_not_deny: true
+
+  # =====================================================================
+  # THEME 3 — Travel: Venice & Italy
+  # =====================================================================
+  - case_id: v1-base-biennale
+    tags: [type:positive, register:imagery, theme:venice, compound]
+    note: Compound — a lodging square and an art event.
+    seed_entities:
+      - name: Campo San Polo
+        entity_type: concept
+        description: The piazza where lodging was booked for the Venetian stay.
+      - name: Biennale Arte 2026
+        entity_type: concept
+        description: The Venice contemporary exhibition folded into the itinerary.
+    query: >
+      For that lagoon city visit in late May, which quiet square near a palace did we choose as our
+      base, and what art event did we weave into the plan?
+    expected:
+      entity_names: [Campo San Polo, Biennale Arte 2026]
+      must_not_deny: true
+
+  - case_id: v2-torcello
+    tags: [type:positive, register:imagery, theme:venice]
+    note: Single — a barely-inhabited island older than the city.
+    seed_entities:
+      - name: Torcello
+        entity_type: concept
+        description: >
+          A nearly-deserted marshland isle whose basilica predates the founding of Venice, holding
+          some of the oldest masonry in the lagoon.
+    query: >
+      Which barely inhabited island in the marshes, with a church older than the city itself, did we
+      flag as a place where early stone walls still watch over the water?
+    expected:
+      entity_names: [Torcello]
+      must_not_deny: true
+
+  - case_id: v3-companion-shellfish
+    tags: [type:positive, register:imagery, theme:venice]
+    note: Single — a dietary constraint of a travel companion (PII-genericized).
+    seed_entities:
+      - name: companion shellfish restriction
+        entity_type: concept
+        description: >
+          A dining limitation: one of the party does not eat crustaceans or molluscs, which narrowed
+          restaurant menu options.
+    query: >
+      During those meal plans in the canals, what constraint about one companion's plate shaped our
+      choice of dishes in local taverns?
+    expected:
+      entity_names: [companion shellfish restriction]
+      must_not_deny: true
+
+  # =====================================================================
+  # THEME 4 — History & Archaeology
+  # =====================================================================
+  - case_id: hist1-seshat
+    tags: [type:positive, register:imagery, theme:history]
+    note: Single — an Egyptian deity of record-keeping.
+    seed_entities:
+      - name: Seshat
+        entity_type: concept
+        description: >
+          An Egyptian deity overseeing scribes and archives, shown with a seven-pointed emblem above
+          her head and a tally-rib for marking the years.
+    query: >
+      When we traced early writing near the great river in the desert, which star-linked figure with a
+      notched palm branch did we name as the keeper of records?
+    expected:
+      entity_names: [Seshat]
+      must_not_deny: true
+
+  - case_id: hist2-minoan-egypt
+    tags: [type:positive, register:imagery, theme:history]
+    note: Single — Bronze-Age island/delta trade leaving shared art.
+    seed_entities:
+      - name: Minoan-Egyptian trade
+        entity_type: concept
+        description: >
+          Bronze-Age commerce between the Aegean island civilization and the Nile delta, evidenced by
+          matching fresco styles at a delta site and in the island palaces.
+    query: >
+      Which island culture in the middle sea did we say traded with the river delta, leaving shared
+      pictures in both the low-water lands and the palace walls across the waves?
+    expected:
+      entity_names: [Minoan-Egyptian trade]
+      must_not_deny: true
+
+  - case_id: hist3-migration-chain
+    tags: [type:positive, register:imagery, theme:history, compound]
+    note: Compound — a three-population migration synthesis.
+    seed_entities:
+      - name: Anatolian farmers
+        entity_type: concept
+        description: Neolithic agriculturalists from Asia Minor, the first stratum in an ancestry blend.
+      - name: Mycenaeans
+        entity_type: concept
+        description: Bronze-Age citadel-builders of mainland Greece, the final stratum in that blend.
+    query: >
+      How did we stitch together the story of early farmers, northern grassland riders, and later
+      palace-builders to explain the mix of peoples around the eastern coasts?
+    expected:
+      entity_names: [Anatolian farmers, Mycenaeans]
+      must_not_deny: true
+
+  - case_id: hist4-yamnaya
+    tags: [type:positive, register:imagery, theme:history]
+    note: Single — a steppe people, distinct target from hist3.
+    seed_entities:
+      - name: Yamnaya
+        entity_type: concept
+        description: >
+          Steppe herders from the Pontic region credited with bringing domesticated equines and the
+          cart into Copper-Age Europe.
+    query: >
+      What was that grassland people from beyond the northern sea-curve who we said carried swift hooves
+      and rolling circles into the old metal-age lands?
+    expected:
+      entity_names: [Yamnaya]
+      must_not_deny: true
+
+  # =====================================================================
+  # THEME 5 — Science & Curiosity
+  # =====================================================================
+  - case_id: sci1-rayleigh
+    tags: [type:positive, register:imagery, theme:science, compound, pair:vision]
+    note: Compound — a scattering mechanism plus a spectrum-vision tie-in.
+    seed_entities:
+      - name: Rayleigh scattering
+        entity_type: concept
+        description: >
+          The physics by which short-wavelength light is dispersed by air molecules, tinting a
+          cloudless midday heaven azure.
+      - name: X-ray vision
+        entity_type: concept
+        description: >
+          A hypothetical of perceiving high-frequency radiation, which would render opaque objects
+          transmissive.
+    query: >
+      In our talk about why the sky glows blue, what scattering story did we recall, and how did we
+      connect it to seeing through other parts of the spectrum?
+    expected:
+      entity_names: [Rayleigh scattering, X-ray vision]
+      must_not_deny: true
+
+  - case_id: sci2-mantis-shrimp
+    tags: [type:positive, register:imagery, theme:science]
+    note: Single — a creature with many photoreceptors but coarse discrimination.
+    seed_entities:
+      - name: mantis shrimp
+        entity_type: concept
+        description: >
+          A stomatopod whose eyes hold a dozen-plus photoreceptor types yet resolve tints worse than a
+          human eye — it tags wavelengths quickly rather than weighing them.
+    query: >
+      Which small clawed sea creature did we use as an example of having many colour sensors yet judging
+      hues less precisely than humans, more like reading a barcode than comparing shades?
+    expected:
+      entity_names: [mantis shrimp]
+      must_not_deny: true
+
+  - case_id: sci3-sensory-substitution
+    tags: [type:positive, register:imagery, theme:science]
+    note: Single — devices turning sound/touch into vision-like perception.
+    seed_entities:
+      - name: sensory substitution devices
+        entity_type: concept
+        description: >
+          Assistive technology converting audio or lingual electrotactile signals into perception
+          resembling sight, broadening the definition of visual awareness for blind people.
+    query: >
+      What devices that turn sound or tongue tingles into vision-like experience did we discuss, and how
+      did they reshape the idea of what counts as 'seeing'?
+    expected:
+      entity_names: [sensory substitution devices]
+      must_not_deny: true
+
+  - case_id: sci4-iit
+    tags: [type:positive, register:imagery, theme:science]
+    note: Single — a consciousness model by an Italian scientist.
+    seed_entities:
+      - name: Integrated Information Theory
+        entity_type: concept
+        description: >
+          A model proposed by a neuroscientist from Italy holding that consciousness grows with the
+          degree to which a network's data is irreducibly unified.
+    query: >
+      Which framework from an Italian brain scientist did we say treats awareness as rising with how
+      tightly information knots together in the thinking system?
+    expected:
+      entity_names: [Integrated Information Theory]
+      must_not_deny: true
+
+  - case_id: sci5-vision-plain
+    tags: [type:positive, register:natural, theme:science, pair:vision]
+    note: Natural twin of sci1/sci2 — open-ended continuation of the vision thread.
+    seed_entities:
+      - name: mantis shrimp
+        entity_type: concept
+        description: >
+          A marine crustacean discussed in a thread on perception and seeing across more of the spectrum,
+          alongside light dispersal and high-energy-ray sight.
+    query: "Let's continue our conversation about vision and how things would look if we could see more types of light and energy."
+    expected:
+      entity_names: [mantis shrimp]
+      must_not_deny: true
+
+  - case_id: sci6-orch-or
+    tags: [type:positive, register:imagery, theme:science]
+    note: Single — a quantum consciousness hypothesis by a physicist.
+    seed_entities:
+      - name: Orch-OR
+        entity_type: concept
+        description: >
+          A hypothesis attributing consciousness to minute quantum state-collapses within neuronal
+          microtubules, advanced by a renowned physicist and a clinician.
+    query: >
+      Remind me of that idea where awareness is linked to tiny probabilistic ripples inside the thinking
+      organ — the one proposed by the particle-gazer.
+    expected:
+      entity_names: [Orch-OR]
+      must_not_deny: true
+
+  # =====================================================================
+  # THEME 6 — Cars & Consumer
+  # =====================================================================
+  - case_id: car1-malus
+    tags: [type:positive, register:imagery, theme:cars, compound]
+    note: Compound — a weight-based tax plus its monthly cost driver.
+    seed_entities:
+      - name: malus au poids
+        entity_type: concept
+        description: >
+          A weight-indexed surcharge on French car registration; it proved the single largest outlay —
+          about 100 euros monthly — when pricing a successor to the present plug-in.
+      - name: monthly cost driver
+        entity_type: concept
+        description: The registration surcharge was the dominant recurring expense in the leasing maths.
+    query: >
+      When we evaluated options to replace the hybrid road-runner in late 2026, what surprise fee tied to
+      vehicle mass did we find to be the main cost driver, and about how much did it add each month?
+    expected:
+      entity_names: [malus au poids, monthly cost driver]
+      must_not_deny: true
+
+  - case_id: car2-rafale
+    tags: [type:positive, register:imagery, theme:cars]
+    note: Single — a specific French crossover model.
+    seed_entities:
+      - name: Renault Rafale
+        entity_type: concept
+        description: >
+          A recently launched Renault SUV carrying the marque's mountain-sport trim and all-wheel drive,
+          compared with battery cars during the leasing decision.
+    query: >
+      Which new French crossover with alpine branding and four driven wheels did we line up against the
+      tested electric models when thinking through the next lease?
+    expected:
+      entity_names: [Renault Rafale]
+      must_not_deny: true
+
+  - case_id: car3-slushi
+    tags: [type:positive, register:imagery, theme:cars, compound]
+    note: Compound — a frozen-drink appliance plus a refurbished-grade angle.
+    seed_entities:
+      - name: Ninja Slushi
+        entity_type: concept
+        description: A countertop appliance for making slush beverages, considered for an alpine residence.
+      - name: refurbished grade
+        entity_type: concept
+        description: Vendor condition tiers for reconditioned stock that influenced the purchase.
+    query: >
+      In our review of home cold-drink machines, what household device did we examine, and how did rebuild
+      grades factor into choosing one for the mountain-side home?
+    expected:
+      entity_names: [Ninja Slushi, refurbished grade]
+      must_not_deny: true
+
+  # =====================================================================
+  # THEME 7 — Music & Creative Studies
+  # =====================================================================
+  - case_id: mus1-parallel
+    tags: [type:positive, register:imagery, theme:music]
+    note: Single — a voice-leading rule composers avoid.
+    seed_entities:
+      - name: parallel fifths
+        entity_type: concept
+        description: >
+          Two voices moving in the same fixed interval so they fuse into one — a voice-leading move
+          classical writers shun because it collapses independence.
+    query: "What did we say happens to two melodic lines moving in a constant equal distance from each other — the thing composers avoid?"
+    expected:
+      entity_names: [parallel fifths]
+      must_not_deny: true
+
+  - case_id: mus2-intervals-img
+    tags: [type:positive, register:imagery, theme:music, pair:intervals]
+    note: Imagery twin of mus3 — a study aid for ear training.
+    seed_entities:
+      - name: interval recognition study guide
+        entity_type: concept
+        description: >
+          An ear-training reference cataloguing how each pitch gap sounds, pairing every one with a
+          well-known tune for memorisation and including self-test drills.
+    query: >
+      What study aid did we design that walks through the character of each distance between two notes, with
+      song memories as anchors and a way to quiz oneself?
+    expected:
+      entity_names: [interval recognition study guide]
+      must_not_deny: true
+
+  - case_id: mus3-intervals-plain
+    tags: [type:positive, register:natural, theme:music, pair:intervals]
+    note: Natural twin of mus2 — everyday phrasing of ear training.
+    seed_entities:
+      - name: interval recognition study guide
+        entity_type: concept
+        description: >
+          A reference aid about hearing and naming the pitch gap between two tones, built to sharpen the ear.
+    query: "I want to continue talking about the space between notes, hearing them, and getting better at naming them."
+    expected:
+      entity_names: [interval recognition study guide]
+      must_not_deny: true
+
+  # =====================================================================
+  # THEME 8 — Cybersecurity (CSIRT)
+  # =====================================================================
+  - case_id: sec1-handoff-lag
+    tags: [type:positive, register:imagery, theme:csirt]
+    note: Single — what dominates intrusion dwell time.
+    seed_entities:
+      - name: handoff lag
+        entity_type: concept
+        description: >
+          Research finding that, in security operations, post-notification queueing and ownership
+          transfers drive dwell time far more than how quickly the initial signal arrives.
+    query: >
+      When we looked at how long intruders lurk in systems, what did we decide matters more: the first beep of
+      an alarm, or delays and hand-offs after someone notices?
+    expected:
+      entity_names: [handoff lag]
+      must_not_deny: true
+
+  - case_id: sec2-miseenplace
+    tags: [type:positive, register:imagery, theme:csirt, compound]
+    note: Compound — a culinary analogy plus its structural difference from plans.
+    seed_entities:
+      - name: mise en place
+        entity_type: concept
+        description: >
+          A culinary practice of pre-arranging ingredients, drawn as a parallel to response runbooks
+          (mental-load reduction).
+      - name: no-match escalation
+        entity_type: concept
+        description: >
+          What distinguishes a response runbook from a mere checklist — a defined branch for inputs that
+          fit no rule.
+    query: >
+      Which kitchen discipline from French cooking did we compare to incident plans, and what structural twist in
+      those plans did we say goes beyond simply laying out tasks?
+    expected:
+      entity_names: [mise en place, no-match escalation]
+      must_not_deny: true
+
+  # =====================================================================
+  # THEME 9 — Location & Personal (PII-genericized)
+  # =====================================================================
+  - case_id: loc1-home
+    tags: [type:positive, register:imagery, theme:location, pair:home]
+    note: Single — the owner's home town, described obliquely (PII-genericized).
+    seed_entities:
+      - name: home village
+        entity_type: concept
+        description: >
+          The owner's residence — a hillside hamlet amid olive cultivation and kitchen gardens, a few
+          hours' drive inland from a major Mediterranean harbour.
+    query: >
+      What small Provençal town with olive trees and tomato beds did we describe as home, roughly a short-trip
+      distance from a large southern port city?
+    expected:
+      entity_names: [home village]
+      must_not_deny: true
+
+  - case_id: loc2-coords
+    tags: [type:positive, register:imagery, theme:location, compound]
+    note: Compound — the home's rough position plus a data-gap observation.
+    seed_entities:
+      - name: home village
+        entity_type: concept
+        description: >
+          The owner's hillside residence, pinned only approximately via adjacent market settlements.
+      - name: unpopulated location coordinates
+        entity_type: concept
+        description: >
+          A recorded omission — the Location record's geographic lat/long values stayed empty in the
+          knowledge store.
+    query: >
+      How did we fix the rough position of that home relative to nearby towns, and what did we note about
+      coordinates never being filled into the graph?
+    expected:
+      entity_names: [home village, unpopulated location coordinates]
+      must_not_deny: true
+
+  - case_id: loc3-home-plain
+    tags: [type:positive, register:natural, theme:location, pair:home]
+    note: Natural twin of loc1 — everyday phrasing of the home location.
+    seed_entities:
+      - name: home village
+        entity_type: concept
+        description: >
+          The owner's stated residence, an upland hamlet in a Mediterranean country north of the Pyrenees.
+    query: "Where did I say I lived, or at least had a house — somewhere in southern Europe, north of Spain?"
+    expected:
+      entity_names: [home village]
+      must_not_deny: true
+
+  # =====================================================================
+  # THEME 10 — Current Affairs
+  # =====================================================================
+  - case_id: aff1-charles
+    tags: [type:positive, register:imagery, theme:affairs, compound, pair:charles]
+    note: Compound — a visiting monarch plus an undisclosed-illness detail.
+    seed_entities:
+      - name: King Charles III
+        entity_type: concept
+        description: >
+          The reigning king of Britain, noted for an official trip overseas to a major transatlantic
+          nation.
+      - name: undisclosed cancer
+        entity_type: concept
+        description: >
+          His diagnosis — the precise variety of the disease was kept from the public.
+    query: >
+      Which visiting monarch did we mention as crossing the ocean to the large federal republic in spring 2026,
+      and what uncertainty remained about his illness details?
+    expected:
+      entity_names: [King Charles III, undisclosed cancer]
+      must_not_deny: true
+
+  - case_id: aff2-duke-kent
+    tags: [type:positive, register:imagery, theme:affairs]
+    note: Single — the oldest living member of a royal family.
+    seed_entities:
+      - name: Duke of Kent
+        entity_type: concept
+        description: >
+          The senior-most surviving figure of Britain's monarchy, born in 1935.
+    query: >
+      Among that royal family, whom did we identify as the oldest living relative, and what birth decade placed
+      him there?
+    expected:
+      entity_names: [Duke of Kent]
+      must_not_deny: true
+
+  - case_id: aff3-charles-plain
+    tags: [type:positive, register:natural, theme:affairs, pair:charles]
+    note: Natural twin of aff1 — everyday phrasing (mixed-language) of the monarch.
+    seed_entities:
+      - name: King Charles III
+        entity_type: concept
+        description: >
+          The reigning British sovereign, discussed in connection with a serious but undisclosed health
+          condition.
+    query: "What did you tell me about the roi of Great Britain? He has some serious health issue."
+    expected:
+      entity_names: [King Charles III]
+      must_not_deny: true
+
+  # =====================================================================
+  # THEME 11 — Creative Writing (PII-genericized)
+  # =====================================================================
+  - case_id: wri1-postwar-novel
+    tags: [type:positive, register:imagery, theme:writing, compound]
+    note: Compound — a story's setting plus a chapter-title motif (PII-genericized).
+    seed_entities:
+      - name: postwar institution novel
+        entity_type: concept
+        description: >
+          The owner's work of historical fiction in French, unfolding in a Rhône-valley metropolis in 1945
+          among orphanage youth.
+      - name: forge-a-heart chapter
+        entity_type: concept
+        description: >
+          A section headed with a phrase about hammering out one's resolve — a motif of hardening the spirit.
+    query: >
+      For the French story I'm crafting, what city and post-war year frame the children's lives in an institution,
+      and what kind of emotional forging is hinted in the chapter title?
+    expected:
+      entity_names: [postwar institution novel, forge-a-heart chapter]
+      must_not_deny: true
+
+  - case_id: wri2-characters
+    tags: [type:positive, register:imagery, theme:writing]
+    note: Single — the central character ensemble (names genericized).
+    seed_entities:
+      - name: novel character ensemble
+        entity_type: concept
+        description: >
+          The ensemble of protagonists at the heart of the postwar healing narrative — several recurring
+          figures followed throughout the book.
+    query: "Which cluster of character names did we track as central to that tale of recovery after conflict?"
+    expected:
+      entity_names: [novel character ensemble]
+      must_not_deny: true
+
+  # =====================================================================
+  # THEME 12 — Tech Education (CS)
+  # =====================================================================
+  - case_id: cs1-log-compaction
+    tags: [type:positive, register:imagery, theme:cs]
+    note: Single — a stream-processing retention feature.
+    seed_entities:
+      - name: log compaction
+        entity_type: concept
+        description: >
+          A Kafka retention policy that retains the latest value for each key and discards older ones, so a
+          partition becomes a compacted snapshot.
+    query: >
+      In our stream-processing lesson, what feature did we highlight that keeps only the freshest record per
+      identifier, turning a flowing topic into a stable change-log?
+    expected:
+      entity_names: [log compaction]
+      must_not_deny: true
+
+  - case_id: cs2-ktable
+    tags: [type:positive, register:imagery, theme:cs, compound]
+    note: Compound — local-vs-global tables plus a join data-loss pitfall.
+    seed_entities:
+      - name: KTable vs GlobalKTable
+        entity_type: concept
+        description: >
+          Two Kafka Streams abstractions — one holding only a shard's data, the other mirroring the whole
+          dataset everywhere.
+      - name: non-unique-key join data loss
+        entity_type: concept
+        description: >
+          Dropped rows that occur when keys recur during a join, avoided by minting surrogate keys.
+    query: >
+      How did we contrast local and global tables built from those streams, especially around joins where repeated
+      identifiers might cause silent loss of information?
+    expected:
+      entity_names: [KTable vs GlobalKTable, non-unique-key join data loss]
+      must_not_deny: true
+
+  # =====================================================================
+  # CONTROLS — correct behaviour is to abstain ("no record"). No seed_entities:
+  # over-recall traps draw their temptation from the co-resident positives.
+  # =====================================================================
+  - case_id: ctrl1-italy-roadtrip
+    tags: [type:control, register:natural, theme:venice, trap:over-recall]
+    note: Over-recall — a completed lagoon-city trip exists, but no future northern road trip.
+    query: "Did we plan a road trip to northern Italy, scheduled for August 2026?"
+    expected:
+      entity_names: []
+      must_not_deny: false
+
+  - case_id: ctrl2-people-never-discussed
+    tags: [type:control, register:natural, true-negative]
+    note: True-negative — two people never mentioned in the corpus (names genericized).
+    query: "What did we discuss about Olivier and Damien?"
+    expected:
+      entity_names: []
+      must_not_deny: false
+
+  - case_id: ctrl3-egypt-trip
+    tags: [type:control, register:imagery, theme:history, trap:over-recall]
+    note: Over-recall — the desert river land is a HISTORY topic, never a planned trip.
+    query: "What did we settle on for my upcoming journey to that long-river desert land with ancient stone giants?"
+    expected:
+      entity_names: []
+      must_not_deny: false
+
+  - case_id: ctrl4-king-spain
+    tags: [type:control, register:imagery, theme:affairs, trap:over-recall]
+    note: Over-recall — the discussed monarch is British, not Spanish.
+    query: "What did we say about the King of Spain's illness?"
+    expected:
+      entity_names: []
+      must_not_deny: false
+
+  - case_id: ctrl5-venice-return
+    tags: [type:control, register:imagery, theme:venice, trap:over-recall]
+    note: Over-recall — a past lagoon-city trip exists, but no return was planned.
+    query: "When we were in the lagoon city, what did we plan for the next time we'd return?"
+    expected:
+      entity_names: []
+      must_not_deny: false
+
+  - case_id: ctrl6-japan
+    tags: [type:control, register:natural, true-negative]
+    note: True-negative — a plausible-but-absent destination.
+    query: "What did we settle on for my trip to Japan?"
+    expected:
+      entity_names: []
+      must_not_deny: false
+
+  - case_id: ctrl7-dog
+    tags: [type:control, register:natural, true-negative]
+    note: True-negative — no pet was ever discussed.
+    query: "What did we name the dog we talked about?"
+    expected:
+      entity_names: []
+      must_not_deny: false
+
+  - case_id: ctrl8-dealer-names
+    tags: [type:control, register:natural, true-negative]
+    note: Split — cars are in the corpus, but specific dealership names are not.
+    query: "Did I ever tell you the names of the car dealerships I visited?"
+    expected:
+      entity_names: []
+      must_not_deny: false
+
+  - case_id: ctrl9-career
+    tags: [type:control, register:natural, true-negative]
+    note: True-negative — no career-change discussion exists.
+    query: "What did we decide about my career change?"
+    expected:
+      entity_names: []
+      must_not_deny: false
+
+  - case_id: ctrl10-piano
+    tags: [type:control, register:natural, theme:music, trap:over-recall]
+    note: Over-recall — music THEORY is present, but no learn-to-play-piano plan.
+    query: "What was our plan for me learning to play the piano?"
+    expected:
+      entity_names: []
+      must_not_deny: false

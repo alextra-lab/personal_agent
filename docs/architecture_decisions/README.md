@@ -171,7 +171,20 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0086](ADR-0086-hybrid-decompose-routing-for-artifact-builds.md) | HYBRID/DECOMPOSE Routing for High-Complexity Artifact Builds | Proposed |
 | [ADR-0087](ADR-0087-memory-recall-quality-measurement-program.md) | Memory-Recall Quality: A Measurement-First Program (Diagnose → Gate → Architecture) | Proposed |
 | [ADR-0088](ADR-0088-execution-topology-observability-contract.md) | Execution Topology Observability Contract (Trace-Scoped Spine for Status, Cost, Loud Degradation) | Accepted |
-| [ADR-0089](ADR-0089-artifact-execution-security-model.md) | Artifact Execution Security Model (Sandbox the Execution, Don't Sanitize the Output) | Proposed (supersedes ADR-0070 D7 + FRE-500 on acceptance) |
+| [ADR-0089](ADR-0089-artifact-execution-security-model.md) | Artifact Execution Security Model (Sandbox the Execution, Don't Sanitize the Output) | Implemented (supersedes ADR-0070 D7 + FRE-500) |
+| [ADR-0090](ADR-0090-telemetry-surface-contract.md) | Telemetry Surface Contract (Emit ↔ Mapping ↔ Dashboard Reconciliation) | Accepted |
+| [ADR-0091](ADR-0091-eval-conversation-driver-and-completion-status-layer.md) | Eval Conversation Driver & Turn Completion-Status Layer | Accepted |
+| [ADR-0092](ADR-0092-context-compaction-observability-and-surfacing.md) | Context-Compaction Observability & Surfacing | Implemented |
+| [ADR-0093](ADR-0093-opentelemetry-boundary-migration.md) | OpenTelemetry at the Substrate Boundary | Accepted (scoped) |
+| [ADR-0094](ADR-0094-deterministic-local-cloud-execution-profile-routing.md) | Deterministic Local/Cloud Execution-Profile Routing | Proposed |
+| [ADR-0095](ADR-0095-delegation-boundary-per-worker-routing-and-grammar.md) | Delegation Boundary: Per-Worker Routing + Grammar-Constrained Sub-Agent Output | Proposed |
+| [ADR-0096](ADR-0096-memory-access-model-coordinated-hybrid.md) | Memory Access Model: Coordinated Hybrid (Ambient Floor + On-Demand Retrieval) | Accepted |
+| [ADR-0097](ADR-0097-ingested-knowledge-taxonomy.md) | Ingested-Knowledge Taxonomy (hypothesis) | Proposed (supersedes ADR-0071) |
+| [ADR-0098](ADR-0098-memory-substrate-and-lifecycle-architecture.md) | Memory Substrate & Lifecycle Architecture (Core/Docs topology; living-knowledge model) | Accepted |
+| [ADR-0099](ADR-0099-configuration-management-and-validation.md) | Configuration Management & Validation (single-source role matrix + validator) | Accepted |
+| [ADR-0100](ADR-0100-relevance-bounded-recall.md) | Memory Recall — Relevance-Bounded Candidate Generation | Accepted |
+| [ADR-0101](ADR-0101-agent-vision-ingestion.md) | Agent Vision Ingestion of Uploaded Images | Proposed |
+| ADR-0102 | Document Ingestion (PDF / OCR / chunking) — *forthcoming, FRE-667* | Not yet written |
 
 ### Supplementary
 

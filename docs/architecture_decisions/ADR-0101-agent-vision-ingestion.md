@@ -3,7 +3,7 @@
 **Status:** Proposed
 **Date:** 2026-06-28
 **Deciders:** lextra (owner), Seshat architecture
-**Tags:** uploads, vision, images, model-routing, orchestrator, r2
+**Tags:** uploads, vision, images, model-routing, orchestrator, r2, cost, joinability, execution-profile
 
 ---
 
@@ -53,6 +53,10 @@ Two distinct missing pieces, and a deeper truth behind both:
   attachment is present?
 - **How this composes with FRE-661** (thread structured attachments through `handle_user_request`).
 - **Fix the broken `public_url`-for-binaries path** for agent consumption.
+- **Does an attachment carry a per-attachment cloud/local override**, and how does it interact with the
+  profile's data-egress boundary? (Folded in by the FRE-690 amendment — see below.)
+- **How is cloud vision cost bounded *before* the spend**, not just metered after it?
+- **How do an attachment turn's cost and resolution events stay joinable to the turn** (no orphans)?
 
 **Grounding facts (verified against config + owner):**
 
@@ -80,6 +84,30 @@ Two distinct missing pieces, and a deeper truth behind both:
   whatever model the turn's profile already routes to — own SLM server on local, Anthropic on cloud),
   so vision introduces **no new data-egress boundary**.
 
+**Grounding facts for the FRE-690 control-spine amendment (verified against config + the ADR-0102
+design pass — 2026-06-29):**
+
+- **Cloud vs local is the ExecutionProfile (ADR-0044).** A conversation is bound to a profile at
+  creation; an async context var (`config/profile.py:_current_profile`) carries it through the call
+  chain. There is **no per-attachment path control today** — this amendment adds one (owner-requested),
+  defined attachment-type-agnostically so ADR-0102 inherits it.
+- **Cost is gated and reconciled (ADR-0065).** The cost gate reserves against `cap_usd` caps and
+  commits actual cost via `litellm.completion_cost()` (`cost_gate/gate.py`). Cloud Claude pricing lives
+  in the cost matrix (`config/models.cloud.yaml`); an attachment turn needs a **pre-flight estimate** to
+  reserve *before* spending — a blank reservation would let an unbounded multi-image turn through. If
+  cloud vision pricing is absent, image tokens meter as $0 (silent under-billing).
+- **Joinability is an established pattern (ADR-0074).** `artifact_store.get` already threads `trace_id`
+  (`storage/artifact_store.py:222`), R2 keys embed `session_id`, and `TraceContext` carries
+  `trace_id`+`session_id`. The attachment path must thread `trace_id`/`session_id`/`task_id` onto its
+  resolution and cost events so they join back to the turn with no orphans.
+- **This control set was missing from the original image scope — owner-flagged.** ADR-0102 (documents,
+  Accepted) added per-attachment override, pre-flight cost estimate + threshold confirmation, and
+  joinability in its §7; the FRE-690 amendment folds the **same** control set into this ADR
+  **attachment-type-agnostically** (§8 below) so the mechanisms are built **once** here and the ADR-0102
+  cost/joinability tickets reuse them rather than rebuild them. An image is the bounded instance (one
+  block, ≈1600 tokens max after resize, no page multiplication); the reserve/confirm/meter and
+  joinability machinery is identical and shared.
+
 ---
 
 ## Decision
@@ -100,7 +128,8 @@ Thread a structured `attachments: Sequence[AttachmentRef] | None` parameter thro
 `handle_user_request` → `ExecutionContext`, **separate from `ctx.user_message`**. `ctx.user_message`
 stays the user's clean original text (Captain's Log + entity extraction read it); the attachment
 metadata travels alongside. `AttachmentRef` is a frozen dataclass carrying at least
-`{artifact_id, content_type, title, r2_key}`. `service/app.py` passes the validated structured list
+`{artifact_id, content_type, title, r2_key}` **plus the optional `processing_target` path-control field
+defined in §8a**. `service/app.py` passes the validated structured list
 instead of the augmented string; `_augment_message_with_attachments` (the text-pointer prefix) is
 removed from the orchestrator path. **This subsumes FRE-661** — the carrier is the first ticket of
 this ADR's chain.
@@ -121,8 +150,9 @@ one bounded visual payload — no pagination, no chunking; the only safeguard is
 **Documents (PDF) are out of scope for this ADR.** They are a categorically different problem —
 variable page count, scanned-vs-native-text-layer (OCR vs vision), chunking, per-page cost, and a
 text-extraction-vs-vision strategy decision — and are owned by **ADR-0102 (Document Ingestion,
-forthcoming)**. ADR-0102 reuses this ADR's structured-attachment carrier (§2), credentialed fetch
-(§3), turn-assembly injection, and capability routing (§5); it owns only the document-strategy layer.
+Accepted)**. ADR-0102 reuses this ADR's structured-attachment carrier (§2), credentialed fetch
+(§3), turn-assembly injection, capability routing (§5), and the §8 shared control spine; it owns only
+the document-strategy layer.
 
 ### 5. Capability-driven routing
 
@@ -142,17 +172,31 @@ an image attachment, the routing/turn-assembly layer **asserts the selected mode
   error** naming the unsupported modality. The local-first boundary is never crossed implicitly to
   service an attachment.
 
+When the attachment carries a `processing_target` (§8a), it constrains routing **ahead of** the profile
+default: `"local"` forbids the cloud-escalation branch above (fail-closed to `AttachmentUnsupported`
+instead of crossing the boundary), and `"cloud"` forces the cloud vision path and is cost-gated (§8b).
+
 `ExecutionContext` gains the attachment metadata so the routing seam (`_determine_initial_model_role`
 / its successor) can read it. The text-pointer augmentation is **not** retained as a degraded fallback
 (that would silently reproduce the FRE-369 failure); an unsupported/mismatched attachment is rejected
 explicitly, not quietly downgraded.
 
-### 6. Guardrails (fail-closed)
+### 6. Guardrails (fail-closed, per dimension)
 
-Server-side caps enforced at resolution: per-image max dimension and byte size (downscale or reject
-oversized), max images per turn, and a total per-turn attachment payload cap. Oversized inputs are
-downscaled below the cap or rejected with a clear error — never sent unbounded. (Document-specific
-guardrails — page caps, chunking — belong to ADR-0102.)
+Four caps are enforced server-side at resolution, **each independently fail-closed** — no single
+dimension may pass through unbounded while another is enforced:
+
+- **per-image pixel dimension** — an over-limit image is downscaled (Pillow) below the cap before encoding;
+- **per-image byte size** — after downscale/encode, an image still over the byte cap is rejected;
+- **max images per turn** — beyond the cap the turn is rejected (or excess images dropped *with
+  disclosure*), never silently truncated;
+- **total per-turn attachment payload** — the aggregate across all images is capped independently of the
+  per-image caps.
+
+An over-limit input on any dimension is transformed below the cap (downscale) or rejected with a clear,
+user-visible error; when content is altered (downscaled) or dropped (excess images) the change is
+**disclosed** in the response — never sent unbounded, never silently dropped. (Document-specific
+guardrails — page caps, extracted-text caps, chunking — belong to ADR-0102.)
 
 ### 7. Fix the broken `public_url` path
 
@@ -161,10 +205,68 @@ agent (the agent cannot pass CF Access). For image artifacts it states the bytes
 turn's content block (current-turn attachments) and are not URL-fetchable by the agent. `public_url`
 remains for **human / output-channel display** (PWA, ADR-0070 rich output) only.
 
+### 8. Shared control spine — per-attachment path control, cost, joinability (attachment-type-agnostic)
+
+This ADR no longer carries only image-specific routing: it defines the **attachment-type-agnostic
+control spine** — per-attachment path control, cost reservation/metering, and joinability — that
+**ADR-0102 (documents) inherits rather than rebuilds** (the FRE-690 amendment). The mechanisms below
+live on the shared `AttachmentRef` carrier (§2) and the shared resolution path; the image case is the
+bounded instance (one block, ≈1600 tokens max after the §6 resize, no page multiplication), and the
+PDF case (ADR-0102) reuses the same machinery with page-multiplied cost. Building the spine here, once,
+is the explicit payoff of sequencing the image chain before the ADR-0102 cost/joinability tickets.
+
+**8a. Per-attachment cloud/local override.** `AttachmentRef` carries an optional
+`processing_target: Literal["cloud", "local"] | None`:
+
+- `None` (default) → follow the conversation's bound ExecutionProfile (ADR-0044): a local profile
+  resolves and routes the image to the local vision-capable SLM; a cloud profile routes to cloud
+  Claude. No user action required.
+- `"local"` → force local handling. It **never escalates to cloud**, even on a profile that permits
+  escalation — an attachment the user marked local never crosses the data-egress boundary. If no
+  reachable model on the local profile is vision-capable, it fails closed with `AttachmentUnsupported`
+  (§5), never a silent escalation.
+- `"cloud"` → force the cloud vision path. This is the **only** way a local-profile conversation sends
+  an image to cloud; it is explicit and **still subject to the cost gate** (§8b).
+
+The override is the per-attachment refinement of §5's profile-driven routing: §5 decides capability and
+escalation, while `processing_target` constrains *which side of the boundary* is even eligible and is
+honored ahead of the profile default. The PWA exposes the override per attachment; the default (`None`)
+requires no user action.
+
+**8b. Cost — cloud pricing + pre-flight estimate + threshold confirmation + metering.** Cloud Claude
+model definitions carry per-token pricing in the cost matrix (`config/models.cloud.yaml`) such that
+image tokens produce **non-zero committed cost** — whether the provider bills them as ordinary input
+tokens or via a distinct image-token field (a zero-cost placeholder does not satisfy this; see AC-11).
+Before any cloud image call, resolution computes a **pre-flight
+cost estimate** (image blocks × per-image vision-token estimate × cloud price) and **reserves it against
+the ADR-0065 cost gate before spending** — a blank reservation would let an unbounded multi-image turn
+through. Then:
+
+- estimate ≤ configured threshold → proceed and meter.
+- estimate > threshold → the agent **discloses the estimate and asks the user to proceed** (or keep it
+  local/free), mirroring the §6 disclose-on-alter pattern. No spend until confirmed.
+
+Actual cost is reconciled at commit via `litellm.completion_cost()`, whose token basis includes the
+image tokens (not text-only). Local turns are metered too (zero per-token charge, recorded for
+budget/observability consistency). A single image is cheap (≈1600 tokens), so threshold confirmation
+**rarely fires for one image** — its value is (1) bounding a **multi-image** turn and (2) building the
+**shared reserve/confirm/meter machinery** that ADR-0102's far more expensive PDF path (native block
+≈7× text, page-multiplied) depends on. The image path is where this machinery is proven cheaply first.
+
+**8c. Joinability (ADR-0074).** The resolution path threads `trace_id`, `session_id`, and `task_id`
+onto the `store.get` byte fetch, the cost-gate reservation/commit, and every resolution / routing
+telemetry event. An attachment turn's cost row and resolution events **join back to the turn** via
+`(trace_id, session_id, task_id)` — verified by the ADR-0074 joinability probe with zero orphans.
+`artifact_store.get` already threads `trace_id`; this extends the same identity threading to the cost
+and resolution events the attachment path adds.
+
 ### Scope (v1)
 
-Raster `image/png|jpeg|gif|webp`, **current-turn attachments only**. Out of scope: **documents (PDF) —
-ADR-0102 (forthcoming)**; SVG (XML, not a raster — Anthropic does not accept it as an image);
+Raster `image/png|jpeg|gif|webp`, **current-turn attachments only**, plus the shared control spine (§8):
+per-attachment cloud/local override (fail-closed on `"local"`), cloud vision pricing + pre-flight cost
+estimate with threshold confirmation reserved against the ADR-0065 cap, and trace/session/task
+joinability on cost + resolution events. Out of scope: **documents (PDF) —
+ADR-0102 (Accepted)**; SVG (XML, not a raster — Anthropic does not accept it as an image);
 examining an *arbitrary previously-stored* image mid-conversation (the tool-result-image-block path —
 see Alternatives); audio/video.
 
@@ -260,6 +362,50 @@ owns the document-strategy layer. The image fix ships without waiting on OCR/chu
 **Why Rejected:** Defeats the purpose when vision-capable models are already available on both
 profiles.
 
+### Option 6: Profile-only routing, meter-after (no per-attachment override, no pre-flight reserve)
+
+*(Alternative for the §8 control-spine decision.)*
+
+**Description:** Route purely by the bound ExecutionProfile; carry no `processing_target`; meter cloud
+cost only *after* the call (the existing cost-gate commit), with no pre-flight estimate or reservation.
+
+**Pros:**
+- Least surface — no carrier field, no PWA affordance, no estimator; the profile already encodes the
+  cloud/local choice.
+
+**Cons:**
+- Gives the user no way to keep a *specific* attachment local on a cloud-escalating profile, nor to
+  deliberately send one image to cloud from a local-profile conversation — the boundary is all-or-nothing.
+- Meter-after cannot stop an expensive turn (a multi-image turn, or a PDF on the ADR-0102 path) *before*
+  it spends; the `cap_usd` ceiling is the only backstop, and it rejects mid-turn rather than
+  disclosing-and-confirming, so the user is surprised by the spend rather than asked about it.
+
+**Why Rejected:** The owner wants per-attachment control over the data-egress boundary and a
+spend-before-confirm gate; the document path (ADR-0102, ≈7× cost) makes pre-flight reservation
+load-bearing, not cosmetic. Meter-after-only here would force a rebuild for documents.
+
+### Option 7: Build the control spine only in ADR-0102 (PDF), not shared
+
+*(Alternative for the §8 control-spine decision.)*
+
+**Description:** Leave the image scope as-is (no override, cost confirmation, or joinability) and build
+the path-control + cost + joinability machinery solely in the ADR-0102 document chain.
+
+**Pros:**
+- Keeps the image ADR minimal; the controls land where the expensive case (PDF) actually lives.
+
+**Cons:**
+- The image chain lands **first** — it is the dependency ADR-0102 builds on — so building the spine in
+  ADR-0102 means the image path ships *without* override/cost-confirm/joinability and ADR-0102 then
+  retrofits them onto the shared carrier and resolution path the image chain already created: the same
+  machinery built **twice**, re-touching the image path. It also leaves cloud image turns
+  unmetered-before-spend and image cost/resolution events orphaned in the interim.
+
+**Why Rejected:** FRE-690's sequencing rationale — the image chain is the foundation; folding the
+attachment-type-agnostic spine in here builds it **once**, and ADR-0102's cost and joinability tickets
+become reuse-plus-PDF-specifics rather than fresh builds. That is the payoff of sequencing ADR-0101
+first.
+
 ---
 
 ## Consequences
@@ -277,6 +423,16 @@ profiles.
 - A reusable foundation (carrier, credentialed fetch, content widening, capability routing) that
   ADR-0102 (documents) builds on directly.
 - No new data-egress boundary: the attachment travels with the profile the user already chose.
+- **Per-attachment path control:** the user can pin an attachment local (never crosses the egress
+  boundary) or deliberately send one to cloud — finer-grained than the profile alone, fail-closed on
+  `"local"`.
+- **Cloud cost is controlled before the spend:** cloud image turns are estimated, reserved against the
+  cap, and confirmed past a threshold — no surprise spend — and the machinery is shared with the
+  expensive PDF path.
+- **Cost and resolution events are joinable** (trace/session/task), attributable end-to-end via the
+  existing ADR-0074 probe.
+- **The control spine is attachment-type-agnostic and built once:** ADR-0102 inherits it for PDFs rather
+  than rebuilding — the cost and joinability tickets become reuse-plus-PDF-specifics.
 
 ### Negative Consequences
 
@@ -296,6 +452,16 @@ profiles.
   per-image resolution cap bounds this (no per-page multiplication — that risk lives in ADR-0102).
 - **Routing reads attachment metadata.** `ExecutionContext` gains an attachment field and the routing
   seam now branches on it (previously a pure no-op returning `PRIMARY`).
+- **More control surface (§8).** A `processing_target` field on the carrier (+ a PWA affordance), a
+  pre-flight cost estimator, a configurable cost threshold, and trace/session/task threading on the
+  attachment path — each is small, but together they widen the change beyond the bare image-resolution
+  logic.
+- **Pre-flight estimate is approximate.** The reservation uses a per-image token estimate; actual cost
+  is reconciled at commit, so the reservation may over- or under-shoot. Bounded by reconciliation and
+  the hard `cap_usd` ceiling.
+- **Threshold confirmation rarely fires for a single image** (≈1600 tokens) — the machinery is justified
+  by multi-image turns and by the shared PDF path, not by the single-image case alone. Accepted: the
+  value is building the spine once.
 
 ### Risks and Mitigations
 
@@ -306,6 +472,10 @@ profiles.
 | Oversized image blows context or cost | Medium | Per-image size/dimension cap + downscale, max images/turn, total payload cap, fail-closed guard (AC-7) |
 | Declared `content_type` is wrong (no server-side magic-byte sniff today) | Low | Resolution validates the declared type against the allowlist before constructing a block; mismatched/unsupported types are **rejected with a clear, user-visible error** (fail-closed) — never silently downgraded to the text-pointer behavior |
 | Local SLM rejects `image_url` blocks for a given model build | Low | Capability flag reflects the deployed build; if a profile's model is not actually vision-capable, set its flag false and routing escalates/raises rather than failing opaquely |
+| A `"local"` override is silently escalated to cloud (boundary breach) | High | Override honored strictly: `"local"` never escalates — fail-closed to `AttachmentUnsupported` instead (AC-9) |
+| A `"cloud"` override (or cloud profile) runs up cost on a multi-image turn | Medium | Pre-flight estimate + reservation against `cap_usd`; threshold confirmation before spend (AC-10); actual reconciled at commit (AC-11) |
+| Cloud vision pricing missing → image tokens metered as $0 (silent under-billing) | Medium | Cloud vision pricing asserted present in the cost matrix; non-zero committed cost with image-token basis asserted (AC-11) |
+| Image cost/resolution events orphaned (not joinable to the turn) | Medium | Thread `trace_id`/`session_id`/`task_id` through resolution + cost; ADR-0074 probe asserts zero orphans (AC-12) |
 
 ---
 
@@ -331,13 +501,27 @@ profiles.
   `claude_haiku`.
 - New attachment-resolution module — `store.get` fetch + image block construction + guardrails
   (downscale/caps). Designed so ADR-0102 can add a document branch without reshaping it.
+- `AttachmentRef` carrier — add `processing_target: Literal["cloud","local"] | None` (§8a); orchestrator
+  routing reads it ahead of the profile default and enforces the `"local"` no-escalation rule.
+- Cost gate (`cost_gate/`) — pre-flight image cost estimator (image blocks × per-image vision tokens ×
+  price) → reservation; meter image tokens at commit. Built attachment-type-agnostically so the ADR-0102
+  document cost ticket reuses it.
+- `config/models.cloud.yaml` — ensure cloud Claude per-token vision pricing is present; `config/` — the
+  cost-confirmation threshold (ADR-0099 config-single-source).
+- Attachment path telemetry — thread `trace_id`/`session_id`/`task_id` onto resolution, routing, and
+  cost events (ADR-0074 joinability). Shared with the ADR-0102 document joinability ticket.
+- PWA (`seshat-pwa/`) — per-attachment cloud/local override affordance (defaults to none).
 
-**Dependencies:** R2 store (ADR-0069), the structured-attachment carrier (folded FRE-661).
+**Dependencies:** R2 store (ADR-0069), the structured-attachment carrier (folded FRE-661); the cost gate
+(ADR-0065) and execution profiles (ADR-0044) for the §8 control spine.
 
 **Testing strategy:** unit tests over the resolution module (byte fetch path, block shape, guardrails)
 with a mocked `store`; an assertion over assembled `request_messages` for block presence; a routing
-test for the capability assertion; a master live smoke for the end-to-end "agent sees the image"
-outcome.
+test for the capability assertion **and the `processing_target` override (local fail-closed / cloud
+forced + cost-gated)**; a cost test asserting a pre-flight reservation precedes a cloud call, an
+over-threshold turn is held until confirmation, and the committed cost is non-zero with an image-token
+basis; an ADR-0074 joinability assertion (zero orphans on the cost + resolution events); a master live
+smoke for the end-to-end "agent sees the image" outcome **plus the override/cost/joinability seam legs**.
 
 ---
 
@@ -386,12 +570,55 @@ outcome.
   key, not a bare `public_url`), and that no returned field describes the URL as a way to read/fetch
   the bytes. *Fails if* a bare `public_url` (or any field) remains that an agent would reasonably read
   as a fetchable content source — the absence of the word "fetch" is not enough.
+- **AC-9 (per-attachment override honored, fail-closed)** — A `"local"` `processing_target` never
+  reaches cloud even on an escalation-permitted profile; a `"cloud"` override routes to the cloud vision
+  path and is cost-gated. **Check:** test (a) `processing_target="local"` on a cloud-escalation-enabled
+  profile whose local model is non-vision, with an image → assert **no** cloud call is made and
+  `AttachmentUnsupported` is raised (not a silent escalation); test (b) `processing_target="cloud"` from
+  a local-profile conversation → assert the cloud vision path is taken **and** a cost-gate reservation
+  was made. *Fails if* a `"local"`-marked image reaches cloud, or a `"cloud"`-marked image bypasses the
+  cost gate.
+- **AC-10 (pre-flight estimate gates spend, and confirm actually proceeds)** — A cloud image turn whose
+  estimated cost exceeds the threshold does **not** call the model until the user confirms; on
+  confirmation it **does** proceed; an under-threshold turn proceeds directly with a reservation recorded
+  *before* the call. **Check:** (a) feed a cloud image turn whose estimate exceeds the threshold (e.g.
+  several images, or a deliberately low test threshold) → assert **no** model call is issued and the
+  response carries the dollar estimate + a proceed/keep-local prompt; (b) supply the confirmation →
+  assert the model **is** then called and the spend is committed; (c) feed an under-threshold turn →
+  assert it proceeds and a cost-gate reservation ≈ the estimate is recorded *before* the call. *Fails
+  if* an over-threshold cloud turn calls the model without disclosure, no reservation precedes the
+  spend, **or** a confirmed turn never proceeds (a dead-end prompt).
+- **AC-11 (cloud images are priced and metered, not free)** — Cloud Claude vision pricing is present in
+  the cost matrix and the committed cost is non-zero, reconciled from actual usage, and includes the
+  image-token component. **Check:** assert the cloud model definition in `config/models.cloud.yaml`
+  carries per-token pricing; for a cloud image turn assert the cost-gate `commit` records a non-zero
+  `actual_cost` from `litellm.completion_cost()` whose token basis includes image tokens (not
+  text-only). *Fails if* cloud vision pricing is missing (metered as $0), the spend is never committed,
+  or an image turn is metered as text-only.
+- **AC-12 (joinability — no orphan cost/resolution rows)** — An image turn's cost row and resolution
+  events carry `trace_id` + `session_id` + `task_id` and join back to the turn. **Check:** after an
+  image turn, run the ADR-0074 joinability probe (`observability/` joinability probe) and assert the
+  cost-gate row and the resolution/routing telemetry join to the turn's
+  `(trace_id, session_id, task_id)` with **zero** orphans. *Fails if* any image cost or resolution event
+  lacks a join key or is orphaned per the probe.
 
-**Seam owner (decomposed ADR):** the assembled intent is **AC-1 + AC-3 + AC-4 together** — structured
-image attachment → resolved image block → vision-capable model → response conditioned on the image,
-end to end. This seam is owned by the **final image live-smoke ticket (AC-1)**, run by master at the
-integration gate; the chain does **not** close because the routing-flag or carrier ticket merged in
+**Seam owner (decomposed ADR) — AC-SEAM.** The assembled intent holds only once every child lands; it
+is owned by the **final image live-smoke ticket (FRE-669)**, run by master at the integration gate. The
+chain does **not** close because the routing-flag, carrier, cost, or joinability ticket merged in
 isolation.
+
+- **AC-SEAM (end-to-end, the whole image pipeline in one live run)** — In a single live session: (1) a
+  structured image attachment becomes a resolved **image block**, routes to a **vision-capable** model,
+  and returns a response conditioned on the image's visual marker (AC-1 + AC-3 + AC-4); (2) the same
+  image under a `"local"` override on an escalation-permitted profile with no capable local model
+  **fails closed** with `AttachmentUnsupported`, no cloud crossing (AC-9); (3) a cloud image turn
+  **whose pre-flight estimate exceeds the threshold** is held until confirmation, then on confirmation
+  proceeds and **commits a non-zero cost whose token basis includes image tokens** (AC-10 + AC-11); and
+  (4) the ADR-0074 joinability probe reports **zero orphans** for those turns (AC-12). **Check:** master
+  runs all four legs against the live stack. *Fails if* any leg regresses — which it will unless the
+  carrier (with `processing_target`), content widening, capability routing, guardrails, the cost gate
+  (estimate + confirm + meter), and joinability threading have **all** landed. The ADR does **not** close
+  because the last child ticket merged in isolation — only AC-SEAM closes it.
 
 ---
 
@@ -399,14 +626,17 @@ isolation.
 
 - ADR-0069 — R2 artifact substrate (the `store.get` credentialed byte path)
 - ADR-0070 — output channels (human-facing `public_url` display)
-- ADR-0099 — configuration management & validation (config-single-source for capability flags)
+- ADR-0099 — configuration management & validation (config-single-source for capability flags + cost threshold)
 - ADR-0033 — model role taxonomy (`ModelRole.PRIMARY`; routing seam)
-- ADR-0065 — cost gate (must meter vision tokens)
-- ADR-0102 — Document Ingestion (forthcoming) — PDF/OCR/chunking; reuses this ADR's foundation
+- ADR-0065 — cost gate (pre-flight reservation + commit; must meter vision/image tokens)
+- ADR-0044 — execution profiles (cloud/local binding; the §8a per-attachment override defaults to it)
+- ADR-0074 — joinability (trace/session/task threading; the probe that asserts no orphans)
+- ADR-0102 — Document Ingestion (Accepted) — PDF/OCR/chunking; reuses this ADR's foundation **and the §8 shared control spine**
 - FRE-369 — upload UX, live (surfaced this gap)
 - FRE-368 — agent-side artifact tools (`artifact_read` origin)
-- FRE-661 — structured attachments through `handle_user_request` (folded into this ADR's chain)
+- FRE-661 — structured attachments through `handle_user_request` (folded into this ADR's chain; amended to add `processing_target`)
 - FRE-662 — this ADR's tracking issue
+- FRE-690 — this amendment's authoring issue (the shared control spine, §8)
 - Code anchors — `service/app.py:187-211`, `tools/artifact_tools.py:672-690`,
   `storage/artifact_store.py:222-253`, `orchestrator/orchestrator.py:38`, `executor.py:1309,1741`,
   `service/models.py:130`, `litellm_client.py:57-61`, `config/models.yaml`
@@ -426,7 +656,23 @@ the 2026-06-29 update below — narrowed to images.)*
 **Reason:** Owner call — documents (PDF) merit their own ADR. An image is one bounded visual block
 (no pagination/chunking/OCR); documents carry a divergent decision shape (page count, scanned-vs-text
 layer, OCR-vs-extraction, chunking, per-page cost). Narrowed this ADR to raster images; carved
-documents into **ADR-0102 (forthcoming)**, which reuses this ADR's foundation. Still Proposed.
+documents into **ADR-0102**, which reuses this ADR's foundation. Still Proposed.
+
+### 2026-06-29 - Amended: shared control spine folded in (FRE-690)
+**Changed By:** lextra (adr session, Opus)
+**Reason:** Owner-flagged that the per-attachment path control, cost reservation/metering, and
+joinability added to ADR-0102 §7 were missing from the image scope. Folded the **same** control set into
+this ADR **attachment-type-agnostically** as the shared spine (§8) so it is built **once** and ADR-0102
+inherits it: a `processing_target` cloud/local override on the carrier (fail-closed on `"local"`, the
+only cloud crossing via `"cloud"`, cost-gated); cloud vision pricing + a pre-flight estimate reserved
+against the ADR-0065 cap with threshold confirmation + commit-time metering; trace/session/task
+joinability (ADR-0074) on cost + resolution events; and §6 guardrails made explicit + fail-closed per
+dimension. Added AC-9–AC-12, extended the seam to AC-SEAM (override fail-closed + cost confirm/meter +
+zero-orphan joinability), and added Alternatives 6–7 for the spine decision. The image chain is
+re-ticketed to fold these in (FRE-661/665/666 amended; new image-cost, image-joinability, and
+PWA-override tickets; FRE-669 seam extended); the image-cost and image-joinability tickets build the
+spine generically, so ADR-0102's FRE-686 (cost) and FRE-688 (joinability) become reuse-plus-PDF-specifics.
+**Status stays Proposed** (no implementation has landed).
 
 ---
 

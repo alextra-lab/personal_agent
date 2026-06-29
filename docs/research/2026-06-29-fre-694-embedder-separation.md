@@ -49,8 +49,24 @@ neg-max 0.779 vs 0.792 (**all Δ ≤ 0.012 < 0.02**). The harness computes the s
 
 - **Recall@5 saturates** at 0.98–1.00 for every arm and dim — recall hides the problem; separation is
   the metric.
-- The **dimension sweep** barely moves separation (e.g. 8B Youden's J ≈ 0.53 from 512→4096): more
-  dimensions saturate, they do not open a floor.
+
+### Dimension sweep — best dimension is the *middle*, not native (AC2)
+
+Best Youden's J (recall − false-positive at the optimal floor) by dimension:
+
+| Arm | 256 | 512 | 1024 | 2048 | 4096 | best dim |
+|-----|----:|----:|-----:|-----:|-----:|:--------:|
+| 0.6B | 0.354 | **0.429** | 0.417 | — | — | **512** |
+| 8B | 0.469 | 0.461 | **0.550** | 0.534 | 0.534 | **1024** |
+| Voyage | 0.571 | **0.642** | 0.605 | 0.589 | — | **512** |
+
+More dimensions do **not** improve separation — every arm peaks at a *middle* dimension (512–1024) and
+**native is equal-or-slightly-worse** (8B 1024 = 0.550 > native 4096 = 0.534; Voyage 512 = 0.642 >
+native 2048 = 0.589). The extra dimensions add noise that nudges the hardest distractors up, not
+signal. Recall@1 also plateaus by ~512 (Voyage 0.807 from 512 on). **Practical:** were a re-embed ever
+done, truncate the MRL embedding to **~512 dims** — best separation *and* recall at 4–8× less vector
+storage than native. *(Caveat: at n=54 the J gap between neighbouring dims is within noise; the robust
+read is "saturates by ~512, native doesn't help," not a precise optimum.)*
 
 ## Verdict
 
@@ -78,6 +94,9 @@ overlap but does not close it.
 3. **If a re-embed is ever done for other reasons** (recall, multilingual, longer context), 8B-f16 is
    the local-family ceiling and modestly improves separation; Voyage is marginally better still on the
    median but has a worse worst-case distractor (neg-max 0.804). Neither changes recommendation (1).
+   **Store the truncated MRL embedding at ~512 dims, not native** — the sweep shows 512 gives the best
+   (or equal-best) separation and recall at 4–8× less vector storage; native dimensions add cost, not
+   quality.
 
 ## Limitations (stated)
 

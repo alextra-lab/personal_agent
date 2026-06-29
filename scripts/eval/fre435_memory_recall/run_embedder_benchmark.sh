@@ -35,19 +35,22 @@ case "$EMBEDDER" in
   # 0.6b uses models.yaml (localhost:8503/8504) — host-reachable; models.cloud.yaml
   # points at the docker-internal 'embeddings' host which does not resolve from a
   # host shell. Same physical 0.6B llama.cpp server either way.
-  0.6b) CONFIG="config/models.yaml";              DIMS=1024 ;;
-  4b)   CONFIG="config/models.benchmark-4b.yaml"; DIMS=2560 ;;  # FRE-656 (Q4 — precision-confounded; retired)
-  8b)   CONFIG="config/models.benchmark-8b.yaml"; DIMS=4096 ;;  # FRE-694 (f16)
-  *) echo "unknown embedder: '$EMBEDDER' (want 0.6b|4b|8b)" >&2; exit 2 ;;
+  0.6b)   CONFIG="config/models.yaml";                  DIMS=1024 ;;
+  4b)     CONFIG="config/models.benchmark-4b.yaml";     DIMS=2560 ;;  # FRE-656 (Q4 — precision-confounded; retired)
+  4b-f16) CONFIG="config/models.benchmark-4b-f16.yaml"; DIMS=2560 ;;  # FRE-694 middle rung (f16)
+  8b)     CONFIG="config/models.benchmark-8b.yaml";     DIMS=4096 ;;  # FRE-694 (f16)
+  *) echo "unknown embedder: '$EMBEDDER' (want 0.6b|4b|4b-f16|8b)" >&2; exit 2 ;;
 esac
 # calibrate/ab → ab_relevance_bounded.py (Neo4j). separation → separation_benchmark.py (offline, FRE-694).
 case "$MODE" in calibrate|ab|separation) ;; *) echo "unknown mode: '$MODE' (want calibrate|ab|separation)" >&2; exit 2 ;; esac
 
 : "${AGENT_NEO4J_PASSWORD:?export AGENT_NEO4J_PASSWORD (the test stack :7688 password) first}"
-if [ "$EMBEDDER" = "4b" ] || [ "$EMBEDDER" = "8b" ]; then
-  : "${CF_ACCESS_CLIENT_ID:?$EMBEDDER needs CF_ACCESS_CLIENT_ID (Access-gated slm.frenchforet.com)}"
-  : "${CF_ACCESS_CLIENT_SECRET:?$EMBEDDER needs CF_ACCESS_CLIENT_SECRET}"
-fi
+case "$EMBEDDER" in
+  4b|4b-f16|8b)
+    : "${CF_ACCESS_CLIENT_ID:?$EMBEDDER needs CF_ACCESS_CLIENT_ID (Access-gated slm.frenchforet.com)}"
+    : "${CF_ACCESS_CLIENT_SECRET:?$EMBEDDER needs CF_ACCESS_CLIENT_SECRET}"
+    ;;
+esac
 
 # Force-set (NOT setdefault) the TEST substrate so no stray prod value survives.
 export APP_ENV=test

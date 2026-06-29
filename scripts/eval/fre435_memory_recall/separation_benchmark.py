@@ -85,6 +85,7 @@ _RECALL_K = (1, 5)
 #: Per-arm native dimensionality + the Matryoshka sweep (common 256/512/1024 + native).
 ARMS: dict[str, dict[str, object]] = {
     "0.6b": {"native": 1024, "dims": [256, 512, 1024], "kind": "local"},
+    "4b-f16": {"native": 2560, "dims": [256, 512, 1024, 2048, 2560], "kind": "local"},
     "8b": {"native": 4096, "dims": [256, 512, 1024, 2048, 4096], "kind": "local"},
     "voyage": {"native": 2048, "dims": [256, 512, 1024, 2048], "kind": "voyage"},
 }

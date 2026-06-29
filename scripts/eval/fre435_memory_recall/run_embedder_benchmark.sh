@@ -36,15 +36,17 @@ case "$EMBEDDER" in
   # points at the docker-internal 'embeddings' host which does not resolve from a
   # host shell. Same physical 0.6B llama.cpp server either way.
   0.6b) CONFIG="config/models.yaml";              DIMS=1024 ;;
-  4b)   CONFIG="config/models.benchmark-4b.yaml"; DIMS=2560 ;;
-  *) echo "unknown embedder: '$EMBEDDER' (want 0.6b|4b)" >&2; exit 2 ;;
+  4b)   CONFIG="config/models.benchmark-4b.yaml"; DIMS=2560 ;;  # FRE-656 (Q4 — precision-confounded; retired)
+  8b)   CONFIG="config/models.benchmark-8b.yaml"; DIMS=4096 ;;  # FRE-694 (f16)
+  *) echo "unknown embedder: '$EMBEDDER' (want 0.6b|4b|8b)" >&2; exit 2 ;;
 esac
-case "$MODE" in calibrate|ab) ;; *) echo "unknown mode: '$MODE' (want calibrate|ab)" >&2; exit 2 ;; esac
+# calibrate/ab → ab_relevance_bounded.py (Neo4j). separation → separation_benchmark.py (offline, FRE-694).
+case "$MODE" in calibrate|ab|separation) ;; *) echo "unknown mode: '$MODE' (want calibrate|ab|separation)" >&2; exit 2 ;; esac
 
 : "${AGENT_NEO4J_PASSWORD:?export AGENT_NEO4J_PASSWORD (the test stack :7688 password) first}"
-if [ "$EMBEDDER" = "4b" ]; then
-  : "${CF_ACCESS_CLIENT_ID:?4b needs CF_ACCESS_CLIENT_ID (Access-gated slm.frenchforet.com)}"
-  : "${CF_ACCESS_CLIENT_SECRET:?4b needs CF_ACCESS_CLIENT_SECRET}"
+if [ "$EMBEDDER" = "4b" ] || [ "$EMBEDDER" = "8b" ]; then
+  : "${CF_ACCESS_CLIENT_ID:?$EMBEDDER needs CF_ACCESS_CLIENT_ID (Access-gated slm.frenchforet.com)}"
+  : "${CF_ACCESS_CLIENT_SECRET:?$EMBEDDER needs CF_ACCESS_CLIENT_SECRET}"
 fi
 
 # Force-set (NOT setdefault) the TEST substrate so no stray prod value survives.
@@ -91,5 +93,10 @@ PY
 echo "[run] embedder=$EMBEDDER mode=$MODE config=$CONFIG dims=$DIMS args=$*"
 # Repo root on the path so the driver's `from scripts.eval...` imports resolve.
 export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$(pwd)"
+if [ "$MODE" = "separation" ]; then
+  # FRE-694 offline separation benchmark (no substrate); --arm == the embedder label.
+  exec uv run python scripts/eval/fre435_memory_recall/separation_benchmark.py \
+    --arm "$EMBEDDER" "$@"
+fi
 exec uv run python scripts/eval/fre435_memory_recall/ab_relevance_bounded.py \
   --mode "$MODE" --run-id "fre656-${EMBEDDER}-${MODE}" "$@"

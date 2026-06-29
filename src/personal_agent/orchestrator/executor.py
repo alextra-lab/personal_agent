@@ -1438,6 +1438,9 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
         user_id=ctx.user_id,
         session_id=ctx.session_id,
         eval_mode=ctx.eval_mode,
+        # FRE-673: propagate auth state to tool executors (search_memory) so their
+        # recall threads it into the FRE-229 visibility filter.
+        authenticated=ctx.authenticated,
     )
 
     # ADR-0076: clear any stale Stop-button flag from a prior turn so a new

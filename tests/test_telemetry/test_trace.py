@@ -89,6 +89,16 @@ class TestTraceContext:
         assert child_ctx.kind == "system:scheduler"
         assert child_ctx.is_system is True
 
+    def test_authenticated_defaults_false(self) -> None:
+        """FRE-673: authenticated defaults False so non-user paths stay fail-safe."""
+        assert TraceContext.new_trace().authenticated is False
+
+    def test_authenticated_propagates_through_new_span(self) -> None:
+        """FRE-673: child spans inherit authenticated so tool executors see it."""
+        parent = TraceContext.new_trace(authenticated=True)
+        child_ctx, _ = parent.new_span()
+        assert child_ctx.authenticated is True
+
 
 class TestSystemTraceContext:
     """ADR-0074 §3.6 — system-tagged TraceContext factory."""

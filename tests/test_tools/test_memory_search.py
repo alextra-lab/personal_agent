@@ -115,3 +115,54 @@ async def test_search_memory_executor_broad_path_returns_entities() -> None:
     assert "recent_turns" in result
     assert len(result["entities"]) == 1
     assert result["entities"][0]["name"] == "Athens"
+
+
+@pytest.mark.asyncio
+async def test_search_memory_entity_path_threads_identity() -> None:
+    """FRE-673: entity-match path threads ctx.user_id + ctx.authenticated into query_memory.
+
+    The agent-invoked search_memory tool was the live path returning candidate_set_size=0:
+    it called query_memory without identity, so the FRE-229 group-visibility filter dropped
+    100% of the (all-'group') production memory.
+    """
+    from uuid import uuid4
+
+    from personal_agent.telemetry.trace import TraceContext
+
+    uid = uuid4()
+    mock_service = MagicMock()
+    mock_service.connected = True
+    mock_service.query_memory = AsyncMock(return_value=MemoryQueryResult())
+
+    ctx = TraceContext(trace_id="t-673", user_id=uid, authenticated=True)
+
+    with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
+        await search_memory_executor(query_text="Athens", entity_names=["Athens"], ctx=ctx)
+
+    kwargs = mock_service.query_memory.call_args.kwargs
+    assert kwargs.get("user_id") == uid
+    assert kwargs.get("authenticated") is True
+
+
+@pytest.mark.asyncio
+async def test_search_memory_broad_path_threads_identity() -> None:
+    """FRE-673: broad-recall path threads ctx.user_id + ctx.authenticated into query_memory_broad."""
+    from uuid import uuid4
+
+    from personal_agent.telemetry.trace import TraceContext
+
+    uid = uuid4()
+    mock_service = MagicMock()
+    mock_service.connected = True
+    mock_service.query_memory_broad = AsyncMock(
+        return_value={"entities": [], "sessions": [], "turns_summary": []}
+    )
+
+    ctx = TraceContext(trace_id="t-673", user_id=uid, authenticated=True)
+
+    with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
+        await search_memory_executor(query_text="what have I discussed before?", ctx=ctx)
+
+    kwargs = mock_service.query_memory_broad.call_args.kwargs
+    assert kwargs.get("user_id") == uid
+    assert kwargs.get("authenticated") is True

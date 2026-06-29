@@ -52,6 +52,10 @@ class TraceContext:
     session_id: str | None = None
     kind: str = "user"
     eval_mode: bool = False
+    # FRE-673: whether the request carries a verified identity (CF Access). Propagated
+    # to tool executors so memory-recall tools (search_memory) thread it into the
+    # FRE-229 visibility filter and 'group'-visibility memory is revealed.
+    authenticated: bool = False
 
     @classmethod
     def new_trace(
@@ -60,6 +64,7 @@ class TraceContext:
         *,
         user_id: UUID | None = None,
         session_id: str | None = None,
+        authenticated: bool = False,
     ) -> "TraceContext":
         """Start a new trace.
 
@@ -68,6 +73,8 @@ class TraceContext:
             user_id: Optional authenticated user UUID to propagate to child
                 spans and tool executors.
             session_id: Optional session id to propagate.
+            authenticated: Whether the request carries a verified identity (FRE-229
+                / FRE-673); propagated to tool executors for visibility scoping.
 
         Returns:
             A new TraceContext with a generated trace_id and no parent span.
@@ -77,6 +84,7 @@ class TraceContext:
             profile=profile,
             user_id=user_id,
             session_id=session_id,
+            authenticated=authenticated,
         )
 
     def new_span(self) -> tuple["TraceContext", str]:
@@ -85,7 +93,8 @@ class TraceContext:
         Returns:
             A tuple of (new TraceContext with this span as parent, new span_id).
             The new context has the same trace_id, profile, user_id, session_id,
-            kind, and a new parent_span_id set to the generated span_id.
+            kind, eval_mode, authenticated, and a new parent_span_id set to the
+            generated span_id.
         """
         span_id = str(uuid.uuid4())
         return TraceContext(
@@ -96,6 +105,7 @@ class TraceContext:
             session_id=self.session_id,
             kind=self.kind,
             eval_mode=self.eval_mode,
+            authenticated=self.authenticated,
         ), span_id
 
     @property

@@ -1,9 +1,9 @@
-# ADR-0101: Agent Vision Ingestion of Uploaded Attachments
+# ADR-0101: Agent Vision Ingestion of Uploaded Images
 
 **Status:** Proposed
 **Date:** 2026-06-28
 **Deciders:** lextra (owner), Seshat architecture
-**Tags:** uploads, vision, multimodal, model-routing, orchestrator, r2
+**Tags:** uploads, vision, images, model-routing, orchestrator, r2
 
 ---
 
@@ -21,8 +21,8 @@ The failure is a chain of three layers, each verified in code:
 1. **Upload stores bytes in R2.** `uploads_router.py` persists the `artifacts` row with the
    browser-declared `content_type` (the upload allowlist at `uploads_router.py:46-59` includes
    `image/png|jpeg|gif|webp`, `image/svg+xml`, `application/pdf`, and text types — this ADR's v1 scope
-   is the raster image subset plus PDF); the bytes land in R2 via the presigned PUT. The metadata
-   canon is Postgres (`docker/postgres/init.sql:349-365`).
+   is the raster image subset; `application/pdf` is owned by ADR-0102); the bytes land in R2 via the
+   presigned PUT. The metadata canon is Postgres (`docker/postgres/init.sql:349-365`).
 2. **Attachment is flattened to a text pointer.** `service/app.py:187-211`
    (`_augment_message_with_attachments`) *prepends a plain-text block* to the user message —
    `"[Attachments — call artifact_read(artifact_id) to read content:]"` — and passes the augmented
@@ -43,8 +43,7 @@ Two distinct missing pieces, and a deeper truth behind both:
   Access**, returns raw bytes. It is wired for textual artifacts only, never for binary.
 - **Deliver as a vision content block to a vision-capable model.** Returning raw or base64 bytes in a
   tool result to a model does **not** let it see the image — a model "sees" an image only when the
-  bytes arrive as a typed image/document content block in the message. Plain or base64 text is just
-  text.
+  bytes arrive as a typed image content block in the message. Plain or base64 text is just text.
 
 **What needs to be decided:**
 
@@ -91,7 +90,7 @@ Deliver attachments to the model as **typed content blocks resolved at turn asse
 ### 1. Turn-assembly resolution (not a tool call)
 
 Current-turn attachments are resolved into content blocks **before the first model call** and injected
-into the initial user message. This matches the dominant intent ("here is an image / PDF — look at
+into the initial user message. This matches the dominant intent ("here is an image — look at
 it"): the model sees the attachment on its very first call, with no extra round-trip. A post-hoc
 `artifact_read` tool call is *not* the primary mechanism (see Alternatives).
 
@@ -111,23 +110,26 @@ this ADR's chain.
 At resolution, bytes are fetched via `store.get(r2_key)` (direct R2 S3, bypasses Cloudflare Access).
 The agent is **never** handed the CF-Access `public_url` to fetch as a content source.
 
-### 4. Content-block construction (capability-driven)
+### 4. Content-block construction
 
-- **Raster image** (`image/png|jpeg|gif|webp`) → an image block. Canonical input is the OpenAI-style
-  `image_url` block with a `data:` URI (base64); LiteLLM transforms it to the Anthropic image-source
-  block for the cloud path, and the local SLM path passes it through unaltered.
-- **PDF** (`application/pdf`) → a native Anthropic **document** block when the routed model advertises
-  PDF-document support; otherwise the PDF is **rasterized to per-page image blocks** (portable to any
-  vision-capable model, including the local Qwen). The native-document path preserves the PDF text
-  layer (higher fidelity); rasterization is the portable fallback so PDFs work on the local profile
-  too.
+A **raster image** (`image/png|jpeg|gif|webp`) → a single image block. Canonical input is the
+OpenAI-style `image_url` block with a `data:` URI (base64); LiteLLM transforms it to the Anthropic
+image-source block for the cloud path, and the local SLM path passes it through unaltered. An image is
+one bounded visual payload — no pagination, no chunking; the only safeguard is a size/dimension cap
+(§6).
+
+**Documents (PDF) are out of scope for this ADR.** They are a categorically different problem —
+variable page count, scanned-vs-native-text-layer (OCR vs vision), chunking, per-page cost, and a
+text-extraction-vs-vision strategy decision — and are owned by **ADR-0102 (Document Ingestion,
+forthcoming)**. ADR-0102 reuses this ADR's structured-attachment carrier (§2), credentialed fetch
+(§3), turn-assembly injection, and capability routing (§5); it owns only the document-strategy layer.
 
 ### 5. Capability-driven routing
 
-Add `supports_vision: bool` (raster images) and `supports_pdf_documents: bool` (native PDF document
-blocks) to `ModelDefinition`, set on the model definitions in `config/models.yaml` (true for
-`primary`, `sub_agent`, `claude_sonnet`, `claude_haiku`). When a turn carries an attachment, the
-routing/turn-assembly layer **asserts the selected model supports the required modality**:
+Add `supports_vision: bool` (raster images) to `ModelDefinition`, set on the model definitions in
+`config/models.yaml` (true for `primary`, `sub_agent`, `claude_sonnet`, `claude_haiku`). (ADR-0102
+will add any document-specific capability flag it needs, e.g. native-PDF support.) When a turn carries
+an image attachment, the routing/turn-assembly layer **asserts the selected model supports vision**:
 
 - If the selected model is capable → proceed (the expected common case once the flags are set, since
   the deployed primaries are vision-capable).
@@ -148,9 +150,9 @@ explicitly, not quietly downgraded.
 ### 6. Guardrails (fail-closed)
 
 Server-side caps enforced at resolution: per-image max dimension and byte size (downscale or reject
-oversized), max images per turn, max PDF pages (when rasterizing), and a total per-turn attachment
-payload cap. Oversized inputs are downscaled below the cap or rejected with a clear error — never sent
-unbounded.
+oversized), max images per turn, and a total per-turn attachment payload cap. Oversized inputs are
+downscaled below the cap or rejected with a clear error — never sent unbounded. (Document-specific
+guardrails — page caps, chunking — belong to ADR-0102.)
 
 ### 7. Fix the broken `public_url` path
 
@@ -161,10 +163,10 @@ remains for **human / output-channel display** (PWA, ADR-0070 rich output) only.
 
 ### Scope (v1)
 
-Raster `image/png|jpeg|gif|webp` and `application/pdf`, **current-turn attachments only**. Deferred:
-SVG (XML, not a raster — Anthropic does not accept it as an image), examining an *arbitrary
-previously-stored* image mid-conversation (the tool-result-image-block path — see Alternatives),
-audio/video.
+Raster `image/png|jpeg|gif|webp`, **current-turn attachments only**. Out of scope: **documents (PDF) —
+ADR-0102 (forthcoming)**; SVG (XML, not a raster — Anthropic does not accept it as an image);
+examining an *arbitrary previously-stored* image mid-conversation (the tool-result-image-block path —
+see Alternatives); audio/video.
 
 ---
 
@@ -206,12 +208,12 @@ v2 capability) — the two mechanisms are complementary, not competing.
 **Why Rejected:** It does not solve the problem; it only makes the failure quieter (the model
 hallucinates over gibberish instead of reporting it cannot see the image).
 
-### Option 3: Force all image/PDF turns to cloud Anthropic
+### Option 3: Force all image turns to cloud Anthropic
 
-**Description:** When an attachment is present, always route to `claude_sonnet`.
+**Description:** When an image attachment is present, always route to `claude_sonnet`.
 
 **Pros:**
-- Simplest routing rule; Anthropic has strong vision and native PDF documents.
+- Simplest routing rule; Anthropic has strong vision.
 
 **Cons:**
 - Unnecessary now that the SLM-server Qwen models are vision-capable.
@@ -223,19 +225,26 @@ hallucinates over gibberish instead of reporting it cannot see the image).
 selected; the image follows the same trust boundary as the turn's text. Forcing cloud is a strictly
 worse privacy/locality outcome with no compensating benefit.
 
-### Option 4: PDF via native Anthropic document block only (no rasterize fallback)
+### Option 4: One ADR covering both images and documents (PDF)
 
-**Description:** Handle PDFs solely as Anthropic document blocks.
+**Description:** Keep the original single-ADR scope — images *and* PDFs handled in one decision and one
+implementation chain.
 
 **Pros:**
-- Highest fidelity (preserves the text layer); a single, simple code path.
+- One carrier, one resolution module, one ADR to track; images and documents share most plumbing.
 
 **Cons:**
-- Anthropic/cloud-only — PDFs cannot be processed on the local profile, forcing any PDF turn to
-  cloud (re-introducing Option 3's egress problem for PDFs).
+- Documents carry a genuinely different decision shape — variable page count, scanned-vs-native text
+  layer (OCR vs vision), chunking, per-page cost scaling, and a *text-extraction-vs-vision* strategy
+  choice that may mean **not using vision at all** for text-layer PDFs. Folding that in buries the
+  decisions and couples the simple, high-value image fix to the harder document design.
+- The live bug (FRE-369 smoke test) was an **image** — bundling delays its fix behind the document
+  work.
 
-**Why Rejected as the sole mechanism:** Kept as the *preferred* path when the routed model supports
-PDF documents, with rasterization as the portable fallback so PDFs also work on the local profile.
+**Why Rejected:** Documents merit their own ADR (**ADR-0102**). The split keeps a clean
+foundation-vs-strategy boundary: this ADR delivers the shared foundation (carrier, credentialed fetch,
+content widening, capability routing) plus the simple image path; ADR-0102 reuses that foundation and
+owns the document-strategy layer. The image fix ships without waiting on OCR/chunking design.
 
 ### Option 5: OCR / caption the image server-side, feed text to a text model
 
@@ -257,14 +266,16 @@ profiles.
 
 ### Positive Consequences
 
-- The agent actually sees uploaded images and PDFs — closing the FRE-369 gap.
+- The agent actually sees uploaded images — closing the FRE-369 image gap without waiting on the
+  harder document design.
 - Bytes are fetched over the credentialed R2 S3 path; the Cloudflare-Access failure mode is
   eliminated for agent consumption.
 - Captain's Log `task_description` and entity extraction stay clean (FRE-661 folded in) — no synthetic
   attachment preamble pollutes self-improvement data or the knowledge graph.
-- Vision capability is modeled in config (`supports_vision` / `supports_pdf_documents`), consistent
-  with ADR-0099's config-single-source posture — routing keys off declared capability, not hardcoded
-  model names.
+- Vision capability is modeled in config (`supports_vision`), consistent with ADR-0099's
+  config-single-source posture — routing keys off declared capability, not hardcoded model names.
+- A reusable foundation (carrier, credentialed fetch, content widening, capability routing) that
+  ADR-0102 (documents) builds on directly.
 - No new data-egress boundary: the attachment travels with the profile the user already chose.
 
 ### Negative Consequences
@@ -281,9 +292,8 @@ profiles.
   to `""` (`executor.py:1857`); duplicate-role merge via string interpolation
   (`executor.py:716-719`); and token estimation that stringifies rather than counting image tokens
   (`context_window.py:30-32`). This is a dedicated audit-and-harden ticket, not a three-line fix.
-- **Cost.** Image and document blocks consume vision tokens; the cost gate (ADR-0065) must meter
-  attachment blocks. Large rasterized PDFs multiply token cost per page (hence the page cap).
-- **New dependency.** PDF rasterization needs a server-side PDF→image renderer.
+- **Cost.** Image blocks consume vision tokens; the cost gate (ADR-0065) must meter image blocks. The
+  per-image resolution cap bounds this (no per-page multiplication — that risk lives in ADR-0102).
 - **Routing reads attachment metadata.** `ExecutionContext` gains an attachment field and the routing
   seam now branches on it (previously a pure no-op returning `PRIMARY`).
 
@@ -293,7 +303,7 @@ profiles.
 |------|----------|------------|
 | A non-vision model silently receives an image and hallucinates | High | Routing asserts `supports_vision`; on failure escalate or raise `AttachmentUnsupported` — fail-closed, never silent (AC-4) |
 | `content` widening breaks str-assuming code paths | Medium-High | Dedicated audit ticket over **all** content-stringifying sites (the known set: `history_sanitiser`, `_validate_and_fix_conversation_roles`, debug log, no-think suffix, frozen-context inlining, expansion-query read, duplicate-role merge, token estimation); add a single block-aware text accessor used everywhere; tests over assembled `request_messages` (AC-3) and over each audited site with list content |
-| Oversized/many-page attachment blows context or cost | Medium | Per-image size/dimension cap + downscale, max images/turn, max PDF pages, total payload cap, fail-closed guard (AC-7) |
+| Oversized image blows context or cost | Medium | Per-image size/dimension cap + downscale, max images/turn, total payload cap, fail-closed guard (AC-7) |
 | Declared `content_type` is wrong (no server-side magic-byte sniff today) | Low | Resolution validates the declared type against the allowlist before constructing a block; mismatched/unsupported types are **rejected with a clear, user-visible error** (fail-closed) — never silently downgraded to the text-pointer behavior |
 | Local SLM rejects `image_url` blocks for a given model build | Low | Capability flag reflects the deployed build; if a profile's model is not actually vision-capable, set its flag false and routing escalates/raises rather than failing opaquely |
 
@@ -316,13 +326,13 @@ profiles.
   `_augment_message_with_attachments` from the orchestrator path.
 - `service/models.py` — widen `Message.content` to `str | list[<block>]`.
 - `tools/artifact_tools.py` — binary-path honesty (stop advertising `public_url` as agent-fetchable).
-- `llm_client/models.py` — `ModelDefinition.supports_vision` + `supports_pdf_documents`.
-- `config/models.yaml` — set the flags on `primary`, `sub_agent`, `claude_sonnet`, `claude_haiku`.
-- New attachment-resolution module — `store.get` fetch + block construction (raster + PDF) +
-  guardrails (downscale/caps).
+- `llm_client/models.py` — `ModelDefinition.supports_vision`.
+- `config/models.yaml` — set `supports_vision` on `primary`, `sub_agent`, `claude_sonnet`,
+  `claude_haiku`.
+- New attachment-resolution module — `store.get` fetch + image block construction + guardrails
+  (downscale/caps). Designed so ADR-0102 can add a document branch without reshaping it.
 
-**Dependencies:** R2 store (ADR-0069), the structured-attachment carrier (folded FRE-661), a PDF
-rendering library for the rasterize fallback.
+**Dependencies:** R2 store (ADR-0069), the structured-attachment carrier (folded FRE-661).
 
 **Testing strategy:** unit tests over the resolution module (byte fetch path, block shape, guardrails)
 with a mocked `store`; an assertion over assembled `request_messages` for block presence; a routing
@@ -344,16 +354,15 @@ outcome.
   `store.get` is called with the artifact's `r2_key` and that no agent-side code issues an HTTP GET to
   `artifacts_public_base_url` during resolution. *Fails if* any agent-side path fetches the CF-Access
   URL for bytes.
-- **AC-3 (typed block in the initial message)** — The first model call's message list contains a
-  typed image/document block for the attachment — not a text pointer, not base64 in a text field.
-  **Check:** assert on the assembled `request_messages` that the user turn's `content` is a list
-  containing a block of type `image_url`/`image` (or `document` for PDF). *Fails if* `content` is a
-  `str` or the image is embedded as text.
-- **AC-4 (routing guarantees capability)** — When an attachment is present, the model that receives it
-  has `supports_vision=true` (and `supports_pdf_documents` for the native-PDF path). **Check:** a test
-  that, given a profile whose primary has `supports_vision=false`, the router either escalates to a
-  vision-capable model or raises `AttachmentUnsupported` — and a non-vision model never receives an
-  image block. *Fails if* a model with `supports_vision=false` is handed an image block.
+- **AC-3 (typed image block in the initial message)** — The first model call's message list contains a
+  typed image block for the attachment — not a text pointer, not base64 in a text field. **Check:**
+  assert on the assembled `request_messages` that the user turn's `content` is a list containing a
+  block of type `image_url`/`image`. *Fails if* `content` is a `str` or the image is embedded as text.
+- **AC-4 (routing guarantees vision capability)** — When an image attachment is present, the model that
+  receives it has `supports_vision=true`. **Check:** a test that, given a profile whose primary has
+  `supports_vision=false`, the router either escalates to a vision-capable model or raises
+  `AttachmentUnsupported` — and a non-vision model never receives an image block. *Fails if* a model
+  with `supports_vision=false` is handed an image block.
 - **AC-5 (clean task description — FRE-661 folded)** — For an attachment turn, the captured task text
   equals the user's original submitted message **byte-for-byte**, and attachment metadata appears
   **only** in the structured attachment carrier field. **Check:** assert `TaskCapture.user_message`
@@ -362,18 +371,14 @@ outcome.
   appears in that field, and that attachment metadata is present in the structured carrier. *Fails if*
   the captured text differs from the original by any byte (preamble, appended IDs, or a stringified
   block list) — not merely if the exact `"[Attachments —"` preamble is present.
-- **AC-6 (PDF delivered)** — A turn with a PDF attachment yields a response conditioned on PDF
-  content. **Check:** a live turn with a test PDF containing a unique marker (text or figure present
-  only in the PDF); assert the response references it. *Fails if* the PDF is ignored or the turn
-  errors.
 - **AC-7 (every guardrail dimension fails closed)** — For **each** configured cap — per-image byte
-  size, per-image pixel dimension, images-per-turn, PDF page count, and total per-turn payload — an
-  over-limit input is either transformed below the limit before the model call or rejected with a
-  user-visible error; the over-limit bytes never reach the model. **Check:** one parametrized test per
-  cap dimension feeds an input exceeding that specific cap and asserts (a) the resolved block is below
-  the cap or the turn is rejected, and (b) the over-limit content is absent from the assembled
-  `request_messages`. *Fails if* any single dimension (e.g. page count or multi-attachment total)
-  passes through unbounded while another is enforced.
+  size, per-image pixel dimension, images-per-turn, and total per-turn payload — an over-limit input
+  is either transformed below the limit before the model call or rejected with a user-visible error;
+  the over-limit bytes never reach the model. **Check:** one parametrized test per cap dimension feeds
+  an input exceeding that specific cap and asserts (a) the resolved block is below the cap or the turn
+  is rejected, and (b) the over-limit content is absent from the assembled `request_messages`. *Fails
+  if* any single dimension (e.g. the multi-image total) passes through unbounded while another is
+  enforced.
 - **AC-8 (artifact_read honesty)** — For a binary/image artifact, `artifact_read` exposes no
   agent-readable field that presents a URL as a byte/content-access path. **Check:** call
   `artifact_read` on an image artifact and assert that any URL in the result is **either absent from
@@ -383,9 +388,10 @@ outcome.
   as a fetchable content source — the absence of the word "fetch" is not enough.
 
 **Seam owner (decomposed ADR):** the assembled intent is **AC-1 + AC-3 + AC-4 together** — structured
-attachment → resolved block → vision-capable model → response conditioned on the image, end to end.
-This seam is owned by the **final live-smoke ticket (AC-1/AC-6)**, run by master at the integration
-gate; the chain does **not** close because the routing-flag or carrier ticket merged in isolation.
+image attachment → resolved image block → vision-capable model → response conditioned on the image,
+end to end. This seam is owned by the **final image live-smoke ticket (AC-1)**, run by master at the
+integration gate; the chain does **not** close because the routing-flag or carrier ticket merged in
+isolation.
 
 ---
 
@@ -395,7 +401,8 @@ gate; the chain does **not** close because the routing-flag or carrier ticket me
 - ADR-0070 — output channels (human-facing `public_url` display)
 - ADR-0099 — configuration management & validation (config-single-source for capability flags)
 - ADR-0033 — model role taxonomy (`ModelRole.PRIMARY`; routing seam)
-- ADR-0065 — cost gate (must meter attachment/vision tokens)
+- ADR-0065 — cost gate (must meter vision tokens)
+- ADR-0102 — Document Ingestion (forthcoming) — PDF/OCR/chunking; reuses this ADR's foundation
 - FRE-369 — upload UX, live (surfaced this gap)
 - FRE-368 — agent-side artifact tools (`artifact_read` origin)
 - FRE-661 — structured attachments through `handle_user_request` (folded into this ADR's chain)
@@ -411,7 +418,15 @@ gate; the chain does **not** close because the routing-flag or carrier ticket me
 ### 2026-06-28 - Proposed
 **Changed By:** lextra (adr session, Opus)
 **Reason:** Design pass for FRE-662. Turn-assembly resolution + capability-driven routing; folds
-FRE-661 as the structured-attachment carrier; scope raster + PDF, current-turn.
+FRE-661 as the structured-attachment carrier; scope raster + PDF, current-turn. *(Scope superseded by
+the 2026-06-29 update below — narrowed to images.)*
+
+### 2026-06-29 - Scope narrowed to images
+**Changed By:** lextra (adr session, Opus)
+**Reason:** Owner call — documents (PDF) merit their own ADR. An image is one bounded visual block
+(no pagination/chunking/OCR); documents carry a divergent decision shape (page count, scanned-vs-text
+layer, OCR-vs-extraction, chunking, per-page cost). Narrowed this ADR to raster images; carved
+documents into **ADR-0102 (forthcoming)**, which reuses this ADR's foundation. Still Proposed.
 
 ---
 

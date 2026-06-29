@@ -1,4 +1,4 @@
-# FRE-694 — Does a better embedder open a clean floor? No. (0.6B-f16 · 8B-f16 · Voyage)
+# FRE-694 — Does a better embedder open a clean floor? No. (0.6B · 4B · 8B f16 · Voyage)
 
 **Date:** 2026-06-29 · **Ticket:** FRE-694 ("Memory Recall Quality"). Continuation of FRE-670/656.
 **Backing:** ADR-0087 §D (recall measurement) · ADR-0100 (the floor this gates) · ADR-0099 (config).
@@ -22,8 +22,12 @@ Three arms, all f16, over the 54-case FRE-670 probe (`semantic_probe.yaml`):
 | Arm | Model | Native dim | Endpoint |
 |-----|-------|-----------:|----------|
 | 0.6B | Qwen3-Embedding-0.6B (prod) | 1024 | VPS `:8503` |
+| 4B-f16 | Qwen3-Embedding-4B | 2560 | `slm.frenchforet.com` |
 | 8B | Qwen3-Embedding-8B | 4096 | `slm.frenchforet.com:8505` |
 | Voyage | voyage-4-large (cloud SOTA) | 2048 | Voyage API |
+
+(The 4B and 8B arms share the Access-gated slm endpoint — run separately as the served model was
+swapped; the 8B numbers were captured before the 4B-f16 swap.)
 
 Cosines computed **offline** (embed → first-N truncate → L2 renormalize → cosine), reported in Neo4j
 score space (`(cosine+1)/2`) so they are comparable to the production path and the FRE-655 floor.
@@ -39,54 +43,63 @@ number was trusted: 0.6B@1024 offline medians vs calibrate — pos 0.766 vs 0.77
 neg-max 0.779 vs 0.792 (**all Δ ≤ 0.012 < 0.02**). The harness computes the same geometry as production.
 *(Caveat: this is an embedding-geometry test, not a Neo4j-HNSW index-fidelity test.)*
 
-## Results — separation at native dimension
+## Results — separation at native dimension (full f16 size ladder)
 
-| Arm | pos med | neg med | neg max | pos p5 | neg p95 | best Youden's J | clean floor? |
-|-----|--------:|--------:|--------:|-------:|--------:|----------------:|:------------:|
-| 0.6B @1024 | 0.750 | 0.700 | 0.779 | 0.676 | 0.755 | **0.42** (R 0.49 / FP 0.07 @0.75) | **No** |
-| 8B @4096 | 0.738 | 0.662 | 0.775 | 0.649 | 0.733 | **0.53** (R 0.72 / FP 0.19 @0.70) | **No** |
-| Voyage @2048 | 0.749 | 0.651 | 0.804 | 0.647 | 0.751 | **0.59** (R 0.74 / FP 0.15 @0.70) | **No** |
+| Arm | native | pos med | neg med | neg max | pos p5 | neg p95 | best Youden's J | clean floor? |
+|-----|-------:|--------:|--------:|--------:|-------:|--------:|----------------:|:------------:|
+| 0.6B | 1024 | 0.750 | 0.700 | 0.779 | 0.676 | 0.755 | **0.42** (R 0.49 / FP 0.07 @0.75) | **No** |
+| 4B-f16 | 2560 | 0.746 | 0.680 | 0.811 | 0.662 | 0.738 | **0.53** (best 0.59 @1024) | **No** |
+| 8B | 4096 | 0.738 | 0.662 | 0.775 | 0.649 | 0.733 | **0.53** (best 0.55 @1024) | **No** |
+| Voyage | 2048 | 0.749 | 0.651 | 0.804 | 0.647 | 0.751 | **0.59** (best 0.64 @512) | **No** |
 
 - **Recall@5 saturates** at 0.98–1.00 for every arm and dim — recall hides the problem; separation is
-  the metric.
+  the metric. Recall@1 *is* monotonic with size (0.739 → 0.761 → 0.773 → 0.807).
 
 ### Dimension sweep — best dimension is the *middle*, not native (AC2)
 
 Best Youden's J (recall − false-positive at the optimal floor) by dimension:
 
-| Arm | 256 | 512 | 1024 | 2048 | 4096 | best dim |
-|-----|----:|----:|-----:|-----:|-----:|:--------:|
-| 0.6B | 0.354 | **0.429** | 0.417 | — | — | **512** |
-| 8B | 0.469 | 0.461 | **0.550** | 0.534 | 0.534 | **1024** |
-| Voyage | 0.571 | **0.642** | 0.605 | 0.589 | — | **512** |
+| Arm | 256 | 512 | 1024 | 2048 | 2560 | 4096 | best dim |
+|-----|----:|----:|-----:|-----:|-----:|-----:|:--------:|
+| 0.6B | 0.354 | **0.429** | 0.417 | — | — | — | **512** |
+| 4B-f16 | 0.478 | 0.519 | **0.594** | 0.512 | 0.532 | — | **1024** |
+| 8B | 0.469 | 0.461 | **0.550** | 0.534 | — | 0.534 | **1024** |
+| Voyage | 0.571 | **0.642** | 0.605 | 0.589 | — | — | **512** |
 
 More dimensions do **not** improve separation — every arm peaks at a *middle* dimension (512–1024) and
-**native is equal-or-slightly-worse** (8B 1024 = 0.550 > native 4096 = 0.534; Voyage 512 = 0.642 >
-native 2048 = 0.589). The extra dimensions add noise that nudges the hardest distractors up, not
-signal. Recall@1 also plateaus by ~512 (Voyage 0.807 from 512 on). **Practical:** were a re-embed ever
-done, truncate the MRL embedding to **~512 dims** — best separation *and* recall at 4–8× less vector
-storage than native. *(Caveat: at n=54 the J gap between neighbouring dims is within noise; the robust
-read is "saturates by ~512, native doesn't help," not a precise optimum.)*
+**native is equal-or-worse** (4B-f16 1024 = 0.594 > native 2560 = 0.532; 8B 1024 = 0.550 > native 4096
+= 0.534; Voyage 512 = 0.642 > native 2048 = 0.589). The extra dimensions add noise that nudges the
+hardest distractors up, not signal. **Practical:** were a re-embed ever done, truncate the MRL
+embedding to **~1024 dims** (bigger models) / **~512** (0.6B/Voyage) — best separation *and* recall at
+2–4× less vector storage than native. *(Caveat: at n=54 the J gap between neighbouring dims is within
+noise; the robust read is "saturates by ~512–1024, native doesn't help," not a precise optimum.)*
 
 ## Verdict
 
 **No embedder opens a clean floor.** On every arm at every dimension the positive and negative clouds
 overlap — even at the robust percentiles (pos-p5 < neg-p95 throughout), and even for cloud SOTA
-(Voyage's best Youden's J is 0.59: keep 74 % of true matches while admitting 15 % of distractors —
+(Voyage's best Youden's J is 0.64: keep ~80 % of true matches while admitting ~16 % of distractors —
 far from a clean cutoff). The hardest distractors always outscore the easiest true matches.
 
-**But size genuinely helps — the Q4 confound is cleared.** At f16, a bigger embedder measurably
-improves separation (best Youden's J 0.42 → 0.53 → 0.59 across 0.6B → 8B → Voyage), mostly by pushing
-the *negative* median down (0.700 → 0.662 → 0.651). So FRE-670's "4B doesn't help separation" was
-indeed a precision artifact; at equal precision, the embedder is a **partial lever** — it narrows the
-overlap but does not close it.
+**Size helps with diminishing returns — it plateaus after 4B — and the Q4 confound is now directly
+confirmed.** At native dim the best Youden's J runs 0.42 (0.6B) → 0.53 (4B) → 0.53 (8B) → 0.59
+(Voyage): the real gain is **0.6B → 4B (+0.11)**, then **4B and 8B are statistically indistinguishable**
+(native 0.532 vs 0.534; the ~0.04 edge 4B shows at the 1024 truncation is within the n=54 noise — not
+evidence a smaller model separates better). So within the local Qwen family the separation ceiling is
+reached by **~4B; the 8B buys nothing over the 4B.** Voyage (a different architecture) is marginally
+highest. Crucially, the *same* 4B model scored ≈ 0.6B in FRE-670 **at Q4** but reaches J ≈ 0.53 at
+**f16** — **precision, not size, was suppressing it**, exactly the confound this ticket existed to
+clear. The embedder is a **partial lever** (it narrows the overlap, mostly by lowering negative
+similarity) but at no size or precision does it close it.
 
 ## Recommendation (feeds FRE-655 floor calibration + the re-embed decision)
 
 1. **Do not re-embed for separation.** No embedder — local or cloud SOTA — yields a clean cosine
-   cutoff, and recall already saturates at the 0.6B production embedder. A one-way-door re-embed
-   (8B → 4096-dim storage; Voyage → an external dependency) buys a J of 0.53–0.59, still far from a
-   usable floor. The cost is not justified by separation alone.
+   cutoff, and recall already saturates at the 0.6B production embedder. The local ceiling (4B-f16 @
+   ~1024) reaches only J = 0.59, and even cloud SOTA only 0.64 — still far from a usable floor. A
+   one-way-door re-embed is not justified by separation. *(If ever re-embedded for **other** reasons,
+   the local separation ceiling is reached by ~4B-f16 — the 8B is statistically no better, so it is not
+   worth its larger footprint — and truncating to ~1024 dims loses nothing.)*
 2. **The clean-floor lever is downstream.** A bi-encoder cosine cannot separate these clouds; the
    **reranker** (cross-encoder, cross-attention) is where the floor must come from. FRE-655 should
    calibrate against an *overlapping* cosine distribution and lean on the reranker — not expect a clean

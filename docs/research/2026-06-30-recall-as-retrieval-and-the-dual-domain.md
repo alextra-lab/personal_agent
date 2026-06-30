@@ -48,7 +48,8 @@ The robust, defensible result — the part that survives every caveat:
 > **No single similarity score gives a clean separation floor on this data.** Across 3 embedder
 > runtimes × 3 quant levels × 3 sizes + cloud Voyage (FRE-694), and 3 reranker runtimes + cloud
 > (FRE-695), the positive (true-match) and negative (no-record) score clouds **overlap
-> everywhere.** Best embedder Youden's J ≤ 0.59 (even cloud SOTA only 0.64); best reranker 0.785.
+> everywhere.** Best embedder Youden's J only **0.59–0.64** (local 4B ~0.59 at its best
+> dimension; cloud Voyage up to 0.64 at 512 dims); best reranker 0.785.
 > The hardest distractors always outscore the easiest true matches.
 
 Two decisions fall straight out of that, and they are worth banking:
@@ -72,7 +73,8 @@ things *are* neighbours. Counter-intuitively, **disparate data is easier**; a de
 topically-clustered corpus — which a rich personal memory is by design — is the worst case.
 
 Clean separation comes from **structure**: taxonomy, entity types, relationships, recency windows
-turn relevance into a **deterministic filter** (`type = Person AND topic = X AND after = Y`)
+turn relevance into a **deterministic filter** (`type = Person AND after = Y`, plus `topic = X`
+*only where that vocabulary is closed* — the topic caveat lands two paragraphs down)
 instead of a fuzzy threshold. Structure replaces the floor with hard predicates; it does not make
 the scores separate better.
 
@@ -81,8 +83,10 @@ partly closed:
 
 - **`type` is soft-closed.** The extractor prompt (`second_brain/entity_extraction.py:31`) asks
   for *exactly one* of seven values (Person, Organization, Location, Technology, Concept, Event,
-  Topic) — but nothing **enforces** it. Storage is `entity_data.get("type", "Unknown")`
-  (`consolidator.py:604`, `service.py:601`); no whitelist, no `Literal`, a real `"Unknown"` bin.
+  Topic) — but nothing **enforces** it. Storage is unenforced: `consolidator.py:604` writes
+  `entity_data.get("type", "Unknown")`, while `service.py:601` uses `.get("type", "")` and its
+  Cypher treats empty as "keep the existing node type." No whitelist, no `Literal` — closed by
+  convention, not by contract.
   Closed by convention, not by contract.
 - **`topic` is open.** There is no `topic` field — a topic is an *Entity of type `Topic`* whose
   `name` is **free text the model writes.** "vision", "perception", "eyesight" become three
@@ -127,7 +131,8 @@ finding in two:
   offline geometry, n = 54, probe-specific, extrema outlier-sensitive.)
 
 So the honest meta-conclusion is not *"we found the floor"* — it is *"stop chasing any single
-clean-separation mechanism, because this kind of data will never yield one."* The probe
+clean-separation mechanism, because this class of corpus is unlikely to yield one — and certainly
+has not at the small, single-corpus, n=54 scale measured here."* The probe
 (FRE-489/670) is an **instrument, not a target**: use it to catch regressions, not to set
 production constants.
 
@@ -144,7 +149,8 @@ structural predicate, graph traversal, the proactive path, the topic path — is
 same buried knowledge. So the architectural question is not "tune the recall floor"; it is "how do
 we reliably reach the truth/insight/knowledge in the KG, by **multiple paths**."
 
-The shape that follows (design, not yet decided — see §7):
+The shape that follows is **a design inference from the empirical work, not itself measured**
+(not yet decided — see §7):
 
 - **Multi-strategy retrieval** — dense vector / lexical (full-text) / structural predicate / graph
   traversal / multi-query (paraphrase) expansion. Each arm has different failure modes; the union
@@ -167,6 +173,11 @@ argument is the strongest case *for* multi-path, not against the stream.
 
 ## 6. The dual-domain generalization
 
+*Caveat up front: this section is **analogy and hypothesis, not a finding.** FRE-694/695 measured
+one personal corpus; none of the SOC claims below are measured. They are domain reasoning about
+how the same architecture would behave on a structured corpus — plausible, and worth recording as
+a direction, but not established by the probe.*
+
 The sharpest test of the whole thesis: contrast this corpus with a **bounded** one — a SOC
 (Security Operations Center) collaborative partner, scoped to "all things SOC." Recall *presents
 differently through the telemetry* there, and working out *why* validates the architecture rather
@@ -187,7 +198,7 @@ So the two domains are the **same engine with the ratio turned the other way**:
 | Vocabulary | open, self-generated | closed, standardized (MITRE / CVE / OCSF) |
 | Corpus | extracted from conversation | born as typed telemetry |
 | Recall mix | semantic-dominant, structure thin | predicate + graph-traversal dominant, semantic minority |
-| Ground truth | none (N=1, non-stationary) | **real** — an IOC matched or it did not |
+| Ground truth | none (N=1, non-stationary) | **partly real** — indicator/hash matches are clean; investigation relevance + analyst recall are not automatically so |
 
 And the asymmetry that is genuinely good news: **the SOC space gives you the stationary, labelled
 data that personal memory denies you.** Everything in §4 — "you cannot optimize a threshold against
@@ -202,8 +213,9 @@ SOC-first build would have let clean predicates carry it so far it might never h
 structure/semantic division — and would quietly *assume* structure, then fall over the moment the
 vocabulary opened. Building for the hardest corpus (open, fuzzy, non-stationary, unlabeled) yields
 an architecture that **generalizes *down*** to the measurable one. The two days on FRE-694/695 were
-not a detour from a personal-memory problem; they were discovering the *general law of KG
-retrieval*, on the corpus most likely to expose it.
+not a detour from a personal-memory problem; they were tracing what looks like a *general pattern
+of KG retrieval* — a hypothesis worth carrying, not a proven law from one n=54 corpus — on the case
+most likely to expose it.
 
 If a domain-specialized partner is ever built, the clean factoring is **one platform, two
 instantiations** — never one deployment serving both:
@@ -271,5 +283,5 @@ boundary.
 - FRE-699 — recall-path frequency / rerank-load (the reranker fires only on the vector
   `search_memory` path today; paths are siloed, not fused).
 - Code: `src/personal_agent/second_brain/entity_extraction.py:31` (the 7-value `type` prompt),
-  `consolidator.py:604` / `memory/service.py:601` (unenforced `type` storage),
+  `consolidator.py:604` (`"Unknown"` fallback) / `memory/service.py:601` (`""` fallback, keep-existing) — unenforced `type` storage,
   `memory/service.py` (recall candidate Cypher — vector-first + similarity floor on cosine).

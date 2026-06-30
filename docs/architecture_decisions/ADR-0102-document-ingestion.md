@@ -89,9 +89,11 @@ landing first; this design pass does not.
   (`storage/artifact_store.py:222`), R2 keys embed `session_id`, and `TraceContext` carries
   `trace_id`+`session_id`. The document path must thread `trace_id`/`session_id`/`task_id` onto its
   resolution, cost, and routing events so they join back to the turn with no orphans.
-- **This control set was missing from ADR-0101 (images) too** — owner-flagged. ADR-0101's
-  implementation tickets are still Needs-Approval, so the same per-attachment override, cost metering,
-  and joinability threading should be folded into them; this ADR establishes the shared design.
+- **This control set is the shared spine, defined in ADR-0101 §8** (per-attachment override, cost
+  metering against the ADR-0065 cap, ADR-0074 joinability) — written attachment-type-agnostically so
+  **this ADR inherits it** (built once via FRE-691/693/692; ADR-0102's FRE-686/688 are reuse-plus-PDF
+  specifics). *(Originally this ADR carried the shared design; superseded by the ADR-0101 amendment
+  FRE-690, merged 2026-06-29.)*
 
 ---
 

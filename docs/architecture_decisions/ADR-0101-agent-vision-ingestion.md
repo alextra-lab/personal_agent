@@ -1,6 +1,6 @@
 # ADR-0101: Agent Vision Ingestion of Uploaded Images
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-06-28
 **Deciders:** lextra (owner), Seshat architecture
 **Tags:** uploads, vision, images, model-routing, orchestrator, r2, cost, joinability, execution-profile
@@ -644,6 +644,17 @@ isolation.
 ---
 
 ## Status Updates
+
+### 2026-06-30 - Accepted
+**Changed By:** lextra (owner; recorded by master)
+**Reason:** Owner accepted ADR-0101 (images) and approved the underlying implementation chain. The image
+chain FRE-661/664/665/666/668/669 was already Approved; the shared-control-spine tickets **FRE-691**
+(cloud image cost + ADR-0065 gate) / **FRE-692** (PWA per-attachment override) / **FRE-693** (ADR-0074
+joinability) are now Approved too. Design is complete: turn-assembly resolution + credentialed
+`store.get` fetch + capability-routed fail-closed + §8 shared control spine. Build chain unblocked;
+the ADR-0102 document chain (FRE-682+) hard-depends on this image chain landing first. Seam **FRE-669
+(AC-SEAM)** owns the assembled intent — the ADR closes only when 669 passes all legs, not when the last
+child merges.
 
 ### 2026-06-28 - Proposed
 **Changed By:** lextra (adr session, Opus)

@@ -15,6 +15,46 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from scripts.eval.fre435_memory_recall.calibration import FloorPoint
+
+
+def best_separation_at_observed(
+    positives: Sequence[float], negatives: Sequence[float]
+) -> FloorPoint:
+    """Best Youden's J swept at the *observed* scores (not a fixed grid).
+
+    For a cross-encoder reranker the score scale is arbitrary and often compressed, so
+    a fixed 0.0–0.95/0.05 grid (``calibration.sweep_floor``) can straddle the real
+    separating threshold and understate separation (codex review, FRE-695). Sweeping
+    candidate floors at every observed score finds the true max-J operating point on
+    that arm's own distribution. The floor is arm-specific — never transferable.
+
+    Args:
+        positives: True-match scores (should survive the floor).
+        negatives: Distractor scores (should be dropped).
+
+    Returns:
+        The :class:`~calibration.FloorPoint` at the maximum Youden's J. A floor just
+        above the highest observed score (recall 0, fpr 0, J 0) is always a candidate,
+        so the result is never worse than J = 0.
+
+    Raises:
+        ValueError: If either sequence is empty.
+    """
+    if not positives or not negatives:
+        raise ValueError("separation needs non-empty positive and negative samples")
+    candidates = sorted({*positives, *negatives})
+    candidates.append(candidates[-1] + 1e-9)  # a floor above everything: J = 0 baseline
+    n_pos, n_neg = len(positives), len(negatives)
+    best = FloorPoint(floor=candidates[-1], recall=0.0, false_positive_rate=0.0)
+    for floor in candidates:
+        recall = sum(1 for p in positives if p >= floor) / n_pos
+        fpr = sum(1 for n in negatives if n >= floor) / n_neg
+        point = FloorPoint(floor=floor, recall=recall, false_positive_rate=fpr)
+        if point.youden_j > best.youden_j:
+            best = point
+    return best
+
 
 def truncate_renormalize(vec: Sequence[float], dim: int) -> list[float]:
     """Reduce an MRL embedding to ``dim`` components and renormalize to unit length.

@@ -61,10 +61,12 @@ import asyncio  # noqa: E402
 import json  # noqa: E402
 import subprocess  # noqa: E402
 import sys  # noqa: E402
+import time  # noqa: E402
 import urllib.request  # noqa: E402
 from collections.abc import Sequence  # noqa: E402
 from pathlib import Path  # noqa: E402
 
+import httpx  # noqa: E402
 from scripts.eval.fre435_memory_recall.calibration import propose_floor, sweep_floor  # noqa: E402
 from scripts.eval.fre435_memory_recall.keyword_baseline import (  # noqa: E402
     fractional_recall_at_k,
@@ -72,6 +74,7 @@ from scripts.eval.fre435_memory_recall.keyword_baseline import (  # noqa: E402
 from scripts.eval.fre435_memory_recall.probes import ProbeCase, load_probe_set  # noqa: E402
 from scripts.eval.fre435_memory_recall.separation_report import (  # noqa: E402
     SeparationStats,
+    best_separation_at_observed,
     percentile,
     summarize_separation,
     truncate_renormalize,
@@ -88,8 +91,44 @@ ARMS: dict[str, dict[str, object]] = {
     "4b-f16": {"native": 2560, "dims": [256, 512, 1024, 2048, 2560], "kind": "local"},
     "8b": {"native": 4096, "dims": [256, 512, 1024, 2048, 4096], "kind": "local"},
     "voyage": {"native": 2048, "dims": [256, 512, 1024, 2048], "kind": "voyage"},
+    # FRE-695 MLX embedder ladder (slm endpoint, CF-gated) — runtime + quant cross-check vs
+    # the llama.cpp embedder ceiling (J 0.42/0.53/0.53). 8bit vs bf16 isolates the quant effect.
+    "mlx-emb-0.6b-bf16": {
+        "native": 1024,
+        "dims": [256, 512, 1024],
+        "kind": "mlx",
+        "model": "Qwen/Qwen3-Embedding-0.6B-bf16",
+    },
+    "mlx-emb-0.6b-8bit": {
+        "native": 1024,
+        "dims": [256, 512, 1024],
+        "kind": "mlx",
+        "model": "Qwen/Qwen3-Embedding-0.6B-8bit",
+    },
+    "mlx-emb-4b-8bit": {
+        "native": 2560,
+        "dims": [256, 512, 1024, 2048, 2560],
+        "kind": "mlx",
+        "model": "Qwen/Qwen3-Embedding-4B-8bit",
+    },
+    "mlx-emb-8b-bf16": {
+        "native": 4096,
+        "dims": [256, 512, 1024, 2048, 4096],
+        "kind": "mlx",
+        "model": "Qwen/Qwen3-Embedding-8B-bf16",
+    },
+    "mlx-emb-8b-8bit": {
+        "native": 4096,
+        "dims": [256, 512, 1024, 2048, 4096],
+        "kind": "mlx",
+        "model": "Qwen/Qwen3-Embedding-8B-8bit",
+    },
 }
 _VOYAGE_MODEL = "voyage-4-large"
+_SLM_EMBED_URL = "https://slm.frenchforet.com/v1/embeddings"
+#: Qwen3-Embedding query instruction prefix (mirrors memory/embeddings.py) — applied
+#: client-side for the MLX arms so they match the local arms' asymmetric query mode.
+_QWEN_QUERY_PREFIX = "Instruct: Given a query, retrieve relevant entities and passages\nQuery: "
 
 
 def _entity_text(name: str, description: str) -> str:
@@ -172,6 +211,33 @@ def _embed_voyage(
     return vectors
 
 
+def _embed_mlx(texts: Sequence[str], mode: str, model: str) -> list[list[float]]:
+    """Embed via an MLX embedder on the slm endpoint (CF-gated), native dim, batched.
+
+    The Qwen query instruction prefix is applied client-side (``mode == "query"``) so
+    the MLX arm matches the local arms' asymmetric query mode; documents go as-is.
+    """
+    from personal_agent.service.cf_service_token import (  # noqa: PLC0415
+        cf_access_service_token_headers,
+    )
+
+    headers = dict(cf_access_service_token_headers())
+    headers["User-Agent"] = "seshat-memory/1.0"
+    headers["Content-Type"] = "application/json"
+    prefix = _QWEN_QUERY_PREFIX if mode == "query" else ""
+    vectors: list[list[float]] = []
+    for start in range(0, len(texts), 32):
+        batch = [f"{prefix}{t}" for t in texts[start : start + 32]]
+        body = json.dumps({"model": model, "input": batch}).encode()
+        request = urllib.request.Request(  # noqa: S310 — fixed https slm endpoint
+            _SLM_EMBED_URL, data=body, headers=headers
+        )
+        with urllib.request.urlopen(request, timeout=180) as response:  # noqa: S310
+            payload = json.load(response)
+        vectors.extend([float(x) for x in row["embedding"]] for row in payload["data"])
+    return vectors
+
+
 def _embed_arm(
     arm: str, note_texts: Sequence[str], query_texts: Sequence[str], native: int
 ) -> tuple[list[list[float]], list[list[float]]]:
@@ -180,6 +246,10 @@ def _embed_arm(
         key = _voyage_key()
         notes = _embed_voyage(note_texts, "document", native, key)
         queries = _embed_voyage(query_texts, "query", native, key)
+    elif ARMS[arm]["kind"] == "mlx":
+        model = str(ARMS[arm]["model"])
+        notes = _embed_mlx(note_texts, "document", model)
+        queries = _embed_mlx(query_texts, "query", model)
     else:
         notes = asyncio.run(_embed_local(note_texts, "document"))
         queries = asyncio.run(_embed_local(query_texts, "query"))
@@ -262,6 +332,79 @@ def _parity_check(
     return 1
 
 
+# ── FRE-695 reranker (cross-encoder) helpers ──────────────────────────────────
+
+
+def parse_rerank_response(payload: dict[str, object], n_documents: int) -> list[float]:
+    """Re-align a /v1/rerank response to input-document order (mirrors reranker.py).
+
+    Handles both wire shapes: llama.cpp returns ``results[]``, Voyage returns ``data[]``
+    (an intentional delta — reranker.py reads only ``results[]``). Each item carries an
+    ``index`` (into the input ``documents``) and a ``relevance_score``.
+
+    Args:
+        payload: The decoded JSON response.
+        n_documents: The number of documents sent (the expected result count).
+
+    Returns:
+        Relevance scores in the original input order.
+
+    Raises:
+        ValueError: If the response is truncated (fewer results than documents) — never
+            score a partial candidate set.
+    """
+    items = payload.get("results")
+    if items is None:
+        items = payload.get("data")
+    items = items or []
+    if not isinstance(items, list) or len(items) != n_documents:
+        raise ValueError(
+            f"truncated rerank response: {len(items) if isinstance(items, list) else 'n/a'} "
+            f"results != {n_documents} documents"
+        )
+    scores = [0.0] * n_documents
+    for item in items:
+        scores[int(item["index"])] = float(item["relevance_score"])  # type: ignore[index,call-overload]
+    return scores
+
+
+def separation_from_scores(
+    cases: Sequence[ProbeCase],
+    note_names: Sequence[str],
+    score_rows: Sequence[Sequence[float]],
+) -> tuple[list[float], list[float]]:
+    """Extract positive/negative samples from a (query × note) score matrix.
+
+    Same metric as the embedder path (FRE-694): positives are *per expected entity* (a
+    compound case contributes one sample per expected note); negatives are each query's
+    strongest *non-expected* note score (positive cases and controls alike).
+
+    Args:
+        cases: Probe cases, aligned with ``score_rows``.
+        note_names: Lowercased entity keys, aligned with each row's columns.
+        score_rows: ``score_rows[i][j]`` = relevance score of query *i* vs ``note_names[j]``.
+
+    Returns:
+        ``(positives, negatives)``.
+    """
+    note_idx = {name: j for j, name in enumerate(note_names)}
+    positives: list[float] = []
+    negatives: list[float] = []
+    for case, row in zip(cases, score_rows, strict=True):
+        expected = {n.strip().lower() for n in case.expected.entity_names if n.strip()}
+        if expected:
+            positives.extend(row[note_idx[name]] for name in expected)
+            negatives.append(
+                max(
+                    (s for name, s in zip(note_names, row, strict=True) if name not in expected),
+                    default=0.0,
+                )
+            )
+        else:  # control — every note is a non-match
+            negatives.append(max(row, default=0.0))
+    return positives, negatives
+
+
 def _score_dim(
     cases: Sequence[ProbeCase],
     note_names: Sequence[str],
@@ -333,8 +476,369 @@ def _print_dim(arm: str, row: dict[str, object]) -> None:
     )
 
 
+# ── FRE-695 reranker (cross-encoder) arms ─────────────────────────────────────
+#: Each arm = (rerank endpoint, model id, auth scheme, engine label). The local arms
+#: route by model id on the slm gateway; the CPU arm is the same 0.6B-f16 on the VPS.
+RERANKER_ARMS: dict[str, dict[str, str]] = {
+    "rr-0.6b-gpu": {
+        "endpoint": "https://slm.frenchforet.com/v1",
+        "model": "Voodisss/Qwen3-Reranker-0.6B",
+        "auth": "cf",
+        "engine": "llama.cpp GPU f16",
+    },
+    "rr-4b-gpu": {
+        "endpoint": "https://slm.frenchforet.com/v1",
+        "model": "Voodisss/Qwen3-Reranker-4B",
+        "auth": "cf",
+        "engine": "llama.cpp GPU f16 (LIVE prod reranker)",
+    },
+    "rr-0.6b-cpu": {
+        "endpoint": "http://localhost:8504/v1",
+        "model": "/models/reranker/Qwen3-Reranker-0.6B.F16.gguf",
+        "auth": "none",
+        "engine": "llama.cpp CPU f16 (VPS cross-check)",
+    },
+    "rr-mlx-4b": {
+        "endpoint": "https://slm.frenchforet.com/v1",
+        "model": "mlx-community/Qwen3-Reranker-4B-mxfp8",
+        "auth": "cf",
+        "engine": "MLX 4B mxfp8 (port 8508)",
+    },
+    "rr-mlx-8b": {
+        "endpoint": "https://slm.frenchforet.com/v1",
+        "model": "Qwen/Qwen3-Reranker-8B-mxfp8",
+        "auth": "cf",
+        "engine": "MLX 8B mxfp8 (port 8509)",
+    },
+    "rr-mlx-8b-bf16": {
+        "endpoint": "https://slm.frenchforet.com/v1",
+        "model": "Qwen/Qwen3-Reranker-8B-bf16",
+        "auth": "cf",
+        "engine": "MLX 8B bf16 (port 8510)",
+    },
+    "voyage-rerank-2.5": {
+        "endpoint": "https://api.voyageai.com/v1",
+        "model": "rerank-2.5",
+        "auth": "voyage",
+        "engine": "Voyage cloud",
+    },
+    "voyage-rerank-2.5-lite": {
+        "endpoint": "https://api.voyageai.com/v1",
+        "model": "rerank-2.5-lite",
+        "auth": "voyage",
+        "engine": "Voyage cloud (lite)",
+    },
+}
+
+
+#: Easy relevant/irrelevant pair for the per-arm instrument-sanity gate (rank-order).
+class _RerankStalled(Exception):
+    """A reranker backend stalled (5xx/timeout) — caught to keep partial results."""
+
+
+_SANITY_QUERY = (
+    "that faint leftover glow from when the early universe first cooled enough to turn clear"
+)
+_SANITY_RELEVANT = (
+    "cosmic microwave background: relic radiation left over from recombination, roughly 380,000 "
+    "years after the Big Bang"
+)
+_SANITY_IRRELEVANT = (
+    "ratatouille: a Provencal stew of aubergine, courgette, pepper and tomato cooked separately"
+)
+
+
+def _rerank_headers(arm_meta: dict[str, str]) -> dict[str, str]:
+    """Auth headers for an arm: CF-Access for slm, bearer for Voyage, none for the CPU arm."""
+    auth = arm_meta["auth"]
+    if auth == "cf":
+        from personal_agent.service.cf_service_token import (  # noqa: PLC0415
+            cf_access_service_token_headers,
+        )
+
+        headers = dict(cf_access_service_token_headers())
+        headers["User-Agent"] = "seshat-memory/1.0"
+        return headers
+    if auth == "voyage":
+        return {"Authorization": f"Bearer {_voyage_key()}", "Content-Type": "application/json"}
+    return {}
+
+
+async def _rerank(
+    client: httpx.AsyncClient, arm_meta: dict[str, str], query: str, documents: Sequence[str]
+) -> list[float]:
+    """One /v1/rerank request scoring ALL documents at once (mirrors reranker.py).
+
+    Scores the full candidate set in a single request (``top_n = len(documents)``) — never
+    per-document or chunked — so the relevance score reflects the same listwise candidate
+    context production uses. Retries transient 429/5xx with backoff. Returns scores in the
+    input document order.
+    """
+    payload: dict[str, object] = {
+        "model": arm_meta["model"],
+        "query": query,
+        "documents": list(documents),
+    }
+    if arm_meta["auth"] != "voyage":
+        # llama.cpp truncates to top_n (we want all scored); Voyage rejects top_n
+        # (it uses top_k; omitting returns every document ranked).
+        payload["top_n"] = len(documents)
+    # Retry only true RATE limits (429 — Voyage). A 5xx/504 here means the local
+    # backend wedged (llama.cpp #17200 KV stall); re-sending the SAME request just
+    # piles onto the stuck slot, so fail FAST and loud — never hammer with the repeat.
+    last_err: str = "no attempts"
+    for attempt in range(3):
+        try:
+            resp = await client.post(f"{arm_meta['endpoint']}/rerank", json=payload)
+            if resp.status_code == 429:
+                last_err = "HTTP 429 (rate limit)"
+                await asyncio.sleep(2.0 * (attempt + 1))
+                continue
+            if resp.status_code >= 500:  # backend stall — do NOT retry the same request
+                raise _RerankStalled(
+                    f"backend {resp.status_code} (llama.cpp #17200 KV-stall); not retrying"
+                )
+            resp.raise_for_status()
+            return parse_rerank_response(resp.json(), len(documents))
+        except httpx.TimeoutException:
+            raise _RerankStalled(f"backend timeout ({arm_meta['model']}); wedged") from None
+        except httpx.HTTPError as exc:
+            last_err = f"{type(exc).__name__}: {exc}".strip().rstrip(":")
+            await asyncio.sleep(1.0 * (attempt + 1))
+    raise _RerankStalled(f"rerank failed ({arm_meta['model']}): {last_err}")
+
+
+async def _sanity_check(
+    client: httpx.AsyncClient, arm_meta: dict[str, str]
+) -> tuple[bool, float, float, float]:
+    """Rank-order sanity: the relevant doc must rank #1 and out-score the irrelevant one.
+
+    Scale-agnostic (no fixed 0.5 threshold — score scales differ across rerankers). Returns
+    ``(ok, relevant_score, irrelevant_score, gap)``; the gap is recorded as the arm's local
+    calibration reference.
+    """
+    scores = await _rerank(client, arm_meta, _SANITY_QUERY, [_SANITY_RELEVANT, _SANITY_IRRELEVANT])
+    relevant, irrelevant = scores[0], scores[1]
+    gap = relevant - irrelevant
+    return (relevant > irrelevant, relevant, irrelevant, gap)
+
+
+async def _chunk_check(
+    client: httpx.AsyncClient,
+    arm_meta: dict[str, str],
+    cases: Sequence[ProbeCase],
+    documents: Sequence[str],
+    note_names: Sequence[str],
+) -> dict[str, float]:
+    """Listwise-normalization probe: does an expected note's score change with batch size?
+
+    Re-scores one positive query against (a) the full 49-doc set and (b) just its expected
+    note + the strongest distractor. If the expected note's score moves materially, the
+    reranker normalizes listwise (so the full-set scoring discipline matters); if stable,
+    scoring is pairwise-independent. Diagnostic only.
+    """
+    case = next(c for c in cases if c.expected.entity_names)
+    expected = case.expected.entity_names[0].strip().lower()
+    note_idx = {n: i for i, n in enumerate(note_names)}
+    full = await _rerank(client, arm_meta, case.query, documents)
+    expected_full = full[note_idx[expected]]
+    # strongest non-expected note from the full pass
+    distractor_j = max(
+        (i for i, n in enumerate(note_names) if n != expected), key=lambda i: full[i]
+    )
+    pair = await _rerank(
+        client, arm_meta, case.query, [documents[note_idx[expected]], documents[distractor_j]]
+    )
+    return {
+        "full_set": round(expected_full, 4),
+        "pair": round(pair[0], 4),
+        "delta": round(abs(expected_full - pair[0]), 4),
+    }
+
+
+async def _embedder_shortlist(
+    note_names: Sequence[str],
+    note_texts: Sequence[str],
+    query_texts: Sequence[str],
+    top_n: int,
+) -> list[list[int]]:
+    """Per-query top-n note indices by the 0.6B production embedder (the rerank candidate set).
+
+    Production retrieves with the embedder then reranks its shortlist — so the reranker
+    benchmark reranks the embedder's top-n (plus the case's expected notes, added by the
+    caller), not the whole 49-note corpus. This keeps each rerank request small (well
+    inside the 8192-token reranker context) and faithful to production. Uses the VPS
+    embedder (:8503) — zero laptop-GPU load.
+    """
+    from personal_agent.memory.embeddings import generate_embeddings_batch  # noqa: PLC0415
+
+    note_vecs = await generate_embeddings_batch(list(note_texts), mode="document")
+    query_vecs = await generate_embeddings_batch(list(query_texts), mode="query")
+
+    def _unit(vec: Sequence[float]) -> list[float]:
+        norm = sum(x * x for x in vec) ** 0.5 or 1.0
+        return [x / norm for x in vec]
+
+    units = [_unit(v) for v in note_vecs]
+    shortlists: list[list[int]] = []
+    for query_vec in query_vecs:
+        qu = _unit(query_vec)
+        order = sorted(
+            range(len(note_names)),
+            key=lambda j: -sum(a * b for a, b in zip(qu, units[j], strict=True)),
+        )
+        shortlists.append(order[:top_n])
+    return shortlists
+
+
+async def _run_reranker(arm: str, args: argparse.Namespace) -> int:
+    """Score the probe through a reranker arm; report separation on relevance scores."""
+    arm_meta = RERANKER_ARMS[arm]
+    cases = load_probe_set(Path(args.probe))
+    notes_by_entity, cases = _build_corpus(cases)
+    note_names = list(notes_by_entity)
+    documents = [notes_by_entity[name] for name in note_names]
+
+    async with httpx.AsyncClient(timeout=240.0, headers=_rerank_headers(arm_meta)) as client:
+        try:
+            ok, relevant, irrelevant, gap = await _sanity_check(client, arm_meta)
+        except _RerankStalled as exc:
+            raise SystemExit(f"[fail-loud] sanity stalled for {arm}: {exc}") from None
+        print(f"=== FRE-695 reranker — arm={arm} ({arm_meta['engine']}) ===")
+        print(
+            f"sanity: relevant={relevant:.4f} irrelevant={irrelevant:.4f} gap={gap:.4f} "
+            f"-> {'OK (relevant ranks #1)' if ok else 'FAIL'}"
+        )
+        if not ok:
+            raise SystemExit(
+                f"[fail-loud] sanity failed for {arm}: relevant must out-score irrelevant"
+            )
+        if args.chunk_check:
+            chunk = await _chunk_check(client, arm_meta, cases, documents, note_names)
+            print(f"chunk-check (listwise?): {json.dumps(chunk)}")
+        if args.sanity:
+            return 0
+        # Rerank a per-query candidate set, not the whole corpus: production reranks
+        # the embedder's shortlist (~top-N), and small requests stay well inside the
+        # reranker's context window. --candidates 0 reranks all notes (legacy).
+        shortlists: list[list[int]] | None = None
+        if args.candidates and args.candidates > 0:
+            shortlists = await _embedder_shortlist(
+                note_names, documents, [c.query for c in cases], args.candidates
+            )
+        note_index = {name: j for j, name in enumerate(note_names)}
+        positives: list[float] = []
+        negatives: list[float] = []
+        latencies_ms: list[float] = []
+        cand_sizes: list[int] = []
+        stalled_at: int | None = None
+        pause_s = max(0.0, args.pause_ms / 1000.0)
+        for index, case in enumerate(cases):
+            if index and pause_s:
+                await asyncio.sleep(pause_s)  # breathing room for the shared backend
+            expected = {n.strip().lower() for n in case.expected.entity_names if n.strip()}
+            if shortlists is not None:
+                # embedder top-N ∪ the case's expected notes (so positives are scored)
+                cand_idx = list(
+                    dict.fromkeys(
+                        [*shortlists[index], *(note_index[n] for n in expected if n in note_index)]
+                    )
+                )
+            else:
+                cand_idx = list(range(len(note_names)))
+            cand_names = [note_names[j] for j in cand_idx]
+            cand_docs = [documents[j] for j in cand_idx]
+            t0 = time.monotonic()
+            try:
+                scores = await _rerank(client, arm_meta, case.query, cand_docs)
+            except _RerankStalled as exc:
+                stalled_at = index  # keep what we have up to the wedge
+                print(f"  ⚠️ STALLED at query {index + 1}/{len(cases)} ({case.case_id}): {exc}")
+                break
+            latencies_ms.append((time.monotonic() - t0) * 1000.0)
+            cand_sizes.append(len(cand_docs))
+            by_name = dict(zip(cand_names, scores, strict=True))
+            if expected:
+                positives.extend(by_name[n] for n in expected if n in by_name)
+                negatives.append(
+                    max((s for n, s in by_name.items() if n not in expected), default=0.0)
+                )
+            else:  # control — every candidate is a non-match
+                negatives.append(max(scores, default=0.0))
+    completed = len(latencies_ms)
+    if stalled_at is not None:
+        print(
+            f"  PARTIAL: backend wedged after {completed}/{len(cases)} queries "
+            f"(llama.cpp #17200) — reporting separation on what completed."
+        )
+    if len(positives) < 3 or len(negatives) < 3:
+        raise SystemExit(
+            f"[partial] only {completed} queries before the wedge "
+            f"({len(positives)} pos / {len(negatives)} neg) — too few to score separation."
+        )
+    warm = latencies_ms[1:] or latencies_ms  # drop the cold first (model-load) call
+    stats = summarize_separation(positives, negatives)
+    best = best_separation_at_observed(positives, negatives)
+    latency = {
+        "candidates_per_query": round(sum(cand_sizes) / len(cand_sizes), 1),
+        "warm_median_ms": round(percentile(warm, 50), 1),
+        "warm_p95_ms": round(percentile(warm, 95), 1),
+        "cold_first_ms": round(latencies_ms[0], 1),  # model lazy-load on the shared GPU
+    }
+    run_record = {
+        "arm": arm,
+        "engine": arm_meta["engine"],
+        "model": arm_meta["model"],
+        "n_notes": len(note_names),
+        "n_queries": len(cases),
+        "completed_queries": completed,
+        "partial": stalled_at is not None,
+        "candidates": args.candidates,
+        "probe": args.probe,
+        "sanity_gap": round(gap, 4),
+        "latency": latency,
+    }
+    print(f"run-record: {json.dumps(run_record)}")
+    print(
+        f"  latency (rerank ~{latency['candidates_per_query']} candidates/query): "
+        f"warm-median={latency['warm_median_ms']}ms warm-p95={latency['warm_p95_ms']}ms "
+        f"cold-first={latency['cold_first_ms']}ms"
+    )
+    verdict = "CLEAN floor" if stats.clean_floor else "OVERLAP"
+    robust = "robust-clean" if stats.robust_clean else "robust-overlap"
+    print(
+        f"  {arm}: pos[min/med/p5={stats.pos_min:.3f}/{stats.pos_median:.3f}/{stats.pos_p5:.3f}]  "
+        f"neg[max/med/p95={stats.neg_max:.3f}/{stats.neg_median:.3f}/{stats.neg_p95:.3f}]  "
+        f"overlap[neg≥minpos={stats.neg_above_min_pos},pos≤maxneg={stats.pos_below_max_neg}]  "
+        f"bestJ={best.youden_j:.3f}@{best.floor:.4f}(R{best.recall:.2f}/FP{best.false_positive_rate:.2f})  "
+        f"-> {verdict} / {robust}"
+    )
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"separation-{arm}.json"
+    out_path.write_text(
+        json.dumps(
+            {
+                "run_record": run_record,
+                "separation": stats.__dict__,
+                "best_floor": {
+                    "floor": best.floor,
+                    "recall": best.recall,
+                    "fpr": best.false_positive_rate,
+                    "youden_j": best.youden_j,
+                },
+            },
+            indent=2,
+        )
+    )
+    print(f"written: {out_path}  (gitignored — commit only curated aggregates)")
+    return 0
+
+
 def run(args: argparse.Namespace) -> int:
     """Embed the probe for one arm, sweep dimensions, write the separation report."""
+    if args.arm in RERANKER_ARMS:
+        return asyncio.run(_run_reranker(args.arm, args))
     arm = args.arm
     native = int(ARMS[arm]["native"])
     dims = [d for d in ARMS[arm]["dims"] if not args.dims or d in args.dims]  # type: ignore[union-attr]
@@ -380,17 +884,51 @@ def run(args: argparse.Namespace) -> int:
 
 def main() -> int:
     """CLI entry point."""
-    parser = argparse.ArgumentParser(description="FRE-694 embedder separation benchmark")
-    parser.add_argument("--arm", required=True, choices=sorted(ARMS), help="Embedder arm.")
+    parser = argparse.ArgumentParser(
+        description="FRE-694/695 embedder + reranker separation benchmark"
+    )
+    parser.add_argument(
+        "--arm",
+        required=True,
+        choices=sorted([*ARMS, *RERANKER_ARMS]),
+        help="Embedder arm (FRE-694) or reranker arm (FRE-695).",
+    )
     parser.add_argument("--probe", default=DEFAULT_PROBE, help="Probe YAML path.")
     parser.add_argument("--out", default=DEFAULT_OUT, help="Output dir (gitignored).")
     parser.add_argument(
-        "--dims", type=int, nargs="*", default=None, help="Restrict the sweep to these dims."
+        "--dims",
+        type=int,
+        nargs="*",
+        default=None,
+        help="Restrict the sweep to these dims (embedder).",
     )
     parser.add_argument(
         "--parity",
         action="store_true",
-        help="HARD GATE: 0.6B@native vs FRE-670 calibrate medians (run before trusting arms).",
+        help="HARD GATE (embedder): 0.6B@native vs FRE-670 calibrate medians.",
+    )
+    parser.add_argument(
+        "--sanity",
+        action="store_true",
+        help="Reranker: run the rank-order instrument-sanity gate only, then stop.",
+    )
+    parser.add_argument(
+        "--chunk-check",
+        action="store_true",
+        help="Reranker: probe whether the engine normalizes listwise (full-set vs pair score).",
+    )
+    parser.add_argument(
+        "--pause-ms",
+        type=float,
+        default=250.0,
+        help="Reranker: pause between per-query requests (breathing room for the shared GPU).",
+    )
+    parser.add_argument(
+        "--candidates",
+        type=int,
+        default=15,
+        help="Reranker: rerank the 0.6B embedder's top-N candidates per query (0 = all notes). "
+        "Small N keeps each request inside the reranker context window + mirrors production.",
     )
     return run(parser.parse_args())
 

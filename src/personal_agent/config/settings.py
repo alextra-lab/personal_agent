@@ -533,7 +533,7 @@ class AppConfig(BaseSettings):
         description="Number of top candidates to re-score with reranker",
     )
     reranker_input_cap: int = Field(
-        default=50,
+        default=25,
         ge=1,
         description=(
             "FRE-672: max candidates passed *into* the cross-attention reranker per "
@@ -541,7 +541,11 @@ class AppConfig(BaseSettings):
             "its latency scales with this cap, not with recall_candidate_cap. Only "
             "the top-N candidates by vector score are reranked; the rest pass through "
             "on their vector+recency score. Small by design (positives sit in the "
-            "high-vector-score head); calibrated against recall@5 in FRE-655's A/B."
+            "high-vector-score head); calibrated against recall@5 in FRE-655's A/B. "
+            "FRE-696 lowered 50->25: the FRE-696 latency curve showed the 4B-mxfp8 "
+            "reranker costs ~0.11s/candidate, so 25 bounds per-recall rerank to ~2.8s "
+            "now that recall returns real volume (the 50 cap was set while recall was "
+            "empty under the FRE-673 auth bug and never bit)."
         ),
     )
 

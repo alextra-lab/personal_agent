@@ -17,6 +17,7 @@ This folder holds Kibana saved objects. Each file contains one dashboard and all
 - **expansion_decomposition.ndjson** — Expansion & Decomposition (strategy distribution, sub-agent spawn rate/success, context budget).
 - **intent_classification.ndjson** — Intent Classification (task type distribution, confidence scores, signal frequency).
 - **prompt-cost-cache.ndjson** — Prompt Cost & Cache Attribution (per-callsite token/cost, static-prefix-hash erosion). Lens-based (FRE-406).
+- **context_occupancy.ndjson** — Context Window Occupancy (memory / tool-definition / reasoning token composition over time, from `context_budget_applied`). Lens stacked-area (FRE-593).
 
 > **Retired (FRE-535):** `request_latency.ndjson` — fully superseded by Request Traces; every panel filtered a never-emitted `request_latency_*` event. See `docs/research/2026-06-08-fre-535-dashboard-triage.md`.
 

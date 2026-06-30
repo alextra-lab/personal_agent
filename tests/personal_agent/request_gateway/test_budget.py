@@ -3,7 +3,14 @@
 from typing import Any
 from unittest.mock import patch
 
-from personal_agent.request_gateway.budget import apply_budget, estimate_tokens
+import structlog
+
+from personal_agent.request_gateway.budget import (
+    _context_occupancy,
+    _total_context_tokens,
+    apply_budget,
+    estimate_tokens,
+)
 from personal_agent.request_gateway.types import AssembledContext
 from personal_agent.telemetry.compaction import (
     clear_dropped_entities,
@@ -205,6 +212,110 @@ class TestNonMessageFieldsPreserved:
         result = apply_budget(ctx, max_tokens=5, trace_id="t1")
         assert result.skills == skills
         assert result.delegation_context == delegation
+
+
+# ---------------------------------------------------------------------------
+# FRE-593 — context-window occupancy breakdown
+# ---------------------------------------------------------------------------
+
+
+def _reasoning_msg(content: str, reasoning: str) -> dict[str, Any]:
+    return {"role": "assistant", "content": content, "reasoning_content": reasoning}
+
+
+class TestContextOccupancy:
+    """The pure breakdown helper splits the window into memory/tool/reasoning + total."""
+
+    def test_empty_categories_are_zero_total_counts_content(self) -> None:
+        # No memory, no tools, no reasoning — only message content contributes.
+        occ = _context_occupancy([_msg("user", "word word word")], None, None)
+        assert occ["memory_tokens"] == 0
+        assert occ["tool_tokens"] == 0
+        assert occ["reasoning_tokens"] == 0
+        # total is the real total (message content lands in the residual, not a category).
+        assert occ["total"] == _total_context_tokens([_msg("user", "word word word")], None, None)
+        assert occ["total"] >= 3
+
+    def test_memory_only(self) -> None:
+        memory = [{"type": "entity", "name": "Alice and Bob and Carol"}]
+        occ = _context_occupancy([_msg("user", "hi")], memory, None)
+        assert occ["memory_tokens"] > 0
+        assert occ["tool_tokens"] == 0
+        assert occ["reasoning_tokens"] == 0
+
+    def test_tools_only(self) -> None:
+        tools = [{"name": "search", "description": "find things on the web"}]
+        occ = _context_occupancy([_msg("user", "hi")], None, tools)
+        assert occ["tool_tokens"] > 0
+        assert occ["memory_tokens"] == 0
+        assert occ["reasoning_tokens"] == 0
+
+    def test_reasoning_only_zero_fills_elsewhere(self) -> None:
+        # Thinking-model turn: reasoning_content present, no memory/tools.
+        messages = [_reasoning_msg("", "word word word word")]
+        occ = _context_occupancy(messages, None, None)
+        assert occ["reasoning_tokens"] == 4
+        assert occ["memory_tokens"] == 0
+        assert occ["tool_tokens"] == 0
+
+    def test_non_thinking_turn_reasoning_is_zero(self) -> None:
+        # Plain message, no reasoning_content key — must zero-fill, not error.
+        occ = _context_occupancy([_msg("user", "hello there")], None, None)
+        assert occ["reasoning_tokens"] == 0
+
+    def test_all_categories_present_total_is_real_total(self) -> None:
+        messages = [_reasoning_msg("hello there", "word word")]
+        memory = [{"type": "entity", "name": "Alice"}]
+        tools = [{"name": "search", "description": "web"}]
+        occ = _context_occupancy(messages, memory, tools)
+        assert occ["memory_tokens"] > 0
+        assert occ["tool_tokens"] > 0
+        assert occ["reasoning_tokens"] > 0
+        assert occ["total"] == _total_context_tokens(messages, memory, tools)
+        # total includes message content too, so it is at least the reasoning slice.
+        assert occ["total"] >= occ["reasoning_tokens"]
+
+
+class TestContextOccupancyEmit:
+    """apply_budget emits the breakdown on the context_budget_applied event (AC1)."""
+
+    def test_event_carries_context_occupancy(self) -> None:
+        memory = [{"type": "entity", "name": "Alice"}]
+        tools = [{"name": "search", "description": "web search"}]
+        ctx = _context(
+            messages=[_reasoning_msg("current question", "word word word")],
+            memory_context=memory,
+            tool_definitions=tools,
+        )
+        with structlog.testing.capture_logs() as captured:
+            result = apply_budget(ctx, max_tokens=10_000, trace_id="t-occ")
+
+        evt = next(e for e in captured if e.get("event") == "context_budget_applied")
+        occ = evt["context_occupancy"]
+        assert set(occ) == {"memory_tokens", "tool_tokens", "reasoning_tokens", "total"}
+        assert all(isinstance(v, int) for v in occ.values())
+        # total in the breakdown matches the scalar already on the event and the result.
+        assert occ["total"] == evt["total_tokens"]
+        assert occ["total"] == result.token_count
+        assert occ["memory_tokens"] > 0
+        assert occ["tool_tokens"] > 0
+        assert occ["reasoning_tokens"] > 0
+
+    def test_occupancy_reflects_post_trim_state(self) -> None:
+        # Memory is dropped by trimming; the breakdown must show 0 memory tokens
+        # (post-trim altitude — it describes what the model actually sees).
+        long_text = " ".join(["word"] * 500)
+        memory = [{"type": "entity", "name": long_text}]
+        ctx = _context(
+            messages=[_msg("user", "short question")],
+            memory_context=memory,
+        )
+        with structlog.testing.capture_logs() as captured:
+            result = apply_budget(ctx, max_tokens=5, trace_id="t-trim")
+
+        assert result.memory_context is None  # dropped
+        evt = next(e for e in captured if e.get("event") == "context_budget_applied")
+        assert evt["context_occupancy"]["memory_tokens"] == 0
 
 
 # ---------------------------------------------------------------------------

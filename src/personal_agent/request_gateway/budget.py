@@ -65,6 +65,56 @@ def _total_context_tokens(
     return estimate_tokens(" ".join(parts))
 
 
+def _context_occupancy(
+    messages: list[dict[str, Any]],
+    memory_context: list[dict[str, Any]] | None,
+    tool_definitions: list[dict[str, Any]] | None,
+) -> dict[str, int]:
+    """Split the context window into a per-category token breakdown (FRE-593).
+
+    Mirrors :func:`_total_context_tokens`'s own decomposition so the emitted
+    occupancy is consistent with the budget total. Categories:
+
+    * ``memory_tokens`` — Seshat memory enrichment (``memory_context``); 0 when absent.
+    * ``tool_tokens`` — tool **definitions** only (``tool_definitions``); 0 when absent.
+      Tool *results* return as conversation messages and fall into the residual, not here.
+    * ``reasoning_tokens`` — preserved ``reasoning_content`` across messages (Qwen3.6+
+      ``preserve_thinking``); **zero-fills on non-thinking turns** that carry none.
+    * ``total`` — the full :func:`_total_context_tokens` (includes message ``content``),
+      so ``total >= memory + tool + reasoning``. The residual (``total`` minus the three)
+      is everything else the model sees: system prompts, conversation history,
+      user/assistant message text, and tool results.
+
+    The caller passes the **post-trim** context, so the breakdown describes what the
+    model actually receives — memory/tools/history dropped to fit budget read as 0.
+
+    Args:
+        messages: Final message list (OpenAI format).
+        memory_context: Final memory enrichment items, or None.
+        tool_definitions: Final tool definitions, or None.
+
+    Returns:
+        Mapping with keys ``memory_tokens``, ``tool_tokens``, ``reasoning_tokens``,
+        ``total`` — all non-negative integer token estimates.
+    """
+    reasoning_tokens = estimate_tokens(
+        " ".join((m.get("reasoning_content") or "") for m in messages)
+    )
+    memory_tokens = (
+        estimate_tokens(" ".join(str(item) for item in memory_context)) if memory_context else 0
+    )
+    tool_tokens = (
+        estimate_tokens(" ".join(str(tool) for tool in tool_definitions)) if tool_definitions else 0
+    )
+    total = _total_context_tokens(messages, memory_context, tool_definitions)
+    return {
+        "memory_tokens": memory_tokens,
+        "tool_tokens": tool_tokens,
+        "reasoning_tokens": reasoning_tokens,
+        "total": total,
+    }
+
+
 def _extract_entity_ids(
     memory_context: list[Any] | None,
 ) -> tuple[str, ...]:
@@ -267,10 +317,14 @@ def apply_budget(
 
     trimmed = overflow_action is not None
 
+    # FRE-593: per-category occupancy of the final (post-trim) window for ES/Kibana.
+    occupancy = _context_occupancy(messages, memory_context, tool_definitions)
+
     logger.info(
         "context_budget_applied",
         trimmed=trimmed,
         total_tokens=total_tokens,
+        context_occupancy=occupancy,
         max_tokens=max_tokens,
         effective_max_tokens=effective_max_tokens,
         governance_tightened=governance_tightened,

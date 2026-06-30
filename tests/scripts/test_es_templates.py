@@ -161,6 +161,33 @@ def test_logs_adr0092_turn_status_session_fields_explicit() -> None:
     )
 
 
+def test_logs_context_occupancy_object_explicit() -> None:
+    """FRE-593 context occupancy breakdown is an explicit object with four long leaves.
+
+    ``budget.py`` emits ``context_occupancy={memory_tokens, tool_tokens,
+    reasoning_tokens, total}`` on the ``context_budget_applied`` event. Per ADR-0090
+    guarded-dynamic discipline every known numeric field is pinned explicitly so it can
+    never be silently coerced. All four are token magnitudes → ``long`` (matching
+    ``total_tokens``/``input_tokens``/``output_tokens``). It is an ES ``object`` mapping
+    (flattened dotted leaves), *not* ``nested``. Note the breakdown carries its own
+    ``total`` leaf inside the object — the flat top-level ``total`` field (consolidation
+    counts, ``integer``) is a separate field and must remain untouched.
+    """
+    props = _props(_load("index-template.json"))
+    occ = props.get("context_occupancy", {})
+    assert occ.get("type") == "object", "context_occupancy must be an explicit object"
+    assert "properties" in occ, "context_occupancy must declare its leaves explicitly"
+    occ_props = occ["properties"]
+    for leaf in ("memory_tokens", "tool_tokens", "reasoning_tokens", "total"):
+        assert occ_props.get(leaf, {}).get("type") == "long", (
+            f"context_occupancy.{leaf} must be long (token magnitude)"
+        )
+    # The flat consolidation `total` field is unrelated and stays integer.
+    assert props.get("total", {}).get("type") == "integer", (
+        "top-level flat `total` (consolidation counts) must stay integer"
+    )
+
+
 def test_logs_free_text_covers_genuine_long_text_leaves() -> None:
     """free_text maps the genuine long-text leaves to text."""
     tpl = _load("index-template.json")

@@ -38,6 +38,7 @@ FILES=(
   "traversal_gate.ndjson"
   "monitors_joinability_slm.ndjson"
   "turn_session_artifact.ndjson"
+  "context_occupancy.ndjson"
 )
 
 echo "Importing dashboards into Kibana at ${KIBANA_URL} ..."

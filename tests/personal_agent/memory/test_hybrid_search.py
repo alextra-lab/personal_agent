@@ -360,7 +360,10 @@ class TestRerankerInputBounding:
 
         captured: dict[str, object] = {}
 
-        async def _fake_rerank(query: str, documents: object, top_k: int | None = None) -> list:
+        async def _fake_rerank(
+            query: str, documents: object, top_k: int | None = None, **kwargs: object
+        ) -> list:
+            # **kwargs absorbs the FRE-698 trace identity (trace_id/session_id/task_id).
             captured["documents"] = documents
             return []
 

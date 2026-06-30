@@ -541,8 +541,9 @@ class TestMemoryQueries:
         async def _zero_embedding(*_args, **_kwargs):
             return [0.0, 0.0, 0.0, 0.0]
 
-        async def _fake_rerank(query, documents, top_k=None):
-            # Score the marker-bearing (old, relevant) document highest.
+        async def _fake_rerank(query, documents, top_k=None, **kwargs):
+            # Score the marker-bearing (old, relevant) document highest. **kwargs
+            # absorbs the FRE-698 trace identity (trace_id/session_id/task_id).
             return [
                 RerankResult(index=i, score=1.0 if marker in doc else 0.0, document=doc)
                 for i, doc in enumerate(documents)
@@ -563,6 +564,53 @@ class TestMemoryQueries:
         )
         # Blocker 5: quality metrics / result reflect the post-slice set, not the candidate set.
         assert len(result.relevance_scores) == len(result.conversations) <= 3
+
+    @pytest.mark.asyncio
+    async def test_query_memory_threads_identity_into_rerank(
+        self, memory_service, clean_test_data, monkeypatch
+    ):
+        """FRE-698 (ADR-0074): query_memory passes its trace_id/session_id to rerank().
+
+        Proves the service.py call site threads the join keys so the reranker telemetry
+        is attributable to the turn. Captures the kwargs the fake rerank receives.
+        """
+        monkeypatch.setattr(get_settings(), "relevance_bounded_recall_enabled", True, raising=False)
+        entity = f"FRE698_{uuid.uuid4().hex[:8]}"
+        for i in range(2):
+            await memory_service.create_conversation(
+                ConversationNode(
+                    conversation_id=str(uuid.uuid4()),
+                    timestamp=datetime.now() - timedelta(minutes=i),
+                    user_message=f"turn {i} about {entity}",
+                    assistant_response=f"{entity} note {i}.",
+                    key_entities=[entity],
+                )
+            )
+
+        async def _zero_embedding(*_args, **_kwargs):
+            return [0.0, 0.0, 0.0, 0.0]
+
+        captured: dict[str, object] = {}
+
+        async def _capturing_rerank(query, documents, top_k=None, **kwargs):
+            captured.update(kwargs)
+            return [
+                RerankResult(index=i, score=1.0, document=doc) for i, doc in enumerate(documents)
+            ]
+
+        with (
+            patch("personal_agent.memory.service.generate_embedding", _zero_embedding),
+            patch("personal_agent.memory.reranker.rerank", _capturing_rerank),
+        ):
+            await memory_service.query_memory(
+                MemoryQuery(entity_names=[entity], recency_days=30, limit=5),
+                query_text=f"tell me about {entity}",
+                trace_id="tr-698",
+                session_id="se-698",
+            )
+
+        assert captured.get("trace_id") == "tr-698"
+        assert captured.get("session_id") == "se-698"
 
     @pytest.mark.asyncio
     async def test_query_memory_flag_on_id_lookup_not_reordered(

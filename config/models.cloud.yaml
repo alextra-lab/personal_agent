@@ -218,12 +218,17 @@ models:
 
   # ── Reranker Model (Seshat Memory — ADR-0035) ──────────────────
   reranker:
-    # Qwen3-Reranker-4B on the Mac/laptop GPU via slm.frenchforet.com (FRE-671).
-    # GPU rerank ~0.6s vs ~4.4s/recall VPS-CPU — the FRE-679 latency fix.
+    # Qwen3-Reranker-4B mxfp8 on the Mac/laptop GPU via slm.frenchforet.com, MLX runtime
+    # (FRE-696). MLX replaces llama.cpp: the llama.cpp causal-rerank path stalled under
+    # sustained distinct-candidate load and timed out at the 50-candidate cap (FRE-695/696).
+    # MLX is reliable AND higher-separation (Youden's J 0.747 vs 0.71 for the llama.cpp 4B)
+    # at the same latency class: ~1.6s @15 / ~3.4s @30 / ~5.6s @50 candidates (FRE-696 curve).
+    # Paired with reranker_input_cap=25 to bound per-recall cost (~2.8s) now that recall
+    # returns real candidate volume (the cap was set when recall was empty — FRE-673).
     # Stateless query-time rescorer: no KG re-embed, embedder unchanged (0.6B/VPS).
     # CF-Access service token injected by memory/reranker.py for slm.frenchforet.com.
     # Fails safe: rerank() falls back to vector+recency passthrough if unreachable.
-    id: "Voodisss/Qwen3-Reranker-4B"
+    id: "Qwen/Qwen3-Reranker-4B-mxfp8"
     provider_type: "local"
     endpoint: "https://slm.frenchforet.com/v1"
     context_length: 8192

@@ -14,6 +14,7 @@ See: ADR-0035 (seshat-backend-decision)
 from __future__ import annotations
 
 import time
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -23,7 +24,7 @@ import structlog
 from personal_agent.config import get_settings
 from personal_agent.service.cf_service_token import cf_access_service_token_headers
 
-logger = structlog.get_logger(__name__)
+log = structlog.get_logger(__name__)
 
 # Hostname of the Access-gated Mac SLM gateway (mirrors llm_client/client.py:58).
 # Requests to it must carry the CF-Access service token; the internal Docker
@@ -67,6 +68,10 @@ async def rerank(
     query: str,
     documents: Sequence[str],
     top_k: int | None = None,
+    *,
+    trace_id: str | None = None,
+    session_id: str | None = None,
+    task_id: str | None = None,
 ) -> list[RerankResult]:
     """Re-score documents using cross-attention reranker.
 
@@ -74,15 +79,29 @@ async def rerank(
     disabled or unreachable, returns documents in original order
     with default scores (graceful degradation).
 
+    Stamps the ``reranker_applied`` / ``reranker_failed`` telemetry with the
+    request identity tuple and a per-call ``span_id`` so two reranks in one
+    turn are distinguishable and the events join to the turn (ADR-0074). When a
+    ``trace_id`` is supplied the same keys are forwarded to the SLM server as
+    ``X-Trace-Id`` / ``X-Session-Id`` / ``X-Span-Id`` headers so its rerank log
+    can join too. Callers should thread ``trace_id`` and ``session_id`` together
+    (both or neither) — a lone ``session_id`` produces an unjoinable event.
+
     Args:
         query: The search query to rank against.
         documents: Candidate documents to re-score.
         top_k: Max results to return. None uses settings.reranker_top_k.
+        trace_id: Request trace id for event correlation (ADR-0074).
+        session_id: Session id for event correlation (ADR-0074).
+        task_id: Sub-agent task id when the rerank runs inside a delegated task
+            (FRE-513); ``None`` on the ordinary recall path.
 
     Returns:
         List of RerankResult sorted by relevance score descending.
     """
     settings = get_settings()
+    span_id = str(uuid.uuid4())
+    input_cap = settings.reranker_input_cap
 
     if not settings.reranker_enabled:
         return _passthrough(documents)
@@ -96,10 +115,24 @@ async def rerank(
     try:
         model_id, endpoint = _get_reranker_config()
     except KeyError:
-        logger.warning("reranker_config_missing")
+        log.warning(
+            "reranker_config_missing",
+            trace_id=trace_id,
+            session_id=session_id,
+            task_id=task_id,
+            span_id=span_id,
+        )
         return _passthrough(documents)
 
     headers = cf_access_service_token_headers() if _SLM_TUNNEL_HOSTNAME in endpoint else {}
+    # Forward join keys to the SLM server only when a real trace exists — a
+    # standalone span on the SLM side would be unjoinable (ADR-0074).
+    if trace_id is not None:
+        headers = {**headers, "X-Trace-Id": trace_id, "X-Span-Id": span_id}
+        if session_id is not None:
+            headers["X-Session-Id"] = session_id
+        if task_id is not None:
+            headers["X-Task-Id"] = task_id
 
     start = time.monotonic()
     try:
@@ -133,11 +166,18 @@ async def rerank(
         # Sort by score descending
         results.sort(key=lambda r: r.score, reverse=True)
 
-        logger.info(
+        log.info(
             "reranker_applied",
+            trace_id=trace_id,
+            session_id=session_id,
+            task_id=task_id,
+            span_id=span_id,
+            model_id=model_id,
             candidate_count=len(documents),
+            input_cap=input_cap,
             top_k=top_k,
             result_count=len(results),
+            top_score=results[0].score if results else None,
             duration_ms=round(duration_ms, 1),
         )
 
@@ -145,11 +185,17 @@ async def rerank(
 
     except Exception as exc:
         duration_ms = (time.monotonic() - start) * 1000
-        logger.warning(
+        log.warning(
             "reranker_failed",
+            trace_id=trace_id,
+            session_id=session_id,
+            task_id=task_id,
+            span_id=span_id,
+            model_id=model_id,
             error=str(exc),
             duration_ms=round(duration_ms, 1),
             candidate_count=len(documents),
+            input_cap=input_cap,
         )
         return _passthrough(documents)
 

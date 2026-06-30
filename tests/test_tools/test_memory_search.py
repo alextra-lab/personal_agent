@@ -145,6 +145,30 @@ async def test_search_memory_entity_path_threads_identity() -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_memory_entity_path_threads_trace_and_session() -> None:
+    """FRE-698: entity-match path threads ctx.trace_id + ctx.session_id into query_memory.
+
+    These are the join keys the reranker fires inside query_memory needs (ADR-0074): the
+    incident path previously passed trace_id but not session_id, so the joinability probe
+    (which keys on session_id) could not attribute the rerank to its turn.
+    """
+    from personal_agent.telemetry.trace import TraceContext
+
+    mock_service = MagicMock()
+    mock_service.connected = True
+    mock_service.query_memory = AsyncMock(return_value=MemoryQueryResult())
+
+    ctx = TraceContext(trace_id="t-698", session_id="s-698")
+
+    with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
+        await search_memory_executor(query_text="Athens", entity_names=["Athens"], ctx=ctx)
+
+    kwargs = mock_service.query_memory.call_args.kwargs
+    assert kwargs.get("trace_id") == "t-698"
+    assert kwargs.get("session_id") == "s-698"
+
+
+@pytest.mark.asyncio
 async def test_search_memory_broad_path_threads_identity() -> None:
     """FRE-673: broad-recall path threads ctx.user_id + ctx.authenticated into query_memory_broad."""
     from uuid import uuid4

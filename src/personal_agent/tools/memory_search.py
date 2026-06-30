@@ -158,6 +158,9 @@ async def search_memory_executor(
                 query_text=query_text,
                 access_context=AccessContext.TOOL_CALL,
                 trace_id=trace_id,
+                # FRE-698: thread session_id so the reranker fired inside query_memory
+                # stamps a join key the ADR-0074 probe keys on (it had trace_id only).
+                session_id=getattr(ctx, "session_id", None),
                 # FRE-673: thread request identity so the FRE-229 visibility filter
                 # reveals 'group'-visibility memory on this agent-invoked recall path.
                 user_id=getattr(ctx, "user_id", None),

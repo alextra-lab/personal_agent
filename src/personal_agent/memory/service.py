@@ -1819,6 +1819,8 @@ class MemoryService:
                             query=query_text,
                             documents=docs,
                             top_k=current_settings.reranker_top_k,
+                            trace_id=trace_id,
+                            session_id=session_id,
                         )
                         # rr.index is into the bounded docs list; map back to conversations.
                         if rerank_results:

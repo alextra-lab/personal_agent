@@ -2048,6 +2048,10 @@ async def step_init(
                             query,
                             feedback_key=ctx.session_id,
                             query_text=ctx.user_message,
+                            # FRE-698: thread trace+session so the reranker fired inside
+                            # query_memory emits join keys for the ADR-0074 probe.
+                            trace_id=ctx.trace_id,
+                            session_id=ctx.session_id,
                             # FRE-673: thread request identity so 'group'-visibility
                             # memory is revealed by the chokepoint filter (FRE-229).
                             user_id=ctx.user_id,

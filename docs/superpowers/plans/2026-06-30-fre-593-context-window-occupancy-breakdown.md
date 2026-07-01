@@ -129,3 +129,33 @@ README bullet in `config/kibana/dashboards/README.md`.
 
 ## Out of scope
 - No change to trimming behaviour. No new ADR. No pre-trim breakdown (post-trim only).
+
+## Addendum — AC3 dashboard render fix (2026-07-01)
+
+The first-pass `context_occupancy.ndjson` was **hand-authored** and, though it imported
+cleanly, never rendered — the Lens panel showed *"Visualization type not found."* Root
+cause (per FRE-406 / master): a Lens saved object needs `attributes.visualizationType`
+(`lnsXY` for XY/area), which is **optional at import but required at render**; hand-authored
+objects omit it, so they persist yet never draw. "Import passed" was never proof.
+
+**Fix (the prescribed way — build in the UI, export the real object, prove render):**
+1. Seeded ~48 sample `context_budget_applied` docs carrying `context_occupancy.*` into an
+   isolated, deletable local (cloud-sim) index so the fields were selectable in Lens.
+2. Built the stacked-area chart in the Kibana Lens UI: X = `@timestamp` date histogram;
+   Y = **Sum** of `context_occupancy.{memory,tool,reasoning}_tokens` (legend Memory /
+   Tool definitions / Reasoning); filter `event_type: "context_budget_applied"`; series
+   type `area_stacked`.
+3. Saved to the library, embedded in a dashboard, **exported with deep references**.
+4. Rewrote the volatile export UUIDs to the stable committed ids
+   (`context-occupancy-over-time`, `context-occupancy-dashboard`) — including the id
+   embedded in `panelsJSON.savedObjectId` — so a master re-import **overwrites the broken
+   objects in place** (no duplicate dashboard). The render-critical Lens state is verbatim
+   from Kibana's export.
+5. **Proof:** deleted the live scratch objects, re-imported the committed file onto a clean
+   slate (prod-equivalent), and render-checked the resulting `context-occupancy-dashboard`
+   via Playwright — `data-ech-render-complete="true"`, chart canvas drawn, legend =
+   Memory / Tool definitions / Reasoning, **zero** "Visualization type not found". DoD met:
+   the panel visibly renders, not merely imports.
+
+**Definition of done for AC3** = the panel visibly renders (Playwright render-check), not
+"ndjson imports."

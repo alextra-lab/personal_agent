@@ -319,9 +319,9 @@ chain here so the assembled ADR does not close on the three authored children al
 
 | Build ticket | Scope | Proves | Depends on |
 |--------------|-------|--------|-----------|
-| **Build 1 — RRF fusion + cross-path dedup** | `memory/fusion.py`: pure RRF combiner (§3) + dedup rule (§4). Unit tests: agreement property, dedup by canonical id, k=60 behaviour. | AC-2 | — |
-| **Build 2 — Lexical + Multi-query arms** | Neo4j full-text index over `Turn`/`Entity.name` + ranked query fn; multi-query paraphrase wrapper (§2, §3.3). Integration-tested vs. test substrate; **flag-dark** (not yet wired into live recall). | (feeds AC-1/AC-3) | — |
-| **Build 3 — Assemble the pipeline (SEAM OWNER)** | Build the shared multi-path core (dense + lexical + multi-query → dedup → RRF → `_select_rerank_candidates` by RRF rank → rerank-on-fused); route the **explicit recall path `query_memory_broad`** (the MEMORY_RECALL / lived-symptom path) through it behind `multipath_recall_enabled`; **converge the entity-name path (`query_memory`) and proactive path onto the same core** (FRE-699), not left single-path; soft operating point (§5, values from FRE-706 sign-off); telemetry (`arms_ran`, `fused_set_size`, path); enforce fused-set cap. **Prove AC-1, AC-3, AC-5, AC-6 live, flag on**, via the FRE-489/670 A/B (incl. AC-6(c) measured p50 ≤ 17 s, else hold the flag). | AC-1, AC-3, AC-5, AC-6 | Build 1, Build 2, FRE-706 |
+| **Build 1 — RRF fusion + cross-path dedup** (**FRE-722**) | `memory/fusion.py`: pure RRF combiner (§3) + dedup rule (§4). Unit tests: agreement property, dedup by canonical id, k=60 behaviour. | AC-2 | — |
+| **Build 2 — Lexical + Multi-query arms** (**FRE-723**) | Neo4j full-text index over `Turn`/`Entity.name` + ranked query fn; multi-query paraphrase wrapper (§2, §3.3). Integration-tested vs. test substrate; **flag-dark** (not yet wired into live recall). | (feeds AC-1/AC-3) | — |
+| **Build 3 — Assemble the pipeline (SEAM OWNER)** (**FRE-724**) | Build the shared multi-path core (dense + lexical + multi-query → dedup → RRF → `_select_rerank_candidates` by RRF rank → rerank-on-fused); route the **explicit recall path `query_memory_broad`** (the MEMORY_RECALL / lived-symptom path) through it behind `multipath_recall_enabled`; **converge the entity-name path (`query_memory`) and proactive path onto the same core** (FRE-699), not left single-path; soft operating point (§5, values from FRE-706 sign-off); telemetry (`arms_ran`, `fused_set_size`, path); enforce fused-set cap. **Prove AC-1, AC-3, AC-5, AC-6 live, flag on**, via the FRE-489/670 A/B (incl. AC-6(c) measured p50 ≤ 17 s, else hold the flag). | AC-1, AC-3, AC-5, AC-6 | Build 1 (FRE-722), Build 2 (FRE-723), FRE-706 |
 
 **Existing siblings that plug into this chain:**
 
@@ -331,8 +331,10 @@ chain here so the assembled ADR does not close on the three authored children al
   *same* `memory/fusion.py` combiner as two more ranked lists. Delivers ADR-0104 AC-4. Not part of the
   v1 seam.
 
-**The named seam owner for ADR-0104 is Build 3.** FRE-705 (this spec) is accountable for its existence;
-FRE-705 files Builds 1–3 as a Needs-Approval chain under the Memory Recall Quality project.
+**The named seam owner for ADR-0104 is Build 3 (FRE-724).** FRE-705 (this spec) is accountable for its
+existence; the chain is filed as Needs-Approval under the Memory Recall Quality project: **FRE-722**
+(Build 1), **FRE-723** (Build 2), **FRE-724** (Build 3, seam owner — blocked on FRE-722, FRE-723,
+FRE-706).
 
 ---
 

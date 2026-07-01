@@ -1,9 +1,12 @@
-"""Static validation of the FRE-546 fix: prompt-cost-cache.ndjson saved-object format.
+"""Static validation of prompt-cost-cache.ndjson saved-object format and value redesign.
 
-The original file used an older Kibana export format: top-level ``migrationVersion``
-(object form) and ``attributes.references`` nested inside the two Lens objects.
-Both are rejected by the strict ``.kibana`` mapping, causing the import to return
-``success:false`` even under HTTP 200 (the hardened ``import_dashboards.sh`` catches this).
+FRE-546 fixed the saved-object envelope: top-level ``migrationVersion`` (object form) and
+``attributes.references`` nested inside the two Lens objects are both rejected by the strict
+``.kibana`` mapping, causing the import to return ``success:false`` even under HTTP 200 (the
+hardened ``import_dashboards.sh`` catches this). FRE-406/FRE-703 then rebuilt both panels via
+the Kibana UI (never hand-authored) to fix the still-missing ``visualizationType`` — a Lens
+object persists fine without it but renders "Visualization type not found" — and to redesign
+the value: per-callsite cost, and cache-hit-rate (not raw hash-count) over time.
 
 These tests are *static* (no live cluster) and guard against:
 1. FRE-546 trap A — top-level ``migrationVersion`` re-introduced.
@@ -12,14 +15,15 @@ These tests are *static* (no live cluster) and guard against:
    index-pattern id, and its self-included data-view object must be byte-identical to the
    canonical copy in ``data_views.ndjson`` (prevents a sparse copy clobbering the rich
    canonical on ``overwrite=true``).
-4. Data-backing (owner verification ask) — the Lens ``sourceField`` values used by the two
-   panels are pinned to the set verified live in ``agent-logs-*`` (8 538 docs,
-   1 808 with prompt_static_prefix_hash, correct ES mapping types).
+4. FRE-406/FRE-703 trap — every ``lens`` object must carry ``attributes.visualizationType``
+   (the render-time-only requirement a hand-authored object silently omits).
+5. Data-backing (owner verification ask) — the Lens ``sourceField`` values used by the two
+   panels are pinned to the set verified live in ``agent-logs-*`` (8 162+ model_call_completed
+   docs, correct ES mapping types).
 
-Source of truth for the field types: live ``agent-logs-2026.06.17/_mapping`` verification
-recorded in the FRE-546 build session (2026-06-19):
-  input_tokens=long, cache_read_tokens=long, cost_usd=double,
-  prompt_callsite=keyword, prompt_static_prefix_hash=keyword.
+Source of truth for the field types: live ``agent-logs-*`` verification recorded in the
+FRE-406/FRE-703 build session (2026-07-01):
+  input_tokens=long, cache_read_tokens=long, cost_usd=double, prompt_callsite=keyword.
 """
 
 from __future__ import annotations
@@ -43,7 +47,6 @@ VERIFIED_SOURCE_FIELDS = frozenset(
         "input_tokens",
         "cache_read_tokens",
         "cost_usd",
-        "prompt_static_prefix_hash",
         "@timestamp",
     }
 )
@@ -136,6 +139,27 @@ def test_no_lens_attributes_references() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# FRE-406/FRE-703 trap — visualizationType (render-time-only requirement).
+# --------------------------------------------------------------------------- #
+
+
+def test_every_lens_has_visualization_type() -> None:
+    """Every ``lens`` object carries ``attributes.visualizationType``.
+
+    A Lens saved object persists and imports fine without this attribute, but is
+    *optional at import, required at render* — omitting it draws "Visualization
+    type not found" (FRE-406/FRE-593/FRE-702). Hand-authoring an object (rather
+    than exporting one built via the Kibana UI) is exactly how this gets dropped.
+    """
+    for lens in _by_type(_objects(), "lens"):
+        viz_type = lens.get("attributes", {}).get("visualizationType")
+        assert viz_type, (
+            f"lens {lens.get('id')!r} is missing ``attributes.visualizationType`` — "
+            f"it will import but render 'Visualization type not found'"
+        )
+
+
+# --------------------------------------------------------------------------- #
 # FRE-535 dedupe — canonical index-pattern.
 # --------------------------------------------------------------------------- #
 
@@ -161,12 +185,14 @@ def test_index_pattern_object_matches_canonical() -> None:
     the overwrite is canonical→canonical (a no-op).
     """
     canonical_objs = [
-        json.loads(line)
-        for line in DATA_VIEWS_FILE.read_text().splitlines()
-        if line.strip()
+        json.loads(line) for line in DATA_VIEWS_FILE.read_text().splitlines() if line.strip()
     ]
     canonical_ip = next(
-        (o for o in canonical_objs if o.get("type") == "index-pattern" and o.get("id") == CANONICAL_INDEX_PATTERN_ID),
+        (
+            o
+            for o in canonical_objs
+            if o.get("type") == "index-pattern" and o.get("id") == CANONICAL_INDEX_PATTERN_ID
+        ),
         None,
     )
     assert canonical_ip is not None, (
@@ -186,7 +212,9 @@ def test_index_pattern_object_matches_canonical() -> None:
 def test_every_lens_references_canonical_index_pattern() -> None:
     """Every lens top-level ``references`` points at the canonical index-pattern id."""
     for lens in _by_type(_objects(), "lens"):
-        ip_ref_ids = [r["id"] for r in lens.get("references", []) if r.get("type") == "index-pattern"]
+        ip_ref_ids = [
+            r["id"] for r in lens.get("references", []) if r.get("type") == "index-pattern"
+        ]
         assert ip_ref_ids == [CANONICAL_INDEX_PATTERN_ID], (
             f"lens {lens.get('id')!r} references index-pattern ids {ip_ref_ids!r}; "
             f"must be [{CANONICAL_INDEX_PATTERN_ID!r}]"
@@ -229,10 +257,9 @@ def test_lens_source_fields_are_verified_live() -> None:
     Prevents a future edit from introducing a field that exists in code but is
     absent from the index mapping (silent empty panel).
 
-    Verified 2026-06-19 against agent-logs-2026.06.17/_mapping:
+    Verified 2026-07-01 against live agent-logs-* mapping:
       input_tokens=long, cache_read_tokens=long, cost_usd=double,
-      prompt_callsite=keyword, prompt_static_prefix_hash=keyword.
-    8 538 model_call_completed docs; 1 808 with prompt_static_prefix_hash.
+      prompt_callsite=keyword. 8 162+ model_call_completed docs.
     """
     for lens in _by_type(_objects(), "lens"):
         for field in _lens_source_fields(lens):

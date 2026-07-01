@@ -86,6 +86,23 @@ class TestApplyBudgetUnderLimit:
         assert result.token_count >= 0
 
 
+class TestListShapedContent:
+    """ADR-0101 §2 widens ``content`` to ``str | list[dict]`` (FRE-709)."""
+
+    def test_list_content_does_not_crash(self) -> None:
+        messages = [
+            _msg("user", "hello"),
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "the answer is forty two"}],
+            },
+        ]
+        ctx = _context(messages=messages)
+        result = apply_budget(ctx, max_tokens=10_000, trace_id="t1")
+        assert result.trimmed is False
+        assert result.token_count > 0
+
+
 # ---------------------------------------------------------------------------
 # apply_budget — Phase 1: history trimming
 # ---------------------------------------------------------------------------

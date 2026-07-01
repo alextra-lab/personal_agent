@@ -23,6 +23,7 @@ import structlog
 
 from personal_agent.config import settings
 from personal_agent.events.bus import EventBus, get_event_bus
+from personal_agent.llm_client.message_content import get_text_content
 from personal_agent.request_gateway.types import (
     IntentResult,
     RecallCandidate,
@@ -362,7 +363,7 @@ def _scan_session_facts(
     total_turns = len(session_messages)
 
     for i, msg in enumerate(reversed(session_messages)):
-        content = msg.get("content", "")
+        content = get_text_content(msg.get("content", ""))
         if not content:
             continue
 

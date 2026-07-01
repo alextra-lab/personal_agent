@@ -30,7 +30,9 @@ class TestDetectRecallCues:
         assert _detect_recall_cues("What was our primary database again?") is not None
 
     def test_going_back(self) -> None:
-        assert _detect_recall_cues("Going back to the beginning — what was our database?") is not None
+        assert (
+            _detect_recall_cues("Going back to the beginning — what was our database?") is not None
+        )
 
     def test_remind_me(self) -> None:
         assert _detect_recall_cues("Remind me what we decided on caching") is not None
@@ -89,6 +91,23 @@ class TestScanSessionFacts:
             max_candidates=3,
         )
         assert len(candidates) == 0
+
+    def test_list_content_does_not_crash(self) -> None:
+        """ADR-0101 §2 widens ``content`` to ``str | list[dict]`` (FRE-709)."""
+        session_messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Let's use PostgreSQL as our primary database"}
+                ],
+            },
+        ]
+        candidates = _scan_session_facts(
+            noun_phrases=["primary database"],
+            session_messages=session_messages,
+            max_candidates=3,
+        )
+        assert len(candidates) >= 1
 
 
 class TestRunRecallController:
@@ -200,7 +219,9 @@ def test_recall_cue_patterns_cp19_variants(text: str, should_match: bool) -> Non
         assert match is None, f"Pattern should NOT match: {text!r}"
 
 
-def test_recall_cue_telemetry_when_intent_already_memory_recall(caplog: pytest.LogCaptureFixture) -> None:
+def test_recall_cue_telemetry_when_intent_already_memory_recall(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """recall_cue_detected is emitted even when Stage 4 already classified MEMORY_RECALL."""
     caplog.set_level("INFO", logger="personal_agent.request_gateway.recall_controller")
 
@@ -277,12 +298,8 @@ class TestBugBSessionIdAndDualWrite:
             lambda: tmp_path,
         )
 
-        caplog.set_level(
-            "WARNING", logger="personal_agent.request_gateway.recall_controller"
-        )
-        caplog.set_level(
-            "INFO", logger="personal_agent.telemetry.context_quality"
-        )
+        caplog.set_level("WARNING", logger="personal_agent.request_gateway.recall_controller")
+        caplog.set_level("INFO", logger="personal_agent.telemetry.context_quality")
         caplog.set_level("INFO")
 
         intent = IntentResult(
@@ -321,9 +338,7 @@ class TestBugBSessionIdAndDualWrite:
             "personal_agent.telemetry.context_quality._default_output_dir",
             lambda: tmp_path,
         )
-        caplog.set_level(
-            "INFO", logger="personal_agent.telemetry.context_quality"
-        )
+        caplog.set_level("INFO", logger="personal_agent.telemetry.context_quality")
 
         intent = IntentResult(
             task_type=TaskType.CONVERSATIONAL,
@@ -376,9 +391,7 @@ class TestBugBSessionIdAndDualWrite:
 
         from personal_agent.request_gateway import recall_controller as rc
 
-        monkeypatch.setattr(
-            rc.settings, "context_quality_stream_enabled", False, raising=False
-        )
+        monkeypatch.setattr(rc.settings, "context_quality_stream_enabled", False, raising=False)
         caplog.set_level("INFO")
 
         intent = IntentResult(

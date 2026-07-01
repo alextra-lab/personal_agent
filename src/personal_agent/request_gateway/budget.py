@@ -17,6 +17,7 @@ from typing import Any
 import structlog
 
 from personal_agent.config import settings
+from personal_agent.llm_client.message_content import get_text_content
 from personal_agent.request_gateway.types import AssembledContext
 from personal_agent.telemetry.compaction import CompactionRecord, log_compaction
 from personal_agent.telemetry.context_quality import get_incident_tracker
@@ -51,7 +52,8 @@ def _total_context_tokens(
     multi-step turns.
     """
     parts: list[str] = [
-        (m.get("content") or "") + " " + (m.get("reasoning_content") or "") for m in messages
+        get_text_content(m.get("content")) + " " + (m.get("reasoning_content") or "")
+        for m in messages
     ]
 
     if memory_context:

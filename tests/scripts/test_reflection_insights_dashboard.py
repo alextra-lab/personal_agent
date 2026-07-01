@@ -1,7 +1,7 @@
 """Static validation of reflection_insights.ndjson saved-object format and value redesign.
 
-FRE-703 rebuilt all three panels via the Kibana UI (Playwright-driven, never hand-authored)
-to fix two problems found during step 0 (raw-event inspection):
+FRE-703 rebuilt all three chart panels via the Kibana UI (Playwright-driven, never
+hand-authored) to fix two problems found during step 0 (raw-event inspection):
 
 1. Same mapping-drift class of bug as insights_engine (FRE-703): ``status`` and
    ``proposed_change.category`` are mapped as ``text`` (fielddata disabled, not
@@ -26,6 +26,14 @@ exactly the kind of fragile, misleading proxy this audit exists to replace. The 
 "proposals by category" panel (using the real ``proposed_change.category`` enum field) and
 "proposals by status" panel serve the decision more directly and accurately.
 
+A fourth panel -- a Discover saved search, not a Lens visualization -- was added per owner
+request to show *what the individual insights are* (title, category, status; sorted newest
+first), not just aggregate counts. While checking whether a Linear-issue link should be a
+column, we found ``linear_issue_id`` is present in the schema but ``null`` on all 1,800
+reflection docs (all-time) -- no proposal has ever actually been linked to a Linear issue.
+That column was therefore left out (it would always render blank) and the finding is
+recorded in the dashboard description instead.
+
 These tests are *static* (no live cluster) and guard against:
 1. No top-level ``migrationVersion`` (legacy Kibana export format).
 2. No ``attributes.references`` nested inside a ``lens`` object.
@@ -35,6 +43,7 @@ These tests are *static* (no live cluster) and guard against:
    copy in ``data_views.ndjson``.
 5. Data-backing -- the Lens ``sourceField`` values used are pinned to the set verified live
    in ``agent-captains-reflections-*``.
+6. The dashboard's panel references (lens *and* search) all resolve.
 """
 
 from __future__ import annotations
@@ -97,10 +106,11 @@ def _lens_source_fields(lens: dict) -> list[str]:
 
 
 def test_ndjson_is_valid_and_has_expected_counts() -> None:
-    """File parses as NDJSON and contains exactly 1 dashboard + 3 lens + 1 index-pattern."""
+    """File parses as NDJSON and contains exactly 1 dashboard + 3 lens + 1 search + 1 index-pattern."""
     objs = _objects()
     assert len(_by_type(objs, "dashboard")) == 1, "exactly one dashboard object expected"
     assert len(_by_type(objs, "lens")) == 3, "expected three lens panel objects"
+    assert len(_by_type(objs, "search")) == 1, "expected one search (detail table) panel object"
     assert len(_by_type(objs, "index-pattern")) == 1, "expected exactly one index-pattern object"
 
 
@@ -196,16 +206,48 @@ def test_every_lens_references_canonical_index_pattern() -> None:
         )
 
 
+def test_search_references_canonical_index_pattern() -> None:
+    """The search (detail table) object's index-ref points at the canonical index-pattern id."""
+    for search in _by_type(_objects(), "search"):
+        ip_ref_ids = [
+            r["id"] for r in search.get("references", []) if r.get("type") == "index-pattern"
+        ]
+        assert ip_ref_ids == [CANONICAL_INDEX_PATTERN_ID], (
+            f"search {search.get('id')!r} references index-pattern ids {ip_ref_ids!r}; "
+            f"must be [{CANONICAL_INDEX_PATTERN_ID!r}]"
+        )
+
+
+def test_search_does_not_show_linear_issue_id() -> None:
+    """The detail table does not include ``linear_issue_id`` as a column.
+
+    Verified 2026-07-01: linear_issue_id is null on all 1,800 reflection docs (all-time) --
+    no proposal has ever been linked to a Linear issue. A column that is always blank is
+    exactly the kind of misleading noise this audit exists to remove; if this ever becomes
+    populated in real telemetry, add the column back deliberately (with a link format).
+    """
+    for search in _by_type(_objects(), "search"):
+        columns = search.get("attributes", {}).get("columns", [])
+        assert "linear_issue_id" not in columns, (
+            "linear_issue_id is null on every reflection doc to date; showing it as a "
+            "column would always render blank"
+        )
+
+
 def test_panel_references_resolve() -> None:
-    """Every dashboard panel reference resolves to a lens object in the file."""
+    """Every dashboard panel reference (lens and search) resolves to an object in the file."""
     objs = _objects()
     dashboard = _by_type(objs, "dashboard")[0]
     lens_ids = {o["id"] for o in _by_type(objs, "lens")}
+    search_ids = {o["id"] for o in _by_type(objs, "search")}
+    panelable_ids = lens_ids | search_ids
 
-    panel_refs = {r["name"]: r["id"] for r in dashboard["references"] if r["type"] == "lens"}
+    panel_refs = {
+        r["name"]: r["id"] for r in dashboard["references"] if r["type"] in ("lens", "search")
+    }
     for name, ref_id in panel_refs.items():
-        assert ref_id in lens_ids, (
-            f"dashboard panel ref {name!r} -> {ref_id!r} has no matching lens object"
+        assert ref_id in panelable_ids, (
+            f"dashboard panel ref {name!r} -> {ref_id!r} has no matching lens/search object"
         )
 
     panels = json.loads(dashboard["attributes"]["panelsJSON"])

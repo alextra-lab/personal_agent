@@ -146,6 +146,12 @@ async def test_stance_and_claim_are_wired_into_core(
     assert result["stances_created"] == 1
     assert result["claims_created"] == 1
 
+    # FRE-711: the World-description correction gate inputs are threaded into create_entity.
+    memory_service.create_entity.assert_awaited_once()
+    ce_kwargs = memory_service.create_entity.await_args.kwargs
+    assert ce_kwargs["eval_mode"] is False  # capture.eval_mode
+    assert ce_kwargs["description_confidence"] == pytest.approx(0.8)  # conversation source
+
 
 @pytest.mark.asyncio
 async def test_no_stances_or_claims_is_a_noop(

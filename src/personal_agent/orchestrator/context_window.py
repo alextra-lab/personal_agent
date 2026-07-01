@@ -25,17 +25,17 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
     Returns:
         Estimated token count for the message.
     """
+    from personal_agent.llm_client.message_content import count_content_tokens
     from personal_agent.llm_client.token_counter import estimate_tokens
 
     content = message.get("content", "")
-    if not isinstance(content, str):
-        content = str(content)
 
     # Include tool_calls payload — assistant messages with large argument payloads
     # are not underestimated and accidentally kept when they should be evicted.
     tool_calls = message.get("tool_calls")
     return max(
-        1, estimate_tokens(content) + (estimate_tokens(str(tool_calls)) if tool_calls else 0)
+        1,
+        count_content_tokens(content) + (estimate_tokens(str(tool_calls)) if tool_calls else 0),
     )
 
 

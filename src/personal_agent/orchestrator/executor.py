@@ -16,6 +16,7 @@ from uuid import UUID, uuid4
 from personal_agent.config import settings
 from personal_agent.config.env_loader import Environment
 from personal_agent.llm_client import ModelRole
+from personal_agent.llm_client.message_content import get_text_content, merge_content
 from personal_agent.observability.topology import observe_topology
 from personal_agent.orchestrator import compression_manager
 from personal_agent.orchestrator.context_window import (
@@ -713,12 +714,12 @@ def _validate_and_fix_conversation_roles(messages: list[dict[str, Any]]) -> list
                 # disarm a tool round, which is the failure we just fixed).
                 assert prior_idx is not None  # narrowed by is_true_duplicate
                 prior = fixed[prior_idx]
-                old_content = prior.get("content", "") or ""
-                new_content = msg.get("content", "") or ""
-                if old_content and new_content:
-                    prior["content"] = f"{old_content}\n\n{new_content}"
-                elif new_content:
-                    prior["content"] = new_content
+                old_content = prior.get("content", "")
+                new_content = msg.get("content", "")
+                # Block-aware merge (ADR-0101 §2, FRE-664): string-interpolating a
+                # block list would corrupt it (embeds its Python repr). merge_content
+                # concatenates blocks in order instead when either side is a list.
+                prior["content"] = merge_content(old_content, new_content)
                 # Preserve incoming tool_calls — concatenate when both sides have them.
                 incoming_tool_calls = msg.get("tool_calls") or []
                 if incoming_tool_calls:
@@ -805,7 +806,10 @@ def _append_no_think_to_last_user_message(messages: list[dict[str, Any]]) -> lis
             continue
         content = out[i].get("content")
         if not isinstance(content, str):
-            continue
+            # Block-list content (e.g. an image attachment, ADR-0101 §2) — do not
+            # stringify it, and do not fall through to an OLDER user message
+            # either (that would misapply the suffix to an unrelated turn).
+            return out
         trimmed = content.rstrip()
         if trimmed.endswith(suffix):
             return out
@@ -1857,7 +1861,9 @@ async def step_init(
                 # climbs from turn.model_call_completed events, not a per-loop accumulator.
                 await _report_turn_progress(ctx)
                 expansion_result = await controller.execute(
-                    query=ctx.messages[-1].get("content", "") if ctx.messages else "",
+                    query=get_text_content(ctx.messages[-1].get("content", ""))
+                    if ctx.messages
+                    else "",
                     strategy=gw.decomposition.strategy.value.upper(),
                     llm_client=llm_client,
                     trace_id=ctx.trace_id,
@@ -2324,8 +2330,7 @@ async def step_llm_call(
         _user_message: str | None = None
         for _msg in reversed(ctx.messages):
             if isinstance(_msg, dict) and _msg.get("role") == "user":
-                _content = _msg.get("content", "")
-                _user_message = _content if isinstance(_content, str) else str(_content)
+                _user_message = get_text_content(_msg.get("content", ""))
                 break
 
         # Priority: per-request override > global setting (profile binding comes in Phase C)
@@ -2746,9 +2751,7 @@ async def step_llm_call(
             messages_preview=[
                 {
                     "role": msg.get("role"),
-                    "content_preview": str(msg.get("content", ""))[:100]
-                    if msg.get("content")
-                    else None,
+                    "content_preview": get_text_content(msg.get("content", ""))[:100] or None,
                     "has_tool_calls": bool(msg.get("tool_calls")),
                 }
                 for msg in request_messages

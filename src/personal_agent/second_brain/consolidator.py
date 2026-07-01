@@ -23,9 +23,10 @@ from personal_agent.events import (
     MemoryEntitiesUpdatedEvent,
     get_event_bus,
 )
-from personal_agent.memory.models import Entity, Relationship, SessionNode, TurnNode
+from personal_agent.memory.models import Claim, Entity, Relationship, SessionNode, Stance, TurnNode
 from personal_agent.memory.promote import run_promotion_pipeline
 from personal_agent.memory.service import MemoryService
+from personal_agent.memory.weight import KnowledgeWeight
 from personal_agent.second_brain.attempts import (
     previous_attempt_count,
     record_consolidation_attempt,
@@ -41,6 +42,78 @@ log = get_logger(__name__)
 def _new_consolidation_trace_id() -> str:
     """Mint a system-scoped trace id for a consolidation run (ADR-0074 §I3)."""
     return SystemTraceContext.new("consolidation").trace_id
+
+
+def _parse_provenance_dt(provenance: dict[str, Any], key: str) -> datetime | None:
+    """Parse an ISO-8601 provenance timestamp, returning None if absent/unparseable."""
+    raw = provenance.get(key)
+    if not isinstance(raw, str):
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def _build_stance(data: dict[str, Any]) -> Stance | None:
+    """Build a :class:`Stance` from an extractor stance dict (ADR-0098 D2/D5).
+
+    Returns None (skip) when the target or the provenance ``observed_at`` — the
+    bitemporal ordering axis — is missing, so a stance is never written without
+    the timestamp its supersession depends on.
+
+    Args:
+        data: One stance object from the extractor's ``stances`` array.
+
+    Returns:
+        A Stance, or None when it cannot be safely constructed.
+    """
+    target = str(data.get("target", "")).strip()
+    provenance = data.get("provenance") or {}
+    observed_at = _parse_provenance_dt(provenance, "observed_at")
+    if not target or observed_at is None:
+        return None
+    return Stance(
+        target=target,
+        affect=str(data.get("affect", "") or ""),
+        mastery=data.get("mastery"),
+        trace_id=provenance.get("trace_id"),
+        session_id=provenance.get("session_id"),
+        source_type=str(provenance.get("source_type", "conversation")),
+        observed_at=observed_at,
+        extracted_at=_parse_provenance_dt(provenance, "extracted_at"),
+    )
+
+
+def _build_claim(data: dict[str, Any]) -> Claim | None:
+    """Build a :class:`Claim` from an extractor claim dict (ADR-0098 D2/D5).
+
+    Confidence is derived from the provenance source type via
+    :meth:`KnowledgeWeight.from_source` — the weight the correction path
+    adjudicates on. Returns None (skip) when content or ``observed_at`` is absent.
+
+    Args:
+        data: One claim object from the extractor's ``claims`` array.
+
+    Returns:
+        A Claim, or None when it cannot be safely constructed.
+    """
+    content = str(data.get("content", "")).strip()
+    provenance = data.get("provenance") or {}
+    observed_at = _parse_provenance_dt(provenance, "observed_at")
+    if not content or observed_at is None:
+        return None
+    source_type = str(provenance.get("source_type", "conversation"))
+    return Claim(
+        content=content,
+        knowledge_class=str(data.get("class", "Personal")),
+        confidence=KnowledgeWeight.from_source(source_type).confidence,
+        trace_id=provenance.get("trace_id"),
+        session_id=provenance.get("session_id"),
+        source_type=source_type,
+        observed_at=observed_at,
+        extracted_at=_parse_provenance_dt(provenance, "extracted_at"),
+    )
 
 
 class SecondBrainConsolidator:
@@ -128,6 +201,8 @@ class SecondBrainConsolidator:
         turns_created = 0
         entities_created = 0
         relationships_created = 0
+        stances_created = 0
+        claims_created = 0
         captures_skipped = 0
         sessions_with_new_turns: set[str] = set()
         all_entity_ids: list[str] = []
@@ -170,6 +245,8 @@ class SecondBrainConsolidator:
                         sessions_with_new_turns.add(capture.session_id)
                 entities_created += result.get("entities_created", 0)
                 relationships_created += result.get("relationships_created", 0)
+                stances_created += result.get("stances_created", 0)
+                claims_created += result.get("claims_created", 0)
                 all_entity_ids.extend(result.get("entity_ids", []))
                 all_relationship_element_ids.extend(result.get("relationship_element_ids", []))
                 log.debug(
@@ -215,6 +292,8 @@ class SecondBrainConsolidator:
             "sessions_created": sessions_created,
             "entities_created": entities_created,
             "relationships_created": relationships_created,
+            "stances_created": stances_created,
+            "claims_created": claims_created,
             "entities_promoted": entities_promoted,
         }
 
@@ -634,6 +713,26 @@ class SecondBrainConsolidator:
                 relationships_created += 1
                 relationship_element_ids.append(rel_eid)
 
+        # ADR-0098 D2 (FRE-638): wire the FRE-637 stances[]/claims[] into Core.
+        # Stances become native owner→World HAS_STANCE edges; Personal claims become
+        # living Claim nodes (correction / bitemporal supersession). Both resolve the
+        # "owner" sentinel to the is_owner Person node inside the service methods.
+        stances_created = 0
+        for stance_data in extraction_result.get("stances", []):
+            stance = _build_stance(stance_data)
+            if stance is None:
+                continue
+            if await self.memory_service.assert_stance(stance, trace_id=capture.trace_id):
+                stances_created += 1
+
+        claims_created = 0
+        for claim_data in extraction_result.get("claims", []):
+            claim = _build_claim(claim_data)
+            if claim is None:
+                continue
+            if await self.memory_service.assert_claim(claim, trace_id=capture.trace_id):
+                claims_created += 1
+
         # FRE-307: terminal success row.
         await record_consolidation_attempt(
             trace_id=capture.trace_id,
@@ -646,6 +745,8 @@ class SecondBrainConsolidator:
             "turns_created": turns_created,
             "entities_created": entities_created,
             "relationships_created": relationships_created,
+            "stances_created": stances_created,
+            "claims_created": claims_created,
             "entity_ids": entity_ids,
             "relationship_element_ids": list(dict.fromkeys(relationship_element_ids)),
         }

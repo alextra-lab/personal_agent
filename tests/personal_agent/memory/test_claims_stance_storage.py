@@ -17,6 +17,7 @@ assert, without depending on the live embedder.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
@@ -212,3 +213,153 @@ async def test_stance_re_assertion_supersedes_prior(owner_service: MemoryService
     superseded = [r for r in rows if r["valid_to"] is not None]
     assert len(current) == 1 and current[0]["affect"] == "mastered it"
     assert len(superseded) == 1 and superseded[0]["affect"] == "learning it"
+
+
+# ---------------------------------------------------------------------------
+# FRE-712: facet-aware matching + explicit update_kind label
+# ---------------------------------------------------------------------------
+
+
+def _vec(cos: float) -> list[float]:
+    """A unit vector whose cosine with [1, 0] is exactly ``cos``."""
+    return [cos, math.sqrt(max(0.0, 1.0 - cos * cos))]
+
+
+def _embed_map(mapping: dict[str, list[float]]):
+    """Deterministic embedder: content → vector (default orthogonal to [1, 0])."""
+
+    async def _embed(text: str) -> list[float]:
+        return mapping.get(text, [0.0, 1.0])
+
+    return _embed
+
+
+@pytest.mark.asyncio
+async def test_ac_a_same_facet_groups_the_slot(owner_service: MemoryService) -> None:
+    old = "Lease ends in March."
+    new = "Lease ends in June."
+    mapping = {old: _vec(0.70), new: _vec(1.0)}  # same facet → 0.60 floor, 0.70 matches
+    with patch(
+        "personal_agent.memory.service.generate_embedding",
+        new=AsyncMock(side_effect=_embed_map(mapping)),
+    ):
+        await owner_service.assert_claim(
+            Claim(content=old, confidence=0.8, observed_at=_T0, facet="lease_end_date")
+        )
+        await owner_service.assert_claim(
+            Claim(content=new, confidence=0.8, observed_at=_T1, facet="lease_end_date")
+        )
+    current = await _current_claims(owner_service)
+    assert [c["content"] for c in current] == [new]  # grouped + superseded
+
+
+@pytest.mark.asyncio
+async def test_ac_b_different_facet_moderate_similarity_does_not_collide(
+    owner_service: MemoryService,
+) -> None:
+    a = "Lease ends in March."
+    b = "Rent is 2000 a month."
+    mapping = {a: _vec(0.85), b: _vec(1.0)}  # 0.85 < DIFF_FACET_FLOOR (0.95) → no match
+    with patch(
+        "personal_agent.memory.service.generate_embedding",
+        new=AsyncMock(side_effect=_embed_map(mapping)),
+    ):
+        await owner_service.assert_claim(
+            Claim(content=a, confidence=0.8, observed_at=_T0, facet="lease_end_date")
+        )
+        await owner_service.assert_claim(
+            Claim(content=b, confidence=0.8, observed_at=_T1, facet="monthly_rent")
+        )
+    current = await _current_claims(owner_service)
+    assert {c["content"] for c in current} == {a, b}  # both stay current — no false collide
+
+
+@pytest.mark.asyncio
+async def test_ac_c_facet_drift_recovers_on_near_identical_content(
+    owner_service: MemoryService,
+) -> None:
+    old = "Lease ends in March."
+    new = "Lease ends in June."
+    mapping = {old: _vec(0.97), new: _vec(1.0)}  # different facet, 0.97 >= 0.95 → merge
+    with patch(
+        "personal_agent.memory.service.generate_embedding",
+        new=AsyncMock(side_effect=_embed_map(mapping)),
+    ):
+        await owner_service.assert_claim(
+            Claim(content=old, confidence=0.8, observed_at=_T0, facet="lease_end_date")
+        )
+        await owner_service.assert_claim(
+            Claim(content=new, confidence=0.8, observed_at=_T1, facet="current_lease_expiration")
+        )
+    current = await _current_claims(owner_service)
+    assert [c["content"] for c in current] == [new]  # drift did not strand the stale fact
+
+
+@pytest.mark.asyncio
+async def test_ac_c2_new_facet_supersedes_legacy_no_facet_claim(
+    owner_service: MemoryService,
+) -> None:
+    old = "Lease ends in March."
+    new = "Lease ends in June."
+    mapping = {old: _vec(0.90), new: _vec(1.0)}  # either-empty → base 0.83, 0.90 matches
+    with patch(
+        "personal_agent.memory.service.generate_embedding",
+        new=AsyncMock(side_effect=_embed_map(mapping)),
+    ):
+        # Legacy claim: no facet (FRE-638-era row).
+        await owner_service.assert_claim(Claim(content=old, confidence=0.8, observed_at=_T0))
+        await owner_service.assert_claim(
+            Claim(content=new, confidence=0.8, observed_at=_T1, facet="lease_end_date")
+        )
+    current = await _current_claims(owner_service)
+    assert [c["content"] for c in current] == [new]
+
+
+@pytest.mark.asyncio
+async def test_ac_d_explicit_correction_label(owner_service: MemoryService) -> None:
+    old = "Lease ends in March."
+    new = "Lease ends in June."
+    mapping = {old: _vec(0.70), new: _vec(1.0)}
+    with patch(
+        "personal_agent.memory.service.generate_embedding",
+        new=AsyncMock(side_effect=_embed_map(mapping)),
+    ):
+        await owner_service.assert_claim(
+            Claim(content=old, confidence=0.8, observed_at=_T0, facet="lease_end_date")
+        )
+        await owner_service.assert_claim(
+            Claim(
+                content=new,
+                confidence=0.8,  # EQUAL confidence — heuristic would say 'evolution'
+                observed_at=_T1,
+                facet="lease_end_date",
+                update_kind="correction",
+            )
+        )
+    superseded = [c for c in await _all_claims(owner_service) if c["content"] == old][0]
+    assert superseded["reason"] == "correction"  # explicit signal, not the heuristic
+
+
+@pytest.mark.asyncio
+async def test_ac_e_explicit_evolution_label(owner_service: MemoryService) -> None:
+    old = "Lease ends in March."
+    new = "Lease ends in June."
+    mapping = {old: _vec(0.70), new: _vec(1.0)}
+    with patch(
+        "personal_agent.memory.service.generate_embedding",
+        new=AsyncMock(side_effect=_embed_map(mapping)),
+    ):
+        await owner_service.assert_claim(
+            Claim(content=old, confidence=0.5, observed_at=_T0, facet="lease_end_date")
+        )
+        await owner_service.assert_claim(
+            Claim(
+                content=new,
+                confidence=0.9,  # HIGHER confidence — heuristic would say 'correction'
+                observed_at=_T1,
+                facet="lease_end_date",
+                update_kind="evolution",
+            )
+        )
+    superseded = [c for c in await _all_claims(owner_service) if c["content"] == old][0]
+    assert superseded["reason"] == "evolution"  # explicit signal overrides the heuristic

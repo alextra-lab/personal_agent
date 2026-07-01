@@ -75,6 +75,8 @@ def _extraction_with_stance_and_claim(capture: TaskCapture) -> dict[str, Any]:
             {
                 "subject": "owner",
                 "content": "The user's car lease ends in March.",
+                "facet": "lease_end_date",
+                "update_kind": "new",
                 "description": "timing constraint",
                 "class": "Personal",
                 "provenance": dict(prov),
@@ -135,6 +137,8 @@ async def test_stance_and_claim_are_wired_into_core(
     assert isinstance(claim_arg, Claim)
     assert claim_arg.content == "The user's car lease ends in March."
     assert claim_arg.knowledge_class == "Personal"
+    assert claim_arg.facet == "lease_end_date"  # FRE-712: facet threaded
+    assert claim_arg.update_kind == "new"  # FRE-712: update_kind threaded
     assert claim_arg.observed_at == _TURN_TS
     # conversation source → 0.8 confidence (KnowledgeWeight).
     assert claim_arg.confidence == pytest.approx(0.8)

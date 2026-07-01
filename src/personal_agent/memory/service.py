@@ -21,7 +21,7 @@ from personal_agent.events import (
     get_event_bus,
 )
 from personal_agent.llm_client.token_counter import estimate_tokens
-from personal_agent.memory.embeddings import cosine_similarity, generate_embedding
+from personal_agent.memory.embeddings import generate_embedding
 from personal_agent.memory.fact import PromotionCandidate
 from personal_agent.memory.freshness_aggregate import (
     GraphStalenessSummary,
@@ -39,11 +39,11 @@ from personal_agent.memory.models import (
     TurnNode,
 )
 from personal_agent.memory.supersession import (
-    CLAIM_MATCH_THRESHOLD,
     ClaimRecord,
     SupersessionAction,
     adjudicate,
-    best_candidate,
+    matching_candidates,
+    strongest_blocker,
 )
 
 Neo4jAsyncGraphDatabase: Any = None
@@ -1105,7 +1105,7 @@ class MemoryService:
                     "WHERE cl.valid_to IS NULL AND cl.invalid_at IS NULL\n"
                     "RETURN cl.claim_id AS claim_id, cl.content AS content,\n"
                     "       cl.confidence AS confidence, cl.observed_at AS observed_at,\n"
-                    "       cl.embedding AS embedding",
+                    "       cl.embedding AS embedding, cl.facet AS facet",
                 )
                 candidates: list[ClaimRecord] = []
                 async for row in current:
@@ -1118,26 +1118,27 @@ class MemoryService:
                             confidence=float(row["confidence"] or 0.0),
                             observed_at=_parse_iso(row["observed_at"], fallback=claim.observed_at),
                             embedding=list(row["embedding"]),
+                            # Legacy rows predate facet → property reads back None; "" is
+                            # neutral in the facet-weighted matcher (FRE-712, Codex #5).
+                            facet=row["facet"] or "",
                         )
                     )
 
-                # Adjudicate against the best match; invalidate ALL matches on supersede
-                # so the "≤1 current per fact-slot" invariant self-heals (Codex #5).
-                match = best_candidate(embedding, candidates)
+                # Facet-aware matching (FRE-712): adjudicate against the strongest blocker
+                # so a weaker new claim never supersedes past a higher-confidence one, and
+                # invalidate ALL matches on supersede so ≤1-current-per-slot self-heals.
+                matches = matching_candidates(claim.facet, embedding, candidates)
                 decision = adjudicate(
                     new_confidence=claim.confidence,
                     new_observed_at=claim.observed_at,
-                    candidate=match,
+                    candidate=strongest_blocker(matches),
+                    new_update_kind=claim.update_kind,
                 )
                 supersede_ids: list[str] = []
                 new_valid_to: str | None = None
                 new_invalid_at: str | None = None
                 if decision.action is SupersessionAction.SUPERSEDE:
-                    supersede_ids = [
-                        c.claim_id
-                        for c in candidates
-                        if cosine_similarity(embedding, c.embedding) >= CLAIM_MATCH_THRESHOLD
-                    ]
+                    supersede_ids = [c.claim_id for c in matches]
                 elif decision.action is SupersessionAction.REJECT:
                     # New claim arrives already non-current (retained for audit).
                     new_valid_to = claim.observed_at.isoformat()
@@ -1156,6 +1157,7 @@ class MemoryService:
                     "}\n"
                     "CREATE (o)-[:HAS_FACT]->(cl:Claim {\n"
                     "    claim_id: $claim_id, content: $content, class: $knowledge_class,\n"
+                    "    facet: $facet, update_kind: $update_kind,\n"
                     "    confidence: $confidence, embedding: $embedding,\n"
                     "    valid_from: $valid_from, valid_to: $new_valid_to, invalid_at: $new_invalid_at,\n"
                     "    superseded_by: null, supersession_reason: null,\n"
@@ -1167,6 +1169,8 @@ class MemoryService:
                     claim_id=claim_id,
                     content=claim.content,
                     knowledge_class=claim.knowledge_class,
+                    facet=claim.facet,
+                    update_kind=claim.update_kind,
                     confidence=claim.confidence,
                     embedding=embedding,
                     valid_from=claim.observed_at.isoformat(),

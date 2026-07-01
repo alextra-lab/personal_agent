@@ -107,6 +107,8 @@ def _build_claim(data: dict[str, Any]) -> Claim | None:
     return Claim(
         content=content,
         knowledge_class=str(data.get("class", "Personal")),
+        facet=str(data.get("facet", "") or ""),
+        update_kind=str(data.get("update_kind", "new") or "new"),
         confidence=KnowledgeWeight.from_source(source_type).confidence,
         trace_id=provenance.get("trace_id"),
         session_id=provenance.get("session_id"),

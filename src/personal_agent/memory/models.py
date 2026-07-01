@@ -119,6 +119,12 @@ class Claim(BaseModel):
         content: The fact as one self-contained declarative sentence.
         knowledge_class: One of "Personal"/"World"/"Stance"/"System" (ADR-0098 D1);
             "Personal" for the situational facts this ticket wires.
+        facet: Normalized slot key for the fact (e.g. "lease_end_date"), so
+            supersession can group same-slot claims deterministically (FRE-712);
+            "" when the extractor names none (falls back to embedding matching).
+        update_kind: The extractor's contradiction signal — "new"/"correction"/
+            "evolution" (FRE-712) — driving the correction-vs-evolution supersession
+            label instead of a confidence-delta guess. Defaults to "new".
         confidence: Confidence in [0.0, 1.0], derived from the source type; the
             weight the correction path adjudicates on.
         trace_id: Originating capture's trace_id (provenance).
@@ -133,6 +139,8 @@ class Claim(BaseModel):
 
     content: str
     knowledge_class: str = "Personal"
+    facet: str = ""
+    update_kind: str = "new"
     confidence: float = Field(default=0.8, ge=0.0, le=1.0)
     trace_id: str | None = None
     session_id: str | None = None

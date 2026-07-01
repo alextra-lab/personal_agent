@@ -26,7 +26,6 @@ Task analytics, reflection insights, and system health visibility in Kibana. Thi
 | Insights Engine | `insights_engine.ndjson` | `agent-insights-*` | Insight count by type, confidence trend, anomalies, weekly proposals |
 | Extraction Retry Health | `extraction_retry_health.ndjson` | `agent-logs-*` | Median attempts to success, dead-letter rate, denial_reason breakdown |
 | LLM Performance | `llm_performance.ndjson` | `agent-logs-*` | Call count by model, latency, token usage, errors over time |
-| Delegation Outcomes | `delegation_outcomes.ndjson` | `agent-logs-*` | Delegation volume by agent, success rate, rounds needed, satisfaction |
 | Expansion & Decomposition | `expansion_decomposition.ndjson` | `agent-logs-*` | Strategy distribution, sub-agent spawn/success rate, context budget |
 | Intent Classification | `intent_classification.ndjson` | `agent-logs-*` | Task type distribution, confidence scores, signal frequency |
 

@@ -30,7 +30,6 @@ FILES=(
   "insights_engine.ndjson"
   "extraction_retry_health.ndjson"
   "llm_performance.ndjson"
-  "delegation_outcomes.ndjson"
   "expansion_decomposition.ndjson"
   "intent_classification.ndjson"
   "prompt-cost-cache.ndjson"

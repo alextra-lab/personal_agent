@@ -13,7 +13,6 @@ This folder holds Kibana saved objects. Each file contains one dashboard and all
 - **insights_engine.ndjson** — Insights Engine (insight count by type, confidence trend, anomalies).
 - **extraction_retry_health.ndjson** — Extraction Retry Health (median attempts, fallback rate, denial_reason distribution).
 - **llm_performance.ndjson** — LLM Performance (call count by model, latency, token usage, errors over time).
-- **delegation_outcomes.ndjson** — Delegation Outcomes (volume by agent).
 - **expansion_decomposition.ndjson** — Expansion & Decomposition (strategy distribution, sub-agent spawn rate/success, context budget).
 - **intent_classification.ndjson** — Intent Classification (task type distribution, confidence scores, signal frequency).
 - **prompt-cost-cache.ndjson** — Prompt Cost & Cache Attribution (per-callsite token/cost, static-prefix-hash erosion). Lens-based (FRE-406).

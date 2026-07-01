@@ -9,9 +9,9 @@ Master-maintained dispatch. `/build 1`, `/build 2`, and `/adr` resolve their NEX
 <!-- STREAM-BOARD:START -->
 | Stream | Command | NEXT (build this) | Context | Queued after |
 |--------|---------|-------------------|---------|--------------|
-| build · Stream 1 | `/build 1` | **FRE-712** | **KEEP** — direct follow-on; shares the FRE-637/638 extractor+supersession files | FRE-707 (after FRE-705 design) |
-| build2 · Stream 2 | `/build 2` | **FRE-665** | CLEAR | FRE-709 → FRE-666 (deploy-gate) |
-| adr | `/adr` | **FRE-708** | CLEAR | FRE-705 → FRE-706 |
+| build · Stream 1 | `/build 1` | 🔨 **FRE-712** _(building)_ | **KEEP** — direct follow-on; shares the FRE-637/638 extractor+supersession files | FRE-707 (after FRE-705 design) |
+| build2 · Stream 2 | `/build 2` | 🔨 **FRE-665** _(building)_ | CLEAR | FRE-709 → FRE-666 (deploy-gate) |
+| adr | `/adr` | 🔨 **FRE-708** _(building)_ | CLEAR | FRE-705 → FRE-706 |
 <!-- STREAM-BOARD:END -->
 
 **Context flag:** default **CLEAR** (fresh context per ticket). **KEEP** is set only when the NEXT ticket is a direct follow-on to what the stream just shipped (same files/substrate) — then run the command on the warm context, do **not** `/clear`. **Parked / owner-gated (not auto-dispatched):** FRE-713 (trigger-gated) · FRE-639 (held for the FRE-708 isolate-vs-gate decision) · FRE-711 (World→Claim — master confirms timing, needs FRE-712 first) · FRE-704 (ES field-drop — master brings the raise-cap-vs-prune approach to owner). WIP = 1 live ticket per stream.

@@ -9,7 +9,7 @@ Master-maintained dispatch. `/build 1`, `/build 2`, and `/adr` resolve their NEX
 <!-- STREAM-BOARD:START -->
 | Stream | Command | NEXT (build this) | Context | Queued after |
 |--------|---------|-------------------|---------|--------------|
-| build · Stream 1 · **Opus** | `/build 1` | **FRE-639** [S] _(System gate; unparked — ADR-0105 kept it unchanged)_ | CLEAR | FRE-707 [O] (gated on FRE-705) |
+| build · Stream 1 · **Opus** | `/build 1` | **FRE-711** [O] _(World→Claim; retire FWW fully — **codex design pass req'd**, blast radius: recall/dedup + FRE-375)_ | **KEEP** — extends the 638/712 Claim substrate | FRE-639 [S] (System gate) → FRE-707 [O] |
 | build2 · Stream 2 · **Sonnet** | `/build 2` | 🔨 **FRE-665** _(building)_ [S] | CLEAR | FRE-709 [S] → FRE-666 [tier TBD — master verifies before dispatch] (deploy-gate) |
 | adr · **Opus** | `/adr` | **FRE-705** [O] _(multi-path retrieval design)_ | CLEAR _(per adr handoff — unrelated to ADR-0105)_ | FRE-706 [O] |
 <!-- STREAM-BOARD:END -->

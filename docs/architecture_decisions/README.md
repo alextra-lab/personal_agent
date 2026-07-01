@@ -185,6 +185,8 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0100](ADR-0100-relevance-bounded-recall.md) | Memory Recall — Relevance-Bounded Candidate Generation | Accepted |
 | [ADR-0101](ADR-0101-agent-vision-ingestion.md) | Agent Vision Ingestion of Uploaded Images | Accepted |
 | [ADR-0102](ADR-0102-document-ingestion.md) | Document Ingestion (PDF) — tiered, capability-routed | Accepted |
+| [ADR-0103](ADR-0103-recall-no-clean-floor-structural-separation.md) | Recall is Retrieval — No Clean Similarity Floor; Separation is Structural | Accepted |
+| [ADR-0104](ADR-0104-multi-path-retrieval-rank-fusion.md) | Multi-Path Retrieval with Rank Fusion | Proposed |
 
 ### Supplementary
 

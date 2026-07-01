@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from personal_agent.memory.weight import KnowledgeWeight
 
@@ -68,6 +68,77 @@ class Relationship(BaseModel):
     first_accessed_at: datetime | None = None
     # FRE-229: visibility scope
     visibility: str = Visibility.PUBLIC
+
+
+class Stance(BaseModel):
+    """The owner's affect toward / mastery of a World concept (ADR-0098 D2).
+
+    A Stance is a native ``HAS_STANCE`` edge inside Core — the owner ``:Person``
+    (``is_owner=true``) to a World ``:Entity`` — never an entity or a description
+    clause. It is provenance-bearing and temporally valid, so a changed stance
+    supersedes the prior one (superseded ≠ deleted); supersession is keyed on the
+    ``(owner, target)`` pair.
+
+    Attributes:
+        target: Name of the World concept the stance is about (an existing
+            ``:Entity``; also emitted in the extractor's ``entities`` array).
+        affect: Short sentiment/preference phrase ("loves the hybrid powertrain");
+            empty when the stance is purely a mastery/skill level.
+        mastery: Skill/learning level in [0.0, 1.0], or None for a pure preference.
+        review_due: Spaced-repetition next-review time; None until a scheduler
+            sets it (Stance lifecycle is ADR-0098 D4, out of this ticket's scope).
+        trace_id: Originating capture's trace_id (provenance).
+        session_id: Originating capture's session_id (provenance).
+        source_type: Origin channel; "conversation" for extracted stances.
+        observed_at: Turn time — the authoritative bitemporal ordering axis.
+        extracted_at: Wall-clock when extraction ran (forensics only).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    target: str
+    affect: str = ""
+    mastery: float | None = Field(default=None, ge=0.0, le=1.0)
+    review_due: datetime | None = None
+    trace_id: str | None = None
+    session_id: str | None = None
+    source_type: str = "conversation"
+    observed_at: datetime
+    extracted_at: datetime | None = None
+
+
+class Claim(BaseModel):
+    """A first-class, provenance-bearing, temporally-valid durable fact (ADR-0098 D2).
+
+    Replaces first-write-wins for durable knowledge: a Claim's value can change.
+    Stored as a ``:Claim`` node hung off the owner via ``HAS_FACT``. This ticket
+    (FRE-638) feeds Personal situational facts; the model is class-agnostic so
+    World facts can migrate onto it later.
+
+    Attributes:
+        content: The fact as one self-contained declarative sentence.
+        knowledge_class: One of "Personal"/"World"/"Stance"/"System" (ADR-0098 D1);
+            "Personal" for the situational facts this ticket wires.
+        confidence: Confidence in [0.0, 1.0], derived from the source type; the
+            weight the correction path adjudicates on.
+        trace_id: Originating capture's trace_id (provenance).
+        session_id: Originating capture's session_id (provenance).
+        source_type: Origin channel; "conversation" for extracted claims.
+        observed_at: Turn time — the authoritative bitemporal ordering axis
+            (``valid_from`` is set from this at write time).
+        extracted_at: Wall-clock when extraction ran (forensics only).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    content: str
+    knowledge_class: str = "Personal"
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    trace_id: str | None = None
+    session_id: str | None = None
+    source_type: str = "conversation"
+    observed_at: datetime
+    extracted_at: datetime | None = None
 
 
 class TurnNode(BaseModel):

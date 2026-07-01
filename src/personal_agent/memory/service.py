@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import orjson
 import structlog
@@ -21,20 +21,29 @@ from personal_agent.events import (
     get_event_bus,
 )
 from personal_agent.llm_client.token_counter import estimate_tokens
-from personal_agent.memory.embeddings import generate_embedding
+from personal_agent.memory.embeddings import cosine_similarity, generate_embedding
 from personal_agent.memory.fact import PromotionCandidate
 from personal_agent.memory.freshness_aggregate import (
     GraphStalenessSummary,
     aggregate_graph_staleness,
 )
 from personal_agent.memory.models import (
+    Claim,
     Entity,
     EntityNode,
     MemoryQuery,
     MemoryQueryResult,
     Relationship,
     SessionNode,
+    Stance,
     TurnNode,
+)
+from personal_agent.memory.supersession import (
+    CLAIM_MATCH_THRESHOLD,
+    ClaimRecord,
+    SupersessionAction,
+    adjudicate,
+    best_candidate,
 )
 
 Neo4jAsyncGraphDatabase: Any = None
@@ -50,6 +59,35 @@ ConversationNode = TurnNode
 
 log = structlog.get_logger()
 settings = get_settings()
+
+
+def _parse_iso(value: Any, *, fallback: datetime) -> datetime:
+    """Parse a stored ISO-8601 string back to a datetime, tolerating bad data.
+
+    Claim ``observed_at`` is written as an ISO string, so it reads back as a string;
+    Neo4j native temporals expose ``.to_native()``. Anything unparseable falls back
+    so a single corrupt row cannot break supersession ordering.
+
+    Args:
+        value: The raw property value (str, native temporal, or None).
+        fallback: The datetime to use when ``value`` cannot be parsed.
+
+    Returns:
+        A timezone-aware datetime.
+    """
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return fallback
+    to_native = getattr(value, "to_native", None)
+    if callable(to_native):
+        native = to_native()
+        if isinstance(native, datetime):
+            return native
+    if isinstance(value, datetime):
+        return value
+    return fallback
 
 
 def _build_visibility_filter(
@@ -932,6 +970,235 @@ class MemoryService:
                 error=str(e),
                 exc_info=True,
                 trace_id=originating_trace_id,
+            )
+            return ""
+
+    async def assert_stance(
+        self,
+        stance: Stance,
+        *,
+        trace_id: str | None = None,
+    ) -> bool:
+        """Assert a Stance as a native ``HAS_STANCE`` edge from the owner (ADR-0098 D2/D3).
+
+        Resolves the FRE-637 ``"owner"`` sentinel to the ``is_owner=true`` Person
+        node (ADR-0052) and writes a native edge to the target World ``:Entity`` —
+        the crown-jewel traversal stays inside Core (AC-5). A stance is the most
+        temporal class (ADR-0098 D4): a new stance to the same concept unconditionally
+        supersedes the prior current edge (its ``valid_to``/``invalid_at`` are set and
+        it is retained), so exactly one stance to a concept is ever current.
+
+        The write is a single atomic statement. It is skipped (logged) when the owner
+        node or the target ``:Entity`` is absent — a stance is never written dangling.
+
+        Args:
+            stance: The stance to assert (target, affect, mastery, provenance).
+            trace_id: Request/consolidation trace id for log correlation (ADR-0074 §I3).
+
+        Returns:
+            True if a HAS_STANCE edge was created, False if skipped or on error.
+        """
+        if not self.connected or not self.driver:
+            log.warning("assert_stance_skipped_not_connected", trace_id=trace_id)
+            return False
+
+        now = datetime.now(timezone.utc)
+        # ADR-0074 identity threading: trace_id/session_id ride on the edge.
+        query = (
+            "MATCH (o:Person {is_owner: true})\n"
+            "MATCH (c:Entity {name: $target})\n"
+            "WITH o, c\n"
+            "CALL {\n"
+            "    WITH o, c\n"
+            "    MATCH (o)-[cur:HAS_STANCE]->(c)\n"
+            "    WHERE cur.valid_to IS NULL AND cur.invalid_at IS NULL\n"
+            "    SET cur.valid_to = $valid_from, cur.invalid_at = $now\n"
+            "    RETURN count(*) AS superseded\n"
+            "}\n"
+            "CREATE (o)-[s:HAS_STANCE {\n"
+            "    affect: $affect, mastery: $mastery, review_due: $review_due,\n"
+            "    class: 'Stance', valid_from: $valid_from, valid_to: null, invalid_at: null,\n"
+            "    trace_id: $trace_id, session_id: $session_id, source_type: $source_type,\n"
+            "    observed_at: $observed_at, extracted_at: $extracted_at\n"
+            "}]->(c)\n"
+            "RETURN superseded"
+        )
+        params: dict[str, Any] = {
+            "target": stance.target,
+            "affect": stance.affect,
+            "mastery": stance.mastery,
+            "review_due": stance.review_due.isoformat() if stance.review_due else None,
+            "valid_from": stance.observed_at.isoformat(),
+            "now": now.isoformat(),
+            "trace_id": stance.trace_id or trace_id,
+            "session_id": stance.session_id,
+            "source_type": stance.source_type,
+            "observed_at": stance.observed_at.isoformat(),
+            "extracted_at": stance.extracted_at.isoformat() if stance.extracted_at else None,
+        }
+        try:
+            async with self.driver.session() as session:
+                result = await session.run(query, **params)
+                record = await result.single()
+                if record is None:
+                    log.warning(
+                        "assert_stance_skipped_no_owner_or_target",
+                        target=stance.target,
+                        trace_id=trace_id,
+                    )
+                    return False
+                log.info(
+                    "stance_asserted",
+                    target=stance.target,
+                    superseded=record["superseded"],
+                    trace_id=trace_id,
+                )
+                return True
+        except Exception as e:
+            log.error(
+                "assert_stance_failed",
+                target=stance.target,
+                error=str(e),
+                exc_info=True,
+                trace_id=trace_id,
+            )
+            return False
+
+    async def assert_claim(
+        self,
+        claim: Claim,
+        *,
+        trace_id: str | None = None,
+    ) -> str:
+        """Assert a durable Claim under the owner, killing first-write-wins (ADR-0098 D2).
+
+        Durable facts are living: a new Claim about the same fact-slot (matched by
+        content-embedding similarity, :data:`CLAIM_MATCH_THRESHOLD`) either supersedes
+        the current one (correction/evolution — AC-1/AC-2) or is rejected as a weaker/
+        stale re-assertion (retained as a non-current audit record — *not* naive
+        last-write-wins). Superseded Claims are retained with ``valid_to``/``invalid_at``/
+        ``superseded_by`` set; the current Claim is the one with both temporal bounds null.
+
+        Owner-sentinel resolution and the full write are one atomic statement. Skipped
+        (logged) when the owner node is absent — a Claim is never written orphaned.
+
+        Args:
+            claim: The Claim to assert (content, class, confidence, provenance).
+            trace_id: Request/consolidation trace id for log correlation (ADR-0074 §I3).
+
+        Returns:
+            The new Claim's id, or "" if skipped or on error.
+        """
+        if not self.connected or not self.driver:
+            log.warning("assert_claim_skipped_not_connected", trace_id=trace_id)
+            return ""
+
+        embedding = await generate_embedding(claim.content)
+        now = datetime.now(timezone.utc)
+        claim_id = str(uuid4())
+
+        try:
+            async with self.driver.session() as session:
+                # Fetch the owner's current Claims (bounded set) for similarity matching.
+                current = await session.run(
+                    "MATCH (o:Person {is_owner: true})-[:HAS_FACT]->(cl:Claim)\n"
+                    "WHERE cl.valid_to IS NULL AND cl.invalid_at IS NULL\n"
+                    "RETURN cl.claim_id AS claim_id, cl.content AS content,\n"
+                    "       cl.confidence AS confidence, cl.observed_at AS observed_at,\n"
+                    "       cl.embedding AS embedding",
+                )
+                candidates: list[ClaimRecord] = []
+                async for row in current:
+                    if row["embedding"] is None or row["claim_id"] is None:
+                        continue
+                    candidates.append(
+                        ClaimRecord(
+                            claim_id=row["claim_id"],
+                            content=row["content"] or "",
+                            confidence=float(row["confidence"] or 0.0),
+                            observed_at=_parse_iso(row["observed_at"], fallback=claim.observed_at),
+                            embedding=list(row["embedding"]),
+                        )
+                    )
+
+                # Adjudicate against the best match; invalidate ALL matches on supersede
+                # so the "≤1 current per fact-slot" invariant self-heals (Codex #5).
+                match = best_candidate(embedding, candidates)
+                decision = adjudicate(
+                    new_confidence=claim.confidence,
+                    new_observed_at=claim.observed_at,
+                    candidate=match,
+                )
+                supersede_ids: list[str] = []
+                new_valid_to: str | None = None
+                new_invalid_at: str | None = None
+                if decision.action is SupersessionAction.SUPERSEDE:
+                    supersede_ids = [
+                        c.claim_id
+                        for c in candidates
+                        if cosine_similarity(embedding, c.embedding) >= CLAIM_MATCH_THRESHOLD
+                    ]
+                elif decision.action is SupersessionAction.REJECT:
+                    # New claim arrives already non-current (retained for audit).
+                    new_valid_to = claim.observed_at.isoformat()
+                    new_invalid_at = now.isoformat()
+
+                write = await session.run(
+                    "MATCH (o:Person {is_owner: true})\n"
+                    "WITH o\n"
+                    "CALL {\n"
+                    "    WITH o\n"
+                    "    UNWIND $supersede_ids AS sid\n"
+                    "    MATCH (o)-[:HAS_FACT]->(old:Claim {claim_id: sid})\n"
+                    "    SET old.valid_to = $valid_from, old.invalid_at = $now,\n"
+                    "        old.superseded_by = $claim_id, old.supersession_reason = $reason\n"
+                    "    RETURN count(*) AS invalidated\n"
+                    "}\n"
+                    "CREATE (o)-[:HAS_FACT]->(cl:Claim {\n"
+                    "    claim_id: $claim_id, content: $content, class: $knowledge_class,\n"
+                    "    confidence: $confidence, embedding: $embedding,\n"
+                    "    valid_from: $valid_from, valid_to: $new_valid_to, invalid_at: $new_invalid_at,\n"
+                    "    superseded_by: null, supersession_reason: null,\n"
+                    "    trace_id: $trace_id, session_id: $session_id, source_type: $source_type,\n"
+                    "    observed_at: $observed_at, extracted_at: $extracted_at\n"
+                    "})\n"
+                    "RETURN cl.claim_id AS claim_id, invalidated",
+                    supersede_ids=supersede_ids,
+                    claim_id=claim_id,
+                    content=claim.content,
+                    knowledge_class=claim.knowledge_class,
+                    confidence=claim.confidence,
+                    embedding=embedding,
+                    valid_from=claim.observed_at.isoformat(),
+                    new_valid_to=new_valid_to,
+                    new_invalid_at=new_invalid_at,
+                    now=now.isoformat(),
+                    reason=decision.reason,
+                    trace_id=claim.trace_id or trace_id,
+                    session_id=claim.session_id,
+                    source_type=claim.source_type,
+                    observed_at=claim.observed_at.isoformat(),
+                    extracted_at=claim.extracted_at.isoformat() if claim.extracted_at else None,
+                )
+                record = await write.single()
+                if record is None:
+                    log.warning("assert_claim_skipped_no_owner", trace_id=trace_id)
+                    return ""
+                log.info(
+                    "claim_asserted",
+                    claim_id=claim_id,
+                    action=decision.action.value,
+                    reason=decision.reason,
+                    superseded=record["invalidated"],
+                    trace_id=trace_id,
+                )
+                return claim_id
+        except Exception as e:
+            log.error(
+                "assert_claim_failed",
+                error=str(e),
+                exc_info=True,
+                trace_id=trace_id,
             )
             return ""
 

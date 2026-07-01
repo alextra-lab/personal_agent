@@ -159,3 +159,59 @@ objects omit it, so they persist yet never draw. "Import passed" was never proof
 
 **Definition of done for AC3** = the panel visibly renders (Playwright render-check), not
 "ndjson imports."
+
+## Addendum 2 — v2 dashboard: composition was misleading (2026-07-01)
+
+Master scrutinized the v1 render **against real data** (the decisive gate the
+`create-visualization` skill formalized from this run) and found it lied: v1 summed absolute
+token counts per category with no residual band, so a real 15-minute window read "100%
+Memory" when memory was actually only 23-48% (36% aggregate) of the window — the largest
+component (conversation history / system prompt / tool results) was never drawn. Rebuilt to
+match the upgraded acceptance bar: *a human can read, from real data, what share of the
+window is memory/tools/reasoning/rest, and whether it's nearing the budget ceiling.*
+
+**v2 ships four panels** (all UI-built, per the `create-visualization` skill, on the same
+dashboard `context-occupancy-dashboard`):
+
+1. **Composition (% of window)** — `context-occupancy-over-time` (reused id). Area,
+   **percentage-stacked**, 4 Sum metrics: Memory / Tool definitions / Reasoning / **`Other
+   (history, system prompt, tool results)`** — a Lens **Formula** column,
+   `sum(total) - sum(memory) - sum(tool) - sum(reasoning)`, the residual that was the whole
+   bug in v1. Y-axis title fixed to "Share of context window" (v1 defaulted to "Memory").
+2. **Occupancy vs Budget Ceiling** — `context-occupancy-ceiling` (new). Line (avg
+   `total_tokens`) + a **reference-line layer** static value 120,000 ("Budget ceiling
+   (120,000)"), answering "is usage anywhere near the cap" at a glance — auto-scaled Y
+   includes the reference line, so actual usage reads as a tiny sliver against the ceiling.
+3. **Per-Turn Detail** — `context-occupancy-detail-table` (new). A Lens **Data Table**:
+   rows = Top-20 `trace_id` ordered by a `Max(@timestamp)` metric descending (one doc per
+   `trace_id` ⇒ effectively a raw per-turn listing), columns = Turn time / Memory / Tool
+   definitions / Reasoning / Turn total. Lets a viewer check the aggregate story against
+   individual real rows.
+4. **Usage Trend (detail)** — `context-occupancy-detail-trend` (new). Same avg-`total_tokens`
+   line as panel 2 but with a **custom fixed Y-axis bound (0-2,500)** and no reference line,
+   so the turn-to-turn wiggle is visible without needing to drag-zoom panel 2's X-axis.
+
+**Scrutiny findings folded into v2 build (not deferred):**
+- Every Lens Sum metric defaults `params.emptyAsNull: true` ("Hide zero values" toggle ON).
+  For an aggregate chart this doesn't matter, but for the **per-turn detail table** — where
+  each row is exactly one real document — a genuine `reasoning_tokens: 0` (a non-thinking
+  turn) rendered as `-`, indistinguishable from missing data. Fixed via the UI ("Hide zero
+  values" → off) on all four Sum columns in the table; this is an "Accurate" gate finding
+  (bands/values must represent what they claim), not cosmetic.
+- X-axis (time) drag-to-zoom is a native Elastic-Charts capability — verified live by
+  dispatching a synthetic drag on the ceiling panel's canvas and confirming the URL's global
+  time range updated. Y-axis has no equivalent interactive zoom (Lens auto-scales Y to fit
+  data **and** any reference line together); the only lever is a static custom bound set at
+  design time — which is exactly what panel 4 does, as a second, permanently-zoomed panel
+  rather than a runtime toggle.
+
+**Self-scrutiny (gate 4, real-data proxy):** no production data access from this session
+(local cloud-sim only; no live gateway turn — standing rule). Seeded 50 realistic sample
+docs mirroring master's actual ratios (total 1,800-2,100 tokens/turn; memory 23-48% share).
+Cross-checked an ES aggregation query (identical Sum/Avg operations to the Lens metrics)
+against the known seed ground truth: **memory 35.2% / tool 9.9% / reasoning 5.8% / residual
+49.1%, avg total 1,969 — ES aggregation matched the seed exactly.** Spot-checked a detail-
+table row (`fre593v2-0049`) against its raw document — exact match. This proves the pipeline
+computes the right numbers on real-shaped data; it does not substitute for master's real-
+production-data scrutiny (the actual decisive gate), which remains outstanding the same way
+AC1's live-confirm did.

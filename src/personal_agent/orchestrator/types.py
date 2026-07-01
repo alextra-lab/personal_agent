@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 from uuid import UUID
 
 from personal_agent.governance.models import Mode
@@ -147,6 +147,30 @@ class ToolResultPin:
     round_pinned: int
 
 
+@dataclass(frozen=True)
+class AttachmentRef:
+    """Structured reference to a completed upload (FRE-661 / ADR-0101 §2, §8a).
+
+    Carried on ``ExecutionContext.attachments``, separate from ``ctx.user_message``,
+    so attachment metadata never pollutes the clean task text that Captain's Log
+    and entity extraction read (AC-5).
+
+    Attributes:
+        artifact_id: Postgres ``artifacts.id`` of the completed upload.
+        content_type: MIME type of the upload.
+        title: Display filename.
+        r2_key: Object key for the credentialed ``store.get(r2_key)`` byte fetch (§3).
+        processing_target: Optional per-attachment cloud/local override (§8a).
+            ``None`` follows the conversation's bound ExecutionProfile.
+    """
+
+    artifact_id: str
+    content_type: str
+    title: str
+    r2_key: str
+    processing_target: Literal["cloud", "local"] | None = None
+
+
 @dataclass
 class ExecutionContext:
     """Mutable state container passed through execution steps.
@@ -265,6 +289,12 @@ class ExecutionContext:
     # decompose / delegate). Set once by observe_topology on seam enter; read by the
     # route-trace assembler and carried on stream:turn.observed events.
     topology: str | None = None
+
+    # --- FRE-661 / ADR-0101 §2 structured attachment carrier ---
+    # Kept separate from user_message so Captain's Log + entity extraction never
+    # see attachment metadata (AC-5). Immutable tuple to prevent caller-side
+    # mutation of the list passed at the handle_user_request seam.
+    attachments: tuple[AttachmentRef, ...] = ()
 
 
 class OrchestratorStep(TypedDict):

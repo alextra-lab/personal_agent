@@ -4,6 +4,7 @@ This module provides the public API for the orchestrator, matching
 the interface defined in ORCHESTRATOR_CORE_SPEC_v0.1.md.
 """
 
+from collections.abc import Sequence
 from uuid import UUID
 
 from personal_agent.brainstem import get_current_mode
@@ -11,7 +12,7 @@ from personal_agent.governance.models import Mode
 from personal_agent.orchestrator.channels import Channel
 from personal_agent.orchestrator.executor import execute_task_safe
 from personal_agent.orchestrator.session import SessionManager
-from personal_agent.orchestrator.types import ExecutionContext, OrchestratorResult
+from personal_agent.orchestrator.types import AttachmentRef, ExecutionContext, OrchestratorResult
 from personal_agent.request_gateway.types import GatewayOutput
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.request_timer import RequestTimer
@@ -49,6 +50,7 @@ class Orchestrator:
         user_display_name: str | None = None,
         eval_mode: bool = False,
         authenticated: bool = False,
+        attachments: Sequence[AttachmentRef] | None = None,
     ) -> OrchestratorResult:
         """Top-level entrypoint for a single user turn.
 
@@ -76,6 +78,9 @@ class Orchestrator:
             authenticated: Whether the request carries a verified CF Access identity.
                 Threaded into the executor's memory-recall visibility scoping so
                 'group'-visibility memory is revealed (FRE-229 / FRE-673).
+            attachments: Structured attachment references for this turn (FRE-661 /
+                ADR-0101 §2), kept separate from user_message so Captain's Log and
+                entity extraction never see attachment metadata (AC-5).
 
         Returns:
             OrchestratorResult with reply, steps, and trace_id.
@@ -123,6 +128,7 @@ class Orchestrator:
             user_display_name=user_display_name,
             eval_mode=eval_mode,
             authenticated=authenticated,
+            attachments=tuple(attachments or ()),
         )
 
         # Execute task

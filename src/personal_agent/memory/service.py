@@ -60,6 +60,11 @@ ConversationNode = TurnNode
 log = structlog.get_logger()
 settings = get_settings()
 
+# FRE-711: legacy :Entity rows predate description confidence; treat a null stored
+# confidence as this baseline so legacy descriptions are not mass-reset on the first
+# post-deploy consolidation (a same-baseline write does not clear strict '>').
+_DEFAULT_DESCRIPTION_CONFIDENCE = 0.8
+
 
 def _parse_iso(value: Any, *, fallback: datetime) -> datetime:
     """Parse a stored ISO-8601 string back to a datetime, tolerating bad data.
@@ -829,8 +834,17 @@ class MemoryService:
         originating_trace_id: str | None = None,
         originating_session_id: str | None = None,
         extractor_model: str | None = None,
+        description_confidence: float = _DEFAULT_DESCRIPTION_CONFIDENCE,
+        eval_mode: bool = False,
     ) -> str:
         """Create or update an entity node with dedup and optional embedding.
+
+        The World-fact ``description`` is a **living** value (ADR-0098 D2 / FRE-711):
+        first-write-wins is retired for it. A later extraction with a *strictly higher*
+        confidence corrects it (the prior value is archived to a ``HAD_DESCRIPTION`` ->
+        ``EntityDescriptionVersion`` node, never deleted); an ``eval_mode`` write never
+        overwrites a non-eval description (this replaces the FRE-375 freeze as the
+        anti-test-overwrite guard). ``entity_type``/``properties`` stay first-write-wins.
 
         Args:
             entity: Entity to create.
@@ -845,6 +859,10 @@ class MemoryService:
             extractor_model: Identifier of the LLM that produced this entity's
                 description / extraction (ADR-0074 §I5). ``None`` for user-provided
                 facts (gateway ``store_fact`` path); set for entity-extraction outputs.
+            description_confidence: Confidence of this write's description; a correction
+                lands only when it is *strictly greater* than the stored one (FRE-711).
+            eval_mode: Whether this write originates from eval/test traffic; an eval write
+                never overwrites a non-eval description (FRE-711, preserving FRE-375).
 
         Returns:
             Entity ID (name-based, may be canonical name if deduplicated).
@@ -898,10 +916,14 @@ class MemoryService:
                     "e.entity_id = COALESCE(e.entity_id, $entity_id)",
                     # entity_type: first-write-wins (FRE-375 — prevent test overwrites)
                     "e.entity_type = CASE WHEN e.entity_type IS NULL OR e.entity_type = '' THEN $entity_type ELSE e.entity_type END",
-                    # description: first-write-wins (FRE-375 — prevent test overwrites)
-                    "e.description = CASE WHEN e.description IS NULL OR e.description = '' THEN $description ELSE e.description END",
                     # properties: first-write-wins (FRE-375 — prevent test overwrites)
                     "e.properties = CASE WHEN e.properties IS NULL OR e.properties = '{}' THEN $properties ELSE e.properties END",
+                    # description: living value (FRE-711) — apply the gated correction
+                    # computed in the WITH block above; ON CREATE sets the first value.
+                    "e.description = CASE WHEN _do_correct OR _do_fill THEN $description ELSE e.description END",
+                    "e.description_confidence = CASE WHEN _do_correct OR _do_fill THEN $description_confidence ELSE e.description_confidence END",
+                    "e.description_eval_mode = CASE WHEN _do_correct OR _do_fill THEN $eval_mode ELSE e.description_eval_mode END",
+                    "e.description_set_at = CASE WHEN _do_correct OR _do_fill THEN datetime() ELSE e.description_set_at END",
                     "e.last_seen = datetime()",
                     "e.mention_count = COALESCE(e.mention_count, 0) + 1",
                     "e.first_seen = COALESCE(e.first_seen, datetime())",
@@ -917,6 +939,12 @@ class MemoryService:
                     "entity_type": entity.entity_type,
                     "description": entity.description,
                     "properties": orjson.dumps(entity.properties).decode(),
+                    # FRE-711 living-description gate inputs.
+                    "description_confidence": description_confidence,
+                    "eval_mode": eval_mode,
+                    "default_description_confidence": _DEFAULT_DESCRIPTION_CONFIDENCE,
+                    "proposed_name": entity.name,
+                    "description_source_trace_id": originating_trace_id,
                 }
 
                 if embedding is not None:
@@ -937,7 +965,15 @@ class MemoryService:
                 params["visibility"] = visibility
                 # ADR-0074 §I5: origination written ON CREATE SET so first-write
                 # semantics preserve the originating request even across merges.
-                on_create_clauses = ["e.visibility = $visibility"]
+                # FRE-711: the first description write also stamps its confidence/eval
+                # provenance here (ON CREATE); later corrections flow through the SET gate.
+                on_create_clauses = [
+                    "e.visibility = $visibility",
+                    "e.description = $description",
+                    "e.description_confidence = $description_confidence",
+                    "e.description_eval_mode = $eval_mode",
+                    "e.description_set_at = datetime()",
+                ]
                 if originating_trace_id is not None:
                     on_create_clauses.append("e.originating_trace_id = $originating_trace_id")
                     params["originating_trace_id"] = originating_trace_id
@@ -947,9 +983,30 @@ class MemoryService:
                 if extractor_model is not None:
                     on_create_clauses.append("e.extractor_model = $extractor_model")
                     params["extractor_model"] = extractor_model
+                # FRE-711: the description-correction gate is evaluated inside the MERGE
+                # against the freshly-matched node (no app-side stale read → race-safe:
+                # two concurrent consolidations cannot double-archive), then the old value
+                # is archived to a HAD_DESCRIPTION history node BEFORE the SET overwrites it.
                 query = (
                     "MERGE (e:Entity {name: $name})\n"
                     "ON CREATE SET " + ",\n    ".join(on_create_clauses) + "\n"
+                    "WITH e, e.description AS _old_desc, e.description_confidence AS _old_conf,\n"
+                    "     e.description_eval_mode AS _old_eval, e.description_set_at AS _old_set_at\n"
+                    "WITH e, _old_desc, _old_conf, _old_eval, _old_set_at,\n"
+                    "     ($description <> '' AND (_old_desc IS NULL OR _old_desc = '')) AS _do_fill,\n"
+                    "     ($description <> '' AND _old_desc IS NOT NULL AND _old_desc <> ''\n"
+                    "      AND $description <> _old_desc\n"
+                    "      AND NOT ($eval_mode AND coalesce(_old_eval, false) = false)\n"
+                    "      AND $description_confidence > coalesce(_old_conf, $default_description_confidence)\n"
+                    "     ) AS _do_correct\n"
+                    "FOREACH (_ IN CASE WHEN _do_correct THEN [1] ELSE [] END |\n"
+                    "    CREATE (e)-[:HAD_DESCRIPTION]->(:EntityDescriptionVersion {\n"
+                    "        text: _old_desc, confidence: _old_conf,\n"
+                    "        eval_mode: coalesce(_old_eval, false),\n"
+                    "        valid_from: _old_set_at, valid_to: datetime(),\n"
+                    "        source_trace_id: $description_source_trace_id, proposed_name: $proposed_name\n"
+                    "    })\n"
+                    ")\n"
                     "SET " + ",\n    ".join(set_clauses) + "\n"
                     "RETURN e.name as entity_id"
                 )

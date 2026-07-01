@@ -1,21 +1,25 @@
-"""Tests for FRE-375: entity description/type/properties are first-write-wins in create_entity.
+"""Tests for FRE-375 first-write-wins in create_entity — as amended by FRE-711.
 
-The bug being fixed: before FRE-375, create_entity() used unconditional SET clauses
-for description, entity_type, and properties. This meant every call (including from
-test scripts) would overwrite the existing entity's characterisation in Neo4j.
+FRE-375 made description/entity_type/properties first-write-wins so a test script
+could not overwrite an entity's characterisation. FRE-711 then made the **description**
+a *living* value (ADR-0098 D2): it is now correctable by a strictly-higher-confidence
+write, and the anti-test-overwrite guarantee moved from the freeze to an **eval-mode
+gate** (an eval write never overwrites a non-eval description). ``entity_type`` and
+``properties`` remain first-write-wins.
 
-The fix: CASE WHEN ... IS NULL OR ... = '' semantics so only the first writer sets
-the identity fields. Telemetry fields (last_seen, mention_count) continue to update
-unconditionally.
+So these tests keep the shape assertions for entity_type/properties, and assert the
+description is now the gated living value (not the old freeze). The behavioural
+anti-clobber guarantee (eval cannot overwrite non-eval) is proven against live Neo4j
+in ``test_world_description_correction.py``.
 """
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from personal_agent.memory.models import Entity
+import pytest
 
+from personal_agent.memory.models import Entity
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -47,13 +51,15 @@ def _make_service_with_mock() -> tuple:
 
 
 class TestEntityDescriptionFirstWriteWins:
-    @pytest.mark.asyncio
-    async def test_description_clause_is_not_unconditional_overwrite(self) -> None:
-        """The description SET clause must not use bare assignment (FRE-375).
+    """entity_type/properties stay first-write-wins; description is now the FRE-711 living value."""
 
-        Bare ``e.description = $description`` overwrites existing values on every
-        create_entity() call, including calls from test scripts. The clause must
-        use CASE WHEN ... IS NULL semantics instead.
+    @pytest.mark.asyncio
+    async def test_description_is_gated_living_value_not_frozen(self) -> None:
+        """The description is now a gated living value, not the FRE-375 freeze (FRE-711).
+
+        The blanket first-write freeze (``IS NULL OR = ''``) is gone; the SET is gated
+        on the ``_do_correct``/``_do_fill`` decision, and a superseded value is archived.
+        Bare unconditional ``e.description = $description`` remains forbidden.
         """
         service, mock_session = _make_service_with_mock()
 
@@ -73,15 +79,21 @@ class TestEntityDescriptionFirstWriteWins:
             entity_type="TechnologyConcept",
             description="A programming language",
         )
-        await service.create_entity(entity, visibility="group")
+        # Zero embedding → dedup path skipped → the MERGE (with the gate) is captured.
+        with patch(
+            "personal_agent.memory.service.generate_embedding",
+            new=AsyncMock(return_value=[0.0, 0.0]),
+        ):
+            await service.create_entity(entity, visibility="group")
 
         merged = " ".join(captured_cypher)
 
-        # The key assertion: no bare unconditional assignment for description
-        assert "e.description = $description" not in merged, (
-            "e.description must use CASE WHEN (first-write-wins), "
-            "not bare '= $description' which overwrites on every call (FRE-375)"
-        )
+        # The old FRE-375 first-write freeze is retired for the description (the on-MATCH
+        # SET no longer guards with IS NULL OR = ''); ON CREATE still sets the first value.
+        assert "e.description = CASE WHEN e.description IS NULL OR e.description = ''" not in merged
+        # It is the FRE-711 gated living value with a superseded-history archive.
+        assert "_do_correct OR _do_fill" in merged
+        assert "HAD_DESCRIPTION" in merged
 
     @pytest.mark.asyncio
     async def test_entity_type_clause_is_not_unconditional_overwrite(self) -> None:
@@ -131,51 +143,7 @@ class TestEntityDescriptionFirstWriteWins:
         merged = " ".join(captured_cypher)
 
         assert "e.properties = $properties" not in merged, (
-            "e.properties must use CASE WHEN (first-write-wins), "
-            "not bare '= $properties' (FRE-375)"
-        )
-
-    @pytest.mark.asyncio
-    async def test_description_clause_uses_case_when(self) -> None:
-        """The MERGE query must use CASE WHEN for description (FRE-375).
-
-        Patches generate_embedding to return None so the dedup code path is
-        bypassed and only the MERGE query is captured.
-        """
-        service, mock_session = _make_service_with_mock()
-
-        captured_cypher: list[str] = []
-
-        entity_result = AsyncMock()
-        entity_result.single = AsyncMock(return_value={"entity_id": "Neo4j"})
-
-        async def capture_run(cypher: str, **kwargs: object) -> AsyncMock:
-            captured_cypher.append(cypher)
-            return entity_result
-
-        mock_session.run = AsyncMock(side_effect=capture_run)
-
-        entity = Entity(
-            name="Neo4j",
-            entity_type="Database",
-            description="A graph database management system",
-        )
-        # Patch generate_embedding so no embedding is produced → dedup path skipped
-        with patch(
-            "personal_agent.memory.service.generate_embedding",
-            new_callable=AsyncMock,
-            return_value=None,
-        ):
-            await service.create_entity(entity)
-
-        # There should be exactly one MERGE query (no dedup cosine-similarity call)
-        merge_queries = [c for c in captured_cypher if "MERGE (e:Entity" in c]
-        assert len(merge_queries) >= 1, "Expected at least one MERGE (e:Entity ...) query"
-
-        merge_cypher = merge_queries[-1]
-
-        assert "CASE WHEN" in merge_cypher, (
-            "create_entity MERGE query must use CASE WHEN for identity fields (FRE-375)"
+            "e.properties must use CASE WHEN (first-write-wins), not bare '= $properties' (FRE-375)"
         )
 
     @pytest.mark.asyncio

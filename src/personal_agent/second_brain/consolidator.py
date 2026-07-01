@@ -693,6 +693,10 @@ class SecondBrainConsolidator:
                 originating_trace_id=capture.trace_id,
                 originating_session_id=capture.session_id,
                 extractor_model=extractor_model,
+                # FRE-711: World-description correction gate — source confidence + the
+                # eval flag so an eval turn can never overwrite a real description.
+                description_confidence=KnowledgeWeight.from_source("conversation").confidence,
+                eval_mode=capture.eval_mode,
             )
             if entity_id:
                 entities_created += 1

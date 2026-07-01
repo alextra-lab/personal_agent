@@ -7,6 +7,7 @@ conversation text using local reasoning models (Qwen 8B, LFM 1.2B) or Claude 4.5
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -22,7 +23,10 @@ log = get_logger(__name__)
 
 _EXTRACTION_SYSTEM_PROMPT = """\
 You are a knowledge graph extraction expert building a personal memory system.
-Reason carefully about which entities and relationships have lasting knowledge value.
+Reason carefully about (a) which entities and relationships have lasting knowledge value,
+(b) the KNOWLEDGE CLASS of each entity (World / Personal / System), and (c) the user's
+explicit STANCES and personal situational CLAIMS — which you must emit as structured items,
+never flatten into an entity's description.
 Your final output must be valid JSON only — no markdown fences, no explanation text."""
 
 _EXTRACTION_PROMPT_TEMPLATE = """\
@@ -45,6 +49,47 @@ RELATIONSHIP TYPES — use EXACTLY one of these UPPER_SNAKE_CASE values, no othe
   CREATED_BY    — entity was created or authored by another
   LOCATED_IN    — entity is geographically within another
 
+KNOWLEDGE CLASS — every entity MUST carry a "class", EXACTLY one of these three:
+  World     — reusable, impersonal know-how: facts, concepts, products, techniques, and
+              named people/orgs/places discussed as general knowledge. This is the default
+              for real subject-matter content.
+  Personal  — a named thing belonging to the USER'S OWN life: their doctor, employer, city of
+              residence, their own project. (A first-person SITUATIONAL FACT such as
+              "my lease ends in March" is NOT an entity — put it under "claims", below.)
+  System    — the agent's OWN machinery: infrastructure, tooling, telemetry, operations.
+              Examples: a database discussed as infra ("Postgres is healthy"), healthchecks,
+              log/telemetry review (sensor_poll, cost_gate_reaper_swept, DEBUG counts),
+              harness internals (executor.py, ToolLoopGate, the consolidation job),
+              connectivity pings. This is NOT user knowledge — label it System so it can be
+              kept out of the tutor. Judge by the SUBJECT of the turn, not the word alone:
+              "our graph store is up" → Neo4j is System; "graph databases store nodes and
+              edges" → Neo4j is World.
+  (There is NO "Stance" entity. A stance is a RELATION — emit it under "stances", below.)
+
+STANCES — the user's explicit first-person affect toward, or mastery of, a World concept
+  ("I love X", "I prefer X over Y", "I'm learning X", "I've basically mastered X").
+  A stance is NOT an entity and must NEVER be written into an entity's description.
+  Each stance object:
+    subject — always the literal string "owner"
+    target  — the World concept it is about (this concept should ALSO appear in "entities")
+    affect  — a SHORT phrase for the sentiment/preference ("loves it", "prefers over CR-V",
+              "wants to learn"); use "" if the stance is purely a mastery/skill level
+    mastery — a number 0.0-1.0 if a skill/learning level is stated or clearly implied,
+              otherwise null (a pure preference like "I love it" has mastery = null)
+    description — one sentence of context
+
+CLAIMS — first-person SITUATIONAL FACTS about the user's own life/relationships/events that
+  are assertions, not named entities ("my lease ends in March", "I saw the cardiologist
+  today", "I'm actively shopping for a car"). These have no entity slot and are silently
+  DROPPED today — you MUST emit them here instead.
+  Each claim object:
+    subject — always the literal string "owner"
+    content — the fact as ONE self-contained declarative sentence
+    description — optional one sentence of context
+
+Do NOT put any provenance, timestamp, id, or record-date on stances or claims — the system
+adds those, not you.
+
 EXTRACTION RULES (follow strictly):
 1. NEVER extract the protocol role labels "User" / "Assistant" / "System" / "Reasoning" as Person
    entities — these are chat-template role slots, not people.
@@ -66,16 +111,28 @@ EXTRACTION RULES (follow strictly):
    - "Météo France" not "Meteo France" or "Météo-France" (use the official accented form, no hyphen)
    - "Forcalquier" not "Forcqlquier" (correct spelling, not typos)
 7. Deduplicate: if two names clearly refer to the same entity, use one canonical name only
-8. If the conversation is a system test, ping, or empty exchange with no real content,
-   return empty entities and relationships arrays
+8. If the exchange is an empty/placeholder/test artifact with no real content (e.g. "test
+   message", a bare ping with no substance), return empty entities and relationships arrays.
+   BUT a real operational turn the user actually engaged in — a healthcheck they ran, a
+   telemetry/log review, a harness explainer — is NOT empty: emit its subjects as entities
+   with class=System (see rule 11), do not drop them.
 9. Write summaries as one concrete sentence about what was accomplished or learned
 10. Descriptions should add context beyond the name — what makes this entity notable here?
+11. Assign every entity a "class" (World | Personal | System) per the definitions above. When
+    the turn's SUBJECT is the agent's own infra/tooling/telemetry/healthcheck, the entity is
+    System even if it names a general technology.
+12. NEVER flatten a user stance into an entity description (no "a car the user loves",
+    "central to the user's preference"). Emit it as a structured object in "stances".
+13. NEVER drop a first-person situational fact. If it is an assertion about the user's life
+    rather than a named entity, emit it in "claims".
 
 GOOD EXAMPLES:
-  ✓ {{"name": "Paris", "type": "Location", "description": "Capital of France, subject of weather inquiry"}}
-  ✓ {{"name": "Qwen3.5", "type": "Technology", "description": "Local reasoning LLM used for entity extraction"}}
-  ✓ {{"name": "Neo4j", "type": "Technology", "description": "Graph database storing the personal memory graph"}}
-  ✓ {{"name": "GraphRAG", "type": "Concept", "description": "Technique combining knowledge graphs with RAG retrieval"}}
+  ✓ {{"name": "Paris", "type": "Location", "class": "World", "description": "Capital of France, subject of weather inquiry"}}
+  ✓ {{"name": "Qwen3.5", "type": "Technology", "class": "World", "description": "Local reasoning LLM used for entity extraction"}}
+  ✓ {{"name": "Postgres", "type": "Technology", "class": "System", "description": "The agent's own database, referenced in a healthcheck"}}
+  ✓ {{"name": "GraphRAG", "type": "Concept", "class": "World", "description": "Technique combining knowledge graphs with RAG retrieval"}}
+  ✓ stance: {{"subject": "owner", "target": "Toyota RAV4 Hybrid", "affect": "loves the hybrid powertrain", "mastery": null, "description": "User strongly prefers the RAV4 Hybrid's drivetrain"}}
+  ✓ claim:  {{"subject": "owner", "content": "The user's current car lease ends in March.", "description": "Situational constraint driving purchase timing"}}
 
 BAD EXAMPLES (never produce these):
   ✗ {{"name": "User", "type": "Person", ...}}
@@ -87,6 +144,10 @@ BAD EXAMPLES (never produce these):
   ✗ {{"name": "Météo-France", ...}}                               ← use "Météo France" (no hyphen)
   ✗ {{"name": "Test message", "type": "Message", ...}}
   ✗ {{"name": "Topic", "type": "Topic", ...}}
+  ✗ {{"name": "Toyota RAV4 Hybrid", ..., "description": "a car the user loves"}}   ← stance flattened; emit a stance
+  ✗ (silently omitting "my lease ends in March")                                   ← emit it as a claim
+  ✗ {{"name": "my lease ends in March", "type": "Event", ...}}                     ← situational fact is a claim, not an entity
+  ✗ {{"subject": "owner", "target": "...", "provenance": {{...}}}}                 ← never emit provenance; the system adds it
 
 Conversation:
 User: {user_message}
@@ -99,6 +160,7 @@ Return ONLY valid JSON (no markdown fences, no explanation):
     {{
       "name": "Canonical Entity Name",
       "type": "Person|Organization|Location|Technology|Concept|Event|Topic",
+      "class": "World|Personal|System",
       "description": "One sentence with useful context beyond the name",
       "properties": {{}}
     }}
@@ -110,6 +172,22 @@ Return ONLY valid JSON (no markdown fences, no explanation):
       "type": "PART_OF|USES|RELATED_TO|SIMILAR_TO|CREATED_BY|LOCATED_IN",
       "weight": 0.1-1.0,
       "properties": {{}}
+    }}
+  ],
+  "stances": [
+    {{
+      "subject": "owner",
+      "target": "World Concept Name",
+      "affect": "short phrase or empty string",
+      "mastery": null,
+      "description": "One sentence of context"
+    }}
+  ],
+  "claims": [
+    {{
+      "subject": "owner",
+      "content": "One self-contained declarative sentence about the user's situation",
+      "description": "Optional one sentence of context"
     }}
   ]
 }}\
@@ -156,6 +234,133 @@ def _supplement_person_entities_from_user_message(
     return out
 
 
+_VALID_ENTITY_CLASSES = frozenset({"World", "Personal", "System"})
+
+
+def _build_provenance(
+    *,
+    trace_id: UUID | str | None,
+    session_id: str | None,
+    turn_timestamp: datetime | None,
+    extracted_at: datetime,
+) -> dict[str, Any]:
+    """Build the provenance block stamped onto every Stance and Claim (ADR-0098 D5).
+
+    ``observed_at`` is the *turn* time (when the user asserted the fact), so a Claim
+    can later be bitemporally superseded (ADR-0098 D2); it falls back to the
+    extraction time only when the caller did not thread a ``turn_timestamp`` (e.g.
+    direct/test callers). ``extracted_at`` is pipeline-forensics wall-clock only.
+
+    Args:
+        trace_id: Originating capture's trace_id (stamped, not asked of the LLM).
+        session_id: Originating capture's session_id.
+        turn_timestamp: The turn's timestamp; authoritative ``observed_at``.
+        extracted_at: Wall-clock when extraction ran; forensics + fallback.
+
+    Returns:
+        Provenance dict with trace_id, session_id, source_type, observed_at, extracted_at.
+    """
+    observed = turn_timestamp or extracted_at
+    return {
+        "trace_id": str(trace_id) if trace_id else None,
+        "session_id": session_id,
+        "source_type": "conversation",
+        "observed_at": observed.astimezone(timezone.utc).isoformat(),
+        "extracted_at": extracted_at.isoformat(),
+    }
+
+
+def _coerce_mastery(value: Any) -> float | None:
+    """Coerce a model-emitted mastery value to a clamped float or None.
+
+    Local SLMs emit ``"0.6"`` (str), ``0.6`` (num), or ``"null"``/None
+    inconsistently; normalize so FRE-638's edge write receives a stable type.
+
+    Args:
+        value: The raw ``mastery`` field from the model.
+
+    Returns:
+        A float clamped to [0.0, 1.0], or None if absent/unparseable.
+    """
+    if value is None:
+        return None
+    try:
+        mastery = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, min(1.0, mastery))
+
+
+def _normalize_entity_class(entity: dict[str, Any]) -> str:
+    """Return a valid entity class, defaulting to World (fail-open, FRE-637).
+
+    A missing or invalid class fails **open** to ``World`` (visible to the tutor)
+    rather than ``System`` so a hedging model never silently starves the tutor.
+    System-classification precision is FRE-639's concern.
+
+    Args:
+        entity: An extracted entity dict.
+
+    Returns:
+        One of ``World`` / ``Personal`` / ``System``.
+    """
+    candidate = str(entity.get("class", "")).strip().capitalize()
+    if candidate in _VALID_ENTITY_CLASSES:
+        return candidate
+    return "World"
+
+
+def _finalize_extraction(
+    result: dict[str, Any],
+    *,
+    trace_id: UUID | str | None,
+    session_id: str | None,
+    turn_timestamp: datetime | None,
+) -> None:
+    """Normalize entity classes and stamp provenance on stances/claims, in place.
+
+    This is the Python side of the ADR-0098 D5 contract: the LLM emits the
+    semantic content of stances/claims; Python owns the ``class`` defaulting and
+    the provenance + timestamp (the model cannot know real trace/session identity
+    or wall-clock time). Runs *after* Person supplementation so supplemented rows
+    also receive a class.
+
+    Args:
+        result: The parsed extraction dict (mutated in place).
+        trace_id: Originating capture's trace_id.
+        session_id: Originating capture's session_id.
+        turn_timestamp: The turn's timestamp for ``observed_at``.
+    """
+    extracted_at = datetime.now(timezone.utc)
+    provenance = _build_provenance(
+        trace_id=trace_id,
+        session_id=session_id,
+        turn_timestamp=turn_timestamp,
+        extracted_at=extracted_at,
+    )
+
+    for entity in result.get("entities", []):
+        entity["class"] = _normalize_entity_class(entity)
+
+    stances = list(result.get("stances", []))
+    for stance in stances:
+        stance["subject"] = "owner"
+        stance["class"] = "Stance"
+        stance["mastery"] = _coerce_mastery(stance.get("mastery"))
+        stance.setdefault("affect", "")
+        stance.setdefault("description", "")
+        stance["provenance"] = dict(provenance)
+    result["stances"] = stances
+
+    claims = list(result.get("claims", []))
+    for claim in claims:
+        claim["subject"] = "owner"
+        claim["class"] = "Personal"
+        claim.setdefault("description", "")
+        claim["provenance"] = dict(provenance)
+    result["claims"] = claims
+
+
 async def extract_entities_and_relationships(
     user_message: str,
     assistant_response: str,
@@ -163,6 +368,7 @@ async def extract_entities_and_relationships(
     trace_id: UUID | str | None = None,
     session_id: str | None = None,
     attempt_number: int | None = None,
+    turn_timestamp: datetime | None = None,
 ) -> dict[str, Any]:
     """Extract entities and relationships from conversation.
 
@@ -182,9 +388,16 @@ async def extract_entities_and_relationships(
         attempt_number: Sequential retry counter per trace_id (FRE-307);
             the consolidator computes this and passes it through so log
             lines are aggregable in Kibana ("median attempts to success").
+        turn_timestamp: The originating turn's timestamp (ADR-0098 D5). Threaded
+            from ``capture.timestamp`` so a Claim/Stance ``observed_at`` is the
+            turn time — not the (lagging) consolidation-run time — which the
+            bitemporal supersession in FRE-638 depends on. Falls back to
+            extraction wall-clock when omitted.
 
     Returns:
-        Dict with entities, relationships, entity_names, and summary.
+        Dict with entities, relationships, entity_names, summary, and — new in
+        FRE-637 — ``stances`` and ``claims`` (each provenance-stamped). Every
+        entity additionally carries a ``class`` (World/Personal/System).
 
     Raises:
         BudgetDenied: Re-raised so the consolidator can write a
@@ -342,6 +555,15 @@ async def extract_entities_and_relationships(
         )
         result["entities"] = entities
 
+        # ADR-0098 D5: default entity classes and stamp provenance on stances/claims.
+        # Runs after Person supplementation so supplemented rows also get a class.
+        _finalize_extraction(
+            result,
+            trace_id=trace_id,
+            session_id=session_id,
+            turn_timestamp=turn_timestamp,
+        )
+
         # Extract entity names for convenience
         entity_names = [e.get("name", "") for e in entities if e.get("name")]
 
@@ -349,6 +571,8 @@ async def extract_entities_and_relationships(
             "entity_extraction_completed",
             entities_found=len(entity_names),
             relationships_found=len(result.get("relationships", [])),
+            stances_found=len(result.get("stances", [])),
+            claims_found=len(result.get("claims", [])),
             model_used=model_used,
             trace_id=trace_id_str,
         )
@@ -358,6 +582,8 @@ async def extract_entities_and_relationships(
             "entities": entities,
             "relationships": result.get("relationships", []),
             "entity_names": entity_names,
+            "stances": result.get("stances", []),
+            "claims": result.get("claims", []),
         }
 
     except BudgetDenied as e:
@@ -405,4 +631,6 @@ def _default_extraction_result(user_message: str) -> dict[str, Any]:
         "entities": [],
         "relationships": [],
         "entity_names": [],
+        "stances": [],
+        "claims": [],
     }

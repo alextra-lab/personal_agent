@@ -115,6 +115,40 @@ async def test_below_cap_fallback_skips_neo4j_writes(
 
 
 # ---------------------------------------------------------------------------
+# FRE-637: the turn timestamp is threaded into the extractor as turn_timestamp
+# so a Claim/Stance observed_at is the turn time, not consolidation-run time.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_process_capture_passes_capture_timestamp_as_turn_timestamp(
+    consolidator: SecondBrainConsolidator, memory_service: MagicMock
+) -> None:
+    """`_process_capture` threads `capture.timestamp` into the extractor (ADR-0098 D5)."""
+    capture = _make_capture()
+    with (
+        patch(
+            "personal_agent.second_brain.consolidator.extract_entities_and_relationships",
+            new_callable=AsyncMock,
+            return_value=_successful_extraction(),
+        ) as mock_extract,
+        patch(
+            "personal_agent.second_brain.consolidator.previous_attempt_count",
+            new_callable=AsyncMock,
+            return_value=0,
+        ),
+        patch(
+            "personal_agent.second_brain.consolidator.record_consolidation_attempt",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await consolidator._process_capture(capture)
+
+    mock_extract.assert_awaited_once()
+    assert mock_extract.await_args.kwargs.get("turn_timestamp") == capture.timestamp
+
+
+# ---------------------------------------------------------------------------
 # At-cap: extraction fallback → stub Turn written, outcome=extraction_capped
 # ---------------------------------------------------------------------------
 

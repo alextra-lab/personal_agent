@@ -11,8 +11,10 @@ and tell the owner (ADR authoring is Opus-only).
 **Argument: none → resolve from the Stream Board.** Read the `## 🎛️ Stream Board` in
 `docs/plans/MASTER_PLAN.md` (between the `<!-- STREAM-BOARD:START -->` / `END` markers); take the
 `/adr` row's **NEXT** ticket (bold `FRE-…`) and honor its **Context** flag exactly as `/build` does —
-**CLEAR** (default): if your context holds a previous completed ADR, STOP and tell the owner to
-`/clear` then re-run; **KEEP**: proceed on the warm context. An explicit `FRE-…` id overrides the board.
+**CLEAR** (default): **first check if you are a blank/new session** (freshly started or just `/clear`ed,
+essentially nothing in context but this invocation); if yes, proceed; if no (you still carry a previous
+ADR's work), STOP and tell the owner to `/clear` then re-run `/adr`. **KEEP**: proceed on the warm
+context regardless. An explicit `FRE-…` id overrides the board.
 If the row is missing/ambiguous, STOP and ask master.
 
 ## Step 0 — Fresh-start (worktree reset)

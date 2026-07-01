@@ -3,7 +3,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, cast
+from typing import Any, AsyncGenerator, Literal, cast
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
@@ -25,6 +25,7 @@ from personal_agent.captains_log.es_indexer import build_es_indexer_from_handler
 from personal_agent.config.settings import get_settings
 from personal_agent.memory.protocol_adapter import MemoryServiceAdapter
 from personal_agent.memory.service import MemoryService
+from personal_agent.orchestrator.types import AttachmentRef
 from personal_agent.request_gateway import run_gateway_pipeline
 from personal_agent.security import sanitize_error_message
 from personal_agent.service.auth import (
@@ -134,17 +135,20 @@ async def _validate_attachments(
     *,
     user_id: UUID,
     trace_id: str,
-) -> list[dict[str, str]]:
+) -> list[AttachmentRef]:
     """Parse attachment JSON and return only rows owned by user_id with upload_pending=FALSE.
 
     Args:
-        attachments_json: JSON-encoded list of ``{artifact_id, content_type, title}``,
-            or ``None`` / empty string when the turn has no attachments.
+        attachments_json: JSON-encoded list of ``{artifact_id, content_type, title,
+            processing_target?}``, or ``None`` / empty string when the turn has no
+            attachments. ``processing_target`` (FRE-690 / ADR-0101 §8a) is optional
+            and threaded through unchanged when present and valid.
         user_id: The authenticated caller's UUID.
         trace_id: Request trace id for log correlation.
 
     Returns:
-        Validated attachment dicts (empty list if none pass).
+        Validated AttachmentRef list (empty if none pass), carrying r2_key for the
+        credentialed byte fetch (§3) and any per-attachment processing_target (§8a).
     """
     import json as _json  # noqa: PLC0415
 
@@ -161,54 +165,36 @@ async def _validate_attachments(
     ids = [att.get("artifact_id", "") for att in items if att.get("artifact_id")]
     if not ids:
         return []
+    targets_by_id: dict[str, Literal["cloud", "local"]] = {}
+    for att in items:
+        artifact_id = att.get("artifact_id")
+        target = att.get("processing_target")
+        if artifact_id and target in ("cloud", "local"):
+            targets_by_id[artifact_id] = cast(Literal["cloud", "local"], target)
 
     from sqlalchemy import text as _text  # noqa: PLC0415
 
-    valid: list[dict[str, str]] = []
+    valid: list[AttachmentRef] = []
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             _text(
-                "SELECT id, content_type, title FROM artifacts "
+                "SELECT id, content_type, title, r2_key FROM artifacts "
                 "WHERE id = ANY(:ids) AND user_id = :uid AND upload_pending = FALSE"
             ),
             {"ids": ids, "uid": str(user_id)},
         )
         for row in result.fetchall():
+            row_id = str(row.id)
             valid.append(
-                {
-                    "artifact_id": str(row.id),
-                    "content_type": row.content_type or "",
-                    "title": row.title or str(row.id),
-                }
+                AttachmentRef(
+                    artifact_id=row_id,
+                    content_type=row.content_type or "",
+                    title=row.title or row_id,
+                    r2_key=row.r2_key,
+                    processing_target=targets_by_id.get(row_id),
+                )
             )
     return valid
-
-
-def _augment_message_with_attachments(
-    message: str,
-    attachments: list[dict[str, str]],
-) -> str:
-    """Prepend attachment context to ``message`` for the orchestrator.
-
-    Does NOT mutate the message stored in DB or passed to ``run_gateway_pipeline``.
-    Called AFTER intent classification so gateway routing is unaffected.
-
-    Args:
-        message: Original user message text.
-        attachments: Validated attachment dicts from ``_validate_attachments``.
-
-    Returns:
-        Augmented message string, or ``message`` unchanged when ``attachments`` is empty.
-    """
-    if not attachments:
-        return message
-    lines = ["[Attachments — call artifact_read(artifact_id) to read content:]"]
-    for att in attachments:
-        lines.append(
-            f"  - artifact_id: {att['artifact_id']}, "
-            f"content_type: {att['content_type']}, filename: {att['title']}"
-        )
-    return "\n".join(lines) + "\n\n" + message
 
 
 async def _process_chat_stream_background(
@@ -238,8 +224,9 @@ async def _process_chat_stream_background(
         client_msg_id: Client-provided idempotency key (FRE-392); used to release
             the dedup entry when the task completes so retries work immediately.
         attachments_json: JSON-encoded list of completed upload dicts (FRE-369),
-            or ``None``. Injected into the orchestrator message AFTER gateway
-            classification so TaskType routing is unaffected.
+            or ``None``. Validated AFTER gateway classification (so TaskType
+            routing is unaffected) and passed to the orchestrator as a structured
+            carrier, separate from the message text (FRE-661 / ADR-0101 §2).
     """
     from personal_agent.config.profile import load_profile, set_current_profile
 
@@ -346,13 +333,14 @@ async def _process_chat_stream_background(
                 error=sanitize_error_message(e),
             )
 
-        # ── Attachment injection (FRE-369) ───────────────────────────────
+        # ── Attachment carrier (FRE-661 / ADR-0101 §2) ────────────────────
         # Validate ownership + completeness AFTER gateway classification, so that
-        # attachment context does NOT pollute TaskType routing.
+        # attachment metadata does NOT pollute TaskType routing. Passed to the
+        # orchestrator as a structured carrier, separate from `message`, which
+        # stays the clean original text (AC-5).
         validated_attachments = await _validate_attachments(
             attachments_json, user_id=user_id, trace_id=trace_id
         )
-        orchestrator_message = _augment_message_with_attachments(message, validated_attachments)
 
         # ── Orchestrator ─────────────────────────────────────────────────
         response_content = ""
@@ -375,7 +363,7 @@ async def _process_chat_stream_background(
 
             result = await orchestrator.handle_user_request(
                 session_id=session_id,
-                user_message=orchestrator_message,
+                user_message=message,
                 mode=None,
                 channel=None,
                 trace_id=trace_id,
@@ -385,6 +373,7 @@ async def _process_chat_stream_background(
                 user_email=user_email,
                 user_display_name=user_display_name,
                 authenticated=True,
+                attachments=validated_attachments,
             )
             response_content = result.get("reply", "No response generated")
 

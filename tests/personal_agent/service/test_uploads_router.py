@@ -452,27 +452,105 @@ async def test_expire_pending_uploads_deletes_old_rows(monkeypatch: pytest.Monke
 
 
 # ---------------------------------------------------------------------------
-# Tests — _augment_message_with_attachments helper
+# Tests — _validate_attachments (FRE-661 structured carrier)
 # ---------------------------------------------------------------------------
 
 
-def test_augment_message_prepends_attachment_context() -> None:
-    """_augment_message_with_attachments produces the expected prefix."""
-    from personal_agent.service.app import _augment_message_with_attachments
+@pytest.mark.asyncio
+async def test_validate_attachments_returns_attachment_ref_with_r2_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_validate_attachments returns AttachmentRef carrying r2_key (§3 credentialed fetch)."""
+    import personal_agent.service.app as app_mod
+    from personal_agent.orchestrator.types import AttachmentRef
 
-    attachments = [
-        {"artifact_id": "abc-123", "content_type": "image/png", "title": "photo.png"},
+    artifact_id = str(uuid4())
+    session = _StubSession()
+    session.enqueue(
+        SimpleNamespace(
+            id=UUID(artifact_id),
+            content_type="image/png",
+            title="photo.png",
+            r2_key="upload/user/GLOBAL/abc.png",
+        )
+    )
+    monkeypatch.setattr(app_mod, "AsyncSessionLocal", lambda: session)
+
+    result = await app_mod._validate_attachments(
+        f'[{{"artifact_id": "{artifact_id}"}}]', user_id=_USER_ID, trace_id="t1"
+    )
+
+    assert result == [
+        AttachmentRef(
+            artifact_id=artifact_id,
+            content_type="image/png",
+            title="photo.png",
+            r2_key="upload/user/GLOBAL/abc.png",
+            processing_target=None,
+        )
     ]
-    result = _augment_message_with_attachments("Hello!", attachments)
-    assert "abc-123" in result
-    assert "image/png" in result
-    assert "Hello!" in result
-    assert result.index("abc-123") < result.index("Hello!")
 
 
-def test_augment_message_no_attachments_returns_original() -> None:
-    """_augment_message_with_attachments with empty list returns message unchanged."""
-    from personal_agent.service.app import _augment_message_with_attachments
+@pytest.mark.asyncio
+async def test_validate_attachments_threads_processing_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_validate_attachments threads an inbound processing_target unchanged (AC-9 slice)."""
+    import personal_agent.service.app as app_mod
 
-    result = _augment_message_with_attachments("Unchanged", [])
-    assert result == "Unchanged"
+    artifact_id = str(uuid4())
+    session = _StubSession()
+    session.enqueue(
+        SimpleNamespace(
+            id=UUID(artifact_id),
+            content_type="image/png",
+            title="photo.png",
+            r2_key="upload/user/GLOBAL/abc.png",
+        )
+    )
+    monkeypatch.setattr(app_mod, "AsyncSessionLocal", lambda: session)
+
+    result = await app_mod._validate_attachments(
+        f'[{{"artifact_id": "{artifact_id}", "processing_target": "cloud"}}]',
+        user_id=_USER_ID,
+        trace_id="t1",
+    )
+
+    assert result[0].processing_target == "cloud"
+
+
+@pytest.mark.asyncio
+async def test_validate_attachments_drops_invalid_processing_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An out-of-domain processing_target value is dropped, not passed through."""
+    import personal_agent.service.app as app_mod
+
+    artifact_id = str(uuid4())
+    session = _StubSession()
+    session.enqueue(
+        SimpleNamespace(
+            id=UUID(artifact_id),
+            content_type="image/png",
+            title="photo.png",
+            r2_key="upload/user/GLOBAL/abc.png",
+        )
+    )
+    monkeypatch.setattr(app_mod, "AsyncSessionLocal", lambda: session)
+
+    result = await app_mod._validate_attachments(
+        f'[{{"artifact_id": "{artifact_id}", "processing_target": "bogus"}}]',
+        user_id=_USER_ID,
+        trace_id="t1",
+    )
+
+    assert result[0].processing_target is None
+
+
+@pytest.mark.asyncio
+async def test_validate_attachments_no_attachments_returns_empty_list() -> None:
+    """_validate_attachments with no JSON returns an empty list."""
+    from personal_agent.service.app import _validate_attachments
+
+    result = await _validate_attachments(None, user_id=_USER_ID, trace_id="t1")
+    assert result == []

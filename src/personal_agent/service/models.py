@@ -22,6 +22,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase
 
+from personal_agent.llm_client.message_content import MessageContent
+
 
 class Base(DeclarativeBase):
     """SQLAlchemy declarative base for all ORM models."""
@@ -127,7 +129,7 @@ class Message(BaseModel):
     """A single message in conversation."""
 
     role: str  # 'user', 'assistant', 'system', 'tool'
-    content: str
+    content: MessageContent
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     metadata: dict[str, Any] = Field(default_factory=dict)
 

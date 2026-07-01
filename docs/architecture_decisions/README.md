@@ -187,6 +187,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0102](ADR-0102-document-ingestion.md) | Document Ingestion (PDF) — tiered, capability-routed | Accepted |
 | [ADR-0103](ADR-0103-recall-no-clean-floor-structural-separation.md) | Recall is Retrieval — No Clean Similarity Floor; Separation is Structural | Accepted |
 | [ADR-0104](ADR-0104-multi-path-retrieval-rank-fusion.md) | Multi-Path Retrieval with Rank Fusion | Proposed |
+| [ADR-0105](ADR-0105-convergent-self-improvement-pipeline-and-system-graph.md) | Convergent Self-Improvement Pipeline & Isolated System Graph | Proposed |
 
 ### Supplementary
 

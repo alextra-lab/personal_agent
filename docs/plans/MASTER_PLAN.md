@@ -11,7 +11,7 @@ Master-maintained dispatch. `/build 1`, `/build 2`, and `/adr` resolve their NEX
 |--------|---------|-------------------|---------|--------------|
 | build · Stream 1 · **Opus** | `/build 1` | **FRE-639** [S] _(System gate; unparked — ADR-0105 kept it unchanged)_ | CLEAR | FRE-707 [O] (gated on FRE-705) |
 | build2 · Stream 2 · **Sonnet** | `/build 2` | 🔨 **FRE-665** _(building)_ [S] | CLEAR | FRE-709 [S] → FRE-666 [tier TBD — master verifies before dispatch] (deploy-gate) |
-| adr · **Opus** | `/adr` | **FRE-708** _(amend ADR-0105: owner refinements — semantic-dedup + generation-time read surface)_ [O] | KEEP | FRE-705 [O] → FRE-706 [O] |
+| adr · **Opus** | `/adr` | **FRE-705** [O] _(multi-path retrieval design)_ | CLEAR _(per adr handoff — unrelated to ADR-0105)_ | FRE-706 [O] |
 <!-- STREAM-BOARD:END -->
 
 **Context flag:** default **CLEAR** (fresh context per ticket). **KEEP** is set only when the NEXT ticket is a direct follow-on to what the stream just shipped (same files/substrate) — then run the command on the warm context, do **not** `/clear`. **Parked / owner-gated (not auto-dispatched):** FRE-713 (trigger-gated) · FRE-639 (held for the FRE-708 isolate-vs-gate decision) · FRE-711 (World→Claim — master confirms timing, needs FRE-712 first) · FRE-704 (ES field-drop — master brings the raise-cap-vs-prune approach to owner). WIP = 1 live ticket per stream.

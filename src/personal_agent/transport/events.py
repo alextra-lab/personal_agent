@@ -211,6 +211,7 @@ class ClassifiedErrorEvent:
         "rate_limit",
         "budget_denied",
         "tool_failure",
+        "attachment_unsupported",
         "generic",
     ]
     reason: str

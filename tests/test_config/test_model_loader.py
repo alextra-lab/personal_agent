@@ -142,6 +142,45 @@ models:
         with pytest.raises(ModelConfigError, match="validation failed"):
             load_model_config(config_file)
 
+    def test_supports_vision_defaults_false(self, tmp_path: Path) -> None:
+        """ModelDefinition.supports_vision defaults to False when omitted (ADR-0101 §5)."""
+        config_file = tmp_path / "models.yaml"
+        config_file.write_text(
+            """
+models:
+  router:
+    id: "test-router"
+    context_length: 8192
+    quantization: "8bit"
+    max_concurrency: 4
+    default_timeout: 5
+"""
+        )
+
+        config = load_model_config(config_file)
+
+        assert config.models["router"].supports_vision is False
+
+    def test_supports_vision_explicit_true(self, tmp_path: Path) -> None:
+        """ModelDefinition.supports_vision is set from config when declared true."""
+        config_file = tmp_path / "models.yaml"
+        config_file.write_text(
+            """
+models:
+  vision_model:
+    id: "test-vision"
+    context_length: 8192
+    quantization: "8bit"
+    max_concurrency: 4
+    default_timeout: 5
+    supports_vision: true
+"""
+        )
+
+        config = load_model_config(config_file)
+
+        assert config.models["vision_model"].supports_vision is True
+
     def test_load_uses_cache_for_same_path(self, tmp_path: Path) -> None:
         """Test repeated loads for same path only parse YAML once."""
         config_file = tmp_path / "models.yaml"
@@ -168,3 +207,14 @@ models:
         assert first == second
         assert cache_info.misses == 1
         assert cache_info.hits == 1
+
+
+class TestSupportsVisionDeployedConfig:
+    """ADR-0101 §5: the deployed vision-capable models declare supports_vision."""
+
+    def test_deployed_vision_capable_models_flagged(self) -> None:
+        """primary, sub_agent, claude_sonnet, claude_haiku all declare supports_vision=True."""
+        config = load_model_config(Path("config/models.yaml"))
+
+        for key in ("primary", "sub_agent", "claude_sonnet", "claude_haiku"):
+            assert config.models[key].supports_vision is True, f"{key} must support vision"

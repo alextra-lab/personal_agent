@@ -62,6 +62,7 @@ models:
     repetition_penalty: 1.0      # Qwen card default; via extra_body
     thinking_budget_tokens: 32768  # Qwen card "standard" max output
     supports_function_calling: true
+    supports_vision: true         # Qwen3.6-35B-A3B vision-capable on the deployed build (ADR-0101)
     tool_calling_strategy: "native"  # Qwen3.5/3.6 chat template supports tools natively
     provider_type: "local"
     endpoint: "http://localhost:8000/v1"
@@ -89,6 +90,7 @@ models:
     max_tokens: 2048             # Bounded output for summary-length sub-task results
     disable_thinking: true       # Hard disable via chat_template_kwargs (ADR-0023)
     supports_function_calling: true
+    supports_vision: true         # Qwen3.6-35B-A3B vision-capable on the deployed build (ADR-0101)
     tool_calling_strategy: "native"  # Qwen3.6 chat template supports tools natively
     provider_type: "local"
     endpoint: "http://localhost:8000/v1"
@@ -136,6 +138,7 @@ models:
     min_concurrency: 1
     max_concurrency: 10
     default_timeout: 180
+    supports_vision: true         # Claude Sonnet is vision-capable (ADR-0101)
 
   claude_haiku:
     # Anthropic Claude Haiku — fast, low-cost sub-agent model for cloud profile
@@ -148,6 +151,7 @@ models:
     min_concurrency: 1
     max_concurrency: 20
     default_timeout: 30
+    supports_vision: true         # Claude Haiku is vision-capable (ADR-0101)
 
   gpt-5.4-nano:
     # OpenAI GPT-5.4 Nano — entity extraction, structured output tasks

@@ -6,5 +6,8 @@ provider_type: local
 cost_limit_per_session: null  # No cost limit for local
 delegation:
   allow_cloud_escalation: false
-  escalation_provider: null
-  escalation_model: null
+  # escalation_model is used only by the explicit per-attachment "cloud"
+  # processing_target override (ADR-0101 §8a) — allow_cloud_escalation stays
+  # false, so no implicit/default escalation happens.
+  escalation_provider: anthropic
+  escalation_model: claude_sonnet

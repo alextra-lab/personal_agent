@@ -29,6 +29,7 @@ class ClassifiedError:
         "rate_limit",
         "budget_denied",
         "tool_failure",
+        "attachment_unsupported",
         "generic",
     ]
     reason: str
@@ -167,6 +168,16 @@ def classify_error(error: Exception, *, is_cloud: bool | None = None) -> Classif
             )
     except ImportError:
         pass
+
+    from personal_agent.exceptions import AttachmentUnsupportedError
+
+    if isinstance(error, AttachmentUnsupportedError):
+        return ClassifiedError(
+            category="attachment_unsupported",
+            reason=str(error),
+            next_step="Remove the attachment, or resubmit without the local/cloud override.",
+            actions=("stop",),
+        )
 
     # Generic fallback — delegate reason to sanitize_error_message.
     from personal_agent.security import sanitize_error_message

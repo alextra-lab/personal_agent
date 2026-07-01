@@ -70,6 +70,9 @@ class ModelDefinition(BaseModel):
         thinking_budget_tokens: Cap on the number of thinking tokens the model may generate.
             Passed as thinking_budget in extra_body. None means unlimited.
             Mutually exclusive with disable_thinking.
+        supports_vision: Whether this model/deployment accepts image content blocks
+            (ADR-0101 §5). A deployment property, not inferred — set explicitly per
+            model definition. Defaults to False.
     """
 
     id: str = Field(..., description="Model identifier")
@@ -156,6 +159,13 @@ class ModelDefinition(BaseModel):
         description=(
             "DEPRECATED — use tool_calling_strategy instead.  Kept for backward "
             "compatibility; ignored when tool_calling_strategy is set explicitly."
+        ),
+    )
+    supports_vision: bool = Field(
+        False,
+        description=(
+            "Whether this model/deployment accepts image content blocks (ADR-0101 §5). "
+            "A deployment property, not inferred — set explicitly per model definition."
         ),
     )
     tool_calling_strategy: ToolCallingStrategy | None = Field(

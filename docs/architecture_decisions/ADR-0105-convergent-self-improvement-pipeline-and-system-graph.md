@@ -26,7 +26,9 @@ The FRE-703 dashboard value-audit surfaced (did not cause) three structural prob
 
 **3. The signal is stored flat when it is inherently relational.** Proposals derive from stats, promote to tickets, tickets produce outcomes, and proposals/stats correlate with and influence one another. Those are multi-hop relationships. They live today only as flat ES documents (`agent-insights-*`, `agent-captains-reflections-*`), where correlation and influence cannot be expressed as traversals — only as aggregations that cannot answer "which stat patterns produce proposals that ship" or "which proposals cluster."
 
-**What needs to be decided.** How to (a) converge the two producers into one pipeline with a source discriminator without rebuilding the promotion path; (b) give the relational layer a graph home that is **physically isolated** from the user-memory knowledge graph; (c) make the funnel — including the ADR-0040 throttle — observable; and (d) close the loop so ticket outcomes reweight source proposals. Two design decisions were reserved for this ADR and settled with the owner (2026-07-01): the **store engine** for the isolated System graph, and its **relationship to ADR-0098's System class + FRE-639**.
+**4. Repetition is *semantic*, and dedup/suppression happen too late.** Measured on the live corpus (942 reflections with proposals): **832 distinct fingerprints of 942** (~88% textually distinct) yet **topically concentrated** (performance 43%, observability 23%, reliability 11%). So the pile of `~1,800 awaiting_approval` proposals is not literal-duplicate — it is **the same idea re-phrased**, which the text-exact `dedup.py` fingerprint lets through, and which nothing suppresses until *promotion* (if it ever reaches it). The producer has no awareness of its own history at the moment it generates, so it re-proposes ideas already decided (shipped or rejected). Dedup must be **semantic** and must act **at generation**, not only at promotion.
+
+**What needs to be decided.** How to (a) converge the two producers into one pipeline with a source discriminator without rebuilding the promotion path; (b) give the relational layer a graph home that is **physically isolated** from the user-memory knowledge graph; (c) make the funnel — including the ADR-0040 throttle — observable; (d) close the loop so ticket outcomes reweight *and actively suppress* source proposals; and (e) dedup semantically **at generation** by making the store a producer-side read surface — with the similarity signal's reliability **measured, not assumed**. Two design decisions were reserved for this ADR and settled with the owner (2026-07-01): the **store engine** for the isolated System graph, and its **relationship to ADR-0098's System class + FRE-639**. This revision (2026-07-01) folds in the generation-time read surface (D9), semantic-dedup-behind-a-measurement-gate (D10), and the active-suppression sharpening of the loop-close (D7).
 
 ---
 
@@ -89,8 +91,9 @@ A ticket outcome — `shipped` / `canceled-as-noise` / `owner-rejected` (via the
 - **Windowed, smoothed value** per key over a **trailing 90-day window** (verdicts age out; no all-time calcification): `v = Σweights / (n + 2)` — additive smoothing with prior `2` pulls cold-start keys toward `0` so one early verdict cannot swing a source.
 - **Promotion ranking:** the existing `seen_count` priority is *modulated*, not replaced — `priority × (1 + clamp(v, −0.5, +0.5))`. Positive-track keys rank up, negative-track down, bounded so one bad key cannot fully silence a source.
 - **Suppression:** if `v ≤ −0.4` over `n ≥ 5` in-window outcomes, the `(source, category)` is deprioritized to the bottom for a **30-day cooldown** — parallel to, not a replacement for, the ADR-0040 fingerprint suppression registry.
+- **Active suppression of already-*decided* kinds (not merely record).** **Definition — a kind is `decided` when it has any terminal outcome except `deferred`: `shipped ∪ owner-rejected ∪ canceled-as-noise`.** (`deferred` = "right idea, wrong time" per the ADR-0040 Defer label, and `awaiting` are explicitly **not** decided.) Recording an `Outcome` is necessary but not sufficient. A proposal whose semantic kind (D10 cluster; the interim key `(source, category)` — or `(source, category, facet)` where facets exist — until D10's probe resolves) is `decided` gets that status stamped, and D9's generation-time read consults it to **stop the re-proposal at the source**. The open loop persists precisely because a decided verdict never suppresses the next re-proposal — closing it means the loop *acts on* the outcome, not just stores it. (The measured `~1,800 awaiting_approval` pile is the symptom of record-without-act.)
 
-These constants are the starting point, not a fixed law; the acceptance test (AC-6) asserts the *mechanism* (an outcome changes `v` and the next run acts on it), so a build A/B can retune weights/window without reopening this ADR.
+These constants are the starting point, not a fixed law; the acceptance test (AC-6) asserts the *mechanism* (an outcome changes `v`, marks the kind decided, and the next run acts on both), so a build A/B can retune weights/window without reopening this ADR.
 
 ### D8 — Operational readiness: Postgres tuning & auto-scheduled maintenance
 
@@ -99,7 +102,38 @@ The `sysgraph` schema adopts Postgres, which today runs **stock PG17 defaults** 
 - **SSD-appropriate planner costs** (safe, RAM-neutral, correctness-improving on the current spinning-disk defaults): `random_page_cost≈1.1`, `effective_io_concurrency≈200`, `track_io_timing=on` (observability for `EXPLAIN (BUFFERS)`).
 - **RAM-aware buffers** — modest, host-shared: right-size `shared_buffers` and `effective_cache_size` to Postgres's *actual* share of the ~10 GiB host (not the 4 GiB planner default that assumes a dedicated box); a small `work_mem` bump for recursive-CTE sorts. Exact values set against the deployed memory envelope in the ticket, not guessed here.
 - **Auto-maintenance:** autovacuum is the baseline auto-maintenance; for the `sysgraph` tables confirm it runs (per-table thresholds if the write pattern warrants), plus a scheduled `VACUUM (ANALYZE)` and pgvector index maintenance (`REINDEX`/rebuild cadence) for the vector index if similar-proposal search is enabled.
-- **pgvector baseline (reuse the established one; do not introduce new/unbounded dimensionality):** proposal embeddings use **`vector(1024)`** — the deployed embedder's native dimension (Qwen3-Embedding-0.6B; matches the `embedding_dimensions` setting and the existing `artifacts` schema, `docker/postgres/migrations/0003_artifacts_schema.sql`), indexed **HNSW with `vector_cosine_ops`** (identical to `artifacts`). Target: top-k similarity **< 50 ms p95** over the (low-thousands) proposal corpus — trivially met at this scale, stated so a later regression is detectable. If similar-proposal search proves unnecessary (explicit `CORRELATES_WITH` edges suffice), the vector column is omitted rather than left unindexed.
+- **pgvector baseline (reuse the established one; do not introduce new/unbounded dimensionality):** proposal embeddings use **`vector(1024)`** — the deployed embedder's native dimension (Qwen3-Embedding-0.6B; matches the `embedding_dimensions` setting and the existing `artifacts` schema, `docker/postgres/migrations/0003_artifacts_schema.sql`), indexed **HNSW with `vector_cosine_ops`** (identical to `artifacts`). Target: top-k similarity **< 50 ms p95** over the (low-thousands) proposal corpus — trivially met at this scale, stated so a later regression is detectable. Whether the vector column is *used* for semantic dedup is gated on D10's separation probe; if the probe fails (or explicit `CORRELATES_WITH` edges suffice), the column is omitted rather than left unindexed.
+
+### D9 — `sysgraph` is also a generation-time READ surface (producer-side recall-before-emit)
+
+The System graph is not only a downstream store; the producers **read it before they emit**. Before a reflection or statistical producer records a proposal, it queries `sysgraph` — semantic similarity ("is there an equivalent existing proposal?") plus a status/outcome traversal ("what happened to it?") — and branches:
+
+- **similar exists AND decided** (shipped, owner-rejected, or canceled-as-noise — the `decided` set defined in D7) → **do not re-record**; at most annotate "already addressed by proposal *X*";
+- **similar exists AND still awaiting** → **reinforce** the existing proposal (increment `seen_count` / add a link) instead of creating a near-duplicate;
+- **nothing similar** → **generate new**.
+
+This moves dedup and self-awareness **upstream to generation**, where D7's promotion-time suppression is only a backstop. It stops repetition at the source (no wasted LLM generation, no near-duplicate pile — the measured `832/942` semantic-repeat problem is prevented, not swept up later) and makes the generator **aware of its own history** — the "engine that learns" goal. Both producers are **background** (reflection per FRE-710; the statistical engine on the consolidation event), so the extra read has **no user-facing latency cost**. Generation-time read is the **front line**; promotion-time suppression (D7) is the backstop — they compose, neither replaces the other.
+
+**"Similar" is resolved by D10** — the semantic match if the probe passes, else the explicit `(source, category, facet)` fallback key. **Interim behavior before D10's probe resolves:** D9 keys on `(source, category, facet)` where facets exist, else `(source, category)` with conservative matching — labeled explicitly as **non-semantic fallback**, so a build never silently ships "semantic" dedup on an unmeasured floor.
+
+**Fail-open, and observably so.** The read must **fail open**: if `sysgraph` is unreachable the producer degrades to "generate new" — a background job is never blocked by the store. But fail-open silently weakens dedup during an outage, so each fail-open degrade is **counted and reported** (a telemetry counter + a funnel/alert signal), so a duplicate spike during an outage is explainable and bounded rather than mysterious.
+
+### D10 — Semantic (not fingerprint) dedup — **measured before adopted** (the separation-probe gate)
+
+The existing `dedup.py` keys on a **text-exact fingerprint**, so the same idea in different words passes as new — the live corpus proves it: **832 distinct `proposed_change` fingerprints out of 942** (~88% textually distinct) yet **topically concentrated** (performance 43%, observability 23%, reliability 11%). The repetition is **semantic** (one idea, many phrasings), not literal-duplicate. Dedup must therefore cluster by **meaning** (D9's "is there an equivalent?"), not by fingerprint.
+
+**But semantic dedup is only as reliable as the similarity signal — the same clean-floor discipline ADR-0103 forced, applied to a new domain.** ADR-0103's *no-clean-floor* verdict is **domain-scoped** to dense, topically-overlapping personal memory (FRE-670 probe). The insights corpus is a *different distribution* — structured, templated (what/why/how/rationale), topically-distinct — so an embedder **may** yield non-overlapping good/bad cosine distributions (a thresholdable floor). It may equally fail: per-turn reflections (FRE-710) create genuine near-duplicates that could be denser-within-category than they are separable. **This is not assertable either way without measurement** (the FRE-489 lexical-masking lesson).
+
+**Decision:** treat this as a **build-phase measurement gate**, not an in-ADR assertion. Reuse the **FRE-670 / ADR-0103 separation probe** (which ADR-0103 defines as a regression instrument) on the **real proposal/insight corpus** before any vector-clustering code commits:
+
+- **If positive/negative cosines separate** → adopt semantic dedup on a **clean similarity floor** with a **light embedder and no reranker**;
+- **If they do not** → **fall back to explicit category + facet grouping** over the graph's explicit edges (a mechanism this domain supports natively, unlike recall) — no vector clustering. The **facet taxonomy** (the required facets per category, their extraction source, and how they are stored as explicit `sysgraph` attributes/edges) is a **build-ticket deliverable**, defined and stored before fallback dedup is enabled — it is not fixed in this ADR, but it is not optional either.
+
+**Retrieval-stack scoping (do NOT inherit the User-KG recall stack).** The System graph's primary value is **structural traversal over explicit edges** (deterministic, no embedder). Vectors serve exactly **one narrow job** — clustering semantically-similar proposals — and only if the probe passes. Therefore:
+
+- **No cross-encoder reranker.** It exists to reorder near-duplicates in dense personal memory where no floor separates them; an insight-clustering false-similar is a cosmetic grouping error, not a recall miss. FRE-697's reranker evaluation does **not** transfer here.
+- **Embedder only if needed, and on an always-on private CPU path.** System-KG work is **background**, not a hot user turn, and must **not depend on the laptop/Mac-GPU tunnel** (the isolation principle). If an embedder is needed, **reuse the existing prod 0.6B VPS embedder** (`embeddings:8503`, already the `vector(1024)` source) **or ride FRE-697's ONNX-on-VPS conclusion** — never a separate or laptop-dependent path.
+- **Exception to watch:** if a future consumer wants to *semantically retrieve past insights into agent context* (FRE-349 territory), that is recall-like and re-opens the embedder question — but FRE-708's core (correlation, observability, loop-closing, dedup) is **traversal-first**.
 
 ---
 
@@ -149,6 +183,23 @@ The `sysgraph` schema adopts Postgres, which today runs **stock PG17 defaults** 
 **Pros/Cons:** Conceptually tidy, but turns FRE-639 from a clean class-gate into a live-substrate **migration touching the soul subgraph** — higher blast radius, coupled release, no functional gain.
 **Why Rejected:** The two "System"s are different data (D3). Complementary isolation delivers the isolation win with none of the migration risk.
 
+### Option 6 (dedup): Keep fingerprint-only dedup + promotion-time suppression only
+**Description:** Leave `dedup.py`'s text-exact fingerprint as the dedup key and suppress only at promotion (D7).
+**Pros:**
+- No embedder, no read-before-emit, no measurement gate — simplest.
+**Cons:**
+- The measured `832/942` distinct fingerprints prove fingerprinting **already fails** on semantic repeats.
+- Promotion-time-only means the LLM still **generates** the near-duplicate (wasted cost) and it **piles up** (the `~1,800 awaiting` symptom) before anything suppresses it; the generator never learns.
+**Why Rejected:** It is the status quo that produced the pile. Fingerprint dedup demonstrably lets the actual (semantic) repetition through; suppressing only at promotion treats the symptom, not the source.
+
+### Option 7 (dedup): Adopt semantic (vector) dedup **without** measuring corpus separation
+**Description:** Assume the insights corpus has a clean similarity floor and ship vector clustering directly.
+**Pros:**
+- Faster to build; no probe step.
+**Cons:**
+- Assumes a floor exists — the exact mistake FRE-489 (lexical-masking) and ADR-0103 (no-clean-floor on *personal memory*) warn against. If the corpus does **not** separate, semantic dedup silently mis-clusters — collapsing distinct proposals or missing real duplicates.
+**Why Rejected:** Un-measured. ADR-0103's no-floor verdict is domain-scoped, so it neither licenses assuming a floor *nor* assuming none here — only a measurement resolves it. Hence the D10 separation-probe gate, with an explicit non-vector fallback (category + facet grouping).
+
 ---
 
 ## Consequences
@@ -161,6 +212,8 @@ The `sysgraph` schema adopts Postgres, which today runs **stock PG17 defaults** 
 - **Correlation/influence are first-class** graph traversals, isolated by engine from user recall — the ops graph cannot pollute the tutor corpus, by construction.
 - **Zero new RAM/service** on the binding-RAM host; linkage writes are transactional with promotion.
 - **Promoted tickets are evaluable** — verbatim substance carry-through makes auto-promoted tickets meet the same decision-ready bar as hand-written ones.
+- **Repetition stops at the source.** Generation-time read-before-emit (D9) + semantic dedup (D10) prevent the near-duplicate pile the fingerprint key let through — no wasted LLM generation, and the generator becomes aware of its own history ("the engine that learns").
+- **The vector decision is measured, not assumed** (D10 probe gate) — the System KG gets the *simple* retrieval recall could not (thresholdable floor + light embedder, no reranker) **only if the corpus earns it**, with an explicit non-vector fallback.
 - **A latent instance-wide Postgres tuning gap is closed** (SSD costs, RAM-aware buffers, IO observability, auto-maintenance).
 
 ### Negative Consequences
@@ -169,6 +222,8 @@ The `sysgraph` schema adopts Postgres, which today runs **stock PG17 defaults** 
 - **Recursive-CTE correlation queries are more verbose** than Cypher — tolerable at this volume, revisited only at the D2 flip trigger.
 - **Producer convergence touches a live pipeline** — the `source` discriminator and single-entrypoint refactor must not regress the currently-shipping human-closed loop (ADR-0040).
 - **Instance-wide Postgres parameter change** requires a Postgres restart (an always-ask-class deploy) and affects every Postgres consumer, not just `sysgraph`.
+- **A generation-time read is added to both producers** — a `sysgraph` query before each emit. Negligible latency (both producers are background), but it couples generation to store availability; the read must fail *open* (degrade to "generate new" if the store is unreachable) so a `sysgraph` outage never blocks reflection/insight generation.
+- **Semantic dedup depends on a measurement that may say "no."** If the probe fails, the vector-clustering approach is dropped for the category+facet fallback — a real possibility the build must plan for, not a guaranteed capability.
 
 ### Risks and Mitigations
 
@@ -180,6 +235,9 @@ The `sysgraph` schema adopts Postgres, which today runs **stock PG17 defaults** 
 | The realized-value signal is written but never read (a dead field) | Medium | AC-6 requires the *next promotion run* to demonstrably reflect the signal, not merely that it was stored |
 | System store leaks into user recall via a future shared code path | High | Three-layer isolation (D2): engine separation (Postgres vs Neo4j) + **role/grant policy** (recall role has no grant to `sysgraph`) + repository boundary; AC-2 proves it with a **permission-denied test**, not just a grep |
 | Verbatim carry-through bloats tickets / hits Linear limits | Low | Carry full substance in the description body (Markdown), not the title; truncate only display-title, never the substance fields |
+| Semantic dedup mis-clusters — collapses distinct proposals or misses real dupes | Medium | D10 separation-probe gate: adopt vector clustering **only if** the corpus separates; explicit category+facet fallback otherwise; AC-10 asserts the branch matches the measured result |
+| Generation-time read blocks producers if `sysgraph` is down | Medium | The read fails **open** — unreachable store degrades to "generate new," never blocks generation (a background job); D9 backstopped by D7 promotion-time suppression |
+| Embedder scope-creep — the System KG grows a User-KG-style reranker/multi-path stack | Medium | D10 scopes it out explicitly: no reranker; embedder only if the probe passes, on the always-on private VPS CPU path (`embeddings:8503` or FRE-697 ONNX), never laptop-GPU; AC covers "no reranker dependency" |
 
 ---
 
@@ -189,7 +247,10 @@ The `sysgraph` schema adopts Postgres, which today runs **stock PG17 defaults** 
 - `src/personal_agent/captains_log/models.py` — add `source` discriminator to the proposal model.
 - `src/personal_agent/insights/engine.py` — emit through the unified path; carry the linkage field onto `agent-insights-*`.
 - `src/personal_agent/captains_log/promotion.py` — verbatim substance carry-through (D5); bidirectional linkage (D4); emit the ADR-0040 throttle as a queryable funnel state (D6); write graph nodes/edges + outcome ingestion (D2/D7).
-- `src/personal_agent/sysgraph/` (new) — the isolated System-graph repository (the only code that opens the `sysgraph` schema); nodes/edges tables + recursive-CTE traversals + optional pgvector similarity.
+- `src/personal_agent/sysgraph/` (new) — the isolated System-graph repository (the only code that opens the `sysgraph` schema); nodes/edges tables + recursive-CTE traversals + the generation-time read (D9: similarity + status traversal, fail-open) + probe-gated pgvector similarity.
+- `src/personal_agent/insights/engine.py` and `src/personal_agent/captains_log/reflection.py` — insert the generation-time read-before-emit branch (D9) into both producers, before they record a proposal.
+- `src/personal_agent/captains_log/dedup.py` — semantic dedup (D10) replacing/augmenting the text-exact fingerprint key, **behind the separation-probe gate** (falls back to category+facet grouping if the probe fails).
+- separation-probe harness (reuse the FRE-670 / ADR-0103 instrument) run against the real `agent-captains-reflections-*` / `agent-insights-*` corpus — the D10 build-phase gate.
 - `docker/postgres/migrations/00XX_sysgraph_schema.sql` — new schema (no Alembic; per project policy).
 - `docker/postgres/` tuning + `docker-compose.yml` Postgres `command:`/config — D8 (separate ticket; build/master-applied).
 - Kibana funnel dashboard (built in UI, exported, Playwright-verified) + explicit ES field mappings (FRE-704).
@@ -198,8 +259,9 @@ The `sysgraph` schema adopts Postgres, which today runs **stock PG17 defaults** 
 - Coordinates with **FRE-639** (ADR-0098 T3 System gate) — complementary, not blocking (D3).
 - Coordinates with **FRE-704** (ES 300-field cap) for the explicit conversion-field mappings.
 - Relates to **FRE-586/FRE-598** (proposal acceptance-rate signal / KG-quality anomaly pipeline).
+- **D10 separation probe** reuses **FRE-670 / ADR-0103**; **embedder** rides **FRE-697** (ONNX-on-VPS) or the prod `embeddings:8503` — no reranker; **FRE-349** (semantic retrieval into context) is the watched exception; **FRE-710** (coarser reflection cadence) reduces the near-duplicate inflow the dedup must absorb.
 
-**Testing strategy:** unit tests for the `source` discriminator + verbatim carry-through (string-containment against source fields); integration test for the end-to-end loop (D7) against the test substrate; joinability probe for linkage; Playwright render-check for the funnel.
+**Testing strategy:** unit tests for the `source` discriminator + verbatim carry-through (string-containment against source fields); integration test for the end-to-end loop (D7) against the test substrate; joinability probe for linkage; Playwright render-check for the funnel; the D10 separation-probe eval on the real corpus as the gate before semantic-dedup code lands.
 
 ---
 
@@ -214,8 +276,11 @@ The `sysgraph` schema adopts Postgres, which today runs **stock PG17 defaults** 
 - **AC-5 — One observable funnel, faceted by source, cap-safe fields.** *Outcome:* a single dashboard shows produced→promoted→shipped/canceled from real docs, split by source, with the throttle state visible. · **Check:** the funnel renders (Playwright) with non-zero real counts and a `source` facet and a "throttled: budget" state; the conversion fields are **explicitly mapped** in the ES template (not dynamic), verified against the index mapping (FRE-704); the two prior dashboards are retired. · *Fails if* counts are placeholder/zero, the fields are dynamic (droppable), or the throttle is not a visible state.
 - **AC-6 — Loop closed end-to-end on ≥1 real path.** *Outcome:* a real ticket's outcome updates a signal on its source proposal that the next promotion run acts on. · **Check:** take one real ticket that reached an outcome; confirm an `Outcome` node linked to the source `Proposal` (not orphaned); confirm the source's `(source, category)` `v` changed by the expected outcome weight (query before/after); confirm the *next* promotion run's ranking/suppression reflects the changed `v` (the signal is read, not just written). · *Fails if* the `Outcome` node is orphaned, or the signal is written but no promotion code reads it (a dead field).
 - **AC-7 — Postgres operationally ready.** *Outcome:* the deployed Postgres runs the tuned, RAM-aware profile and auto-maintains the `sysgraph` tables. · **Check:** `SHOW` on the deployed instance returns the tuned values (SSD costs + right-sized buffers, not stock defaults); and auto-maintenance is *demonstrably running* on `sysgraph` — either `pg_stat_user_tables.last_autovacuum`/`last_analyze` becomes non-null after a **seeded write load above the configured autovacuum thresholds**, or the scheduled `VACUUM (ANALYZE)` job's last successful run for `sysgraph` is shown (the low steady-state volume can otherwise leave autovacuum legitimately idle). · *Fails if* the instance still reports `random_page_cost=4`/`effective_io_concurrency=1`, or neither auto-maintenance path can be shown to have run for `sysgraph`.
+- **AC-8 — Separation-probe gate ran and drove the branch (D10).** *Outcome:* the vector-vs-fallback decision is grounded in a recorded, replayable measurement on the real corpus, not an assumption. · **Check:** a **versioned probe artifact** (committed to the repo or stored in the build/eval output) records the corpus source + query, the time window, item counts, the labeled positive/negative pair counts, the cosine distributions, the chosen threshold/floor, the pass/fail decision, the probe code version, and the run id; and the shipped dedup branch is **mechanically checked against that artifact** (vector clustering only if the artifact says "separated," category+facet grouping otherwise). · *Fails if* semantic/vector dedup ships with **no** such artifact (a PR-description number does not count), or the artifact says "did not separate" yet vector clustering was adopted anyway (assuming a floor — Option 7).
+- **AC-9 — Generation-time read prevents the semantic re-proposal (D9 + D10).** *Outcome:* a producer facing an equivalent already-*decided* idea does not create a new near-duplicate; facing an equivalent *awaiting* idea, it reinforces rather than duplicates. · **Check:** replay a proposal whose equivalent is already `decided` (shipped, owner-rejected, or canceled-as-noise per D7) → **no new proposal row is created** (at most an annotation); replay one whose equivalent is still `awaiting` → the existing proposal's `seen_count`/links increment and **no near-duplicate row appears**. Compare against a control with the read disabled to show the duplicate *would* have been created. · *Fails if* the producer emits a fresh row for an already-decided or already-awaiting equivalent (read is a no-op), or if the read hard-fails *closed* and blocks generation when `sysgraph` is unreachable (must degrade to "generate new"). With `sysgraph` unreachable, the degrade must also be **observable** — the fail-open counter increments **and** the degrade surfaces on the funnel/alert signal (D9), not just an internal counter.
+- **AC-10 — No inherited recall stack (D10 scoping), proven by instrumentation.** *Outcome:* the System KG runs traversal-first with, at most, a light always-on private-CPU embedder and **no reranker**, and no dependency on the laptop/Mac-GPU tunnel. · **Check:** an integration test runs the D9/D10 correlation + dedup path with (a) the laptop/Mac-GPU tunnel **deliberately unreachable** and (b) a **test double that fails on any reranker endpoint/module invocation** — the run **succeeds**, using only `embeddings:8503` or the FRE-697 ONNX endpoint when embeddings are enabled; **and** a dependency/call-path scan shows no System-KG module imports or calls the User-KG reranker/recall stack. · *Fails if* the path invokes the reranker double (a reranker is on the path), or the run fails with the tunnel offline (a laptop-GPU dependency), or the scan finds a User-KG-recall import on the System-KG path.
 
-**Seam owner (assembled intent):** the **loop-closure integration (AC-6)** is the seam — it closes only when AC-1 (converged source), AC-2 (isolated store), AC-3 (linkage), and AC-4 (substance) all land: one real proposal must travel produced → promoted (with verbatim substance, linked both ways) → shipped/canceled → outcome → signal-updated → next-run-reweighted, through the converged pipeline and the isolated store, and show correctly on the funnel (AC-5). No single child ticket proves this; **master holds the decomposed ADR against AC-6** and it does **not** close because the last child merged — only because one real proposal demonstrably completes the whole arc. The observability seam (AC-5) and the operational seam (AC-7) are asserted independently.
+**Seam owner (assembled intent):** the **loop-closure integration (AC-6)** remains the primary seam — it closes only when AC-1 (converged source), AC-2 (isolated store), AC-3 (linkage), and AC-4 (substance) all land: one real proposal must travel produced → promoted (with verbatim substance, linked both ways) → shipped/canceled → outcome → **kind marked decided** → next-run-reweighted-and-suppressed, through the converged pipeline and the isolated store, and show correctly on the funnel (AC-5). The **generation-time dedup seam (AC-9)** closes only once AC-8's probe has run and the store is a live read surface — it is asserted with, and depends on, AC-8. No single child ticket proves either; **master holds the decomposed ADR against AC-6 and AC-9** and neither closes because the last child merged — only because one real proposal demonstrably completes each arc. The observability (AC-5), operational (AC-7), and scoping (AC-10) seams are asserted independently.
 
 ---
 
@@ -232,6 +297,11 @@ The `sysgraph` schema adopts Postgres, which today runs **stock PG17 defaults** 
 - FRE-704 — ES 300-field-cap dynamic-field drop (explicit conversion-field mappings)
 - FRE-703 — Dashboard value-audit (surfaced the problem)
 - FRE-586 / FRE-598 — proposal acceptance-rate signal / KG-quality anomaly pipeline
+- ADR-0103 — Recall: no clean floor, structural separation (the separation-probe instrument D10 reuses; its no-floor verdict is *domain-scoped* to personal memory, hence D10's measurement)
+- FRE-670 — semantic separation probe (the built tooling D10's gate runs on the insights corpus)
+- FRE-697 — ONNX cross-encoder on VPS CPU (the always-on private embedder path the System KG rides if vectors are needed; no reranker)
+- FRE-710 — coarser reflection cadence (reduces the per-turn near-duplicate inflow the dedup absorbs)
+- FRE-349 — semantic retrieval of insights into agent context (the watched exception that would re-open the embedder question)
 - Codex independent store review, 2026-07-01 (converged on Postgres + the Kuzu flip trigger)
 - External design-input (Gemini), 2026-07-01 — guardrails folded into D2 (role/grant isolation + ≤50k-node validity envelope) and D8 (pgvector 1024/HNSW baseline); confirmed the workload is shallow-path (depth 2–3 + similarity), not heavy multi-hop analytics
 - `docker/postgres/migrations/0003_artifacts_schema.sql` — the existing `vector(1024)` + HNSW `vector_cosine_ops` precedent the pgvector baseline reuses
@@ -243,6 +313,10 @@ The `sysgraph` schema adopts Postgres, which today runs **stock PG17 defaults** 
 ### 2026-07-01 - Proposed
 **Changed By:** Project owner (adr session, Opus)
 **Reason:** Authored from FRE-708 (Approved). Two reserved design decisions settled with the owner: store engine = Postgres dedicated schema (isolated by engine; independent Codex second opinion concurred), and scope = complementary to ADR-0098's System class (no relocation; FRE-639 unchanged). Awaiting Codex review + owner acceptance.
+
+### 2026-07-01 - Revised (still Proposed) — generation-time dedup + semantic-behind-a-measurement-gate
+**Changed By:** Project owner (adr session, Opus)
+**Reason:** Folded in the owner's FRE-708 comments: **D9** (`sysgraph` is a generation-time read surface — producers read-before-emit and branch decided/awaiting/novel, front-line dedup with D7 as backstop); **D10** (semantic dedup, not fingerprint — grounded in the measured 832/942 semantic-repeat; adopted **only behind** the FRE-670/ADR-0103 separation-probe gate on the real corpus, with a category+facet fallback; no reranker; embedder only on the always-on private VPS CPU path, never laptop-GPU); and **D7 sharpened** to active suppression of already-*decided* kinds, not merely recording the outcome. New alternatives (Options 6–7), risks, and criteria AC-8/9/10 added; AC-9 is a second assembled seam (depends on AC-8). Awaiting Codex review + owner acceptance.
 
 ---
 

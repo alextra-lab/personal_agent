@@ -87,6 +87,10 @@ Condensed recipe (drive `http://localhost:5601` with the Playwright MCP, **local
 4. **Verified against REAL recent data** — the decisive gate. Seeded/empty data lets a *misleading* chart
    pass gates 1-3; only real data exposes it (FRE-593 v1: "100% memory" vs the true 36%). Pull the raw docs,
    replicate the viz's aggregation in a query, and confirm the chart's story matches the numbers.
+   - **Cache-bust the render-check.** The dashboard SPA caches saved objects — a stale panel can render the
+     OLD version and give a false verdict (FRE-593 v2 first showed a cached v1). Confirm the *live saved
+     object* is the new one (query the saved-objects API + check `updated_at`), then force a fresh load
+     (navigate away first, add a cache-bust query param, and confirm the page title/structure changed).
 
 A chart that leads a human to the wrong answer is worse than no chart. If any gate fails → Iterate.
 

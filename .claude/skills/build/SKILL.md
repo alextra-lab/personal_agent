@@ -5,7 +5,13 @@ description: Use in the build session to ship a Linear FRE ticket from Approved 
 
 # Build a Linear Ticket (build session)
 
-Read `.claude/skills/lifecycle-rules.md` first. Argument: a Linear issue ID (e.g. `FRE-471`), or omitted (pick the top Approved ticket from MASTER_PLAN).
+Read `.claude/skills/lifecycle-rules.md` first. Argument: **a stream selector** (`1` or `2`), or an explicit Linear issue ID (e.g. `FRE-471`).
+
+**Stream selector (`1`/`2`) → resolve from the Stream Board.** Read the `## 🎛️ Stream Board` in `docs/plans/MASTER_PLAN.md` (between the `<!-- STREAM-BOARD:START -->` / `END` markers). Find the `/build <N>` row; the **NEXT** cell's bold `FRE-…` is the ticket to build. Honor that row's **Context** flag:
+- **CLEAR** (the default): this ticket wants a fresh slate. If your context still holds a *previous completed ticket*, STOP and tell the owner: "FRE-… is flagged CLEAR — run `/clear`, then `/build <N>` again." A stale prior-ticket context pollutes the plan. (If you were just `/clear`ed, proceed.)
+- **KEEP**: the NEXT ticket is a direct follow-on (same files/substrate) — proceed on the current warm context; do not ask for a `/clear`.
+
+An explicit `FRE-…` id skips the board and builds that ticket (treat Context as CLEAR unless the owner says otherwise). If the board row is missing/ambiguous, STOP and ask master.
 
 ## Step 0 — Fresh-start (worktree reset + retire the merged branch)
 1. `git fetch --prune origin`

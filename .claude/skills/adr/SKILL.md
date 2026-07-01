@@ -8,6 +8,13 @@ description: Use in the adr session (Opus) to produce a complete ADR — discuss
 Read `.claude/skills/lifecycle-rules.md` first. Confirm the session model is Opus; if not, STOP
 and tell the owner (ADR authoring is Opus-only).
 
+**Argument: none → resolve from the Stream Board.** Read the `## 🎛️ Stream Board` in
+`docs/plans/MASTER_PLAN.md` (between the `<!-- STREAM-BOARD:START -->` / `END` markers); take the
+`/adr` row's **NEXT** ticket (bold `FRE-…`) and honor its **Context** flag exactly as `/build` does —
+**CLEAR** (default): if your context holds a previous completed ADR, STOP and tell the owner to
+`/clear` then re-run; **KEEP**: proceed on the warm context. An explicit `FRE-…` id overrides the board.
+If the row is missing/ambiguous, STOP and ask master.
+
 ## Step 0 — Fresh-start (worktree reset)
 1. `git fetch origin`
 2. Safety gate — BOTH must hold, else STOP and surface:

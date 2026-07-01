@@ -283,3 +283,71 @@ class TestFallbackShape:
         assert result["stances"] == []
         assert result["claims"] == []
         assert result["entities"] == []
+
+
+@pytest.mark.asyncio
+class TestFacetAndUpdateKind:
+    """FRE-712: claims carry a normalized ``facet`` slot key + an ``update_kind`` signal."""
+
+    async def test_claim_facet_defaults_to_empty_when_absent(self) -> None:
+        """A model that omits facet gets ``facet == ""`` (falls back to embedding matching)."""
+        result = await _run_extractor(_CARBUY_MODEL_JSON, user_message=_CARBUY_USER_MSG)
+        assert result["claims"]  # fixture emits at least one claim
+        for claim in result["claims"]:
+            assert claim["facet"] == ""
+
+    async def test_claim_update_kind_defaults_to_new_when_absent(self) -> None:
+        result = await _run_extractor(_CARBUY_MODEL_JSON, user_message=_CARBUY_USER_MSG)
+        for claim in result["claims"]:
+            assert claim["update_kind"] == "new"
+
+    async def test_model_emitted_facet_is_normalized_and_kept(self) -> None:
+        model_json: dict[str, Any] = {
+            "summary": "s",
+            "entities": [],
+            "relationships": [],
+            "stances": [],
+            "claims": [
+                {
+                    "subject": "owner",
+                    "content": "The user's lease ends in June.",
+                    "facet": "Lease End Date",
+                    "update_kind": "correction",
+                }
+            ],
+        }
+        result = await _run_extractor(model_json, user_message="my lease actually ends in June")
+        claim = result["claims"][0]
+        assert claim["facet"] == "lease_end_date"  # normalized to lower snake
+        assert claim["update_kind"] == "correction"
+
+    async def test_off_vocabulary_update_kind_normalizes_to_new(self) -> None:
+        model_json: dict[str, Any] = {
+            "summary": "s",
+            "entities": [],
+            "relationships": [],
+            "stances": [],
+            "claims": [
+                {
+                    "subject": "owner",
+                    "content": "x",
+                    "facet": "employer",
+                    "update_kind": "corrected",
+                }
+            ],
+        }
+        result = await _run_extractor(model_json, user_message="msg")
+        assert result["claims"][0]["update_kind"] == "new"
+
+    async def test_evolution_update_kind_preserved(self) -> None:
+        model_json: dict[str, Any] = {
+            "summary": "s",
+            "entities": [],
+            "relationships": [],
+            "stances": [],
+            "claims": [
+                {"subject": "owner", "content": "x", "facet": "city", "update_kind": "evolution"}
+            ],
+        }
+        result = await _run_extractor(model_json, user_message="msg")
+        assert result["claims"][0]["update_kind"] == "evolution"

@@ -85,6 +85,14 @@ CLAIMS — first-person SITUATIONAL FACTS about the user's own life/relationship
   Each claim object:
     subject — always the literal string "owner"
     content — the fact as ONE self-contained declarative sentence
+    facet   — a SHORT stable slot key naming WHAT the fact is about, as lower_snake_case
+              (e.g. "lease_end_date", "employer", "current_city", "car_shopping_status").
+              Two claims about the SAME underlying thing must share the SAME facet so a
+              later value replaces the earlier one. Use "" if you cannot name a clear slot.
+    update_kind — one of "new" | "correction" | "evolution":
+              "correction" when the user is FIXING an earlier mistake ("actually…", "I was
+              wrong", "not X, it's Y"); "evolution" when the fact CHANGED ("now…", "as of…",
+              "we moved to…", "extended to…"); "new" otherwise (the default).
     description — optional one sentence of context
 
 Do NOT put any provenance, timestamp, id, or record-date on stances or claims — the system
@@ -187,6 +195,8 @@ Return ONLY valid JSON (no markdown fences, no explanation):
     {{
       "subject": "owner",
       "content": "One self-contained declarative sentence about the user's situation",
+      "facet": "lower_snake_case slot key, or empty string",
+      "update_kind": "new|correction|evolution",
       "description": "Optional one sentence of context"
     }}
   ]
@@ -235,6 +245,40 @@ def _supplement_person_entities_from_user_message(
 
 
 _VALID_ENTITY_CLASSES = frozenset({"World", "Personal", "System"})
+
+# FRE-712: the extractor's contradiction signal per claim; off-vocabulary → "new".
+_VALID_UPDATE_KINDS = frozenset({"new", "correction", "evolution"})
+_FACET_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _normalize_facet(value: Any) -> str:
+    """Normalize a model-emitted facet to a stable lower-snake slot key (FRE-712).
+
+    Lowercasing + snake-casing damps trivial cross-turn drift ("Lease End Date" and
+    "lease_end_date" collapse to one slot). Returns "" when absent/empty, which the
+    matcher treats as neutral (falls back to embedding similarity).
+
+    Args:
+        value: The raw ``facet`` field from the model (may be missing/None).
+
+    Returns:
+        A lower-snake slot key, or "" when there is nothing usable.
+    """
+    text = str(value or "").strip().lower()
+    return _FACET_NON_ALNUM_RE.sub("_", text).strip("_")
+
+
+def _normalize_update_kind(value: Any) -> str:
+    """Return a valid update_kind, defaulting off-vocabulary values to "new" (FRE-712).
+
+    Args:
+        value: The raw ``update_kind`` field from the model.
+
+    Returns:
+        One of "new"/"correction"/"evolution".
+    """
+    candidate = str(value or "").strip().lower()
+    return candidate if candidate in _VALID_UPDATE_KINDS else "new"
 
 
 def _build_provenance(
@@ -357,6 +401,11 @@ def _finalize_extraction(
         claim["subject"] = "owner"
         claim["class"] = "Personal"
         claim.setdefault("description", "")
+        # FRE-712: normalized slot key + validated contradiction signal (Python owns
+        # defaulting, like class) so supersession keys on a stable facet and labels
+        # correction-vs-evolution from an explicit signal rather than a heuristic.
+        claim["facet"] = _normalize_facet(claim.get("facet"))
+        claim["update_kind"] = _normalize_update_kind(claim.get("update_kind"))
         claim["provenance"] = dict(provenance)
     result["claims"] = claims
 

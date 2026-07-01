@@ -100,7 +100,13 @@ async def test_assert_stance_emits_owner_sentinel_and_native_edge() -> None:
 @pytest.mark.asyncio
 async def test_assert_claim_fresh_creates_current_claim() -> None:
     service, captured = _service_capturing(current_rows=[])  # no current claims
-    claim = Claim(content="The user's lease ends in March.", confidence=0.8, observed_at=_NOW)
+    claim = Claim(
+        content="The user's lease ends in March.",
+        confidence=0.8,
+        observed_at=_NOW,
+        facet="lease_end_date",
+        update_kind="correction",
+    )
 
     with patch(
         "personal_agent.memory.service.generate_embedding",
@@ -113,12 +119,16 @@ async def test_assert_claim_fresh_creates_current_claim() -> None:
     fetch_cypher, _ = captured[0]
     write_cypher, write_params = captured[1]
     assert "HAS_FACT" in fetch_cypher and "cl.valid_to IS NULL" in fetch_cypher
+    assert "cl.facet AS facet" in fetch_cypher  # FRE-712: facet fetched for matching
     assert "CREATE (o)-[:HAS_FACT]->(cl:Claim" in write_cypher
     # Fresh claim is current: both temporal bounds null, nothing superseded.
     assert write_params["new_valid_to"] is None
     assert write_params["new_invalid_at"] is None
     assert write_params["supersede_ids"] == []
     assert write_params["valid_from"] == _NOW.isoformat()
+    # FRE-712: facet + update_kind stored on the new Claim.
+    assert write_params["facet"] == "lease_end_date"
+    assert write_params["update_kind"] == "correction"
 
 
 @pytest.mark.asyncio

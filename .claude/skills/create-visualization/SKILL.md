@@ -20,11 +20,27 @@ handoff; master scrutinizes independently at the gate (that is master's nature, 
 which is *optional at import but required at render* — hand-authored objects omit it, persist fine, and
 never draw. Let Kibana author the object via its UI; your job is to drive that UI reliably and extract a
 stable artifact. Never use our own committed objects as a reference for "correct" — they may be the broken
-artifact. Use the Elastic documentation.
+artifact.
 
-## Step 0 — Inspect the raw data first (non-negotiable)
+## Documentation-first (unskippable)
 
-Before drawing anything, read the actual event/docs you will visualize:
+For **anything** Kibana / Lens / Elastic-specific — which `visualizationType` a chart needs, chart-type
+semantics, aggregation behavior (Sum vs Median vs cumulative), controls & filters, saved-object
+export/import — read the **official Elastic documentation FIRST**, before building, asserting, or
+reverse-engineering. Do not answer from memory; do not infer the "right" shape from our own objects.
+Match the docs to the **running Kibana version (currently 8.19)** — behavior and schema differ by version.
+- Lens: https://www.elastic.co/docs/explore-analyze/visualize/lens
+- Dashboards & controls: https://www.elastic.co/docs/explore-analyze/dashboards
+- Saved objects (export/import): https://www.elastic.co/guide/en/kibana/8.19/managing-saved-objects.html
+
+This is the exact failure that created FRE-702: two Lens dashboards shipped broken because nobody checked
+the docs — the fix was one documented attribute (`visualizationType`). When in doubt, go to the docs; do
+not make the reviewer push you there.
+
+## Step 0 — Inspect the raw data (and confirm the viz mechanics in the docs) first (non-negotiable)
+
+Before drawing anything, read the actual event/docs you will visualize (and confirm any unfamiliar Lens
+mechanic against the documentation above):
 - What fields exist, and what do they *mean* (per-turn? cumulative? a subset of a larger whole?).
 - What **constraints / denominators** are emitted that make the viz digestible — ceilings, caps, totals
   (e.g. `context_budget_applied` carries `max_tokens`=120000, `message_count`, `trimmed`/`overflow_action`).

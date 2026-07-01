@@ -6,18 +6,22 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from personal_agent.config import settings
+from personal_agent.config.profile import DelegationConfig, ExecutionProfile, set_current_profile
+from personal_agent.exceptions import AttachmentUnsupportedError
 from personal_agent.governance.models import Mode
 from personal_agent.llm_client import ModelRole
+from personal_agent.llm_client.models import ModelDefinition
 from personal_agent.orchestrator import Channel, Orchestrator
 from personal_agent.orchestrator.executor import (
     _determine_initial_model_role,
+    _resolve_vision_routing_key,
 )
 from personal_agent.orchestrator.routing import (
     heuristic_routing,
     is_memory_recall_query,
     resolve_role,
 )
-from personal_agent.orchestrator.types import ExecutionContext
+from personal_agent.orchestrator.types import AttachmentRef, ExecutionContext
 from tests.test_orchestrator.conftest import configure_mock_llm_client_model_configs
 
 
@@ -172,3 +176,251 @@ class TestRoutingFlow:
 
         assert mock_client.respond.call_count == 1
         assert mock_client.respond.call_args.kwargs["role"] == ModelRole.PRIMARY
+
+
+class TestVisionRouting:
+    """AC-4 (capability assert + escalate + fail-closed) and AC-9 (processing_target
+    override, "local" wins on conflict) — ADR-0101 §5, §8a.
+    """
+
+    def _make_attachment(self, **overrides: object) -> AttachmentRef:
+        defaults: dict[str, object] = {
+            "artifact_id": "abc-123",
+            "content_type": "image/png",
+            "title": "photo.png",
+            "r2_key": "upload/user/GLOBAL/abc.png",
+        }
+        defaults.update(overrides)
+        return AttachmentRef(**defaults)  # type: ignore[arg-type]
+
+    def _make_ctx(self, attachments: tuple[AttachmentRef, ...]) -> ExecutionContext:
+        return ExecutionContext(
+            session_id="s1",
+            trace_id="t1",
+            user_message="hello",
+            mode=Mode.NORMAL,
+            channel=Channel.CHAT,
+            attachments=attachments,
+        )
+
+    def _model_def(self, *, supports_vision: bool, provider_type: str = "local") -> ModelDefinition:
+        return ModelDefinition(
+            id="test-model",
+            context_length=8192,
+            max_concurrency=1,
+            default_timeout=30,
+            provider_type=provider_type,
+            supports_vision=supports_vision,
+        )
+
+    def _patch_models(self, models: dict[str, ModelDefinition]) -> Any:
+        mock_config = MagicMock()
+        mock_config.models = models
+        return patch(
+            "personal_agent.config.model_loader.load_model_config", return_value=mock_config
+        )
+
+    def test_no_image_attachment_is_noop(self) -> None:
+        """No raster image attachment — returns resolve_model_key(role_name) unchanged."""
+        ctx = self._make_ctx(())
+        assert _resolve_vision_routing_key(ctx, "primary") == "primary"
+
+    def test_non_raster_attachment_is_noop(self) -> None:
+        """A PDF attachment (ADR-0102 territory) never triggers vision routing."""
+        ctx = self._make_ctx((self._make_attachment(content_type="application/pdf"),))
+        assert _resolve_vision_routing_key(ctx, "primary") == "primary"
+
+    def test_ac4_capable_primary_no_override_proceeds(self) -> None:
+        """Real deployed config: primary already supports vision — no escalation needed."""
+        ctx = self._make_ctx((self._make_attachment(),))
+        assert _resolve_vision_routing_key(ctx, "primary") == "primary"
+
+    def test_ac4_incapable_primary_escalation_permitted_escalates(self) -> None:
+        """Non-vision primary + escalation-permitted profile → escalates to the capable model."""
+        ctx = self._make_ctx((self._make_attachment(),))
+        models = {
+            "primary": self._model_def(supports_vision=False, provider_type="local"),
+            "claude_sonnet": self._model_def(supports_vision=True, provider_type="cloud"),
+        }
+        profile = ExecutionProfile(
+            name="cloud",
+            primary_model="primary",
+            sub_agent_model="sub_agent",
+            provider_type="cloud",
+            delegation=DelegationConfig(
+                allow_cloud_escalation=True,
+                escalation_provider="anthropic",
+                escalation_model="claude_sonnet",
+            ),
+        )
+        token = set_current_profile(profile)
+        try:
+            with self._patch_models(models):
+                assert _resolve_vision_routing_key(ctx, "primary") == "claude_sonnet"
+        finally:
+            from personal_agent.config.profile import _current_profile
+
+            _current_profile.reset(token)
+
+    def test_ac4_incapable_primary_escalation_forbidden_raises(self) -> None:
+        """Non-vision primary + no escalation permitted → fails closed, never silent."""
+        ctx = self._make_ctx((self._make_attachment(),))
+        models = {"primary": self._model_def(supports_vision=False, provider_type="local")}
+        profile = ExecutionProfile(
+            name="local",
+            primary_model="primary",
+            sub_agent_model="sub_agent",
+            provider_type="local",
+            delegation=DelegationConfig(allow_cloud_escalation=False),
+        )
+        token = set_current_profile(profile)
+        try:
+            with self._patch_models(models):
+                with pytest.raises(AttachmentUnsupportedError):
+                    _resolve_vision_routing_key(ctx, "primary")
+        finally:
+            from personal_agent.config.profile import _current_profile
+
+            _current_profile.reset(token)
+
+    def test_ac9_local_override_never_escalates_even_under_cloud_profile(self) -> None:
+        """ "local" override stays pinned to the raw role's own local deployment — never
+        resolves via the active (cloud) profile's redirect, and fails closed rather than
+        silently escalating when that local model isn't vision-capable.
+        """
+        ctx = self._make_ctx((self._make_attachment(processing_target="local"),))
+        models = {
+            "primary": self._model_def(supports_vision=False, provider_type="local"),
+            "claude_sonnet": self._model_def(supports_vision=True, provider_type="cloud"),
+        }
+        profile = ExecutionProfile(
+            name="cloud",
+            primary_model="claude_sonnet",  # profile redirects "primary" -> claude_sonnet
+            sub_agent_model="claude_haiku",
+            provider_type="cloud",
+            delegation=DelegationConfig(
+                allow_cloud_escalation=True,
+                escalation_provider="anthropic",
+                escalation_model="claude_sonnet",
+            ),
+        )
+        token = set_current_profile(profile)
+        try:
+            with self._patch_models(models):
+                with pytest.raises(AttachmentUnsupportedError):
+                    _resolve_vision_routing_key(ctx, "primary")
+        finally:
+            from personal_agent.config.profile import _current_profile
+
+            _current_profile.reset(token)
+
+    def test_ac9_local_override_succeeds_when_local_model_capable(self) -> None:
+        """ "local" override succeeds on the raw local model when it is vision-capable,
+        even under an active cloud profile.
+        """
+        ctx = self._make_ctx((self._make_attachment(processing_target="local"),))
+        models = {
+            "primary": self._model_def(supports_vision=True, provider_type="local"),
+            "claude_sonnet": self._model_def(supports_vision=True, provider_type="cloud"),
+        }
+        profile = ExecutionProfile(
+            name="cloud",
+            primary_model="claude_sonnet",
+            sub_agent_model="claude_haiku",
+            provider_type="cloud",
+        )
+        token = set_current_profile(profile)
+        try:
+            with self._patch_models(models):
+                assert _resolve_vision_routing_key(ctx, "primary") == "primary"
+        finally:
+            from personal_agent.config.profile import _current_profile
+
+            _current_profile.reset(token)
+
+    def test_ac9_cloud_override_forces_cloud_even_on_local_profile(self) -> None:
+        """ "cloud" override forces the cloud vision path from a local-profile conversation,
+        even though that profile's allow_cloud_escalation is False.
+        """
+        ctx = self._make_ctx((self._make_attachment(processing_target="cloud"),))
+        models = {
+            "primary": self._model_def(supports_vision=True, provider_type="local"),
+            "claude_sonnet": self._model_def(supports_vision=True, provider_type="cloud"),
+        }
+        profile = ExecutionProfile(
+            name="local",
+            primary_model="primary",
+            sub_agent_model="sub_agent",
+            provider_type="local",
+            delegation=DelegationConfig(
+                allow_cloud_escalation=False,
+                escalation_provider="anthropic",
+                escalation_model="claude_sonnet",
+            ),
+        )
+        token = set_current_profile(profile)
+        try:
+            with self._patch_models(models):
+                assert _resolve_vision_routing_key(ctx, "primary") == "claude_sonnet"
+        finally:
+            from personal_agent.config.profile import _current_profile
+
+            _current_profile.reset(token)
+
+    def test_ac9_cloud_override_fails_closed_when_no_escalation_model_configured(self) -> None:
+        """ "cloud" override with no escalation_model configured fails closed."""
+        ctx = self._make_ctx((self._make_attachment(processing_target="cloud"),))
+        models = {"primary": self._model_def(supports_vision=True, provider_type="local")}
+        profile = ExecutionProfile(
+            name="local",
+            primary_model="primary",
+            sub_agent_model="sub_agent",
+            provider_type="local",
+            delegation=DelegationConfig(allow_cloud_escalation=False),
+        )
+        token = set_current_profile(profile)
+        try:
+            with self._patch_models(models):
+                with pytest.raises(AttachmentUnsupportedError):
+                    _resolve_vision_routing_key(ctx, "primary")
+        finally:
+            from personal_agent.config.profile import _current_profile
+
+            _current_profile.reset(token)
+
+    def test_conflicting_overrides_local_wins(self) -> None:
+        """One attachment "local", another "cloud" in the same turn — "local" wins (never
+        escalates) even though a vision-capable cloud escalation model IS configured.
+        """
+        ctx = self._make_ctx(
+            (
+                self._make_attachment(artifact_id="a1", processing_target="local"),
+                self._make_attachment(artifact_id="a2", processing_target="cloud"),
+            )
+        )
+        models = {
+            "primary": self._model_def(supports_vision=False, provider_type="local"),
+            "claude_sonnet": self._model_def(supports_vision=True, provider_type="cloud"),
+        }
+        profile = ExecutionProfile(
+            name="local",
+            primary_model="primary",
+            sub_agent_model="sub_agent",
+            provider_type="local",
+            delegation=DelegationConfig(
+                allow_cloud_escalation=False,
+                escalation_provider="anthropic",
+                escalation_model="claude_sonnet",
+            ),
+        )
+        token = set_current_profile(profile)
+        try:
+            with self._patch_models(models):
+                # local wins -> primary isn't vision-capable in this mock -> fail closed,
+                # NOT silently escalated to claude_sonnet despite it being available.
+                with pytest.raises(AttachmentUnsupportedError):
+                    _resolve_vision_routing_key(ctx, "primary")
+        finally:
+            from personal_agent.config.profile import _current_profile
+
+            _current_profile.reset(token)

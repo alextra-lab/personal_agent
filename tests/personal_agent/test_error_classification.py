@@ -149,6 +149,31 @@ class TestClassifyBudgetDenied:
         assert "stop" in classify_error(_budget_denied()).actions
 
 
+class TestClassifyAttachmentUnsupported:
+    """ADR-0101 §5/§8a: AttachmentUnsupportedError surfaces as a distinct,
+    user-visible failure category — never a generic fallback.
+    """
+
+    def test_category(self) -> None:
+        from personal_agent.exceptions import AttachmentUnsupportedError
+
+        assert (
+            classify_error(AttachmentUnsupportedError("no vision-capable model")).category
+            == "attachment_unsupported"
+        )
+
+    def test_reason_echoes_the_raised_message(self) -> None:
+        from personal_agent.exceptions import AttachmentUnsupportedError
+
+        result = classify_error(AttachmentUnsupportedError("this image cannot be processed"))
+        assert result.reason == "this image cannot be processed"
+
+    def test_actions_are_stop_only(self) -> None:
+        from personal_agent.exceptions import AttachmentUnsupportedError
+
+        assert classify_error(AttachmentUnsupportedError("x")).actions == ("stop",)
+
+
 class TestClassifyInferenceSlotTimeout:
     """InferenceSlotTimeout (concurrency.py) should map to timeout category."""
 

@@ -1326,6 +1326,94 @@ def _determine_initial_model_role(ctx: ExecutionContext) -> ModelRole:
     return ModelRole.PRIMARY
 
 
+_RASTER_IMAGE_CONTENT_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+
+
+def _resolve_vision_routing_key(ctx: ExecutionContext, role_name: str) -> str:
+    """Resolve the model config key for this role, enforcing vision capability.
+
+    No-op (returns the profile-resolved key unchanged) when the turn carries no
+    raster-image attachment. Otherwise asserts the serving model supports vision —
+    escalating or failing closed per ADR-0101 §5/§8a. ``"local"`` wins when
+    attachments in the same turn carry conflicting ``processing_target`` values.
+
+    Args:
+        ctx: Execution context carrying ``attachments`` (FRE-661).
+        role_name: The model role string (e.g. "primary").
+
+    Returns:
+        The model config key to use for this call.
+
+    Raises:
+        AttachmentUnsupportedError: No reachable model can serve the attachment.
+    """
+    from personal_agent.config.model_loader import load_model_config
+    from personal_agent.config.profile import get_current_profile, resolve_model_key
+    from personal_agent.exceptions import AttachmentUnsupportedError
+
+    image_attachments = [
+        a for a in ctx.attachments if a.content_type in _RASTER_IMAGE_CONTENT_TYPES
+    ]
+    if not image_attachments:
+        return resolve_model_key(role_name)
+
+    targets = {a.processing_target for a in image_attachments if a.processing_target}
+    effective_target: str | None = "local" if "local" in targets else next(iter(targets), None)
+
+    models = load_model_config().models
+    profile = get_current_profile()
+
+    if effective_target == "local":
+        # Bypass profile resolution deliberately: "local" must mean role_name's
+        # own raw local deployment (e.g. "primary" -> Qwen), never whatever a
+        # cloud-bound profile would otherwise redirect this role to. Using
+        # resolve_model_key() here would return "claude_sonnet" under an active
+        # cloud profile — exactly the boundary crossing "local" must prevent.
+        model_def = models.get(role_name)
+        if (
+            model_def is not None
+            and model_def.provider_type == "local"
+            and model_def.supports_vision
+        ):
+            return role_name
+        raise AttachmentUnsupportedError(
+            "This image is pinned to local-only processing, but the local model "
+            "does not support vision. It will not be escalated to cloud."
+        )
+
+    if effective_target == "cloud":
+        esc_key = profile.delegation.escalation_model if profile else None
+        esc_def = models.get(esc_key) if esc_key else None
+        if (
+            esc_key is not None
+            and esc_def is not None
+            and esc_def.provider_type != "local"
+            and esc_def.supports_vision
+        ):
+            return esc_key
+        raise AttachmentUnsupportedError(
+            "This image is marked for cloud processing, but no vision-capable "
+            "cloud model is configured for the active profile."
+        )
+
+    # No override — follow the profile default (§5).
+    key = resolve_model_key(role_name)
+    model_def = models.get(key)
+    if model_def is not None and model_def.supports_vision:
+        return key
+
+    if profile is not None and profile.delegation.allow_cloud_escalation:
+        esc_key = profile.delegation.escalation_model
+        esc_def = models.get(esc_key) if esc_key else None
+        if esc_key is not None and esc_def is not None and esc_def.supports_vision:
+            return esc_key
+
+    raise AttachmentUnsupportedError(
+        "This turn includes an image, but the model serving this conversation "
+        "does not support vision and no cloud escalation is available."
+    )
+
+
 def _render_memory_section(entity_items: list[dict[str, Any]]) -> str:
     """Build the ## Your Memory Graph entity section string.
 
@@ -2478,9 +2566,26 @@ async def step_llm_call(
 
     try:
         # Create LLM client — dispatches to LocalLLMClient or LiteLLMClient based on provider_type
+        from personal_agent.config.profile import resolve_model_key
         from personal_agent.llm_client.factory import get_llm_client
 
-        llm_client = get_llm_client(role_name=model_role.value)
+        # ADR-0101 §5/§8a: an image attachment may require a different model than
+        # the role's plain profile-resolved key (escalation or an explicit
+        # processing_target override) — resolved here, inside the try block, so a
+        # fail-closed AttachmentUnsupportedError is caught by the except below
+        # rather than propagating uncaught above the state machine.
+        role_key = resolve_model_key(model_role.value)
+        effective_model_key = _resolve_vision_routing_key(ctx, model_role.value)
+
+        if effective_model_key == role_key:
+            llm_client = get_llm_client(role_name=model_role.value)
+        else:
+            from personal_agent.cost_gate import budget_role_for
+            from personal_agent.llm_client.factory import get_llm_client_for_key
+
+            llm_client = get_llm_client_for_key(
+                effective_model_key, budget_role=budget_role_for(model_role.value)
+            )
 
         # Get tools for this model role and mode
         # ReAct loop: always offer tools so the model can chain calls until it
@@ -2489,10 +2594,9 @@ async def step_llm_call(
         is_synthesizing = False
 
         # ── Strategy-aware tool setup (ADR-0032) ──────────────────────
-        from personal_agent.config.profile import resolve_model_key
         from personal_agent.llm_client.models import ToolCallingStrategy
 
-        model_config = llm_client.model_configs.get(resolve_model_key(model_role.value))
+        model_config = llm_client.model_configs.get(effective_model_key)
         tool_strategy = (
             model_config.effective_tool_strategy if model_config else ToolCallingStrategy.NATIVE
         )

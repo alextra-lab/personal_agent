@@ -17,7 +17,6 @@ from personal_agent.config.profile import (
     set_current_profile,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -223,6 +222,19 @@ class TestLoadProfile:
         cloud_profile = load_profile("cloud", profiles_dir=real_profiles)
         assert cloud_profile.provider_type == "cloud"
 
+    def test_local_profile_escalation_model_set_for_vision_override(self) -> None:
+        """ADR-0101 §8a: local.yaml carries an escalation target for the explicit
+        per-attachment "cloud" override, without enabling implicit escalation.
+        """
+        real_profiles = Path("config/profiles")
+        if not real_profiles.exists():
+            pytest.skip("config/profiles directory not present in working directory")
+
+        local_profile = load_profile("local", profiles_dir=real_profiles)
+        assert local_profile.delegation.escalation_model == "claude_sonnet"
+        assert local_profile.delegation.escalation_provider == "anthropic"
+        assert local_profile.delegation.allow_cloud_escalation is False
+
     def test_load_profile_accepts_path_object(self, profiles_dir: Path) -> None:
         """profiles_dir argument accepts a Path object as well as a string."""
         profile = load_profile("local", profiles_dir=profiles_dir)
@@ -302,6 +314,7 @@ class TestResolveModelKey:
             assert resolve_model_key("primary") == "claude_sonnet"
         finally:
             from personal_agent.config.profile import _current_profile
+
             _current_profile.reset(token)
 
     def test_redirects_sub_agent_via_active_profile(self) -> None:
@@ -317,6 +330,7 @@ class TestResolveModelKey:
             assert resolve_model_key("sub_agent") == "claude_haiku"
         finally:
             from personal_agent.config.profile import _current_profile
+
             _current_profile.reset(token)
 
     def test_does_not_redirect_compressor_role(self) -> None:
@@ -332,6 +346,7 @@ class TestResolveModelKey:
             assert resolve_model_key("compressor") == "compressor"
         finally:
             from personal_agent.config.profile import _current_profile
+
             _current_profile.reset(token)
 
     def test_unknown_role_passes_through_unchanged(self) -> None:
@@ -347,4 +362,5 @@ class TestResolveModelKey:
             assert resolve_model_key("unknown_role") == "unknown_role"
         finally:
             from personal_agent.config.profile import _current_profile
+
             _current_profile.reset(token)

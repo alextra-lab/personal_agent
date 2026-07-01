@@ -29,3 +29,14 @@ class InvalidMessageError(ValueError):
     attribution survives in Postgres. ``SessionRepository.append_message``
     raises this when those fields are missing.
     """
+
+
+class AttachmentUnsupportedError(ValueError):
+    """Raised when a turn cannot be routed to a vision-capable model for an attachment.
+
+    ADR-0101 §5/§8a: routing never silently falls back or crosses a data-egress
+    boundary implicitly. When no reachable model can serve an attachment — no
+    vision-capable model on the bound profile, escalation forbidden, or a
+    ``"local"`` override with no capable local model — this is raised with a
+    message naming the unsupported modality, surfaced to the user verbatim.
+    """

@@ -282,6 +282,7 @@ class MemoryServiceAdapter:
                 trace_id,
                 user_id=user_id,
                 authenticated=authenticated,
+                query_text=user_message,
             )
             if not raw:
                 log.info(

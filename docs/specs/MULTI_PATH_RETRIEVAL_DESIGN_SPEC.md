@@ -326,6 +326,17 @@ chain here so the assembled ADR does not close on the three authored children al
 | **Build 2 — Lexical + Multi-query arms** (**FRE-723**) | Neo4j full-text index over `Turn`/`Entity.name` + ranked query fn; multi-query paraphrase wrapper (§2, §3.3). Integration-tested vs. test substrate; **flag-dark** (not yet wired into live recall). | (feeds AC-1/AC-3) | — |
 | **Build 3 — Assemble the pipeline (SEAM OWNER)** (**FRE-724**) | Build the shared multi-path core (dense + lexical + multi-query → dedup → RRF → `_select_rerank_candidates` by RRF rank → rerank-on-fused); route the **explicit recall path `query_memory_broad`** (the MEMORY_RECALL / lived-symptom path) through it behind `multipath_recall_enabled`; **converge the entity-name path (`query_memory`) and proactive path onto the same core** (FRE-699), not left single-path; soft operating point (§5, values from FRE-706 sign-off); telemetry (`arms_ran`, `fused_set_size`, path); enforce fused-set cap. **Prove AC-1, AC-3, AC-5, AC-6 live, flag on**, via the FRE-489/670 A/B (incl. AC-6(c) measured p50 ≤ 17 s, else hold the flag). | AC-1, AC-3, AC-5, AC-6 | Build 1 (FRE-722), Build 2 (FRE-723), FRE-706 |
 
+> **Build 3 status (FRE-724, 2026-07-02):** built behind `multipath_recall_enabled` (default off). Shared
+> core `_multipath_fused_recall` (arms → RRF → fused-rank cap → rerank-on-fused → operating point + telemetry)
+> lands in `memory/service.py`; `RankedResult`/`FusedResult` carry `kind` so the heterogeneous fused set
+> resolves. All three paths converge behind the flag: `query_memory_broad` (primary), `query_memory`
+> (entity-name), and `suggest_relevant`/`suggest_proactive_raw` (proactive, multi-arm **candidacy** — keeps
+> its own cosine scoring + min-score/budget gates, deliberately not the AC-5 surface). AC-1/AC-5/AC-6(a) +
+> the AC-3 tail-case mechanism are proven by unit + live test-substrate integration tests (present
+> multipath-on / absent-off, end-to-end on `query_memory_broad`). **AC-6(c) live p50 ≤ 17 s and the AC-1
+> floor-invariant probe (FRE-489/670) are master-owned + deploy-gated** — the flag ships off; the floor
+> value 0.60 (FRE-706) is applied via deploy config at the verified rollout, not the code default.
+
 **Existing siblings that plug into this chain:**
 
 - **FRE-706** (Approved) — operating-point **sign-off + recorded values** (§5). Gates Build 3's

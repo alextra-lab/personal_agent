@@ -35,10 +35,17 @@ If the row is missing/ambiguous, STOP and ask master.
 
 ## 1 — Discuss first
 Collaborate with the owner on the decision. Do NOT write any file until the decision is settled
-(discussion-mode default). If this work has an Approved ADR ticket (e.g. FRE-582), **set it →
-In Progress** now (`save_issue state="In Progress"`) — Linear is disconnected from GitHub
-(2026-06-26), so status no longer moves automatically; the working session owns the In Progress
-transition, master owns Done.
+(discussion-mode default). **adr dev is always tracked by a Linear ticket** (same as build) — the
+board's `/adr` NEXT is a `FRE-…`, and `prime-worker` dispatches off its Linear state, so untracked ADR
+work is invisible to the loop. Therefore:
+- If an ADR umbrella ticket already exists (e.g. FRE-582), **set it → In Progress** now
+  (`save_issue state="In Progress"`).
+- If this is ad-hoc work with no ticket yet, **file the umbrella ticket first** (Needs Approval, under a
+  Linear project) so the work is referenced from the start; the owner approves it → it becomes the board
+  NEXT → then set it In Progress.
+
+Linear is disconnected from GitHub (2026-06-26), so status never moves automatically; the working
+session owns the In Progress transition, master owns Done.
 
 ## 2 — Write the ADR
 Start from **`docs/architecture_decisions/ADR_TEMPLATE.md`** — the project ADR format (mirrors the

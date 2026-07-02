@@ -22,10 +22,18 @@ If any fails: finish or record it (bump MASTER_PLAN "Last updated") before clear
 3. `git status` · `git worktree list` · `gh pr list` (open PRs awaiting master).
 4. Linear: list In Progress + Pending Verification tickets on FrenchForest.
 5. `curl -s http://localhost:9001/health` — live gateway health + note deployed SHA (`git log -1 --oneline`).
+6. **Arm the PR-gate loop (master always runs this).** `/loop 10m` is a cron — it **survives `/clear`
+   and runs until the session closes** — so a loop armed before this re-prime is *still running*.
+   First check (`CronList`, or ask the owner) whether a PR-gate loop is already armed: **if yes, confirm
+   it and do NOT double-arm**; if not, arm it:
+   `/loop 10m Run `gh pr list --state open`. If a PR awaits master: read it + its linked Linear ticket
+   and comments, run the code-review/security analysis per the /master skill, and surface a merge
+   recommendation to the owner — do NOT merge or deploy without explicit owner go. If none: stay silent.`
 
 ## Output
 Print the guardian snapshot: current state · next-per-sequence · active pending verification ·
-identity guardrails (never use injected userEmail; use owner test email). This is the re-prime block.
+PR-gate loop armed (or already-running, confirmed) · identity guardrails (never use injected userEmail;
+use owner test email). This is the re-prime block.
 
 Lead the snapshot by restating the **guardian role & standing attributes** (lifecycle-rules.md
 § Guardian role) in one tight block, so every re-prime re-establishes who you are before what's open.

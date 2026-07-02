@@ -9,8 +9,8 @@ Master-maintained dispatch. `/build 1`, `/build 2`, and `/adr` resolve their NEX
 <!-- STREAM-BOARD:START -->
 | Stream | Command | NEXT (build this) | Context | Queued after |
 |--------|---------|-------------------|---------|--------------|
-| build · Stream 1 · **Opus** | `/build 1` | ⚠️ **blocked/idle** — FRE-707 shipped (#321). Next Opus recall work = **FRE-724** (seam owner), **blocked on FRE-722/723** (Sonnet, on build2 after vision). No unblocked Opus ticket until then | CLEAR | FRE-724 [O] (after 722/723/706) |
-| build2 · Stream 2 · **Sonnet** | `/build 2` | **FRE-666** [S] _(resolve raster attachments to image content blocks — vision ticket 4; **deploy-gate** — master drafts staged runbook when this lands)_ | CLEAR | **FRE-722** [S] → **FRE-723** [S] (recall v1 core — Approved) |
+| build · Stream 1 · **Sonnet** _(run as Sonnet for 722/723; flip back to Opus for 724)_ | `/build 1` | **FRE-722** [S] _(RRF fusion + cross-path dedup — pure, unit-testable; recall v1 core Build 1)_ | CLEAR | **FRE-723** [S] → **FRE-724** [O] (seam — flip back to Opus, after 722/723/706) |
+| build2 · Stream 2 · **Sonnet** | `/build 2` | **FRE-666** [S] _(resolve raster attachments to image content blocks — vision ticket 4; **deploy-gate** — master drafts staged runbook when this lands)_ | CLEAR | — _(free after 666; 724 is Opus→build1)_ |
 | adr · **Opus** | `/adr` | **FRE-727** [O] _(System-domain boundary — isolate+observe, 639↔0105 reconcile + self-referential handling; **open exploration, no fixed gate** — owner-approved 2026-07-02)_ | CLEAR | — |
 <!-- STREAM-BOARD:END -->
 

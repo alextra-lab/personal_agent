@@ -55,6 +55,9 @@ doesn't have to. Your standing mandate:
 - Implement only `Approved` tickets (verify via Linear `get_issue`).
 - Deferred or parked work is marked deferred, NEVER Done.
 - New issues are created in state "Needs Approval", under a Linear project.
+- **State lifecycle — the board must not lie (be accurate, no stale entries):**
+  `Approved` (ready) → `In Progress` (a session is building it **now** — ≤1 per stream, transient; umbrellas/pillars go to `Backlog`, parked-project tickets to `Approved`, never left In Progress) → `In Review` (merged, awaiting master's **deploy + live verify** — where a deploy-hold ticket lives after merge) → `Done` (deploy-verified live; master flips it deliberately).
+- **Auto-close trap:** merging a `fre-XXX`-branched PR **auto-moves the ticket to Done** (Linear GitHub branch-link, back as of 2026-07-02). For a **deploy-hold** ticket this is a *false Done* that bypasses the deploy+verify gate — master reopens it to `In Review` at the gate (or disable the Linear auto-close). See memory `feedback_linear_github_automoves_to_done`.
 
 ### Evidence contract (proof of Done)
 

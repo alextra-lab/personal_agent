@@ -32,11 +32,13 @@ class InvalidMessageError(ValueError):
 
 
 class AttachmentUnsupportedError(ValueError):
-    """Raised when a turn cannot be routed to a vision-capable model for an attachment.
+    """Raised when a turn's attachment cannot be delivered to the model.
 
-    ADR-0101 §5/§8a: routing never silently falls back or crosses a data-egress
-    boundary implicitly. When no reachable model can serve an attachment — no
-    vision-capable model on the bound profile, escalation forbidden, or a
-    ``"local"`` override with no capable local model — this is raised with a
+    Covers two related fail-closed cases (ADR-0101): routing (§5/§8a) — no
+    reachable model can serve the attachment, no vision-capable model on the
+    bound profile, escalation forbidden, or a ``"local"`` override with no
+    capable local model; and resolution (§6, FRE-666) — a guardrail cap is
+    exceeded after transformation, or the declared content type is neither a
+    supported raster type nor a known non-raster type. Always raised with a
     message naming the unsupported modality, surfaced to the user verbatim.
     """

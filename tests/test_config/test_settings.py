@@ -216,6 +216,17 @@ class TestCompressionGeometry:
             AppConfig()
 
 
+class TestAttachmentGuardrailCaps:
+    """FRE-666 / ADR-0101 §6 — raster attachment resolution guardrail defaults."""
+
+    def test_defaults(self) -> None:
+        config = AppConfig()
+        assert config.attachment_image_max_pixels == 1568
+        assert config.attachment_image_max_bytes == 5_242_880
+        assert config.attachment_max_images_per_turn == 4
+        assert config.attachment_max_total_payload_bytes == 15_728_640
+
+
 class TestSingleton:
     """Test singleton pattern."""
 

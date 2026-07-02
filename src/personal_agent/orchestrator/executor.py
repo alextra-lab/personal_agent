@@ -16,7 +16,11 @@ from uuid import UUID, uuid4
 from personal_agent.config import settings
 from personal_agent.config.env_loader import Environment
 from personal_agent.llm_client import ModelRole
-from personal_agent.llm_client.message_content import get_text_content, merge_content
+from personal_agent.llm_client.message_content import (
+    MessageContent,
+    get_text_content,
+    merge_content,
+)
 from personal_agent.observability.topology import observe_topology
 from personal_agent.orchestrator import compression_manager
 from personal_agent.orchestrator.context_window import (
@@ -1326,9 +1330,6 @@ def _determine_initial_model_role(ctx: ExecutionContext) -> ModelRole:
     return ModelRole.PRIMARY
 
 
-_RASTER_IMAGE_CONTENT_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
-
-
 def _resolve_vision_routing_key(ctx: ExecutionContext, role_name: str) -> str:
     """Resolve the model config key for this role, enforcing vision capability.
 
@@ -1350,10 +1351,9 @@ def _resolve_vision_routing_key(ctx: ExecutionContext, role_name: str) -> str:
     from personal_agent.config.model_loader import load_model_config
     from personal_agent.config.profile import get_current_profile, resolve_model_key
     from personal_agent.exceptions import AttachmentUnsupportedError
+    from personal_agent.orchestrator.attachment_resolution import RASTER_CONTENT_TYPES
 
-    image_attachments = [
-        a for a in ctx.attachments if a.content_type in _RASTER_IMAGE_CONTENT_TYPES
-    ]
+    image_attachments = [a for a in ctx.attachments if a.content_type in RASTER_CONTENT_TYPES]
     if not image_attachments:
         return resolve_model_key(role_name)
 
@@ -1832,8 +1832,22 @@ async def step_init(
         if timer:
             timer.end_span("session_history_load", message_count=session_message_count)
 
-    # Add new user message
-    ctx.messages.append({"role": "user", "content": ctx.user_message})
+    # Add new user message — resolve current-turn raster attachments to image
+    # blocks first (ADR-0101 §3/§4/§6, FRE-666); widens content to a block list
+    # only when there is something to inject (FRE-664 MessageContent).
+    content: MessageContent = ctx.user_message
+    if ctx.attachments:
+        from personal_agent.orchestrator.attachment_resolution import resolve_attachments
+
+        resolved = await resolve_attachments(ctx.attachments, trace_id=ctx.trace_id)
+        ctx.attachment_disclosures = list(resolved.disclosures)
+        if resolved.blocks:
+            content = (
+                [{"type": "text", "text": ctx.user_message}, *resolved.blocks]
+                if ctx.user_message
+                else list(resolved.blocks)
+            )
+    ctx.messages.append({"role": "user", "content": content})
 
     # --- Gateway-driven path: skip inline routing and memory ---
     if ctx.gateway_output is not None:
@@ -3696,6 +3710,12 @@ async def step_synthesis(
         # Ensure final reply is set (should already be set from LLM call)
         if not ctx.final_reply:
             ctx.final_reply = "Task completed"  # Fallback
+
+        # ADR-0101 §6 / FRE-690: guardrail alterations (downscale/drop) are disclosed
+        # in the response, deterministically — never left to the model to relay.
+        if ctx.attachment_disclosures:
+            disclosure_text = "\n\n".join(f"Note: {d}" for d in ctx.attachment_disclosures)
+            ctx.final_reply = f"{ctx.final_reply}\n\n{disclosure_text}"
 
         # Update session with new messages
         if timer:

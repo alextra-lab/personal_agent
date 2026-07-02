@@ -700,6 +700,44 @@ class AppConfig(BaseSettings):
             "min(max_tokens, default_output_tokens))."
         ),
     )
+    attachment_image_max_pixels: int = Field(
+        default=1568,
+        gt=0,
+        description=(
+            "Per-image long-edge pixel cap before encoding (ADR-0101 §6, FRE-666). "
+            "An over-limit image is downscaled (aspect-preserving) below this "
+            "before the byte-size check. Matches Anthropic's own vision downscale "
+            "threshold."
+        ),
+    )
+    attachment_image_max_bytes: int = Field(
+        default=5_242_880,  # 5 MiB
+        gt=0,
+        description=(
+            "Per-image byte-size cap after downscale/base64-encode (ADR-0101 §6, "
+            "FRE-666). An image still over this cap after downscale is rejected "
+            "with a user-visible AttachmentUnsupportedError."
+        ),
+    )
+    attachment_max_images_per_turn: int = Field(
+        default=4,
+        gt=0,
+        description=(
+            "Max raster images resolved per turn (ADR-0101 §6, FRE-666). Excess "
+            "images (beyond the first N in submitted order) are dropped with "
+            "disclosure."
+        ),
+    )
+    attachment_max_total_payload_bytes: int = Field(
+        default=15_728_640,  # 15 MiB
+        gt=0,
+        description=(
+            "Total per-turn resolved-image payload cap across all images, "
+            "measured post-base64-encode (ADR-0101 §6, FRE-666), independent of "
+            "the per-image byte cap. Trailing images that would exceed it are "
+            "dropped with disclosure."
+        ),
+    )
 
     # Paths (for domain config loaders)
     governance_config_path: Path = Field(

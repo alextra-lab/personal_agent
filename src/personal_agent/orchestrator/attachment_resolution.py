@@ -7,6 +7,7 @@ separate concerns; this module only turns bytes into a typed, capped image block
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -19,9 +20,6 @@ from personal_agent.config import settings
 from personal_agent.exceptions import AttachmentUnsupportedError
 from personal_agent.orchestrator.types import AttachmentRef
 from personal_agent.storage import get_artifact_store
-from personal_agent.telemetry import get_logger
-
-log = get_logger(__name__)
 
 RASTER_CONTENT_TYPES: frozenset[str] = frozenset(
     {"image/png", "image/jpeg", "image/gif", "image/webp"}
@@ -154,11 +152,12 @@ async def resolve_attachments(
 
     blocks: list[dict[str, Any]] = []
     total_encoded_bytes = 0
-    payload_dropped = 0
 
-    for attachment in raster:
+    for index, attachment in enumerate(raster):
         raw = await store.get(attachment.r2_key, trace_id=trace_id)
-        image_bytes, was_downscaled = _downscale_if_needed(raw, attachment.content_type)
+        image_bytes, was_downscaled = await asyncio.to_thread(
+            _downscale_if_needed, raw, attachment.content_type
+        )
         encoded = base64.b64encode(image_bytes).decode("ascii")
         encoded_len = len(encoded)
 
@@ -170,8 +169,16 @@ async def resolve_attachments(
             )
 
         if total_encoded_bytes + encoded_len > settings.attachment_max_total_payload_bytes:
-            payload_dropped += 1
-            continue
+            # Stop rather than skip-and-continue: the result must be a strict
+            # prefix in submitted order, so a later smaller image never sneaks
+            # in past an earlier one that didn't fit, and no bytes are fetched
+            # for images that would be dropped anyway.
+            payload_dropped = len(raster) - index
+            disclosures.append(
+                f"{payload_dropped} image(s) were dropped because the total per-turn "
+                "attachment payload limit was reached."
+            )
+            break
 
         total_encoded_bytes += encoded_len
         if was_downscaled:
@@ -182,12 +189,6 @@ async def resolve_attachments(
                 "type": "image_url",
                 "image_url": {"url": f"data:{attachment.content_type};base64,{encoded}"},
             }
-        )
-
-    if payload_dropped:
-        disclosures.append(
-            f"{payload_dropped} image(s) were dropped because the total per-turn "
-            "attachment payload limit was reached."
         )
 
     return ResolvedAttachments(blocks=tuple(blocks), disclosures=tuple(disclosures))

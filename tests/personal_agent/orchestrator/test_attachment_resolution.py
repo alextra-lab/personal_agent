@@ -11,14 +11,14 @@ from io import BytesIO
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from PIL import Image
+
+from personal_agent.exceptions import AttachmentUnsupportedError
 from personal_agent.orchestrator.attachment_resolution import (
     _KNOWN_NON_RASTER_CONTENT_TYPES,
     RASTER_CONTENT_TYPES,
     resolve_attachments,
 )
-from PIL import Image
-
-from personal_agent.exceptions import AttachmentUnsupportedError
 from personal_agent.orchestrator.types import AttachmentRef
 from personal_agent.service.uploads_router import ALLOWED_UPLOAD_CONTENT_TYPES
 
@@ -249,3 +249,56 @@ class TestTotalPayloadCapGuardrail:
 
         assert len(result.blocks) == 2
         assert any("dropped" in d and "total" in d for d in result.disclosures)
+
+    @pytest.mark.asyncio
+    async def test_total_payload_cap_stops_processing_at_first_drop(self) -> None:
+        """A dropped image must not be skipped past to admit a later smaller one.
+
+        Once an image doesn't fit the remaining budget, resolution must stop —
+        not keep scanning for a later, smaller image that happens to fit — so
+        the result is always a strict prefix in submitted order ("trailing
+        images dropped", per the settings docstring), and no bytes are fetched
+        for images that will be dropped anyway.
+        """
+        full = _make_png_bytes(size=(10, 10))
+        tiny = _make_png_bytes(size=(1, 1))
+        full_len = len(base64.b64encode(full))
+        tiny_len = len(base64.b64encode(tiny))
+        assert tiny_len < full_len  # sanity
+
+        attachments = [
+            _make_attachment(title="full1.png", r2_key="upload/u/g/full1.png"),
+            _make_attachment(title="full2.png", r2_key="upload/u/g/full2.png"),
+            _make_attachment(title="tiny.png", r2_key="upload/u/g/tiny.png"),
+        ]
+        store = _mock_store(
+            {
+                "upload/u/g/full1.png": full,
+                "upload/u/g/full2.png": full,
+                "upload/u/g/tiny.png": tiny,
+            }
+        )
+
+        # Room for exactly one full image plus the tiny one, but not two full
+        # images — a continue-based (non-prefix) implementation would skip
+        # full2 and still admit tiny; a break-based one stops at full2.
+        cap = full_len + tiny_len
+
+        with (
+            patch(
+                "personal_agent.orchestrator.attachment_resolution.get_artifact_store",
+                return_value=store,
+            ),
+            patch(
+                "personal_agent.orchestrator.attachment_resolution.settings.attachment_max_total_payload_bytes",
+                cap,
+            ),
+            patch(
+                "personal_agent.orchestrator.attachment_resolution.settings.attachment_max_images_per_turn",
+                10,
+            ),
+        ):
+            result = await resolve_attachments(attachments)
+
+        assert len(result.blocks) == 1
+        assert store.get.await_count == 2  # tiny is never fetched

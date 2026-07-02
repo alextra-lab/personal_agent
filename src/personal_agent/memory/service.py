@@ -126,6 +126,140 @@ def _build_visibility_filter(
     return fragment, params
 
 
+def _build_structural_arm_query(
+    *,
+    entity_types: Sequence[str] | None,
+    type_predicate_enabled: bool,
+    recency_days: int | None,
+    anchor_names: Sequence[str] | None,
+    top_k: int,
+    vis_fragment_e: str,
+    vis_fragment_t: str,
+    vis_fragment_a: str,
+) -> tuple[str, dict[str, Any]]:
+    """Build the closed-axis structural arm's Cypher and params (ADR-0104 AC-4).
+
+    Pure function (no substrate) so the safe type predicate and the open-axis
+    exclusion are unit-testable. Composes three optional closed-axis predicates —
+    entity type (safe), recency-as-predicate, relationship hops — over entities.
+    Never filters on the open axis (name/description): AC-4c.
+
+    Args:
+        entity_types: Requested entity types for the type predicate, or None.
+        type_predicate_enabled: Whether the type sub-predicate is active (AC-4a).
+        recency_days: Recency window in days for last_seen, or None for no window.
+        anchor_names: Entity names to seed 1-hop co-occurrence traversal, or None.
+        top_k: Maximum entities to return.
+        vis_fragment_e: Visibility WHERE fragment for the entity alias ``e`` (FRE-229).
+        vis_fragment_t: Visibility fragment for the intermediate Turn alias ``t``.
+        vis_fragment_a: Visibility fragment for the anchor entity alias ``a``.
+
+    Returns:
+        Tuple of (cypher, params). Params never include a name/description filter.
+    """
+    params: dict[str, Any] = {"top_k": top_k}
+    e_where: list[str] = [vis_fragment_e]
+
+    if type_predicate_enabled and entity_types:
+        # SAFE type predicate (AC-4b): narrow to the requested types but keep
+        # unenforced-type rows so none is silently dropped until FRE-637's
+        # contract has back-filled the graph. The explicit IS NULL branch makes
+        # the disjunction true for null-typed rows (Cypher null semantics).
+        e_where.append(
+            "(e.entity_type IN $entity_types "
+            "OR e.entity_type IS NULL "
+            "OR e.entity_type = '' "
+            "OR e.entity_type = 'Unknown')"
+        )
+        params["entity_types"] = list(entity_types)
+
+    if recency_days is not None:
+        # last_seen is heterogeneous (ISO string on the mention path, Neo4j
+        # datetime() on the create/access path); normalise both sides with
+        # toString for a valid lexicographic, day-granular comparison. Rows with
+        # a null last_seen are excluded by the window (NULL >= x is null).
+        params["recency_cutoff"] = (
+            datetime.now(timezone.utc) - timedelta(days=recency_days)
+        ).isoformat()
+        e_where.append("toString(e.last_seen) >= $recency_cutoff")
+
+    e_where_clause = " AND ".join(e_where)
+
+    if anchor_names:
+        params["anchor_names"] = list(anchor_names)
+        # 1-hop co-occurrence over the bipartite Turn-Entity graph. Scope a, t
+        # AND e (FRE-229): never surface an entity reached through an anchor or
+        # intermediate Turn the caller cannot see.
+        cypher = f"""
+        MATCH (a:Entity)<-[:DISCUSSES]-(t:Turn)-[:DISCUSSES]->(e:Entity)
+        WHERE a.name IN $anchor_names AND e.name <> a.name
+          AND {vis_fragment_a} AND {vis_fragment_t} AND {e_where_clause}
+        WITH e, count(DISTINCT a) AS cooccur
+        RETURN e AS e
+        ORDER BY cooccur DESC, toString(e.last_seen) DESC, e.name
+        LIMIT $top_k
+        """
+    else:
+        cypher = f"""
+        MATCH (e:Entity)
+        WHERE {e_where_clause}
+        RETURN e AS e
+        ORDER BY toString(e.last_seen) DESC, e.name
+        LIMIT $top_k
+        """
+    return cypher, params
+
+
+def _entity_node_from_record(node: Any) -> EntityNode:
+    """Build an EntityNode from a Neo4j entity node (shared parse).
+
+    Handles the heterogeneous storage of the temporal fields (Neo4j
+    ``DateTime`` objects vs ISO strings vs missing) and the JSON-string
+    ``properties`` field. Extracted so the broad recall paths and the
+    structural arm (FRE-707) parse entities identically.
+
+    Args:
+        node: A Neo4j node (mapping of entity properties) from a query record.
+
+    Returns:
+        The parsed EntityNode. ``entity_type`` defaults to ``"Unknown"`` and
+        timestamps default to now when absent.
+    """
+    first_seen = node.get("first_seen")
+    if hasattr(first_seen, "to_native"):
+        first_seen = first_seen.to_native()
+    elif isinstance(first_seen, str):
+        first_seen = datetime.fromisoformat(first_seen)
+    elif first_seen is None:
+        first_seen = datetime.utcnow()
+
+    last_seen = node.get("last_seen")
+    if hasattr(last_seen, "to_native"):
+        last_seen = last_seen.to_native()
+    elif isinstance(last_seen, str):
+        last_seen = datetime.fromisoformat(last_seen)
+    elif last_seen is None:
+        last_seen = datetime.utcnow()
+
+    properties = node.get("properties", "{}")
+    if isinstance(properties, str):
+        properties = orjson.loads(properties)
+    elif properties is None:
+        properties = {}
+
+    return EntityNode(
+        entity_id=node.get("name", ""),
+        name=node.get("name", ""),
+        entity_type=node.get("entity_type", "Unknown"),
+        description=node.get("description"),
+        interest_weight=min(node.get("mention_count", 0) / 100.0, 1.0),
+        first_seen=first_seen,
+        last_seen=last_seen,
+        mention_count=node.get("mention_count", 0),
+        properties=properties,
+    )
+
+
 def _rank_conversations_by_relevance(
     conversations: Sequence[TurnNode],
     relevance_scores: dict[str, float],
@@ -2323,6 +2457,92 @@ class MemoryService:
         rows: list[dict[str, Any]] = await result.data()
         return rows
 
+    async def structural_recall_arm(
+        self,
+        *,
+        entity_types: Sequence[str] | None = None,
+        recency_days: int | None = None,
+        anchor_names: Sequence[str] | None = None,
+        limit: int | None = None,
+        access_context: AccessContext = AccessContext.SEARCH,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
+    ) -> list[EntityNode]:
+        """Closed-axis structural recall arm (ADR-0104 AC-4 / FRE-707).
+
+        Returns a ranked list of entities narrowed by the closed axes — entity
+        type (safe predicate, gated by ``structural_type_predicate_enabled``),
+        recency, and 1-hop relationship co-occurrence. Feature-gated OFF
+        (``structural_arm_enabled``); flag-dark until the multi-path fusion core
+        (FRE-722/724) wires it in. Never filters on the open axis
+        (name/description) — that stays semantic (AC-4c).
+
+        Args:
+            entity_types: Closed-axis type filter; applied only when the type
+                sub-predicate is enabled. Unenforced-type rows are never dropped.
+            recency_days: Recency window for last_seen; None = no window.
+            anchor_names: Seeds for 1-hop co-occurrence traversal; None = plain scan.
+            limit: Max entities; defaults to ``structural_arm_top_k``.
+            access_context: Typed access context (ADR-0042).
+            trace_id: Request trace id for event correlation.
+            session_id: Session id for event correlation.
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity (FRE-229).
+
+        Returns:
+            Ranked list of EntityNode (best-first). Empty when the arm is gated
+            off, the service is disconnected, or nothing matches.
+        """
+        current_settings = get_settings()
+        if not current_settings.structural_arm_enabled:
+            return []
+        if not self.connected or not self.driver:
+            return []
+
+        top_k = limit if limit is not None else current_settings.structural_arm_top_k
+        vis_e, vis_params = _build_visibility_filter("e", user_id, authenticated)
+        vis_t, _ = _build_visibility_filter("t", user_id, authenticated)
+        vis_a, _ = _build_visibility_filter("a", user_id, authenticated)
+        cypher, params = _build_structural_arm_query(
+            entity_types=entity_types,
+            type_predicate_enabled=current_settings.structural_type_predicate_enabled,
+            recency_days=recency_days,
+            anchor_names=anchor_names,
+            top_k=top_k,
+            vis_fragment_e=vis_e,
+            vis_fragment_t=vis_t,
+            vis_fragment_a=vis_a,
+        )
+        params.update(vis_params)
+
+        try:
+            async with self.driver.session() as db_session:
+                result = await db_session.run(cypher, parameters=params)
+                records = await result.data()
+        except Exception as e:
+            log.error(
+                "structural_recall_arm_failed",
+                error=str(e),
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            return []
+
+        entities = [_entity_node_from_record(r["e"]) for r in records]
+        log.info(
+            "structural_recall_arm_completed",
+            arm="structural",
+            entity_count=len(entities),
+            type_predicate_enabled=current_settings.structural_type_predicate_enabled,
+            has_recency=recency_days is not None,
+            has_anchors=bool(anchor_names),
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        return entities
+
     async def query_memory_broad(
         self,
         entity_types: list[str] | None = None,
@@ -2977,47 +3197,7 @@ class MemoryService:
 
                 entities = []
                 async for record in result:
-                    node = record["e"]
-
-                    # Handle datetime fields (Neo4j returns neo4j.time.DateTime objects)
-                    first_seen = node.get("first_seen")
-                    if hasattr(first_seen, "to_native"):
-                        first_seen = first_seen.to_native()
-                    elif isinstance(first_seen, str):
-                        first_seen = datetime.fromisoformat(first_seen)
-                    elif first_seen is None:
-                        first_seen = datetime.utcnow()
-
-                    last_seen = node.get("last_seen")
-                    if hasattr(last_seen, "to_native"):
-                        last_seen = last_seen.to_native()
-                    elif isinstance(last_seen, str):
-                        last_seen = datetime.fromisoformat(last_seen)
-                    elif last_seen is None:
-                        last_seen = datetime.utcnow()
-
-                    # Handle properties (stored as JSON string, needs deserialization)
-                    properties = node.get("properties", "{}")
-                    if isinstance(properties, str):
-                        properties = orjson.loads(properties)
-                    elif properties is None:
-                        properties = {}
-
-                    entities.append(
-                        EntityNode(
-                            entity_id=node.get("name", ""),
-                            name=node.get("name", ""),
-                            entity_type=node.get("entity_type", "Unknown"),
-                            description=node.get("description"),
-                            interest_weight=min(
-                                node.get("mention_count", 0) / 100.0, 1.0
-                            ),  # Normalize to 0-1
-                            first_seen=first_seen,
-                            last_seen=last_seen,
-                            mention_count=node.get("mention_count", 0),
-                            properties=properties,
-                        )
-                    )
+                    entities.append(_entity_node_from_record(record["e"]))
 
                 log.info("user_interests_retrieved", count=len(entities), trace_id=trace_id)
                 return entities

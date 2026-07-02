@@ -594,6 +594,38 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # --- Structural / closed-axis retrieval arm (ADR-0104 AC-4 / FRE-707) ---
+    structural_arm_enabled: bool = Field(
+        default=False,
+        description=(
+            "ADR-0104 / FRE-707: master gate for the closed-axis structural recall "
+            "arm (entity type + recency-as-predicate + relationship hops). Ships "
+            "flag-dark: default off means the arm is never invoked and contributes "
+            "no candidates. Enabled only once the multi-path fusion core (FRE-722/724) "
+            "wires it in, under the FRE-433 flag->verified->rollout discipline."
+        ),
+    )
+    structural_type_predicate_enabled: bool = Field(
+        default=False,
+        description=(
+            "ADR-0104 AC-4 / ADR-0103 §4: gates the entity-type sub-predicate of the "
+            "structural arm. Off until the type axis is closed by contract (FRE-637). "
+            "When on, the type predicate is SAFE by construction — it narrows to the "
+            "requested types but never drops rows whose entity_type is ''/'Unknown', "
+            "so an unenforced-type entity is never silently lost."
+        ),
+    )
+    structural_arm_top_k: int = Field(
+        default=50,
+        ge=1,
+        le=500,
+        description=(
+            "FRE-707 / design spec §3.3: per-arm retrieval depth for the structural "
+            "arm's ranked list, matching the multi-path arm depth default (50). "
+            "Config-driven per ADR-0031."
+        ),
+    )
+
     # --- Artifact substrate (ADR-0069 / FRE-227) ---
     # R2 (Cloudflare) holds the bytes; Postgres holds the metadata canon.
     # The agent talks to R2 via aiobotocore. The cloud-side Worker resolves

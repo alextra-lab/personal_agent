@@ -626,6 +626,20 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # --- Multi-path recall seam (ADR-0104 AC-1/AC-3/AC-5/AC-6 / FRE-724) ---
+    multipath_recall_enabled: bool = Field(
+        default=False,
+        description=(
+            "ADR-0104 / FRE-724: master gate that routes the recall paths "
+            "(query_memory_broad, query_memory, suggest_relevant) through the shared "
+            "multi-path fused+reranked core instead of their single-path retrieval. "
+            "Ships flag-dark: default off reproduces single-path recall exactly. "
+            "Enabled only after master's FRE-489/670 live probe confirms the p50 "
+            "latency ceiling (<=17s) and the noise-guard floor invariant hold "
+            "(FRE-433 flag->verified->rollout discipline)."
+        ),
+    )
+
     # --- Lexical + multi-query retrieval arms (ADR-0104 AC-1/AC-3 / FRE-723) ---
     lexical_arm_enabled: bool = Field(
         default=False,

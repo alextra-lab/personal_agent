@@ -8,9 +8,11 @@ sections 3 and 4 for the design this implements.
 from __future__ import annotations
 
 import pytest
+
 from personal_agent.memory.fusion import (
     DEFAULT_RRF_K,
     FusedResult,
+    MultiPathRecallResult,
     RankedResult,
     dedup_arm_ranking,
     reciprocal_rank_fusion,
@@ -160,3 +162,67 @@ class TestReciprocalRankFusion:
 
         assert fused[0].score == fused[1].score
         assert [r.item_id for r in fused] == ["a_item", "b_item"]
+
+
+class TestKindPropagation:
+    """Kind (turn vs entity) must survive dedup and fusion (FRE-724).
+
+    The multi-path core reranks and resolves a heterogeneous fused set: dense /
+    multi-query arms surface Entity elementIds, the lexical arm surfaces both
+    Turn.turn_id (kind='turn') and Entity elementId (kind='entity'). The
+    downstream resolver needs the kind to fetch doc text and expand to entities.
+    """
+
+    def test_ranked_result_defaults_to_entity_kind(self) -> None:
+        """Existing arms construct RankedResult without kind; default is 'entity'."""
+        assert RankedResult(item_id="e1", rank=1).kind == "entity"
+
+    def test_dedup_preserves_kind(self) -> None:
+        """Within-arm dedup keeps the item's kind, not just its best rank."""
+        results = [
+            RankedResult(item_id="t1", rank=5, kind="turn"),
+            RankedResult(item_id="t1", rank=2, kind="turn"),
+        ]
+        deduped = dedup_arm_ranking(results)
+        assert deduped == [RankedResult(item_id="t1", rank=2, kind="turn")]
+
+    def test_fusion_carries_turn_kind_onto_fused_result(self) -> None:
+        """A turn-kind ranked hit fuses into a turn-kind FusedResult."""
+        arm = [RankedResult(item_id="turn-abc", rank=1, kind="turn")]
+        fused = reciprocal_rank_fusion([arm])
+        assert fused[0].kind == "turn"
+
+    def test_fusion_carries_entity_kind_by_default(self) -> None:
+        """Entity-kind (the default) is preserved through fusion."""
+        arm = [RankedResult(item_id="elem-1", rank=1)]
+        fused = reciprocal_rank_fusion([arm])
+        assert fused[0].kind == "entity"
+
+    def test_same_id_across_arms_keeps_single_kind(self) -> None:
+        """An item surfaced by two arms keeps one consistent kind after fusion."""
+        arm1 = [RankedResult(item_id="elem-9", rank=1, kind="entity")]
+        arm2 = [RankedResult(item_id="elem-9", rank=3, kind="entity")]
+        fused = reciprocal_rank_fusion([arm1, arm2])
+        assert len(fused) == 1
+        assert fused[0].kind == "entity"
+        assert fused[0].arm_count == 2
+
+
+class TestMultiPathRecallResult:
+    """The core's return envelope (FRE-724)."""
+
+    def test_carries_arms_and_telemetry_fields(self) -> None:
+        """The result exposes ordered items plus AC-1/AC-6 telemetry."""
+        result = MultiPathRecallResult(
+            items=(FusedResult(item_id="e1", score=0.5, arm_count=2, kind="entity"),),
+            arms_executed=("dense", "lexical"),
+            arms_failed=(),
+            per_arm_counts={"dense": 1, "lexical": 0},
+            fused_set_size=1,
+            path="broad",
+        )
+        assert [i.item_id for i in result.items] == ["e1"]
+        assert set(result.arms_executed) == {"dense", "lexical"}
+        assert result.per_arm_counts["lexical"] == 0
+        assert result.fused_set_size == 1
+        assert result.path == "broad"

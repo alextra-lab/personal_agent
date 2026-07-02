@@ -1,5 +1,6 @@
 """Neo4j memory service for knowledge graph operations."""
 
+import asyncio
 import re
 import statistics
 import time
@@ -29,7 +30,12 @@ from personal_agent.memory.freshness_aggregate import (
     GraphStalenessSummary,
     aggregate_graph_staleness,
 )
-from personal_agent.memory.fusion import RankedResult, reciprocal_rank_fusion
+from personal_agent.memory.fusion import (
+    FusedResult,
+    MultiPathRecallResult,
+    RankedResult,
+    reciprocal_rank_fusion,
+)
 from personal_agent.memory.models import (
     Claim,
     Entity,
@@ -662,6 +668,7 @@ class MemoryService:
         trace_id: str,
         user_id: UUID | None = None,
         authenticated: bool = False,
+        query_text: str | None = None,
     ) -> list[dict[str, Any]]:
         """Vector entity retrieval plus best cross-session turn per entity (ADR-0039).
 
@@ -671,6 +678,13 @@ class MemoryService:
             trace_id: For error logging.
             user_id: Authenticated user UUID for visibility scoping (FRE-229).
             authenticated: Whether the request carries a verified identity (FRE-229).
+            query_text: Original query text (FRE-724). When provided and
+                ``multipath_recall_enabled`` is on, the proactive candidate set is
+                broadened with the lexical arm's entity hits (multi-path candidacy),
+                entering at the noise-guard baseline score. Proactive keeps its own
+                cosine scoring and min-score/budget gates — it is deliberately NOT
+                run through the rerank/operating point (proactive is not the AC-5
+                "no prior discussions" surface). None / flag off = unchanged.
 
         Returns:
             Row dicts for :func:`personal_agent.memory.proactive.build_proactive_suggestions`.
@@ -751,7 +765,115 @@ class MemoryService:
                     "mention_count": 0,
                 }
             )
+
+        if query_text and cfg.multipath_recall_enabled:
+            out = await self._augment_proactive_with_lexical(
+                out,
+                query_text,
+                current_session_id=sid,
+                trace_id=trace_id,
+                user_id=user_id,
+                authenticated=authenticated,
+            )
         return out
+
+    async def _augment_proactive_with_lexical(
+        self,
+        rows: list[dict[str, Any]],
+        query_text: str,
+        *,
+        current_session_id: str,
+        trace_id: str,
+        user_id: UUID | None,
+        authenticated: bool,
+    ) -> list[dict[str, Any]]:
+        """Broaden proactive candidacy with the lexical arm's entity hits (FRE-724).
+
+        Multi-path candidacy for the proactive path: lexical-arm entity hits not
+        already surfaced by the dense vector query are appended, resolved to the
+        proactive row shape (best cross-session turn), entering at the noise-guard
+        baseline score (``recall_similarity_floor``) so they remain subject to
+        proactive's own min-score/budget gates. Turn-kind lexical hits are ignored
+        here (proactive is entity-centric). Fails open to the input rows.
+
+        Args:
+            rows: The dense-arm proactive rows already assembled.
+            query_text: The recall query for the lexical arm.
+            current_session_id: Session to exclude from cross-session turns.
+            trace_id: Request trace id for event correlation.
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity.
+
+        Returns:
+            The rows augmented with lexical-only entity candidates.
+        """
+        try:
+            lexical = await self.lexical_recall_arm(
+                query_text,
+                trace_id=trace_id,
+                user_id=user_id,
+                authenticated=authenticated,
+            )
+        except Exception as exc:
+            log.warning("proactive_lexical_augment_failed", error=str(exc), trace_id=trace_id)
+            return rows
+        entity_ids = [r.item_id for r in lexical if r.kind == "entity"]
+        if not entity_ids or not self.driver:
+            return rows
+
+        existing_names = {r.get("name") for r in rows}
+        baseline = get_settings().recall_similarity_floor
+        node_vis, vis_params = _build_visibility_filter("e", user_id, authenticated)
+        turn_vis, _ = _build_visibility_filter("t", user_id, authenticated)
+        try:
+            async with self.driver.session() as session:
+                result = await session.run(
+                    f"""
+                    UNWIND $ids AS eid
+                    MATCH (e:Entity) WHERE elementId(e) = eid AND {node_vis}
+                    OPTIONAL MATCH (e)<-[:DISCUSSES]-(t:Turn)
+                    WHERE (t IS NULL OR coalesce(t.session_id, '') <> $current_session)
+                      AND (t IS NULL OR {turn_vis})
+                    WITH e, t ORDER BY t.timestamp DESC
+                    WITH e, collect(t)[0] AS t
+                    RETURN e.name AS name, e.entity_type AS entity_type,
+                           e.description AS description,
+                           t.turn_id AS turn_id, t.session_id AS session_id,
+                           t.timestamp AS timestamp, t.user_message AS user_message,
+                           t.summary AS summary, t.key_entities AS key_entities
+                    """,
+                    ids=entity_ids,
+                    current_session=current_session_id,
+                    **vis_params,
+                )
+                lex_rows = await result.data()
+        except Exception as exc:
+            log.warning("proactive_lexical_resolve_failed", error=str(exc), trace_id=trace_id)
+            return rows
+
+        for row in lex_rows:
+            name = row.get("name")
+            if not name or name in existing_names:
+                continue
+            existing_names.add(name)
+            ts = row.get("timestamp")
+            ts_iso = ts.isoformat() if isinstance(ts, datetime) else (str(ts) if ts else None)
+            rows.append(
+                {
+                    "name": name,
+                    "entity_type": row.get("entity_type"),
+                    "description": row.get("description"),
+                    "vector_score": float(baseline),
+                    "turn_id": row.get("turn_id"),
+                    "session_id": row.get("session_id"),
+                    "timestamp_iso": ts_iso,
+                    "user_message": row.get("user_message"),
+                    "summary": row.get("summary"),
+                    "key_entities": list(row.get("key_entities") or []),
+                    "mention_count": 0,
+                }
+            )
+        return rows
 
     async def create_conversation(
         self,
@@ -2165,6 +2287,21 @@ class MemoryService:
             log.warning("neo4j_not_connected", trace_id=trace_id, session_id=session_id)
             return MemoryQueryResult()
 
+        # Multi-path recall (ADR-0104 / FRE-724): behind multipath_recall_enabled,
+        # the entity-name path converges onto the shared fused+reranked core rather
+        # than its single dense+entity-name candidate set. Flag off falls through to
+        # the legacy path below, unchanged.
+        if query_text and get_settings().multipath_recall_enabled:
+            return await self._multipath_query_memory(
+                query,
+                query_text,
+                access_context=access_context,
+                trace_id=trace_id,
+                session_id=session_id,
+                user_id=effective_user_id,
+                authenticated=effective_authenticated,
+            )
+
         vis_frag, vis_params = _build_visibility_filter(
             "c", effective_user_id, effective_authenticated
         )
@@ -2707,6 +2844,7 @@ class MemoryService:
                     WHERE {vis_frag}
                     RETURN
                         CASE WHEN node:Turn THEN node.turn_id ELSE elementId(node) END AS item_id,
+                        CASE WHEN node:Turn THEN 'turn' ELSE 'entity' END AS kind,
                         score
                     ORDER BY score DESC
                     LIMIT $top_k
@@ -2723,7 +2861,10 @@ class MemoryService:
             )
             return []
 
-        ranked = [RankedResult(item_id=r["item_id"], rank=i + 1) for i, r in enumerate(rows)]
+        ranked = [
+            RankedResult(item_id=r["item_id"], rank=i + 1, kind=r["kind"])
+            for i, r in enumerate(rows)
+        ]
         log.info(
             "lexical_recall_arm_completed",
             arm="lexical",
@@ -2753,7 +2894,10 @@ class MemoryService:
             vis_params: Params for vis_frag.
 
         Returns:
-            RankedResult list, 1-based rank, item_id = Entity elementId.
+            RankedResult list, 1-based rank, item_id = Entity elementId. Rows below
+            the ``recall_similarity_floor`` noise guard are dropped before ranking
+            (ADR-0103 §4 per-arm guard / FRE-724); with the floor at its 0.0 default
+            this is a no-op.
         """
         if not any(x != 0.0 for x in embedding):
             return []
@@ -2769,7 +2913,621 @@ class MemoryService:
             parameters={"top_k": top_k, "embedding": embedding, **vis_params},
         )
         rows = await result.data()
-        return [RankedResult(item_id=r["item_id"], rank=i + 1) for i, r in enumerate(rows)]
+        floor = get_settings().recall_similarity_floor
+        kept = [r for r in rows if r.get("score") is not None and float(r["score"]) >= floor]
+        return [RankedResult(item_id=r["item_id"], rank=i + 1) for i, r in enumerate(kept)]
+
+    async def dense_recall_arm(
+        self,
+        query_text: str,
+        *,
+        limit: int | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
+    ) -> list[RankedResult]:
+        """Dense vector recall arm (ADR-0104 / FRE-724).
+
+        The baseline arm: embed ``query_text`` and rank ``entity_embedding`` ANN
+        hits, applying the ``recall_similarity_floor`` noise guard. Used by the
+        multi-path core as the dense signal when the multi-query arm is off (the
+        multi-query arm subsumes the original-query dense pass). Fails open to an
+        empty list — never hard-fails recall.
+
+        Args:
+            query_text: Free-text query.
+            limit: Max hits; defaults to ``multipath_arm_top_k``.
+            trace_id: Request trace id for event correlation.
+            session_id: Session id for event correlation.
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity.
+
+        Returns:
+            Ranked list of RankedResult (best-first, 1-based rank, entity kind).
+            Empty when disconnected, the query is empty, embedding fails, or
+            nothing clears the floor.
+        """
+        if not self.connected or not self.driver or not query_text.strip():
+            return []
+        current_settings = get_settings()
+        top_k = limit if limit is not None else current_settings.multipath_arm_top_k
+        try:
+            embedding = await generate_embedding(query_text, mode="query")
+        except Exception as exc:
+            log.warning(
+                "dense_recall_arm_embed_failed",
+                error=str(exc),
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            return []
+        vis_frag, vis_params = _build_visibility_filter("node", user_id, authenticated)
+        try:
+            async with self.driver.session() as session:
+                ranked = await self._dense_vector_search_ranked(
+                    session, embedding, top_k, vis_frag, vis_params
+                )
+        except Exception as exc:
+            log.error(
+                "dense_recall_arm_failed",
+                error=str(exc),
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            return []
+        log.info(
+            "dense_recall_arm_completed",
+            arm="dense",
+            hit_count=len(ranked),
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        return ranked
+
+    async def _multipath_fused_recall(
+        self,
+        query_text: str,
+        *,
+        path: str,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
+    ) -> MultiPathRecallResult:
+        """Shared multi-path recall core (ADR-0104 seam owner / FRE-724).
+
+        Runs the v1 arms in parallel, fuses them by Reciprocal Rank Fusion, caps
+        the fused set to the reranker input cap, reranks that capped set, and
+        applies the soft operating point. Every recall path routes through this
+        one core (behind ``multipath_recall_enabled``); each adapts the returned
+        ``MultiPathRecallResult`` to its own shape.
+
+        The v1 arm set is dense + lexical + multi-query (design spec §2). The
+        multi-query arm subsumes the original-query dense pass, so the standalone
+        dense arm runs only when multi-query is off — never double-counting the
+        original query's agreement. The noise-guard floor lives inside the dense
+        arm (ADR-0103 §4); this core never applies a score threshold to the fused
+        or reranked set — the reranker orders, it does not gate (AC-5).
+
+        Args:
+            query_text: Free-text recall query.
+            path: Which recall path the core serves ("broad"/"entity"/"proactive")
+                — telemetry only.
+            trace_id: Request trace id for event correlation.
+            session_id: Session id for event correlation.
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity.
+
+        Returns:
+            The fused + reranked candidates (ordered, deduped, ≤ the input cap)
+            with the AC-1/AC-6 telemetry (arms executed/failed, per-arm counts,
+            fused-set size, path).
+        """
+        current_settings = get_settings()
+
+        arm_kwargs: dict[str, Any] = {
+            "trace_id": trace_id,
+            "session_id": session_id,
+            "user_id": user_id,
+            "authenticated": authenticated,
+        }
+        arm_names: list[str] = []
+        arm_coros: list[Any] = []
+        if current_settings.multiquery_arm_enabled:
+            arm_names.append("multi_query")
+            arm_coros.append(self.multi_query_recall_arm(query_text, **arm_kwargs))
+        else:
+            arm_names.append("dense")
+            arm_coros.append(self.dense_recall_arm(query_text, **arm_kwargs))
+        if current_settings.lexical_arm_enabled:
+            arm_names.append("lexical")
+            arm_coros.append(self.lexical_recall_arm(query_text, **arm_kwargs))
+
+        arm_results = await asyncio.gather(*arm_coros, return_exceptions=True)
+
+        arm_rankings: list[list[RankedResult]] = []
+        arms_failed: list[str] = []
+        per_arm_counts: dict[str, int] = {}
+        for name, res in zip(arm_names, arm_results, strict=True):
+            if isinstance(res, BaseException):
+                arms_failed.append(name)
+                per_arm_counts[name] = 0
+                log.warning(
+                    "multipath_arm_failed",
+                    arm=name,
+                    error=str(res),
+                    trace_id=trace_id,
+                    session_id=session_id,
+                )
+                continue
+            per_arm_counts[name] = len(res)
+            if res:
+                arm_rankings.append(res)
+
+        fused = reciprocal_rank_fusion(arm_rankings, k=current_settings.multipath_rrf_k)
+        capped = fused[: current_settings.reranker_input_cap]
+        items = await self._rerank_fused_items(
+            query_text, capped, trace_id=trace_id, session_id=session_id
+        )
+
+        log.info(
+            "multipath_recall",
+            path=path,
+            arms_executed=arm_names,
+            arms_failed=arms_failed,
+            per_arm_counts=per_arm_counts,
+            fused_set_size=len(capped),
+            reranked=bool(items) and current_settings.reranker_enabled,
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+
+        return MultiPathRecallResult(
+            items=items,
+            arms_executed=arm_names,
+            arms_failed=arms_failed,
+            per_arm_counts=per_arm_counts,
+            fused_set_size=len(capped),
+            path=path,
+        )
+
+    async def _resolve_item_texts(
+        self,
+        items: Sequence[FusedResult],
+        *,
+        trace_id: str | None = None,
+    ) -> dict[str, str]:
+        """Fetch rerank doc text for a heterogeneous fused set, keyed by item_id.
+
+        Entities (elementId) resolve to ``name + description``; turns (turn_id)
+        resolve to ``summary`` (falling back to ``user_message``). Missing items
+        simply have no entry — the caller substitutes an empty document so the
+        reranker still scores (and never drops) them.
+
+        Args:
+            items: The capped fused set to resolve.
+            trace_id: Request trace id for event correlation.
+
+        Returns:
+            Map of item_id → document text (may omit ids with no matching node).
+        """
+        texts: dict[str, str] = {}
+        if not self.driver or not items:
+            return texts
+        entity_ids = [it.item_id for it in items if it.kind == "entity"]
+        turn_ids = [it.item_id for it in items if it.kind == "turn"]
+        try:
+            async with self.driver.session() as session:
+                if entity_ids:
+                    r = await session.run(
+                        """
+                        UNWIND $ids AS eid
+                        MATCH (e:Entity) WHERE elementId(e) = eid
+                        RETURN eid AS id,
+                               coalesce(e.name, '') + ' ' + coalesce(e.description, '') AS text
+                        """,
+                        ids=entity_ids,
+                    )
+                    for row in await r.data():
+                        texts[row["id"]] = row["text"]
+                if turn_ids:
+                    r = await session.run(
+                        """
+                        UNWIND $ids AS tid
+                        MATCH (t:Turn {turn_id: tid})
+                        RETURN tid AS id, coalesce(t.summary, t.user_message, '') AS text
+                        """,
+                        ids=turn_ids,
+                    )
+                    for row in await r.data():
+                        texts[row["id"]] = row["text"]
+        except Exception as exc:
+            log.warning(
+                "multipath_resolve_texts_failed",
+                error=str(exc),
+                trace_id=trace_id,
+            )
+        return texts
+
+    async def _rerank_fused_items(
+        self,
+        query_text: str,
+        fused_items: Sequence[FusedResult],
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+    ) -> list[FusedResult]:
+        """Rerank the capped fused set as a soft ordering signal (AC-5).
+
+        Every item is scored (``top_k = len(docs)``) and the set is reordered by
+        rerank score; items the reranker omits keep fused order after the scored
+        ones. The reranker never drops an item — a disabled/failed/empty reranker
+        returns the fused order unchanged. It orders; it does not gate.
+
+        Args:
+            query_text: The recall query the reranker scores against.
+            fused_items: The capped fused set (already RRF-ordered).
+            trace_id: Request trace id for event correlation.
+            session_id: Session id for event correlation.
+
+        Returns:
+            The fused items, reordered by rerank score; a permutation of the input
+            (never a subset).
+        """
+        current_settings = get_settings()
+        items = list(fused_items)
+        if not current_settings.reranker_enabled or not query_text or len(items) <= 1:
+            return items
+
+        texts = await self._resolve_item_texts(items, trace_id=trace_id)
+        docs = [texts.get(it.item_id, "") for it in items]
+        try:
+            from personal_agent.memory.reranker import rerank  # noqa: PLC0415
+
+            rerank_results = await rerank(
+                query=query_text,
+                documents=docs,
+                top_k=len(docs),
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+        except Exception as exc:
+            log.warning(
+                "multipath_rerank_failed",
+                error=str(exc),
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            return items
+        if not rerank_results:
+            return items
+
+        scored: dict[int, float] = {
+            rr.index: rr.score for rr in rerank_results if 0 <= rr.index < len(items)
+        }
+        scored_order = sorted(scored, key=lambda i: (-scored[i], i))
+        unscored_order = [i for i in range(len(items)) if i not in scored]
+        return [items[i] for i in [*scored_order, *unscored_order]]
+
+    async def _multipath_broad_entities(
+        self,
+        query_text: str,
+        *,
+        limit: int,
+        entity_types: list[str] | None,
+        user_id: UUID | None,
+        authenticated: bool,
+        trace_id: str | None,
+        session_id: str | None,
+    ) -> list[dict[str, Any]]:
+        """Resolve the multi-path fused set into the broad path's entity payload.
+
+        Runs the shared core (path="broad"), then maps its ordered fused items back
+        to ``{name, type, description, mentions}`` entity dicts in fused-rank order:
+        entity items resolve to themselves; turn items (surfaced by the lexical arm)
+        expand to the entities they discuss. Deduped by name (first — highest fused
+        rank — wins), optionally filtered to ``entity_types``, and capped to ``limit``.
+
+        Args:
+            query_text: The recall query.
+            limit: Max entities to return.
+            entity_types: Optional type filter (applied in Python; None = all types).
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity.
+            trace_id: Request trace id for event correlation.
+            session_id: Session id for event correlation.
+
+        Returns:
+            Entity dicts ordered by fused rank, in the broad payload shape.
+        """
+        recall = await self._multipath_fused_recall(
+            query_text,
+            path="broad",
+            trace_id=trace_id,
+            session_id=session_id,
+            user_id=user_id,
+            authenticated=authenticated,
+        )
+        if not recall.items or not self.driver:
+            return []
+
+        entity_ids = [it.item_id for it in recall.items if it.kind == "entity"]
+        turn_ids = [it.item_id for it in recall.items if it.kind == "turn"]
+        vis_e, vis_params = _build_visibility_filter("e", user_id, authenticated)
+
+        by_entity_id: dict[str, dict[str, Any]] = {}
+        by_turn_id: dict[str, list[dict[str, Any]]] = {}
+        try:
+            async with self.driver.session() as session:
+                if entity_ids:
+                    r = await session.run(
+                        f"""
+                        UNWIND $ids AS eid
+                        MATCH (e:Entity) WHERE elementId(e) = eid AND {vis_e}
+                        OPTIONAL MATCH (e)<-[:DISCUSSES]-(mt:Turn)
+                        RETURN eid AS id, e.name AS name, e.entity_type AS type,
+                               e.description AS description, count(mt) AS mentions
+                        """,
+                        ids=entity_ids,
+                        **vis_params,
+                    )
+                    for row in await r.data():
+                        by_entity_id[row["id"]] = {
+                            "name": row["name"],
+                            "type": row["type"],
+                            "description": row["description"],
+                            "mentions": row["mentions"],
+                        }
+                if turn_ids:
+                    r = await session.run(
+                        f"""
+                        UNWIND $ids AS tid
+                        MATCH (t:Turn {{turn_id: tid}})-[:DISCUSSES]->(e:Entity)
+                        WHERE {vis_e}
+                        OPTIONAL MATCH (e)<-[:DISCUSSES]-(mt:Turn)
+                        RETURN tid AS id, e.name AS name, e.entity_type AS type,
+                               e.description AS description, count(mt) AS mentions
+                        """,
+                        ids=turn_ids,
+                        **vis_params,
+                    )
+                    for row in await r.data():
+                        by_turn_id.setdefault(row["id"], []).append(
+                            {
+                                "name": row["name"],
+                                "type": row["type"],
+                                "description": row["description"],
+                                "mentions": row["mentions"],
+                            }
+                        )
+        except Exception as exc:
+            log.warning(
+                "multipath_broad_resolve_failed",
+                error=str(exc),
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            return []
+
+        ordered: list[dict[str, Any]] = []
+        seen_names: set[str] = set()
+        for item in recall.items:
+            resolved = (
+                [by_entity_id[item.item_id]]
+                if item.kind == "entity" and item.item_id in by_entity_id
+                else by_turn_id.get(item.item_id, [])
+            )
+            for ent in resolved:
+                name = ent.get("name")
+                if not name or name in seen_names:
+                    continue
+                if entity_types and ent.get("type") not in entity_types:
+                    continue
+                seen_names.add(name)
+                ordered.append(ent)
+                if len(ordered) >= limit:
+                    return ordered
+        return ordered
+
+    @staticmethod
+    def _turn_node_from_node(node: Any) -> TurnNode:
+        """Build a TurnNode from a raw Neo4j Turn node (shared resolver helper)."""
+        turn_id = node.get("turn_id") or node.get("conversation_id", "")
+        return TurnNode(
+            turn_id=turn_id,
+            trace_id=node.get("trace_id"),
+            session_id=node.get("session_id"),
+            sequence_number=node.get("sequence_number", 0),
+            timestamp=datetime.fromisoformat(node.get("timestamp", datetime.utcnow().isoformat())),
+            summary=node.get("summary"),
+            user_message=node.get("user_message", ""),
+            assistant_response=node.get("assistant_response"),
+            key_entities=node.get("key_entities", []),
+            properties=orjson.loads(node.get("properties", "{}"))
+            if isinstance(node.get("properties"), str)
+            else node.get("properties", {}),
+        )
+
+    async def _multipath_query_memory(
+        self,
+        query: "MemoryQuery",
+        query_text: str,
+        *,
+        access_context: AccessContext,
+        trace_id: str | None,
+        session_id: str | None,
+        user_id: UUID | None,
+        authenticated: bool,
+    ) -> "MemoryQueryResult":
+        """Entity-name path convergence onto the multi-path core (FRE-724).
+
+        Runs the shared fused+reranked core (path="entity") and resolves its
+        ordered items into the ``MemoryQueryResult`` turn set: turn items map
+        straight to their TurnNode, entity items expand to their most-recent turns
+        (bounded by ``recall_per_entity_turn_cap``). Relevance scores are the fused
+        rank normalised to (0, 1] so downstream consumers keep a monotonic ordering
+        signal. Turns are deduped by turn_id and sliced to ``query.limit``.
+
+        Args:
+            query: The original memory query (for the result limit + access event).
+            query_text: The recall query text.
+            access_context: Typed access context (ADR-0042).
+            trace_id: Request trace id for event correlation.
+            session_id: Session id for event correlation.
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity.
+
+        Returns:
+            MemoryQueryResult with fused+reranked conversations and rank-derived
+            relevance scores.
+        """
+        recall = await self._multipath_fused_recall(
+            query_text,
+            path="entity",
+            trace_id=trace_id,
+            session_id=session_id,
+            user_id=user_id,
+            authenticated=authenticated,
+        )
+        conversations: list[TurnNode] = []
+        relevance_scores: dict[str, float] = {}
+        if recall.items and self.driver:
+            turns_by_entity, turns_by_id = await self._resolve_fused_turns(
+                recall.items,
+                per_entity_cap=get_settings().recall_per_entity_turn_cap,
+                user_id=user_id,
+                authenticated=authenticated,
+                trace_id=trace_id,
+            )
+            seen: set[str] = set()
+            total = len(recall.items)
+            for position, item in enumerate(recall.items):
+                resolved = (
+                    [turns_by_id[item.item_id]]
+                    if item.kind == "turn" and item.item_id in turns_by_id
+                    else turns_by_entity.get(item.item_id, [])
+                )
+                for turn in resolved:
+                    if turn.turn_id in seen:
+                        continue
+                    seen.add(turn.turn_id)
+                    conversations.append(turn)
+                    relevance_scores[turn.turn_id] = (total - position) / total
+                    if len(conversations) >= query.limit:
+                        break
+                if len(conversations) >= query.limit:
+                    break
+
+        accessed_entity_ids = list(query.entity_names or [])
+        for conversation in conversations:
+            accessed_entity_ids.extend(conversation.key_entities or [])
+        accessed_entity_ids = list(dict.fromkeys(accessed_entity_ids))
+
+        log.info(
+            "memory_query_completed",
+            query_params=["multipath"],
+            result_count=len(conversations),
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        if settings.freshness_enabled and accessed_entity_ids and trace_id:
+            event = MemoryAccessedEvent(
+                entity_ids=accessed_entity_ids,
+                relationship_ids=[],
+                access_context=access_context,
+                query_type="query_memory_multipath",
+                trace_id=trace_id,
+                session_id=session_id,
+                source_component="memory.service",
+            )
+            bus = get_event_bus()
+            try:
+                await bus.publish(STREAM_MEMORY_ACCESSED, event)
+            except Exception as pub_exc:
+                log.warning(
+                    "memory_access_event_publish_failed",
+                    error=str(pub_exc),
+                    event_id=event.event_id,
+                    trace_id=trace_id,
+                )
+        return MemoryQueryResult(
+            conversations=conversations,
+            relevance_scores=relevance_scores,
+        )
+
+    async def _resolve_fused_turns(
+        self,
+        items: Sequence[FusedResult],
+        *,
+        per_entity_cap: int,
+        user_id: UUID | None,
+        authenticated: bool,
+        trace_id: str | None,
+    ) -> tuple[dict[str, list[TurnNode]], dict[str, TurnNode]]:
+        """Resolve a fused set into TurnNodes for the entity-name path.
+
+        Args:
+            items: The capped fused set.
+            per_entity_cap: Max most-recent turns to expand per entity item.
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity.
+            trace_id: Request trace id for event correlation.
+
+        Returns:
+            Tuple of (entity elementId -> its expanded TurnNodes, turn_id -> TurnNode).
+        """
+        by_entity: dict[str, list[TurnNode]] = {}
+        by_turn: dict[str, TurnNode] = {}
+        if not self.driver or not items:
+            return by_entity, by_turn
+        entity_ids = [it.item_id for it in items if it.kind == "entity"]
+        turn_ids = [it.item_id for it in items if it.kind == "turn"]
+        vis_t, vis_params = _build_visibility_filter("t", user_id, authenticated)
+        try:
+            async with self.driver.session() as session:
+                if turn_ids:
+                    r = await session.run(
+                        f"""
+                        UNWIND $ids AS tid
+                        MATCH (t:Turn {{turn_id: tid}}) WHERE {vis_t}
+                        RETURN t
+                        """,
+                        ids=turn_ids,
+                        **vis_params,
+                    )
+                    for row in await r.values():
+                        if row and row[0]:
+                            node = self._turn_node_from_node(row[0])
+                            by_turn[node.turn_id] = node
+                if entity_ids:
+                    r = await session.run(
+                        f"""
+                        UNWIND $ids AS eid
+                        MATCH (e:Entity)<-[:DISCUSSES]-(t:Turn)
+                        WHERE elementId(e) = eid AND {vis_t}
+                        WITH eid, t ORDER BY t.timestamp DESC
+                        WITH eid, collect(t)[0..$cap] AS turns
+                        UNWIND turns AS t
+                        RETURN eid AS eid, t
+                        """,
+                        ids=entity_ids,
+                        cap=per_entity_cap,
+                        **vis_params,
+                    )
+                    for row in await r.values():
+                        eid, node_raw = row[0], row[1]
+                        if node_raw:
+                            by_entity.setdefault(eid, []).append(
+                                self._turn_node_from_node(node_raw)
+                            )
+        except Exception as exc:
+            log.warning(
+                "multipath_resolve_turns_failed",
+                error=str(exc),
+                trace_id=trace_id,
+            )
+        return by_entity, by_turn
 
     async def multi_query_recall_arm(
         self,
@@ -2942,88 +3700,104 @@ class MemoryService:
 
         try:
             async with self.driver.session() as db_session:
-                # Relevance-keyed candidate entities (ADR-0100): vector top-k over
-                # entity_embedding, floor-filtered. Empty when the flag is off, no
-                # query_text, or the embedding is unavailable — in which case the
-                # entity query below collapses to the legacy recency-only path.
-                relevant_entity_names: list[str] = []
-                entity_scores: dict[str, float] = {}
-                if relevance_bounded and query_text:
-                    try:
-                        query_embedding = await generate_embedding(query_text, mode="query")
-                        if any(x != 0.0 for x in query_embedding):
-                            rows = await self._query_entity_vector_candidates(
-                                db_session,
-                                query_embedding,
-                                current_settings.proactive_memory_vector_top_k,
-                            )
-                            relevant_entity_names, entity_scores = _filter_entities_by_floor(
-                                rows, current_settings.recall_similarity_floor
-                            )
-                    except Exception as vec_exc:
-                        log.warning(
-                            "broad_vector_search_failed",
-                            error=str(vec_exc),
-                            trace_id=trace_id,
-                        )
-
-                # Entities: legacy recency-only, or (flag on) recency-window UNION
-                # vector-relevant entities across all time, ranked by relevance.
-                if relevance_bounded:
-                    entity_type_clause = (
-                        "AND e.entity_type IN $entity_types\n" if entity_types else ""
-                    )
-                    entity_q = f"""
-                        MATCH (e:Entity)<-[:DISCUSSES]-(t:Turn)
-                        WHERE {turn_vis_frag}
-                          {entity_type_clause}
-                          AND (t.timestamp >= $cutoff OR e.name IN $relevant_entity_names)
-                        WITH e, count(t) AS mentions,
-                             coalesce($entity_scores[e.name], 0.0) AS escore
-                        RETURN e.name AS name, e.entity_type AS type,
-                               e.description AS description, mentions
-                        ORDER BY escore DESC, mentions DESC LIMIT $limit
-                    """
-                    params: dict[str, Any] = {
-                        "cutoff": cutoff,
-                        "limit": limit,
-                        "relevant_entity_names": relevant_entity_names,
-                        "entity_scores": entity_scores,
-                        **vis_params,
-                    }
-                    if entity_types:
-                        params["entity_types"] = entity_types
-                    r = await db_session.run(entity_q, **params)
-                elif entity_types:
-                    entity_q = f"""
-                        MATCH (e:Entity)<-[:DISCUSSES]-(t:Turn)
-                        WHERE {turn_vis_frag}
-                          AND e.entity_type IN $entity_types
-                          AND t.timestamp >= $cutoff
-                        RETURN e.name as name, e.entity_type as type,
-                               e.description as description,
-                               count(t) as mentions
-                        ORDER BY mentions DESC LIMIT $limit
-                    """
-                    r = await db_session.run(
-                        entity_q,
-                        entity_types=entity_types,
-                        cutoff=cutoff,
+                # Multi-path recall (ADR-0104 / FRE-724): behind
+                # multipath_recall_enabled, the entity set is produced by the shared
+                # fused+reranked core and resolved back to the broad payload shape.
+                # Flag off reproduces the ADR-0100 / legacy entity path below,
+                # byte-for-byte.
+                if current_settings.multipath_recall_enabled and query_text:
+                    entities = await self._multipath_broad_entities(
+                        query_text,
                         limit=limit,
-                        **vis_params,
+                        entity_types=entity_types,
+                        user_id=user_id,
+                        authenticated=authenticated,
+                        trace_id=trace_id,
+                        session_id=session_id,
                     )
                 else:
-                    entity_q = f"""
-                        MATCH (e:Entity)<-[:DISCUSSES]-(t:Turn)
-                        WHERE {turn_vis_frag}
-                          AND t.timestamp >= $cutoff
-                        RETURN e.name as name, e.entity_type as type,
-                               e.description as description,
-                               count(t) as mentions
-                        ORDER BY mentions DESC LIMIT $limit
-                    """
-                    r = await db_session.run(entity_q, cutoff=cutoff, limit=limit, **vis_params)
-                entities = await r.data()
+                    # Relevance-keyed candidate entities (ADR-0100): vector top-k over
+                    # entity_embedding, floor-filtered. Empty when the flag is off, no
+                    # query_text, or the embedding is unavailable — in which case the
+                    # entity query below collapses to the legacy recency-only path.
+                    relevant_entity_names: list[str] = []
+                    entity_scores: dict[str, float] = {}
+                    if relevance_bounded and query_text:
+                        try:
+                            query_embedding = await generate_embedding(query_text, mode="query")
+                            if any(x != 0.0 for x in query_embedding):
+                                rows = await self._query_entity_vector_candidates(
+                                    db_session,
+                                    query_embedding,
+                                    current_settings.proactive_memory_vector_top_k,
+                                )
+                                relevant_entity_names, entity_scores = _filter_entities_by_floor(
+                                    rows, current_settings.recall_similarity_floor
+                                )
+                        except Exception as vec_exc:
+                            log.warning(
+                                "broad_vector_search_failed",
+                                error=str(vec_exc),
+                                trace_id=trace_id,
+                            )
+
+                    # Entities: legacy recency-only, or (flag on) recency-window UNION
+                    # vector-relevant entities across all time, ranked by relevance.
+                    if relevance_bounded:
+                        entity_type_clause = (
+                            "AND e.entity_type IN $entity_types\n" if entity_types else ""
+                        )
+                        entity_q = f"""
+                            MATCH (e:Entity)<-[:DISCUSSES]-(t:Turn)
+                            WHERE {turn_vis_frag}
+                              {entity_type_clause}
+                              AND (t.timestamp >= $cutoff OR e.name IN $relevant_entity_names)
+                            WITH e, count(t) AS mentions,
+                                 coalesce($entity_scores[e.name], 0.0) AS escore
+                            RETURN e.name AS name, e.entity_type AS type,
+                                   e.description AS description, mentions
+                            ORDER BY escore DESC, mentions DESC LIMIT $limit
+                        """
+                        params: dict[str, Any] = {
+                            "cutoff": cutoff,
+                            "limit": limit,
+                            "relevant_entity_names": relevant_entity_names,
+                            "entity_scores": entity_scores,
+                            **vis_params,
+                        }
+                        if entity_types:
+                            params["entity_types"] = entity_types
+                        r = await db_session.run(entity_q, **params)
+                    elif entity_types:
+                        entity_q = f"""
+                            MATCH (e:Entity)<-[:DISCUSSES]-(t:Turn)
+                            WHERE {turn_vis_frag}
+                              AND e.entity_type IN $entity_types
+                              AND t.timestamp >= $cutoff
+                            RETURN e.name as name, e.entity_type as type,
+                                   e.description as description,
+                                   count(t) as mentions
+                            ORDER BY mentions DESC LIMIT $limit
+                        """
+                        r = await db_session.run(
+                            entity_q,
+                            entity_types=entity_types,
+                            cutoff=cutoff,
+                            limit=limit,
+                            **vis_params,
+                        )
+                    else:
+                        entity_q = f"""
+                            MATCH (e:Entity)<-[:DISCUSSES]-(t:Turn)
+                            WHERE {turn_vis_frag}
+                              AND t.timestamp >= $cutoff
+                            RETURN e.name as name, e.entity_type as type,
+                                   e.description as description,
+                                   count(t) as mentions
+                            ORDER BY mentions DESC LIMIT $limit
+                        """
+                        r = await db_session.run(entity_q, cutoff=cutoff, limit=limit, **vis_params)
+                    entities = await r.data()
 
                 # Recent sessions with dominant topics
                 session_q = f"""

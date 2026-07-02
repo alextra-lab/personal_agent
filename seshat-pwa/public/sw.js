@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v28-runtime-config';
+const CACHE_NAME = 'seshat-v29-attachment-override';
 
 const PRECACHE_URLS = [
   '/',

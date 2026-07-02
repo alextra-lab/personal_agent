@@ -159,3 +159,81 @@ def estimate_reservation_for_call(
         output_price_per_token=output_price,
         config=config,
     )
+
+
+def actual_cost_for_response(
+    *,
+    response: Any,
+    model: str,
+    trace_id: str | None = None,
+) -> Decimal:
+    """Reconcile the committed USD cost of a completed call, guarding against $0.
+
+    ``litellm.completion_cost`` derives the model from the response when not passed
+    one; a *dated* provider id (e.g. ``claude-sonnet-4-6-20990101``) the registry
+    does not know raises, which the caller would otherwise swallow as ``$0`` —
+    silently metering cloud vision as free (ADR-0101 §8b AC-11, codex High-2). This
+    passes the known request ``model`` so litellm prices the registered rate, and on
+    any failure (or a ``0`` result while the response carries usage) falls back to
+    config pricing × actual usage. ``usage.prompt_tokens`` already includes image
+    tokens as the provider counts them, so the committed basis includes images.
+
+    Args:
+        response: The litellm response object (carries ``.usage`` + ``.model``).
+        model: The request's litellm model string (e.g. ``anthropic/claude-sonnet-4-6``),
+            registered via :func:`personal_agent.llm_client.pricing.register_model_pricing`.
+        trace_id: Originating request trace_id, threaded onto fallback logs
+            (ADR-0074 §I3).
+
+    Returns:
+        Committed cost in USD, rounded to 6 decimals (matches ``DECIMAL(10, 6)``).
+    """
+    import litellm  # noqa: PLC0415 — keep litellm import off module load
+
+    try:
+        cost = float(litellm.completion_cost(completion_response=response, model=model))
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "actual_cost_completion_cost_failed",
+            model=model,
+            error=str(exc),
+            trace_id=trace_id,
+        )
+        cost = 0.0
+
+    if cost > 0:
+        return Decimal(str(cost)).quantize(Decimal("0.000001"))
+
+    # Fallback: price the actual usage from the (config-registered) registry so a
+    # response whose model id litellm can't map still meters non-zero.
+    usage = getattr(response, "usage", None)
+    prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+    completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+    if prompt_tokens == 0 and completion_tokens == 0:
+        return Decimal("0")
+
+    model_cost_table: dict[str, Any] = getattr(litellm, "model_cost", {})
+    pricing: dict[str, Any] = model_cost_table.get(model) or model_cost_table.get(
+        model.rsplit("/", 1)[-1], {}
+    )
+    input_price = Decimal(str(pricing.get("input_cost_per_token", "0")))
+    output_price = Decimal(str(pricing.get("output_cost_per_token", "0")))
+    fallback = Decimal(prompt_tokens) * input_price + Decimal(completion_tokens) * output_price
+
+    if fallback > 0:
+        log.info(
+            "actual_cost_fallback_priced",
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost_usd=float(fallback),
+            trace_id=trace_id,
+        )
+    else:
+        log.warning(
+            "actual_cost_unpriced",
+            model=model,
+            note="committed as $0; model has no registered pricing",
+            trace_id=trace_id,
+        )
+    return fallback.quantize(Decimal("0.000001"))

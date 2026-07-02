@@ -168,6 +168,24 @@ class ModelDefinition(BaseModel):
             "A deployment property, not inferred — set explicitly per model definition."
         ),
     )
+    input_cost_per_token: float | None = Field(
+        default=None,
+        ge=0.0,
+        description=(
+            "USD cost per input token (ADR-0101 §8b / FRE-691). Config-owned pricing "
+            "registered into litellm.model_cost at startup so cloud cost is deterministic "
+            "and non-zero, independent of litellm's shipped registry. None = rely on the "
+            "litellm registry (local/free models leave this unset). Image (vision) tokens "
+            "are billed as ordinary input tokens on this rate."
+        ),
+    )
+    output_cost_per_token: float | None = Field(
+        default=None,
+        ge=0.0,
+        description=(
+            "USD cost per output token (ADR-0101 §8b / FRE-691). See input_cost_per_token."
+        ),
+    )
     tool_calling_strategy: ToolCallingStrategy | None = Field(
         default=None,
         description=(

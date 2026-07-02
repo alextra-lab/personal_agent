@@ -302,6 +302,14 @@ class ExecutionContext:
     # step_synthesis so the disclosure reaches the user (never silent).
     attachment_disclosures: list[str] = field(default_factory=list)
 
+    # --- FRE-691 / ADR-0101 §8b cloud-attachment cost confirmation ---
+    # Set True once the user has confirmed (or the turn is under the cost
+    # threshold) so a turn that re-enters LLM_CALL (tool iterations, hybrid
+    # synthesis) with the images still in context is not re-prompted. The gate
+    # is per-turn: one confirmation authorises the turn's cloud-vision usage,
+    # while the per-call ADR-0065 reservation still caps every call.
+    attachment_cost_confirmed: bool = False
+
 
 class OrchestratorStep(TypedDict):
     """Step metadata for observability.

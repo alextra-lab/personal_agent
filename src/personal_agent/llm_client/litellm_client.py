@@ -572,11 +572,15 @@ class LiteLLMClient:
                         usage.get("cache_read_input_tokens", 0) + openai_cached
                     )
 
-        # Cost tracking — use litellm.completion_cost(), record to DB
-        try:
-            cost = litellm.completion_cost(completion_response=response)
-        except Exception:
-            cost = 0.0
+        # Cost tracking — reconcile via litellm.completion_cost(), guarded so an
+        # unmapped dated response id can't silently commit $0 (ADR-0101 §8b AC-11).
+        from personal_agent.llm_client.cost_estimator import actual_cost_for_response
+
+        cost = float(
+            actual_cost_for_response(
+                response=response, model=self._litellm_model, trace_id=trace_id
+            )
+        )
 
         # Settle the reservation against the actual cost. Always commit (even
         # at $0) so the reservation row transitions out of `active` and the

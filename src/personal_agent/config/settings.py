@@ -792,6 +792,17 @@ class AppConfig(BaseSettings):
             "dropped with disclosure."
         ),
     )
+    attachment_cost_confirmation_threshold_usd: float = Field(
+        default=0.50,
+        ge=0.0,
+        description=(
+            "Pre-flight cloud-attachment cost above which the agent asks the user to "
+            "confirm before spending, rather than proceeding silently (ADR-0101 §8b / "
+            "FRE-691). A single image (~1600 tokens ≈ $0.005) is far below this, so the "
+            "gate mainly bounds multi-image turns and the pricier ADR-0102 PDF path. "
+            "Owner-tunable via AGENT_ATTACHMENT_COST_CONFIRMATION_THRESHOLD_USD."
+        ),
+    )
 
     # Paths (for domain config loaders)
     governance_config_path: Path = Field(

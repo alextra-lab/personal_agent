@@ -16,12 +16,18 @@ export const CONSTRAINT_ACTION_LABELS: Record<string, Record<string, string>> = 
     compress_continue: 'Compress and continue',
     stop_here: 'Stop here instead',
   },
+  // ADR-0101 §8b / FRE-691: pre-flight cloud-attachment cost confirmation.
+  attachment_cost: {
+    proceed_cloud: 'Proceed on cloud',
+    keep_local: 'Keep local / free',
+  },
 };
 
 /** Human title for a constraint type, shown in the DecisionCard header. */
 export const CONSTRAINT_TITLES: Record<string, string> = {
   tool_iteration_limit: 'Tool call limit reached',
   context_compression: 'Context window nearly full',
+  attachment_cost: 'Confirm cloud attachment cost',
 };
 
 /** Map an action_id to its display label, falling back to the raw id. */

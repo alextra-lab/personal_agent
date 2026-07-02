@@ -66,11 +66,23 @@ function wsBaseUrl(): string {
 // User uploads (FRE-369 / ADR-0069)
 // --------------------------------------------------------------------------
 
-/** An attachment that has successfully completed the presign→upload→complete flow. */
-export interface UploadedAttachment {
+/** Metadata for an attachment that has completed the presign→upload→complete flow. */
+export interface CompletedUpload {
   artifact_id: string;
   content_type: string;
   title: string;
+}
+
+/**
+ * An attachment attached to an outgoing chat turn.
+ *
+ * `processing_target` is the ADR-0101 §8a per-attachment cloud/local override, sent
+ * unchanged to `/chat/stream` and threaded through by the backend (FRE-661/691/692).
+ * `'none'` is the wire value for "no selection made" — the backend treats it (and any
+ * other non-`'cloud'`/`'local'` value) as equivalent to absent.
+ */
+export interface UploadedAttachment extends CompletedUpload {
+  processing_target: 'cloud' | 'local' | 'none';
 }
 
 /** Per-file upload state tracked by ChatInput. */
@@ -81,6 +93,8 @@ export interface UploadState {
   status: 'uploading' | 'complete' | 'error';
   artifact_id?: string;
   error?: string;
+  /** ADR-0101 §8a override; undefined = no selection (sent as `'none'` on submit). */
+  processingTarget?: 'cloud' | 'local';
 }
 
 interface _PresignResponse {
@@ -134,7 +148,7 @@ export async function uploadToR2(uploadUrl: string, file: File): Promise<void> {
  * @returns The completed attachment metadata.
  * @throws Error when backend returns 404 / 502 / 413.
  */
-export async function completeUpload(artifactId: string): Promise<UploadedAttachment> {
+export async function completeUpload(artifactId: string): Promise<CompletedUpload> {
   const resp = await fetch(`${SESHAT_API}/api/uploads/${artifactId}/complete`, {
     method: 'POST',
     credentials: 'include',

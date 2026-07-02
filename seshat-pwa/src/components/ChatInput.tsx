@@ -41,6 +41,8 @@ const ACCEPTED_TYPE_SET = new Set(ACCEPTED_TYPES.split(','));
  * - The textarea auto-grows up to 5 lines.
  * - Footer padding accounts for iOS home-indicator via safe-area-inset-bottom.
  * - Send is blocked while any upload is in-progress (status !== 'complete').
+ * - Completed image attachments carry an Auto/Cloud/Local cycle button (ADR-0101 §8a,
+ *   FRE-692); the chosen value (or 'none' if untouched) is sent as `processing_target`.
  */
 export function ChatInput({
   onSend,
@@ -111,6 +113,22 @@ export function ChatInput({
     setUploads((prev) => prev.filter((u) => u.id !== id));
   };
 
+  /** Cycle an image attachment's processing-target override: Auto → Cloud → Local → Auto. */
+  const cycleProcessingTarget = (id: string) => {
+    setUploads((prev) =>
+      prev.map((u) => {
+        if (u.id !== id) return u;
+        const next =
+          u.processingTarget === undefined
+            ? 'cloud'
+            : u.processingTarget === 'cloud'
+              ? 'local'
+              : undefined;
+        return { ...u, processingTarget: next };
+      }),
+    );
+  };
+
   // ---------------------------------------------------------------------------
   // Send
   // ---------------------------------------------------------------------------
@@ -127,6 +145,7 @@ export function ChatInput({
         artifact_id: u.artifact_id!,
         content_type: u.file.type,
         title: u.file.name,
+        processing_target: u.processingTarget ?? 'none',
       }));
 
     onSend(trimmed, completed);
@@ -265,6 +284,25 @@ export function ChatInput({
               {u.status === 'complete' && <span>✓</span>}
               {u.status === 'error' && <span>✗</span>}
               <span className="max-w-[120px] truncate">{u.file.name}</span>
+              {u.status === 'complete' && u.file.type.startsWith('image/') && (
+                <button
+                  type="button"
+                  onClick={() => cycleProcessingTarget(u.id)}
+                  className={`px-1 rounded ${
+                    u.processingTarget === 'cloud'
+                      ? 'text-amber-300'
+                      : u.processingTarget === 'local'
+                        ? 'text-emerald-300'
+                        : 'text-slate-400'
+                  }`}
+                  aria-label={`Set processing target for ${u.file.name}, currently ${
+                    u.processingTarget === 'cloud' ? 'Cloud' : u.processingTarget === 'local' ? 'Local' : 'Auto'
+                  }`}
+                  title="Cycle per-attachment processing target (Auto / Cloud / Local)"
+                >
+                  {u.processingTarget === 'cloud' ? 'Cloud' : u.processingTarget === 'local' ? 'Local' : 'Auto'}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => removeUpload(u.id)}

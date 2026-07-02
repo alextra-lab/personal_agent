@@ -1,6 +1,6 @@
 # ADR-0105: Convergent Self-Improvement Pipeline & Isolated System Graph
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-01
 **Deciders:** Project owner
 **Tags:** self-improvement, insights, captains-log, observability, postgres, system-kg, feedback-loop
@@ -317,6 +317,10 @@ The existing `dedup.py` keys on a **text-exact fingerprint**, so the same idea i
 ### 2026-07-01 - Revised (still Proposed) — generation-time dedup + semantic-behind-a-measurement-gate
 **Changed By:** Project owner (adr session, Opus)
 **Reason:** Folded in the owner's FRE-708 comments: **D9** (`sysgraph` is a generation-time read surface — producers read-before-emit and branch decided/awaiting/novel, front-line dedup with D7 as backstop); **D10** (semantic dedup, not fingerprint — grounded in the measured 832/942 semantic-repeat; adopted **only behind** the FRE-670/ADR-0103 separation-probe gate on the real corpus, with a category+facet fallback; no reranker; embedder only on the always-on private VPS CPU path, never laptop-GPU); and **D7 sharpened** to active suppression of already-*decided* kinds, not merely recording the outcome. New alternatives (Options 6–7), risks, and criteria AC-8/9/10 added; AC-9 is a second assembled seam (depends on AC-8). Awaiting Codex review + owner acceptance.
+
+### 2026-07-02 - Accepted
+**Changed By:** Project owner (via master gate)
+**Reason:** Owner-accepted 2026-07-02. The build wave (children FRE-714–721) is greenlit; the one risky decision — **D10 semantic dedup** — stays gated behind the FRE-720 separation-probe measurement, so acceptance commits to the **isolated-sysgraph substrate** + producer convergence (D1) + verbatim promotion (D5) + one funnel (D6) + Postgres tuning (D8), **not** to unmeasured semantic dedup. Locks the System-isolation approach coordinated with Memory's ADR-0098 D1 System class (FRE-639) and ADR-0106 (FRE-728–732).
 
 ---
 

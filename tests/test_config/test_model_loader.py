@@ -3,9 +3,11 @@
 from pathlib import Path
 
 import pytest
+import structlog
 
 from personal_agent.config import ModelConfigError, load_model_config
 from personal_agent.config import model_loader as model_loader_module
+from personal_agent.config.model_loader import check_vision_capabilities
 from personal_agent.llm_client.models import ModelConfig, ModelDefinition
 
 
@@ -210,11 +212,105 @@ models:
 
 
 class TestSupportsVisionDeployedConfig:
-    """ADR-0101 §5: the deployed vision-capable models declare supports_vision."""
+    """ADR-0101 §5: the deployed vision-capable models declare supports_vision.
 
-    def test_deployed_vision_capable_models_flagged(self) -> None:
+    FRE-734: guards BOTH deployed config files. The original guard read only
+    ``config/models.yaml``, so the cloud deployment (``config/models.cloud.yaml``,
+    selected via ``AGENT_MODEL_CONFIG_PATH`` in ``docker-compose.cloud.yml``) drifted to
+    ``supports_vision=False`` on every model and broke vision in production while CI
+    stayed green. ``config/models.eval.yaml`` is referenced by ``docker-compose.eval.yml``
+    but does not exist in the repo (stale/eval-only), so it is intentionally excluded.
+    """
+
+    _VISION_ROLES = ("primary", "sub_agent", "claude_sonnet", "claude_haiku")
+
+    @pytest.mark.parametrize(
+        "config_path",
+        [
+            Path("config/models.yaml"),
+            Path("config/models.cloud.yaml"),
+        ],
+    )
+    def test_deployed_vision_capable_models_flagged(self, config_path: Path) -> None:
         """primary, sub_agent, claude_sonnet, claude_haiku all declare supports_vision=True."""
-        config = load_model_config(Path("config/models.yaml"))
+        config = load_model_config(config_path)
 
-        for key in ("primary", "sub_agent", "claude_sonnet", "claude_haiku"):
-            assert config.models[key].supports_vision is True, f"{key} must support vision"
+        for key in self._VISION_ROLES:
+            assert config.models[key].supports_vision is True, (
+                f"{key} must support vision in {config_path}"
+            )
+
+
+class TestCheckVisionCapabilities:
+    """FRE-734 startup drift guard: check_vision_capabilities (ADR-0101 §5)."""
+
+    @staticmethod
+    def _model(*, supports_vision: bool) -> ModelDefinition:
+        return ModelDefinition(
+            id="test-model",
+            context_length=8192,
+            max_concurrency=1,
+            default_timeout=30,
+            supports_vision=supports_vision,
+        )
+
+    def _patch_config(
+        self, monkeypatch: pytest.MonkeyPatch, models: dict[str, ModelDefinition]
+    ) -> None:
+        monkeypatch.setattr(
+            model_loader_module,
+            "load_model_config",
+            lambda *a, **k: ModelConfig(models=models),
+        )
+
+    def test_all_expected_roles_flagged_no_warning(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When every expected role is vision-flagged, missing is empty and no warning fires."""
+        self._patch_config(
+            monkeypatch,
+            {
+                role: self._model(supports_vision=True)
+                for role in model_loader_module._EXPECTED_VISION_ROLES
+            },
+        )
+
+        with structlog.testing.capture_logs() as logs:
+            capable, missing = check_vision_capabilities()
+
+        assert missing == []
+        assert set(capable) == set(model_loader_module._EXPECTED_VISION_ROLES)
+        events = [entry["event"] for entry in logs]
+        assert "vision_capabilities_at_startup" in events
+        assert "vision_capable_roles_missing" not in events
+
+    def test_drift_warns_role_aware(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The cloud-drift shape (roles present but unflagged) warns and reports the roles."""
+        self._patch_config(
+            monkeypatch,
+            {
+                role: self._model(supports_vision=False)
+                for role in model_loader_module._EXPECTED_VISION_ROLES
+            },
+        )
+
+        with structlog.testing.capture_logs() as logs:
+            capable, missing = check_vision_capabilities()
+
+        assert capable == []
+        assert set(missing) == set(model_loader_module._EXPECTED_VISION_ROLES)
+        warnings = [e for e in logs if e["event"] == "vision_capable_roles_missing"]
+        assert len(warnings) == 1
+        assert set(warnings[0]["missing_roles"]) == set(model_loader_module._EXPECTED_VISION_ROLES)
+
+    def test_load_failure_is_non_fatal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A config load failure is swallowed, logged, and returns empty lists (never raises)."""
+
+        def _boom(*a: object, **k: object) -> ModelConfig:
+            raise ModelConfigError("simulated load failure")
+
+        monkeypatch.setattr(model_loader_module, "load_model_config", _boom)
+
+        with structlog.testing.capture_logs() as logs:
+            capable, missing = check_vision_capabilities()
+
+        assert (capable, missing) == ([], [])
+        assert "vision_capabilities_check_failed" in [e["event"] for e in logs]

@@ -151,3 +151,83 @@ def resolve_active_attribution(
         )
         primary_id = None
     return primary_id, config_path_str
+
+
+# Expected vision-capable roles on the deployed profiles (ADR-0101 §5).
+# FRE-734: the drift that broke production was these roles unflagged in the
+# deployed config file — so the startup guard checks these specific roles,
+# not merely "some model is vision-capable".
+_EXPECTED_VISION_ROLES: tuple[str, ...] = (
+    "primary",
+    "sub_agent",
+    "claude_sonnet",
+    "claude_haiku",
+)
+
+
+def check_vision_capabilities(*, trace_id: str | None = None) -> tuple[list[str], list[str]]:
+    """Log the active config's vision-capable roles and warn on drift (ADR-0101 §5).
+
+    Startup drift guard (FRE-734). Vision broke in production once because the
+    deployed config file (``config/models.cloud.yaml``, selected via
+    ``AGENT_MODEL_CONFIG_PATH``) was never given the ``supports_vision`` flag that
+    ``config/models.yaml`` carried, so every image turn failed routing while CI
+    stayed green. This emits a startup signal — an info line listing the
+    vision-capable roles, plus a role-aware warning when an expected production
+    role is not flagged — so the drift is visible in logs at boot, not discovered
+    by a user.
+
+    Non-fatal by design: vision is not load-bearing, so a config gap must not down
+    the gateway; the CI parity test
+    (``test_deployed_vision_capable_models_flagged``) is the real gate. Any failure
+    loading the config is swallowed and logged, never raised.
+
+    Args:
+        trace_id: Optional trace correlation id. Startup has no request context,
+            so this is normally None.
+
+    Returns:
+        ``(capable_roles, missing_roles)`` — ``capable_roles`` is every role key in
+        the active config with ``supports_vision=True`` (sorted); ``missing_roles``
+        is the subset of ``_EXPECTED_VISION_ROLES`` absent or not vision-flagged.
+        Both empty lists on a load failure.
+    """
+    from personal_agent.config import settings  # noqa: PLC0415
+
+    config_path_str = str(settings.model_config_path)
+    try:
+        cfg = load_model_config()
+    except Exception as exc:  # noqa: BLE001 — startup diagnostic must never down the service
+        log.warning(
+            "vision_capabilities_check_failed",
+            error=str(exc),
+            config_path=config_path_str,
+            trace_id=trace_id,
+        )
+        return [], []
+
+    capable = sorted(key for key, model in cfg.models.items() if model.supports_vision)
+    missing = [
+        role
+        for role in _EXPECTED_VISION_ROLES
+        if role not in cfg.models or not cfg.models[role].supports_vision
+    ]
+
+    log.info(
+        "vision_capabilities_at_startup",
+        vision_capable_roles=capable,
+        config_path=config_path_str,
+        trace_id=trace_id,
+    )
+    if missing:
+        log.warning(
+            "vision_capable_roles_missing",
+            missing_roles=missing,
+            config_path=config_path_str,
+            remedy=(
+                "Set supports_vision: true on these roles in the active model config "
+                "(ADR-0101 §5; FRE-734 config-parity drift)."
+            ),
+            trace_id=trace_id,
+        )
+    return capable, missing

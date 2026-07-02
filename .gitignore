@@ -181,3 +181,6 @@ telemetry/evaluation/eval-04b-occupancy-curve/
 
 # /build role skill — exempt from the generic build/ ignore above
 !.claude/skills/build/
+
+# master deploy snapshots (never commit — large Neo4j dumps)
+.backups/

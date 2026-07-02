@@ -56,10 +56,11 @@
 # --- Dynamic Cypher false-positive: originating_trace_id/originating_session_id
 #     ARE set on this Entity MERGE via dynamically-joined on_create_clauses
 #     (ADR-0074 §I5); the static string-chunk analyzer cannot see the joined
-#     props. Line shifted 752 → 871 → 913 → 951 → 991 → 1125 (FRE-369, FRE-672 selector
-#     helper, FRE-638 Claims imports + _parse_iso, FRE-711 living-description gate block,
-#     then FRE-707 structural-arm builder + shared entity-parse helper). ---
+#     props. Line shifted 752 → 871 → 913 → 951 → 991 → 1125 → 1208 (FRE-369, FRE-672
+#     selector helper, FRE-638 Claims imports + _parse_iso, FRE-711 living-description
+#     gate block, FRE-707 structural-arm builder + shared entity-parse helper, then
+#     FRE-723 lexical/multi-query arm imports + module-level helpers inserted above). ---
 - path: src/personal_agent/memory/service.py
-  line: 1125
+  line: 1208
   pattern: cypher_merge
   reason: "dynamic on_create_clauses set origination; static analyzer can't see joined props (FP)"

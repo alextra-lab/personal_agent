@@ -615,6 +615,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 log.info("neo4j_vector_index_ensured")
             except Exception as idx_e:
                 log.warning("neo4j_vector_index_setup_failed", error=str(idx_e))
+            # Ensure Neo4j full-text index for the lexical recall arm (ADR-0104 /
+            # FRE-723). Idempotent; needed even while the arm is flag-dark, else
+            # the index never exists to enable it against later.
+            try:
+                await memory_service.ensure_fulltext_index()
+                log.info("neo4j_fulltext_index_ensured")
+            except Exception as ft_e:
+                log.warning("neo4j_fulltext_index_setup_failed", error=str(ft_e))
             # Bootstrap owner identity (FRE-213 / ADR-0052) — idempotent, no-op when empty
             if settings.owner_name and settings.agent_owner_email:
                 try:

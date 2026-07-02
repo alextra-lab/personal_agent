@@ -190,3 +190,65 @@ async def test_search_memory_broad_path_threads_identity() -> None:
     kwargs = mock_service.query_memory_broad.call_args.kwargs
     assert kwargs.get("user_id") == uid
     assert kwargs.get("authenticated") is True
+
+
+@pytest.mark.asyncio
+async def test_search_memory_explicit_window_sets_hard_recency() -> None:
+    """FRE-658: an explicit positive recency_days is a HARD time window.
+
+    The tool marks it via MemoryQuery.hard_recency_days so the de-gated recall
+    paths re-apply a hard time bound (an explicit "last week about X" must not
+    return all-time results once the relevance-bounded / multi-path flag is on).
+    """
+    mock_service = MagicMock()
+    mock_service.connected = True
+    mock_service.query_memory = AsyncMock(return_value=MemoryQueryResult())
+
+    with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
+        await search_memory_executor(
+            query_text="last week about Athens", entity_names=["Athens"], recency_days=7
+        )
+
+    query = mock_service.query_memory.call_args.args[0]
+    assert query.hard_recency_days == 7
+    assert query.recency_days == 7
+
+
+@pytest.mark.asyncio
+async def test_search_memory_omitted_window_no_hard_recency() -> None:
+    """FRE-658: an omitted recency_days is NOT a hard window (automatic-like).
+
+    hard_recency_days stays None so the de-gated path remains invariant to the
+    default recency_days (ADR-0100 AC-1a); the 90-day default is preserved as the
+    soft/ranking window.
+    """
+    mock_service = MagicMock()
+    mock_service.connected = True
+    mock_service.query_memory = AsyncMock(return_value=MemoryQueryResult())
+
+    with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
+        await search_memory_executor(query_text="Athens", entity_names=["Athens"])
+
+    query = mock_service.query_memory.call_args.args[0]
+    assert query.hard_recency_days is None
+    assert query.recency_days == 90
+
+
+@pytest.mark.asyncio
+async def test_search_memory_zero_window_no_hard_recency() -> None:
+    """FRE-658: explicit 0 is not a hard window (0 is coerced to the 90 default).
+
+    Documents the pre-existing "use 0 to search all history" docstring/behaviour
+    mismatch (int(recency_days or 90) coerces 0 -> 90) — filed as a follow-up, not
+    changed here. What FRE-658 asserts is only that 0 sets no hard window.
+    """
+    mock_service = MagicMock()
+    mock_service.connected = True
+    mock_service.query_memory = AsyncMock(return_value=MemoryQueryResult())
+
+    with patch.dict(sys.modules, {"personal_agent.service.app": _fake_app_module(mock_service)}):
+        await search_memory_executor(query_text="Athens", entity_names=["Athens"], recency_days=0)
+
+    query = mock_service.query_memory.call_args.args[0]
+    assert query.hard_recency_days is None
+    assert query.recency_days == 90

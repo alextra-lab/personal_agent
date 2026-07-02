@@ -96,6 +96,10 @@ class MemoryRecallQuery:
         entity_types: Filter by entity types.
         memory_types: Which memory scopes to search (default: all).
         recency_days: Only return memories from the last N days (None = no limit).
+            Under relevance-bounded / multi-path recall (ADR-0100 / ADR-0104) this is
+            DEMOTED to a ranking weight on the automatic path — recall stays invariant
+            to it (ADR-0100 AC-1a). An explicit hard time window is preserved only for
+            time-scoped tool queries via ``MemoryQuery.hard_recency_days`` (FRE-658).
         limit: Maximum results to return.
         query_text: Free-text query for relevance scoring.
         user_id: Authenticated user UUID for visibility scoping (FRE-229).

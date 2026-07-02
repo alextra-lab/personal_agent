@@ -86,6 +86,43 @@ class TestApplyBudgetUnderLimit:
         assert result.token_count >= 0
 
 
+class TestListShapedContent:
+    """ADR-0101 §2 widens ``content`` to ``str | list[dict]`` (FRE-709)."""
+
+    def test_list_content_does_not_crash(self) -> None:
+        messages = [
+            _msg("user", "hello"),
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "the answer is forty two"}],
+            },
+        ]
+        ctx = _context(messages=messages)
+        result = apply_budget(ctx, max_tokens=10_000, trace_id="t1")
+        assert result.trimmed is False
+        assert result.token_count > 0
+
+    def test_image_block_counts_toward_budget(self) -> None:
+        """An image block must add its fixed token estimate, not drop to ~0 (master gate finding)."""
+        from personal_agent.llm_client.message_content import IMAGE_BLOCK_TOKEN_ESTIMATE
+
+        text_only = [
+            {"role": "user", "content": [{"type": "text", "text": "look at this"}]},
+        ]
+        with_image = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "look at this"},
+                    {"type": "image_url", "image_url": {"url": "https://example.com/x.png"}},
+                ],
+            },
+        ]
+        text_only_tokens = _total_context_tokens(text_only, None, None)
+        with_image_tokens = _total_context_tokens(with_image, None, None)
+        assert with_image_tokens - text_only_tokens >= IMAGE_BLOCK_TOKEN_ESTIMATE
+
+
 # ---------------------------------------------------------------------------
 # apply_budget — Phase 1: history trimming
 # ---------------------------------------------------------------------------

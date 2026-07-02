@@ -25,6 +25,7 @@ import anthropic
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 
 from personal_agent.config.settings import get_settings
+from personal_agent.llm_client.message_content import get_text_content
 from personal_agent.service.auth import RequestUser, get_request_user
 from personal_agent.service.database import AsyncSessionLocal
 from personal_agent.service.models import SessionModel
@@ -429,7 +430,7 @@ async def chat(
         # Build prior messages: strip to wire format only (role + content).
         raw_messages: list[Any] = list(session.messages) if session.messages else []
         prior_messages: list[dict[str, Any]] = [
-            {"role": str(m["role"]), "content": str(m["content"])}
+            {"role": str(m["role"]), "content": get_text_content(m["content"])}
             for m in raw_messages
             if isinstance(m, dict) and m.get("role") and m.get("content")
         ]

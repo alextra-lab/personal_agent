@@ -111,6 +111,62 @@ def test_chat_starts_streaming() -> None:
     mock_create_task.assert_called_once()
 
 
+def test_chat_normalizes_prior_list_content_to_text() -> None:
+    """List-shaped prior content (ADR-0101 §2) is extracted to text, not stringified (FRE-709).
+
+    ``str(list)`` would send Anthropic a Python-repr string (e.g. ``"[{'type': ...}]"``)
+    instead of the actual text — corrupting history the first time a real image block
+    lands in persisted session messages.
+    """
+    sid = str(uuid4())
+    mock_session = _make_session_model(session_id=sid)
+    mock_session.messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "prior answer"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/x.png"}},
+            ],
+        }
+    ]
+
+    with (
+        patch(
+            "personal_agent.gateway.chat_api.get_settings",
+            return_value=MagicMock(anthropic_api_key="sk-test"),
+        ),
+        patch(
+            "personal_agent.gateway.chat_api.AsyncSessionLocal",
+        ) as mock_session_local,
+        patch(
+            "personal_agent.service.repositories.session_repository.SessionRepository.get",
+            new_callable=AsyncMock,
+            return_value=mock_session,
+        ),
+        patch("asyncio.create_task") as mock_create_task,
+        patch("personal_agent.gateway.chat_api._stream_to_queue") as mock_stream_to_queue,
+    ):
+        mock_db = AsyncMock()
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_session_local.return_value = mock_ctx
+
+        app = _build_app()
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.post(
+                "/chat",
+                data={"message": "follow-up", "session_id": sid},
+                headers=_AUTH_HEADERS,
+            )
+
+    assert resp.status_code == 200
+    mock_create_task.assert_called_once()
+    mock_stream_to_queue.assert_called_once()
+    anthropic_messages = mock_stream_to_queue.call_args.kwargs["anthropic_messages"]
+    assert anthropic_messages[0]["content"] == "prior answer"
+
+
 def test_chat_invalid_uuid() -> None:
     """POST /chat with a non-UUID session_id returns 422."""
     with (
@@ -232,7 +288,8 @@ def test_chat_404_when_session_owned_by_other_user() -> None:
 
 def test_gateway_emits_model_call_completed_with_identity() -> None:
     """The gateway success path emits a canonical model_call_completed stamped
-    with callsite='gateway.chat' (was previously untelemetered)."""
+    with callsite='gateway.chat' (was previously untelemetered).
+    """
     from personal_agent.gateway.chat_api import _emit_gateway_model_call_completed
 
     usage = MagicMock(input_tokens=120, output_tokens=45)

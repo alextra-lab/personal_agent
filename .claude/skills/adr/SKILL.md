@@ -8,8 +8,12 @@ description: Use in the adr session (Opus) to produce a complete ADR — discuss
 Read `.claude/skills/lifecycle-rules.md` first. Confirm the session model is Opus; if not, STOP
 and tell the owner (ADR authoring is Opus-only).
 
-**Argument: none → resolve from the Stream Board.** Read the `## 🎛️ Stream Board` in
-`docs/plans/MASTER_PLAN.md` (between the `<!-- STREAM-BOARD:START -->` / `END` markers); take the
+**Argument: none → resolve from the Stream Board on _latest main_.** **FIRST sync to main — this is
+step one, before anything else:** `git fetch origin`, then read the board from **`origin/main`**, NOT
+your local worktree copy (it is stale whenever you are still sitting on the previous, now-merged
+per-ADR branch — the cause of resolving an already-shipped ticket as NEXT):
+`git show origin/main:docs/plans/MASTER_PLAN.md`. In it, find the `## 🎛️ Stream Board`
+(between the `<!-- STREAM-BOARD:START -->` / `END` markers); take the
 `/adr` row's **NEXT** ticket (bold `FRE-…`) and honor its **Context** flag exactly as `/build` does —
 **CLEAR** (default): **first check if you are a blank/new session** (freshly started or just `/clear`ed,
 essentially nothing in context but this invocation); if yes, proceed; if no (you still carry a previous

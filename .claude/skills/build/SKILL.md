@@ -7,7 +7,7 @@ description: Use in the build session to ship a Linear FRE ticket from Approved 
 
 Read `.claude/skills/lifecycle-rules.md` first. Argument: **a stream selector** (`1` or `2`), or an explicit Linear issue ID (e.g. `FRE-471`).
 
-**Stream selector (`1`/`2`) → resolve from the Stream Board.** Read the `## 🎛️ Stream Board` in `docs/plans/MASTER_PLAN.md` (between the `<!-- STREAM-BOARD:START -->` / `END` markers). Find the `/build <N>` row; the **NEXT** cell's bold `FRE-…` is the ticket to build. Honor that row's **Context** flag:
+**Stream selector (`1`/`2`) → resolve from the Stream Board on _latest main_.** **FIRST sync to main — this is step one, before anything else:** `git fetch origin`, then read the board from **`origin/main`**, NOT your local worktree copy (it is stale whenever you are still on the previous, now-merged per-ticket branch — the cause of resolving an already-shipped ticket as NEXT): `git show origin/main:docs/plans/MASTER_PLAN.md`. In it, find the `/build <N>` row; the **NEXT** cell's bold `FRE-…` is the ticket to build. Honor that row's **Context** flag:
 - **CLEAR** (the default): this ticket wants a fresh slate. **First check: are you a blank/new session** — freshly started or just `/clear`ed, with essentially nothing in context but this invocation and session-start priming? If **yes**, proceed. If **no** (you still carry a previous ticket's work in context), STOP and tell the owner: "FRE-… is flagged CLEAR — run `/clear`, then `/build <N>` again." A stale prior-ticket context pollutes the plan.
 - **KEEP**: the NEXT ticket is a direct follow-on (same files/substrate) — proceed on the current warm context regardless of the blank-session check; do not ask for a `/clear`.
 

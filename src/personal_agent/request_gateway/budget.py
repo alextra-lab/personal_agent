@@ -17,7 +17,7 @@ from typing import Any
 import structlog
 
 from personal_agent.config import settings
-from personal_agent.llm_client.message_content import get_text_content
+from personal_agent.llm_client.message_content import count_content_tokens
 from personal_agent.request_gateway.types import AssembledContext
 from personal_agent.telemetry.compaction import CompactionRecord, log_compaction
 from personal_agent.telemetry.context_quality import get_incident_tracker
@@ -49,12 +49,13 @@ def _total_context_tokens(
     Counts both ``content`` and ``reasoning_content`` per message — the latter is
     populated when ``preserve_thinking`` is enabled (Qwen3.6+), and ignoring it
     leaves the budget blind to the very content that grows the prompt across
-    multi-step turns.
+    multi-step turns. ``content`` is counted block-aware (``count_content_tokens``)
+    so an image block contributes its fixed token estimate instead of being
+    silently dropped from the budget (FRE-709).
     """
-    parts: list[str] = [
-        get_text_content(m.get("content")) + " " + (m.get("reasoning_content") or "")
-        for m in messages
-    ]
+    content_tokens = sum(count_content_tokens(m.get("content")) for m in messages)
+
+    parts: list[str] = [(m.get("reasoning_content") or "") for m in messages]
 
     if memory_context:
         for item in memory_context:
@@ -64,7 +65,7 @@ def _total_context_tokens(
         for tool in tool_definitions:
             parts.append(str(tool))
 
-    return estimate_tokens(" ".join(parts))
+    return content_tokens + estimate_tokens(" ".join(parts))
 
 
 def _context_occupancy(

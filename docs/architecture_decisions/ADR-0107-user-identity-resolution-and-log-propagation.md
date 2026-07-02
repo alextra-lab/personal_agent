@@ -2,7 +2,7 @@
 
 # ADR-0107: User Identity Resolution for Claims + Trace/Log Identity Propagation
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-02
 **Deciders:** Owner (lextra); adr session (Opus)
 **Amends:** ADR-0098 D2 (Personal-situational-facts clause only — "Claims about the owner's life" → "Claims about the acting authenticated User"; the Stance clause is unchanged)
@@ -163,6 +163,10 @@ Of that 38,918-doc gap, `executor` (orchestrator) alone accounts for 7,994 (20.5
 ### 2026-07-02 - Proposed
 **Changed By:** adr session (Opus)
 **Reason:** Live-session investigation of a misattributed Claim surfaced a conflict between ADR-0098 D2 (Claims specified as owner-scoped) and ADR-0052's already-generalized multi-user `:Person` model, plus a quantified logging-identity gap; drafted per owner direction after live discussion.
+
+### 2026-07-02 - Accepted
+**Changed By:** master session (owner-approved)
+**Reason:** Approved at the master integration gate (PR #327 merged). Not gated on the implementation children landing (per the ADR-0106 precedent). Implementation chain FRE-738/739/740 approved for build; FRE-739 owns the assembled acceptance-criteria seam.
 
 ---
 

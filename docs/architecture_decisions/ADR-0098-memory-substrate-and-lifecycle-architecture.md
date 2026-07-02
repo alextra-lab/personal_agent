@@ -52,7 +52,7 @@ This makes ADR-0097's partition *total and honest*: every ingested item has a cl
 Stance and Personal-situational facts have **no structural home** in today's entity-property model (finding #3's flattening/dropping is a direct consequence). They become first-class **Claims** — provenance-bearing assertions, modeled as nodes or typed edges:
 
 - **Stance** = an owner↔World edge carrying affect / mastery / spaced-repetition state (`(owner)-[:HAS_STANCE {affect, mastery, review_due}]->(:WorldConcept)`). The pedagogical crown jewel; a native edge inside Core (D3).
-- **Personal-situational facts** = Claims about the owner's life/relationships/events (`(owner)-[:HAS_FACT]->(:Claim)` or an owner-anchored Claim node).
+- **Personal-situational facts** = Claims about the owner's life/relationships/events (`(owner)-[:HAS_FACT]->(:Claim)` or an owner-anchored Claim node). **[Amended by [ADR-0107](ADR-0107-user-identity-resolution-and-log-propagation.md) (Accepted 2026-07-02): a Claim anchors to the *acting authenticated User* (via `user_id`, per ADR-0052), not the `is_owner` singleton — so a claim asserted by a non-owner user attaches to that user. The Stance clause above is unchanged.]**
 - **World facts** = Claims/SPO over the entity spine (consistent with the GraphRAG Claim/Covariate/Statement consensus the FRE-635 evidence documents).
 
 Because facts are Claims with provenance and **temporal validity**, knowledge is **updatable** — two distinct modes, deliberately separated so updating one does not corrupt the other:

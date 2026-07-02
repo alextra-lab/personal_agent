@@ -1,6 +1,6 @@
 ---
 name: prime-worker
-description: Run once in a build / build2 / adr worker session. Self-identifies the stream from its worktree, arms its own 10m monitor loop (survives /clear, runs till session close — no double-arm), then tests idle/building/awaiting-master from durable git state and ONLY when idle with an Approved NEXT surfaces a one-line dispatch card (model switch + CLEAR/KEEP + exact command). Advises only — never builds, clears, merges, or edits anything.
+description: Run once in a build / build2 / adr worker session. Self-identifies the stream from its worktree, arms its own 20m monitor loop (survives /clear, runs till session close — no double-arm), then tests idle/building/awaiting-master from durable git state and ONLY when idle with an Approved NEXT surfaces a one-line dispatch card (model switch + CLEAR/KEEP + exact command). Advises only — never builds, clears, merges, or edits anything.
 ---
 
 # Prime a Worker Session (build / build2 / adr)
@@ -10,7 +10,7 @@ edits `src/`, never runs `/build` or `/adr`, never `/clear`s, never merges, neve
 It reads durable git + board + Linear state and, only when the stream is genuinely idle with a ready
 NEXT, tells the owner exactly what to run. **When in doubt, stay silent.**
 
-**Run `/prime-worker` once** when you open a worker session. It arms its own **10m loop** (Step 2),
+**Run `/prime-worker` once** when you open a worker session. It arms its own **20m loop** (Step 2),
 which is a cron — it **survives `/clear` and runs until the session is closed** — so you never type
 `/loop` and never re-arm. The same command works in all three worker sessions; this skill
 self-identifies from its worktree.
@@ -28,7 +28,7 @@ self-identifies from its worktree.
 Only reached in a real worker session. Check `CronList` for an existing `/prime-worker` loop:
 - **already armed** (you ran this after a `/clear`, or this *is* a loop tick) → do **not** arm again;
   continue to Step 3.
-- **none** → arm `/loop 10m /prime-worker`, then continue to Step 3.
+- **none** → arm `/loop 20m /prime-worker`, then continue to Step 3.
 
 ## Step 3 — Determine state from durable git/gh (never from conversation memory)
 Self-memory breaks the instant the session is `/clear`ed; git does not. `git fetch origin` (cheap —

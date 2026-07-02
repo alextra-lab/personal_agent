@@ -1,6 +1,7 @@
 # ADR-0060: Knowledge Graph Quality Stream
 
-**Status**: Accepted
+**Status**: Superseded (2026-07-02)
+**Superseded by**: ADR-0098 (Memory Substrate & Lifecycle — D4 class-aware lifecycle subsumes Stream 6: turns ADR-0042 freshness on per-tier and adds eviction, replacing the "staleness-tier penalty in recall" framing) · ADR-0105 (self-improvement pipeline — owns Stream 8 consolidation-anomaly → proposal). Recall-side recency now handled in ADR-0100 / ADR-0104. Both implementation projects (ADR-0060 KG-Quality Stream, Knowledge Graph Quality) were cancelled 2026-06-26 when the ADR-0097/0098 substrate rework was decided.
 **Date**: 2026-04-29
 **Deciders**: Project owner
 **Depends on**: ADR-0041 (Event Bus — Redis Streams), ADR-0042 (Knowledge Graph Freshness via Access Tracking), ADR-0043 (Three-Layer Architectural Separation), ADR-0053 (Gate Feedback-Loop Monitoring Framework — template), ADR-0054 (Feedback Stream Bus Convention), ADR-0057 (Insights & Pattern Analysis — establishes anomaly→proposal pattern)

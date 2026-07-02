@@ -102,6 +102,8 @@ class CostGate:
         trace_id: UUID | None = None,
         user_id: UUID | None = None,
         provider: str | None = None,
+        session_id: UUID | None = None,
+        task_id: UUID | None = None,
     ) -> ReservationId:
         """Reserve ``amount`` against every applicable cap, atomically.
 
@@ -118,6 +120,11 @@ class CostGate:
             user_id: Reserved for v2 per-user policy. v1 is always ``None``.
             provider: Reserved for v2 per-provider policy. v1 is always
                 ``None``.
+            session_id: Originating session; recorded on the reservation row
+                for ADR-0074 §I3/§8c joinability (FRE-693).
+            task_id: Sub-agent task identifier, ``None`` at the turn level
+                (mirrors the ``route_traces`` convention — no sub-agent call
+                site threads a real value here yet).
 
         Returns:
             ``ReservationId`` (UUID) — pass to ``commit()`` or ``refund()``
@@ -197,16 +204,21 @@ class CostGate:
                         trace_id=str(trace_id) if trace_id else None,
                     )
                     return await self._insert_uncapped_reservation(
-                        conn, role=role, amount=amount, trace_id=trace_id
+                        conn,
+                        role=role,
+                        amount=amount,
+                        trace_id=trace_id,
+                        session_id=session_id,
+                        task_id=task_id,
                     )
 
                 row = await conn.fetchrow(
                     """
                     INSERT INTO budget_reservations (
                         counter_id, role, amount_usd, status,
-                        created_at, expires_at, trace_id
+                        created_at, expires_at, trace_id, session_id, task_id
                     )
-                    VALUES ($1, $2, $3, $4, NOW(), NOW() + ($5 || ' seconds')::interval, $6)
+                    VALUES ($1, $2, $3, $4, NOW(), NOW() + ($5 || ' seconds')::interval, $6, $7, $8)
                     RETURNING reservation_id
                     """,
                     ref_counter_id,
@@ -215,6 +227,8 @@ class CostGate:
                     ReservationStatus.ACTIVE.value,
                     str(RESERVATION_TTL_SECONDS),
                     trace_id,
+                    session_id,
+                    task_id,
                 )
 
         reservation_id: UUID = row["reservation_id"]
@@ -224,6 +238,8 @@ class CostGate:
             amount_usd=float(amount),
             reservation_id=str(reservation_id),
             trace_id=str(trace_id) if trace_id else None,
+            session_id=str(session_id) if session_id else None,
+            task_id=str(task_id) if task_id else None,
             cap_count=len(counters),
         )
         return reservation_id
@@ -234,6 +250,7 @@ class CostGate:
         actual_cost: Decimal,
         *,
         trace_id: UUID | str | None = None,
+        session_id: UUID | str | None = None,
     ) -> None:
         """Settle a reservation with the actual post-call cost.
 
@@ -250,6 +267,9 @@ class CostGate:
                 correlation (ADR-0074 §I3). The trace is already recorded on
                 the reservation row at ``reserve()`` time, so this is purely
                 an observability hook.
+            session_id: Originating session; threaded through for log
+                correlation only (ADR-0074 §8c, FRE-693) — already recorded
+                on the reservation row at ``reserve()`` time.
 
         Raises:
             ValueError: If ``actual_cost`` is negative or the reservation is
@@ -323,6 +343,7 @@ class CostGate:
             reserved_usd=float(reserved),
             delta_usd=float(delta),
             trace_id=str(trace_id) if trace_id else None,
+            session_id=str(session_id) if session_id else None,
         )
 
     async def refund(
@@ -635,6 +656,8 @@ class CostGate:
         role: str,
         amount: Decimal,
         trace_id: UUID | None,
+        session_id: UUID | None = None,
+        task_id: UUID | None = None,
     ) -> ReservationId:
         """Write a reservation row when there are no applicable caps.
 
@@ -666,9 +689,9 @@ class CostGate:
             """
             INSERT INTO budget_reservations (
                 counter_id, role, amount_usd, status,
-                created_at, expires_at, trace_id
+                created_at, expires_at, trace_id, session_id, task_id
             )
-            VALUES ($1, $2, $3, $4, NOW(), NOW() + ($5 || ' seconds')::interval, $6)
+            VALUES ($1, $2, $3, $4, NOW(), NOW() + ($5 || ' seconds')::interval, $6, $7, $8)
             RETURNING reservation_id
             """,
             row["id"],
@@ -677,6 +700,8 @@ class CostGate:
             ReservationStatus.ACTIVE.value,
             str(RESERVATION_TTL_SECONDS),
             trace_id,
+            session_id,
+            task_id,
         )
         rid: UUID = ins["reservation_id"]
         return rid

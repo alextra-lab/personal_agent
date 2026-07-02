@@ -1970,7 +1970,14 @@ async def step_init(
     if ctx.attachments:
         from personal_agent.orchestrator.attachment_resolution import resolve_attachments
 
-        resolved = await resolve_attachments(ctx.attachments, trace_id=ctx.trace_id)
+        resolved = await resolve_attachments(
+            ctx.attachments,
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            # Turn-level call — no sub-agent task_id reaches this layer
+            # (mirrors the route_traces convention: task_id NULL = turn-level).
+            task_id=None,
+        )
         ctx.attachment_disclosures = list(resolved.disclosures)
         resolved_blocks = resolved.blocks
         if resolved.blocks:
@@ -2720,6 +2727,7 @@ async def step_llm_call(
         # Create LLM client — dispatches to LocalLLMClient or LiteLLMClient based on provider_type
         from personal_agent.config.profile import resolve_model_key
         from personal_agent.llm_client.factory import get_llm_client
+        from personal_agent.orchestrator.attachment_resolution import RASTER_CONTENT_TYPES
 
         # ADR-0101 §5/§8a: an image attachment may require a different model than
         # the role's plain profile-resolved key (escalation or an explicit
@@ -2728,6 +2736,22 @@ async def step_llm_call(
         # rather than propagating uncaught above the state machine.
         role_key = resolve_model_key(model_role.value)
         effective_model_key = _resolve_vision_routing_key(ctx, model_role.value)
+
+        # ADR-0074 §8c / FRE-693: log the routing decision only when this turn
+        # carries a raster image attachment — otherwise this call was a no-op
+        # (effective_model_key == role_key always) and there is no vision
+        # routing decision to report.
+        if any(a.content_type in RASTER_CONTENT_TYPES for a in ctx.attachments):
+            log.info(
+                "vision_routing_decision",
+                trace_id=ctx.trace_id,
+                session_id=ctx.session_id,
+                task_id=None,
+                model_role=model_role.value,
+                role_key=role_key,
+                effective_model_key=effective_model_key,
+                escalated=effective_model_key != role_key,
+            )
 
         if effective_model_key == role_key:
             llm_client = get_llm_client(role_name=model_role.value)

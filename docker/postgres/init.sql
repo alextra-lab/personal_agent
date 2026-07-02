@@ -259,13 +259,17 @@ CREATE TABLE IF NOT EXISTS budget_reservations (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ NOT NULL,    -- created_at + 90s
     settled_at TIMESTAMPTZ,
-    trace_id UUID
+    trace_id UUID,
+    session_id UUID,                    -- ADR-0074 §I3/FRE-693: turn joinability
+    task_id UUID                        -- sub-agent id (NULL at turn level, per route_traces)
 );
 -- Reaper hot-path: only scan active reservations past their TTL.
 CREATE INDEX IF NOT EXISTS idx_budget_reservations_reaper
     ON budget_reservations(expires_at) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_budget_reservations_trace
     ON budget_reservations(trace_id);
+CREATE INDEX IF NOT EXISTS idx_budget_reservations_session
+    ON budget_reservations(session_id);
 
 -- Per-attempt telemetry (D6). Covers entity-extraction / promotion retries;
 -- event-driven Redis Streams redelivery is observable separately via

@@ -11,6 +11,7 @@ from io import BytesIO
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import structlog
 from PIL import Image
 
 from personal_agent.exceptions import AttachmentUnsupportedError
@@ -45,7 +46,13 @@ def _make_png_bytes(
 def _mock_store(bytes_by_key: dict[str, bytes]) -> AsyncMock:
     store = AsyncMock()
 
-    async def _get(r2_key: str, *, trace_id: str | None = None) -> bytes:
+    async def _get(
+        r2_key: str,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        task_id: str | None = None,
+    ) -> bytes:
         return bytes_by_key[r2_key]
 
     store.get.side_effect = _get
@@ -99,7 +106,9 @@ class TestCredentialedFetch:
         ):
             await resolve_attachments([attachment], trace_id="trace-1")
 
-        store.get.assert_awaited_once_with("upload/u/g/photo.png", trace_id="trace-1")
+        store.get.assert_awaited_once_with(
+            "upload/u/g/photo.png", trace_id="trace-1", session_id=None, task_id=None
+        )
         mock_httpx.assert_not_called()
 
     @pytest.mark.asyncio
@@ -111,6 +120,25 @@ class TestCredentialedFetch:
         ):
             with pytest.raises(AttachmentUnsupportedError):
                 await resolve_attachments([attachment])
+
+    @pytest.mark.asyncio
+    async def test_store_get_called_with_session_and_task_id(self) -> None:
+        """FRE-693 (ADR-0074 §8c): session_id/task_id thread onto the byte fetch."""
+        png = _make_png_bytes()
+        attachment = _make_attachment(r2_key="upload/u/g/photo.png")
+        store = _mock_store({"upload/u/g/photo.png": png})
+
+        with patch(
+            "personal_agent.orchestrator.attachment_resolution.get_artifact_store",
+            return_value=store,
+        ):
+            await resolve_attachments(
+                [attachment], trace_id="trace-1", session_id="sess-1", task_id="task-1"
+            )
+
+        store.get.assert_awaited_once_with(
+            "upload/u/g/photo.png", trace_id="trace-1", session_id="sess-1", task_id="task-1"
+        )
 
 
 class TestBlockShape:
@@ -302,3 +330,101 @@ class TestTotalPayloadCapGuardrail:
 
         assert len(result.blocks) == 1
         assert store.get.await_count == 2  # tiny is never fetched
+
+
+class TestResolutionTelemetry:
+    """FRE-693 (ADR-0074 §8c): resolution/failure events carry identity."""
+
+    @pytest.mark.asyncio
+    async def test_completed_log_fires_with_identity_and_counts(self) -> None:
+        png = _make_png_bytes()
+        attachment = _make_attachment(r2_key="upload/u/g/photo.png")
+        store = _mock_store({"upload/u/g/photo.png": png})
+
+        with (
+            patch(
+                "personal_agent.orchestrator.attachment_resolution.get_artifact_store",
+                return_value=store,
+            ),
+            structlog.testing.capture_logs() as logs,
+        ):
+            await resolve_attachments(
+                [attachment], trace_id="trace-1", session_id="sess-1", task_id="task-1"
+            )
+
+        completed = [e for e in logs if e.get("event") == "attachment_resolution_completed"]
+        assert completed, f"attachment_resolution_completed not found in: {logs}"
+        entry = completed[0]
+        assert entry["trace_id"] == "trace-1"
+        assert entry["session_id"] == "sess-1"
+        assert entry["task_id"] == "task-1"
+        assert entry["attachment_count"] == 1
+        assert entry["resolved_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_completed_log_fires_when_no_raster_attachments(self) -> None:
+        attachment = _make_attachment(content_type="application/pdf", r2_key="upload/u/g/doc.pdf")
+
+        with structlog.testing.capture_logs() as logs:
+            await resolve_attachments([attachment], trace_id="trace-1", session_id="sess-1")
+
+        completed = [e for e in logs if e.get("event") == "attachment_resolution_completed"]
+        assert completed, f"attachment_resolution_completed not found in: {logs}"
+        assert completed[0]["resolved_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_failed_log_fires_for_unsupported_content_type(self) -> None:
+        attachment = _make_attachment(content_type="image/tiff")
+
+        with structlog.testing.capture_logs() as logs:
+            with pytest.raises(AttachmentUnsupportedError):
+                await resolve_attachments([attachment], trace_id="trace-1", session_id="sess-1")
+
+        failed = [e for e in logs if e.get("event") == "attachment_resolution_failed"]
+        assert failed, f"attachment_resolution_failed not found in: {logs}"
+        assert failed[0]["trace_id"] == "trace-1"
+        assert failed[0]["session_id"] == "sess-1"
+
+    @pytest.mark.asyncio
+    async def test_failed_log_fires_for_store_unconfigured(self) -> None:
+        attachment = _make_attachment()
+
+        with (
+            patch(
+                "personal_agent.orchestrator.attachment_resolution.get_artifact_store",
+                return_value=None,
+            ),
+            structlog.testing.capture_logs() as logs,
+        ):
+            with pytest.raises(AttachmentUnsupportedError):
+                await resolve_attachments([attachment], trace_id="trace-1", session_id="sess-1")
+
+        failed = [e for e in logs if e.get("event") == "attachment_resolution_failed"]
+        assert failed, f"attachment_resolution_failed not found in: {logs}"
+        assert failed[0]["trace_id"] == "trace-1"
+        assert failed[0]["session_id"] == "sess-1"
+
+    @pytest.mark.asyncio
+    async def test_failed_log_fires_for_oversized_after_downscale(self) -> None:
+        png = _make_png_bytes()
+        attachment = _make_attachment(title="huge.png", r2_key="upload/u/g/huge.png")
+        store = _mock_store({"upload/u/g/huge.png": png})
+
+        with (
+            patch(
+                "personal_agent.orchestrator.attachment_resolution.get_artifact_store",
+                return_value=store,
+            ),
+            patch(
+                "personal_agent.orchestrator.attachment_resolution.settings.attachment_image_max_bytes",
+                1,
+            ),
+            structlog.testing.capture_logs() as logs,
+        ):
+            with pytest.raises(AttachmentUnsupportedError):
+                await resolve_attachments([attachment], trace_id="trace-1", session_id="sess-1")
+
+        failed = [e for e in logs if e.get("event") == "attachment_resolution_failed"]
+        assert failed, f"attachment_resolution_failed not found in: {logs}"
+        assert failed[0]["trace_id"] == "trace-1"
+        assert failed[0]["session_id"] == "sess-1"

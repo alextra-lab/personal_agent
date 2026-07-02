@@ -290,6 +290,96 @@ async def test_red_when_api_costs_has_null_session_id(ctx: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Tests — budget_reservations joinability (FRE-693, ADR-0074 §8c, AC-12)
+# ---------------------------------------------------------------------------
+
+
+def _pg_with_budget_reservations(reservation_rows: list[Any]) -> FakePgPool:
+    """A green api_costs anchor (so trace_ids is populated) + given reservation rows."""
+    return FakePgPool(
+        FakePgConn(
+            {
+                "sessions": _row(
+                    session_id=uuid.UUID(SESSION_ID),
+                    primary_model_at_creation="m",
+                    model_config_path="p",
+                    messages=[],
+                ),
+                "api_costs": [
+                    _row(id=1, trace_id=uuid.UUID(TRACE_A), session_id=uuid.UUID(SESSION_ID))
+                ],
+                "metrics": [],
+                "captains_log_captures": [],
+                "captains_log_reflections": [],
+                "consolidation_attempts": [],
+                "budget_reservations": reservation_rows,
+                "artifacts": [],
+            }
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_budget_reservations_orphan_when_session_id_null(ctx: Any) -> None:
+    rows = [
+        _row(
+            reservation_id="r-1",
+            trace_id=uuid.UUID(TRACE_A),
+            session_id=None,
+            task_id=None,
+        )
+    ]
+    walk = _build_walk(pg_pool=_pg_with_budget_reservations(rows), es=_green_es(), ctx=ctx)
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+    assert doc.outcome == "red"
+    orphan = next(
+        o
+        for o in doc.orphans
+        if o.substrate == "postgres.budget_reservations" and o.kind == "missing_identity"
+    )
+    assert orphan.severity == "red"
+
+
+@pytest.mark.asyncio
+async def test_budget_reservations_orphan_when_session_id_mismatch(ctx: Any) -> None:
+    other_session = "99999999-9999-9999-9999-999999999999"
+    rows = [
+        _row(
+            reservation_id="r-1",
+            trace_id=uuid.UUID(TRACE_A),
+            session_id=uuid.UUID(other_session),
+            task_id=None,
+        )
+    ]
+    walk = _build_walk(pg_pool=_pg_with_budget_reservations(rows), es=_green_es(), ctx=ctx)
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+    assert doc.outcome == "red"
+    orphan = next(
+        o
+        for o in doc.orphans
+        if o.substrate == "postgres.budget_reservations" and o.kind == "missing_identity"
+    )
+    assert orphan.severity == "red"
+
+
+@pytest.mark.asyncio
+async def test_budget_reservations_no_orphan_when_session_id_matches(ctx: Any) -> None:
+    # task_id NULL alone must NOT be an orphan — it is the correct turn-level state.
+    rows = [
+        _row(
+            reservation_id="r-1",
+            trace_id=uuid.UUID(TRACE_A),
+            session_id=uuid.UUID(SESSION_ID),
+            task_id=None,
+        )
+    ]
+    walk = _build_walk(pg_pool=_pg_with_budget_reservations(rows), es=_green_es(), ctx=ctx)
+    doc = await walk.run(SESSION_ID, source="cli", window_hours=24, random_seed=0)
+    assert doc.outcome == "green", doc.orphans
+    assert not any(o.substrate == "postgres.budget_reservations" for o in doc.orphans)
+
+
+# ---------------------------------------------------------------------------
 # Tests — red when ES has events for session but no trace_id (§I1)
 # ---------------------------------------------------------------------------
 

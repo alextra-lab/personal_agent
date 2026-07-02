@@ -14,12 +14,15 @@ from dataclasses import dataclass
 from io import BytesIO
 from typing import Any
 
+import structlog
 from PIL import Image
 
 from personal_agent.config import settings
 from personal_agent.exceptions import AttachmentUnsupportedError
 from personal_agent.orchestrator.types import AttachmentRef
 from personal_agent.storage import get_artifact_store
+
+log = structlog.get_logger(__name__)
 
 RASTER_CONTENT_TYPES: frozenset[str] = frozenset(
     {"image/png", "image/jpeg", "image/gif", "image/webp"}
@@ -92,7 +95,11 @@ def _downscale_if_needed(image_bytes: bytes, content_type: str) -> tuple[bytes, 
 
 
 async def resolve_attachments(
-    attachments: Sequence[AttachmentRef], *, trace_id: str | None = None
+    attachments: Sequence[AttachmentRef],
+    *,
+    trace_id: str | None = None,
+    session_id: str | None = None,
+    task_id: str | None = None,
 ) -> ResolvedAttachments:
     """Resolve a turn's raster attachments into capped, typed image content blocks.
 
@@ -106,7 +113,12 @@ async def resolve_attachments(
             non-raster entries (documents, SVG) are left unresolved (out of this
             ADR's v1 scope); a content type in neither set is rejected.
         trace_id: Originating request trace_id, threaded onto the ``store.get`` call
-            and failure logs (ADR-0074 identity threading).
+            and resolution/failure logs (ADR-0074 identity threading).
+        session_id: Originating session id, threaded onto the ``store.get`` call
+            and resolution/failure logs (ADR-0074 §8c joinability, FRE-693).
+        task_id: Sub-agent task id, threaded onto the ``store.get`` call and
+            resolution/failure logs (ADR-0074 §8c, FRE-693) — ``None`` at the
+            turn level (this module is only ever called from turn assembly).
 
     Returns:
         ``ResolvedAttachments`` with the surviving image blocks and any disclosure
@@ -125,12 +137,30 @@ async def resolve_attachments(
         elif attachment.content_type in _KNOWN_NON_RASTER_CONTENT_TYPES:
             continue
         else:
+            log.warning(
+                "attachment_resolution_failed",
+                trace_id=trace_id,
+                session_id=session_id,
+                task_id=task_id,
+                artifact_id=attachment.artifact_id,
+                content_type=attachment.content_type,
+                reason="unsupported_content_type",
+            )
             raise AttachmentUnsupportedError(
                 f"Attachment '{attachment.title}' has an unsupported content type: "
                 f"{attachment.content_type}."
             )
 
     if not raster:
+        log.info(
+            "attachment_resolution_completed",
+            trace_id=trace_id,
+            session_id=session_id,
+            task_id=task_id,
+            attachment_count=len(attachments),
+            resolved_count=0,
+            disclosure_count=0,
+        )
         return ResolvedAttachments(blocks=(), disclosures=())
 
     disclosures: list[str] = []
@@ -146,6 +176,15 @@ async def resolve_attachments(
 
     store = get_artifact_store()
     if store is None:
+        log.warning(
+            "attachment_resolution_failed",
+            trace_id=trace_id,
+            session_id=session_id,
+            task_id=task_id,
+            artifact_id=None,
+            content_type=None,
+            reason="store_unconfigured",
+        )
         raise AttachmentUnsupportedError(
             "Image attachments cannot be processed: artifact storage is not configured."
         )
@@ -154,7 +193,9 @@ async def resolve_attachments(
     total_encoded_bytes = 0
 
     for index, attachment in enumerate(raster):
-        raw = await store.get(attachment.r2_key, trace_id=trace_id)
+        raw = await store.get(
+            attachment.r2_key, trace_id=trace_id, session_id=session_id, task_id=task_id
+        )
         image_bytes, was_downscaled = await asyncio.to_thread(
             _downscale_if_needed, raw, attachment.content_type
         )
@@ -162,6 +203,15 @@ async def resolve_attachments(
         encoded_len = len(encoded)
 
         if encoded_len > settings.attachment_image_max_bytes:
+            log.warning(
+                "attachment_resolution_failed",
+                trace_id=trace_id,
+                session_id=session_id,
+                task_id=task_id,
+                artifact_id=attachment.artifact_id,
+                content_type=attachment.content_type,
+                reason="oversized_after_downscale",
+            )
             raise AttachmentUnsupportedError(
                 f"Image '{attachment.title}' is too large ({encoded_len} encoded bytes) "
                 f"even after downscaling; the per-image limit is "
@@ -191,4 +241,13 @@ async def resolve_attachments(
             }
         )
 
+    log.info(
+        "attachment_resolution_completed",
+        trace_id=trace_id,
+        session_id=session_id,
+        task_id=task_id,
+        attachment_count=len(attachments),
+        resolved_count=len(blocks),
+        disclosure_count=len(disclosures),
+    )
     return ResolvedAttachments(blocks=tuple(blocks), disclosures=tuple(disclosures))

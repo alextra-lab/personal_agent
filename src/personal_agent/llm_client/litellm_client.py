@@ -467,6 +467,10 @@ class LiteLLMClient:
                 role=self.budget_role,
                 amount=reservation_amount,
                 trace_id=UUID(trace_ctx.trace_id),
+                session_id=UUID(trace_ctx.session_id) if trace_ctx.session_id else None,
+                # Turn-level call — no sub-agent task_id reaches this layer
+                # (mirrors the route_traces convention: task_id NULL = turn-level).
+                task_id=None,
             )
         except BudgetDenied:
             log.warning(
@@ -588,7 +592,12 @@ class LiteLLMClient:
         from decimal import Decimal as _Decimal  # noqa: PLC0415 — local alias
 
         try:
-            await gate.commit(reservation_id, _Decimal(str(cost)), trace_id=trace_id)
+            await gate.commit(
+                reservation_id,
+                _Decimal(str(cost)),
+                trace_id=trace_id,
+                session_id=trace_ctx.session_id,
+            )
         except Exception as commit_exc:  # noqa: BLE001
             # If the commit fails (DB hiccup), we'd rather log loudly than
             # silently lose the actual-cost adjustment. The reaper will sweep

@@ -157,7 +157,7 @@ class JoinabilityWalk:
         await self._walk_captures(trace_ids, checks, orphans)
         await self._walk_reflections(trace_ids, checks, orphans)
         await self._walk_consolidation(trace_ids, checks)
-        await self._walk_budget_reservations(trace_ids, checks)
+        await self._walk_budget_reservations(session_id, trace_ids, checks, orphans)
         await self._walk_artifacts(session_id, checks)
 
         # 3. Elasticsearch walks.
@@ -506,9 +506,19 @@ class JoinabilityWalk:
 
     async def _walk_budget_reservations(
         self,
+        session_id: str,
         trace_ids: set[str],
         checks: list[SubstrateCheck],
+        orphans: list[Orphan],
     ) -> None:
+        """Check cost-gate reservations join back to the turn (ADR-0074 §8c, FRE-693).
+
+        A row is an orphan when its ``session_id`` is missing or disagrees with the
+        sampled anchor session — a trace_id match alone isn't sufficient joinability
+        (AC-12). ``task_id`` is intentionally never checked here: ``NULL`` is the
+        correct, expected value for every turn-level reservation (mirrors the
+        ``route_traces`` convention — set only for a sub-agent segment row).
+        """
         substrate = "postgres.budget_reservations"
         if self.pg_pool is None or not trace_ids:
             checks.append(_skipped(substrate, "conditional", reason="no_trace_ids"))
@@ -519,7 +529,8 @@ class JoinabilityWalk:
             async with self.pg_pool.acquire() as conn:
                 rows = await conn.fetch(
                     """
-                    SELECT reservation_id FROM budget_reservations
+                    SELECT reservation_id, trace_id, session_id, task_id
+                    FROM budget_reservations
                     WHERE trace_id = ANY($1::uuid[])
                     """,
                     uuid_list,
@@ -527,13 +538,31 @@ class JoinabilityWalk:
         except Exception as exc:  # noqa: BLE001
             checks.append(_errored(substrate, "conditional", exc, t0))
             return
+        dur = _dur_ms(t0)
+        sampled_uuid = _to_uuid(session_id)
+        status: Literal["green", "yellow", "red", "skipped"] = "green"
+        for r in rows:
+            row_session_id = r["session_id"]
+            if row_session_id is None or row_session_id != sampled_uuid:
+                status = "red"
+                orphans.append(
+                    Orphan(
+                        substrate=substrate,
+                        kind="missing_identity",
+                        detail={
+                            "reservation_id": str(r["reservation_id"]),
+                            "trace_id": str(r["trace_id"]),
+                        },
+                        severity="red",
+                    )
+                )
         checks.append(
             SubstrateCheck(
                 substrate=substrate,
                 expected="conditional",
                 observed_count=len(rows),
-                status="green",
-                duration_ms=_dur_ms(t0),
+                status=status,
+                duration_ms=dur,
             )
         )
 

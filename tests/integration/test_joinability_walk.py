@@ -42,9 +42,14 @@ TRACE_B = uuid.uuid4()
 USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000591")
 
 
+_BUDGET_ROLE = "joinability_walk_itest"
+
+
 async def _seed(pool: Any) -> None:
-    """Insert one known-good session with two api_costs rows."""
+    """Insert one known-good session with two api_costs rows + one budget_reservations row."""
     async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM budget_reservations WHERE role = $1", _BUDGET_ROLE)
+        await conn.execute("DELETE FROM budget_counters WHERE role = $1", _BUDGET_ROLE)
         await conn.execute("DELETE FROM api_costs WHERE session_id = $1", SESSION_ID)
         await conn.execute("DELETE FROM sessions WHERE session_id = $1", SESSION_ID)
         # Seed the FK target first (sessions.user_id NOT NULL → users, FRE-591).
@@ -79,10 +84,37 @@ async def _seed(pool: Any) -> None:
                 trace_id,
                 SESSION_ID,
             )
+        # FRE-693 (ADR-0074 §8c, AC-12): a cost-gate reservation with session_id
+        # set must join back to the anchor session with zero orphans.
+        counter_id = await conn.fetchval(
+            """
+            INSERT INTO budget_counters (
+                user_id, time_window, provider, role, window_start, running_total
+            ) VALUES (NULL, 'daily', NULL, $1, date_trunc('day', NOW()), 0)
+            ON CONFLICT (user_id, time_window, provider, role, window_start)
+            DO UPDATE SET role = EXCLUDED.role
+            RETURNING id
+            """,
+            _BUDGET_ROLE,
+        )
+        await conn.execute(
+            """
+            INSERT INTO budget_reservations (
+                counter_id, role, amount_usd, status,
+                created_at, expires_at, trace_id, session_id, task_id
+            ) VALUES ($1, $2, 0.01, 'committed', NOW(), NOW() + interval '90 seconds', $3, $4, NULL)
+            """,
+            counter_id,
+            _BUDGET_ROLE,
+            TRACE_A,
+            SESSION_ID,
+        )
 
 
 async def _cleanup(pool: Any) -> None:
     async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM budget_reservations WHERE role = $1", _BUDGET_ROLE)
+        await conn.execute("DELETE FROM budget_counters WHERE role = $1", _BUDGET_ROLE)
         await conn.execute("DELETE FROM api_costs WHERE session_id = $1", SESSION_ID)
         await conn.execute("DELETE FROM sessions WHERE session_id = $1", SESSION_ID)
 

@@ -2833,26 +2833,41 @@ class MemoryService:
 
         vis_frag, vis_params = _build_visibility_filter("node", user_id, authenticated)
         arm_rankings: list[list[RankedResult]] = []
-        async with self.driver.session() as session:
-            for variant in variants:
-                # Per-variant isolation: one variant's embedding/ANN failure
-                # must not zero out the other variants' results, matching
-                # query_memory's existing per-call isolation.
-                try:
-                    embedding = await generate_embedding(variant, mode="query")
-                    ranked = await self._dense_vector_search_ranked(
-                        session, embedding, top_k, vis_frag, vis_params
-                    )
-                except Exception as exc:
-                    log.warning(
-                        "multiquery_variant_search_failed",
-                        error=str(exc),
-                        trace_id=trace_id,
-                        session_id=session_id,
-                    )
-                    continue
-                if ranked:
-                    arm_rankings.append(ranked)
+        try:
+            async with self.driver.session() as session:
+                for variant in variants:
+                    # Per-variant isolation: one variant's embedding/ANN
+                    # failure must not zero out the other variants' results,
+                    # matching query_memory's existing per-call isolation.
+                    try:
+                        embedding = await generate_embedding(variant, mode="query")
+                        ranked = await self._dense_vector_search_ranked(
+                            session, embedding, top_k, vis_frag, vis_params
+                        )
+                    except Exception as exc:
+                        log.warning(
+                            "multiquery_variant_search_failed",
+                            error=str(exc),
+                            trace_id=trace_id,
+                            session_id=session_id,
+                        )
+                        continue
+                    if ranked:
+                        arm_rankings.append(ranked)
+        except Exception as exc:
+            # Session acquisition/release failure (transient
+            # ServiceUnavailable, pool exhaustion, etc.) must not hard-fail
+            # recall — matches lexical_recall_arm / structural_recall_arm,
+            # which both wrap their whole session block (master gate finding,
+            # 2026-07-02). Falls through to fusion with whatever arm_rankings
+            # was accumulated before the failure (empty if it failed on
+            # acquisition, before any variant ran).
+            log.error(
+                "multiquery_session_failed",
+                error=str(exc),
+                trace_id=trace_id,
+                session_id=session_id,
+            )
 
         fused = reciprocal_rank_fusion(arm_rankings, k=current_settings.multipath_rrf_k)
         # reciprocal_rank_fusion returns list[FusedResult]; this arm's contract

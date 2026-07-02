@@ -233,3 +233,26 @@ async def test_one_variant_failure_does_not_zero_the_whole_arm(memory_service, m
         assert call_count["n"] == 2
     finally:
         await _purge(memory_service, prefix)
+
+
+@pytest.mark.asyncio
+async def test_session_acquisition_failure_returns_empty_not_raises(memory_service, monkeypatch):
+    """Master gate finding (2026-07-02): if Neo4j session acquisition itself
+    fails (transient ServiceUnavailable, pool exhaustion, etc.), the arm must
+    return [] rather than propagating — it promises to "never hard-fail
+    recall" and lexical_recall_arm already honors this by wrapping its whole
+    session block; multi_query_recall_arm must match.
+    """
+
+    async def _paraphrase(query_text, count, **kwargs):
+        return []
+
+    def _boom_session(*args, **kwargs):
+        raise RuntimeError("simulated session acquisition failure")
+
+    monkeypatch.setattr(svc, "generate_query_paraphrases", _paraphrase)
+    monkeypatch.setattr(memory_service.driver, "session", _boom_session)
+    monkeypatch.setattr(get_settings(), "multiquery_arm_enabled", True, raising=False)
+
+    result = await memory_service.multi_query_recall_arm("some query")
+    assert result == []

@@ -10,10 +10,12 @@ candidate Cypher is exercised by the integration tests in
 from datetime import datetime, timedelta, timezone
 
 from personal_agent.config.settings import AppConfig
-from personal_agent.memory.models import TurnNode
+from personal_agent.memory.models import MemoryQuery, TurnNode
 from personal_agent.memory.service import (
     _build_memory_recall_event,
     _filter_entities_by_floor,
+    _filter_turns_by_hard_recency,
+    _hard_recency_cutoff_iso,
     _rank_conversations_by_relevance,
 )
 
@@ -201,3 +203,60 @@ class TestSettingsDefaults:
         cfg = AppConfig()
         assert cfg.relevance_bounded_recall_enabled is False
         assert cfg.recall_similarity_floor == 0.0
+
+
+class TestHardRecencyCutoffIso:
+    """FRE-658: explicit hard time window re-applied on the relevance-bounded path."""
+
+    def test_returns_naive_iso_when_set(self) -> None:
+        """A set hard_recency_days yields a NAIVE ISO cutoff (matches legacy L2442)."""
+        cutoff = _hard_recency_cutoff_iso(MemoryQuery(entity_names=["X"], hard_recency_days=7))
+        assert cutoff is not None
+        # Must be naive (no UTC offset) so it string-compares against the naive
+        # datetime.utcnow().isoformat() timestamps the legacy cutoff uses.
+        assert "+00:00" not in cutoff
+        assert datetime.fromisoformat(cutoff).tzinfo is None
+
+    def test_none_when_unset(self) -> None:
+        """No explicit window -> None (automatic path stays de-gated, AC-1a)."""
+        assert _hard_recency_cutoff_iso(MemoryQuery(entity_names=["X"])) is None
+
+    def test_none_when_zero(self) -> None:
+        """hard_recency_days == 0 is not a window -> None."""
+        assert (
+            _hard_recency_cutoff_iso(MemoryQuery(entity_names=["X"], hard_recency_days=0)) is None
+        )
+
+
+class TestFilterTurnsByHardRecency:
+    """FRE-658: hard post-recall window filter for the de-gated multi-path path."""
+
+    def test_drops_out_of_window(self) -> None:
+        """Turns older than the window are dropped; in-window turns kept."""
+        kept = _filter_turns_by_hard_recency(
+            [_turn("recent", days_ago=2), _turn("old", days_ago=100)], 7
+        )
+        assert [t.turn_id for t in kept] == ["recent"]
+
+    def test_none_is_noop(self) -> None:
+        """hard_recency_days None returns all turns unchanged (AC-1a invariance)."""
+        kept = _filter_turns_by_hard_recency(
+            [_turn("recent", days_ago=2), _turn("old", days_ago=100)], None
+        )
+        assert [t.turn_id for t in kept] == ["recent", "old"]
+
+    def test_zero_is_noop(self) -> None:
+        """hard_recency_days 0 is not a window -> no filtering."""
+        kept = _filter_turns_by_hard_recency([_turn("old", days_ago=100)], 0)
+        assert [t.turn_id for t in kept] == ["old"]
+
+    def test_naive_timestamp_normalised_not_crash(self) -> None:
+        """A naive turn timestamp is treated as UTC (no aware/naive compare crash)."""
+        naive = TurnNode(
+            turn_id="naive",
+            timestamp=datetime.utcnow(),
+            user_message="x",
+            key_entities=[],
+        )
+        kept = _filter_turns_by_hard_recency([naive], 7)
+        assert [t.turn_id for t in kept] == ["naive"]

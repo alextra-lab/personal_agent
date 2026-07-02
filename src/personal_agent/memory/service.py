@@ -448,6 +448,61 @@ def _filter_entities_by_floor(
     return names, scores
 
 
+def _hard_recency_cutoff_iso(query: MemoryQuery) -> str | None:
+    """ISO cutoff for an explicit hard recency window, or None (FRE-658).
+
+    Used by the de-gated relevance-bounded path in ``query_memory`` to re-apply a
+    hard ``c.timestamp >= cutoff`` bound when the caller supplied an explicit time
+    window (``hard_recency_days``). The format matches the **naive**
+    ``datetime.utcnow().isoformat()`` the legacy cutoff uses, so the string
+    comparison against stored turn timestamps is byte-consistent. Returns ``None``
+    when no explicit window is set (the automatic path), preserving ADR-0100 AC-1a
+    invariance to ``recency_days``.
+
+    Args:
+        query: The memory query; only ``hard_recency_days`` is consulted.
+
+    Returns:
+        A naive ISO-8601 cutoff string, or ``None`` when no hard window applies.
+    """
+    if not query.hard_recency_days:
+        return None
+    return (datetime.utcnow() - timedelta(days=query.hard_recency_days)).isoformat()
+
+
+def _filter_turns_by_hard_recency(
+    turns: Sequence[TurnNode], hard_recency_days: int | None
+) -> list[TurnNode]:
+    """Drop turns older than an explicit hard recency window (FRE-658).
+
+    The de-gated multi-path recall path (ADR-0104 / FRE-724) generates candidates
+    by relevance and takes no recency predicate, so an explicit caller-supplied
+    time window is enforced here as a hard **post-recall** filter (the fused arms
+    would otherwise return all-time matches for a time-scoped query). A falsy
+    ``hard_recency_days`` (the automatic path) is a no-op, so ADR-0100 AC-1a
+    invariance is preserved. Naive turn timestamps are treated as UTC to avoid an
+    aware/naive comparison error.
+
+    Args:
+        turns: Resolved turns from the fused recall set.
+        hard_recency_days: Explicit hard window in days, or None/0 for no window.
+
+    Returns:
+        The turns within the window, in input order (all turns when no window).
+    """
+    if not hard_recency_days:
+        return list(turns)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=hard_recency_days)
+    kept: list[TurnNode] = []
+    for turn in turns:
+        ts = turn.timestamp
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if ts >= cutoff:
+            kept.append(turn)
+    return kept
+
+
 def _build_memory_recall_event(
     returned: Sequence[TurnNode],
     candidate_set_size: int,
@@ -2380,10 +2435,13 @@ class MemoryService:
                     #
                     # Contract (ADR-0100 §2/§3, AC-1a): recency_days is DEMOTED to a
                     # ranking weight on this path — it no longer gates candidacy, so
-                    # the cutoff clause is intentionally absent. recency_days is still
+                    # the default cutoff is intentionally absent. recency_days is still
                     # honoured as a recency component inside _calculate_relevance_scores.
-                    # Callers needing a hard time window must not rely on recency_days
-                    # under the flag (tracked follow-up for the rollout ticket).
+                    #
+                    # FRE-658 resolution: an EXPLICIT caller-supplied hard window
+                    # (query.hard_recency_days, set only by the memory_search tool) is
+                    # re-applied as a hard candidacy bound below via {time_frag}. The
+                    # automatic callers never set it, so they stay invariant (AC-1a).
                     #
                     # The candidate set is ordered by entity relevance (explicit name
                     # match = 1.0, else the floored vector score) then recency BEFORE
@@ -2396,10 +2454,13 @@ class MemoryService:
                     else:
                         entity_predicate = "e.entity_type IN $entity_types"
                         cypher_parts.append("entity_types: $entity_types")
+                    hard_cutoff = _hard_recency_cutoff_iso(query)
+                    time_frag = "AND c.timestamp >= $cutoff_date" if hard_cutoff else ""
                     base_query = f"""
                     MATCH (c:Turn)-[:DISCUSSES]->(e:Entity)
                     WHERE {vis_frag}
                     AND ({entity_predicate} OR e.name IN $relevant_entity_names)
+                    {time_frag}
                     WITH e, c,
                          CASE WHEN {entity_predicate} THEN 1.0
                               ELSE coalesce($entity_scores[e.name], 0.0) END AS escore
@@ -2471,6 +2532,9 @@ class MemoryService:
                     params["entity_scores"] = floored_vector_scores
                     params["per_entity_cap"] = current_settings.recall_per_entity_turn_cap
                     params["candidate_cap"] = current_settings.recall_candidate_cap
+                    # FRE-658: bind the explicit hard-window cutoff when one applies.
+                    if hard_cutoff:
+                        params["cutoff_date"] = hard_cutoff
                 elif query.recency_days:
                     params["cutoff_date"] = cutoff_date
 
@@ -3408,6 +3472,11 @@ class MemoryService:
                     if item.kind == "turn" and item.item_id in turns_by_id
                     else turns_by_entity.get(item.item_id, [])
                 )
+                # FRE-658: the fused arms take no recency predicate, so an explicit
+                # caller-supplied hard window is enforced here as a post-recall
+                # filter (dropped before the limit fill, so in-window turns are not
+                # crowded out). No-op when hard_recency_days is None (AC-1a).
+                resolved = _filter_turns_by_hard_recency(resolved, query.hard_recency_days)
                 for turn in resolved:
                     if turn.turn_id in seen:
                         continue

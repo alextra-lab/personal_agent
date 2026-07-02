@@ -61,6 +61,6 @@
 #     gate block, FRE-707 structural-arm builder + shared entity-parse helper, then
 #     FRE-723 lexical/multi-query arm imports + module-level helpers inserted above). ---
 - path: src/personal_agent/memory/service.py
-  line: 1330
+  line: 1385
   pattern: cypher_merge
   reason: "dynamic on_create_clauses set origination; static analyzer can't see joined props (FP)"

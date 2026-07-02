@@ -226,6 +226,12 @@ class MemoryQuery(BaseModel):
     limit: int = Field(default=10, ge=1, le=100)
     min_interest_weight: float = Field(default=0.0, ge=0.0, le=1.0)
     recency_days: int | None = None  # Only return conversations from last N days
+    # FRE-658: an explicit caller-supplied HARD time window that survives the
+    # ADR-0100 / ADR-0104 de-gate. None = no hard window (the automatic path, which
+    # stays invariant to recency_days under the flags — ADR-0100 AC-1a); an int
+    # re-applies a hard time bound on the de-gated recall paths (set only by the
+    # memory_search tool when the caller passes an explicit positive recency_days).
+    hard_recency_days: int | None = None
     # FRE-229: visibility scoping (chokepoint filter)
     user_id: UUID | None = None
     authenticated: bool = False

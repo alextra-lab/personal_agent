@@ -92,7 +92,7 @@ async def search_memory_executor(
     query_text: str = "",
     entity_types: list[str] | None = None,
     entity_names: list[str] | None = None,
-    recency_days: int = 90,
+    recency_days: int | None = None,
     limit: int = 10,
     ctx: Any = None,
 ) -> dict[str, Any]:
@@ -103,6 +103,9 @@ async def search_memory_executor(
         entity_types: Optional filter by entity type.
         entity_names: Optional specific entity names to match.
         recency_days: Only return results from the past N days (0 = all history).
+            An explicit positive value is treated as a HARD time window that
+            survives the ADR-0100 / ADR-0104 recall de-gate (FRE-658); omitting it
+            leaves recall invariant to the default window (ADR-0100 AC-1a).
         limit: Maximum number of results (1–50).
         ctx: Optional trace context for logging.
 
@@ -112,6 +115,9 @@ async def search_memory_executor(
     """
     entity_types = entity_types or []
     entity_names = entity_names or []
+    # FRE-658: distinguish an explicit caller-supplied window (a hard time bound)
+    # from an omitted/zero default (soft) BEFORE the coercion collapses them to 90.
+    explicit_window = recency_days is not None and int(recency_days) > 0
     recency_days = int(recency_days or 90)
     limit = min(max(int(limit or 10), 1), 50)
 
@@ -152,6 +158,9 @@ async def search_memory_executor(
                 entity_types=entity_types,
                 limit=limit,
                 recency_days=recency_days if recency_days > 0 else None,
+                # FRE-658: an explicit positive window is a hard bound the de-gated
+                # recall paths must honour; an omitted/zero window stays soft (None).
+                hard_recency_days=recency_days if explicit_window else None,
             )
             result = await memory_service.query_memory(
                 query,

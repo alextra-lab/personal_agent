@@ -1,6 +1,6 @@
 # ADR-0106: The System/User Knowledge Boundary — Dispatch by Output Kind, Observe, and Ground (no reasoning cage)
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-02
 **Deciders:** Project owner (adr session, Opus)
 **Tags:** memory, knowledge-graph, system-boundary, extraction, dispatch, observability, self-improvement, sysgraph, event-bus, grounding
@@ -266,6 +266,10 @@ Each check names the concrete artifact it inspects. Where Core is checked, the e
 ### 2026-07-02 - Revised (still Proposed) — Codex round 1
 **Changed By:** Project owner (adr session, Opus)
 **Reason:** Folded Codex round-1 findings. **The routing signal is now explicit** — a first-class `output_kind` axis (`knowledge`/`ephemeral`/`finding`) that decomposes ADR-0098's single `System` class, resolving the "one `class` value can't drive a 3-way route" gap (finding #1). Terminology standardized on `output_kind` (title + D1/D2/D3/D7), "subject" reserved for *what an item is about*. Present-tense over-claims reframed as **target invariants** the implementation establishes, with a "prescriptive not descriptive" header and honest current-state notes (findings #2/#11/#12). **AC-7 now requires the cleanup to reclassify-and-retain the harness-as-studied-subject** (the crown jewel), not just delete System — closing a data-loss hole (finding #9). ACs tightened: AC-1 uses a ≥4×2 fixture set + ES-retention check (not two prompts); AC-2 covers **all** user-facing read paths; AC-4 defines the governed self-knowledge **allowlist** and rejects generic tool calls; AC-5 replaced the brittle "no branch anywhere" scan with a **named forbidden dataflow** on specific gateway/orchestrator stages + a deterministic stubbed-unavailable fixture; AC-6's Core-world-correlation half made mandatory (findings #3/#4/#6/#7/#8/#10). Live-KG numbers committed as a citable artifact (`docs/research/2026-07-02-fre-727-system-noise-breakdown.md`, nit #5). Re-submitting to Codex.
+
+### 2026-07-02 - Accepted
+**Changed By:** master (integration gate)
+**Reason:** Owner co-designed the full spine across the adr session and approved it; codex 2 rounds, no blocking findings; merged as PR #324. Elevated Proposed → Accepted at the gate (consistent with ADR-0098 / ADR-0105 acceptance-at-gate). The design is settled; implementation is FRE-728–732 (Needs Approval). ADR reaches *Implemented* only when the assembled seam AC-1+AC-2+AC-3 is proven live (master-held). Reconciles FRE-639 (its query-time filter + class-aware System eviction are superseded by write-time dispatch, D3); refines ADR-0098 D1; extends ADR-0105 D1.
 
 ---
 

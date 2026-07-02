@@ -524,6 +524,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup
     log.info("service_starting")
 
+    # Vision-capability drift guard (ADR-0101 §5; FRE-734): log which roles are
+    # vision-capable in the active config and warn if an expected production role
+    # is not flagged. Non-fatal — surfaces config-parity drift in the boot logs so
+    # it is caught here, not by a user on a broken image turn.
+    from personal_agent.config.model_loader import check_vision_capabilities
+
+    check_vision_capabilities()
+
     # Pre-flight: verify PostgreSQL is reachable before attempting any DB operations
     pg_host, pg_port = _parse_db_host_port(settings.database_url)
     await _preflight_check_tcp("PostgreSQL", pg_host, pg_port)

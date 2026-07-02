@@ -1139,6 +1139,34 @@ def _fallback_reply_from_tool_results(ctx: ExecutionContext, *, lead: str | None
     return "\n".join(lines)
 
 
+def _select_no_tool_final_reply(
+    ctx: ExecutionContext, response_content: str, reasoning_trace: str | None
+) -> str:
+    """Choose the final reply for a turn that produced no tool calls.
+
+    Priority: the model's content, then a substantive reasoning trace, then the
+    tool-results fallback. Thinking models (Qwen3.6) can emit the entire answer in
+    the reasoning/thinking channel with empty content — notably on vision turns
+    (ADR-0101) — which otherwise collapses to a generic "Task completed"
+    (FRE-734 Defect 2). The reasoning trace is surfaced ONLY when content is empty,
+    so it is the answer itself, not internal scratchpad shadowing a real answer.
+
+    Args:
+        ctx: Execution context (its ``tool_results`` feed the final fallback).
+        response_content: The model's cleaned content for this turn (may be empty).
+        reasoning_trace: The model's thinking/reasoning text, if any.
+
+    Returns:
+        The user-facing reply string.
+    """
+    if response_content:
+        return response_content
+    trace = (reasoning_trace or "").strip()
+    if trace:
+        return trace
+    return _fallback_reply_from_tool_results(ctx)
+
+
 # FRE-484: minimal placeholder so Anthropic accepts a forced-synthesis call whose
 # history references tools, when the active mode currently exposes no tool defs.
 # Never invoked — tool_choice is pinned to "none".
@@ -3120,8 +3148,11 @@ async def step_llm_call(
         if response_tool_calls:
             return TaskState.TOOL_EXECUTION
         else:
-            # No tools, set final reply and synthesize
-            ctx.final_reply = response_content or _fallback_reply_from_tool_results(ctx)
+            # No tools, set final reply and synthesize. FRE-734 Defect 2: when a
+            # thinking model (Qwen3.6) emits the answer in the reasoning channel with
+            # empty content — as on vision turns (ADR-0101) — surface the reasoning
+            # trace rather than collapsing to a generic "Task completed".
+            ctx.final_reply = _select_no_tool_final_reply(ctx, response_content, reasoning_trace)
             return TaskState.SYNTHESIS
 
     except Exception as e:

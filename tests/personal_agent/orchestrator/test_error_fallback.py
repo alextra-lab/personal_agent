@@ -11,9 +11,9 @@ Verifies:
 from __future__ import annotations
 
 import pytest
-from personal_agent.error_classification import ClassifiedError
 
 import personal_agent.orchestrator.executor as ex
+from personal_agent.error_classification import ClassifiedError
 from personal_agent.governance.models import Mode
 from personal_agent.llm_client.types import LLMServerError, LLMTimeout
 from personal_agent.orchestrator.channels import Channel
@@ -65,6 +65,51 @@ class TestFallbackReplyFromToolResults:
         reply = ex._fallback_reply_from_tool_results(ctx)
         assert "search" in reply
         assert "read_file" in reply
+
+
+# ---------------------------------------------------------------------------
+# _select_no_tool_final_reply (FRE-734 Defect 2)
+# ---------------------------------------------------------------------------
+
+
+class TestSelectNoToolFinalReply:
+    """A thinking-only answer (empty content, substantive reasoning) is surfaced.
+
+    FRE-734 Defect 2 / ADR-0101: Qwen3.6 can emit the entire vision answer in the
+    reasoning/thinking channel with empty content, which previously collapsed to a
+    generic 'Task completed'. The reply now falls back to the reasoning trace —
+    but only when content is empty, so it is the answer, not scratchpad shadowing
+    a real answer.
+    """
+
+    def test_content_wins_over_reasoning(self) -> None:
+        ctx = _make_ctx()
+        reply = ex._select_no_tool_final_reply(ctx, "the real answer", "some thinking")
+        assert reply == "the real answer"
+
+    def test_reasoning_surfaced_when_content_empty(self) -> None:
+        ctx = _make_ctx()
+        reply = ex._select_no_tool_final_reply(ctx, "", "The image shows a red bicycle.")
+        assert reply == "The image shows a red bicycle."
+
+    def test_reasoning_stripped(self) -> None:
+        ctx = _make_ctx()
+        reply = ex._select_no_tool_final_reply(ctx, "", "  padded answer  \n")
+        assert reply == "padded answer"
+
+    def test_empty_content_and_reasoning_falls_back(self) -> None:
+        """No content, no reasoning, no tools → the generic no-answer fallback (unchanged)."""
+        ctx = _make_ctx()
+        reply = ex._select_no_tool_final_reply(ctx, "", None)
+        assert reply == ex._fallback_reply_from_tool_results(ctx)
+        assert "couldn't produce a final answer" in reply
+
+    def test_whitespace_reasoning_does_not_shadow_tool_results(self) -> None:
+        """Whitespace-only reasoning is not substantive → tool-results fallback still used."""
+        ctx = _make_ctx()
+        ctx.tool_results.append({"tool_name": "search", "success": True})  # type: ignore[attr-defined]
+        reply = ex._select_no_tool_final_reply(ctx, "", "   ")
+        assert "search" in reply
 
 
 # ---------------------------------------------------------------------------

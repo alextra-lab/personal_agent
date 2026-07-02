@@ -9,8 +9,8 @@ Master-maintained dispatch. `/build 1`, `/build 2`, and `/adr` resolve their NEX
 <!-- STREAM-BOARD:START -->
 | Stream | Command | NEXT (build this) | Context | Queued after |
 |--------|---------|-------------------|---------|--------------|
-| build · Stream 1 · **Sonnet** _(run as Sonnet for 723; flip back to Opus for 724)_ | `/build 1` | **FRE-723** [S] _(lexical full-text + multi-query paraphrase arms — recall v1 core Build 2)_ | **KEEP** — shares `memory/fusion.py` with the just-shipped 722 | **FRE-724** [O] (seam — flip back to Opus, after 723/706; 722✅) |
-| build2 · Stream 2 · **Sonnet** | `/build 2` | **FRE-691** [S] _(cloud image cost — pricing/pre-flight/ADR-0065 reservation/metering; **must land before FRE-692 cloud-override UI**)_ | CLEAR | FRE-692 [S] (PWA override) → FRE-693 [S] (joinability); FRE-669 seam = master-run post-deploy |
+| build · Stream 1 · **Sonnet** _(run as Sonnet for 723; flip to Opus for 724)_ | `/build 1` | **FRE-723** [S] _(finish the #325 bounce-fix: wrap the multi_query session block; recall v1 core Build 2)_ | **KEEP** — PR #325 open | **FRE-724** [O] (seam — flip to Opus, after 723/706; 722✅) |
+| build2 · Stream 2 · **Opus** _(flip to Opus for 734)_ | `/build 2` | 🔴 **FRE-734** [O] _(HIGH prod bug — deployed gateway parses supports_vision=False → ALL image turns fail routing; container-vs-repo config-parse forensics + reply thinking/content fix; blocks FRE-669)_ | CLEAR | **FRE-691** [S] (cloud image cost) → FRE-692 → FRE-693 |
 | adr · **Opus** | `/adr` | ⚠️ **queue exhausted** — FRE-727 shipped (ADR-0106 Accepted, #324); children 728–732 are build tickets (Sonnet), not adr. Candidate next = **pedagogical-reflection ADR** (ADR-0106 D7 flags it; unfiled — owner file+approve) | CLEAR | — |
 <!-- STREAM-BOARD:END -->
 

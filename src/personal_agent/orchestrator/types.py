@@ -296,6 +296,12 @@ class ExecutionContext:
     # mutation of the list passed at the handle_user_request seam.
     attachments: tuple[AttachmentRef, ...] = ()
 
+    # --- FRE-666 / ADR-0101 §6 guardrail disclosure ---
+    # User-facing strings describing any downscale/drop a guardrail applied while
+    # resolving this turn's raster attachments. Appended to ctx.final_reply by
+    # step_synthesis so the disclosure reaches the user (never silent).
+    attachment_disclosures: list[str] = field(default_factory=list)
+
 
 class OrchestratorStep(TypedDict):
     """Step metadata for observability.

@@ -3,6 +3,7 @@
 import json
 import sys
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -21,9 +22,10 @@ from personal_agent.orchestrator.executor import (
     _validate_and_fix_conversation_roles,
     execute_task_safe,
     step_init,
+    step_synthesis,
 )
 from personal_agent.orchestrator.session import SessionManager
-from personal_agent.orchestrator.types import ExecutionContext, TaskState
+from personal_agent.orchestrator.types import AttachmentRef, ExecutionContext, TaskState
 from personal_agent.telemetry.trace import TraceContext
 from tests.test_orchestrator.conftest import configure_mock_llm_client_model_configs
 
@@ -1158,3 +1160,144 @@ class TestExecutorRecallIdentityThreading:
         kwargs = mock_memory.query_memory_broad.call_args.kwargs
         assert kwargs.get("user_id") == uid
         assert kwargs.get("authenticated") is True
+
+
+class TestStepInitAttachmentResolution:
+    """FRE-666 / ADR-0101 §3, §4 — turn-assembly image-block injection."""
+
+    @staticmethod
+    def _make_ctx(message: str, attachments: tuple[AttachmentRef, ...] = ()) -> ExecutionContext:
+        return ExecutionContext(
+            session_id="sess-666",
+            trace_id="trace-666",
+            user_message=message,
+            mode=Mode.NORMAL,
+            channel=Channel.CHAT,
+            gateway_output=None,
+            attachments=attachments,
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_attachments_content_stays_string(self) -> None:
+        ctx = self._make_ctx("hello")
+        trace_ctx = TraceContext(trace_id="trace-666", session_id="sess-666")
+
+        await step_init(ctx, SessionManager(), trace_ctx)
+
+        assert ctx.messages[-1]["content"] == "hello"
+
+    @pytest.mark.asyncio
+    async def test_image_attachment_injects_block_list(self) -> None:
+        """AC-3: the assembled user turn content is a list containing a typed image block."""
+        attachment = AttachmentRef(
+            artifact_id="a1",
+            content_type="image/png",
+            title="photo.png",
+            r2_key="upload/u/g/photo.png",
+        )
+        ctx = self._make_ctx("Look at this", attachments=(attachment,))
+        trace_ctx = TraceContext(trace_id="trace-666", session_id="sess-666")
+
+        image_block = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+        with patch(
+            "personal_agent.orchestrator.attachment_resolution.resolve_attachments",
+            new=AsyncMock(return_value=SimpleNamespace(blocks=(image_block,), disclosures=())),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        content = ctx.messages[-1]["content"]
+        assert isinstance(content, list)
+        types = {block["type"] for block in content}
+        assert types == {"text", "image_url"}
+        text_block = next(b for b in content if b["type"] == "text")
+        assert text_block["text"] == "Look at this"
+
+    @pytest.mark.asyncio
+    async def test_empty_user_message_with_attachment_omits_text_block(self) -> None:
+        attachment = AttachmentRef(
+            artifact_id="a1",
+            content_type="image/png",
+            title="photo.png",
+            r2_key="upload/u/g/photo.png",
+        )
+        ctx = self._make_ctx("", attachments=(attachment,))
+        trace_ctx = TraceContext(trace_id="trace-666", session_id="sess-666")
+
+        image_block = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+        with patch(
+            "personal_agent.orchestrator.attachment_resolution.resolve_attachments",
+            new=AsyncMock(return_value=SimpleNamespace(blocks=(image_block,), disclosures=())),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        content = ctx.messages[-1]["content"]
+        assert content == [image_block]
+
+    @pytest.mark.asyncio
+    async def test_disclosures_copied_onto_ctx(self) -> None:
+        attachment = AttachmentRef(
+            artifact_id="a1",
+            content_type="image/png",
+            title="photo.png",
+            r2_key="upload/u/g/photo.png",
+        )
+        ctx = self._make_ctx("hi", attachments=(attachment,))
+        trace_ctx = TraceContext(trace_id="trace-666", session_id="sess-666")
+
+        with patch(
+            "personal_agent.orchestrator.attachment_resolution.resolve_attachments",
+            new=AsyncMock(
+                return_value=SimpleNamespace(
+                    blocks=(),
+                    disclosures=("Image 'photo.png' was downscaled to fit the size limit.",),
+                )
+            ),
+        ):
+            await step_init(ctx, SessionManager(), trace_ctx)
+
+        assert ctx.attachment_disclosures == [
+            "Image 'photo.png' was downscaled to fit the size limit."
+        ]
+
+
+class TestStepSynthesisAttachmentDisclosure:
+    """FRE-666 / ADR-0101 §6, FRE-690 — guardrail disclosures reach the actual reply."""
+
+    @staticmethod
+    def _make_ctx(final_reply: str | None, disclosures: list[str]) -> ExecutionContext:
+        ctx = ExecutionContext(
+            session_id="sess-666-synth",
+            trace_id="trace-666-synth",
+            user_message="hi",
+            mode=Mode.NORMAL,
+            channel=Channel.CHAT,
+        )
+        ctx.final_reply = final_reply
+        ctx.attachment_disclosures = disclosures
+        return ctx
+
+    @pytest.mark.asyncio
+    async def test_disclosures_appended_to_final_reply(self) -> None:
+        ctx = self._make_ctx(
+            "Here's what I see.",
+            ["Image 'a.png' was downscaled to fit the size limit."],
+        )
+        trace_ctx = TraceContext(trace_id="trace-666-synth", session_id="sess-666-synth")
+
+        session_manager = SessionManager()
+        session_manager.create_session(Mode.NORMAL, Channel.CHAT, session_id=ctx.session_id)
+        await step_synthesis(ctx, session_manager, trace_ctx)
+
+        assert "Here's what I see." in ctx.final_reply
+        assert "Image 'a.png' was downscaled to fit the size limit." in ctx.final_reply
+
+    @pytest.mark.asyncio
+    async def test_no_disclosures_leaves_final_reply_unchanged(self) -> None:
+        ctx = self._make_ctx("Here's what I see.", [])
+        trace_ctx = TraceContext(trace_id="trace-666-synth", session_id="sess-666-synth")
+
+        session_manager = SessionManager()
+        session_manager.create_session(Mode.NORMAL, Channel.CHAT, session_id=ctx.session_id)
+        await step_synthesis(ctx, session_manager, trace_ctx)
+
+        assert ctx.final_reply == "Here's what I see."

@@ -1,5 +1,6 @@
 """Neo4j memory service for knowledge graph operations."""
 
+import re
 import statistics
 import time
 from collections.abc import Sequence
@@ -20,6 +21,7 @@ from personal_agent.events import (
     MemoryAccessedEvent,
     get_event_bus,
 )
+from personal_agent.llm_client import InferencePriority, LocalLLMClient, ModelRole
 from personal_agent.llm_client.token_counter import estimate_tokens
 from personal_agent.memory.embeddings import generate_embedding
 from personal_agent.memory.fact import PromotionCandidate
@@ -27,6 +29,7 @@ from personal_agent.memory.freshness_aggregate import (
     GraphStalenessSummary,
     aggregate_graph_staleness,
 )
+from personal_agent.memory.fusion import RankedResult, reciprocal_rank_fusion
 from personal_agent.memory.models import (
     Claim,
     Entity,
@@ -45,6 +48,7 @@ from personal_agent.memory.supersession import (
     matching_candidates,
     strongest_blocker,
 )
+from personal_agent.telemetry.trace import TraceContext
 
 Neo4jAsyncGraphDatabase: Any = None
 try:
@@ -124,6 +128,85 @@ def _build_visibility_filter(
     )
     params: dict[str, Any] = {"vis_authenticated": authenticated, "vis_user_id": user_id_str}
     return fragment, params
+
+
+_LUCENE_SPECIAL_CHARS = re.compile(r'([+\-!(){}\[\]^"~*?:\\/&|])')
+
+
+def _escape_lucene_query(text: str) -> str:
+    r"""Escape Lucene special characters so free text is a literal query.
+
+    Neo4j's full-text index is Lucene-backed; unescaped punctuation (``: ( ) "
+    / \\`` etc.) throws a parse error on ordinary sentences, not just
+    adversarial input — this is a real system boundary (user text → Lucene
+    query DSL), not speculative hardening.
+
+    Args:
+        text: Raw query text.
+
+    Returns:
+        Text with Lucene special characters backslash-escaped.
+    """
+    return _LUCENE_SPECIAL_CHARS.sub(r"\\\1", text)
+
+
+_PARAPHRASE_SYSTEM_PROMPT = (
+    "Rewrite the user's query as alternative phrasings using different vocabulary "
+    "for the same meaning. Reply with exactly one paraphrase per line, no numbering, "
+    "no commentary."
+)
+
+
+async def generate_query_paraphrases(
+    query_text: str,
+    count: int,
+    *,
+    trace_id: str | None = None,
+    session_id: str | None = None,
+) -> list[str]:
+    """Generate up to `count` paraphrases of a query via the local SUB_AGENT model.
+
+    Fails open (ADR-0104 / FRE-723): any error — timeout, slot exhaustion,
+    malformed response, connection failure — returns []. Callers degrade to the
+    dense arm alone on the original query; this function never raises and must
+    never hard-fail recall.
+
+    Args:
+        query_text: The original query to paraphrase.
+        count: Max paraphrases to request (not including the original).
+        trace_id: Optional trace id for correlation.
+        session_id: Optional session id for correlation.
+
+    Returns:
+        Up to `count` paraphrase strings, one per line of the model's reply.
+        Empty on any failure or when count < 1 or query_text is blank.
+    """
+    if count < 1 or not query_text.strip():
+        return []
+    try:
+        client = LocalLLMClient()
+        trace_ctx = TraceContext(trace_id=trace_id or str(uuid4()), session_id=session_id)
+        response = await client.respond(
+            role=ModelRole.SUB_AGENT,
+            messages=[{"role": "user", "content": query_text}],
+            system_prompt=_PARAPHRASE_SYSTEM_PROMPT,
+            max_tokens=200,
+            max_retries=0,
+            timeout_s=10.0,
+            priority=InferencePriority.BACKGROUND,
+            priority_timeout=10.0,
+            trace_ctx=trace_ctx,
+        )
+        lines = [line.strip() for line in response["content"].splitlines() if line.strip()]
+        return lines[:count]
+    except Exception as exc:
+        log.warning(
+            "multiquery_paraphrase_generation_failed",
+            error=str(exc),
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        return []
 
 
 def _build_structural_arm_query(
@@ -1462,6 +1545,31 @@ class MemoryService:
             log.error("vector_index_creation_failed", error=str(e), exc_info=True)
             return False
 
+    async def ensure_fulltext_index(self) -> bool:
+        """Create the Turn/Entity full-text index (ADR-0104 / FRE-723 lexical arm).
+
+        Idempotent (IF NOT EXISTS). Mirrors ensure_vector_index()'s pattern.
+
+        Returns:
+            True if the index exists or was created successfully.
+        """
+        if not self.connected or not self.driver:
+            return False
+        try:
+            async with self.driver.session() as session:
+                await session.run(
+                    """
+                    CREATE FULLTEXT INDEX turn_entity_fulltext IF NOT EXISTS
+                    FOR (n:Turn|Entity)
+                    ON EACH [n.user_message, n.name]
+                    """
+                )
+            log.info("fulltext_index_ensured", index_name="turn_entity_fulltext")
+            return True
+        except Exception as e:
+            log.error("fulltext_index_creation_failed", error=str(e), exc_info=True)
+            return False
+
     async def bootstrap_owner_identity(
         self,
         agent_id: str,
@@ -2542,6 +2650,228 @@ class MemoryService:
             session_id=session_id,
         )
         return entities
+
+    async def lexical_recall_arm(
+        self,
+        query_text: str,
+        *,
+        limit: int | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
+    ) -> list[RankedResult]:
+        """Lexical full-text recall arm (ADR-0104 / FRE-723).
+
+        Ranked hits over Turn.user_message and Entity.name via the
+        ``turn_entity_fulltext`` index. Feature-gated OFF
+        (``lexical_arm_enabled``); flag-dark until the multi-path fusion core
+        (FRE-724) wires it in. Recovers rare tokens/IDs/names the dense
+        embedder blurs (ADR-0104 §2).
+
+        Args:
+            query_text: Free-text query. Lucene special characters are escaped.
+            limit: Max hits; defaults to ``multipath_arm_top_k``.
+            trace_id: Request trace id for event correlation.
+            session_id: Session id for event correlation.
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity.
+
+        Returns:
+            Ranked list of RankedResult (best-first, 1-based rank). item_id is
+            Turn.turn_id for turns, Entity elementId for entities. Empty when
+            the arm is gated off, the service is disconnected, the query is
+            empty, or nothing matches.
+        """
+        current_settings = get_settings()
+        if not current_settings.lexical_arm_enabled:
+            return []
+        if not self.connected or not self.driver or not query_text.strip():
+            return []
+
+        top_k = limit if limit is not None else current_settings.multipath_arm_top_k
+        vis_frag, vis_params = _build_visibility_filter("node", user_id, authenticated)
+        params: dict[str, Any] = {
+            "query_text": _escape_lucene_query(query_text),
+            "top_k": top_k,
+            **vis_params,
+        }
+
+        try:
+            async with self.driver.session() as session:
+                result = await session.run(
+                    f"""
+                    CALL db.index.fulltext.queryNodes('turn_entity_fulltext', $query_text)
+                    YIELD node, score
+                    WITH node, score
+                    WHERE {vis_frag}
+                    RETURN
+                        CASE WHEN node:Turn THEN node.turn_id ELSE elementId(node) END AS item_id,
+                        score
+                    ORDER BY score DESC
+                    LIMIT $top_k
+                    """,
+                    parameters=params,
+                )
+                rows = await result.data()
+        except Exception as e:
+            log.error(
+                "lexical_recall_arm_failed",
+                error=str(e),
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            return []
+
+        ranked = [RankedResult(item_id=r["item_id"], rank=i + 1) for i, r in enumerate(rows)]
+        log.info(
+            "lexical_recall_arm_completed",
+            arm="lexical",
+            hit_count=len(ranked),
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        return ranked
+
+    async def _dense_vector_search_ranked(
+        self,
+        session: Any,
+        embedding: list[float],
+        top_k: int,
+        vis_frag: str,
+        vis_params: dict[str, Any],
+    ) -> list[RankedResult]:
+        """Run the entity_embedding ANN search, ranked by descending similarity.
+
+        The "dense arm" the multi-query wrapper fans paraphrases through.
+
+        Args:
+            session: Active Neo4j async session.
+            embedding: Query embedding vector; a zero vector short-circuits to [].
+            top_k: Max candidates to retrieve.
+            vis_frag: Visibility WHERE fragment (see _build_visibility_filter).
+            vis_params: Params for vis_frag.
+
+        Returns:
+            RankedResult list, 1-based rank, item_id = Entity elementId.
+        """
+        if not any(x != 0.0 for x in embedding):
+            return []
+        result = await session.run(
+            f"""
+            CALL db.index.vector.queryNodes('entity_embedding', $top_k, $embedding)
+            YIELD node, score
+            WITH node, score
+            WHERE {vis_frag}
+            RETURN elementId(node) AS item_id, score
+            ORDER BY score DESC
+            """,
+            parameters={"top_k": top_k, "embedding": embedding, **vis_params},
+        )
+        rows = await result.data()
+        return [RankedResult(item_id=r["item_id"], rank=i + 1) for i, r in enumerate(rows)]
+
+    async def multi_query_recall_arm(
+        self,
+        query_text: str,
+        *,
+        limit: int | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        user_id: UUID | None = None,
+        authenticated: bool = False,
+    ) -> list[RankedResult]:
+        """Multi-query paraphrase recall arm (ADR-0104 / FRE-723).
+
+        Fans the original query plus up to (multipath_paraphrase_count - 1)
+        local-model paraphrases through the dense vector arm, and RRF-fuses
+        the per-variant ranked lists into one. Direct mitigation for the
+        open-vocabulary miss (e.g. "vision" vs. "perception") without
+        write-side canonicalization. Feature-gated OFF
+        (``multiquery_arm_enabled``); flag-dark until FRE-724. Degrades to
+        the dense arm on the original query alone if paraphrase generation
+        fails or returns nothing — never hard-fails recall.
+
+        Args:
+            query_text: Free-text query.
+            limit: Max fused hits; defaults to ``multipath_arm_top_k``.
+            trace_id: Request trace id for event correlation.
+            session_id: Session id for event correlation.
+            user_id: Authenticated user UUID for visibility scoping (FRE-229).
+            authenticated: Whether the request carries a verified identity.
+
+        Returns:
+            Ranked, RRF-fused list of RankedResult (best-first). item_id is
+            Entity elementId. Empty when the arm is gated off, disconnected,
+            or the query is empty.
+        """
+        current_settings = get_settings()
+        if not current_settings.multiquery_arm_enabled:
+            return []
+        if not self.connected or not self.driver or not query_text.strip():
+            return []
+
+        top_k = limit if limit is not None else current_settings.multipath_arm_top_k
+        paraphrase_count = max(current_settings.multipath_paraphrase_count - 1, 0)
+        try:
+            paraphrases = await generate_query_paraphrases(
+                query_text, paraphrase_count, trace_id=trace_id, session_id=session_id
+            )
+        except Exception as exc:
+            # Defense in depth: generate_query_paraphrases already fails open
+            # internally, but this arm's own contract ("must never hard-fail
+            # recall") does not get to depend on a collaborator never
+            # regressing that guarantee.
+            log.warning(
+                "multiquery_paraphrase_call_failed",
+                error=str(exc),
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+            paraphrases = []
+        variants = [query_text, *paraphrases]
+
+        vis_frag, vis_params = _build_visibility_filter("node", user_id, authenticated)
+        arm_rankings: list[list[RankedResult]] = []
+        async with self.driver.session() as session:
+            for variant in variants:
+                # Per-variant isolation: one variant's embedding/ANN failure
+                # must not zero out the other variants' results, matching
+                # query_memory's existing per-call isolation.
+                try:
+                    embedding = await generate_embedding(variant, mode="query")
+                    ranked = await self._dense_vector_search_ranked(
+                        session, embedding, top_k, vis_frag, vis_params
+                    )
+                except Exception as exc:
+                    log.warning(
+                        "multiquery_variant_search_failed",
+                        error=str(exc),
+                        trace_id=trace_id,
+                        session_id=session_id,
+                    )
+                    continue
+                if ranked:
+                    arm_rankings.append(ranked)
+
+        fused = reciprocal_rank_fusion(arm_rankings, k=current_settings.multipath_rrf_k)
+        # reciprocal_rank_fusion returns list[FusedResult]; this arm's contract
+        # is list[RankedResult] (matching lexical_recall_arm and the arm
+        # interface FRE-724 consumes) — re-rank the fused order into
+        # RankedResult.
+        ranked_fused = [
+            RankedResult(item_id=f.item_id, rank=i + 1) for i, f in enumerate(fused[:top_k])
+        ]
+        log.info(
+            "multi_query_recall_arm_completed",
+            arm="multi_query",
+            variant_count=len(variants),
+            paraphrase_count=len(paraphrases),
+            hit_count=len(ranked_fused),
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        return ranked_fused
 
     async def query_memory_broad(
         self,

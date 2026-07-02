@@ -196,11 +196,14 @@ guard — i.e. no arm found anything above pure noise. The reranker and agreemen
 **ordering and the confidence framing handed up**, never a drop-to-empty. The main model then decides
 whether the material actually answers the query.
 
-**What FRE-706 signs off (its recorded values):**
+**What FRE-706 signs off (its recorded values) — settled 2026-07-01, see
+`docs/specs/RECALL_OPERATING_POINT_DECISION.md`:**
 
-- the `recall_similarity_floor` value operated as a **noise guard** (must remain below the true-match
-  distribution — provable on the FRE-489 probe: no true positive is dropped by it, AC-1);
-- whether/how RRF agreement (≥2 arms) is surfaced as a confidence cue to the main model;
+- the `recall_similarity_floor` value operated as a **noise guard** — **owner-confirmed `= 0.60`**
+  (score space, prod 0.6B embedder; up from 0.0), sitting below the true-match distribution
+  (~0.076 below the FRE-694 p5 of 0.676). Hard invariant (AC-1): the *lowest* FRE-489 true positive
+  still clears it — validated on the probe at enactment (FRE-724), else the floor is lowered;
+- RRF agreement (≥2 arms) is surfaced to the main model as a **confidence cue**, not a filter;
 - confirmed against the pedagogical bar with owner sign-off, mirroring the FRE-655 sign-off pattern.
 
 No hard separating floor is chosen anywhere — that framing is retired (ADR-0103 AC-5).

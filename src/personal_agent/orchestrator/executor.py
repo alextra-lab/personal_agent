@@ -325,6 +325,7 @@ async def _maybe_pause_for_constraint(
     constraint: str,
     context: str,
     timeout_seconds: float = 60.0,
+    allow_preference: bool = True,
 ) -> str:
     """Pause and ask the user, or apply a stored preference (ADR-0076).
 
@@ -341,6 +342,11 @@ async def _maybe_pause_for_constraint(
         constraint: Constraint name (must be a key of ``CONSTRAINT_OPTIONS``).
         context: Human-readable description of the situation for the card.
         timeout_seconds: Seconds before the default option auto-applies.
+        allow_preference: When ``False``, a stored preference is neither read nor
+            written for this pause — the user is always asked and no "remember"
+            choice is persisted. Used for the ``attachment_cost`` (spend)
+            confirmation so a remembered "always proceed" can never silently spend
+            (ADR-0101 §8b / FRE-691). Defaults to ``True`` (all other constraints).
 
     Returns:
         The resolved ``action_id`` the executor should act on.
@@ -360,8 +366,12 @@ async def _maybe_pause_for_constraint(
     default_id = default_action_id(constraint)
 
     # 1. Stored preference bypasses the pause entirely (telemetry-only record).
-    pref = await _load_constraint_preference(
-        user_id, constraint, trace_id=trace_id, session_id=session_id
+    pref = (
+        await _load_constraint_preference(
+            user_id, constraint, trace_id=trace_id, session_id=session_id
+        )
+        if allow_preference
+        else None
     )
     if pref and pref != "always_pause":
         log.info(
@@ -459,7 +469,7 @@ async def _maybe_pause_for_constraint(
             session_id=session_id,
         )
 
-    if remember:
+    if remember and allow_preference:
         await _save_constraint_preference(
             user_id, constraint, action_id, trace_id=trace_id, session_id=session_id
         )
@@ -1442,6 +1452,98 @@ def _resolve_vision_routing_key(ctx: ExecutionContext, role_name: str) -> str:
     )
 
 
+async def _maybe_confirm_attachment_cost(
+    ctx: ExecutionContext, resolved_blocks: Sequence[dict[str, Any]]
+) -> bool:
+    """Pre-flight cloud-attachment cost gate (ADR-0101 §8b / FRE-691).
+
+    When a turn's resolved attachment blocks route to a *priced cloud* model and the
+    pre-flight estimate exceeds ``attachment_cost_confirmation_threshold_usd``, ask the
+    user to confirm before any spend (mirrors the §6 disclose-on-alter pattern). The
+    gate is **per-turn**: one confirmation authorises the whole turn's cloud-vision
+    usage — the per-call ADR-0065 reservation still independently caps every call, so a
+    multi-call turn cannot exceed the budget under one confirmation.
+
+    Local/free routing, an unpriced model, or an under-threshold estimate proceed
+    silently. A routing error is deferred to ``step_llm_call`` (which surfaces it as
+    today) rather than handled here.
+
+    Args:
+        ctx: Execution context (carries attachments, session/trace identity, reply).
+        resolved_blocks: The turn's resolved attachment content blocks.
+
+    Returns:
+        ``True`` to proceed with the turn; ``False`` to stop with no model call
+        (``ctx.final_reply`` is set to the estimate + proceed/keep-local prompt).
+    """
+    from decimal import Decimal
+
+    from personal_agent.config.model_loader import load_model_config
+    from personal_agent.exceptions import AttachmentUnsupportedError
+    from personal_agent.llm_client.message_content import IMAGE_BLOCK_TOKEN_ESTIMATE
+    from personal_agent.orchestrator.attachment_cost import estimate_attachment_cloud_cost_usd
+
+    try:
+        effective_key = _resolve_vision_routing_key(ctx, ModelRole.PRIMARY.value)
+    except AttachmentUnsupportedError:
+        # Routing can't serve this attachment — let step_llm_call raise it as today.
+        return True
+
+    model_def = load_model_config().models.get(effective_key)
+    input_price = model_def.input_cost_per_token if model_def is not None else None
+    if model_def is None or model_def.provider_type == "local" or not input_price:
+        # Local/free or unpriced — nothing to gate.
+        ctx.attachment_cost_confirmed = True
+        return True
+
+    estimate = estimate_attachment_cloud_cost_usd(
+        block_count=len(resolved_blocks),
+        per_block_tokens=IMAGE_BLOCK_TOKEN_ESTIMATE,
+        input_price_per_token=Decimal(str(input_price)),
+    )
+    threshold = Decimal(str(settings.attachment_cost_confirmation_threshold_usd))
+
+    if estimate <= threshold:
+        ctx.attachment_cost_confirmed = True
+        return True
+
+    decision = await _maybe_pause_for_constraint(
+        session_id=ctx.session_id,
+        trace_id=ctx.trace_id,
+        user_id=ctx.user_id,
+        constraint="attachment_cost",
+        context=(
+            f"This turn sends {len(resolved_blocks)} attachment(s) to the cloud vision "
+            f"model, estimated ${estimate:.4f}. Proceed on cloud, or keep it local and free?"
+        ),
+        allow_preference=False,
+    )
+    log.info(
+        "attachment_cost_gate_decision",
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        block_count=len(resolved_blocks),
+        estimate_usd=float(estimate),
+        threshold_usd=float(threshold),
+        model=effective_key,
+        decision=decision,
+    )
+
+    if decision == "proceed_cloud":
+        ctx.attachment_cost_confirmed = True
+        return True
+
+    # keep_local / timeout / no active WS: no cloud spend this turn.
+    ctx.final_reply = (
+        f"This turn's {len(resolved_blocks)} attachment(s) would cost about "
+        f"${estimate:.4f} on the cloud vision model — above your "
+        f"${float(threshold):.2f} confirmation threshold — so I didn't send anything. "
+        "Reply to confirm if you'd like me to proceed on the cloud, or keep it local "
+        "and free."
+    )
+    return False
+
+
 def _render_memory_section(entity_items: list[dict[str, Any]]) -> str:
     """Build the ## Your Memory Graph entity section string.
 
@@ -1864,11 +1966,13 @@ async def step_init(
     # blocks first (ADR-0101 §3/§4/§6, FRE-666); widens content to a block list
     # only when there is something to inject (FRE-664 MessageContent).
     content: MessageContent = ctx.user_message
+    resolved_blocks: tuple[dict[str, Any], ...] = ()
     if ctx.attachments:
         from personal_agent.orchestrator.attachment_resolution import resolve_attachments
 
         resolved = await resolve_attachments(ctx.attachments, trace_id=ctx.trace_id)
         ctx.attachment_disclosures = list(resolved.disclosures)
+        resolved_blocks = resolved.blocks
         if resolved.blocks:
             content = (
                 [{"type": "text", "text": ctx.user_message}, *resolved.blocks]
@@ -1876,6 +1980,12 @@ async def step_init(
                 else list(resolved.blocks)
             )
     ctx.messages.append({"role": "user", "content": content})
+
+    # ADR-0101 §8b / FRE-691: pre-flight cloud-attachment cost confirmation. An
+    # over-threshold cloud turn stops here with the estimate + proceed/keep-local
+    # prompt and makes no model call until the user confirms (AC-10).
+    if resolved_blocks and not await _maybe_confirm_attachment_cost(ctx, resolved_blocks):
+        return TaskState.SYNTHESIS
 
     # --- Gateway-driven path: skip inline routing and memory ---
     if ctx.gateway_output is not None:

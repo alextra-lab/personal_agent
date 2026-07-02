@@ -38,6 +38,12 @@ CONSTRAINT_OPTIONS: dict[str, list[ConstraintOption]] = {
         ConstraintOption(action_id="compress_continue", label="Compress and continue"),
         ConstraintOption(action_id="stop_here", label="Stop here instead"),
     ],
+    # ADR-0101 §8b / FRE-691: pre-flight cloud-attachment cost confirmation. The
+    # safe default (last) is keep_local — no cloud spend without explicit confirm.
+    "attachment_cost": [
+        ConstraintOption(action_id="proceed_cloud", label="Proceed on cloud"),
+        ConstraintOption(action_id="keep_local", label="Keep local / free"),
+    ],
 }
 
 

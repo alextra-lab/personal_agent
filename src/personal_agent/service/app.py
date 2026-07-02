@@ -573,6 +573,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             roles=len(budget_config.roles),
             caps=len(budget_config.caps),
         )
+
+        # Config-owned model pricing (ADR-0101 §8b / FRE-691): push per-token
+        # rates from models.yaml into litellm.model_cost so cloud cost —
+        # including image (vision) tokens — reconciles deterministically and
+        # non-zero, independent of litellm's shipped registry. Fail-open: on
+        # error the shipped registry still prices known ids; log loudly.
+        try:
+            from personal_agent.config.model_loader import load_model_config
+            from personal_agent.llm_client.pricing import register_model_pricing
+
+            register_model_pricing(load_model_config())
+        except Exception as pricing_exc:  # noqa: BLE001
+            log.error(
+                "model_pricing_registration_failed",
+                error=str(pricing_exc),
+                remedy="Cloud cost falls back to litellm's shipped registry; verify models config.",
+                exc_info=True,
+            )
     except Exception as e:
         # Failing to initialise the gate is fatal — without it, paid calls
         # would fall back to the unprotected advisory check the gate replaces.

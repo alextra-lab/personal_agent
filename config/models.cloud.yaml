@@ -149,6 +149,8 @@ models:
     max_concurrency: 10
     default_timeout: 180
     supports_vision: true         # Claude Sonnet is vision-capable (ADR-0101; FRE-734 parity fix)
+    input_cost_per_token: 0.000003    # $3/MTok (ADR-0101 §8b / FRE-691 — config-owned cost matrix)
+    output_cost_per_token: 0.000015   # $15/MTok
 
   claude_haiku:
     # Anthropic Claude Haiku — fast, low-cost sub-agent model for cloud profile
@@ -162,6 +164,8 @@ models:
     max_concurrency: 20
     default_timeout: 30
     supports_vision: true         # Claude Haiku is vision-capable (ADR-0101; FRE-734 parity fix)
+    input_cost_per_token: 0.000001    # $1/MTok (ADR-0101 §8b / FRE-691 — config-owned cost matrix)
+    output_cost_per_token: 0.000005   # $5/MTok
 
   gpt-5.4-nano:
     # OpenAI GPT-5.4 Nano — entity extraction, structured output tasks

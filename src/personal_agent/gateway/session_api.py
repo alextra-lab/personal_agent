@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from personal_agent.gateway.auth import TokenInfo, require_scope
 from personal_agent.gateway.errors import not_found, service_unavailable
 from personal_agent.gateway.rate_limiting import get_rate_limiter
+from personal_agent.llm_client.message_content import get_text_content
 from personal_agent.service.auth import _CF_EMAIL_HEADER, _get_user_with_display_name
 from personal_agent.service.models import SessionProfileUpdate
 from personal_agent.telemetry.trace import SystemTraceContext
@@ -420,7 +421,7 @@ def _extract_title(messages: list[dict[str, Any]]) -> str | None:
     """
     for msg in messages:
         if msg.get("role") == "user" and msg.get("content"):
-            text = str(msg["content"]).strip()
+            text = get_text_content(msg["content"]).strip()
             if text:
                 return text[:60] + ("…" if len(text) > 60 else "")
     return None

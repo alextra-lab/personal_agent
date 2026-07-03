@@ -19,6 +19,7 @@ from uuid import UUID
 import structlog
 
 from personal_agent.config import settings
+from personal_agent.llm_client.message_content import get_text_content
 from personal_agent.memory.protocol import BroadRecallResult, MemoryProtocol, MemoryRecallQuery
 from personal_agent.request_gateway.state_document import build_state_document
 from personal_agent.request_gateway.types import (
@@ -36,7 +37,9 @@ def _session_topic_hint(session_messages: Sequence[dict[str, Any]]) -> str | Non
     parts: list[str] = []
     for m in session_messages:
         if m.get("role") == "user" and m.get("content"):
-            parts.append(str(m["content"]))
+            text = get_text_content(m["content"])
+            if text:
+                parts.append(text)
     if not parts:
         return None
     return " ".join(parts[-3:])[:800]
@@ -337,7 +340,7 @@ async def assemble_context(
     messages.append({"role": "user", "content": user_message})
 
     # Slice 1: simple token estimation (word count * 1.3)
-    total_text = " ".join(m.get("content", "") for m in messages)
+    total_text = " ".join(get_text_content(m.get("content", "")) for m in messages)
     estimated_tokens = int(len(total_text.split()) * 1.3)
 
     logger.debug(

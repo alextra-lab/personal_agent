@@ -44,6 +44,30 @@ class TestAssembleContext:
         assert any(m.get("role") == "user" for m in result.messages)
 
     @pytest.mark.asyncio
+    async def test_token_estimation_does_not_crash_on_list_content(self) -> None:
+        """List-shaped content in history does not raise TypeError during token estimation (FRE-753)."""
+        intent = IntentResult(
+            task_type=TaskType.CONVERSATIONAL,
+            complexity=Complexity.SIMPLE,
+            confidence=0.9,
+            signals=[],
+        )
+        history = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "what's in this image?"}],
+            },
+        ]
+        result = await assemble_context(
+            user_message="follow up",
+            session_messages=history,
+            intent=intent,
+            memory_adapter=None,
+            trace_id="test",
+        )
+        assert result.token_count > 0
+
+    @pytest.mark.asyncio
     async def test_session_history_included(self) -> None:
         """Verify session history is preserved in output."""
         intent = IntentResult(
@@ -230,3 +254,49 @@ class TestAssembleContext:
         )
         assert result.memory_context is None
         mock_adapter.suggest_relevant.assert_not_called()
+
+
+class TestSessionTopicHint:
+    """Tests for _session_topic_hint() (ADR-0101 §2 content-widening, FRE-726)."""
+
+    def test_list_content_extracts_real_text_not_repr(self) -> None:
+        """List-shaped content yields its text block, not a Python-repr string."""
+        session_messages = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "What's in this diagram?"}],
+            },
+        ]
+        hint = ctx_module._session_topic_hint(session_messages)
+        assert hint == "What's in this diagram?"
+        assert "[{" not in (hint or "")
+
+    def test_mixed_str_and_list_content(self) -> None:
+        """A session mixing plain-string and list-shaped user turns joins both cleanly."""
+        session_messages = [
+            {"role": "user", "content": "first question"},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "second question"}],
+            },
+        ]
+        hint = ctx_module._session_topic_hint(session_messages)
+        assert hint == "first question second question"
+
+    def test_image_only_content_returns_none_when_no_text_anywhere(self) -> None:
+        """An image-only turn with no text anywhere yields None, not an empty string."""
+        session_messages = [
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "x"}}]},
+        ]
+        assert ctx_module._session_topic_hint(session_messages) is None
+
+    def test_image_only_recent_turn_does_not_evict_earlier_text(self) -> None:
+        """An image-only turn contributes no empty slot, so parts[-3:] keeps prior text."""
+        session_messages = [
+            {"role": "user", "content": "turn one"},
+            {"role": "user", "content": "turn two"},
+            {"role": "user", "content": "turn three"},
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "x"}}]},
+        ]
+        hint = ctx_module._session_topic_hint(session_messages)
+        assert hint == "turn one turn two turn three"

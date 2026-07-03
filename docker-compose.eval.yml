@@ -159,7 +159,7 @@ services:
       AGENT_ELASTICSEARCH_URL: http://elasticsearch-eval:9200
       AGENT_EVENT_BUS_REDIS_URL: redis://redis:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
-      AGENT_MODEL_CONFIG_PATH: /app/config/models.eval.yaml
+      AGENT_MODEL_CONFIG_PATH: /app/config/models.cloud.yaml
       AGENT_ANTHROPIC_API_KEY: ${AGENT_ANTHROPIC_API_KEY}
       AGENT_OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY}
       API_HOST: 0.0.0.0
@@ -191,7 +191,7 @@ services:
       AGENT_ELASTICSEARCH_URL: http://elasticsearch-eval:9200
       AGENT_EVENT_BUS_REDIS_URL: redis://redis:6379/0
       AGENT_SEARXNG_BASE_URL: http://searxng:8080
-      AGENT_MODEL_CONFIG_PATH: /app/config/models.eval.yaml
+      AGENT_MODEL_CONFIG_PATH: /app/config/models.cloud.yaml
       AGENT_ANTHROPIC_API_KEY: ${AGENT_ANTHROPIC_API_KEY}
       AGENT_OPENAI_API_KEY: ${AGENT_OPENAI_API_KEY}
       API_HOST: 0.0.0.0

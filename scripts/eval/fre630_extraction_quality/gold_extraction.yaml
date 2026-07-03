@@ -3,6 +3,11 @@
 # This is the labelled set that decides "is extraction getting the right things out."
 # It is loadable by the harness through the GoldCase schema (gold.py).
 #
+# SIZE: ~36 cases (was 24). FRE-759 grew claim coverage to 12 keyed-claim cases so
+# claim_emission_recall is powered (case-level ≥8/10), and added 2 entity-type-boundary
+# cases (Concept↔Topic, Concept↔Technology). A gold change invalidates the historical
+# 24-case baseline — re-baseline flag-OFF before any A/B (see the research doc §4.2).
+#
 # PROVENANCE & CURATION DISCIPLINE (read before editing)
 # ------------------------------------------------------
 # Cases are GROUNDED in the failure modes surfaced on Seshat's own live corpus
@@ -513,3 +518,163 @@ cases:
         aliases: ["the knowledge graph", "knowledge graph"]
     expect_relationships:
       - {source: Knowledge Graph, type: PART_OF, target: Neo4j}
+
+  # =====================================================================
+  # CLAIM EMISSION — FRE-759: powered set for claim_emission_recall.
+  # First-person SITUATIONAL facts about the user's own life that must be
+  # emitted as keyed `claims`, never dropped or flattened into an entity.
+  # Grounded/paraphrased, no PII; each carries a distinct stable facet slot.
+  # =====================================================================
+  - case_id: claim-new-employer
+    tags: [claim, personal, world]
+    source:
+      user: "I started at a small robotics firm last week — still finding my feet."
+      assistant: >
+        Robotics engineering blends mechanical design, control systems, and
+        software; onboarding at a small firm usually means wearing several hats.
+    expect_entities:
+      - name: Robotics
+        type: Topic
+        class: World
+        aliases: ["robotics", "robotics engineering"]
+    expect_claims:
+      - {facet: employer, content_gist: the user recently started a job at a robotics firm}
+
+  - case_id: claim-relocation
+    tags: [claim, personal, world]
+    source:
+      user: "We're moving to a coastal town next month, so everything's in boxes."
+      assistant: "Coastal relocations often mean adjusting to humidity and salt-air upkeep."
+    expect_claims:
+      - {facet: current_city, content_gist: the user is relocating to a coastal town next month}
+
+  - case_id: claim-car-shopping
+    tags: [claim, personal, world]
+    source:
+      user: "I'm test-driving compact SUVs this month before I commit to one."
+      assistant: >
+        Compact SUVs balance cargo room and efficiency; hybrids are worth a
+        look if most of your driving is urban.
+    expect_entities:
+      - name: Compact SUV
+        type: Concept
+        class: World
+        aliases: ["compact suvs", "compact suv"]
+    expect_claims:
+      - {facet: car_shopping_status, content_gist: the user is actively shopping for a compact SUV}
+
+  - case_id: claim-home-renovation
+    tags: [claim, personal, world]
+    source:
+      user: "We're mid-renovation on the kitchen right now, so cooking is chaos."
+      assistant: "Kitchen renovations often overrun; a temporary prep station helps."
+    expect_claims:
+      - {facet: home_project, content_gist: the user is renovating their kitchen}
+
+  - case_id: claim-course-enrollment
+    tags: [claim, personal, world]
+    source:
+      user: "I just enrolled in an evening statistics course to shore up the basics."
+      assistant: >
+        Introductory statistics covers distributions, hypothesis testing, and
+        regression — a solid base for data work.
+    expect_entities:
+      - name: Statistics
+        type: Topic
+        class: World
+        aliases: ["statistics"]
+    expect_claims:
+      - {facet: course_enrollment, content_gist: the user enrolled in an evening statistics course}
+
+  - case_id: claim-fitness-goal
+    tags: [claim, personal, world]
+    source:
+      user: "I'm training for a half marathon in the spring — first one ever."
+      assistant: >
+        Half-marathon plans usually build weekly mileage gradually with one
+        long run and a rest day to avoid injury.
+    expect_claims:
+      - {facet: fitness_goal, content_gist: the user is training for a half marathon in the spring}
+
+  - case_id: claim-pet-adoption
+    tags: [claim, personal, world]
+    source:
+      user: "We just adopted a rescue dog, so the mornings look different now."
+      assistant: "Newly adopted rescue dogs often need a settling-in routine of a few weeks."
+    expect_claims:
+      - {facet: pet, content_gist: the user recently adopted a rescue dog}
+
+  - case_id: claim-travel-plan
+    tags: [claim, travel, personal, world]
+    source:
+      user: "I'm flying to a conference in Berlin next week to present."
+      assistant: >
+        Berlin's a major hub for tech conferences; the public transit from the
+        airport into the centre is straightforward.
+    expect_entities:
+      - name: Berlin
+        type: Location
+        class: World
+        aliases: ["berlin"]
+    # Attending a conference is a VISIT, not residence — do not promote to LIVES_IN.
+    forbid_rel_types: [LIVES_IN, LOCATED_IN]
+    expect_claims:
+      - {facet: travel_plan, content_gist: the user is travelling to a conference in Berlin next week}
+
+  - case_id: claim-side-project
+    tags: [claim, personal, world]
+    source:
+      user: "I've been building a small weather app on weekends to learn the stack."
+      assistant: >
+        Weekend projects are a good way to practise API integration and
+        caching without production pressure.
+    expect_claims:
+      - {facet: side_project, content_gist: the user is building a weather app as a side project}
+
+  - case_id: claim-diet-change
+    tags: [claim, cooking, personal, world]
+    source:
+      user: "I've gone mostly plant-based this year, so I'm rebuilding my recipes."
+      assistant: >
+        A plant-based shift usually means planning protein sources like legumes,
+        tofu, and tempeh across the week.
+    expect_entities:
+      - name: Plant-Based Diet
+        type: Concept
+        class: World
+        aliases: ["plant-based", "plant based diet"]
+    expect_claims:
+      - {facet: dietary_preference, content_gist: the user has shifted to a mostly plant-based diet this year}
+
+  # =====================================================================
+  # ENTITY-TYPE BOUNDARIES — FRE-759: the Concept/Topic and Concept/Technology
+  # confusions the baseline diffs implicate (entity_type_accuracy 0.80).
+  # =====================================================================
+  - case_id: type-topic-subject-area
+    tags: [type-boundary, economics, world]
+    source:
+      user: "Can you give me an overview of behavioral economics?"
+      assistant: >
+        Behavioral economics studies how psychological factors shape economic
+        decisions, departing from the fully-rational actor of classical models.
+    # The whole FIELD being surveyed is a Topic (subject area), not a single Concept.
+    expect_entities:
+      - name: Behavioral Economics
+        type: Topic
+        class: World
+        aliases: ["behavioral economics", "behavioural economics"]
+
+  - case_id: type-concept-not-technology
+    tags: [type-boundary, ml, world]
+    source:
+      user: "Explain how retrieval-augmented generation works."
+      assistant: >
+        Retrieval-augmented generation retrieves relevant passages from a corpus
+        and conditions the language model's output on them, grounding responses
+        in external context rather than parametric memory alone.
+    # RAG is a TECHNIQUE/method (Concept), commonly mis-typed as a Technology/tool.
+    expect_entities:
+      - name: Retrieval-Augmented Generation
+        type: Concept
+        class: World
+        aliases: ["rag", "retrieval augmented generation", "retrieval-augmented generation"]

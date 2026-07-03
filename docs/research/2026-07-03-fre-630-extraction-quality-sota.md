@@ -244,6 +244,56 @@ The non-determinism problem itself is now handed off with a ruled-out lever: FRE
 prompt/DSPy A/B) proceeds as queued; a `seed`-parameter investigation is a candidate new ticket if
 the owner wants to keep pulling this thread.
 
+### 4.2 FRE-759 A/B — few-shot type/claim exemplars (2026-07-03)
+
+_Two runs on the **FRE-759-expanded 36-case gold set** (12 keyed-claim cases, +2 entity-type-boundary
+cases — the historical 24-case baseline no longer applies, per the codex P1.2 fresh-baseline rule).
+Same model (`gpt-5.4-mini`), same gold, same matcher; **the flag-gated few-shot exemplar block is the
+only variable** (`entity_extraction_fewshot_exemplars_enabled`). Flag-OFF `prompt_hash 8a1bdd119ca3`,
+flag-ON `7951f9e9ef7e`. `--samples 3`. Claim recall read **case-level** (distinct cases, not
+sample-flattened — codex P1.1). Curated summary — raw runs gitignored._
+
+**Aggregate, flag-OFF baseline vs flag-ON candidate:**
+
+| metric | flag-OFF | flag-ON | target | verdict |
+|---|---:|---:|---|---|
+| **entity_type_accuracy** | **0.76±0.39** | **0.77±0.37** | ≥0.95 | ✗ flat — **AC-1 not met** |
+| **claim_case_level_recall** (distinct cases) | **3/12 (0.25)** | **5/12 (0.42)** | ≥0.8 | ✗ +2 cases, far short — **AC-2 not met** |
+| claim_emission_recall (sample aggregate) | 0.28±0.45 | 0.36±0.48 | — | directional only |
+| **relationship_type_correctness** | **0.99±0.08** | **0.77±0.40** | ≥0.89 (pin) | ✗ **regressed — AC-3 violated** |
+| forbidden_edge_type_rate | 0.01±0.10 | 0.03±0.14 | low | ✗ slightly worse |
+| knowledge_class_accuracy | 1.00 | 1.00 | 1.00 | ✓ held |
+| hallucination_rate | 0.00 | 0.00 | 0.00 | ✓ held |
+| dedup_convergence | 1.00 | 1.00 | 1.00 | ✓ held |
+| stance_emission_recall | 1.00 | 1.00 | 1.00 | ✓ held |
+| empty_fallback_rate | 0.00 | 0.00 | 0.00 | ✓ held |
+
+**Paired per-case (the diagnostic signal):**
+- **Type exemplars work when precisely aimed but do net damage.** The Topic exemplar fixed its exact
+  target (`type-topic-subject-area` 0.0→1.0) and two others improved (`history-bronze-age` 0.78→1.0,
+  `security-incident-response` 0.83→1.0), but the block caused **collateral type regressions**
+  (`game-theory-prisoners-dilemma` 1.0→0.5, `cs-data-structure` 0.83→0.5) → **net flat**.
+- **Claim exemplars give a modest real gain** (3→5 of 12 distinct cases) but nowhere near ≥0.8.
+- **The block broadly regresses edge-typing** (`hallucination-misspelled-reltype` 1.0→0.0,
+  `game-theory` 1.0→0.5, `cs-data-structure` 1.0→0.33) — the added type/claim guidance appears to
+  distract the model from relationship-type discipline. This is a real, ~4–5-case systemic effect,
+  not single-case noise.
+
+**Result: FRE-759's acceptance criteria were NOT met by the hand-drafted exemplars.** entity-type did
+not move (0.76→0.77), claim recall improved but fell far short (0.25→0.42 case-level), and
+relationship-type correctness regressed below its pin. This is the measure-don't-assert payoff: the
+lever is decisively characterized rather than assumed.
+
+**Disposition:** the flag ships **default-OFF** — zero live impact (default behaviour is the flag-OFF
+baseline, edge-typing intact). What ships and stays is the **permanent instrument + mechanism**: the
+powered 12-case claim gold + case-level `claim_case_level_recall` metric (both needed by *every* future
+extraction A/B, including DSPy), the flag-aware `prompt_hash`, and the reusable flag-gated exemplar
+seam (dormant). **The lever hands off to DSPy-compiled extraction (FRE-759's owner-preferred option):**
+compiling few-shot demos + instructions against this benchmark's `score_case` targets the exact metrics
+*and* holds the near-ideal ones as constraints — precisely the collateral-damage problem hand-tuning
+just exhibited. A narrower, edge-type-preserving exemplar retry is a secondary candidate. Filed as
+follow-ups.
+
 ---
 
 ## Part 5 — Recommended improvements (→ follow-up tickets, each its own A/B)

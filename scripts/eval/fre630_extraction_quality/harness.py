@@ -101,10 +101,13 @@ def _git_commit() -> str:
 
 
 def _prompt_hash() -> str:
-    """Short hash of the extraction system + user prompt templates."""
-    payload = (
-        entity_extraction._EXTRACTION_SYSTEM_PROMPT + entity_extraction._EXTRACTION_PROMPT_TEMPLATE
-    ).encode("utf-8")
+    """Short hash of the flag-aware effective prompt material (FRE-759).
+
+    Delegates to ``entity_extraction.prompt_material_for_hash()`` so a flag-ON run
+    (few-shot exemplars spliced) and a flag-OFF run get distinct ``prompt_hash``
+    stamps — an A/B never silently compares two different prompts.
+    """
+    payload = entity_extraction.prompt_material_for_hash().encode("utf-8")
     return hashlib.sha256(payload).hexdigest()[:12]
 
 

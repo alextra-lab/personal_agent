@@ -20,9 +20,17 @@ from unittest.mock import AsyncMock, patch
 import orjson
 import pytest
 
+from personal_agent.config import get_settings
 from personal_agent.second_brain.entity_extraction import (
+    _EXTRACTION_PROMPT_TEMPLATE,
+    _EXTRACTION_SYSTEM_PROMPT,
+    _build_extraction_prompt,
     extract_entities_and_relationships,
+    prompt_material_for_hash,
 )
+
+#: Substring unique to the FRE-759 exemplar block; absent when the flag is off.
+_EXEMPLAR_SENTINEL = "DISAMBIGUATION EXEMPLARS"
 
 # ---------------------------------------------------------------------------
 # Synthetic fixtures — model-emitted JSON (BEFORE Python provenance stamping).
@@ -435,3 +443,55 @@ class TestCloudPathTemperature:
             await extract_entities_and_relationships(_OPERATIONAL_USER_MSG, "assistant reply")
 
             assert mock_client.respond.call_args.kwargs["temperature"] == 0.0
+
+
+class TestFewshotExemplarFlag:
+    """FRE-759: the flag-gated few-shot exemplar splice + flag-aware hash material.
+
+    Proves the *mechanism* (AC-4): the prompt toggles deterministically through the
+    one shared seam, the hash material distinguishes the two prompts, and the
+    exemplar block's literal JSON braces do not break ``.format()`` (codex P2.2).
+    The *outcome* (accuracy lift) is the owner-gated FRE-630 A/B, not a unit test.
+    """
+
+    def test_flag_off_excludes_exemplars_and_hash_is_system_plus_template(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Flag off: no exemplar block, and hash material == system + template exactly."""
+        monkeypatch.setattr(
+            get_settings(), "entity_extraction_fewshot_exemplars_enabled", False, raising=False
+        )
+        prompt = _build_extraction_prompt("u", "a")
+        assert _EXEMPLAR_SENTINEL not in prompt
+        assert prompt_material_for_hash() == _EXTRACTION_SYSTEM_PROMPT + _EXTRACTION_PROMPT_TEMPLATE
+
+    def test_flag_on_includes_exemplars_and_hash_differs(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Flag on: exemplar block present, and the hash material diverges from flag-off."""
+        monkeypatch.setattr(
+            get_settings(), "entity_extraction_fewshot_exemplars_enabled", False, raising=False
+        )
+        off_material = prompt_material_for_hash()
+        monkeypatch.setattr(
+            get_settings(), "entity_extraction_fewshot_exemplars_enabled", True, raising=False
+        )
+        prompt = _build_extraction_prompt("u", "a")
+        assert _EXEMPLAR_SENTINEL in prompt
+        assert prompt_material_for_hash() != off_material
+        # The flag-on material is the flag-off material plus the rendered block.
+        assert prompt_material_for_hash().startswith(off_material)
+
+    def test_flag_on_renders_without_brace_errors(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The exemplar block's literal JSON braces must not break .format() (P2.2).
+
+        The block is a pre-rendered ``.format()`` value, so its ``{"subject":...}``
+        JSON is substituted literally and never rescanned for format fields.
+        """
+        monkeypatch.setattr(
+            get_settings(), "entity_extraction_fewshot_exemplars_enabled", True, raising=False
+        )
+        # Must not raise KeyError/ValueError from the JSON braces in the exemplar value.
+        prompt = _build_extraction_prompt("my lease ends in March", "assistant reply")
+        assert '{"subject":"owner"' in prompt  # exemplar JSON present as literal text
+        assert "my lease ends in March" in prompt  # per-case content still interpolates

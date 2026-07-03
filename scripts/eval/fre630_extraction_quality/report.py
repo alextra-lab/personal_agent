@@ -17,7 +17,12 @@ import json
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 
-from scripts.eval.fre630_extraction_quality.metrics import MeanStd, mean_std
+from scripts.eval.fre630_extraction_quality.metrics import (
+    ClaimCaseRecall,
+    MeanStd,
+    claim_case_level_recall,
+    mean_std,
+)
 from scripts.eval.fre630_extraction_quality.scoring import CaseScore
 
 #: The metric accessors aggregated in the report, in display order. Each maps a
@@ -139,6 +144,23 @@ def aggregate_by_tag(report: RunReport) -> dict[str, dict[str, MeanStd]]:
     return out
 
 
+def claim_case_recall(report: RunReport) -> ClaimCaseRecall:
+    """Case-level claim-emission recall over the run's distinct claim cases (FRE-759).
+
+    Adapts each :class:`CaseRun` to its per-sample ``claim_emission_recall`` values
+    and defers to the pure :func:`claim_case_level_recall`, so AC-2 reads as
+    "N of M distinct claim cases pass", never the sample-flattened aggregate.
+
+    Args:
+        report: The completed run.
+
+    Returns:
+        The passing/total counts and their fraction over distinct claim cases.
+    """
+    per_case = [[s.claim_emission_recall for s in c.samples] for c in report.cases]
+    return claim_case_level_recall(per_case)
+
+
 def _ms_to_dict(ms: MeanStd) -> dict[str, float | int | None]:
     """Serialise a :class:`MeanStd`."""
     return {"mean": ms.mean, "std": ms.std, "n": ms.n}
@@ -155,9 +177,15 @@ def render_json(report: RunReport) -> str:
     """
     overall = aggregate(_all_scores(report))
     by_tag = aggregate_by_tag(report)
+    ccr = claim_case_recall(report)
     payload = {
         "meta": asdict(report.meta),
         "aggregate": {k: _ms_to_dict(v) for k, v in overall.items()},
+        "claim_case_level_recall": {
+            "passing": ccr.passing,
+            "total": ccr.total,
+            "fraction": ccr.fraction,
+        },
         "by_tag": {tag: {k: _ms_to_dict(v) for k, v in m.items()} for tag, m in by_tag.items()},
         "cases": [
             {
@@ -218,7 +246,13 @@ def render_markdown(report: RunReport) -> str:
         "|---|---|",
     ]
     lines += [f"| {name} | {_fmt(overall[name])} |" for name in METRIC_ACCESSORS]
+    ccr = claim_case_recall(report)
+    ccr_str = f"{ccr.passing}/{ccr.total} distinct claim cases pass" + (
+        f" ({ccr.fraction:.2f})" if ccr.fraction is not None else " (—)"
+    )
     lines += [
+        "",
+        f"**claim_case_level_recall (FRE-759, AC-2 — distinct cases, not samples):** {ccr_str}",
         "",
         "## Per-tag (entity_f1 · rel_type_correctness · hallucination · empty_fallback)",
         "",

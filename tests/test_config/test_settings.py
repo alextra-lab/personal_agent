@@ -227,6 +227,21 @@ class TestAttachmentGuardrailCaps:
         assert config.attachment_max_total_payload_bytes == 15_728_640
 
 
+class TestEntityExtractionFewshotFlag:
+    """FRE-759 — the flag gating the few-shot exemplar block (default OFF)."""
+
+    def test_flag_exists_and_defaults_false(self) -> None:
+        """The prompt-exemplar flag exists and defaults False (ships flag-dark)."""
+        config = AppConfig()
+        assert config.entity_extraction_fewshot_exemplars_enabled is False
+
+    def test_flag_reads_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The flag is togglable via its AGENT_-prefixed env var."""
+        monkeypatch.setenv("AGENT_ENTITY_EXTRACTION_FEWSHOT_EXEMPLARS_ENABLED", "true")
+        config = AppConfig()
+        assert config.entity_extraction_fewshot_exemplars_enabled is True
+
+
 class TestSingleton:
     """Test singleton pattern."""
 

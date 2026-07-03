@@ -84,8 +84,11 @@ async def test_over_threshold_stops_with_prompt_and_no_model_call(
     monkeypatch.setattr(
         executor_mod, "_maybe_pause_for_constraint", AsyncMock(return_value="keep_local")
     )
+    # Keep the unit test hermetic — the keep_local path persists pending state to
+    # Postgres; stub the durable save so no DB is required here (FRE-749).
+    monkeypatch.setattr(executor_mod, "_save_pending_cloud_confirmation", AsyncMock())
 
-    proceed = await executor_mod._maybe_confirm_attachment_cost(ctx, [_IMAGE_BLOCK], sm)
+    proceed = await executor_mod._maybe_confirm_attachment_cost(ctx, [_IMAGE_BLOCK])
 
     assert proceed is False
     assert ctx.attachment_cost_confirmed is False
@@ -126,7 +129,7 @@ async def test_confirm_proceeds(monkeypatch: pytest.MonkeyPatch) -> None:
         executor_mod, "_maybe_pause_for_constraint", AsyncMock(return_value="proceed_cloud")
     )
 
-    proceed = await executor_mod._maybe_confirm_attachment_cost(ctx, [_IMAGE_BLOCK], sm)
+    proceed = await executor_mod._maybe_confirm_attachment_cost(ctx, [_IMAGE_BLOCK])
 
     assert proceed is True
     assert ctx.attachment_cost_confirmed is True
@@ -140,7 +143,7 @@ async def test_under_threshold_proceeds_without_pausing(monkeypatch: pytest.Monk
     pause = AsyncMock(return_value="keep_local")
     monkeypatch.setattr(executor_mod, "_maybe_pause_for_constraint", pause)
 
-    proceed = await executor_mod._maybe_confirm_attachment_cost(ctx, [_IMAGE_BLOCK], sm)
+    proceed = await executor_mod._maybe_confirm_attachment_cost(ctx, [_IMAGE_BLOCK])
 
     assert proceed is True
     assert ctx.attachment_cost_confirmed is True
@@ -164,7 +167,7 @@ async def test_local_routing_is_free_and_ungated(monkeypatch: pytest.MonkeyPatch
     pause = AsyncMock(return_value="keep_local")
     monkeypatch.setattr(executor_mod, "_maybe_pause_for_constraint", pause)
 
-    proceed = await executor_mod._maybe_confirm_attachment_cost(ctx, [_IMAGE_BLOCK], sm)
+    proceed = await executor_mod._maybe_confirm_attachment_cost(ctx, [_IMAGE_BLOCK])
 
     assert proceed is True
     pause.assert_not_awaited()
@@ -178,7 +181,7 @@ async def test_multi_call_turn_confirmed_once(monkeypatch: pytest.MonkeyPatch) -
     pause = AsyncMock(return_value="proceed_cloud")
     monkeypatch.setattr(executor_mod, "_maybe_pause_for_constraint", pause)
 
-    await executor_mod._maybe_confirm_attachment_cost(ctx, [_IMAGE_BLOCK, _IMAGE_BLOCK], sm)
+    await executor_mod._maybe_confirm_attachment_cost(ctx, [_IMAGE_BLOCK, _IMAGE_BLOCK])
 
     # The per-turn flag is set; the gate lives only in step_init (once/turn), so a
     # subsequent LLM_CALL re-entry with the images still in context never re-prompts.
@@ -193,8 +196,9 @@ async def test_cost_constraint_ignores_stored_preference(monkeypatch: pytest.Mon
     _patch_routing(monkeypatch, _cloud_def(input_price=0.001))
     pause = AsyncMock(return_value="keep_local")
     monkeypatch.setattr(executor_mod, "_maybe_pause_for_constraint", pause)
+    monkeypatch.setattr(executor_mod, "_save_pending_cloud_confirmation", AsyncMock())
 
-    await executor_mod._maybe_confirm_attachment_cost(ctx, [_IMAGE_BLOCK], sm)
+    await executor_mod._maybe_confirm_attachment_cost(ctx, [_IMAGE_BLOCK])
 
     assert pause.await_args.kwargs["allow_preference"] is False
     assert pause.await_args.kwargs["constraint"] == "attachment_cost"

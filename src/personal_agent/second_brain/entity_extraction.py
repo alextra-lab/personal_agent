@@ -7,6 +7,7 @@ conversation text using local reasoning models (Qwen 8B, LFM 1.2B) or Claude 4.5
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -20,6 +21,35 @@ from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.trace import SystemTraceContext
 
 log = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class ExtractionModelOverride:
+    """Eval-only per-call model/reasoning override for the FRE-766 benchmark.
+
+    When passed to :func:`extract_entities_and_relationships`, the cloud path builds a
+    client for *this* model (with ``budget_role="entity_extraction"`` so cost
+    reservations stay in the intended lane) instead of resolving
+    ``entity_extraction_role`` from global config. This lets the model×reasoning
+    benchmark drive the real extractor across many cells **concurrently** without any
+    global-config mutation (each worker carries its own override — no shared state).
+    Not used in production (default ``None`` leaves the config path untouched).
+
+    Attributes:
+        model_id: Provider model id (e.g. ``"gpt-5.4"``).
+        provider: Cloud provider (``"openai"`` / ``"anthropic"``).
+        reasoning_effort: Discrete effort hint (low/medium/high/xhigh) or None
+            (None = provider default; Claude uses adaptive thinking, so leave None).
+        temperature: Sampling temperature or None (None = provider default).
+        max_tokens: Max output tokens for the call.
+    """
+
+    model_id: str
+    provider: str
+    reasoning_effort: str | None = None
+    temperature: float | None = None
+    max_tokens: int = 8192
+
 
 _EXTRACTION_SYSTEM_PROMPT = """\
 You are a knowledge graph extraction expert building a personal memory system.
@@ -534,6 +564,8 @@ async def extract_entities_and_relationships(
     session_id: str | None = None,
     attempt_number: int | None = None,
     turn_timestamp: datetime | None = None,
+    model_override: ExtractionModelOverride | None = None,
+    call_stats_sink: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Extract entities and relationships from conversation.
 
@@ -558,6 +590,12 @@ async def extract_entities_and_relationships(
             turn time — not the (lagging) consolidation-run time — which the
             bitemporal supersession in FRE-638 depends on. Falls back to
             extraction wall-clock when omitted.
+        model_override: FRE-766 eval-only. When set, the cloud path builds a client
+            for this specific model/reasoning (with ``budget_role="entity_extraction"``)
+            instead of resolving the config role, so the benchmark can drive many cells
+            concurrently without global-config mutation. ``None`` in production.
+        call_stats_sink: FRE-766 eval-only. When provided, per-call usage / reasoning
+            tokens / cost / error_class are appended for the benchmark. ``None`` in production.
 
     Returns:
         Dict with entities, relationships, entity_names, summary, and — new in
@@ -571,10 +609,27 @@ async def extract_entities_and_relationships(
             budget window rolls. Generic exceptions are still swallowed
             and surfaced as a fallback result.
     """
+    # FRE-766: an eval-only model_override drives the cloud path directly (a specific
+    # model + reasoning), bypassing global config resolution so the benchmark can run
+    # many cells concurrently without shared-state races. Prod (override None) resolves
+    # entity_extraction_role from config as before, and now also forwards the config's
+    # reasoning_effort so that field is live.
     model_config = load_model_config()
-    entity_extraction_role = model_config.entity_extraction_role
-    model_def = model_config.models.get(entity_extraction_role)
-    provider = model_def.provider if model_def else None
+    provider: str | None
+    if model_override is not None:
+        entity_extraction_role = "entity_extraction"
+        model_def = None
+        provider = model_override.provider
+        eff_reasoning_effort = model_override.reasoning_effort
+        eff_temperature = model_override.temperature
+        eff_model_id = model_override.model_id
+    else:
+        entity_extraction_role = model_config.entity_extraction_role
+        model_def = model_config.models.get(entity_extraction_role)
+        provider = model_def.provider if model_def else None
+        eff_reasoning_effort = model_def.reasoning_effort if model_def else None
+        eff_temperature = model_def.temperature if model_def else None
+        eff_model_id = model_def.id if model_def else entity_extraction_role
 
     prompt = _build_extraction_prompt(user_message, assistant_response)
 
@@ -583,7 +638,7 @@ async def extract_entities_and_relationships(
         "entity_extraction_started",
         entity_extraction_role=entity_extraction_role,
         provider=provider,
-        model=model_def.id if model_def else None,
+        model=eff_model_id,
         user_msg_len=len(user_message),
         assistant_msg_len=len(assistant_response),
         trace_id=trace_id_str,
@@ -593,12 +648,22 @@ async def extract_entities_and_relationships(
         # Call appropriate LLM and extract content
         if provider is not None:
             # Cloud path: any provider via LiteLLM
-            from personal_agent.llm_client.factory import get_llm_client
+            if model_override is not None:
+                from personal_agent.llm_client.litellm_client import LiteLLMClient
 
-            cloud_client = get_llm_client(role_name=entity_extraction_role)
+                cloud_client = LiteLLMClient(
+                    model_id=model_override.model_id,
+                    provider=model_override.provider,
+                    max_tokens=model_override.max_tokens,
+                    budget_role="entity_extraction",
+                )
+            else:
+                from personal_agent.llm_client.factory import get_llm_client
+
+                cloud_client = get_llm_client(role_name=entity_extraction_role)
             log.debug(
                 "entity_extraction_using_cloud",
-                model=model_def.id if model_def else None,
+                model=eff_model_id,
                 provider=provider,
                 trace_id=trace_id_str,
             )
@@ -607,11 +672,25 @@ async def extract_entities_and_relationships(
                 role=ModelRole.PRIMARY,
                 messages=[{"role": "user", "content": prompt}],
                 system_prompt=_EXTRACTION_SYSTEM_PROMPT,
-                temperature=model_def.temperature if model_def else None,
+                temperature=eff_temperature,
+                reasoning_effort=eff_reasoning_effort,
                 trace_ctx=SystemTraceContext.new("entity_extraction", session_id=session_id),
             )
             content = cloud_response["content"]
-            model_used = model_def.id if model_def else entity_extraction_role
+            model_used = eff_model_id
+            # FRE-766: surface per-call usage/cost for the benchmark (eval-only; the
+            # sink is None in production). error_class=None marks a clean call so the
+            # smoke classifier can tell a provider rejection from a parse/empty miss.
+            if call_stats_sink is not None:
+                _usage = dict(cloud_response.get("usage") or {})
+                call_stats_sink.append(
+                    {
+                        "usage": _usage,
+                        "reasoning_tokens": _usage.get("reasoning_tokens"),
+                        "cost_usd": cloud_response.get("cost_usd"),
+                        "error_class": None,
+                    }
+                )
         else:
             # Local SLM path
             local_client = LocalLLMClient()
@@ -768,6 +847,18 @@ async def extract_entities_and_relationships(
         )
         raise
     except Exception as e:
+        # FRE-766: record the failure class for the eval smoke classifier (eval-only)
+        # so a provider/param rejection is distinguished from a parse/empty miss rather
+        # than silently scoring as an empty-fallback quality-zero.
+        if call_stats_sink is not None:
+            call_stats_sink.append(
+                {
+                    "usage": {},
+                    "reasoning_tokens": None,
+                    "cost_usd": None,
+                    "error_class": type(e).__name__,
+                }
+            )
         log.error(
             "entity_extraction_failed",
             error=str(e),

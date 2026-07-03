@@ -411,6 +411,13 @@ class LiteLLMClient:
             litellm_kwargs["response_format"] = response_format
         if temperature is not None:
             litellm_kwargs["temperature"] = temperature
+        if reasoning_effort is not None:
+            # FRE-766: forward the discrete effort hint (low/medium/high/xhigh) to the
+            # provider. Previously declared but never wired, so it was silently dropped;
+            # litellm routes it to the reasoning models that accept it. drop_params is
+            # left off so a model that rejects the value surfaces an error (the eval
+            # smoke gate classifies it) rather than masking it.
+            litellm_kwargs["reasoning_effort"] = reasoning_effort
         if timeout_s is not None:
             litellm_kwargs["timeout"] = timeout_s
         if max_retries is not None:
@@ -575,6 +582,21 @@ class LiteLLMClient:
                     usage["cache_read_input_tokens"] = (
                         usage.get("cache_read_input_tokens", 0) + openai_cached
                     )
+
+            # FRE-766: reasoning-token count from the reasoning models (GPT-5 family
+            # via litellm). Defensive across shapes — completion_tokens_details may be a
+            # provider object (attribute) or a dict; left absent (never 0/None-forced)
+            # when the provider omits it (e.g. Claude adaptive thinking) so the eval
+            # never treats "missing" as "zero reasoning".
+            completion_details = getattr(response.usage, "completion_tokens_details", None)
+            if completion_details is not None:
+                reasoning_tokens = (
+                    completion_details.get("reasoning_tokens")
+                    if isinstance(completion_details, dict)
+                    else getattr(completion_details, "reasoning_tokens", None)
+                )
+                if reasoning_tokens is not None:
+                    usage["reasoning_tokens"] = reasoning_tokens
 
         # Cost tracking — reconcile via litellm.completion_cost(), guarded so an
         # unmapped dated response id can't silently commit $0 (ADR-0101 §8b AC-11).

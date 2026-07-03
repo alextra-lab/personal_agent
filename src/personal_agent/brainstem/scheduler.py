@@ -61,6 +61,7 @@ ARCHIVE_HOUR_UTC = 2  # Daily archive at 2 AM UTC
 PURGE_WEEKDAY = 6  # Sunday
 PURGE_HOUR_UTC = 3  # Weekly purge at 3 AM UTC Sunday
 BACKFILL_INTERVAL_SECONDS = 600  # Captain's Log ES backfill every 10 minutes (FRE-30)
+EMBEDDING_BACKFILL_INTERVAL_SECONDS = 3600  # Entity embedding backfill hourly (FRE-659)
 
 
 class BrainstemScheduler:
@@ -114,6 +115,7 @@ class BrainstemScheduler:
         self._last_purge_week: tuple[int, int] | None = None  # (year, week)
         self._backfill_es_logger = backfill_es_logger
         self._last_backfill_run: datetime | None = None
+        self._last_embedding_backfill_run: datetime | None = None  # FRE-659
         self._last_quality_check_date: date | None = None
         self._last_feedback_date: date | None = None  # ADR-0040
         self.feedback_poller: FeedbackPoller | None = (
@@ -564,6 +566,30 @@ class BrainstemScheduler:
                             error=str(backfill_err),
                             exc_info=True,
                             trace_id=iteration_trace_id,
+                        )
+
+                # Hourly: entity embedding backfill (FRE-659) — re-embed entities
+                # whose embedding is missing or zero-vectored (baked during an embedder
+                # outage) once the embedder is reachable. Idempotent and outage-safe.
+                if (
+                    self.memory_service is not None
+                    and getattr(settings, "embedding_backfill_enabled", True)
+                    and (
+                        self._last_embedding_backfill_run is None
+                        or (now - self._last_embedding_backfill_run).total_seconds()
+                        >= EMBEDDING_BACKFILL_INTERVAL_SECONDS
+                    )
+                ):
+                    eb_trace_id = _new_scheduler_trace_id("scheduler.embedding_backfill")
+                    try:
+                        await self.memory_service.backfill_missing_embeddings(trace_id=eb_trace_id)
+                        self._last_embedding_backfill_run = now
+                    except Exception as eb_err:
+                        log.warning(
+                            "embedding_backfill_failed",
+                            error=str(eb_err),
+                            exc_info=True,
+                            trace_id=eb_trace_id,
                         )
 
                 # Hourly: joinability probe (ADR-0074 Phase 5 / FRE-376)

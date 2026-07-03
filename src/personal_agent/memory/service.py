@@ -24,7 +24,7 @@ from personal_agent.events import (
 )
 from personal_agent.llm_client import InferencePriority, LocalLLMClient, ModelRole
 from personal_agent.llm_client.token_counter import estimate_tokens
-from personal_agent.memory.embeddings import generate_embedding
+from personal_agent.memory.embeddings import generate_embedding, generate_embeddings_batch
 from personal_agent.memory.fact import PromotionCandidate
 from personal_agent.memory.freshness_aggregate import (
     GraphStalenessSummary,
@@ -1370,7 +1370,12 @@ class MemoryService:
                     "explicit_description_update_kinds": list(_EXPLICIT_DESCRIPTION_UPDATE_KINDS),
                 }
 
-                if embedding is not None:
+                # FRE-659: never persist a zero-vector embedding. When the embedder is
+                # unreachable ``generate_embedding`` degrades to a zero vector; writing it
+                # bakes an unrecallable node into the ``entity_embedding`` index. Persist
+                # only a real vector — a missing embedding is repaired by the periodic
+                # backfill (``backfill_missing_embeddings``) once the embedder returns.
+                if embedding is not None and any(x != 0.0 for x in embedding):
                     set_clauses.append("e.embedding = $embedding")
                     params["embedding"] = embedding
 
@@ -1459,6 +1464,93 @@ class MemoryService:
                 trace_id=originating_trace_id,
             )
             return ""
+
+    async def backfill_missing_embeddings(
+        self,
+        *,
+        batch_size: int = 100,
+        trace_id: str | None = None,
+    ) -> int:
+        """Re-embed entities whose embedding is missing or zero-vectored (FRE-659).
+
+        Idempotent, outage-safe remediation for the zero-vector corruption. An entity
+        created while the embedder was unreachable is either missing ``e.embedding``
+        (post-guard write path) or carries a baked-in zero vector (pre-guard corruption).
+        This pass finds such entities (bounded to ``batch_size``, deterministic
+        ``ORDER BY e.name`` so successive runs converge rather than re-selecting the same
+        page), batch-regenerates their embeddings in one call, and persists ONLY the
+        non-zero results — so a run during a continuing embedder outage is a safe no-op
+        rather than re-poisoning the index.
+
+        The write is guarded (``WHERE e.embedding IS NULL OR none(...)``) so it never
+        clobbers a fresher non-zero embedding a concurrent :meth:`create_entity` may have
+        written between the read and the write.
+
+        Args:
+            batch_size: Max entities repaired per run (bounds one scheduler tick's cost).
+            trace_id: System-scoped scheduler trace id for log correlation (ADR-0074 §I3).
+
+        Returns:
+            Number of entities whose embedding was populated this run.
+        """
+        if not self.connected or not self.driver:
+            return 0
+
+        try:
+            async with self.driver.session() as session:
+                read = await session.run(
+                    "MATCH (e:Entity)\n"
+                    "WHERE e.description IS NOT NULL AND e.description <> ''\n"
+                    "  AND (e.embedding IS NULL OR none(x IN e.embedding WHERE x <> 0.0))\n"
+                    "RETURN e.name AS name, e.description AS description\n"
+                    "ORDER BY e.name\n"
+                    "LIMIT $batch_size",
+                    batch_size=batch_size,
+                )
+                candidates = await read.data()
+                if not candidates:
+                    return 0
+
+                texts = [f"{c['name']}: {c['description']}" for c in candidates]
+                embeddings = await generate_embeddings_batch(texts)
+                updates = [
+                    {"name": c["name"], "embedding": emb}
+                    for c, emb in zip(candidates, embeddings, strict=True)
+                    if any(x != 0.0 for x in emb)
+                ]
+                if not updates:
+                    log.info(
+                        "embedding_backfill_skipped_embedder_down",
+                        candidates=len(candidates),
+                        trace_id=trace_id,
+                    )
+                    return 0
+
+                write = await session.run(
+                    "UNWIND $updates AS u\n"
+                    "MATCH (e:Entity {name: u.name})\n"
+                    "WHERE e.embedding IS NULL OR none(x IN e.embedding WHERE x <> 0.0)\n"
+                    "SET e.embedding = u.embedding\n"
+                    "RETURN count(*) AS filled",
+                    updates=updates,
+                )
+                record = await write.single()
+                filled = int(record["filled"]) if record else 0
+                log.info(
+                    "embedding_backfill_completed",
+                    candidates=len(candidates),
+                    filled=filled,
+                    trace_id=trace_id,
+                )
+                return filled
+        except Exception as exc:
+            log.warning(
+                "embedding_backfill_error",
+                error=str(exc),
+                exc_info=True,
+                trace_id=trace_id,
+            )
+            return 0
 
     async def assert_stance(
         self,

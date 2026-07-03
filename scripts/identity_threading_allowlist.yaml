@@ -62,6 +62,6 @@
 #     lexical/multi-query arm imports + module-level helpers, then FRE-725 description
 #     update-kind constants + create_entity signal param/docstring inserted above). ---
 - path: src/personal_agent/memory/service.py
-  line: 1414
+  line: 1419  # FRE-659: +5 from the zero-vector write-guard comment inserted above (was 1414)
   pattern: cypher_merge
   reason: "dynamic on_create_clauses set origination; static analyzer can't see joined props (FP)"

@@ -271,6 +271,47 @@ class TestEntityExtractionTemperatureDeployedConfig:
         )
 
 
+class TestCloudGptPricingDeployedConfig:
+    """FRE-742 / ADR-0101 §8b: the gpt-5.4 cloud models carry config-owned pricing.
+
+    FRE-691 moved cloud cost into the model definition for the Claude entries only;
+    gpt-5.4-nano / gpt-5.4-mini still deferred to litellm's shipped registry, which
+    silently meters $0 if a future litellm upgrade renames or drops those ids (cf.
+    FRE-734). Guards BOTH deployed config files (``config/models.yaml`` and
+    ``config/models.cloud.yaml``) so a value present in one but not the other — the
+    exact drift that broke vision in FRE-734 — fails CI. Rates per the YAML comments:
+    nano $0.20/$1.25 per MTok, mini $0.75/$4.50 per MTok.
+    """
+
+    # (entry key, expected input_cost_per_token, expected output_cost_per_token)
+    _EXPECTED = (
+        ("gpt-5.4-nano", 0.0000002, 0.00000125),
+        ("gpt-5.4-mini", 0.00000075, 0.0000045),
+    )
+
+    @pytest.mark.parametrize(
+        "config_path",
+        [
+            Path("config/models.yaml"),
+            Path("config/models.cloud.yaml"),
+        ],
+    )
+    def test_gpt_cloud_models_carry_config_pricing(self, config_path: Path) -> None:
+        """gpt-5.4-nano and gpt-5.4-mini declare the documented per-token pricing."""
+        config = load_model_config(config_path)
+
+        for key, expected_input, expected_output in self._EXPECTED:
+            model = config.models[key]
+            assert model.input_cost_per_token == pytest.approx(expected_input), (
+                f"{key} in {config_path} must carry input_cost_per_token="
+                f"{expected_input}, got {model.input_cost_per_token!r}"
+            )
+            assert model.output_cost_per_token == pytest.approx(expected_output), (
+                f"{key} in {config_path} must carry output_cost_per_token="
+                f"{expected_output}, got {model.output_cost_per_token!r}"
+            )
+
+
 class TestDockerComposeModelConfigPaths:
     """Every AGENT_MODEL_CONFIG_PATH in a docker-compose file must resolve to a real file.
 

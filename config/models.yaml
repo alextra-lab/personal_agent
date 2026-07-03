@@ -173,6 +173,8 @@ models:
     # actual local-dev entity_extraction_role (see top of file); see gpt-5.4-mini
     # below for the parity rationale (that entry governs the cloud/prod role).
     temperature: 0.0
+    input_cost_per_token: 0.0000002     # $0.20/MTok (ADR-0101 §8b / FRE-742 — config-owned cost matrix)
+    output_cost_per_token: 0.00000125   # $1.25/MTok
 
   gpt-5.4-mini:
     # OpenAI GPT-5.4 Mini — higher-quality background reasoning
@@ -189,6 +191,8 @@ models:
     # pinned for parity with config/models.cloud.yaml's gpt-5.4-mini (the
     # prod/benchmarked entity extractor) — avoids the next config-drift surprise.
     temperature: 0.0
+    input_cost_per_token: 0.00000075    # $0.75/MTok (ADR-0101 §8b / FRE-742 — config-owned cost matrix)
+    output_cost_per_token: 0.0000045    # $4.50/MTok
 
   # ── Tier 3: Context Compressor (ADR-0038) ────────────────────────
   compressor:

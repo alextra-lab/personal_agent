@@ -1,0 +1,245 @@
+# FRE-630 — KG extraction quality → SOTA: survey, instrument, and baseline
+
+**Date:** 2026-07-03
+**Ticket:** [FRE-630](https://linear.app/frenchforest/issue/FRE-630) (Memory Recall Quality, parent FRE-435) · Tier-1:Opus
+**Backing methodology:** [ADR-0087](../architecture_decisions/ADR-0087-memory-recall-quality-measurement.md) (measurement-first) ·
+precedent: [FRE-636 taxonomy spike](2026-06-27-fre-636-taxonomy-validation.md), the FRE-435/489/670 recall harness
+**Method posture:** measure-don't-assert (FRE-433/434). This Phase-1 PR changes **no production behaviour** —
+it adds an eval instrument, this survey, and a baseline. Improvements are approved follow-up tickets.
+
+> **Privacy note.** The gold set and this note are generalized. The failure modes are grounded in Seshat's
+> own live corpus (FRE-630 evidence + the FRE-636 spike) but all cases are curated/paraphrased — no verbatim
+> transcripts, no PII, no owner name / home / vehicle / deployment identifiers.
+
+---
+
+## TL;DR
+
+1. **The ticket's failure catalog is largely pre-`gpt-5.4` and must be re-measured, not assumed.** The
+   extractor was substantially rebuilt after FRE-630 was filed (2026-06-27): it now carries the 3-class
+   knowledge taxonomy (World/Personal/System, FRE-637), emits **structured** stances + claims instead of
+   flattening them into descriptions (FRE-638/711/725), uses a 6-type controlled relationship vocabulary,
+   applies embedding-based dedup + a confidence-gated description-correction path (FRE-711/725), and runs on
+   **gpt-5.4-mini** (cloud) / gpt-5.4-nano (local) — **not** the qwen3-8b the ticket's bugs came from.
+2. **The decisive gap was a missing instrument.** Nothing scored whether extraction was *correct*; the
+   FRE-435 harness measures *retrieval*, assuming extraction is right. Phase 1 builds the missing
+   **pre-write extraction-quality benchmark** (`scripts/eval/fre630_extraction_quality/`).
+3. **Baseline (gpt-5.4-mini, 81 extractions): the ticket's failures do not reproduce; two new weak spots do.**
+   Hallucination 0.00, forbidden-edge 0.02, dedup 1.00, knowledge-class 1.00, stance-emission 1.00 — the
+   qwen-era catalog is gone. The evidence-backed targets are instead **entity_type_accuracy 0.80** and
+   **claim_emission_recall 0.33** (details in Part 4).
+4. **The field's playbook for typed-edge correctness + canonicalization + hallucination control** (GraphRAG
+   gleanings, HippoRAG/iText2KG entity resolution, schema-constrained relation extraction, extract-then-verify)
+   maps cleanly onto concrete changes in our pipeline — each filed as its own flag→verify A/B follow-up.
+
+---
+
+## Part 1 — The current extractor (what already exists)
+
+`second_brain/entity_extraction.py::extract_entities_and_relationships(user, assistant) -> dict` returns
+`entities` / `relationships` / `stances` / `claims` / `summary`. The contract (system + user prompt, ~1.8k
+lines of rules) already encodes much of the SOTA hygiene the ticket asked for:
+
+| Surface | Current state |
+|---|---|
+| Entity types | 7 controlled: Person, Organization, Location, Technology, Concept, Event, Topic |
+| Knowledge class | 3 controlled: World / Personal / System (FRE-637; the FRE-636 operational bucket) |
+| Relationship vocab | 6 controlled: PART_OF, USES, RELATED_TO, SIMILAR_TO, CREATED_BY, LOCATED_IN |
+| Stance / claim | Emitted as **structured** items (not flattened) — the FRE-636 fix |
+| Canonicalization | Prompt rules ("Python" not "python") + embedding dedup at write (`memory/dedup.py`) |
+| Description gate | Confidence-gated correction/enrichment (FRE-711/725) |
+| Model | gpt-5.4-mini (cloud) / gpt-5.4-nano (local) via LiteLLM |
+
+**Known structural gap (confirmed by code read):** the extracted `relationship_type` is written to Neo4j
+**without validation** — an off-vocabulary edge type (the ticket's `LIVES_IN`) would pass straight through.
+There is no write-time relationship-type gate. This is the single clearest candidate change.
+
+---
+
+## Part 2 — The instrument (Phase-1 deliverable)
+
+A **pre-write** benchmark: it scores the extractor's *output dict* against a curated gold set — no Neo4j
+write, so it isolates extraction quality from persistence. Pure, unit-tested core (matcher/metrics/scoring/
+report) + a gold set + an I/O harness that runs the real extractor. Full design: the FRE-630 plan and the
+package `README.md`.
+
+**Metrics.** Entity P/R/F1 · entity-type accuracy · knowledge-class accuracy · relationship P/R ·
+**relationship-type correctness** (right-type-given-right-endpoints) · hallucination rate ·
+forbidden-edge-type rate · extraction-empty-fallback rate · dedup convergence · description-integrity proxy ·
+stance/claim emission recall.
+
+**The matcher matters (codex plan-review P0.2).** LLM extraction is non-deterministic and gold names won't
+string-match; a naive exact match punishes valid paraphrases and cascades one name miss into false
+relationship misses (edges are scored over endpoints). Each extracted name resolves to at most one gold
+entity via **exact → alias → narrow-fuzzy** tiers; relationships score over the *resolved* endpoints. This
+mirrors standard practice for open-schema KG-extraction evaluation, where canonicalization/equivalence — not
+surface identity — is the unit of comparison.
+
+**Interpretation caveat — sparse-gold precision dilution (measured, not hypothetical).** On the very first
+live case the extractor emitted 5 valid entities where the gold labeled 1 (it also caught the basilica, the
+mosaics, the city). Because the gold set labels *salient* entities rather than *every* entity, **raw entity
+precision/F1 is diluted on sparsely-labeled cases and is advisory only.** The trustworthy signals are
+**recall** (did it get the entities we care about?) and the **trap-based** metrics (hallucination rate,
+forbidden-edge-type rate, relationship-type correctness) which are precision-side but do not punish
+correct-but-unlabeled extractions. This is the standard incomplete-gold problem in open information
+extraction; a closed-world / exhaustively-labeled subset is the follow-up if a hard precision number is
+needed.
+
+---
+
+## Part 3 — SOTA survey
+
+What the field does for the three things the ticket cares about — **typed-edge correctness**,
+**canonicalization/entity-resolution**, and **hallucination control** — in LLM-driven KG construction.
+
+### 3.1 LLM graph construction pipelines
+- **GraphRAG** (Edge et al., Microsoft, 2024, arXiv:2404.16130). LLM extracts *element instances* (entities,
+  relationships, and **claims**) under a typed prompt, then does community detection (Leiden) and
+  hierarchical summarization. Two transferable ideas: (a) **"gleanings"** — multiple extraction rounds where
+  the model is asked "what did you miss?", trading tokens for **recall**; (b) treating **claims** as
+  first-class extraction targets (Seshat already does, via `claims`).
+- **HippoRAG / HippoRAG 2** (Gutiérrez et al., 2024/2025, arXiv:2405.14831, arXiv:2502.14802). OpenIE triple
+  extraction + Personalized PageRank over the KG, with **synonymy edges** added between near-duplicate nodes
+  as the entity-resolution mechanism. Transferable: alias/synonym linking as an explicit graph operation
+  rather than a one-shot dedup.
+- **iText2KG** (Lairgi et al., 2024, arXiv:2409.03284). **Incremental** KG construction with distinct
+  entity/relation modules that resolve each new item against the existing graph by embedding similarity
+  before insertion — precisely the dedup problem, done at construction time and zero-shot.
+
+### 3.2 Typed relation extraction (edge-type correctness)
+- **Schema-constrained / closed-vocabulary extraction.** Constraining the model to a fixed relation set is
+  the standard defense against invented edge types. **REBEL** (Huguet Cabot & Navigli, EMNLP 2021) casts
+  relation extraction as constrained seq2seq over a known relation inventory. **GLiNER** (Zaratiana et al.,
+  2024, arXiv:2311.08526) does constrained, label-conditioned extraction. Seshat already prompts a 6-type
+  vocab; the missing half is **enforcement** — a validation gate that rejects/normalizes off-vocabulary
+  edges at the write path (today absent).
+- **Ontology grounding.** **Text2KGBench** (Mihindukulasooriya et al., ISWC 2023) evaluates ontology-driven
+  LLM KG generation and shows type/relation adherence improves with in-context ontology exemplars — argues
+  for a few-shot type/edge exemplar block in the prompt.
+
+### 3.3 Entity resolution / canonicalization
+- **CESI** (Vashishth et al., WWW 2018) — canonicalizing open KBs by learning entity/relation embeddings and
+  clustering. Establishes the embedding-cluster approach Seshat's `dedup.py` already approximates.
+- **Blocking + embedding match** is the standard scalable ER recipe; the transferable refinement is
+  **model-proposed aliases** (ask the extractor for accepted surface forms) feeding the dedup key — which is
+  also exactly what makes the *benchmark's* matcher fair, and could feed the *write-path* dedup.
+
+### 3.4 Hallucination control
+- **Extract-then-verify.** A second pass that checks each extracted triple against the source text
+  (FActScore-style atomic verification; Min et al., EMNLP 2023, arXiv:2305.14251) filters unsupported facts.
+  Candidate: a cheap verification/self-consistency vote for low-confidence entities/edges before write.
+- **Self-consistency** (Wang et al., 2022, arXiv:2203.11171) — sample N extractions, keep items that recur —
+  is the determinism/robustness lever this benchmark's `--samples N` is built to measure.
+- **LLM-as-judge** for description quality (Zheng et al., 2023, arXiv:2306.05685) — replaces the current
+  deterministic description-integrity proxy with a rubric-scored judge (a named follow-up).
+
+### 3.5 How reference benchmarks are sized (why 24 is a seed set)
+DocRED (Yao et al., 2019) ≈ 5k docs; SciERC, CrossRE, WebNLG, Text2KGBench all label hundreds–thousands of
+examples. A 24-case curated set is a **high-signal regression/calibration probe**, not a statistically
+powered benchmark — it detects large regressions and the named failure modes, but a few-point A/B needs
+paired per-case deltas and, eventually, a larger set (codex plan-review P1.3).
+
+---
+
+## Part 4 — Baseline (current extractor: gpt-5.4-mini)
+
+_Run: `baseline-20260703`, 27 cases × 3 samples (81 extractions, ≈ $0.43), model `gpt-5.4-mini`,
+prompt_hash `fade5e71`, matcher 1.0, gold_schema 1.0. Curated summary — raw run is gitignored._
+
+**Aggregate (mean±std over all sampled cases):**
+
+| metric | value | reading |
+|---|---:|---|
+| entity_recall | **0.90**±0.23 | strong — gets the entities we label |
+| entity_precision | 0.66±0.29 | *advisory* — diluted by sparse gold (extractor emits valid unlabeled entities) |
+| entity_f1 | 0.75±0.21 | dominated by the precision dilution above |
+| **entity_type_accuracy** | **0.80**±0.35 | ⚠️ weak spot — ~1 in 5 matched entities gets the wrong type |
+| **knowledge_class_accuracy** | **1.00**±0.00 | ✅ World/Personal/System nailed — the FRE-636 mis-class concern does **not** reproduce |
+| relationship_type_correctness | **0.89**±0.30 | strong — right endpoints → right edge type |
+| relationship_precision / recall | 0.33 / 0.56 | noisy (sparse rel gold; different cases excluded per metric — not directly comparable) |
+| **hallucination_rate** | **0.00**±0.00 | ✅ no `DISCUSES` / role-label / tool-name garbage |
+| **forbidden_edge_type_rate** | **0.02**±0.08 | ✅ residence-vs-visit essentially does **not** reproduce |
+| **dedup_convergence** | **1.00**±0.00 | ✅ case-variants always collapse |
+| description_integrity | 0.99±0.07 | ✅ clean single sentences, no stance-flatten |
+| **stance_emission_recall** | **1.00**±0.00 | ✅ stances emitted structurally — the FRE-636 flattening fix holds |
+| **claim_emission_recall** | **0.33**±0.47 | ⚠️ weak spot — personal situational claims under-emitted |
+| empty_fallback_rate | 0.00±0.00 | ✅ never fell back to the empty result |
+
+**Headline: the ticket's qwen-era failure catalog largely does not reproduce on gpt-5.4-mini.** Residence
+edges, hallucinated entities, flattened stances, and case-variant duplicates are all at or near their ideal
+values. This is the measure-don't-assert payoff — proposing a `VISITED`/`TRAVELED_TO` vocabulary split (the
+ticket's suggestion) would fix a bug the current extractor **does not have**.
+
+**Two evidence-backed weak spots** (these, not the ticket's list, are what the improvement tickets target):
+1. **entity_type_accuracy 0.80** — the extractor picks the wrong one of the 7 types ~20% of the time
+   (Concept↔Topic and Concept↔Technology boundaries, from the per-case diffs). A prompt few-shot type
+   exemplar block or an extract-then-verify type check is the candidate (SOTA §3.2/§3.4).
+2. **claim_emission_recall 0.33** — structured personal *claims* are under-emitted (the FRE-636 "Personal
+   dropped" finding partially persists for claims, even though *stances* are now perfect). A claim-focused
+   prompt exemplar or a dedicated claim pass is the candidate.
+
+**Per-tag caveat (sparse-gold, as predicted).** Low per-tag entity_f1 — csirt/security 0.31,
+travel/residence-vs-visit 0.46, system/agent-arch ~0.58 — is **not** extraction failure: those cases label
+1–2 salient entities while the extractor legitimately emits more (recall stays high, `hallucination_rate`
+is 0 across every tag). Read these as "gold under-labeled," not "extractor wrong." The clean precision-side
+signals are the trap metrics, which are green everywhere. Strong-gold tags (tech-stack, game-theory,
+cosmology) sit at entity_f1 1.00.
+
+> **Reading note.** `relationship_precision/recall/f1` each exclude a *different* set of cases (a metric is
+> `None` on a vacuous denominator), so they are not directly comparable to each other; use
+> `relationship_type_correctness` (0.89) as the clean edge-quality signal.
+
+---
+
+## Part 5 — Recommended improvements (→ follow-up tickets, each its own A/B)
+
+**Reprioritized by the baseline** (the ticket's suggested fixes are *not* at the top — the extractor no
+longer has those bugs). Ranked by measured impact:
+
+1. **Entity-type accuracy (0.80 → target ≥0.95).** Few-shot type exemplars in the prompt for the confused
+   boundaries (Concept↔Topic, Concept↔Technology) and/or an extract-then-verify type check. *(SOTA §3.2/§3.4.)*
+2. **Claim emission (0.33 → target ≥0.8).** Personal situational claims are under-emitted; add a
+   claim-focused prompt exemplar or a dedicated claim pass. *(FRE-636 finding, partially persists.)*
+3. **DSPy-compiled extraction** *(owner-raised; strong fit — DSPy is already in the stack for
+   `captains_log/reflection_dspy.py`, but extraction is a hand-written template today).* Define a DSPy
+   `Signature` for extraction and **use this benchmark's `score_case` as the DSPy metric** to *compile* the
+   prompt (few-shot demos + instructions) rather than hand-tuning it. This subsumes #1/#2 as an optimization
+   target and is the principled version of "adjust the prompt." *(SOTA §3.2; self-consistency §3.4.)*
+4. **Relationship-type validation gate** at the write path (reject/normalize off-vocabulary edge types).
+   A real structural gap (no enforcement today) — but *low urgency*: the baseline shows off-vocab edges at
+   only 2%, so this is defense-in-depth, not a live fire. *(SOTA §3.2.)*
+5. **Description-integrity LLM-judge** to replace the deterministic proxy. *(SOTA §3.4.)*
+6. **Phase-2 post-write graph-state benchmark** — score the persisted graph (embedding dedup, correction
+   gate, write-time validation), which this pre-write instrument by design does not observe.
+7. **Closed-world / exhaustively-labeled gold subset** so entity precision becomes a hard number, plus a
+   blind second-labeler pass (cf. FRE-636 inter-rater).
+
+**Explicitly NOT recommended (measure-don't-assert):** a `VISITED`/`TRAVELED_TO` vocabulary split. The
+ticket proposed it, but the baseline shows the extractor does **not** mis-assert residence for visits
+(`forbidden_edge_rate` 0.02, and 0.00 on the visit cases). Adding vocabulary to fix a non-existent bug
+would be speculative complexity.
+
+---
+
+## Part 6 — Method limitations (stated plainly)
+- **Small set (24 cases)** — calibration/regression, not statistically powered.
+- **Sparse gold** — entity precision/F1 is diluted on non-exhaustively-labeled cases; lead with recall + traps.
+- **Non-determinism** — a stochastic LLM; the baseline runs `--samples 3` with mean±std, but the bands are
+  wide at n=3. Prompt/model/matcher revisions are stamped so runs are never silently compared.
+- **Author-as-labeler** — the gold set was authored by this session; boundary calls (type vs class) are one
+  labeler's. A blind second-labeler pass is the obvious hardening (cf. FRE-636's inter-rater check).
+
+---
+
+## References
+- Edge et al. (2024), *From Local to Global: A Graph RAG Approach to Query-Focused Summarization*, arXiv:2404.16130.
+- Gutiérrez et al. (2024), *HippoRAG*, arXiv:2405.14831; (2025) *HippoRAG 2*, arXiv:2502.14802.
+- Lairgi et al. (2024), *iText2KG: Incremental Knowledge Graphs Construction Using LLMs*, arXiv:2409.03284.
+- Huguet Cabot & Navigli (2021), *REBEL: Relation Extraction By End-to-end Language generation*, EMNLP Findings.
+- Zaratiana et al. (2024), *GLiNER: Generalist Model for NER using Bidirectional Transformer*, arXiv:2311.08526.
+- Mihindukulasooriya et al. (2023), *Text2KGBench: A Benchmark for Ontology-Driven KG Generation from Text*, ISWC.
+- Vashishth et al. (2018), *CESI: Canonicalizing Open Knowledge Bases*, WWW.
+- Min et al. (2023), *FActScore*, EMNLP, arXiv:2305.14251.
+- Wang et al. (2022), *Self-Consistency Improves Chain of Thought Reasoning*, arXiv:2203.11171.
+- Zheng et al. (2023), *Judging LLM-as-a-Judge (MT-Bench)*, arXiv:2306.05685.
+- Yao et al. (2019), *DocRED: A Large-Scale Document-Level Relation Extraction Dataset*, ACL.

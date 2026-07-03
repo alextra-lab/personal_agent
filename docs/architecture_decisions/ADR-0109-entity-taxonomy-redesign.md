@@ -1,6 +1,6 @@
 # ADR-0109: Entity & Relationship Taxonomy — V1 (inherited) → V2 (first principled derivation)
 
-**Status:** Proposed
+**Status:** Accepted (2026-07-03, owner)
 **Date:** 2026-07-03
 **Scope:** the entity-*type* and relationship-*type* vocabularies of the extractor (entity-first). The knowledge-*class* axis (World/Personal/System/Stance — ADR-0097/0098/0106) is **unchanged and orthogonal**.
 **Gives an ADR to something that never had one:** the type vocabularies were **never** defined or justified by any prior ADR — see §Provenance. This is not a supersession; it is the **first** documented derivation.

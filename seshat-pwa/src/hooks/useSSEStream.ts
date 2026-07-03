@@ -10,6 +10,7 @@ import {
   type StreamConnection,
   type UploadedAttachment,
 } from '@/lib/agui-client';
+import { submitTurnRating } from '@/lib/submitTurnRating';
 import { generateUUID } from '@/lib/uuid';
 import type {
   AGUIEvent,
@@ -32,6 +33,9 @@ import type {
 
 /** localStorage key for persisting the in-progress assistant draft on visibility hide. */
 const DRAFT_KEY = (sid: string) => `seshat_bg_draft_${sid}`;
+
+/** Resting "ok" rating persisted on turn completion (FRE-757; == imputation default). */
+const RATING_OK_DEFAULT = 2;
 
 // --------------------------------------------------------------------------
 // Hook return type
@@ -142,6 +146,9 @@ export function useSSEStream(): UseSSEStreamReturn {
   // FRE-236: mirrors isStreaming state for use in non-React closures (event handlers).
   // Must be updated alongside every setIsStreaming call.
   const isStreamingRef = useRef(false);
+  // FRE-757: trace_ids whose default "ok" was already persisted on completion,
+  // so a repeated DONE never double-posts the resting default.
+  const defaultRatedTracesRef = useRef<Set<string>>(new Set());
 
   // FRE-236: persist the in-progress draft to localStorage on visibility hide so
   // a kill+relaunch can detect that a turn was in-flight and the relaunch hydration
@@ -357,6 +364,10 @@ export function useSSEStream(): UseSSEStreamReturn {
               traceId: m.trace_id,
               // FRE-407: hydrated history is complete → rating control renders.
               complete: true,
+              // FRE-757: preserve any stored rating across a replay-gap rehydrate
+              // (mirrors normal history hydration) so the control shows the real
+              // rating instead of reverting to the resting default.
+              rating: m.rating,
             }));
             setMessages(hydrated);
           });
@@ -392,6 +403,23 @@ export function useSSEStream(): UseSSEStreamReturn {
           }
           return prev;
         });
+
+        // FRE-757: persist the resting "ok" default on send. Fire ONLY here, on
+        // a live turn's completion — never from the rating control's mount — so
+        // historical / replayed turns never auto-post. The write is
+        // create-if-absent server-side, so it can never clobber a rating the
+        // user gives after DONE; the per-trace guard avoids a duplicate on a
+        // repeated DONE.
+        const persistSession = currentSessionRef.current;
+        if (
+          doneTraceId &&
+          persistSession &&
+          !defaultRatedTracesRef.current.has(doneTraceId)
+        ) {
+          defaultRatedTracesRef.current.add(doneTraceId);
+          void submitTurnRating(doneTraceId, persistSession, RATING_OK_DEFAULT, true);
+        }
+
         currentTurnTraceIdRef.current = '';
         // FRE-575 (fold-in to FRE-573): persist the completed engagement's tool
         // state so the engagement lane restores on remount (e.g. artifact → back).

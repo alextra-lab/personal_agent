@@ -51,9 +51,12 @@ vi.mock('@/lib/uuid', () => ({
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
 import { useSSEStream } from '@/hooks/useSSEStream';
-import { connectWebSocket } from '@/lib/agui-client';
+import { connectWebSocket, getSessionMessages } from '@/lib/agui-client';
+import { submitTurnRating } from '@/lib/submitTurnRating';
 
 const mockConnect = connectWebSocket as Mock;
+const mockGetSessionMessages = getSessionMessages as Mock;
+const mockSubmitRating = submitTurnRating as Mock;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -75,6 +78,10 @@ beforeEach(() => {
   mockSend.mockClear();
   mockClose.mockClear();
   mockConnect.mockClear();
+  mockSubmitRating.mockClear();
+  mockSubmitRating.mockResolvedValue(true);
+  mockGetSessionMessages.mockReset();
+  mockGetSessionMessages.mockResolvedValue([]);
 });
 
 describe('useSSEStream — TEXT_DELTA accumulation', () => {
@@ -97,6 +104,63 @@ describe('useSSEStream — TEXT_DELTA accumulation', () => {
 
     pushEvent({ type: 'DONE', seq: null });
     expect(hook.result.current.isStreaming).toBe(false);
+  });
+});
+
+describe('useSSEStream — FRE-757 persist-on-send', () => {
+  function pushTraceStatus(traceId: string): void {
+    pushEvent({
+      type: 'STATE_DELTA',
+      data: {
+        key: 'turn_status',
+        value: {
+          context_tokens: 1,
+          context_max: 100,
+          tool_iteration: 0,
+          tool_iteration_max: 10,
+          turn_cost_usd: 0,
+          trace_id: traceId,
+        },
+      },
+      seq: 1,
+    });
+  }
+
+  it('persists the ok default (rating=2, default=true) once on DONE', async () => {
+    const hook = renderHook(() => useSSEStream());
+    await startTurn(hook);
+    pushTraceStatus('trace-done');
+    pushEvent({ type: 'DONE', seq: null });
+
+    expect(mockSubmitRating).toHaveBeenCalledTimes(1);
+    expect(mockSubmitRating).toHaveBeenCalledWith('trace-done', 'session-1', 2, true);
+  });
+
+  it('does NOT persist a default when the completed turn has no trace_id', async () => {
+    const hook = renderHook(() => useSSEStream());
+    await startTurn(hook);
+    pushEvent({ type: 'DONE', seq: null });
+    expect(mockSubmitRating).not.toHaveBeenCalled();
+  });
+
+  it('preserves a stored rating across a replay-gap rehydrate', async () => {
+    mockGetSessionMessages.mockResolvedValueOnce([
+      { role: 'assistant', content: 'hi', trace_id: 't1', rating: 3 },
+    ]);
+    const hook = renderHook(() => useSSEStream());
+    await startTurn(hook);
+
+    await act(async () => {
+      capturedOnEvent!({ type: 'REPLAY_GAP', seq: null });
+      // Flush the getSessionMessages().then rehydrate.
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const assistant = hook.result.current.messages.find((m) => m.role === 'assistant');
+    expect(assistant?.rating).toBe(3);
+    // Replay rehydrate must not auto-post a default for historical turns.
+    expect(mockSubmitRating).not.toHaveBeenCalled();
   });
 });
 

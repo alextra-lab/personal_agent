@@ -201,6 +201,159 @@ class TestRatingHappyPath:
 
 
 # ---------------------------------------------------------------------------
+# Default (create-if-absent) rating writes — FRE-757 "persist ok on send"
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultRating:
+    """`default: true` writes are create-if-absent and never publish the bus.
+
+    FRE-757: the PWA fires a default ``ok`` (rating 2) on turn completion so
+    every turn carries a persisted rating. This write must NEVER overwrite an
+    explicit rating the user already gave, and must not emit the
+    ``user.turn_rated`` bus event (a default is not a user judgement).
+    """
+
+    @staticmethod
+    def _run_default_post(
+        *,
+        existing_rating: dict[str, Any] | None,
+        rating: int = 2,
+    ) -> tuple[int, dict[str, Any], list[Any], Any]:
+        """POST a default rating; return (status, json, es_calls, bus_mock)."""
+        mock_db = AsyncMock()
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+
+        app = _build_app(mock_db)
+        session_mock = _make_session_mock()
+        es_calls: list[Any] = []
+
+        with (
+            patch(
+                "personal_agent.gateway.feedback_api._get_user_with_display_name",
+                new_callable=AsyncMock,
+                return_value=(_TEST_USER_ID, None),
+            ),
+            patch("personal_agent.gateway.feedback_api.SessionRepository") as MockRepo,
+            patch(
+                "personal_agent.gateway.feedback_api._lookup_prompt_identity",
+                new_callable=AsyncMock,
+                return_value={
+                    "prompt_callsite": "orchestrator.primary",
+                    "prompt_static_prefix_hash": "h",
+                    "prompt_dynamic_hash": "h",
+                    "prompt_component_ids": [],
+                },
+            ),
+            patch(
+                "personal_agent.gateway.feedback_api._get_existing_rating",
+                new_callable=AsyncMock,
+                return_value=existing_rating,
+            ),
+            patch(
+                "personal_agent.gateway.feedback_api.schedule_es_index",
+                side_effect=lambda *a, **k: es_calls.append((a, k)),
+            ),
+            patch(
+                "personal_agent.gateway.feedback_api._publish_rating_event",
+                new_callable=AsyncMock,
+            ) as bus_mock,
+        ):
+            repo_instance = AsyncMock()
+            repo_instance.get = AsyncMock(return_value=session_mock)
+            MockRepo.return_value = repo_instance
+
+            client = TestClient(app)
+            resp = client.post(
+                f"/api/v1/turns/{_TRACE_ID}/rating",
+                json={"rating": rating, "session_id": _SESSION_ID, "default": True},
+                headers=_AUTH_HEADERS,
+            )
+        return resp.status_code, resp.json(), es_calls, bus_mock
+
+    def test_default_write_skipped_when_rating_exists(self) -> None:
+        """default:true + an existing explicit rating → no ES write, no bus, 200."""
+        status, body, es_calls, bus_mock = self._run_default_post(
+            existing_rating={"rating": 3},
+        )
+        assert status == 200
+        assert body == {"status": "exists"}
+        assert es_calls == [], "default write must not overwrite an existing rating"
+        bus_mock.assert_not_awaited()
+
+    def test_default_write_persists_when_absent(self) -> None:
+        """default:true + no existing rating → ES write of 2, but NO bus event."""
+        status, body, es_calls, bus_mock = self._run_default_post(existing_rating=None)
+        assert status == 200
+        assert body == {"status": "received"}
+        assert len(es_calls) == 1
+        _index_name, doc, *_ = es_calls[0][0]
+        assert doc["rating"] == 2
+        assert doc["prompt_callsite"] == "orchestrator.primary"
+        # A default is not a user judgement — it must not fire user.turn_rated.
+        bus_mock.assert_not_awaited()
+
+    def test_manual_write_still_overwrites_and_publishes(self) -> None:
+        """Sanity: a non-default (manual) write overwrites even when one exists."""
+        mock_db = AsyncMock()
+        mock_db.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_db.__aexit__ = AsyncMock(return_value=False)
+
+        app = _build_app(mock_db)
+        session_mock = _make_session_mock()
+        es_calls: list[Any] = []
+
+        with (
+            patch(
+                "personal_agent.gateway.feedback_api._get_user_with_display_name",
+                new_callable=AsyncMock,
+                return_value=(_TEST_USER_ID, None),
+            ),
+            patch("personal_agent.gateway.feedback_api.SessionRepository") as MockRepo,
+            patch(
+                "personal_agent.gateway.feedback_api._lookup_prompt_identity",
+                new_callable=AsyncMock,
+                return_value={
+                    "prompt_callsite": "orchestrator.primary",
+                    "prompt_static_prefix_hash": "h",
+                    "prompt_dynamic_hash": "h",
+                    "prompt_component_ids": [],
+                },
+            ),
+            patch(
+                "personal_agent.gateway.feedback_api._get_existing_rating",
+                new_callable=AsyncMock,
+                return_value={"rating": 2},
+            ),
+            patch(
+                "personal_agent.gateway.feedback_api.schedule_es_index",
+                side_effect=lambda *a, **k: es_calls.append((a, k)),
+            ),
+            patch(
+                "personal_agent.gateway.feedback_api._publish_rating_event",
+                new_callable=AsyncMock,
+            ) as bus_mock,
+        ):
+            repo_instance = AsyncMock()
+            repo_instance.get = AsyncMock(return_value=session_mock)
+            MockRepo.return_value = repo_instance
+
+            client = TestClient(app)
+            resp = client.post(
+                f"/api/v1/turns/{_TRACE_ID}/rating",
+                json={"rating": 0, "session_id": _SESSION_ID},
+                headers=_AUTH_HEADERS,
+            )
+
+        assert resp.status_code == 200
+        assert len(es_calls) == 1, "manual re-rate must overwrite"
+        _index_name, doc, *_ = es_calls[0][0]
+        assert doc["rating"] == 0
+        bus_mock.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
 # Validation: out-of-range ratings → 400
 # ---------------------------------------------------------------------------
 

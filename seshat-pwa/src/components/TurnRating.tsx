@@ -1,48 +1,93 @@
 'use client';
 
 /**
- * Per-turn 0–3 value rating control (FRE-407).
+ * Per-turn quality rating control (FRE-407 → redesigned in FRE-757).
  *
- * Renders a compact 4-segment meter in the assistant message footer,
- * beside the copy button, using the same hover-reveal idiom.
+ * Renders three tap-sized icon chips in the assistant message footer:
  *
- * Rating scale and fill colors (accent vocabulary from the existing PWA):
- *   0 — No value        → slate-600  (neutral/empty)
- *   1 — Low value       → amber-400  (caution)
- *   2 — Meets expectation → sky-400  (informational)
- *   3 — Wow             → emerald-400 (confirmed/good)
+ *   error ✕  → store value 0  (dark red)
+ *   ok    ✓  → store value 2  (green — the resting default)
+ *   exceptional ★ → store value 3  (gold)
  *
- * Behaviour:
- *   - Default displayed value is 2 ("Meets expectation", sky-400) — purely
- *     visual; no network POST is issued on mount or render.
- *   - A rating is sent ONLY on an explicit user click (including re-clicking
- *     segment 2 to deliberately confirm a 2).
- *   - Each turn's control independently defaults to 2 until clicked.
- *   - Optimistic select on click; reverts to previous visual state on failure.
- *   - On confirmation a single animate-pulse fires then the state settles.
- *   - Re-rating is allowed: clicking a new segment re-POSTs and overwrites.
- *   - Never renders mid-stream; parent gates on `message.complete === true`.
+ * Design (owner-confirmed 2026-07-03):
+ *   - The store keeps the FRE-407 0–3 integer scale; the control exposes three
+ *     of the four values. ok=2 deliberately equals the backend imputation
+ *     default, so persisting/backfilling "ok" is metric-invariant.
+ *   - Legacy stored value 1 ("Low", no longer offered) hydrates as a distinct
+ *     "legacy low" state on the error chip; the stored value is left untouched
+ *     until the user re-rates.
+ *   - Resting state reads as ok (solid green) — a persisted value, not a faint
+ *     "unset" default. The persisted-on-send write is issued by the streaming
+ *     hook on turn completion (useSSEStream DONE), NOT by this component, so
+ *     no POST is ever fired on mount / hydration / replay.
+ *   - Touch targets are 44×44px (Apple HIG / WCAG 2.5.5) around a ~24px icon.
+ *
+ * Behaviour (unchanged from FRE-407/426):
+ *   - Persistently visible (never hover-gated).
+ *   - Optimistic paint + a single pulse on confirmation.
+ *   - Re-rating overwrites (a manual click always POSTs, incl. re-confirming ok).
+ *   - Prior ratings hydrate from history via `initialRating`.
+ *   - Never renders mid-stream — the parent gates on `message.complete`.
  */
 
 import { useState, useCallback } from 'react';
 import { submitTurnRating } from '@/lib/submitTurnRating';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Rating metadata
+// Chip vocabulary
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface RatingMeta {
+type ChipKey = 'error' | 'ok' | 'exceptional';
+
+interface Chip {
+  key: ChipKey;
+  /** Store value this chip writes (FRE-407 0–3 scale; 1 "Low" is not offered). */
+  value: number;
+  glyph: string;
   label: string;
-  /** Tailwind fill class applied to segments at-or-below the selected index. */
-  fillClass: string;
+  /** Tailwind classes applied when this chip is the selected rating. */
+  selectedClass: string;
 }
 
-const RATING_META: [RatingMeta, RatingMeta, RatingMeta, RatingMeta] = [
-  { label: 'No value',            fillClass: 'bg-slate-600' },
-  { label: 'Low value',           fillClass: 'bg-amber-400' },
-  { label: 'Meets expectation',   fillClass: 'bg-sky-400'   },
-  { label: 'Wow',                 fillClass: 'bg-emerald-400' },
+/** The resting default: "ok" (store value 2 == the backend imputation default). */
+const DEFAULT_OK = 2;
+/** Legacy "Low" store value, hydrated-only — no chip writes it. */
+const LEGACY_LOW = 1;
+
+const CHIPS: readonly Chip[] = [
+  {
+    key: 'error',
+    value: 0,
+    glyph: '✕',
+    label: 'error',
+    // #991b1b / #b91c1c / #fecaca
+    selectedClass: 'bg-red-800 border-red-700 text-red-200',
+  },
+  {
+    key: 'ok',
+    value: DEFAULT_OK,
+    glyph: '✓',
+    label: 'ok',
+    // #059669 / #10b981 / #d1fae5 (emerald-600/500/100)
+    selectedClass: 'bg-emerald-600 border-emerald-500 text-emerald-100',
+  },
+  {
+    key: 'exceptional',
+    value: 3,
+    glyph: '★',
+    label: 'exceptional',
+    // #d4af37 / #e6c34e / #1a1205 + subtle glow
+    selectedClass:
+      'bg-[#d4af37] border-[#e6c34e] text-[#1a1205] shadow-[0_0_8px_rgba(212,175,55,0.55)]',
+  },
 ];
+
+/** Muted resting style for a chip that is not the selected rating. */
+const UNSELECTED_CLASS =
+  'bg-transparent border-transparent text-slate-500 hover:text-slate-300 hover:border-slate-600';
+
+/** Legacy-low treatment on the error chip when a stored value of 1 hydrates. */
+const LEGACY_CLASS = 'bg-transparent border-red-800/60 text-red-400/80';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Component
@@ -54,60 +99,42 @@ interface TurnRatingProps {
   /** Session that owns the turn — enforced server-side for ownership. */
   sessionId: string;
   /**
-   * Previously-submitted 0–3 score, hydrated from history (FRE-426). When
-   * present the control renders solid (rated); when undefined it renders the
-   * faint unrated default.
+   * Previously-submitted 0–3 score, hydrated from history (FRE-426). Undefined
+   * when the turn has no stored rating — the control then shows the resting
+   * "ok" default (the persist-on-send write lands separately, from the DONE
+   * hook for live turns and the one-time backfill for historical turns).
    */
   initialRating?: number;
 }
 
 /**
- * Compact 4-segment value-rating meter.
- *
- * Persistently visible in the assistant message footer (NOT hover-gated like
- * the copy button) — the rating is a primary affordance the user engages every
- * turn, and a hover-reveal made it invisible on resize and on touch devices.
- *
- * Default display: segment 2 ("Meets expectation", sky-400) renders filled
- * before any interaction. This is purely visual — no POST is issued until
- * the user explicitly clicks a segment. Un-clicked controls are treated as
- * value 2 by the backend imputation metric (FRE-407).
+ * Three-chip per-turn rating control.
  *
  * Args:
  *   traceId:   Trace ID of the assistant turn to rate.
  *   sessionId: Owning session ID, forwarded to the rating endpoint.
+ *   initialRating: Hydrated 0–3 store value, if any.
  */
 export function TurnRating({ traceId, sessionId, initialRating }: TurnRatingProps) {
-  /**
-   * null = no rating submitted yet (visually defaults to 2, not persisted).
-   * number = persisted score (hydrated from history or set by the user).
-   */
+  /** Persisted store value (hydrated or set by the user); null = none stored. */
   const [persisted, setPersisted] = useState<number | null>(initialRating ?? null);
-  /** Optimistic selection while the request is in-flight. */
+  /** Optimistic selection while a request is in-flight. */
   const [optimistic, setOptimistic] = useState<number | null>(null);
   /** Drives the pulse animation on successful confirmation. */
   const [pulsing, setPulsing] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  /**
-   * Visual rating: defaults to 2 before any click so the meter shows
-   * "Meets expectation" at rest. Actual persisted value is null until the
-   * user explicitly clicks.
-   */
-  const VISUAL_DEFAULT = 2;
-  const currentRating = optimistic ?? persisted ?? VISUAL_DEFAULT;
-  // Distinguish "showing the default" from "the user actually rated this".
-  // Unrated → faint (light blue); explicitly rated → solid (darker). Gives the
-  // user a clear at-a-glance indicator of which turns they've scored.
-  const isExplicit = (optimistic ?? persisted) !== null;
+  // Effective store value driving chip selection: optimistic > persisted > ok.
+  const effective = optimistic ?? persisted ?? DEFAULT_OK;
+  // A hydrated legacy "Low" (1) with no newer interaction renders its own state.
+  const isLegacyLow = optimistic === null && persisted === LEGACY_LOW;
 
   const handleRate = useCallback(
     async (rating: number) => {
       if (submitting) return;
 
       const previous = persisted;
-
-      // Optimistic update — paint immediately.
+      // Optimistic paint.
       setOptimistic(rating);
       setSubmitting(true);
 
@@ -118,11 +145,9 @@ export function TurnRating({ traceId, sessionId, initialRating }: TurnRatingProp
 
       if (ok) {
         setPersisted(rating);
-        // Pulse the confirmed segment, then settle.
         setPulsing(rating);
         setTimeout(() => setPulsing(null), 800);
       } else {
-        // Revert to previous persisted value on failure.
         setPersisted(previous);
       }
     },
@@ -130,34 +155,41 @@ export function TurnRating({ traceId, sessionId, initialRating }: TurnRatingProp
   );
 
   return (
-    <div
-      className={`flex items-center gap-0.5 transition-opacity ${
-        isExplicit ? 'opacity-100' : 'opacity-40 hover:opacity-70'
-      }`}
-      title={isExplicit ? 'You rated this turn — click to change' : 'Not yet rated — click to rate'}
-      aria-label={isExplicit ? 'Rated — change your rating' : 'Rate this response'}
-    >
-      {RATING_META.map((meta, index) => {
-        const isFilled = currentRating !== null && index <= currentRating;
-        const fillClass = isFilled ? RATING_META[currentRating].fillClass : 'bg-slate-700';
-        const isPulsing = pulsing !== null && index === pulsing;
+    <div className="flex items-center gap-1" role="group" aria-label="Rate this response">
+      {CHIPS.map((chip) => {
+        const isSelected = !isLegacyLow && effective === chip.value;
+        const showLegacy = isLegacyLow && chip.key === 'error';
+        const isPulsing = pulsing !== null && isSelected && pulsing === chip.value;
+
+        const stateClass = isSelected
+          ? chip.selectedClass
+          : showLegacy
+            ? LEGACY_CLASS
+            : UNSELECTED_CLASS;
+
+        const label = showLegacy ? 'Legacy low rating — click to re-rate' : `Rate ${chip.label}`;
 
         return (
           <button
-            key={index}
-            onClick={() => void handleRate(index)}
-            title={meta.label}
-            aria-label={meta.label}
+            key={chip.key}
+            type="button"
+            onClick={() => void handleRate(chip.value)}
+            title={showLegacy ? 'Legacy low rating' : chip.label}
+            aria-label={label}
+            aria-pressed={isSelected}
             disabled={submitting}
             className={[
-              'w-3 h-1.5 rounded-sm transition-colors',
-              'hover:opacity-80 disabled:cursor-not-allowed',
-              fillClass,
+              // 44×44 hit target around a ~24px icon core (WCAG 2.5.5 / HIG).
+              'flex h-11 w-11 items-center justify-center rounded-md border',
+              'text-lg leading-none transition-colors disabled:cursor-not-allowed',
+              stateClass,
               isPulsing ? 'animate-pulse' : '',
             ]
               .filter(Boolean)
               .join(' ')}
-          />
+          >
+            <span aria-hidden="true">{chip.glyph}</span>
+          </button>
         );
       })}
     </div>

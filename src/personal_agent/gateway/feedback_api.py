@@ -75,12 +75,18 @@ class RatingRequest(BaseModel):
     Attributes:
         rating: User value score — 0 (no value) through 3 (wow).
         session_id: Session the rated turn belongs to.
+        default: When true this is a create-if-absent "persist ok on send"
+            write (FRE-757) issued automatically on turn completion — it must
+            NEVER overwrite an existing (explicit) rating and does not emit the
+            ``user.turn_rated`` bus event. When false (the default) this is an
+            explicit user rating with overwrite semantics.
     """
 
     model_config = ConfigDict(frozen=True)
 
     rating: int
     session_id: str
+    default: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +247,21 @@ async def submit_turn_rating(
     if existing is not None:
         existing_rating = existing.get("rating")
 
+    # --- Create-if-absent default write (FRE-757 "persist ok on send") ---
+    # A default write (auto-issued on turn completion) must never clobber an
+    # explicit rating the user already gave. Since the read above is issued
+    # before any user interaction is possible (the control only renders after
+    # DONE, which is what fires this write), an existing doc here is always an
+    # explicit rating — skip the write entirely and return a no-op.
+    if body.default and existing is not None:
+        log.info(
+            "feedback_rating_default_skipped_existing",
+            trace_id=trace_id,
+            existing_rating=existing_rating,
+            request_trace_id=ctx.trace_id,
+        )
+        return JSONResponse({"status": "exists"})
+
     # --- Build rating record ---
     now = datetime.now(timezone.utc)
     component_ids: tuple[str, ...] = ()
@@ -279,8 +300,9 @@ async def submit_turn_rating(
     # Re-rates intentionally produce multiple lines; nothing reads this for means.
     _append_ndjson_audit(es_doc, now)
 
-    # --- Bus: publish only when rating value changed (decision §3) ---
-    if existing_rating is None or existing_rating != body.rating:
+    # --- Bus: publish only for explicit ratings whose value changed ---
+    # Default writes (FRE-757) are not user judgements — never emit the event.
+    if not body.default and (existing_rating is None or existing_rating != body.rating):
         await _publish_rating_event(turn_rating, ctx.trace_id)
 
     return JSONResponse({"status": "received"})

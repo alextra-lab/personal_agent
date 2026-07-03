@@ -36,8 +36,14 @@ keeps `origin/main` current), then:
 
 1. **Building** — `git status --short` is non-empty **OR** `git rev-list --count origin/main..HEAD` > 0
    (uncommitted or unpushed work in flight) → **silent.**
-2. **Awaiting master** — clean, but `gh pr list --head "$(git branch --show-current)"` shows an open PR
-   → **silent** (the ticket is built; master owns the gate).
+2. **Awaiting master** — clean, and `gh pr list --head "$(git branch --show-current)"` shows an open PR.
+   A PR is **not** master-ready until its CI is green, so check first: `gh pr checks <PR#>`.
+   - CI **all green** → **silent** (built + CI-green; master owns the gate).
+   - CI **failing** → **NOT silent, NOT awaiting-master**: surface one line —
+     *"Stream X · PR #N CI FAILING (`<failed check>`) — fix before the master gate; master won't merge red."*
+     A red PR is the worker's to fix, not master's to wait on. (This is the guard that stops a session
+     reporting "done / awaiting master" on a PR that never passed CI.)
+   - CI **pending** → one line: *"Stream X · PR #N CI still running — not yet master-ready; re-check next tick."*
 3. Otherwise (clean · nothing unpushed · no open PR) → **possibly idle** → go to Step 4. Whether it is
    truly idle vs. just-dispatched is decided by the NEXT ticket's **Linear state** in Step 4 — NOT by
    branch name (build branches are `fre-<id>-…`, adr branches are `<adr-slug>-…`; only Linear state is

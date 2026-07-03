@@ -417,6 +417,57 @@ def claim_emission_recall(
     return hit / len(keyed)
 
 
+@dataclass(frozen=True)
+class ClaimCaseRecall:
+    """Case-level claim-emission recall over distinct claim-bearing cases (FRE-759).
+
+    Attributes:
+        passing: Distinct claim cases the extractor reliably emitted.
+        total: Distinct claim-bearing cases (the honest denominator).
+        fraction: ``passing / total``, or ``None`` when there are no claim cases.
+    """
+
+    passing: int
+    total: int
+    fraction: float | None
+
+
+def claim_case_level_recall(
+    per_case_sample_recalls: Sequence[Sequence[float | None]],
+    *,
+    min_recall: float = 0.5,
+) -> ClaimCaseRecall:
+    """Score claim emission per DISTINCT case, not per sample (FRE-759, codex P1.1).
+
+    The sample-level ``claim_emission_recall`` aggregate flattens ``--samples N``
+    so N claim cases read as ``n = cases × N``; a few sample flips then masquerade
+    as a big move. This scores each distinct claim case ONCE: a case is claim-bearing
+    iff at least one of its samples produced a non-``None`` recall, and it passes iff
+    the mean of its present per-sample recalls is ``>= min_recall`` (default 0.5 — the
+    majority of samples emitted the expected claim(s)). ``>=0.8`` then credibly means
+    ">=8 of 10 distinct claim cases pass".
+
+    Args:
+        per_case_sample_recalls: One entry per case; each is that case's per-sample
+            ``claim_emission_recall`` values (``None`` where the case expected no claim).
+        min_recall: Mean per-sample recall a case must clear to count as passing.
+
+    Returns:
+        A :class:`ClaimCaseRecall` with the passing/total counts and their fraction.
+    """
+    passing = 0
+    total = 0
+    for sample_recalls in per_case_sample_recalls:
+        present = [r for r in sample_recalls if r is not None]
+        if not present:
+            continue  # not a claim-bearing case — excluded from the denominator
+        total += 1
+        if sum(present) / len(present) >= min_recall:
+            passing += 1
+    fraction = passing / total if total else None
+    return ClaimCaseRecall(passing=passing, total=total, fraction=fraction)
+
+
 def mean_optional(values: Sequence[float | None]) -> float | None:
     """Mean of the non-``None`` values, or ``None`` if there are none."""
     present = [v for v in values if v is not None]

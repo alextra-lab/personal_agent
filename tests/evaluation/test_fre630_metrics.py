@@ -21,6 +21,7 @@ from scripts.eval.fre630_extraction_quality.matching import (
 )
 from scripts.eval.fre630_extraction_quality.metrics import (
     ExtractedRel,
+    claim_case_level_recall,
     claim_emission_recall,
     dedup_convergence,
     description_integrity,
@@ -336,3 +337,47 @@ def test_score_case_end_to_end_with_failures() -> None:
     assert "hallucinated" in score.diffs
     assert "wrong_type" in score.diffs
     assert "forbidden_edges" in score.diffs
+
+
+class TestClaimCaseLevelRecall:
+    """FRE-759 (codex P1.1): case-level claim recall over DISTINCT claim cases.
+
+    Guards against the sample-flattening trap — with --samples 3, six claim cases
+    must not read as n=18. A case passes iff the MAJORITY of its samples emitted
+    the expected claim(s) (mean per-sample recall >= min_recall, default 0.5).
+    """
+
+    def test_none_when_no_claim_cases(self) -> None:
+        """No claim-bearing case → fraction is None (excluded, never a misleading 1.0)."""
+        result = claim_case_level_recall([[None, None], [None]])
+        assert result.total == 0
+        assert result.passing == 0
+        assert result.fraction is None
+
+    def test_counts_distinct_cases_not_samples(self) -> None:
+        """Two distinct claim cases → total=2 regardless of sample count."""
+        # case A: emitted in 3/3 samples (pass); case B: 0/3 (fail).
+        result = claim_case_level_recall([[1.0, 1.0, 1.0], [0.0, 0.0, 0.0]])
+        assert result.total == 2
+        assert result.passing == 1
+        assert result.fraction == 0.5
+
+    def test_majority_of_samples_decides_a_case(self) -> None:
+        """A case passes on 2/3 samples (mean 0.67 ≥ 0.5), fails on 1/3 (mean 0.33)."""
+        passes = claim_case_level_recall([[1.0, 1.0, 0.0]])
+        assert passes.passing == 1 and passes.total == 1 and passes.fraction == 1.0
+        fails = claim_case_level_recall([[1.0, 0.0, 0.0]])
+        assert fails.passing == 0 and fails.total == 1 and fails.fraction == 0.0
+
+    def test_non_claim_samples_excluded_from_a_mixed_case(self) -> None:
+        """A case with some None samples averages only its present recalls."""
+        # present recalls are 1.0, 1.0 → mean 1.0 ≥ 0.5 → pass; the None is ignored.
+        result = claim_case_level_recall([[1.0, None, 1.0]])
+        assert result.total == 1 and result.passing == 1
+
+    def test_eight_of_ten_reads_as_point_eight(self) -> None:
+        """The AC-2 shape: 8 of 10 distinct claim cases passing → fraction 0.8."""
+        cases = [[1.0, 1.0, 1.0]] * 8 + [[0.0, 0.0, 0.0]] * 2
+        result = claim_case_level_recall(cases)
+        assert result.total == 10 and result.passing == 8
+        assert result.fraction == 0.8

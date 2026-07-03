@@ -167,7 +167,7 @@ BAD EXAMPLES (never produce these):
   ✗ {{"name": "my lease ends in March", "type": "Event", ...}}                     ← situational fact is a claim, not an entity
   ✗ {{"subject": "owner", "target": "...", "provenance": {{...}}}}                 ← never emit provenance; the system adds it
 
-Conversation:
+{fewshot_exemplars}Conversation:
 User: {user_message}
 Assistant: {assistant_response}
 
@@ -213,6 +213,86 @@ Return ONLY valid JSON (no markdown fences, no explanation):
   ]
 }}\
 """
+
+# FRE-759: flag-gated few-shot exemplar block targeting the two measured weak spots
+# (entity_type_accuracy 0.80 — Concept/Topic/Technology confusion; claim_emission_recall
+# 0.33 — under-emitted personal claims). Spliced into the prompt as a PRE-RENDERED
+# ``.format()`` VALUE (never itself run through ``.format()``), so its literal JSON braces
+# are inert — single braces here, not the ``{{ }}`` escaping the template constant uses.
+# Ends with a trailing blank line so the ``{fewshot_exemplars}Conversation:`` splice reads
+# cleanly; empty when the flag is off, leaving the prompt byte-for-byte unchanged.
+_EXTRACTION_FEWSHOT_EXEMPLARS = """\
+TYPE & CLAIM DISAMBIGUATION EXEMPLARS (few-shot — study these boundary calls):
+
+  TYPE — Concept vs Topic vs Technology (the ~20% the extractor gets wrong):
+    - A named IDEA, method, technique, or principle -> Concept.
+        "GraphRAG" -> Concept; "self-consistency decoding" -> Concept; "game theory" -> Concept.
+    - The broad SUBJECT AREA / field a turn is about -> Topic.
+        a turn broadly about "machine learning" or "cosmology" as a field -> Topic.
+    - A concrete TOOL, product, framework, language, model, or API -> Technology.
+        "Neo4j" -> Technology; "Python" -> Technology; "gpt-5.4-mini" -> Technology.
+    Contrast: "knowledge graphs" as the subject under discussion -> Topic, but the specific
+    technique "GraphRAG" -> Concept, and the database "Neo4j" -> Technology.
+
+  CLAIMS — first-person situational facts are UNDER-emitted; never drop them:
+    - "I just started a new job at a fintech startup" -> emit a claim:
+        {"subject":"owner","content":"The user recently started a job at a fintech startup.","facet":"employer","update_kind":"new"}
+    - "We're relocating next month" -> emit a claim:
+        {"subject":"owner","content":"The user is relocating next month.","facet":"current_city","update_kind":"evolution"}
+    - Near-miss (NOT a claim): an impersonal geographic fact ("that city is in the south") is
+      World knowledge -> a Location entity, not a claim. A claim is a first-person SITUATIONAL fact.
+
+"""
+
+
+def _fewshot_block() -> str:
+    """Return the few-shot exemplar block when the flag is on, else "" (FRE-759).
+
+    The single decision point for the flag, shared by ``_build_extraction_prompt``
+    (what the extractor sends) and ``prompt_material_for_hash`` (what the FRE-630
+    harness hashes), so the two can never disagree. The block is a PRE-RENDERED
+    value — never run through ``.format()`` — so its literal JSON braces are inert.
+
+    Returns:
+        The exemplar block string when ``entity_extraction_fewshot_exemplars_enabled``
+        is set, otherwise the empty string (the extractor is then unchanged).
+    """
+    if settings.entity_extraction_fewshot_exemplars_enabled:
+        return _EXTRACTION_FEWSHOT_EXEMPLARS
+    return ""
+
+
+def _build_extraction_prompt(user_message: str, assistant_response: str) -> str:
+    """Render the extraction user prompt, splicing the flag-gated exemplar block.
+
+    Args:
+        user_message: The user turn text.
+        assistant_response: The assistant turn text.
+
+    Returns:
+        The fully-rendered user prompt sent to the extractor. The exemplar block is
+        passed as a ``.format()`` value, so any JSON braces inside it are literal.
+    """
+    return _EXTRACTION_PROMPT_TEMPLATE.format(
+        user_message=user_message,
+        assistant_response=assistant_response,
+        fewshot_exemplars=_fewshot_block(),
+    )
+
+
+def prompt_material_for_hash() -> str:
+    """Return the flag-aware prompt material the FRE-630 harness hashes (FRE-759).
+
+    Concatenates the system prompt, the template, and the *rendered* few-shot block
+    (but not the per-case user/assistant text), so a flag-ON run and a flag-OFF run
+    get distinct ``prompt_hash`` stamps and an A/B never silently compares two
+    different prompts. Flag-OFF this equals ``system + template`` exactly.
+
+    Returns:
+        The concatenated prompt material to hash.
+    """
+    return _EXTRACTION_SYSTEM_PROMPT + _EXTRACTION_PROMPT_TEMPLATE + _fewshot_block()
+
 
 # High-precision person attribution when the model omits structured Person entities (eval CP-26).
 _PROJECT_LEAD_PERSON_RE = re.compile(
@@ -496,10 +576,7 @@ async def extract_entities_and_relationships(
     model_def = model_config.models.get(entity_extraction_role)
     provider = model_def.provider if model_def else None
 
-    prompt = _EXTRACTION_PROMPT_TEMPLATE.format(
-        user_message=user_message,
-        assistant_response=assistant_response,
-    )
+    prompt = _build_extraction_prompt(user_message, assistant_response)
 
     trace_id_str = str(trace_id) if trace_id else None
     log.info(

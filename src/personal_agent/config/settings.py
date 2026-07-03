@@ -1252,6 +1252,16 @@ class AppConfig(BaseSettings):
         le=600,
         description="Timeout for entity-extraction LLM call; on timeout return empty entities.",
     )
+    entity_extraction_fewshot_exemplars_enabled: bool = Field(
+        default=False,
+        description=(
+            "FRE-759: when True, splice the type-disambiguation + claim-emphasis "
+            "few-shot exemplar block into the entity-extraction prompt. Ships "
+            "flag-dark (default False); flipped only after the FRE-630 A/B proves "
+            "entity_type_accuracy >=0.95 and claim_emission_recall >=0.8 with no "
+            "regression on the near-ideal metrics."
+        ),
+    )
 
     # Data Lifecycle (Phase 2.3)
     disk_usage_alert_percent: float = Field(

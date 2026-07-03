@@ -103,6 +103,24 @@ def test_no_pii_tokens() -> None:
     assert not offenders, "PII tokens found:\n" + "\n".join(offenders)
 
 
+#: FRE-759 (codex P1.1) — distinct claim cases needed for a powered claim_emission_recall.
+MIN_KEYED_CLAIM_CASES = 10
+
+
+def test_claim_coverage_is_powered() -> None:
+    """FRE-759: ≥10 distinct claim-bearing cases carry a keyed (non-empty facet) claim.
+
+    ``claim_emission_recall`` excludes facetless claims from its denominator, so the
+    measurable power is the count of DISTINCT cases with ≥1 keyed claim. ≥10 makes
+    ``claim_emission_recall ≥0.8`` mean "≥8 of ≥10 distinct claim cases pass" rather
+    than one or two sample flips on a 2-case set (the pre-FRE-759 hazard).
+    """
+    keyed = [c for c in _load() if any(cl.facet for cl in c.expect_claims)]
+    assert len(keyed) >= MIN_KEYED_CLAIM_CASES, (
+        f"only {len(keyed)} keyed-claim cases; need ≥{MIN_KEYED_CLAIM_CASES} for a powered AC-2"
+    )
+
+
 def test_failure_modes_are_represented() -> None:
     """The ticket's named failure modes and all three knowledge classes are covered."""
     cases = _load()

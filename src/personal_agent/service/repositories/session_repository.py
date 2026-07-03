@@ -1,10 +1,11 @@
 """Session storage repository using Postgres."""
 
+import json
 from datetime import datetime, timezone
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -206,3 +207,90 @@ class SessionRepository:
             stmt = stmt.where(SessionModel.user_id == user_id)
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
+
+    # ------------------------------------------------------------------
+    # Pending cloud-attachment confirmation (FRE-749 / ADR-0101 §8b)
+    #
+    # These durable, cross-request methods carry a paused cloud-vision cost
+    # gate's pending state in the ``sessions.metadata`` JSONB column, keyed by
+    # ``pending_cloud_confirmation``. They use key-level JSONB SQL (``jsonb_set``
+    # / key deletion / ``->``) rather than a whole-dict read-modify-write so a
+    # concurrent writer to a *different* metadata key (e.g. the PATCH
+    # ``/sessions/{id}`` settings path) is not clobbered. TTL is a business
+    # concern applied by the caller — the repository stores/returns the raw JSON.
+    # ------------------------------------------------------------------
+
+    async def save_pending_confirmation(self, session_id: UUID, pending: dict[str, Any]) -> int:
+        """Durably store pending cloud-attachment confirmation for a session.
+
+        Writes ``pending`` under the ``pending_cloud_confirmation`` key of the
+        session row's ``metadata`` JSONB via ``jsonb_set`` (key-scoped; other
+        metadata keys are preserved).
+
+        Args:
+            session_id: UUID of the session to annotate.
+            pending: JSON-serializable pending-confirmation payload.
+
+        Returns:
+            Number of rows updated (0 when the session row does not exist —
+            the caller surfaces this as telemetry).
+        """
+        stmt = text(
+            "UPDATE sessions "
+            "SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), "
+            "'{pending_cloud_confirmation}', CAST(:payload AS jsonb)), "
+            "last_active_at = now() "
+            "WHERE session_id = :sid"
+        )
+        result = cast(
+            CursorResult[Any],
+            await self.db.execute(stmt, {"payload": json.dumps(pending), "sid": str(session_id)}),
+        )
+        await self.db.commit()
+        return int(result.rowcount)
+
+    async def load_pending_confirmation(self, session_id: UUID) -> dict[str, Any] | None:
+        """Load the raw pending cloud-attachment confirmation for a session.
+
+        TTL is NOT applied here — the caller decides expiry so the repository
+        stays free of business policy.
+
+        Args:
+            session_id: UUID of the session to read.
+
+        Returns:
+            The stored payload dict, or None when absent / no such session.
+        """
+        stmt = text(
+            "SELECT metadata -> 'pending_cloud_confirmation' AS pending "
+            "FROM sessions WHERE session_id = :sid"
+        )
+        row = (await self.db.execute(stmt, {"sid": str(session_id)})).first()
+        if row is None:
+            return None
+        pending = row[0]
+        if pending is None:
+            return None
+        # The JSONB `->` result may arrive already decoded (dict) or as a JSON
+        # string depending on the driver's codec; normalize to a dict.
+        if isinstance(pending, str):
+            pending = json.loads(pending)
+        return cast("dict[str, Any]", pending)
+
+    async def clear_pending_confirmation(self, session_id: UUID) -> None:
+        """Remove the pending cloud-attachment confirmation key for a session.
+
+        Deletes only the ``pending_cloud_confirmation`` key (other metadata is
+        preserved). A no-op when the session row or key is absent.
+
+        Args:
+            session_id: UUID of the session to clear.
+        """
+        stmt = text(
+            "UPDATE sessions "
+            "SET metadata = metadata - 'pending_cloud_confirmation', "
+            "last_active_at = now() "
+            "WHERE session_id = :sid"
+        )
+        await self.db.execute(stmt, {"sid": str(session_id)})
+        await self.db.commit()

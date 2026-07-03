@@ -84,6 +84,9 @@ async def test_over_threshold_stops_with_prompt_and_no_model_call(
     monkeypatch.setattr(
         executor_mod, "_maybe_pause_for_constraint", AsyncMock(return_value="keep_local")
     )
+    # Keep the unit test hermetic — the keep_local path persists pending state to
+    # Postgres; stub the durable save so no DB is required here (FRE-749).
+    monkeypatch.setattr(executor_mod, "_save_pending_cloud_confirmation", AsyncMock())
 
     proceed = await executor_mod._maybe_confirm_attachment_cost(ctx, [_IMAGE_BLOCK])
 
@@ -193,6 +196,7 @@ async def test_cost_constraint_ignores_stored_preference(monkeypatch: pytest.Mon
     _patch_routing(monkeypatch, _cloud_def(input_price=0.001))
     pause = AsyncMock(return_value="keep_local")
     monkeypatch.setattr(executor_mod, "_maybe_pause_for_constraint", pause)
+    monkeypatch.setattr(executor_mod, "_save_pending_cloud_confirmation", AsyncMock())
 
     await executor_mod._maybe_confirm_attachment_cost(ctx, [_IMAGE_BLOCK])
 

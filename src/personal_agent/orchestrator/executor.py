@@ -317,6 +317,148 @@ async def _save_constraint_preference(
         )
 
 
+# ---------------------------------------------------------------------------
+# Durable pending cloud-attachment confirmation (FRE-749 / ADR-0101 §8b)
+#
+# When the pre-flight cloud-vision cost gate pauses on turn 1, the pending
+# attachment refs must survive to turn 2 — a *separate HTTP request* served by a
+# fresh Orchestrator + in-memory SessionManager (app.py builds one per request).
+# The in-memory Session.metadata is therefore useless across the boundary; these
+# helpers persist to the durable ``sessions.metadata`` JSONB column via
+# ``AsyncSessionLocal`` + ``SessionRepository`` — the same executor→service
+# idiom used by ``_save_constraint_preference`` above. Keyed off ``session_id``;
+# best-effort with telemetry (invalid UUID / zero-row saves are logged, never
+# raised) so the gate never fails a turn on a persistence hiccup.
+# ---------------------------------------------------------------------------
+
+
+def _pending_is_expired(pending: dict[str, Any], now: float) -> bool:
+    """Return True when a pending confirmation payload has outlived its TTL.
+
+    Args:
+        pending: The stored payload (carries ``created_at`` + ``ttl_seconds``).
+        now: Current Unix timestamp to compare against.
+
+    Returns:
+        True when ``now - created_at >= ttl_seconds`` (treats missing fields as
+        expired, so a malformed record is dropped rather than replayed).
+    """
+    created_at = pending.get("created_at")
+    ttl_seconds = pending.get("ttl_seconds")
+    if created_at is None or ttl_seconds is None:
+        return True
+    return (now - float(created_at)) >= float(ttl_seconds)
+
+
+async def _save_pending_cloud_confirmation(
+    session_id: str, pending: dict[str, Any], *, trace_id: str
+) -> None:
+    """Durably persist a paused turn's pending cloud-attachment confirmation.
+
+    Args:
+        session_id: Active session identifier (UUID string).
+        pending: JSON-serializable pending-confirmation payload.
+        trace_id: Trace context identifier for telemetry correlation.
+    """
+    try:
+        sid = UUID(session_id)
+    except (ValueError, AttributeError):
+        log.warning(
+            "pending_cloud_confirmation_save_bad_session",
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        return
+
+    from personal_agent.service.database import AsyncSessionLocal
+    from personal_agent.service.repositories.session_repository import SessionRepository
+
+    try:
+        async with AsyncSessionLocal() as db:
+            repo = SessionRepository(db)
+            rows = await repo.save_pending_confirmation(sid, pending)
+        if rows == 0:
+            log.warning(
+                "pending_cloud_confirmation_save_no_row",
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+    except Exception:
+        log.exception(
+            "pending_cloud_confirmation_save_failed",
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+
+
+async def _load_pending_cloud_confirmation(
+    session_id: str, *, trace_id: str
+) -> dict[str, Any] | None:
+    """Load a durable pending cloud-attachment confirmation, applying TTL.
+
+    Args:
+        session_id: Active session identifier (UUID string).
+        trace_id: Trace context identifier for telemetry correlation.
+
+    Returns:
+        The pending payload when present and unexpired; None otherwise. An
+        expired record is cleared as a side effect before returning None.
+    """
+    try:
+        sid = UUID(session_id)
+    except (ValueError, AttributeError):
+        return None
+
+    from personal_agent.service.database import AsyncSessionLocal
+    from personal_agent.service.repositories.session_repository import SessionRepository
+
+    try:
+        async with AsyncSessionLocal() as db:
+            repo = SessionRepository(db)
+            pending = await repo.load_pending_confirmation(sid)
+    except Exception:
+        log.exception(
+            "pending_cloud_confirmation_load_failed",
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+        return None
+
+    if pending is None:
+        return None
+    if _pending_is_expired(pending, time.time()):
+        await _clear_pending_cloud_confirmation(session_id, trace_id=trace_id)
+        return None
+    return pending
+
+
+async def _clear_pending_cloud_confirmation(session_id: str, *, trace_id: str) -> None:
+    """Clear the durable pending cloud-attachment confirmation for a session.
+
+    Args:
+        session_id: Active session identifier (UUID string).
+        trace_id: Trace context identifier for telemetry correlation.
+    """
+    try:
+        sid = UUID(session_id)
+    except (ValueError, AttributeError):
+        return
+
+    from personal_agent.service.database import AsyncSessionLocal
+    from personal_agent.service.repositories.session_repository import SessionRepository
+
+    try:
+        async with AsyncSessionLocal() as db:
+            repo = SessionRepository(db)
+            await repo.clear_pending_confirmation(sid)
+    except Exception:
+        log.exception(
+            "pending_cloud_confirmation_clear_failed",
+            trace_id=trace_id,
+            session_id=session_id,
+        )
+
+
 async def _maybe_pause_for_constraint(
     *,
     session_id: str,
@@ -1453,7 +1595,8 @@ def _resolve_vision_routing_key(ctx: ExecutionContext, role_name: str) -> str:
 
 
 async def _maybe_confirm_attachment_cost(
-    ctx: ExecutionContext, resolved_blocks: Sequence[dict[str, Any]]
+    ctx: ExecutionContext,
+    resolved_blocks: Sequence[dict[str, Any]],
 ) -> bool:
     """Pre-flight cloud-attachment cost gate (ADR-0101 §8b / FRE-691).
 
@@ -1482,6 +1625,10 @@ async def _maybe_confirm_attachment_cost(
     from personal_agent.exceptions import AttachmentUnsupportedError
     from personal_agent.llm_client.message_content import IMAGE_BLOCK_TOKEN_ESTIMATE
     from personal_agent.orchestrator.attachment_cost import estimate_attachment_cloud_cost_usd
+
+    # FRE-749: Early guard — if cost already confirmed (pending re-injection), skip gate entirely
+    if ctx.attachment_cost_confirmed:
+        return True
 
     try:
         effective_key = _resolve_vision_routing_key(ctx, ModelRole.PRIMARY.value)
@@ -1533,7 +1680,30 @@ async def _maybe_confirm_attachment_cost(
         ctx.attachment_cost_confirmed = True
         return True
 
-    # keep_local / timeout / no active WS: no cloud spend this turn.
+    # keep_local / timeout / no active WS: no cloud spend this turn. Persist the
+    # pending confirmation to durable session storage so an affirmative reply on
+    # the *next* turn (a separate request) can re-inject the image (FRE-749).
+    from dataclasses import asdict
+
+    from personal_agent.orchestrator.types import PendingCloudAttachmentConfirmation
+
+    pending = PendingCloudAttachmentConfirmation(
+        attachments=ctx.attachments,
+        cloud_vision_model_key=effective_key,
+        estimate_usd=float(estimate),
+        created_at=time.time(),
+        ttl_seconds=600,  # 10-minute TTL for pending confirmation
+        original_trace_id=ctx.trace_id,
+    )
+    await _save_pending_cloud_confirmation(ctx.session_id, asdict(pending), trace_id=ctx.trace_id)
+    log.info(
+        "pending_cloud_confirmation_saved",
+        trace_id=ctx.trace_id,
+        session_id=ctx.session_id,
+        estimate_usd=float(estimate),
+        ttl_seconds=600,
+    )
+
     ctx.final_reply = (
         f"This turn's {len(resolved_blocks)} attachment(s) would cost about "
         f"${estimate:.4f} on the cloud vision model — above your "
@@ -1927,6 +2097,109 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
     return ctx
 
 
+def _is_affirmative_confirmation(message: str) -> bool:
+    """Check if a message is an affirmative response to proceed with cloud vision.
+
+    Detects common confirmation phrases while avoiding false positives from
+    unrelated messages that happen to contain the word "yes".
+
+    Args:
+        message: The user's message text.
+
+    Returns:
+        True if the message strongly signals affirmative confirmation, False otherwise.
+    """
+    import re
+
+    msg_lower = message.lower().strip()
+
+    # Explicit confirmations: detect only clear intent phrases.
+    # - "proceed", "confirm", "cloud" at start (strong intent)
+    # - "yes"/"ok"/"okay" ONLY if they're the entire message (with optional trailing punctuation)
+    #   to avoid false positives like "yes, I agree" or "Is that a yes?"
+    patterns = [
+        r"^proceed\b",  # "proceed" at start
+        r"^confirm\b",  # "confirm" at start
+        r"^cloud\b",  # "cloud" at start
+        r"^yes[!.]?\s*$",  # "yes" as entire message, with optional punctuation
+        r"^ok[!.]?\s*$",  # "ok" as entire message
+        r"^okay[!.]?\s*$",  # "okay" as entire message
+        r"^yes[!,.]?\s*(?:proceed|cloud)",  # "yes" followed by proceed/cloud with optional punctuation
+    ]
+
+    return any(re.search(pattern, msg_lower) for pattern in patterns)
+
+
+async def _maybe_reinject_pending_cloud_attachment(ctx: ExecutionContext) -> None:
+    """Re-inject pending cloud attachment confirmation on affirmative reply (FRE-749).
+
+    When a cloud-attachment cost gate pauses, a pending confirmation record is
+    saved to durable session storage. On the next turn (a separate request), if
+    the user's message is affirmative, re-inject the pending attachments into the
+    context so they flow through to cloud vision routing and mark the cost
+    confirmed so the gate does not re-pause. A non-affirmative reply drops the
+    pending state (AC-2). The durable load runs on every turn — a single indexed
+    primary-key read — because pending presence is only knowable from storage;
+    that read is the price of clearing stale pending on a non-affirmative reply.
+
+    Args:
+        ctx: Execution context (modified in-place if pending is re-injected).
+    """
+    pending_dict = await _load_pending_cloud_confirmation(ctx.session_id, trace_id=ctx.trace_id)
+    if not pending_dict:
+        return
+
+    # Check for affirmative confirmation in the user's message
+    if not _is_affirmative_confirmation(ctx.user_message):
+        log.info(
+            "pending_cloud_confirmation_not_affirmative",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            message_preview=ctx.user_message[:50],
+        )
+        await _clear_pending_cloud_confirmation(ctx.session_id, trace_id=ctx.trace_id)
+        return
+
+    # Re-construct AttachmentRef tuples from the pending dict
+    from personal_agent.orchestrator.types import AttachmentRef
+
+    try:
+        attachments_data = pending_dict.get("attachments", [])
+        ctx.attachments = tuple(
+            AttachmentRef(
+                artifact_id=a["artifact_id"],
+                content_type=a["content_type"],
+                title=a["title"],
+                r2_key=a["r2_key"],
+                processing_target=a.get("processing_target"),
+            )
+            for a in attachments_data
+        )
+        # FRE-749: Set the cost-confirmed flag so the re-injected turn does NOT re-pause at the gate
+        ctx.attachment_cost_confirmed = True
+        log.info(
+            "pending_cloud_confirmation_reinjected",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            attachment_count=len(ctx.attachments),
+            estimate_usd=pending_dict.get("estimate_usd"),
+            original_trace_id=pending_dict.get("original_trace_id"),
+            cost_confirmed_set=True,
+        )
+    except Exception as e:
+        log.warning(
+            "pending_cloud_confirmation_reinject_failed",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            error=str(e),
+        )
+        await _clear_pending_cloud_confirmation(ctx.session_id, trace_id=ctx.trace_id)
+        return
+
+    # Clear the pending confirmation after successful re-injection
+    await _clear_pending_cloud_confirmation(ctx.session_id, trace_id=ctx.trace_id)
+
+
 async def step_init(
     ctx: ExecutionContext, session_manager: SessionManager, trace_ctx: TraceContext
 ) -> TaskState:
@@ -1961,6 +2234,10 @@ async def step_init(
     finally:
         if timer:
             timer.end_span("session_history_load", message_count=session_message_count)
+
+    # FRE-749: Check for pending cloud-attachment confirmation from a previous paused turn
+    # and re-inject attachments if the user's message is affirmative.
+    await _maybe_reinject_pending_cloud_attachment(ctx)
 
     # Add new user message — resolve current-turn raster attachments to image
     # blocks first (ADR-0101 §3/§4/§6, FRE-666); widens content to a block list

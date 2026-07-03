@@ -171,6 +171,33 @@ class AttachmentRef:
     processing_target: Literal["cloud", "local"] | None = None
 
 
+@dataclass(frozen=True)
+class PendingCloudAttachmentConfirmation:
+    """Short-lived pending confirmation state for cloud-vision cost gate re-injection (FRE-749 / ADR-0101 §8b).
+
+    When the pre-flight cost gate pauses due to image cost exceeding the threshold,
+    this record carries the already-resolved attachment refs and cloud-vision model
+    key across turns. On the next turn, if the user's message is an affirmative
+    confirmation, the attachments are re-injected into the new ExecutionContext and
+    proceed to cloud-vision call; otherwise, the pending state is dropped.
+
+    Attributes:
+        attachments: Tuple of AttachmentRef from the paused turn (immutable).
+        cloud_vision_model_key: Model key to route cloud vision to (from _resolve_vision_routing_key).
+        estimate_usd: Pre-flight cost estimate disclosed to user.
+        created_at: Unix timestamp when the gate paused.
+        ttl_seconds: Seconds before this pending state expires.
+        original_trace_id: Trace ID of the paused turn (for telemetry correlation).
+    """
+
+    attachments: tuple[AttachmentRef, ...]
+    cloud_vision_model_key: str
+    estimate_usd: float
+    created_at: float  # Unix timestamp
+    ttl_seconds: int
+    original_trace_id: str
+
+
 @dataclass
 class ExecutionContext:
     """Mutable state container passed through execution steps.

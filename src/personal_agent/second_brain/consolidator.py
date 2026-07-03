@@ -697,6 +697,9 @@ class SecondBrainConsolidator:
                 # eval flag so an eval turn can never overwrite a real description.
                 description_confidence=KnowledgeWeight.from_source("conversation").confidence,
                 eval_mode=capture.eval_mode,
+                # FRE-725: the extractor's per-entity enrichment/correction signal so a later
+                # same-confidence description can supersede a thin one (validated in the service).
+                description_update_kind=entity_data.get("description_update_kind", "new"),
             )
             if entity_id:
                 entities_created += 1

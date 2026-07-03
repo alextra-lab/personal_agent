@@ -75,6 +75,18 @@ settings = get_settings()
 # post-deploy consolidation (a same-baseline write does not clear strict '>').
 _DEFAULT_DESCRIPTION_CONFIDENCE = 0.8
 
+# FRE-725: the extractor's per-entity description signal. FRE-711's strict-'>' gate never
+# fires for same-source re-extraction (every conversation write is 0.8), so a thin non-empty
+# description can never be enriched at equal confidence. An explicit "enrichment"/"correction"
+# kind unlocks equal-confidence supersession (still archived, still eval-gated). Unlike the
+# FRE-712 claim update_kind (a label applied AFTER safety checks), this signal is
+# write-authorizing, so create_entity validates it server-side before it reaches Cypher.
+_DEFAULT_DESCRIPTION_UPDATE_KIND = "new"
+_EXPLICIT_DESCRIPTION_UPDATE_KINDS = ("enrichment", "correction")
+_VALID_DESCRIPTION_UPDATE_KINDS = frozenset(
+    {_DEFAULT_DESCRIPTION_UPDATE_KIND, *_EXPLICIT_DESCRIPTION_UPDATE_KINDS}
+)
+
 
 def _parse_iso(value: Any, *, fallback: datetime) -> datetime:
     """Parse a stored ISO-8601 string back to a datetime, tolerating bad data.
@@ -1230,6 +1242,7 @@ class MemoryService:
         extractor_model: str | None = None,
         description_confidence: float = _DEFAULT_DESCRIPTION_CONFIDENCE,
         eval_mode: bool = False,
+        description_update_kind: str = _DEFAULT_DESCRIPTION_UPDATE_KIND,
     ) -> str:
         """Create or update an entity node with dedup and optional embedding.
 
@@ -1257,6 +1270,13 @@ class MemoryService:
                 lands only when it is *strictly greater* than the stored one (FRE-711).
             eval_mode: Whether this write originates from eval/test traffic; an eval write
                 never overwrites a non-eval description (FRE-711, preserving FRE-375).
+            description_update_kind: The extractor's per-entity description signal (FRE-725) —
+                ``"enrichment"``/``"correction"`` unlock a correction at *equal* confidence
+                (which FRE-711's strict ``>`` gate would otherwise block), still archiving the
+                prior value and still eval-gated; ``"enrichment"`` may only land if it does not
+                shrink the description. ``"new"`` (the default) keeps the strict ``>`` behaviour.
+                Off-vocabulary/``None`` values are coerced to ``"new"`` here (the signal is
+                write-authorizing, so validation is server-side, not caller-trusted).
 
         Returns:
             Entity ID (name-based, may be canonical name if deduplicated).
@@ -1339,6 +1359,15 @@ class MemoryService:
                     "default_description_confidence": _DEFAULT_DESCRIPTION_CONFIDENCE,
                     "proposed_name": entity.name,
                     "description_source_trace_id": originating_trace_id,
+                    # FRE-725 equal-confidence enrichment/correction signal. Validated here
+                    # (write-authorizing) so an off-vocabulary/None kind from any caller is
+                    # coerced to "new" before it can reach the correction gate.
+                    "description_update_kind": (
+                        description_update_kind
+                        if description_update_kind in _VALID_DESCRIPTION_UPDATE_KINDS
+                        else _DEFAULT_DESCRIPTION_UPDATE_KIND
+                    ),
+                    "explicit_description_update_kinds": list(_EXPLICIT_DESCRIPTION_UPDATE_KINDS),
                 }
 
                 if embedding is not None:
@@ -1391,7 +1420,14 @@ class MemoryService:
                     "     ($description <> '' AND _old_desc IS NOT NULL AND _old_desc <> ''\n"
                     "      AND $description <> _old_desc\n"
                     "      AND NOT ($eval_mode AND coalesce(_old_eval, false) = false)\n"
-                    "      AND $description_confidence > coalesce(_old_conf, $default_description_confidence)\n"
+                    # FRE-711 strict-'>' arm OR FRE-725 equal-confidence signal arm. The
+                    # signal arm needs an explicit enrichment/correction kind at >= confidence
+                    # (never a downgrade); an 'enrichment' must additionally not shrink the
+                    # description, so it can only add information — 'correction' is length-free.
+                    "      AND ($description_confidence > coalesce(_old_conf, $default_description_confidence)\n"
+                    "           OR ($description_update_kind IN $explicit_description_update_kinds\n"
+                    "               AND $description_confidence >= coalesce(_old_conf, $default_description_confidence)\n"
+                    "               AND ($description_update_kind = 'correction' OR size($description) >= size(_old_desc))))\n"
                     "     ) AS _do_correct\n"
                     "FOREACH (_ IN CASE WHEN _do_correct THEN [1] ELSE [] END |\n"
                     "    CREATE (e)-[:HAD_DESCRIPTION]->(:EntityDescriptionVersion {\n"

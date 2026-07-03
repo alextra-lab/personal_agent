@@ -351,3 +351,53 @@ class TestFacetAndUpdateKind:
         }
         result = await _run_extractor(model_json, user_message="msg")
         assert result["claims"][0]["update_kind"] == "evolution"
+
+
+def _entity_model_json(entity: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "summary": "s",
+        "entities": [entity],
+        "relationships": [],
+        "stances": [],
+        "claims": [],
+    }
+
+
+@pytest.mark.asyncio
+class TestDescriptionUpdateKind:
+    """FRE-725: each entity carries a normalized ``description_update_kind`` signal."""
+
+    async def test_description_update_kind_defaults_to_new_when_absent(self) -> None:
+        model_json = _entity_model_json(
+            {"name": "Neo4j", "type": "Technology", "class": "World", "description": "A database"}
+        )
+        result = await _run_extractor(model_json, user_message="what is Neo4j")
+        assert result["entities"][0]["description_update_kind"] == "new"
+
+    async def test_model_emitted_enrichment_and_correction_preserved(self) -> None:
+        for kind in ("enrichment", "correction"):
+            model_json = _entity_model_json(
+                {
+                    "name": "Neo4j",
+                    "type": "Technology",
+                    "class": "World",
+                    "description": "A graph database management system",
+                    "description_update_kind": kind,
+                }
+            )
+            result = await _run_extractor(model_json, user_message="Neo4j is a graph DB")
+            assert result["entities"][0]["description_update_kind"] == kind
+
+    async def test_off_vocabulary_description_update_kind_normalizes_to_new(self) -> None:
+        for bogus in ("enriched", "updated", "EVOLUTION"):
+            model_json = _entity_model_json(
+                {
+                    "name": "Neo4j",
+                    "type": "Technology",
+                    "class": "World",
+                    "description": "A database",
+                    "description_update_kind": bogus,
+                }
+            )
+            result = await _run_extractor(model_json, user_message="msg")
+            assert result["entities"][0]["description_update_kind"] == "new"

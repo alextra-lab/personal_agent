@@ -133,12 +133,22 @@ EXTRACTION RULES (follow strictly):
     "central to the user's preference"). Emit it as a structured object in "stances".
 13. NEVER drop a first-person situational fact. If it is an assertion about the user's life
     rather than a named entity, emit it in "claims".
+14. Set each entity's "description_update_kind" from THIS TURN's intent (you are NOT comparing to
+    any stored description — you cannot see one; judge only the conversation in front of you):
+      "correction" — the turn EXPLICITLY corrects/contradicts an earlier statement about this
+                     entity ("actually X is Y, not Z"; "I was wrong, it's …").
+      "enrichment" — the turn SUBSTANTIVELY defines or explains the entity (a real definition or
+                     characterization), not just a passing mention.
+      "new"        — the default: a passing mention with no correction or defining intent.
+    Emit "new" whenever unsure. This signal is about the entity's DESCRIPTION only — never a
+    stance or a claim.
 
 GOOD EXAMPLES:
   ✓ {{"name": "Paris", "type": "Location", "class": "World", "description": "Capital of France, subject of weather inquiry"}}
   ✓ {{"name": "Qwen3.5", "type": "Technology", "class": "World", "description": "Local reasoning LLM used for entity extraction"}}
   ✓ {{"name": "Postgres", "type": "Technology", "class": "System", "description": "The agent's own database, referenced in a healthcheck"}}
   ✓ {{"name": "GraphRAG", "type": "Concept", "class": "World", "description": "Technique combining knowledge graphs with RAG retrieval"}}
+  ✓ {{"name": "Neo4j", "type": "Technology", "class": "World", "description": "A graph database management system storing data as nodes and typed relationships", "description_update_kind": "enrichment"}}  ← the turn substantively defines it
   ✓ stance: {{"subject": "owner", "target": "Toyota RAV4 Hybrid", "affect": "loves the hybrid powertrain", "mastery": null, "description": "User strongly prefers the RAV4 Hybrid's drivetrain"}}
   ✓ claim:  {{"subject": "owner", "content": "The user's current car lease ends in March.", "description": "Situational constraint driving purchase timing"}}
 
@@ -170,6 +180,7 @@ Return ONLY valid JSON (no markdown fences, no explanation):
       "type": "Person|Organization|Location|Technology|Concept|Event|Topic",
       "class": "World|Personal|System",
       "description": "One sentence with useful context beyond the name",
+      "description_update_kind": "new|enrichment|correction",
       "properties": {{}}
     }}
   ],
@@ -248,6 +259,9 @@ _VALID_ENTITY_CLASSES = frozenset({"World", "Personal", "System"})
 
 # FRE-712: the extractor's contradiction signal per claim; off-vocabulary → "new".
 _VALID_UPDATE_KINDS = frozenset({"new", "correction", "evolution"})
+
+# FRE-725: the extractor's per-entity description signal; off-vocabulary → "new".
+_VALID_DESCRIPTION_UPDATE_KINDS = frozenset({"new", "enrichment", "correction"})
 _FACET_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -279,6 +293,23 @@ def _normalize_update_kind(value: Any) -> str:
     """
     candidate = str(value or "").strip().lower()
     return candidate if candidate in _VALID_UPDATE_KINDS else "new"
+
+
+def _normalize_description_update_kind(value: Any) -> str:
+    """Return a valid per-entity description signal, defaulting off-vocabulary to "new" (FRE-725).
+
+    Mirrors :func:`_normalize_update_kind` for the World-fact description enrichment/correction
+    signal. Python owns the defaulting (like ``class``) so the correction gate keys on a stable,
+    validated value.
+
+    Args:
+        value: The raw ``description_update_kind`` field from the model.
+
+    Returns:
+        One of "new"/"enrichment"/"correction".
+    """
+    candidate = str(value or "").strip().lower()
+    return candidate if candidate in _VALID_DESCRIPTION_UPDATE_KINDS else "new"
 
 
 def _build_provenance(
@@ -385,6 +416,11 @@ def _finalize_extraction(
 
     for entity in result.get("entities", []):
         entity["class"] = _normalize_entity_class(entity)
+        # FRE-725: validated per-entity description enrichment/correction signal (Python owns
+        # defaulting, like class) so the correction gate keys on a stable, in-vocabulary value.
+        entity["description_update_kind"] = _normalize_description_update_kind(
+            entity.get("description_update_kind")
+        )
 
     stances = list(result.get("stances", []))
     for stance in stances:

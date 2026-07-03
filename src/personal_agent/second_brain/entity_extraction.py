@@ -530,6 +530,7 @@ async def extract_entities_and_relationships(
                 role=ModelRole.PRIMARY,
                 messages=[{"role": "user", "content": prompt}],
                 system_prompt=_EXTRACTION_SYSTEM_PROMPT,
+                temperature=model_def.temperature if model_def else None,
                 trace_ctx=SystemTraceContext.new("entity_extraction", session_id=session_id),
             )
             content = cloud_response["content"]

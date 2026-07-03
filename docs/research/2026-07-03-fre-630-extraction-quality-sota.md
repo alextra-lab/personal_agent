@@ -189,6 +189,61 @@ cosmology) sit at entity_f1 1.00.
 > `None` on a vacuous denominator), so they are not directly comparable to each other; use
 > `relationship_type_correctness` (0.89) as the clean edge-quality signal.
 
+### 4.1 FRE-758 A/B — pinning temperature to 0.0 (2026-07-03)
+
+_Run: `temp-pin-20260703`, 24 cases × 3 samples (72 extractions, ≈$0.09), model `gpt-5.4-mini`,
+prompt_hash `fade5e717889` (unchanged), matcher 1.0, gold_schema 1.0. Same gold set, same prompt,
+same matcher as the baseline above — **temperature is the only variable changed** (provider
+default ~1.0 → pinned 0.0 via `config/models.cloud.yaml` + `entity_extraction.py`). Curated
+summary — raw run is gitignored._
+
+> **Correction to Part 4's header:** the baseline run stamp says "27 cases"; the gold set
+> (`gold_extraction.yaml`) has always had 24 cases (confirmed by direct count, unchanged since the
+> single commit that added it) — the "27" was a transcription error in the original write-up, not
+> a real difference in what was benchmarked. Both runs cover the same 24-case set.
+
+**Aggregate (mean±std), baseline (temp≈1.0, uncontrolled) vs. temp-pinned (0.0):**
+
+| metric | baseline | temp-pin-0.0 | read |
+|---|---:|---:|---|
+| entity_recall | 0.90±0.23 | 0.91±0.20 | flat |
+| entity_precision | 0.66±0.29 | 0.60±0.28 | flat (still precision-diluted, per §Part 4 caveat) |
+| entity_f1 | 0.75±0.21 | 0.70±0.23 | flat |
+| **entity_type_accuracy** | **0.80±0.35** | **0.78±0.36** | **flat — std unchanged, mean did not move toward 0.95** |
+| knowledge_class_accuracy | 1.00±0.00 | 1.00±0.00 | unchanged |
+| relationship_type_correctness | 0.89±0.30 | 0.91±0.28 | flat |
+| hallucination_rate | 0.00±0.00 | 0.00±0.00 | unchanged |
+| forbidden_edge_type_rate | 0.02±0.08 | 0.01±0.05 | flat |
+| dedup_convergence | 1.00±0.00 | 1.00±0.00 | unchanged |
+| description_integrity | 0.99±0.07 | 0.99±0.06 | unchanged |
+| stance_emission_recall | 1.00±0.00 | 1.00±0.00 | unchanged |
+| **claim_emission_recall** | **0.33±0.47** | **0.50±0.50** | **mean up, std also up (noisy — very few `claim`-tagged cases)** |
+| empty_fallback_rate | 0.00±0.00 | 0.00±0.00 | unchanged |
+
+**Result: FRE-758's acceptance criteria were NOT met.** Per-metric std bands did not collapse
+(`entity_type_accuracy` std is unchanged at 0.35→0.36; `claim_emission_recall` std *increased*
+0.47→0.50) and `entity_type_accuracy` did not move toward the ≥0.95 target (0.80→0.78, within
+noise of flat). This is not a code defect — the fix is mechanically verified correct (unit test
+asserts the cloud call forwards `temperature=0.0`; a config-loader test asserts both deployed
+config files' `entity_extraction_role` resolves `temperature=0.0`; a live smoke test confirmed
+`gpt-5.4-mini` accepts the override without error) — pinning temperature to 0.0 for this model
+measurably does **not** reduce sample-to-sample extraction variance.
+
+**Working hypothesis (not proven here, flagged for a follow-up):** `gpt-5.4-mini` is a
+reasoning-tier model; the `temperature` parameter exposed via the Chat Completions API most likely
+governs only final-answer token sampling, not the model's internal reasoning trace — if the
+extraction non-determinism originates in reasoning-path variance rather than output-token
+sampling, no exposed `temperature` value would collapse it. Reasoning-tier determinism (if OpenAI
+exposes a `seed` parameter or similar for this model) is a candidate for a dedicated follow-up
+ticket rather than folding into FRE-759 (prompt/DSPy — a different lever, unaffected by this
+finding).
+
+**Disposition:** the temperature pin ships regardless — it is correct, harmless (no regression on
+any metric), and removes one axis of uncontrolled variance even though it wasn't the dominant one.
+The non-determinism problem itself is now handed off with a ruled-out lever: FRE-759 (type/claim
+prompt/DSPy A/B) proceeds as queued; a `seed`-parameter investigation is a candidate new ticket if
+the owner wants to keep pulling this thread.
+
 ---
 
 ## Part 5 — Recommended improvements (→ follow-up tickets, each its own A/B)

@@ -571,6 +571,15 @@ class AppConfig(BaseSettings):
             "expansion. 0.0 = no floor (legacy-equivalent); calibrated in FRE-655."
         ),
     )
+    embedding_backfill_enabled: bool = Field(
+        default=True,
+        description=(
+            "FRE-659: periodically re-embed entities whose embedding is missing or "
+            "zero-vectored (baked during an embedder outage). Idempotent and outage-safe "
+            "(persists only a non-zero vector, under a guard that never clobbers a fresher "
+            "concurrent write). Default on; off-switch for the recall substrate."
+        ),
+    )
     recall_per_entity_turn_cap: int = Field(
         default=10,
         ge=1,

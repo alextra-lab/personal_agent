@@ -9,10 +9,12 @@ folds a prefixed registration onto the bare key).
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from litellm import ModelResponse, Usage
 
+from personal_agent.config import load_model_config
 from personal_agent.llm_client.cost_estimator import actual_cost_for_response
 from personal_agent.llm_client.models import ModelConfig, ModelDefinition
 from personal_agent.llm_client.pricing import register_model_pricing
@@ -111,5 +113,35 @@ def test_dated_response_model_still_commits_nonzero() -> None:
     expected = Decimal(1800) * Decimal(str(_INPUT_PRICE)) + Decimal(100) * Decimal(
         str(_OUTPUT_PRICE)
     )
+    assert cost == pytest.approx(expected, rel=1e-6)
+    assert cost > 0
+
+
+@pytest.mark.parametrize("gpt_key", ["gpt-5.4-nano", "gpt-5.4-mini"])
+def test_gpt_cloud_ids_reconcile_config_price(gpt_key: str) -> None:
+    """FRE-742: the deployed gpt-5.4 entries commit our config price, not litellm's ship.
+
+    Loads the real ``config/models.cloud.yaml``, registers its pricing, and asserts
+    the reconciled commit-cost for each gpt id equals the config-declared per-token
+    rate × usage — non-zero and deterministic, so a future litellm registry drift
+    on those ids cannot silently meter them at $0 (cf. FRE-734).
+    """
+    config = load_model_config(Path("config/models.cloud.yaml"))
+    definition = config.models[gpt_key]
+
+    # Red-before-green guard: the config must actually own the price (not None),
+    # independent of whatever litellm happens to ship for the bare id.
+    assert definition.input_cost_per_token is not None, (
+        f"{gpt_key} must carry config-owned input_cost_per_token"
+    )
+    assert definition.output_cost_per_token is not None
+
+    register_model_pricing(config)
+
+    model = f"{definition.provider}/{definition.id}"
+    cost = actual_cost_for_response(response=_response(definition.id, 1000, 500), model=model)
+    expected = Decimal(1000) * Decimal(str(definition.input_cost_per_token)) + Decimal(
+        500
+    ) * Decimal(str(definition.output_cost_per_token))
     assert cost == pytest.approx(expected, rel=1e-6)
     assert cost > 0

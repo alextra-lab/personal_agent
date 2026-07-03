@@ -179,6 +179,8 @@ models:
     min_concurrency: 1
     max_concurrency: 10
     default_timeout: 60
+    input_cost_per_token: 0.0000002     # $0.20/MTok (ADR-0101 §8b / FRE-742 — config-owned cost matrix)
+    output_cost_per_token: 0.00000125   # $1.25/MTok
 
   gpt-5.4-mini:
     # OpenAI GPT-5.4 Mini — higher-quality background reasoning
@@ -197,6 +199,8 @@ models:
     # Verified gpt-5.4-mini accepts a temperature override (not a reasoning-tier
     # model that fixes it at 1.0).
     temperature: 0.0
+    input_cost_per_token: 0.00000075    # $0.75/MTok (ADR-0101 §8b / FRE-742 — config-owned cost matrix)
+    output_cost_per_token: 0.0000045    # $4.50/MTok
 
   # ── Tier 3: Context Compressor (ADR-0038) ────────────────────────
   compressor:

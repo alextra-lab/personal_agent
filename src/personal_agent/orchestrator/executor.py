@@ -1483,6 +1483,10 @@ async def _maybe_confirm_attachment_cost(
     from personal_agent.llm_client.message_content import IMAGE_BLOCK_TOKEN_ESTIMATE
     from personal_agent.orchestrator.attachment_cost import estimate_attachment_cloud_cost_usd
 
+    # FRE-749: Early guard — if cost already confirmed (pending re-injection), skip gate entirely
+    if ctx.attachment_cost_confirmed:
+        return True
+
     try:
         effective_key = _resolve_vision_routing_key(ctx, ModelRole.PRIMARY.value)
     except AttachmentUnsupportedError:
@@ -2033,6 +2037,8 @@ async def _maybe_reinject_pending_cloud_attachment(
             )
             for a in attachments_data
         )
+        # FRE-749: Set the cost-confirmed flag so the re-injected turn does NOT re-pause at the gate
+        ctx.attachment_cost_confirmed = True
         log.info(
             "pending_cloud_confirmation_reinjected",
             trace_id=ctx.trace_id,
@@ -2040,6 +2046,7 @@ async def _maybe_reinject_pending_cloud_attachment(
             attachment_count=len(ctx.attachments),
             estimate_usd=pending_dict.get("estimate_usd"),
             original_trace_id=pending_dict.get("original_trace_id"),
+            cost_confirmed_set=True,
         )
     except Exception as e:
         log.warning(

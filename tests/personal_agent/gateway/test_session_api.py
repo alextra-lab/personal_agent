@@ -362,6 +362,46 @@ def test_list_sessions_truncates_title() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Title extraction on list-shaped content (ADR-0101 §2, FRE-726)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_title_list_content_extracts_real_text_not_repr() -> None:
+    """List-shaped first user message yields its text block, not a Python-repr string."""
+    from personal_agent.gateway.session_api import _extract_title
+
+    title = _extract_title(
+        [{"role": "user", "content": [{"type": "text", "text": "What's in this diagram?"}]}]
+    )
+    assert title == "What's in this diagram?"
+    assert title is not None
+    assert "[{" not in title
+
+
+def test_extract_title_image_only_first_message_falls_through_to_next_text() -> None:
+    """An image-only first user turn is skipped in favor of the next textual user turn."""
+    from personal_agent.gateway.session_api import _extract_title
+
+    title = _extract_title(
+        [
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "x"}}]},
+            {"role": "user", "content": "actual question here"},
+        ]
+    )
+    assert title == "actual question here"
+
+
+def test_extract_title_image_only_history_returns_none() -> None:
+    """A history with only image-only user turns yields None, not a repr-shaped title."""
+    from personal_agent.gateway.session_api import _extract_title
+
+    title = _extract_title(
+        [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "x"}}]}]
+    )
+    assert title is None
+
+
+# ---------------------------------------------------------------------------
 # Turn count (FRE-521)
 # ---------------------------------------------------------------------------
 

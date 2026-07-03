@@ -1,24 +1,22 @@
 /**
- * Tests for TurnRating component (FRE-407 refinement).
+ * Tests for the TurnRating control (FRE-757 redesign).
  *
- * Verifies:
- *   - Default visual display is segment 2 ("Meets expectation", sky-400) before any click.
- *   - No network POST on mount/render (submit helper not called on render).
- *   - Explicit click triggers the submit helper exactly once with the clicked rating.
- *   - Re-clicking the default segment (2) also triggers submit (deliberate confirm).
+ * Verifies the 3-chip control (error ✕ =0 / ok ✓ =2 / exceptional ★ =3):
+ *   - Renders three tap-sized chips; resting default reads as "ok".
+ *   - No network POST on mount (persist-on-send is the DONE hook's job).
+ *   - Explicit click POSTs the chip's store value (manual, not default).
+ *   - Hydration maps a stored 0/2/3 to the right chip; legacy 1 → legacy-low.
+ *   - Re-rating overwrites; failure reverts.
+ *   - Colors + 44px hit targets per the owner-confirmed spec.
  */
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 
-// Mock submitTurnRating before importing the component.
-// The vi.mock call is hoisted to the top of the module by Vitest.
+// Mock submitTurnRating before importing the component (hoisted by Vitest).
 vi.mock('@/lib/submitTurnRating', () => ({
   submitTurnRating: vi.fn().mockResolvedValue(true),
 }));
-
-// Also mock agui-client (imported transitively via submitTurnRating real module
-// path resolution in some bundler configs; belt-and-suspenders).
 vi.mock('@/lib/agui-client', () => ({
   SESHAT_API: 'http://localhost:9000',
   authHeaders: () => ({}),
@@ -32,91 +30,125 @@ const mockSubmit = submitTurnRating as ReturnType<typeof vi.fn>;
 const TRACE_ID = 'trace-abc-123';
 const SESSION_ID = 'session-xyz-456';
 
+const errorChip = () => screen.getByRole('button', { name: 'Rate error' });
+const okChip = () => screen.getByRole('button', { name: 'Rate ok' });
+const exceptionalChip = () => screen.getByRole('button', { name: 'Rate exceptional' });
+
 beforeEach(() => {
   mockSubmit.mockClear();
   mockSubmit.mockResolvedValue(true);
 });
 
-describe('TurnRating — default visual state', () => {
-  it('renders 4 rating buttons', () => {
+describe('TurnRating — structure & resting default', () => {
+  it('renders exactly three chips (error / ok / exceptional)', () => {
     render(<TurnRating traceId={TRACE_ID} sessionId={SESSION_ID} />);
-    // Each segment is a button with an aria-label matching its label
-    const buttons = screen.getAllByRole('button');
-    expect(buttons).toHaveLength(4);
+    expect(screen.getAllByRole('button')).toHaveLength(3);
+    expect(errorChip()).toBeTruthy();
+    expect(okChip()).toBeTruthy();
+    expect(exceptionalChip()).toBeTruthy();
   });
 
-  it('shows segment 2 (index 2, "Meets expectation") filled by default', () => {
+  it('resting default selects "ok" (green), not error/exceptional', () => {
     render(<TurnRating traceId={TRACE_ID} sessionId={SESSION_ID} />);
-    // Segments 0–2 should be filled (index <= currentRating=2), segment 3 unfilled.
-    // We check via aria-label which maps to the RATING_META labels.
-    const seg0 = screen.getByRole('button', { name: 'No value' });
-    const seg1 = screen.getByRole('button', { name: 'Low value' });
-    const seg2 = screen.getByRole('button', { name: 'Meets expectation' });
-    const seg3 = screen.getByRole('button', { name: 'Wow' });
-
-    // Segments 0–2 use the fill colour of the "Meets expectation" rating (sky-400).
-    expect(seg0.className).toContain('bg-sky-400');
-    expect(seg1.className).toContain('bg-sky-400');
-    expect(seg2.className).toContain('bg-sky-400');
-    // Segment 3 (above currentRating=2) is unfilled.
-    expect(seg3.className).toContain('bg-slate-700');
+    expect(okChip().getAttribute('aria-pressed')).toBe('true');
+    expect(okChip().className).toContain('bg-emerald-600');
+    expect(errorChip().getAttribute('aria-pressed')).toBe('false');
+    expect(exceptionalChip().getAttribute('aria-pressed')).toBe('false');
   });
 
-  it('does NOT call submitTurnRating on mount', () => {
+  it('each chip is a 44×44px touch target', () => {
+    render(<TurnRating traceId={TRACE_ID} sessionId={SESSION_ID} />);
+    for (const chip of screen.getAllByRole('button')) {
+      expect(chip.className).toContain('h-11');
+      expect(chip.className).toContain('w-11');
+    }
+  });
+
+  it('applies the spec colors when a chip is selected', () => {
+    // Separate renders: initialRating hydrates once at mount (a hydrated turn
+    // never changes rating in place — it remounts), so props do not re-seed
+    // state on rerender.
+    const first = render(
+      <TurnRating traceId={TRACE_ID} sessionId={SESSION_ID} initialRating={0} />,
+    );
+    expect(errorChip().className).toContain('bg-red-800');
+    first.unmount();
+
+    render(<TurnRating traceId={TRACE_ID} sessionId={SESSION_ID} initialRating={3} />);
+    expect(exceptionalChip().className).toContain('bg-[#d4af37]');
+  });
+
+  it('does NOT call submitTurnRating on mount (persist-on-send is the DONE hook)', () => {
     render(<TurnRating traceId={TRACE_ID} sessionId={SESSION_ID} />);
     expect(mockSubmit).not.toHaveBeenCalled();
   });
 });
 
-describe('TurnRating — explicit click behaviour', () => {
-  it('calls submitTurnRating with rating=0 when segment 0 is clicked', async () => {
+describe('TurnRating — explicit click', () => {
+  it('posts 0 on error, 2 on ok, 3 on exceptional (manual, not default)', async () => {
     render(<TurnRating traceId={TRACE_ID} sessionId={SESSION_ID} />);
-    fireEvent.click(screen.getByRole('button', { name: 'No value' }));
+
+    fireEvent.click(errorChip());
     await waitFor(() => expect(mockSubmit).toHaveBeenCalledTimes(1));
-    expect(mockSubmit).toHaveBeenCalledWith(TRACE_ID, SESSION_ID, 0);
+    expect(mockSubmit).toHaveBeenLastCalledWith(TRACE_ID, SESSION_ID, 0);
+
+    fireEvent.click(exceptionalChip());
+    await waitFor(() => expect(mockSubmit).toHaveBeenCalledTimes(2));
+    expect(mockSubmit).toHaveBeenLastCalledWith(TRACE_ID, SESSION_ID, 3);
+
+    fireEvent.click(okChip());
+    await waitFor(() => expect(mockSubmit).toHaveBeenCalledTimes(3));
+    expect(mockSubmit).toHaveBeenLastCalledWith(TRACE_ID, SESSION_ID, 2);
+    // The default flag is NEVER set by a manual click (4th positional arg absent/false).
+    for (const call of mockSubmit.mock.calls) {
+      expect(call[3] ?? false).toBe(false);
+    }
   });
 
-  it('calls submitTurnRating with rating=3 when segment 3 ("Wow") is clicked', async () => {
+  it('re-rating overwrites (last click wins)', async () => {
     render(<TurnRating traceId={TRACE_ID} sessionId={SESSION_ID} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Wow' }));
+    fireEvent.click(errorChip());
     await waitFor(() => expect(mockSubmit).toHaveBeenCalledTimes(1));
-    expect(mockSubmit).toHaveBeenCalledWith(TRACE_ID, SESSION_ID, 3);
+    fireEvent.click(exceptionalChip());
+    await waitFor(() => expect(mockSubmit).toHaveBeenCalledTimes(2));
+    expect(exceptionalChip().getAttribute('aria-pressed')).toBe('true');
+    expect(errorChip().getAttribute('aria-pressed')).toBe('false');
+  });
+});
+
+describe('TurnRating — hydration', () => {
+  it('hydrates a stored 0 as error selected', () => {
+    render(<TurnRating traceId={TRACE_ID} sessionId={SESSION_ID} initialRating={0} />);
+    expect(errorChip().getAttribute('aria-pressed')).toBe('true');
+    expect(okChip().getAttribute('aria-pressed')).toBe('false');
   });
 
-  it('calls submitTurnRating when segment 2 is explicitly clicked (deliberate confirm)', async () => {
-    render(<TurnRating traceId={TRACE_ID} sessionId={SESSION_ID} />);
-    // Clicking the default-filled segment still sends a POST.
-    fireEvent.click(screen.getByRole('button', { name: 'Meets expectation' }));
-    await waitFor(() => expect(mockSubmit).toHaveBeenCalledTimes(1));
-    expect(mockSubmit).toHaveBeenCalledWith(TRACE_ID, SESSION_ID, 2);
+  it('hydrates a stored 3 as exceptional selected', () => {
+    render(<TurnRating traceId={TRACE_ID} sessionId={SESSION_ID} initialRating={3} />);
+    expect(exceptionalChip().getAttribute('aria-pressed')).toBe('true');
   });
 
-  it('only calls submit once per click (no duplicate on re-render)', async () => {
-    const { rerender } = render(<TurnRating traceId={TRACE_ID} sessionId={SESSION_ID} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Low value' }));
-    await waitFor(() => expect(mockSubmit).toHaveBeenCalledTimes(1));
-    // Re-render without a click — still only one call.
-    rerender(<TurnRating traceId={TRACE_ID} sessionId={SESSION_ID} />);
-    expect(mockSubmit).toHaveBeenCalledTimes(1);
+  it('hydrates a legacy stored 1 as a legacy-low state (no chip selected)', () => {
+    render(<TurnRating traceId={TRACE_ID} sessionId={SESSION_ID} initialRating={1} />);
+    // No chip is in the selected state for the orphan legacy value.
+    expect(okChip().getAttribute('aria-pressed')).toBe('false');
+    expect(exceptionalChip().getAttribute('aria-pressed')).toBe('false');
+    // The legacy-low affordance surfaces on the error side with its own label.
+    const legacy = screen.getByRole('button', { name: /legacy low rating/i });
+    expect(legacy).toBeTruthy();
   });
 });
 
 describe('TurnRating — failure revert', () => {
-  it('reverts to visual default (2) on network failure after first click', async () => {
+  it('reverts to the prior selection when the POST fails', async () => {
     mockSubmit.mockResolvedValue(false);
-    render(<TurnRating traceId={TRACE_ID} sessionId={SESSION_ID} />);
+    render(<TurnRating traceId={TRACE_ID} sessionId={SESSION_ID} initialRating={2} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Wow' }));
+    fireEvent.click(exceptionalChip());
     await waitFor(() => expect(mockSubmit).toHaveBeenCalledTimes(1));
 
-    // After failure, persisted stays null → visual default 2 restored.
-    // Segment 2 should be filled with sky-400 again.
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Meets expectation' }).className).toContain(
-        'bg-sky-400',
-      );
-    });
-    // Segment 3 should be back to slate-700 (not filled).
-    expect(screen.getByRole('button', { name: 'Wow' }).className).toContain('bg-slate-700');
+    // After failure, selection settles back to the prior value (ok=2).
+    await waitFor(() => expect(okChip().getAttribute('aria-pressed')).toBe('true'));
+    expect(exceptionalChip().getAttribute('aria-pressed')).toBe('false');
   });
 });

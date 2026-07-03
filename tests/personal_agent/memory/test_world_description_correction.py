@@ -39,11 +39,17 @@ async def svc():
     assert service.driver is not None
     async with service.driver.session() as s:
         await s.run("MATCH (v:EntityDescriptionVersion) DETACH DELETE v")
-        await s.run("MATCH (e:Entity) WHERE e.name STARTS WITH 'FRE711_' DETACH DELETE e")
+        await s.run(
+            "MATCH (e:Entity) WHERE e.name STARTS WITH 'FRE711_' OR e.name STARTS WITH 'FRE725_' "
+            "DETACH DELETE e"
+        )
     yield service
     async with service.driver.session() as s:
         await s.run("MATCH (v:EntityDescriptionVersion) DETACH DELETE v")
-        await s.run("MATCH (e:Entity) WHERE e.name STARTS WITH 'FRE711_' DETACH DELETE e")
+        await s.run(
+            "MATCH (e:Entity) WHERE e.name STARTS WITH 'FRE711_' OR e.name STARTS WITH 'FRE725_' "
+            "DETACH DELETE e"
+        )
     await service.disconnect()
 
 
@@ -165,3 +171,131 @@ async def test_ac6_alias_correction_records_proposed_name(svc: MemoryService) ->
     versions = await _versions(svc, "FRE711_Canonical")
     assert len(versions) == 1
     assert versions[0]["proposed_name"] == "FRE711_Alias"
+
+
+# ---------------------------------------------------------------------------
+# FRE-725 — equal-confidence enrichment/correction signal (ADR-0098 D2).
+#
+# Every conversation extraction is 0.8, so FRE-711's strict '>' never fires for
+# same-source re-extraction. An explicit description_update_kind unlocks
+# equal-confidence supersession (still archived, still eval-gated); "enrichment"
+# may only ADD information (non-shrinking guard), "correction" is length-free.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ac725_1_enrichment_at_equal_confidence(svc: MemoryService) -> None:
+    with _ZERO_EMBED:
+        await svc.create_entity(_entity("FRE725_Neo4j", "A database"), description_confidence=0.8)
+        # Same confidence, longer, explicit enrichment → supersedes (strict '>' would block).
+        await svc.create_entity(
+            _entity("FRE725_Neo4j", "A graph database management system"),
+            description_confidence=0.8,
+            description_update_kind="enrichment",
+            originating_trace_id="trace-enrich",
+        )
+
+    assert await _desc(svc, "FRE725_Neo4j") == "A graph database management system"
+
+
+@pytest.mark.asyncio
+async def test_ac725_1b_correction_at_equal_confidence(svc: MemoryService) -> None:
+    with _ZERO_EMBED:
+        await svc.create_entity(
+            _entity("FRE725_ES", "A document database"), description_confidence=0.8
+        )
+        # A correction may be SHORTER (length-free arm) and still land at equal confidence.
+        await svc.create_entity(
+            _entity("FRE725_ES", "A search engine"),
+            description_confidence=0.8,
+            description_update_kind="correction",
+        )
+
+    assert await _desc(svc, "FRE725_ES") == "A search engine"
+
+
+@pytest.mark.asyncio
+async def test_ac725_2_original_retained_as_version(svc: MemoryService) -> None:
+    with _ZERO_EMBED:
+        await svc.create_entity(_entity("FRE725_Py", "A language"), description_confidence=0.8)
+        await svc.create_entity(
+            _entity("FRE725_Py", "A high-level programming language"),
+            description_confidence=0.8,
+            description_update_kind="enrichment",
+            originating_trace_id="trace-v",
+        )
+
+    versions = await _versions(svc, "FRE725_Py")
+    assert len(versions) == 1
+    assert versions[0]["text"] == "A language"
+    assert versions[0]["confidence"] == pytest.approx(0.8)
+    assert versions[0]["valid_to"] is not None
+
+
+@pytest.mark.asyncio
+async def test_ac725_3_eval_cannot_clobber_with_signal(svc: MemoryService) -> None:
+    with _ZERO_EMBED:
+        await svc.create_entity(
+            _entity("FRE725_Redis", "An in-memory data store"),
+            description_confidence=0.8,
+            eval_mode=False,
+        )
+        # Eval write WITH an explicit correction signal must still not clobber a non-eval desc.
+        await svc.create_entity(
+            _entity("FRE725_Redis", "WRONG eval-injected description that is much longer"),
+            description_confidence=0.8,
+            eval_mode=True,
+            description_update_kind="correction",
+        )
+
+    assert await _desc(svc, "FRE725_Redis") == "An in-memory data store"
+    assert await _versions(svc, "FRE725_Redis") == []
+
+
+@pytest.mark.asyncio
+async def test_ac725_4_no_downgrade_and_unsignaled_noop(svc: MemoryService) -> None:
+    with _ZERO_EMBED:
+        await svc.create_entity(_entity("FRE725_A", "A database"), description_confidence=0.8)
+        # (a) Same confidence, NO signal (default "new") → strict '>' still blocks it.
+        await svc.create_entity(
+            _entity("FRE725_A", "A graph database management system"), description_confidence=0.8
+        )
+        # (b) LOWER confidence WITH an enrichment signal → the '>=' guard blocks the downgrade.
+        await svc.create_entity(
+            _entity("FRE725_A", "A graph database management system, richer"),
+            description_confidence=0.5,
+            description_update_kind="enrichment",
+        )
+
+    assert await _desc(svc, "FRE725_A") == "A database"
+    assert await _versions(svc, "FRE725_A") == []
+
+
+@pytest.mark.asyncio
+async def test_ac725_5_enrichment_cannot_shrink(svc: MemoryService) -> None:
+    rich = "A graph database management system used as the knowledge store"
+    with _ZERO_EMBED:
+        await svc.create_entity(_entity("FRE725_Rich", rich), description_confidence=0.8)
+        # A SHORTER lateral rewrite flagged "enrichment" must NOT overwrite (non-shrinking guard).
+        await svc.create_entity(
+            _entity("FRE725_Rich", "A graph DB"),
+            description_confidence=0.8,
+            description_update_kind="enrichment",
+        )
+
+    assert await _desc(svc, "FRE725_Rich") == rich  # unchanged
+    assert await _versions(svc, "FRE725_Rich") == []  # no history node for the rejected write
+
+
+@pytest.mark.asyncio
+async def test_ac725_6_new_entity_no_archive(svc: MemoryService) -> None:
+    # A first-ever write stamps via ON CREATE and must not archive (nothing to supersede).
+    with _ZERO_EMBED:
+        await svc.create_entity(
+            _entity("FRE725_Fresh", "A first description"),
+            description_confidence=0.8,
+            description_update_kind="enrichment",
+        )
+
+    assert await _desc(svc, "FRE725_Fresh") == "A first description"
+    assert await _versions(svc, "FRE725_Fresh") == []

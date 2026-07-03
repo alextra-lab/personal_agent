@@ -55,6 +55,8 @@ def _extraction_with_stance_and_claim(capture: TaskCapture) -> dict[str, Any]:
                 "type": "Technology",
                 "class": "World",
                 "description": "car",
+                # FRE-725: per-entity description signal threaded into create_entity.
+                "description_update_kind": "enrichment",
             }
         ],
         "relationships": [],
@@ -151,6 +153,8 @@ async def test_stance_and_claim_are_wired_into_core(
     ce_kwargs = memory_service.create_entity.await_args.kwargs
     assert ce_kwargs["eval_mode"] is False  # capture.eval_mode
     assert ce_kwargs["description_confidence"] == pytest.approx(0.8)  # conversation source
+    # FRE-725: the per-entity enrichment/correction signal is threaded from the entity dict.
+    assert ce_kwargs["description_update_kind"] == "enrichment"
 
 
 @pytest.mark.asyncio

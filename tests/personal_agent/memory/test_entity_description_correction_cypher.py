@@ -64,9 +64,12 @@ async def test_description_uses_gated_correction_not_first_write_freeze() -> Non
     assert "e.description = CASE WHEN e.description IS NULL OR e.description = ''" not in cypher
     # Superseded history archive.
     assert "HAD_DESCRIPTION" in cypher and "EntityDescriptionVersion" in cypher
-    # Strict '>' confidence gate (not >=), and the proposed surface name recorded.
-    assert "$description_confidence >" in cypher
-    assert ">=" not in cypher.split("$description_confidence")[1][:3]
+    # FRE-711 strict '>' confidence arm (unsignaled writes still need strictly-higher).
+    assert "$description_confidence > coalesce" in cypher
+    # FRE-725 equal-confidence signal arm: explicit-kind + '>=' + enrichment non-shrinking guard.
+    assert "$description_update_kind IN $explicit_description_update_kinds" in cypher
+    assert "$description_confidence >= coalesce" in cypher
+    assert "size($description) >= size(_old_desc)" in cypher
     assert "proposed_name" in cypher
 
 
@@ -98,3 +101,24 @@ async def test_new_params_are_bound() -> None:
     assert merge_params["description_confidence"] == 0.9
     assert merge_params["eval_mode"] is True
     assert merge_params["proposed_name"] == "Neo4j"
+    # FRE-725: the equal-confidence enrichment/correction signal + its explicit vocabulary.
+    assert merge_params["description_update_kind"] == "new"  # default when unset
+    assert set(merge_params["explicit_description_update_kinds"]) == {"enrichment", "correction"}
+
+
+@pytest.mark.asyncio
+async def test_off_vocabulary_kind_is_normalized_server_side() -> None:
+    # FRE-725: the signal is write-authorizing, so the service (not only the extractor)
+    # must coerce an off-vocabulary/None kind to "new" before it reaches Cypher — a
+    # direct caller can never inject an unknown kind that authorizes an equal-conf write.
+    service, captured = _make_service_with_mock()
+    entity = Entity(name="Neo4j", entity_type="Technology", description="A graph database")
+    await _run(service, entity, description_update_kind="bogus")
+
+    merge_params = next(p for c, p in captured if "HAD_DESCRIPTION" in c)
+    assert merge_params["description_update_kind"] == "new"
+
+    service2, captured2 = _make_service_with_mock()
+    await _run(service2, entity, description_update_kind="enrichment")
+    merge_params2 = next(p for c, p in captured2 if "HAD_DESCRIPTION" in c)
+    assert merge_params2["description_update_kind"] == "enrichment"

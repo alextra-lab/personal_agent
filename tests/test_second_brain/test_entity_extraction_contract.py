@@ -24,6 +24,7 @@ from personal_agent.config import get_settings
 from personal_agent.second_brain.entity_extraction import (
     _EXTRACTION_PROMPT_TEMPLATE,
     _EXTRACTION_SYSTEM_PROMPT,
+    ExtractionModelOverride,
     _build_extraction_prompt,
     extract_entities_and_relationships,
     prompt_material_for_hash,
@@ -426,7 +427,9 @@ class TestCloudPathTemperature:
         """The cloud call forwards model_def.temperature as an explicit kwarg."""
         from types import SimpleNamespace
 
-        mock_model_def = SimpleNamespace(provider="openai", id="gpt-5.4-mini", temperature=0.0)
+        mock_model_def = SimpleNamespace(
+            provider="openai", id="gpt-5.4-mini", temperature=0.0, reasoning_effort=None
+        )
         with (
             patch("personal_agent.second_brain.entity_extraction.load_model_config") as mock_cfg,
             patch("personal_agent.llm_client.factory.get_llm_client") as mock_get_client,
@@ -495,3 +498,138 @@ class TestFewshotExemplarFlag:
         prompt = _build_extraction_prompt("my lease ends in March", "assistant reply")
         assert '{"subject":"owner"' in prompt  # exemplar JSON present as literal text
         assert "my lease ends in March" in prompt  # per-case content still interpolates
+
+
+@pytest.mark.asyncio
+class TestModelOverrideAndCallStats:
+    """FRE-766: the eval-only model_override DI seam + call_stats capture.
+
+    The benchmark drives the real extractor across a model×reasoning matrix without
+    mutating global config (concurrency-safe). These prove the seam forwards the
+    override's model/reasoning/budget-lane and surfaces usage/cost/error per call.
+    """
+
+    async def test_override_drives_model_reasoning_and_budget_role(self) -> None:
+        """model_override builds a client for its model with budget_role=entity_extraction
+        and forwards its reasoning_effort + temperature to respond().
+        """
+        override = ExtractionModelOverride(
+            model_id="gpt-5.4",
+            provider="openai",
+            reasoning_effort="high",
+            temperature=None,
+            max_tokens=4096,
+        )
+        with patch("personal_agent.llm_client.litellm_client.LiteLLMClient") as mock_client_cls:
+            mock_client = mock_client_cls.return_value
+            mock_client.respond = AsyncMock(
+                return_value={
+                    "content": orjson.dumps(_OPERATIONAL_MODEL_JSON).decode("utf-8"),
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 7},
+                    "cost_usd": 0.001,
+                }
+            )
+            await extract_entities_and_relationships(
+                _OPERATIONAL_USER_MSG, "assistant reply", model_override=override
+            )
+            # client built for the override model, in the entity_extraction budget lane
+            ckw = mock_client_cls.call_args.kwargs
+            assert ckw["model_id"] == "gpt-5.4"
+            assert ckw["provider"] == "openai"
+            assert ckw["budget_role"] == "entity_extraction"
+            # reasoning_effort + temperature forwarded from the override
+            rkw = mock_client.respond.call_args.kwargs
+            assert rkw["reasoning_effort"] == "high"
+            assert rkw["temperature"] is None
+
+    async def test_prod_path_forwards_config_reasoning_effort(self) -> None:
+        """No override: the cloud call forwards model_def.reasoning_effort from config."""
+        from types import SimpleNamespace
+
+        model_def = SimpleNamespace(
+            provider="openai", id="gpt-5.4-mini", temperature=0.0, reasoning_effort="high"
+        )
+        with (
+            patch("personal_agent.second_brain.entity_extraction.load_model_config") as mock_cfg,
+            patch("personal_agent.llm_client.factory.get_llm_client") as mock_get_client,
+        ):
+            mock_cfg.return_value.entity_extraction_role = "gpt-5.4-mini"
+            mock_cfg.return_value.models = {"gpt-5.4-mini": model_def}
+            mock_client = mock_get_client.return_value
+            mock_client.respond = AsyncMock(
+                return_value={"content": orjson.dumps(_OPERATIONAL_MODEL_JSON).decode("utf-8")}
+            )
+            await extract_entities_and_relationships(_OPERATIONAL_USER_MSG, "assistant reply")
+            assert mock_client.respond.call_args.kwargs["reasoning_effort"] == "high"
+
+    async def test_call_stats_sink_captures_usage_and_cost(self) -> None:
+        """A passed call_stats_sink gets usage/reasoning_tokens/cost with error_class None."""
+        override = ExtractionModelOverride(model_id="gpt-5.4", provider="openai")
+        sink: list[dict[str, Any]] = []
+        with patch("personal_agent.llm_client.litellm_client.LiteLLMClient") as mock_client_cls:
+            mock_client_cls.return_value.respond = AsyncMock(
+                return_value={
+                    "content": orjson.dumps(_OPERATIONAL_MODEL_JSON).decode("utf-8"),
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 7, "reasoning_tokens": 42},
+                    "cost_usd": 0.002,
+                }
+            )
+            await extract_entities_and_relationships(
+                _OPERATIONAL_USER_MSG,
+                "assistant reply",
+                model_override=override,
+                call_stats_sink=sink,
+            )
+        assert len(sink) == 1
+        assert sink[0]["reasoning_tokens"] == 42
+        assert sink[0]["cost_usd"] == 0.002
+        assert sink[0]["error_class"] is None
+
+    async def test_call_stats_sink_records_error_class_on_failure(self) -> None:
+        """When the cloud call raises, the sink records the error_class (for the smoke
+        classifier) and the extractor still returns the empty fallback shape.
+        """
+        override = ExtractionModelOverride(model_id="gpt-5.4", provider="openai")
+        sink: list[dict[str, Any]] = []
+        with patch("personal_agent.llm_client.litellm_client.LiteLLMClient") as mock_client_cls:
+            mock_client_cls.return_value.respond = AsyncMock(
+                side_effect=RuntimeError("provider rejected reasoning_effort=xhigh")
+            )
+            result = await extract_entities_and_relationships(
+                _OPERATIONAL_USER_MSG,
+                "assistant reply",
+                model_override=override,
+                call_stats_sink=sink,
+            )
+        assert result["entities"] == []  # fallback shape
+        assert len(sink) == 1
+        assert sink[0]["error_class"] == "RuntimeError"
+
+    async def test_budget_denied_reraises_and_appends_no_stat(self) -> None:
+        """BudgetDenied re-raises (consolidator retry signal) and does NOT append a
+        generic error stat — it is caught by its own handler before the sink append.
+        """
+        from datetime import datetime, timezone
+        from decimal import Decimal
+
+        from personal_agent.cost_gate import BudgetDenied
+
+        override = ExtractionModelOverride(model_id="gpt-5.4", provider="openai")
+        sink: list[dict[str, Any]] = []
+        denied = BudgetDenied(
+            role="entity_extraction",
+            time_window="daily",
+            current_spend=Decimal("5"),
+            cap=Decimal("5"),
+            window_resets_at=datetime(2026, 7, 4, tzinfo=timezone.utc),
+        )
+        with patch("personal_agent.llm_client.litellm_client.LiteLLMClient") as mock_client_cls:
+            mock_client_cls.return_value.respond = AsyncMock(side_effect=denied)
+            with pytest.raises(BudgetDenied):
+                await extract_entities_and_relationships(
+                    _OPERATIONAL_USER_MSG,
+                    "assistant reply",
+                    model_override=override,
+                    call_stats_sink=sink,
+                )
+        assert sink == []  # BudgetDenied re-raised before the generic-except stat append

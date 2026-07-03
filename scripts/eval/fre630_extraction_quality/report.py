@@ -65,6 +65,10 @@ class RunMeta:
         gold_schema_version: The gold-case schema revision.
         samples: Extraction samples per case (``N`` for the stability band).
         fuzzy_threshold: The tier-3 matcher threshold used.
+        reasoning_effort: FRE-766 — the reasoning-effort setting for this run's cell
+            (``low``/``medium``/``high``/``xhigh`` or ``None``); ``None`` for the
+            single-config FRE-630 harness.
+        cell_name: FRE-766 — the benchmark cell id (``None`` outside the matrix run).
     """
 
     run_id: str
@@ -80,6 +84,8 @@ class RunMeta:
     gold_schema_version: str
     samples: int
     fuzzy_threshold: float
+    reasoning_effort: str | None = None
+    cell_name: str | None = None
 
 
 @dataclass(frozen=True)

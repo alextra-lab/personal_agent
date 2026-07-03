@@ -294,6 +294,34 @@ compiling few-shot demos + instructions against this benchmark's `score_case` ta
 just exhibited. A narrower, edge-type-preserving exemplar retry is a secondary candidate. Filed as
 follow-ups.
 
+### 4.3 FRE-766 — model × reasoning benchmark, and the taxonomy root-cause (2026-07-03)
+
+_Owner-designed matrix. 5 cells + a reused mini@none baseline (the FRE-759 flag-OFF run), 36-case
+gold, 3 samples/cell, by-model concurrent, direct-metered cost/latency. `mini-xhigh` cut mid-run as
+**measured non-viable** (32 000 reasoning tokens = the whole budget, 0 JSON emitted, ~210 s/call).
+Curated summary — raw runs gitignored._
+
+**Aggregate (mini@none = current prod baseline):**
+
+| cell | entity_type | claim (case) | rel-type | class·halluc | lat p50 | reasoning tok | cost |
+|---|---:|---:|---:|---|---:|---:|---:|
+| **mini-none** (baseline) | 0.76 | 3/12 | ~0.99 | 1.00·0.00 | — | 0 | — |
+| mini-medium | 0.78 | 2/12 | 0.76 | 1.00·0.00 | 8.4 s | 973 | $0.91 |
+| mini-high | 0.78 | 0/12 | 0.67 | 1.00·0.00 | 21 s | 3175 | $1.97 |
+| full-medium | 0.85 | 2/12 | 0.72 | 1.00·0.00 | 7.5 s | 568 | $2.32 |
+| full-high | 0.85 | 2/12 | 0.77 | 1.00·0.00 | 14 s | 1443 | $3.72 |
+| **sonnet5-adaptive** | **0.89** | 2/12 | **0.96** | 1.00·0.00 | 5.2 s | 0 | $2.29 |
+
+**Findings:**
+1. **No cell clears the bars** (entity_type ≥0.95, claim ≥0.8). Best entity-type ≈ **0.89 (sonnet)** — and sonnet reached it with **zero reasoning tokens** and the lowest latency. Model *capability*, not reasoning depth, is what moved entity-type.
+2. **Reasoning is a poor trade for extraction.** On mini it didn't beat @none on entity-type, tanked claims (mini-high 0/12), and was slowest+costly; on the full model it barely moved. `xhigh` is a runaway (cut).
+3. **The rel-type/claim "regressions" are largely measurement artifacts** (harness-removed direct-call spot-checks): the reasoning cells emit `RELATED_TO` where the single-author gold says `USES` (defensible — a trie is *used for* prefix search, not dependent on it), and emit the *same* claim under a different but-valid `facet` key. Both "worst" metrics are substantially gold-label artifacts, not real quality loss.
+4. **The decisive finding — convergent failure = the taxonomy is the root cause.** `gpt-5.4-mini`, `gpt-5.4`, `claude-sonnet-5`, **and a purpose-built encoder (GLiNER, CPU spot-check)** all mis-type the **same** entities — `trie`, `retrieval-augmented generation`, `behavioral economics`, `game theory` — flipping between `Concept`/`Technology`/`Topic`. Four independent architectures agreeing on *where* they fail means the **schema is ill-posed**, not the models. And the ~0.86 ceiling is at/above single-annotator inter-annotator agreement for fine-grained typing — 0.95 against a single-author ambiguous gold is chasing noise above the human ceiling.
+
+**Levers ruled out or shown marginal this program:** temperature (FRE-758, nil) · few-shot exemplars (FRE-759, regressed) · model × reasoning (FRE-766, flat-to-negative) · prompt *format* JSON/XML (nil) · tighter *definitions* (modest, weak-models-only) · purpose-built encoder models GLiNER/GLiREL (same boundary errors; low-confidence on relations). **The lever that worked** — collapsing the ambiguous `Concept`/`Technology`/`Topic` boundaries via an **8-type taxonomy** (`…, TechnicalArtifact, MethodOrConcept, DomainOrTopic, Phenomenon, …`): a spot-check took mini↔sonnet agreement on the flip-flopping cases from near-zero to **9–10/10**, with a clean `Phenomenon` boundary (5/5) and no regression. Captured as **[ADR-0109](../architecture_decisions/ADR-0109-entity-taxonomy-redesign.md)** (Proposed) — the recommended next step, gated behind a downstream-recall-impact check.
+
+**Disposition:** FRE-766's benchmark is complete. **No production config change** — model/reasoning swaps don't clear the bar and reasoning isn't worth it; the mini@none (current prod, zero reasoning) config stands. The real fix is upstream (taxonomy, ADR-0109). FRE-764 (DSPy) is not moot but is lower-priority than the schema fix. The mechanism (config-driven `reasoning_effort`, the eval DI seam) ships as reusable infrastructure.
+
 ---
 
 ## Part 5 — Recommended improvements (→ follow-up tickets, each its own A/B)

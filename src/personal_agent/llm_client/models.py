@@ -4,6 +4,7 @@ This module defines the schema for model configuration loaded from config/models
 """
 
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -125,6 +126,15 @@ class ModelDefinition(BaseModel):
         ge=0.0,
         le=2.0,
         description="Default sampling temperature for this model (None uses backend default).",
+    )
+    reasoning_effort: Literal["low", "medium", "high", "xhigh"] | None = Field(
+        default=None,
+        description=(
+            "FRE-766: discrete reasoning-effort hint for reasoning models (GPT-5 family). "
+            "One of low/medium/high/xhigh; None uses the provider default (medium for GPT-5). "
+            "Forwarded to litellm.acompletion by LiteLLMClient. Claude uses adaptive thinking, "
+            "not this hint — leave None for Anthropic models."
+        ),
     )
     top_p: float | None = Field(
         default=None,

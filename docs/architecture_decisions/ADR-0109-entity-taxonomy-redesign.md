@@ -1,9 +1,30 @@
-# ADR-0109: Entity-Type Taxonomy Redesign (8-type, ambiguity-collapsing)
+# ADR-0109: Entity & Relationship Taxonomy — V1 (inherited) → V2 (first principled derivation)
 
 **Status:** Proposed
 **Date:** 2026-07-03
-**Supersedes (in part):** the entity-*type* vocabulary of ADR-0097 / ADR-0098 (the knowledge-*class* axis World/Personal/System — ADR-0097/0106 — is unchanged and orthogonal).
+**Scope:** the entity-*type* and relationship-*type* vocabularies of the extractor (entity-first). The knowledge-*class* axis (World/Personal/System/Stance — ADR-0097/0098/0106) is **unchanged and orthogonal**.
+**Gives an ADR to something that never had one:** the type vocabularies were **never** defined or justified by any prior ADR — see §Provenance. This is not a supersession; it is the **first** documented derivation.
 **Backing evidence:** FRE-630 (extraction-quality benchmark), FRE-758/759/766 (temperature / exemplar / model×reasoning levers, all disproved or marginal), and the FRE-766 taxonomy spot-checks (this session).
+
+> **Terminology (owner):** **V1** = the current *inherited* taxonomy — 7 entity types (`Person, Organization, Location, Technology, Concept, Event, Topic`) + 6 relationship types (`PART_OF, USES, RELATED_TO, SIMILAR_TO, CREATED_BY, LOCATED_IN`) — live in production. **V2** = the redesign proposed here (8-type entity + a gated relationship vocab). *V1 is real and shipped; V2 is proposed and unbuilt.*
+
+---
+
+## Provenance — where V1 came from (and why "how did we decide" has no good answer)
+
+**V1 was never designed.** git traces the entity-type and relationship-type blocks in the extraction
+prompt to the **Initial commit** — they were baked in at project inception, an inherited/ad-hoc
+"here are common KG types" choice from early prototyping, and **no ADR ever derived or justified
+them.** Every ADR that names them (0098, 0025, 0026, …) merely *uses* the list.
+
+The **only** taxonomy axis that *was* deliberately designed is the knowledge **class** — `World /
+Personal / System / Stance` (ADR-0097, explicitly "a hypothesis… held loosely"; ADR-0098 its
+implementation). That axis is *subject/ownership*, orthogonal to entity *type*.
+
+**This is the root cause, stated plainly:** the `Concept ↔ Technology ↔ Topic` boundaries are fuzzy
+because **nobody ever drew them on purpose.** Four independent models disagreeing on them (below) is
+the symptom of an un-derived vocabulary, not model weakness. V2 is therefore the **first principled
+derivation**, not a tweak of a considered design.
 
 ---
 
@@ -36,7 +57,9 @@ Minimal focused prompt, direct API, `gpt-5.4-mini` (temp 0) + `claude-sonnet-5` 
 
 ## Decision
 
-Replace the 7-type entity-*type* vocabulary with an **8-type** taxonomy, each defined GoLLIE-style (inclusion + **exclusion** + example). The knowledge-*class* axis (World/Personal/System) is unchanged and applied orthogonally.
+### V2 — entity types (validated)
+
+Replace the V1 7-type entity-*type* vocabulary with an **8-type** taxonomy, each defined GoLLIE-style (inclusion + **exclusion** + example). The knowledge-*class* axis (World/Personal/System) is unchanged and applied orthogonally.
 
 | key | definition (inclusion · **exclusion** · e.g.) |
 |---|---|
@@ -50,6 +73,27 @@ Replace the 7-type entity-*type* vocabulary with an **8-type** taxonomy, each de
 | `Event` | a specific named occurrence, milestone, incident, release, or time-bound activity. *e.g. the Big Bang, ICLR 2024, a production outage.* |
 
 **Rationale for `Phenomenon` as a distinct type** (rather than folding into `MethodOrConcept`): the "human-invented abstraction vs naturally-occurring phenomenon" line is *clean and teachable* (5/5 cross-model agreement measured), it is common in the owner's domains (physics, cosmology, cooking-chemistry, acoustics), and it is pedagogically meaningful — *methods to practice · phenomena to understand · domains to survey · artifacts to use*. The usual "more types hurt LLMs" risk did **not** materialize in the spot-check because the added boundary is unambiguous.
+
+### V2 — relationship types (candidate; not yet validated to the entity bar)
+
+The V1 relationship vocab (`PART_OF, USES, RELATED_TO, SIMILAR_TO, CREATED_BY, LOCATED_IN`) is
+**equally inherited and un-derived**, and FRE-759 + the FRE-766 direct-call spot-checks already exposed
+two design faults:
+- **`RELATED_TO` is a mis-designed catch-all.** Defined as the "general" relationship, it *overlaps*
+  every specific type, so models flip between it and `USES`. The RE literature (TACRED/SemEval/SciERC)
+  treats the generic relation as a **gated None-of-the-Above last resort**, never a co-equal option.
+- **`USES` overlaps it** and lacks a directional definition (`A uses B` vs `A is used for B`).
+
+**V2 candidate** (the FRE-759 tightened definitions, owner-arbitrated): keep the 6-type set, but
+(a) re-cast `RELATED_TO` as an explicit last-resort NoTA fallback ("only when no specific type fits;
+never when a specific type applies"), (b) give every relation a **direction** and a functional
+inclusion/exclusion definition, (c) add an explicit *emit-nothing-if-none-fits* rule.
+
+**Honesty flag — this half is NOT yet validated.** Only the *entity* V2 was cross-model spot-checked;
+the relationship V2 is a *proposal*, not a measured result. It needs its own agreement spot-check (and
+the gold re-label, since the tightened `USES`/`RELATED_TO` will disagree with V1 gold labels — the
+`trie → prefix-search` case flips `USES` → `RELATED_TO`). Do not ship the relationship half on the
+entity half's evidence.
 
 ---
 

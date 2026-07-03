@@ -191,6 +191,7 @@ These ADRs define the next architectural phase: three-layer separation, cloud in
 | [ADR-0106](ADR-0106-system-user-knowledge-boundary-dispatch-observe-ground.md) | The System/User Knowledge Boundary — Dispatch by Output Kind, Observe, Ground | Accepted |
 | [ADR-0107](ADR-0107-user-identity-resolution-and-log-propagation.md) | User Identity Resolution for Claims + Trace/Log Identity Propagation | Accepted |
 | [ADR-0108](ADR-0108-stored-artifact-vision-reprocessing.md) | Stored-Artifact Vision Re-processing (analyze-to-text, explicit tool) | Proposed |
+| [ADR-0109](ADR-0109-entity-taxonomy-redesign.md) | Entity & Relationship Taxonomy — V1 (inherited) → V2 (first principled derivation) | Accepted |
 
 ### Supplementary
 

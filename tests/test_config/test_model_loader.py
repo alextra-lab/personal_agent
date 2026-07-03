@@ -1,5 +1,6 @@
 """Tests for model configuration loader."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -218,8 +219,9 @@ class TestSupportsVisionDeployedConfig:
     ``config/models.yaml``, so the cloud deployment (``config/models.cloud.yaml``,
     selected via ``AGENT_MODEL_CONFIG_PATH`` in ``docker-compose.cloud.yml``) drifted to
     ``supports_vision=False`` on every model and broke vision in production while CI
-    stayed green. ``config/models.eval.yaml`` is referenced by ``docker-compose.eval.yml``
-    but does not exist in the repo (stale/eval-only), so it is intentionally excluded.
+    stayed green. ``docker-compose.eval.yml`` also selects ``config/models.cloud.yaml``
+    (FRE-735 repointed it off a retired ``config/models.eval.yaml``), so it needs no
+    separate parametrization here.
     """
 
     _VISION_ROLES = ("primary", "sub_agent", "claude_sonnet", "claude_haiku")
@@ -239,6 +241,42 @@ class TestSupportsVisionDeployedConfig:
             assert config.models[key].supports_vision is True, (
                 f"{key} must support vision in {config_path}"
             )
+
+
+class TestDockerComposeModelConfigPaths:
+    """Every AGENT_MODEL_CONFIG_PATH in a docker-compose file must resolve to a real file.
+
+    FRE-735: ``docker-compose.eval.yml`` drifted to ``config/models.eval.yaml``, a file
+    FRE-645 retired months earlier — the compose reference was never updated, so
+    bringing up the eval gateway raised ``ModelConfigError`` at startup. This
+    generalizes FRE-734's per-file vision-parity guard into a plain existence
+    check across every ``docker-compose*.yml`` in the repo, so a stale pointer
+    fails CI instead of only surfacing at container boot.
+    """
+
+    _CONTAINER_PREFIX = "/app/"
+    _PATTERN = re.compile(r"AGENT_MODEL_CONFIG_PATH:\s*(\S+)")
+
+    def test_all_referenced_configs_exist(self) -> None:
+        """Every AGENT_MODEL_CONFIG_PATH across docker-compose*.yml points at a real file."""
+        repo_root = Path(__file__).resolve().parents[2]
+        compose_files = sorted(repo_root.glob("docker-compose*.yml"))
+        assert compose_files, "expected at least one docker-compose*.yml in repo root"
+
+        missing: list[str] = []
+        for compose_file in compose_files:
+            for line in compose_file.read_text().splitlines():
+                match = self._PATTERN.search(line)
+                if match is None:
+                    continue
+                container_path = match.group(1).strip().strip("\"'")
+                relative_path = container_path.removeprefix(self._CONTAINER_PREFIX)
+                if not (repo_root / relative_path).is_file():
+                    missing.append(f"{compose_file.name}: {container_path}")
+
+        assert not missing, (
+            f"docker-compose AGENT_MODEL_CONFIG_PATH references a missing config file: {missing}"
+        )
 
 
 class TestCheckVisionCapabilities:

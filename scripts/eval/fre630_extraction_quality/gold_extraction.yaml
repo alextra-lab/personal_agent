@@ -1,0 +1,515 @@
+# FRE-630 — curated gold set for the pre-write extraction-quality benchmark.
+#
+# This is the labelled set that decides "is extraction getting the right things out."
+# It is loadable by the harness through the GoldCase schema (gold.py).
+#
+# PROVENANCE & CURATION DISCIPLINE (read before editing)
+# ------------------------------------------------------
+# Cases are GROUNDED in the failure modes surfaced on Seshat's own live corpus
+# (FRE-630 ticket evidence + the FRE-636 taxonomy spike) but are CURATED + PARAPHRASED
+# — never verbatim transcripts. The repo is public, so:
+#   * no private conversation text is copied in,
+#   * no PII / owner name / home location / owned-vehicle / injected CC email /
+#     deployment identifiers appear,
+#   * personal specifics are replaced with generic placeholders that PRESERVE the
+#     failure-mode structure (a "visit" is still a visit; a stance is still a stance).
+#
+# Each case pairs a source turn (user + assistant) with the EXPECTED extraction:
+#   expect_entities        — gold entities: canonical name + accepted `aliases` +
+#                            one of 7 `type`s + one of 3 knowledge `class`es.
+#   expect_relationships   — typed-edge triples over gold canonical names (vocab: 6).
+#   expect_stances/claims  — structured owner signals the extractor must EMIT, not
+#                            flatten into a World description (FRE-636 finding).
+#   forbid_entities        — hallucination traps that MUST NOT be extracted.
+#   forbid_rel_types       — off-vocabulary edge types that MUST NOT appear
+#                            (e.g. LIVES_IN / LOCATED_IN asserted for a mere visit).
+#   dedup_variants         — case/spelling variants that MUST collapse to one entity.
+#
+# Knowledge class: World = reusable impersonal know-how; Personal = named things in
+# the user's own life; System = the agent's own machinery/infra/telemetry.
+
+cases:
+  # =====================================================================
+  # RESIDENCE-vs-VISIT — the ticket's headline failure mode
+  # =====================================================================
+  - case_id: visit-not-residence-lagoon
+    tags: [residence-vs-visit, travel, world]
+    source:
+      user: "Last week I spent an afternoon on a small island out in a coastal lagoon — beautiful old church there."
+      assistant: >
+        That lagoon island is known for its medieval basilica and mosaics; it is a
+        popular day-trip from the nearby city, not a residential area.
+    expect_entities:
+      - name: Lagoon Island
+        type: Location
+        class: World
+        aliases: ["the lagoon island", "the island"]
+    expect_relationships: []
+    forbid_entities: []
+    # A single afternoon visit must NOT be promoted to residence/containment semantics.
+    forbid_rel_types: [LIVES_IN, LOCATED_IN]
+
+  - case_id: visit-not-residence-mountain-village
+    tags: [residence-vs-visit, travel, world]
+    source:
+      user: "Passed through a little mountain village on the drive south and stopped for lunch."
+      assistant: "Those high-valley villages are common rest stops on that route."
+    expect_entities:
+      - name: Mountain Village
+        type: Location
+        class: World
+        aliases: ["the mountain village", "the village"]
+    expect_relationships: []
+    forbid_rel_types: [LIVES_IN, LOCATED_IN]
+
+  # =====================================================================
+  # CASE-VARIANT DEDUP — the extractor's own normalization
+  # =====================================================================
+  - case_id: dedup-game-theory
+    tags: [dedup, game-theory, world]
+    source:
+      user: "Coming back to Game Theory — I keep mixing up the equilibria in Game theory problems."
+      assistant: >
+        In game theory, a Nash equilibrium is a strategy profile where no player gains
+        by unilaterally deviating.
+    expect_entities:
+      - name: Game Theory
+        type: Concept
+        class: World
+        aliases: ["game theory"]
+      - name: Nash Equilibrium
+        type: Concept
+        class: World
+        aliases: ["nash equilibrium"]
+    expect_relationships:
+      - {source: Nash Equilibrium, type: PART_OF, target: Game Theory}
+    dedup_variants:
+      - ["Game Theory", "Game theory"]
+
+  - case_id: dedup-philosophy-of-mind
+    tags: [dedup, philosophy, world]
+    source:
+      user: "In Philosophy of Mind the hard problem still bugs me; Philosophy of mind readings pile up."
+      assistant: "The hard problem of consciousness asks why physical processes give rise to experience."
+    expect_entities:
+      - name: Philosophy of Mind
+        type: Topic
+        class: World
+        aliases: ["philosophy of mind"]
+      - name: Hard Problem of Consciousness
+        type: Concept
+        class: World
+        aliases: ["the hard problem", "hard problem"]
+    expect_relationships:
+      - {source: Hard Problem of Consciousness, type: PART_OF, target: Philosophy of Mind}
+    dedup_variants:
+      - ["Philosophy of Mind", "Philosophy of mind"]
+
+  # =====================================================================
+  # HALLUCINATION TRAPS — garbage / role-labels / tool-names as entities
+  # =====================================================================
+  - case_id: hallucination-misspelled-reltype
+    tags: [hallucination, world]
+    source:
+      user: "Can you explain diffraction gratings?"
+      assistant: >
+        A diffraction grating splits light into its component wavelengths by
+        interference across many closely spaced slits.
+    expect_entities:
+      - name: Diffraction Grating
+        type: Concept
+        class: World
+        aliases: ["diffraction gratings", "diffraction grating"]
+      - name: Interference
+        type: Concept
+        class: World
+        aliases: ["interference"]
+    expect_relationships:
+      - {source: Diffraction Grating, type: USES, target: Interference}
+    # A misspelled relationship type must never leak in as an :Entity.
+    forbid_entities: ["DISCUSES", "RELATED", "USES"]
+
+  - case_id: hallucination-role-labels
+    tags: [hallucination, world]
+    source:
+      user: "Summarise what makes a good hash function."
+      assistant: "A good hash function distributes keys uniformly and minimises collisions."
+    expect_entities:
+      - name: Hash Function
+        type: Concept
+        class: World
+        aliases: ["hash function"]
+    expect_relationships: []
+    # Conversation role labels must never become Person entities.
+    forbid_entities: ["User", "Assistant", "System", "Reasoning"]
+
+  - case_id: hallucination-tool-names
+    tags: [hallucination, system]
+    source:
+      user: "Look up the current best approach for typed relation extraction."
+      assistant: >
+        I searched and found recent work on schema-constrained extraction; the general
+        idea is to constrain the model to a fixed relation vocabulary.
+    expect_entities:
+      - name: Relation Extraction
+        type: Concept
+        class: World
+        aliases: ["typed relation extraction", "relation extraction"]
+    expect_relationships: []
+    # Internal tool identifiers are not world entities.
+    forbid_entities: ["web_search", "run_python", "mcp_search"]
+
+  # =====================================================================
+  # TECH-STACK — USES correctness (the ticket's partial-facts complaint)
+  # =====================================================================
+  - case_id: tech-stack-uses
+    tags: [tech-stack, world, relationships]
+    source:
+      user: "The service is a FastAPI app on Python, and it talks to a Postgres database."
+      assistant: >
+        FastAPI is a Python web framework; pairing it with PostgreSQL for persistence
+        is a common stack.
+    expect_entities:
+      - name: FastAPI
+        type: Technology
+        class: World
+        aliases: ["fastapi"]
+      - name: Python
+        type: Technology
+        class: World
+        aliases: ["python"]
+      - name: PostgreSQL
+        type: Technology
+        class: World
+        aliases: ["postgres", "postgresql"]
+    expect_relationships:
+      - {source: FastAPI, type: USES, target: Python}
+      - {source: FastAPI, type: USES, target: PostgreSQL}
+
+  - case_id: tech-created-by
+    tags: [tech-stack, world, relationships]
+    source:
+      user: "Who made the Linux kernel originally?"
+      assistant: "The Linux kernel was created by Linus Torvalds in 1991."
+    expect_entities:
+      - name: Linux Kernel
+        type: Technology
+        class: World
+        aliases: ["linux kernel", "linux"]
+      - name: Linus Torvalds
+        type: Person
+        class: World
+        aliases: ["torvalds"]
+    expect_relationships:
+      - {source: Linux Kernel, type: CREATED_BY, target: Linus Torvalds}
+
+  # =====================================================================
+  # WORLD KNOWLEDGE — entity typing across domains
+  # =====================================================================
+  - case_id: physics-scattering
+    tags: [physics, world]
+    source:
+      user: "Why is the sky blue?"
+      assistant: >
+        Rayleigh scattering: shorter (blue) wavelengths scatter more strongly off air
+        molecules than longer (red) ones, so the daytime sky looks blue.
+    expect_entities:
+      - name: Rayleigh Scattering
+        type: Concept
+        class: World
+        aliases: ["rayleigh scattering"]
+      - name: Wavelength
+        type: Concept
+        class: World
+        aliases: ["wavelength", "wavelengths"]
+    expect_relationships:
+      - {source: Rayleigh Scattering, type: RELATED_TO, target: Wavelength}
+
+  - case_id: cosmology-cmb
+    tags: [cosmology, physics, world]
+    source:
+      user: "What's the faint leftover radiation from the early universe called?"
+      assistant: >
+        The cosmic microwave background — relic radiation from about 380,000 years
+        after the Big Bang, when the universe became transparent.
+    expect_entities:
+      - name: Cosmic Microwave Background
+        type: Concept
+        class: World
+        aliases: ["cmb", "cosmic microwave background"]
+      - name: Big Bang
+        type: Event
+        class: World
+        aliases: ["the big bang", "big bang"]
+    expect_relationships:
+      - {source: Cosmic Microwave Background, type: RELATED_TO, target: Big Bang}
+
+  - case_id: optics-diffraction-limit
+    tags: [optics, physics, world]
+    source:
+      user: "What sets the smallest thing an optical microscope can resolve?"
+      assistant: >
+        The diffraction limit — roughly half the wavelength of light — bounds the
+        resolution of a conventional optical microscope.
+    expect_entities:
+      - name: Diffraction Limit
+        type: Concept
+        class: World
+        aliases: ["the diffraction limit", "diffraction limit"]
+      - name: Optical Microscope
+        type: Technology
+        class: World
+        aliases: ["optical microscope"]
+    expect_relationships:
+      - {source: Diffraction Limit, type: RELATED_TO, target: Optical Microscope}
+
+  - case_id: cooking-technique
+    tags: [cooking, world]
+    source:
+      user: "How do I get really smooth hummus?"
+      assistant: >
+        Peel the chickpeas or simmer them with a little baking soda until very soft,
+        then blend with ice-cold water and plenty of tahini.
+    expect_entities:
+      - name: Hummus
+        type: Concept
+        class: World
+        aliases: ["hummus"]
+      - name: Tahini
+        type: Concept
+        class: World
+        aliases: ["tahini"]
+    expect_relationships:
+      - {source: Hummus, type: USES, target: Tahini}
+
+  - case_id: history-bronze-age
+    tags: [history, world]
+    source:
+      user: "Tell me about the Bronze Age civilisation on Crete."
+      assistant: >
+        The Minoan civilisation flourished on Crete in the Bronze Age, centred on
+        palace complexes such as Knossos.
+    expect_entities:
+      - name: Minoan Civilisation
+        type: Concept
+        class: World
+        aliases: ["the minoans", "minoan civilisation", "minoans"]
+      - name: Crete
+        type: Location
+        class: World
+        aliases: ["crete"]
+      - name: Knossos
+        type: Location
+        class: World
+        aliases: ["knossos"]
+    expect_relationships:
+      - {source: Knossos, type: LOCATED_IN, target: Crete}
+
+  - case_id: located-in-correct
+    tags: [geography, world, relationships]
+    source:
+      user: "Is the Alhambra in Granada?"
+      assistant: "Yes — the Alhambra is a palace and fortress complex located in Granada, Spain."
+    expect_entities:
+      - name: Alhambra
+        type: Location
+        class: World
+        aliases: ["the alhambra", "alhambra"]
+      - name: Granada
+        type: Location
+        class: World
+        aliases: ["granada"]
+    # A genuine geographic containment — LOCATED_IN is CORRECT here (contrast the visit cases).
+    expect_relationships:
+      - {source: Alhambra, type: LOCATED_IN, target: Granada}
+
+  - case_id: game-theory-prisoners-dilemma
+    tags: [game-theory, world, relationships]
+    source:
+      user: "Remind me how the Prisoner's Dilemma works."
+      assistant: >
+        The Prisoner's Dilemma is a canonical game in game theory where mutual
+        defection is the dominant-strategy equilibrium despite mutual cooperation
+        paying better.
+    expect_entities:
+      - name: Prisoner's Dilemma
+        type: Concept
+        class: World
+        aliases: ["prisoners dilemma", "the prisoner's dilemma"]
+      - name: Game Theory
+        type: Concept
+        class: World
+        aliases: ["game theory"]
+    expect_relationships:
+      - {source: Prisoner's Dilemma, type: PART_OF, target: Game Theory}
+
+  - case_id: cs-data-structure
+    tags: [cs, world]
+    source:
+      user: "When would I reach for a trie?"
+      assistant: >
+        A trie is a tree data structure for storing strings by shared prefixes; it
+        shines for autocomplete and prefix search.
+    expect_entities:
+      - name: Trie
+        type: Concept
+        class: World
+        aliases: ["a trie", "trie"]
+      - name: Prefix Search
+        type: Concept
+        class: World
+        aliases: ["prefix search"]
+    expect_relationships:
+      - {source: Trie, type: USES, target: Prefix Search}
+
+  - case_id: security-incident-response
+    tags: [security, csirt, world]
+    source:
+      user: "What's a standard incident-response lifecycle?"
+      assistant: >
+        A common one has phases: preparation, detection and analysis, containment,
+        eradication and recovery, and post-incident review.
+    expect_entities:
+      - name: Incident Response
+        type: Concept
+        class: World
+        aliases: ["incident response", "incident-response"]
+      - name: Containment
+        type: Concept
+        class: World
+        aliases: ["containment"]
+    expect_relationships:
+      - {source: Containment, type: PART_OF, target: Incident Response}
+
+  # =====================================================================
+  # STANCE / CLAIM EMISSION — must be structured, not flattened (FRE-636)
+  # =====================================================================
+  - case_id: stance-and-claim-vehicle
+    tags: [stance, claim, personal, world]
+    source:
+      user: "My current lease is nearly up so I'm shopping again — honestly I love a manual gearbox, always have."
+      assistant: >
+        A manual transmission gives direct control over gear selection; fewer new
+        models offer one each year.
+    expect_entities:
+      - name: Manual Transmission
+        type: Concept
+        class: World
+        aliases: ["manual gearbox", "manual transmission"]
+    expect_relationships: []
+    # The affect toward the manual gearbox is a STANCE, not a World-description clause.
+    expect_stances:
+      - {target: Manual Transmission, affect: likes strongly}
+    # The lease-ending situational fact is a PERSONAL CLAIM, not dropped.
+    expect_claims:
+      - {facet: lease_status, content_gist: the user's current vehicle lease is nearly finished}
+
+  - case_id: stance-ear-training-goal
+    tags: [stance, music, world]
+    source:
+      user: "I want to finally nail interval recognition by ear this year."
+      assistant: >
+        Ear training builds interval recognition through graded drills — singing and
+        identifying intervals against a reference pitch.
+    expect_entities:
+      - name: Ear Training
+        type: Concept
+        class: World
+        aliases: ["ear training"]
+      - name: Interval Recognition
+        type: Concept
+        class: World
+        aliases: ["interval recognition"]
+    expect_relationships:
+      - {source: Interval Recognition, type: PART_OF, target: Ear Training}
+    expect_stances:
+      - {target: Interval Recognition, affect: a practical learning goal}
+
+  - case_id: stance-preferred-cuisine
+    tags: [stance, cooking, world]
+    source:
+      user: "Give me a weeknight idea — I lean hard into spicy Sichuan food."
+      assistant: >
+        Sichuan cuisine is defined by the numbing heat of Sichuan peppercorns and
+        chilli; mapo tofu is a fast weeknight classic.
+    expect_entities:
+      - name: Sichuan Cuisine
+        type: Concept
+        class: World
+        aliases: ["sichuan food", "sichuan cuisine"]
+      - name: Mapo Tofu
+        type: Concept
+        class: World
+        aliases: ["mapo tofu"]
+    expect_stances:
+      - {target: Sichuan Cuisine, affect: strongly prefers}
+
+  # =====================================================================
+  # PERSONAL class — named things in the user's own life
+  # =====================================================================
+  - case_id: personal-writing-project
+    tags: [personal, neuroscience, world]
+    source:
+      user: "Back to the chapter I'm drafting on neuroplasticity — I want to tie in learning."
+      assistant: >
+        Neuroplasticity is the brain's capacity to reorganise its connections with
+        experience, which is the substrate of learning.
+    expect_entities:
+      - name: Neuroplasticity
+        type: Concept
+        class: World
+        aliases: ["neuroplasticity"]
+      - name: Learning
+        type: Concept
+        class: World
+        aliases: ["learning"]
+      # The user's own drafted artifact is a Personal-class entity (named thing in their life).
+      - name: Neuroplasticity Chapter
+        type: Topic
+        class: Personal
+        aliases: ["the chapter", "the chapter i'm drafting", "my chapter"]
+    expect_relationships:
+      - {source: Neuroplasticity, type: RELATED_TO, target: Learning}
+      - {source: Neuroplasticity Chapter, type: RELATED_TO, target: Neuroplasticity}
+    # The drafted chapter is also a Personal claim/artifact, not World knowledge.
+    expect_claims:
+      - {facet: writing_project, content_gist: the user is drafting a chapter on neuroplasticity}
+
+  # =====================================================================
+  # SYSTEM class — the agent's own machinery (the ~46% operational bucket)
+  # =====================================================================
+  - case_id: system-self-telemetry
+    tags: [system, agent-arch]
+    source:
+      user: "Why did the last consolidation run get budget-denied?"
+      assistant: >
+        The consolidation attempt hit the entity-extraction daily cost cap, so the
+        cost gate denied it and it will retry next window.
+    expect_entities:
+      - name: Consolidation Run
+        type: Event
+        class: System
+        aliases: ["consolidation run", "consolidation attempt", "the last consolidation run"]
+      - name: Cost Gate
+        type: Technology
+        class: System
+        aliases: ["the cost gate", "cost gate"]
+    expect_relationships: []
+    # This is agent operational state, not user knowledge — must be class=System.
+
+  - case_id: system-graph-store
+    tags: [system, agent-arch]
+    source:
+      user: "Which store holds the knowledge graph again?"
+      assistant: "The knowledge graph lives in Neo4j; sessions and costs are in Postgres."
+    expect_entities:
+      - name: Neo4j
+        type: Technology
+        class: System
+        aliases: ["neo4j"]
+      - name: Knowledge Graph
+        type: Concept
+        class: System
+        aliases: ["the knowledge graph", "knowledge graph"]
+    expect_relationships:
+      - {source: Knowledge Graph, type: PART_OF, target: Neo4j}

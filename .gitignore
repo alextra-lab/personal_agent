@@ -173,6 +173,9 @@ telemetry/evaluation/fre453-canonical-evalset/
 # FRE-435/488 memory-recall harness run outputs (raw runs never committed; curated summaries only)
 telemetry/evaluation/fre435-memory-recall/
 
+# FRE-630 extraction-quality benchmark run outputs (raw runs never committed; curated summaries only)
+telemetry/evaluation/fre630-extraction-quality/
+
 # FRE-577 occupancy curve eval run outputs (regeneratable)
 telemetry/evaluation/eval-04b-occupancy-curve/
 

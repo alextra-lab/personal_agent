@@ -219,8 +219,9 @@ artifact_read_tool = ToolDefinition(
     description=(
         "Fetch an artifact's metadata and (for textual artifacts under "
         "256 KB) its content inline, so the agent can revise or build upon "
-        "a prior artifact. For larger or binary artifacts, returns the "
-        "public URL only — the user can open it in a browser."
+        "a prior artifact. For binary or image artifacts no bytes are returned "
+        "inline; the result carries a human-display-only URL (openable in a "
+        "browser by the user) — the agent cannot fetch that URL."
     ),
     category="memory_read",
     parameters=[
@@ -602,16 +603,20 @@ async def artifact_read_executor(
       application/json), AND
     - size_bytes <= 256 KB.
 
-    Larger artifacts and binary types (image/png, image/svg+xml) return
-    metadata + public_url only — the agent should direct the user to open
-    the URL directly.
+    Larger text-like artifacts return metadata + ``public_url``. Binary/image
+    artifacts (image/*, application/pdf) return metadata plus a
+    ``human_display_url`` (human/browser display only) and a ``note`` — no bytes
+    inline and no agent-fetchable URL, per ADR-0101 §7 (AC-8): the public route is
+    Cloudflare-Access-protected, so the agent cannot fetch it. Current-turn image
+    attachments reach the model as a turn content block, not by URL.
 
     Args:
         artifact_id: UUID string returned by artifact_write or artifact_list.
         ctx: Orchestrator ``ExecutionContext`` with ``user_id``.
 
     Returns:
-        Metadata dict. ``content`` key present only for small textual artifacts.
+        Metadata dict. ``content`` key present only for small textual artifacts;
+        ``public_url`` for text-like artifacts, else ``human_display_url`` + ``note``.
 
     Raises:
         ToolExecutionError: On invalid UUID, not found (incl. cross-user),
@@ -656,9 +661,17 @@ async def artifact_read_executor(
         )
         raise ToolExecutionError(f"artifact {parsed_id} not found (or not owned by current user).")
 
+    # Text-like content keeps a plain ``public_url``; binary/image content does not
+    # (AC-8, below). ``_TEXTUAL_CONTENT_TYPES`` covers the charset-tagged artifact
+    # types plus ``application/json``; the ``text/`` prefix additionally covers the
+    # bare upload types (``text/plain`` / ``text/markdown`` / ``text/csv`` —
+    # uploads_router.ALLOWED_UPLOAD_CONTENT_TYPES) so a text upload is not mislabelled
+    # binary. Inline fetch stays gated on the narrower registered-textual set below.
+    is_registered_textual = row.content_type in _TEXTUAL_CONTENT_TYPES
+    is_text_like = is_registered_textual or row.content_type.startswith("text/")
+
     output: dict[str, Any] = {
         "artifact_id": str(row.id),
-        "public_url": _public_url(row.id),
         "slug": row.slug,
         "title": row.title,
         "summary": row.summary,
@@ -669,17 +682,31 @@ async def artifact_read_executor(
         "content": None,
     }
 
+    # ADR-0101 §7 (AC-8, artifact_read honesty): the public URL is the
+    # Cloudflare-Access-protected route. For a binary/image artifact no bytes are
+    # returned inline, so a bare ``public_url`` reads to the model as a fetchable
+    # content source — but the agent cannot fetch it (it receives a sign-in page).
+    # Present the URL only under an explicitly human-display-only key and state
+    # that the bytes reach the model via the turn's content block, never by URL.
+    # Text-like artifacts are out of scope and keep ``public_url`` unchanged.
+    public_url = _public_url(row.id)
+    if is_text_like:
+        output["public_url"] = public_url
+    else:
+        if public_url is not None:
+            output["human_display_url"] = public_url
+        output["note"] = (
+            "Binary or image artifact — the bytes are not URL-fetchable by the agent. "
+            "When such an artifact is a current-turn image attachment, its bytes are "
+            "delivered directly in this turn's content block. 'human_display_url' is for "
+            "human/browser display only and requires interactive sign-in."
+        )
+
     should_fetch_inline = (
-        store is not None
-        and row.content_type in _TEXTUAL_CONTENT_TYPES
-        and row.size_bytes <= _MAX_INLINE_READ_BYTES
+        store is not None and is_registered_textual and row.size_bytes <= _MAX_INLINE_READ_BYTES
     )
 
-    if (
-        store is not None
-        and row.content_type in _TEXTUAL_CONTENT_TYPES
-        and row.size_bytes <= _MAX_INLINE_READ_BYTES
-    ):
+    if store is not None and is_registered_textual and row.size_bytes <= _MAX_INLINE_READ_BYTES:
         log.info(
             "artifact_read_fetching_inline",
             trace_id=trace_id,

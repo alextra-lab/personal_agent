@@ -4,13 +4,17 @@ This module provides session storage and retrieval for multi-turn conversations.
 Sessions are stored in-memory for MVP, with optional JSON persistence for recovery.
 """
 
+import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from personal_agent.governance.models import Mode
 from personal_agent.orchestrator.channels import Channel
+
+if TYPE_CHECKING:
+    from personal_agent.orchestrator.types import PendingCloudAttachmentConfirmation
 
 
 @dataclass
@@ -135,3 +139,69 @@ class SessionManager:
         if session_id not in self._sessions:
             raise ValueError(f"Session {session_id} not found")
         del self._sessions[session_id]
+
+    def save_pending_confirmation(
+        self, session_id: str, pending: "PendingCloudAttachmentConfirmation"
+    ) -> None:
+        """Save a pending cloud-attachment confirmation to session metadata.
+
+        Args:
+            session_id: The session identifier.
+            pending: PendingCloudAttachmentConfirmation to store.
+
+        Raises:
+            ValueError: If session_id not found.
+        """
+        session = self._sessions.get(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+
+        session.metadata["pending_cloud_confirmation"] = asdict(pending)
+        session.last_active_at = datetime.now(UTC)
+
+    def load_pending_confirmation(self, session_id: str) -> dict[str, Any] | None:
+        """Load pending cloud-attachment confirmation from session metadata.
+
+        Checks TTL expiry and returns None if expired.
+
+        Args:
+            session_id: The session identifier.
+
+        Returns:
+            Pending confirmation dict if present and not expired, None otherwise.
+        """
+        session = self._sessions.get(session_id)
+        if not session:
+            return None
+
+        pending = session.metadata.get("pending_cloud_confirmation")
+        if not pending:
+            return None
+
+        # Type safety: pending is stored as dict[str, Any]
+        pending_dict: dict[str, Any] = pending
+        created_at = pending_dict.get("created_at", 0)
+        ttl_seconds = pending_dict.get("ttl_seconds", 0)
+        elapsed = time.time() - created_at
+
+        if elapsed >= ttl_seconds:
+            self.clear_pending_confirmation(session_id)
+            return None
+
+        return pending_dict
+
+    def clear_pending_confirmation(self, session_id: str) -> None:
+        """Clear pending cloud-attachment confirmation from session metadata.
+
+        Args:
+            session_id: The session identifier.
+
+        Raises:
+            ValueError: If session_id not found.
+        """
+        session = self._sessions.get(session_id)
+        if not session:
+            raise ValueError(f"Session {session_id} not found")
+
+        session.metadata.pop("pending_cloud_confirmation", None)
+        session.last_active_at = datetime.now(UTC)

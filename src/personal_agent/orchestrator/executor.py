@@ -1534,6 +1534,36 @@ async def _maybe_confirm_attachment_cost(
         return True
 
     # keep_local / timeout / no active WS: no cloud spend this turn.
+    # Persist pending confirmation for potential re-injection on next turn (FRE-749).
+    from personal_agent.orchestrator.session import SessionManager as SessionMgr
+    from personal_agent.orchestrator.types import PendingCloudAttachmentConfirmation
+
+    session_mgr = SessionMgr()  # Shared global instance
+    try:
+        pending = PendingCloudAttachmentConfirmation(
+            attachments=ctx.attachments,
+            cloud_vision_model_key=effective_key,
+            estimate_usd=float(estimate),
+            created_at=time.time(),
+            ttl_seconds=600,  # 10-minute TTL for pending confirmation
+            original_trace_id=ctx.trace_id,
+        )
+        session_mgr.save_pending_confirmation(ctx.session_id, pending)
+        log.info(
+            "pending_cloud_confirmation_saved",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            estimate_usd=float(estimate),
+            ttl_seconds=600,
+        )
+    except Exception as e:
+        log.warning(
+            "pending_cloud_confirmation_save_failed",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            error=str(e),
+        )
+
     ctx.final_reply = (
         f"This turn's {len(resolved_blocks)} attachment(s) would cost about "
         f"${estimate:.4f} on the cloud vision model — above your "
@@ -1927,6 +1957,104 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
     return ctx
 
 
+def _is_affirmative_confirmation(message: str) -> bool:
+    """Check if a message is an affirmative response to proceed with cloud vision.
+
+    Detects common confirmation phrases while avoiding false positives from
+    unrelated messages that happen to contain the word "yes".
+
+    Args:
+        message: The user's message text.
+
+    Returns:
+        True if the message strongly signals affirmative confirmation, False otherwise.
+    """
+    import re
+
+    msg_lower = message.lower().strip()
+
+    # Explicit confirmations: detect only clear intent phrases.
+    # - "proceed", "confirm", "cloud" at start (strong intent)
+    # - "yes"/"ok"/"okay" ONLY if they're the entire message (with optional trailing punctuation)
+    #   to avoid false positives like "yes, I agree" or "Is that a yes?"
+    patterns = [
+        r"^proceed\b",  # "proceed" at start
+        r"^confirm\b",  # "confirm" at start
+        r"^cloud\b",  # "cloud" at start
+        r"^yes[!.]?\s*$",  # "yes" as entire message, with optional punctuation
+        r"^ok[!.]?\s*$",  # "ok" as entire message
+        r"^okay[!.]?\s*$",  # "okay" as entire message
+        r"^yes[!,.]?\s*(?:proceed|cloud)",  # "yes" followed by proceed/cloud with optional punctuation
+    ]
+
+    return any(re.search(pattern, msg_lower) for pattern in patterns)
+
+
+async def _maybe_reinject_pending_cloud_attachment(
+    ctx: ExecutionContext, session_manager: SessionManager
+) -> None:
+    """Re-inject pending cloud attachment confirmation on affirmative reply (FRE-749).
+
+    When a cloud-attachment cost gate pauses, a pending confirmation record is saved.
+    On the next turn, if the user's message is affirmative, re-inject the pending
+    attachments into the context so they flow through to cloud vision routing.
+
+    Args:
+        ctx: Execution context (modified in-place if pending is re-injected).
+        session_manager: Session manager for loading pending state.
+    """
+    pending_dict = session_manager.load_pending_confirmation(ctx.session_id)
+    if not pending_dict:
+        return
+
+    # Check for affirmative confirmation in the user's message
+    if not _is_affirmative_confirmation(ctx.user_message):
+        log.info(
+            "pending_cloud_confirmation_not_affirmative",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            message_preview=ctx.user_message[:50],
+        )
+        session_manager.clear_pending_confirmation(ctx.session_id)
+        return
+
+    # Re-construct AttachmentRef tuples from the pending dict
+    from personal_agent.orchestrator.types import AttachmentRef
+
+    try:
+        attachments_data = pending_dict.get("attachments", [])
+        ctx.attachments = tuple(
+            AttachmentRef(
+                artifact_id=a["artifact_id"],
+                content_type=a["content_type"],
+                title=a["title"],
+                r2_key=a["r2_key"],
+                processing_target=a.get("processing_target"),
+            )
+            for a in attachments_data
+        )
+        log.info(
+            "pending_cloud_confirmation_reinjected",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            attachment_count=len(ctx.attachments),
+            estimate_usd=pending_dict.get("estimate_usd"),
+            original_trace_id=pending_dict.get("original_trace_id"),
+        )
+    except Exception as e:
+        log.warning(
+            "pending_cloud_confirmation_reinject_failed",
+            trace_id=ctx.trace_id,
+            session_id=ctx.session_id,
+            error=str(e),
+        )
+        session_manager.clear_pending_confirmation(ctx.session_id)
+        return
+
+    # Clear the pending confirmation after successful re-injection
+    session_manager.clear_pending_confirmation(ctx.session_id)
+
+
 async def step_init(
     ctx: ExecutionContext, session_manager: SessionManager, trace_ctx: TraceContext
 ) -> TaskState:
@@ -1961,6 +2089,10 @@ async def step_init(
     finally:
         if timer:
             timer.end_span("session_history_load", message_count=session_message_count)
+
+    # FRE-749: Check for pending cloud-attachment confirmation from a previous paused turn
+    # and re-inject attachments if the user's message is affirmative.
+    await _maybe_reinject_pending_cloud_attachment(ctx, session_manager)
 
     # Add new user message — resolve current-turn raster attachments to image
     # blocks first (ADR-0101 §3/§4/§6, FRE-666); widens content to a block list

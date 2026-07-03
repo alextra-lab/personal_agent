@@ -219,13 +219,24 @@ class R2ArtifactStore:
             )
             raise ArtifactStoreError(f"R2 put failed for {r2_key}: {exc}") from exc
 
-    async def get(self, r2_key: str, *, trace_id: str | None = None) -> bytes:
+    async def get(
+        self,
+        r2_key: str,
+        *,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+        task_id: str | None = None,
+    ) -> bytes:
         """Fetch the bytes at ``r2_key`` from R2.
 
         Args:
             r2_key: Object key to fetch from the bucket.
             trace_id: Originating request trace_id, threaded onto failure logs
                 for §I3 identity threading.
+            session_id: Originating session id, threaded onto failure logs
+                for §8c joinability (FRE-693).
+            task_id: Sub-agent task id, threaded onto failure logs for §8c
+                joinability (FRE-693) — ``None`` at the turn level.
 
         Raises:
             ArtifactStoreError: On ``ClientError`` / ``BotoCoreError``.
@@ -249,6 +260,8 @@ class R2ArtifactStore:
                 r2_key=r2_key,
                 error=str(exc),
                 trace_id=trace_id,
+                session_id=session_id,
+                task_id=task_id,
             )
             raise ArtifactStoreError(f"R2 get failed for {r2_key}: {exc}") from exc
 

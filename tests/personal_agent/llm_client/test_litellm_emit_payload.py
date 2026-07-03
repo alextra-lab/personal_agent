@@ -21,6 +21,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+# FRE-693: session_id must be UUID-parseable — gate.reserve() now does
+# UUID(trace_ctx.session_id) to thread it onto the reservation row (ADR-0074
+# §8c), matching production reality (every real session_id is a UUID).
+_FAILING_TEST_SESSION_ID = "5b6b3f5a-6f5a-4b1a-9b1a-5b6b3f5a6f5a"
+
 
 def _make_mock_response(
     *,
@@ -189,6 +194,73 @@ async def test_legacy_litellm_events_are_not_emitted() -> None:
     assert "litellm_request_complete" not in event_names
 
 
+@pytest.mark.asyncio
+async def test_gate_reserve_and_commit_receive_session_id() -> None:
+    """FRE-693 (ADR-0074 §8c): the cost-gate reserve/commit calls thread session_id."""
+    from uuid import UUID, uuid4
+
+    from personal_agent.llm_client.litellm_client import LiteLLMClient
+    from personal_agent.llm_client.types import ModelRole
+    from personal_agent.telemetry.trace import TraceContext
+
+    session_id = str(uuid4())
+    mock_response = _make_mock_response()
+
+    mock_gate = MagicMock()
+    mock_gate.reserve = AsyncMock(return_value="res-001")
+    mock_gate.commit = AsyncMock()
+
+    mock_tracker = AsyncMock()
+    mock_tracker.connect = AsyncMock()
+    mock_tracker.disconnect = AsyncMock()
+    mock_tracker.record_api_call = AsyncMock()
+
+    client = LiteLLMClient(
+        model_id="claude-sonnet-4-6",
+        provider="anthropic",
+        max_tokens=256,
+        budget_role="main_inference",
+    )
+
+    with (
+        patch("litellm.acompletion", AsyncMock(return_value=mock_response)),
+        patch("litellm.completion_cost", return_value=0.001),
+        patch("personal_agent.cost_gate.get_default_gate", return_value=mock_gate),
+        patch(
+            "personal_agent.cost_gate.load_budget_config",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "personal_agent.llm_client.cost_estimator.estimate_reservation_for_call",
+            return_value=Decimal("0.01"),
+        ),
+        patch(
+            "personal_agent.llm_client.history_sanitiser.sanitise_messages",
+            side_effect=lambda msgs, trace_id: (msgs, []),
+        ),
+        patch(
+            "personal_agent.llm_client.cost_tracker.CostTrackerService",
+            return_value=mock_tracker,
+        ),
+        patch(
+            "personal_agent.config.settings.get_settings",
+            return_value=MagicMock(anthropic_api_key="test-key", openai_api_key=None),
+        ),
+    ):
+        await client.respond(
+            role=ModelRole.PRIMARY,
+            messages=[{"role": "user", "content": "hello"}],
+            trace_ctx=TraceContext.new_trace(session_id=session_id),
+        )
+
+    reserve_kwargs = mock_gate.reserve.call_args.kwargs
+    assert reserve_kwargs["session_id"] == UUID(session_id)
+    assert reserve_kwargs["task_id"] is None
+
+    commit_kwargs = mock_gate.commit.call_args.kwargs
+    assert commit_kwargs["session_id"] == session_id
+
+
 async def _call_respond_failing(captured_error_calls: list[tuple]) -> None:
     """Run LiteLLMClient.respond() where ``litellm.acompletion`` raises.
 
@@ -252,7 +324,7 @@ async def _call_respond_failing(captured_error_calls: list[tuple]) -> None:
             await client.respond(
                 role=ModelRole.PRIMARY,
                 messages=[{"role": "user", "content": "hello"}],
-                trace_ctx=TraceContext.new_trace(session_id="sess-552"),
+                trace_ctx=TraceContext.new_trace(session_id=_FAILING_TEST_SESSION_ID),
             )
 
 
@@ -263,4 +335,4 @@ async def test_litellm_request_failed_includes_session_id() -> None:
     await _call_respond_failing(calls)
     failed = [kwargs for event, kwargs in calls if event == "litellm_request_failed"]
     assert failed, f"litellm_request_failed not found in: {[e for e, _ in calls]}"
-    assert failed[0]["session_id"] == "sess-552"
+    assert failed[0]["session_id"] == _FAILING_TEST_SESSION_ID

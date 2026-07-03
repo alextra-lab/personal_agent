@@ -327,6 +327,8 @@ class BudgetReservationModel(Base):
     expires_at = Column(DateTime(timezone=True), nullable=False)
     settled_at = Column(DateTime(timezone=True), nullable=True)
     trace_id = Column(PG_UUID(as_uuid=True), nullable=True)
+    session_id = Column(PG_UUID(as_uuid=True), nullable=True)
+    task_id = Column(PG_UUID(as_uuid=True), nullable=True)
 
 
 # ============================================================================

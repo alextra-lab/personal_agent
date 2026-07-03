@@ -268,6 +268,35 @@ async def test_get_raises_artifact_store_error_on_botocore_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_failure_log_carries_session_and_task_id() -> None:
+    """FRE-693 (ADR-0074 §8c): the byte-fetch failure log threads session_id/task_id."""
+    import structlog
+    from botocore.exceptions import ClientError
+
+    fake = _FakeS3Client()
+
+    async def raise_client_error(**_kwargs: Any) -> dict[str, Any]:
+        raise ClientError(
+            error_response={"Error": {"Code": "NoSuchKey", "Message": "missing"}},
+            operation_name="GetObject",
+        )
+
+    fake.get_object = raise_client_error  # type: ignore[assignment]
+    store = _store_with(fake)
+
+    with structlog.testing.capture_logs() as logs:
+        with pytest.raises(ArtifactStoreError):
+            await store.get(
+                "missing-key", trace_id="trace-1", session_id="sess-1", task_id="task-1"
+            )
+
+    failure_logs = [entry for entry in logs if entry.get("event") == "artifact_store_get_failed"]
+    assert failure_logs, f"artifact_store_get_failed not found in: {logs}"
+    assert failure_logs[0]["session_id"] == "sess-1"
+    assert failure_logs[0]["task_id"] == "task-1"
+
+
+@pytest.mark.asyncio
 async def test_delete_is_idempotent_via_client() -> None:
     fake = _FakeS3Client()
     fake.stash("k", b"present")

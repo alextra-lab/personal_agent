@@ -11,6 +11,7 @@ live DB. Run with ``pytest tests/personal_agent/cost_gate/`` directly.
 from __future__ import annotations
 
 from decimal import Decimal
+from uuid import uuid4
 
 import asyncpg
 import pytest
@@ -21,6 +22,26 @@ from personal_agent.cost_gate.gate import _window_start
 from .conftest import _build_config
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.asyncio
+async def test_reserve_stores_session_and_task_id(
+    cost_gate: CostGate, db_pool: asyncpg.Pool, unique_role: str
+) -> None:
+    """FRE-693 (ADR-0074 §8c): reserve() threads session_id/task_id onto the row."""
+    session_id = uuid4()
+    task_id = uuid4()
+    rid = await cost_gate.reserve(
+        unique_role, Decimal("0.10"), session_id=session_id, task_id=task_id
+    )
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT session_id, task_id FROM budget_reservations WHERE reservation_id = $1",
+            rid,
+        )
+    assert row is not None
+    assert row["session_id"] == session_id
+    assert row["task_id"] == task_id
 
 
 async def _counter_total(pool: asyncpg.Pool, role: str, time_window: str) -> Decimal:

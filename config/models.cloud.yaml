@@ -139,8 +139,8 @@ models:
 
   claude_sonnet:
     # Anthropic Claude Sonnet — primary model for cloud profile + background tasks
-    # LiteLLM model string: "anthropic/claude-sonnet-4-6" (prefixed at call time)
-    id: "claude-sonnet-4-6"
+    # LiteLLM model string: "anthropic/claude-sonnet-5" (prefixed at call time)
+    id: "claude-sonnet-5"
     provider: "anthropic"
     provider_type: "cloud"
     max_tokens: 32768
@@ -268,7 +268,7 @@ models:
 #     command: "claude"
 #     auth_method: "api_key"
 #     auth_env_var: "ANTHROPIC_API_KEY"
-#     model: "claude-sonnet-4-6"
+#     model: "claude-sonnet-5"
 #     max_turns: 20
 #     timeout_seconds: 600
 #     cost_model: "per_token"

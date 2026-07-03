@@ -11,7 +11,7 @@
  * activate handler evicts the previous version.
  */
 
-const CACHE_NAME = 'seshat-v29-attachment-override';
+const CACHE_NAME = 'seshat-v30-rating-chips';
 
 const PRECACHE_URLS = [
   '/',

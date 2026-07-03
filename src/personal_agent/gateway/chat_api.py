@@ -41,7 +41,7 @@ _SYSTEM_PROMPT = (
     "You are Seshat, a personal AI assistant with persistent memory "
     "and knowledge graph capabilities. You are helpful, thoughtful, and concise."
 )
-_CLOUD_MODEL = "claude-sonnet-4-6"
+_CLOUD_MODEL = "claude-sonnet-5"
 _MAX_TOKENS = 8192
 
 

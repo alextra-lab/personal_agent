@@ -334,7 +334,7 @@ def test_configure_dspy_lm_accepts_string_role_name():
 def test_configure_dspy_lm_cloud_anthropic_model_string():
     """Cloud Anthropic model produces 'anthropic/{model_id}', not 'openai/'."""
     lm = configure_dspy_lm(role="claude_sonnet")
-    assert lm.model == "anthropic/claude-sonnet-4-6"
+    assert lm.model == "anthropic/claude-sonnet-5"
 
 
 def test_configure_dspy_lm_cloud_openai_model_string():

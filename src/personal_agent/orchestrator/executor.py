@@ -1453,7 +1453,9 @@ def _resolve_vision_routing_key(ctx: ExecutionContext, role_name: str) -> str:
 
 
 async def _maybe_confirm_attachment_cost(
-    ctx: ExecutionContext, resolved_blocks: Sequence[dict[str, Any]]
+    ctx: ExecutionContext,
+    resolved_blocks: Sequence[dict[str, Any]],
+    session_manager: SessionManager,
 ) -> bool:
     """Pre-flight cloud-attachment cost gate (ADR-0101 §8b / FRE-691).
 
@@ -1471,6 +1473,7 @@ async def _maybe_confirm_attachment_cost(
     Args:
         ctx: Execution context (carries attachments, session/trace identity, reply).
         resolved_blocks: The turn's resolved attachment content blocks.
+        session_manager: Session manager for persisting pending confirmation state across turns (FRE-749).
 
     Returns:
         ``True`` to proceed with the turn; ``False`` to stop with no model call
@@ -1539,10 +1542,8 @@ async def _maybe_confirm_attachment_cost(
 
     # keep_local / timeout / no active WS: no cloud spend this turn.
     # Persist pending confirmation for potential re-injection on next turn (FRE-749).
-    from personal_agent.orchestrator.session import SessionManager as SessionMgr
     from personal_agent.orchestrator.types import PendingCloudAttachmentConfirmation
 
-    session_mgr = SessionMgr()  # Shared global instance
     try:
         pending = PendingCloudAttachmentConfirmation(
             attachments=ctx.attachments,
@@ -1552,7 +1553,7 @@ async def _maybe_confirm_attachment_cost(
             ttl_seconds=600,  # 10-minute TTL for pending confirmation
             original_trace_id=ctx.trace_id,
         )
-        session_mgr.save_pending_confirmation(ctx.session_id, pending)
+        session_manager.save_pending_confirmation(ctx.session_id, pending)
         log.info(
             "pending_cloud_confirmation_saved",
             trace_id=ctx.trace_id,
@@ -2130,7 +2131,9 @@ async def step_init(
     # ADR-0101 §8b / FRE-691: pre-flight cloud-attachment cost confirmation. An
     # over-threshold cloud turn stops here with the estimate + proceed/keep-local
     # prompt and makes no model call until the user confirms (AC-10).
-    if resolved_blocks and not await _maybe_confirm_attachment_cost(ctx, resolved_blocks):
+    if resolved_blocks and not await _maybe_confirm_attachment_cost(
+        ctx, resolved_blocks, session_manager
+    ):
         return TaskState.SYNTHESIS
 
     # --- Gateway-driven path: skip inline routing and memory ---

@@ -138,6 +138,30 @@ entity half's evidence.
 
 ---
 
+## Levers after the taxonomy fix (this ADR sequences the others)
+
+The convergent-failure diagnosis makes V2 the **root-cause fix**, which re-orders every other
+extraction lever behind it. The full reconciliation lives in
+[the ER-extraction opinion-vs-pipeline study](../research/2026-07-03-er-extraction-opinion-vs-pipeline.md);
+the sequencing consequence for *this* ADR:
+
+1. **V2 (this ADR)** lands first — re-labeled gold → 8-type GoLLIE prompt → powered A/B → KG migration.
+2. **Ontology enforcement (FRE-760, rel-type write gate)** must enforce **V2, not V1** — a write-gate
+   built on the inherited entity-type enum would harden the exact schema this ADR replaces. It is also
+   *low urgency* (FRE-630 measured off-vocab edges at only ~2% → defense-in-depth, not a live fire), so
+   it sequences behind, or is made forward-compatible with, V2.
+3. **Prompt exemplars / DSPy-compiled extraction** re-baseline against the V2-relabeled gold. Static
+   few-shot exemplars already failed (FRE-759) partly *because* they cannot demonstrate the correct side
+   of a boundary that does not exist — coarsening the boundary (V2) is the prerequisite, not a parallel
+   track.
+4. **Fine-tuning / purpose-built model** stays deprioritized (Alternatives #3) — blocked upstream on the
+   gold set until V2 relabels it.
+5. **Extraction decomposition (NER → pair → classify)** is orthogonal (a *precision* lever) and remains a
+   *measure-gated candidate only* — the FRE-630 precision traps are already green, so it is not a ticket
+   until a post-V2 measurement shows spurious-triple noise.
+
+---
+
 ## Verification / Acceptance Criteria
 
 | # | Criterion | Proof |

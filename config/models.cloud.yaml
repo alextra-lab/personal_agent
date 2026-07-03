@@ -191,6 +191,12 @@ models:
     min_concurrency: 1
     max_concurrency: 10
     default_timeout: 60
+    # FRE-758: pinned near-0 for entity-extraction determinism — the FRE-630
+    # baseline showed wide sample-to-sample variance (entity_type_accuracy
+    # std ±0.35, claim_emission_recall std ±0.47) at the provider default (~1.0).
+    # Verified gpt-5.4-mini accepts a temperature override (not a reasoning-tier
+    # model that fixes it at 1.0).
+    temperature: 0.0
 
   # ── Tier 3: Context Compressor (ADR-0038) ────────────────────────
   compressor:

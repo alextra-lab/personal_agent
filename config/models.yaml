@@ -169,6 +169,10 @@ models:
     min_concurrency: 1
     max_concurrency: 10
     default_timeout: 60
+    # FRE-758: pinned near-0 for entity-extraction determinism — this is the
+    # actual local-dev entity_extraction_role (see top of file); see gpt-5.4-mini
+    # below for the parity rationale (that entry governs the cloud/prod role).
+    temperature: 0.0
 
   gpt-5.4-mini:
     # OpenAI GPT-5.4 Mini — higher-quality background reasoning
@@ -181,6 +185,10 @@ models:
     min_concurrency: 1
     max_concurrency: 10
     default_timeout: 60
+    # FRE-758: not the local entity_extraction_role (gpt-5.4-nano is), but
+    # pinned for parity with config/models.cloud.yaml's gpt-5.4-mini (the
+    # prod/benchmarked entity extractor) — avoids the next config-drift surprise.
+    temperature: 0.0
 
   # ── Tier 3: Context Compressor (ADR-0038) ────────────────────────
   compressor:

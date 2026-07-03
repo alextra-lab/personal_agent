@@ -243,6 +243,34 @@ class TestSupportsVisionDeployedConfig:
             )
 
 
+class TestEntityExtractionTemperatureDeployedConfig:
+    """FRE-758: the deployed entity extractor runs at a pinned near-0 temperature.
+
+    Asserts through the real YAML + role indirection (``entity_extraction_role``),
+    not a hand-supplied ``model_def`` — a mocked call-site test cannot catch the
+    role pointing at a *different, unpinned* model entry (caught in codex
+    plan-review: ``config/models.yaml``'s ``entity_extraction_role`` is
+    ``gpt-5.4-nano``, not ``gpt-5.4-mini``).
+    """
+
+    @pytest.mark.parametrize(
+        "config_path",
+        [
+            Path("config/models.yaml"),
+            Path("config/models.cloud.yaml"),
+        ],
+    )
+    def test_entity_extraction_role_has_pinned_temperature(self, config_path: Path) -> None:
+        """The resolved entity_extraction_role model must have temperature == 0.0."""
+        config = load_model_config(config_path)
+
+        role_model = config.models[config.entity_extraction_role]
+        assert role_model.temperature == 0.0, (
+            f"{config.entity_extraction_role} in {config_path} must be pinned to "
+            f"temperature=0.0, got {role_model.temperature!r}"
+        )
+
+
 class TestDockerComposeModelConfigPaths:
     """Every AGENT_MODEL_CONFIG_PATH in a docker-compose file must resolve to a real file.
 

@@ -401,3 +401,37 @@ class TestDescriptionUpdateKind:
             )
             result = await _run_extractor(model_json, user_message="msg")
             assert result["entities"][0]["description_update_kind"] == "new"
+
+
+@pytest.mark.asyncio
+class TestCloudPathTemperature:
+    """FRE-758: the cloud extraction call must forward model_def.temperature.
+
+    Unlike the local-path tests above, this exercises the ``provider is not None``
+    branch (entity_extraction.py) by mocking ``get_llm_client`` — proves the
+    configured temperature (near-0, pinned per FRE-758) actually reaches
+    ``LiteLLMClient.respond`` instead of silently defaulting to the OpenAI
+    provider default (~1.0), which was the FRE-630-observed non-determinism.
+    """
+
+    async def test_cloud_path_passes_configured_temperature(self) -> None:
+        """The cloud call forwards model_def.temperature as an explicit kwarg."""
+        from types import SimpleNamespace
+
+        mock_model_def = SimpleNamespace(provider="openai", id="gpt-5.4-mini", temperature=0.0)
+        with (
+            patch("personal_agent.second_brain.entity_extraction.load_model_config") as mock_cfg,
+            patch("personal_agent.llm_client.factory.get_llm_client") as mock_get_client,
+        ):
+            mock_cfg.return_value.entity_extraction_role = "gpt-5.4-mini"
+            mock_cfg.return_value.models = {"gpt-5.4-mini": mock_model_def}
+            mock_client = mock_get_client.return_value
+            mock_client.respond = AsyncMock(
+                return_value={
+                    "content": orjson.dumps(_OPERATIONAL_MODEL_JSON).decode("utf-8"),
+                }
+            )
+
+            await extract_entities_and_relationships(_OPERATIONAL_USER_MSG, "assistant reply")
+
+            assert mock_client.respond.call_args.kwargs["temperature"] == 0.0

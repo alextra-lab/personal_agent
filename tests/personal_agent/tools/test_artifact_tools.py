@@ -663,6 +663,88 @@ async def test_artifact_read_binary_content_type_omits_content(
 
 
 @pytest.mark.asyncio
+async def test_artifact_read_binary_no_agent_fetchable_url_ac8(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-8 (ADR-0101 §7): a binary/image read exposes no agent-fetchable URL field.
+
+    Any URL must be absent from the agent-readable content or carried only under an
+    explicitly human-display-only key, and a note must state the bytes are delivered
+    via the turn's content block, not by URL.
+    """
+    store = _FakeStore()
+    session = _install_fakes(monkeypatch, store=store)
+
+    art_id = uuid4()
+    session.enqueue(
+        SimpleNamespace(
+            first=lambda: SimpleNamespace(
+                id=art_id,
+                user_id=uuid4(),
+                slug="img",
+                title=None,
+                summary=None,
+                content_type="image/png",
+                size_bytes=4,
+                r2_key=f"artifact/uid/GLOBAL/{art_id}.png",
+                tags=[],
+                created_at=datetime(2026, 5, 21, tzinfo=timezone.utc),
+            )
+        )
+    )
+
+    out = await artifact_tools.artifact_read_executor(artifact_id=str(art_id), ctx=_ctx())
+
+    # No bare public_url — that field reads as an agent-fetchable content source.
+    assert "public_url" not in out
+    # The URL, wherever it appears, is only under the explicitly human-display key.
+    public = f"https://artifacts.test/{art_id}"
+    url_keys = [k for k, v in out.items() if isinstance(v, str) and public in v]
+    assert url_keys == ["human_display_url"]
+    # The note must state the bytes are not URL-fetchable and come via the turn.
+    assert "content block" in out["note"]
+    assert "not url-fetchable" in out["note"].lower()
+
+
+@pytest.mark.asyncio
+async def test_artifact_read_bare_text_upload_keeps_public_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bare text upload (text/plain, no charset) is text-like — keeps public_url.
+
+    Guards the AC-8 predicate against mislabelling upload text types
+    (uploads_router.ALLOWED_UPLOAD_CONTENT_TYPES) as binary/image.
+    """
+    store = _FakeStore()
+    session = _install_fakes(monkeypatch, store=store)
+
+    art_id = uuid4()
+    session.enqueue(
+        SimpleNamespace(
+            first=lambda: SimpleNamespace(
+                id=art_id,
+                user_id=uuid4(),
+                slug="notes",
+                title="Notes",
+                summary=None,
+                content_type="text/plain",  # bare upload type — not in _TEXTUAL_CONTENT_TYPES
+                size_bytes=512 * 1024,  # over inline cap → no inline content either way
+                r2_key=f"upload/uid/GLOBAL/{art_id}.txt",
+                tags=[],
+                created_at=datetime(2026, 5, 21, tzinfo=timezone.utc),
+            )
+        )
+    )
+
+    out = await artifact_tools.artifact_read_executor(artifact_id=str(art_id), ctx=_ctx())
+
+    # Text-like: plain public_url, not the binary/image note treatment.
+    assert out["public_url"].endswith(str(art_id))
+    assert "human_display_url" not in out
+    assert "note" not in out
+
+
+@pytest.mark.asyncio
 async def test_artifact_read_cross_user_raises_toolexec_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

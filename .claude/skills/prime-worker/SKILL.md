@@ -7,7 +7,7 @@ description: Run once in a build / build2 / adr worker session. Self-identifies 
 
 Read `.claude/skills/lifecycle-rules.md` first. This is a **monitor, not an executor.** It never
 edits `src/`, never runs `/build` or `/adr`, never `/clear`s, never merges, never edits MASTER_PLAN.
-It reads durable git + board + Linear state and, only when the stream is genuinely idle with a ready
+It reads durable git + Linear state and, only when the stream is genuinely idle with a ready
 NEXT, tells the owner exactly what to run. **When in doubt, stay silent.**
 
 **Run `/prime-worker` once** when you open a worker session. It arms its own **20m loop** (Step 2),
@@ -49,22 +49,23 @@ keeps `origin/main` current), then:
    branch name (build branches are `fre-<id>-…`, adr branches are `<adr-slug>-…`; only Linear state is
    uniform across both).
 
-## Step 4 — Resolve NEXT + decide via Linear state (the dispatch authority; uniform for build & adr)
-`git show origin/main:docs/plans/MASTER_PLAN.md` → the `## 🎛️ Stream Board` between
-`<!-- STREAM-BOARD:START -->` / `END`. Take THIS stream's row **NEXT** (bold `FRE-…`), its **Context**
-flag (CLEAR/KEEP), and its model tag ([O]/[S]/[H]).
-- NEXT missing/ambiguous, or a non-ticket note (e.g. "owner bug investigation") → **silent.**
+## Step 4 — Resolve NEXT from Linear (the dispatch authority; uniform for build & adr)
+Dispatch contract = lifecycle-rules § Dispatch (Linear-native). Resolve in two queries:
 
-Then `get_issue(<NEXT id>)` on FrenchForest and branch on its state:
-- **Approved** → ready and not yet started → **advise** (Step 5).
-- **In Progress** → already dispatched (a session is on it — both `/build` and `/adr` set In Progress at
-  their Step 1) → **silent.** *This is the reliable "already dispatched" guard: it does not depend on
-  branch names, so it holds for `/adr`'s ADR-slug branches just as for build's `fre-<id>` branches.*
-- **Needs Approval** → one line: *"Stream X NEXT FRE-Y not yet Approved — nothing to dispatch."*
-- **Done / anything else** → the board is stale (master hasn't advanced NEXT) → **silent.**
+1. **Busy guard:** `list_issues(team="FrenchForest", state="In Progress", label="stream:<mine>")` —
+   any result → a session is on it → **silent.** *(This replaces the old board-based
+   "already dispatched" check and is uniform across build & adr branch-naming schemes.)*
+2. **Head of queue:** `list_issues(team="FrenchForest", state="Approved", label="stream:<mine>")` —
+   order by priority (Urgent first, then High/Medium/Low, no-priority last), oldest created on ties;
+   walk from the top and take the first issue with **no open "blocked by" relation**
+   (`get_issue(<id>, includeRelations=true)` — blocked means a `blockedBy` issue that is not
+   Done/Canceled).
+- No candidate → **silent** (nothing dispatched to this stream — master hasn't labeled work for it).
+- Candidate found → read its **Tier label** ([O]/[S]/[H] → Opus/Sonnet/Haiku) and its **context
+  flag** (`context:keep` label present → KEEP; absent → CLEAR) → **advise** (Step 5).
 
 ## Step 5 — Surface the dispatch card (one line), then STOP
-Compare the board's model tag to **this session's own model** (you know it from your system prompt), and
+Compare the ticket's Tier label to **this session's own model** (you know it from your system prompt), and
 use this stream's dispatch command from Step 1. Emit exactly one line, for example:
 
 > **Stream 1 ready → FRE-724 [Opus].** Context CLEAR. Model OK (this session is Opus). Run `/clear`, then `/build 1`.
@@ -74,8 +75,8 @@ use this stream's dispatch command from Step 1. Emit exactly one line, for examp
 > **adr ready → FRE-736 [Opus].** Context CLEAR. Model OK (adr is Opus-only). Run `/clear`, then `/adr`.
 
 Then **STOP.** Do not run the command yourself. The owner performs the model switch, the `/clear`, and
-the dispatch — those are the human-only gates. Master owns the board, so you only ever advise the ticket
-master assigned to this stream; you never choose your own work.
+the dispatch — those are the human-only gates. Master owns dispatch (labels/priority/relations), so you
+only ever advise the ticket master routed to this stream; you never choose your own work.
 
 ## Boundary
 Advises only. Never edits `src/`, never runs `/build` / `/adr`, never `/clear`s, never merges, never

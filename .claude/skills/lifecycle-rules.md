@@ -41,6 +41,25 @@ doesn't have to. Your standing mandate:
 - FORBIDDEN in a PR checklist: post-deploy verification, telemetry checks, deploy
   steps, "verify on prod after merge". Those belong in a Linear comment after merge.
 
+## Comment channels (action vs record)
+
+Two comment channels, split by message **type** — never mixed:
+
+- **PR comments = the action channel.** Transient, scoped to *this PR merging*, and gone once it
+  merges. Master's review **bounces** and "fix X to pass" guidance live here, and a worker **follows**
+  them (prime-worker Step 3.2a). Master leads every actionable bounce with the exact marker
+  **`## Master gate — BOUNCE`** so the worker loop can detect it (author-filtering is unreliable —
+  master and worker may share a git identity). The worker acks a followed bounce with a PR reply
+  containing **`Ack: addressing master bounce`**; the presence of that ack after the latest marker is
+  the idempotency key (unacked → follow, acked → skip). The follow loop ends when the PR merges — no
+  other cleanup.
+- **Ticket (Linear) comments = the record channel.** Durable, about *the work itself* — delivery /
+  close-out evidence, acceptance-criteria proof, design decisions, sequencing rationale, handoff
+  context. **Nobody executes these** — read-for-context only, never instructions.
+
+Principle: **PR = do-this-to-merge (transient); ticket = this-is-what-happened (durable).** Master
+never puts an actionable instruction on the ticket, nor a durable record on the PR.
+
 ## Session boundary
 - build & adr sessions stop at "push branch + open PR". They never merge, deploy,
   close tickets, or edit MASTER_PLAN.

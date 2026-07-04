@@ -95,6 +95,9 @@ Dispatch state lives in Linear, not MASTER_PLAN (process v2, 2026-07-04). A work
   automatically exposes the next — no re-dispatch step.
 - **Busy guard:** if any issue is `In Progress` with this stream's label, the stream is building —
   do not resolve a new NEXT.
+- **No timestamp ties:** if more than one ticket in a stream is eligible (unblocked), master pins the
+  intended head with priority (High = head pin; Urgent = jump). A queue must never depend on the
+  oldest-created tie-break — that fallback exists for safety, not as a control.
 
 ## Deploy
 - Deploy is a master-only action. Owner granted **standing approval (2026-06-26)** for three

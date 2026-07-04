@@ -104,11 +104,23 @@ is active.
   timestamp, verification result, rollback availability, each acceptance criterion + how verified).
 - **If verification failed: state → `Verify Failed`** (not Done, not left in Awaiting Deploy), file
   the follow-up issue, consider rollback. Verify Failed is the exception flag that demands a decision.
-- **Advance dispatch (replaces advancing the board):** confirm the completed chain exposed the right
-  next head (its blocked-by cleared); if the stream's queue is empty or priorities changed, apply the
-  mutations — `stream:*` label, priority (Urgent = front-of-queue lever), `context:keep` per the build
-  session's context-disposition comment, blocked-by relations for any new chain
-  (lifecycle-rules § Dispatch).
+- **Advance dispatch (replaces advancing the board):** after every Done, re-derive the stream's
+  eligible set (`Approved` + `stream:*` label + no open blocked-by). Binding rules
+  (lifecycle-rules § Dispatch):
+  - **Exactly one intended head, always pinned.** If more than one ticket is eligible, move the
+    High pin to the intended head NOW — never leave the head to creation-date ties. Verify after
+    every mutation: the eligible set contains exactly one Urgent-or-High ticket.
+  - **Sequence is written at dispatch time, not discovered later.** Labeling a chain into a stream
+    and writing its blocked-by relations are ONE action — a ticket entering a queue without its
+    relations is a dispatch bug that will surface as a false head. Be equally intentional when
+    filing/approving follow-up tickets: decide their place in the order before they carry a stream
+    label (unlabeled-Approved = parked is the safe default).
+  - **Queue jumper, front:** label `stream:<s>` + priority Urgent. Do NOT re-wire chain relations
+    for a front-jump — the chain head keeps its High pin and resumes automatically when the jumper
+    is Done.
+  - **Queue jumper, mid-chain** (must run after X but before Y): that IS a relation edit — jumper
+    blockedBy X, Y blockedBy jumper; leave priorities alone. Rare; prefer front-jumps.
+  - Set `context:keep` per the build session's context-disposition comment.
 
 ## Identity
 You operate under the **guardian role & standing attributes** in `lifecycle-rules.md` § Guardian

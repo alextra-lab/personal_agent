@@ -1,0 +1,7 @@
+# Fixture compose file: the "real" deployed value disagrees with
+# config/deployment.yaml's declared env_overrides (FRE-651).
+services:
+  seshat-gateway:
+    image: fixture
+    environment:
+      AGENT_MODEL_CONFIG_PATH: /app/config/models.cloud.yaml

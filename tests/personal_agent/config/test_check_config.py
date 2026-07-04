@@ -10,7 +10,16 @@ from pathlib import Path
 
 from scripts.check_config import main
 
-from personal_agent.config.config_guard import check_matrix_shape, load_matrix, run_all_checks
+from personal_agent.config.config_guard import (
+    _compose_model_config_paths,
+    _normalize_container_model_config_path,
+    check_deployment_manifest_internal_consistency,
+    check_deployment_manifest_matches_compose,
+    check_matrix_shape,
+    load_deployment_manifest,
+    load_matrix,
+    run_all_checks,
+)
 
 _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -113,3 +122,105 @@ class TestMatrixShape:
         matrix = load_matrix(_REPO_ROOT)
         findings = check_matrix_shape(matrix)
         assert findings == []
+
+
+class TestDeploymentManifestInternalConsistency:
+    """A profile row's model_config_path must name the same file as its own
+    env_overrides.AGENT_MODEL_CONFIG_PATH (ADR-0099 D2.2, FRE-651 — codex
+    plan-review finding: without this, config-resolve could silently answer
+    from a different file than the one env_overrides documents as deployed).
+    """
+
+    def test_fails_on_internal_mismatch_fixture(self) -> None:
+        manifest = load_deployment_manifest(_FIXTURES / "deployment_manifest_internal_mismatch")
+        findings = check_deployment_manifest_internal_consistency(manifest)
+        assert len(findings) == 1
+        assert findings[0].check == "deployment_manifest_internal_mismatch"
+        assert findings[0].severity == "policy"
+        assert "config/models.yaml" in findings[0].message
+        assert "config/models.cloud.yaml" in findings[0].message
+
+    def test_no_false_positive_on_real_repo(self) -> None:
+        manifest = load_deployment_manifest(_REPO_ROOT)
+        findings = check_deployment_manifest_internal_consistency(manifest)
+        assert findings == []
+
+
+class TestDeploymentManifestMatchesCompose:
+    """AC-5 — the manifest's declared AGENT_MODEL_CONFIG_PATH must match what
+    the profile's actual compose file sets (ADR-0099 D2.2, FRE-651).
+    """
+
+    def test_fails_on_manifest_compose_mismatch_fixture(self) -> None:
+        root = _FIXTURES / "deployment_manifest_mismatch"
+        manifest = load_deployment_manifest(root)
+        findings = check_deployment_manifest_matches_compose(root, manifest)
+        assert len(findings) == 1
+        assert findings[0].check == "deployment_manifest_mismatch"
+        assert findings[0].severity == "policy"
+        assert "models.WRONG.yaml" in findings[0].message
+        assert "models.cloud.yaml" in findings[0].message
+
+    def test_no_false_positive_on_real_repo(self) -> None:
+        manifest = load_deployment_manifest(_REPO_ROOT)
+        findings = check_deployment_manifest_matches_compose(_REPO_ROOT, manifest)
+        assert findings == []
+
+    def test_run_all_checks_includes_deployment_checks_on_real_repo(self) -> None:
+        assert run_all_checks(_REPO_ROOT) == []
+
+
+class TestComposeModelConfigPathParsing:
+    """Unit coverage for _compose_model_config_paths's dict/list environment forms."""
+
+    def test_dict_form_single_service(self) -> None:
+        compose = {
+            "services": {"gw": {"environment": {"AGENT_MODEL_CONFIG_PATH": "/app/config/x.yaml"}}}
+        }
+        assert _compose_model_config_paths(compose) == {"/app/config/x.yaml"}
+
+    def test_list_form_single_service(self) -> None:
+        compose = {
+            "services": {"gw": {"environment": ["AGENT_MODEL_CONFIG_PATH=/app/config/x.yaml"]}}
+        }
+        assert _compose_model_config_paths(compose) == {"/app/config/x.yaml"}
+
+    def test_two_services_agreeing_returns_one_value(self) -> None:
+        compose = {
+            "services": {
+                "a": {"environment": {"AGENT_MODEL_CONFIG_PATH": "/app/config/x.yaml"}},
+                "b": {"environment": {"AGENT_MODEL_CONFIG_PATH": "/app/config/x.yaml"}},
+            }
+        }
+        assert _compose_model_config_paths(compose) == {"/app/config/x.yaml"}
+
+    def test_two_services_disagreeing_returns_both_values(self) -> None:
+        compose = {
+            "services": {
+                "a": {"environment": {"AGENT_MODEL_CONFIG_PATH": "/app/config/x.yaml"}},
+                "b": {"environment": {"AGENT_MODEL_CONFIG_PATH": "/app/config/y.yaml"}},
+            }
+        }
+        assert _compose_model_config_paths(compose) == {
+            "/app/config/x.yaml",
+            "/app/config/y.yaml",
+        }
+
+    def test_no_environment_block_returns_empty_set(self) -> None:
+        assert _compose_model_config_paths({"services": {"gw": {"image": "x"}}}) == set()
+
+    def test_service_with_no_matching_key_returns_empty_set(self) -> None:
+        compose = {"services": {"gw": {"environment": {"OTHER_KEY": "value"}}}}
+        assert _compose_model_config_paths(compose) == set()
+
+
+class TestNormalizeContainerModelConfigPath:
+    """Unit coverage for the /app/ container-mount-prefix normalization."""
+
+    def test_strips_app_prefix(self) -> None:
+        assert _normalize_container_model_config_path("/app/config/models.cloud.yaml") == (
+            "config/models.cloud.yaml"
+        )
+
+    def test_passes_through_relative_path_unchanged(self) -> None:
+        assert _normalize_container_model_config_path("config/models.yaml") == "config/models.yaml"

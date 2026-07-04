@@ -91,7 +91,12 @@ cases:
         aliases: ["nash equilibrium"]
         v2_type: MethodOrConcept
     expect_relationships:
-      - {source: Nash Equilibrium, type: PART_OF, target: Game Theory}
+      - source: Nash Equilibrium
+        type: PART_OF
+        target: Game Theory
+        v2_rel_type: RELATED_TO
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (2/3). Topical containment: a concept studied within a field is RELATED_TO per the PART_OF structural-membership exclusion, not part-of the field."
     dedup_variants:
       - ["Game Theory", "Game theory"]
 
@@ -112,7 +117,12 @@ cases:
         aliases: ["the hard problem", "hard problem"]
         v2_type: MethodOrConcept
     expect_relationships:
-      - {source: Hard Problem of Consciousness, type: PART_OF, target: Philosophy of Mind}
+      - source: Hard Problem of Consciousness
+        type: PART_OF
+        target: Philosophy of Mind
+        v2_rel_type: RELATED_TO
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (2/3). A topic studied within a field is topical containment -> RELATED_TO, not structural PART_OF."
     dedup_variants:
       - ["Philosophy of Mind", "Philosophy of mind"]
 
@@ -140,7 +150,12 @@ cases:
         aliases: ["interference"]
         v2_type: Phenomenon
     expect_relationships:
-      - {source: Diffraction Grating, type: USES, target: Interference}
+      - source: Diffraction Grating
+        type: USES
+        target: Interference
+        v2_rel_type: USES
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (2/3). A diffraction grating's operation functionally depends on the interference phenomenon to work -> USES."
     # A misspelled relationship type must never leak in as an :Entity.
     forbid_entities: ["DISCUSES", "RELATED", "USES"]
 
@@ -205,8 +220,8 @@ cases:
         aliases: ["postgres", "postgresql"]
         v2_type: TechnicalArtifact
     expect_relationships:
-      - {source: FastAPI, type: USES, target: Python}
-      - {source: FastAPI, type: USES, target: PostgreSQL}
+      - {source: FastAPI, type: USES, target: Python, v2_rel_type: USES}
+      - {source: FastAPI, type: USES, target: PostgreSQL, v2_rel_type: USES}
 
   - case_id: tech-created-by
     tags: [tech-stack, world, relationships]
@@ -225,7 +240,7 @@ cases:
         aliases: ["torvalds"]
         v2_type: Person
     expect_relationships:
-      - {source: Linux Kernel, type: CREATED_BY, target: Linus Torvalds}
+      - {source: Linux Kernel, type: CREATED_BY, target: Linus Torvalds, v2_rel_type: CREATED_BY}
 
   # =====================================================================
   # WORLD KNOWLEDGE — entity typing across domains
@@ -251,7 +266,12 @@ cases:
         v2_adjudicated: true
         v2_adjudication_rationale: "Majority (mini+sonnet) — 'wavelength' names a measurable physical property/concept (a defined quantity), not an occurring phenomenon/event itself. Note: exposes a genuine taxonomy gap — physical quantities/measures (wavelength, mass, temperature) have no clean home in the 8-type vocabulary."
     expect_relationships:
-      - {source: Rayleigh Scattering, type: RELATED_TO, target: Wavelength}
+      - source: Rayleigh Scattering
+        type: RELATED_TO
+        target: Wavelength
+        v2_rel_type: RELATED_TO
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (2/3). Intensity varying with wavelength is a weak dependence on a variable, not functional use of an artifact/method -> RELATED_TO."
 
   - case_id: cosmology-cmb
     tags: [cosmology, physics, world]
@@ -272,7 +292,7 @@ cases:
         aliases: ["the big bang", "big bang"]
         v2_type: Event
     expect_relationships:
-      - {source: Cosmic Microwave Background, type: RELATED_TO, target: Big Bang}
+      - {source: Cosmic Microwave Background, type: RELATED_TO, target: Big Bang, v2_rel_type: RELATED_TO}
 
   - case_id: optics-diffraction-limit
     tags: [optics, physics, world]
@@ -295,7 +315,7 @@ cases:
         aliases: ["optical microscope"]
         v2_type: TechnicalArtifact
     expect_relationships:
-      - {source: Diffraction Limit, type: RELATED_TO, target: Optical Microscope}
+      - {source: Diffraction Limit, type: RELATED_TO, target: Optical Microscope, v2_rel_type: RELATED_TO}
 
   - case_id: cooking-technique
     tags: [cooking, world]
@@ -318,7 +338,7 @@ cases:
         aliases: ["tahini"]
         v2_type: TechnicalArtifact
     expect_relationships:
-      - {source: Hummus, type: USES, target: Tahini}
+      - {source: Hummus, type: USES, target: Tahini, v2_rel_type: USES}
 
   - case_id: history-bronze-age
     tags: [history, world]
@@ -346,7 +366,7 @@ cases:
         aliases: ["knossos"]
         v2_type: Location
     expect_relationships:
-      - {source: Knossos, type: LOCATED_IN, target: Crete}
+      - {source: Knossos, type: LOCATED_IN, target: Crete, v2_rel_type: LOCATED_IN}
 
   - case_id: located-in-correct
     tags: [geography, world, relationships]
@@ -366,7 +386,7 @@ cases:
         v2_type: Location
     # A genuine geographic containment — LOCATED_IN is CORRECT here (contrast the visit cases).
     expect_relationships:
-      - {source: Alhambra, type: LOCATED_IN, target: Granada}
+      - {source: Alhambra, type: LOCATED_IN, target: Granada, v2_rel_type: LOCATED_IN}
 
   - case_id: game-theory-prisoners-dilemma
     tags: [game-theory, world, relationships]
@@ -388,7 +408,12 @@ cases:
         aliases: ["game theory"]
         v2_type: DomainOrTopic
     expect_relationships:
-      - {source: Prisoner's Dilemma, type: PART_OF, target: Game Theory}
+      - source: Prisoner's Dilemma
+        type: PART_OF
+        target: Game Theory
+        v2_rel_type: RELATED_TO
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (2/3). A canonical example studied within a field is topical -> RELATED_TO, not structural PART_OF."
 
   - case_id: cs-data-structure
     tags: [cs, world]
@@ -409,7 +434,12 @@ cases:
         aliases: ["prefix search"]
         v2_type: MethodOrConcept
     expect_relationships:
-      - {source: Trie, type: USES, target: Prefix Search}
+      - source: Trie
+        type: USES
+        target: Prefix Search
+        v2_rel_type: RELATED_TO
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Builder override of the USES majority: USES is directional and a trie does not depend on prefix search (the reverse holds); ADR-0109 names this exact case as flipping USES->RELATED_TO, and the sonnet rater's own rationale concluded RELATED_TO."
 
   - case_id: security-incident-response
     tags: [security, csirt, world]
@@ -432,7 +462,7 @@ cases:
         aliases: ["containment"]
         v2_type: MethodOrConcept
     expect_relationships:
-      - {source: Containment, type: PART_OF, target: Incident Response}
+      - {source: Containment, type: PART_OF, target: Incident Response, v2_rel_type: PART_OF}
 
   # =====================================================================
   # STANCE / CLAIM EMISSION — must be structured, not flattened (FRE-636)
@@ -481,7 +511,7 @@ cases:
         aliases: ["interval recognition"]
         v2_type: MethodOrConcept
     expect_relationships:
-      - {source: Interval Recognition, type: PART_OF, target: Ear Training}
+      - {source: Interval Recognition, type: PART_OF, target: Ear Training, v2_rel_type: PART_OF}
     expect_stances:
       - {target: Interval Recognition, affect: a practical learning goal}
 
@@ -543,8 +573,8 @@ cases:
         v2_adjudication_rationale: "3-way split (MethodOrConcept/TechnicalArtifact/Event) — no clean fit. A personal creative-writing artifact (a chapter draft) doesn't map onto any V2 type designed for world-knowledge entities. Provisionally ruled TechnicalArtifact (closest: a concrete, named authored artifact) but this exposes a genuine taxonomy gap for Personal-class creative works; NEEDS OWNER SIGN-OFF before FRE-771 treats this as settled."
         v2_needs_owner_signoff: true
     expect_relationships:
-      - {source: Neuroplasticity, type: RELATED_TO, target: Learning}
-      - {source: Neuroplasticity Chapter, type: RELATED_TO, target: Neuroplasticity}
+      - {source: Neuroplasticity, type: RELATED_TO, target: Learning, v2_rel_type: RELATED_TO}
+      - {source: Neuroplasticity Chapter, type: RELATED_TO, target: Neuroplasticity, v2_rel_type: RELATED_TO}
     # The drafted chapter is also a Personal claim/artifact, not World knowledge.
     expect_claims:
       - {facet: writing_project, content_gist: the user is drafting a chapter on neuroplasticity}
@@ -592,7 +622,12 @@ cases:
         aliases: ["the knowledge graph", "knowledge graph"]
         v2_type: MethodOrConcept
     expect_relationships:
-      - {source: Knowledge Graph, type: PART_OF, target: Neo4j}
+      - source: Knowledge Graph
+        type: PART_OF
+        target: Neo4j
+        v2_rel_type: USES
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (2/3). The knowledge graph depends on Neo4j to persist and be queried -> USES; LOCATED_IN is reserved for geographic places, not datastores."
 
   # =====================================================================
   # CLAIM EMISSION — FRE-759: powered set for claim_emission_recall.
@@ -904,7 +939,7 @@ cases:
         aliases: ["penetration testing", "pen testing", "pentesting"]
         v2_type: MethodOrConcept
     expect_relationships:
-      - {source: Penetration Testing, type: PART_OF, target: Cybersecurity}
+      - {source: Penetration Testing, type: PART_OF, target: Cybersecurity, v2_rel_type: PART_OF}
 
   - case_id: boundary-buffer-overflow
     tags: [type-boundary, security, world]
@@ -941,4 +976,108 @@ cases:
         aliases: ["redshift", "red shift"]
         v2_type: Phenomenon
     expect_relationships:
-      - {source: Redshift, type: PART_OF, target: Cosmology}
+      - source: Redshift
+        type: PART_OF
+        target: Cosmology
+        v2_rel_type: RELATED_TO
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (2/3). Redshift is a tool used by cosmology (reverse direction) and an observational association -> RELATED_TO, not structural PART_OF."
+
+  # =====================================================================
+  # FRE-773 — relationship-V2 coverage growth (the two ADR-named faults:
+  # USES directionality + RELATED_TO catch-all gating) + a SIMILAR_TO
+  # example (V1 gold had zero). Entities here carry builder-assigned
+  # v2_type (unambiguous artifacts/methods) — FRE-773 measures the
+  # relationship label; entity re-labeling was FRE-770's scope.
+  # =====================================================================
+
+  - case_id: cov-uses-dependency
+    tags: [tech-stack, world, relationships, rel-v2-coverage]
+    source:
+      user: "Is pandas its own thing or does it build on something?"
+      assistant: >
+        pandas is built on top of NumPy — its DataFrame and Series rely on
+        NumPy arrays underneath for storage and vectorized operations.
+    expect_entities:
+      - name: pandas
+        type: Technology
+        class: World
+        aliases: ["pandas"]
+        v2_type: TechnicalArtifact
+      - name: NumPy
+        type: Technology
+        class: World
+        aliases: ["numpy"]
+        v2_type: TechnicalArtifact
+    expect_relationships:
+      - {source: pandas, type: USES, target: NumPy, v2_rel_type: USES}
+
+  - case_id: cov-similar-databases
+    tags: [tech-stack, world, relationships, rel-v2-coverage]
+    source:
+      user: "How does MySQL compare to Postgres?"
+      assistant: >
+        MySQL and PostgreSQL are both open-source relational databases that
+        speak SQL; they are comparable alternatives, with Postgres leaning
+        more feature-rich and MySQL historically simpler to operate.
+    expect_entities:
+      - name: MySQL
+        type: Technology
+        class: World
+        aliases: ["mysql"]
+        v2_type: TechnicalArtifact
+      - name: PostgreSQL
+        type: Technology
+        class: World
+        aliases: ["postgres", "postgresql"]
+        v2_type: TechnicalArtifact
+    expect_relationships:
+      - {source: MySQL, type: SIMILAR_TO, target: PostgreSQL, v2_rel_type: SIMILAR_TO}
+
+  - case_id: cov-boundary-usedfor
+    tags: [type-boundary, world, relationships, rel-v2-coverage]
+    source:
+      user: "Why do people use regular expressions for input validation?"
+      assistant: >
+        A regular expression is a pattern language; validation code often uses
+        one to check that input matches an expected shape, though regexes are a
+        general tool and aren't tied to validation specifically.
+    expect_entities:
+      - name: Regular Expression
+        type: Concept
+        class: World
+        aliases: ["regular expression", "regex"]
+        v2_type: MethodOrConcept
+      - name: Input Validation
+        type: Concept
+        class: World
+        aliases: ["input validation"]
+        v2_type: MethodOrConcept
+    expect_relationships:
+      - source: Regular Expression
+        type: RELATED_TO
+        target: Input Validation
+        v2_rel_type: RELATED_TO
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Builder override of the USES majority: a regular expression does not depend on input validation; validation uses regex (the dependency runs the other way), so directional USES fails -> gated RELATED_TO."
+
+  - case_id: cov-partof-structural
+    tags: [type-boundary, world, relationships, rel-v2-coverage]
+    source:
+      user: "Where does TCP sit in the networking stack?"
+      assistant: >
+        TCP is one of the core protocols that make up the Internet protocol
+        suite — it is a component of the suite, sitting at the transport layer.
+    expect_entities:
+      - name: TCP
+        type: Technology
+        class: World
+        aliases: ["tcp", "transmission control protocol"]
+        v2_type: MethodOrConcept
+      - name: Internet Protocol Suite
+        type: Topic
+        class: World
+        aliases: ["internet protocol suite", "tcp/ip"]
+        v2_type: DomainOrTopic
+    expect_relationships:
+      - {source: TCP, type: PART_OF, target: Internet Protocol Suite, v2_rel_type: PART_OF}

@@ -1,6 +1,6 @@
 # Master Plan — Personal Agent
 
-> ✅ **Handoff task complete (2026-07-04).** PR #350 (FRE-697) merged `0bdc6b0` → Done (eval-only, no deploy); board resequenced this pass. ADR-0102 un-paused (see board). **Owner decision open:** build1 NEXT = **FRE-769** (ADR-0109 V2 taxonomy do-first gate, master recommendation — extraction root-cause, owner's #2 priority) vs **FRE-699** (recall parallelism) — confirm at next `/build 1`.
+> ✅ **Handoff task complete (2026-07-04).** PR #350 (FRE-697) merged `0bdc6b0` → Done (eval-only, no deploy); board resequenced this pass. ADR-0102 un-paused (see board). build1 NEXT = **FRE-769** (ADR-0109 V2 taxonomy do-first gate — **owner-confirmed 2026-07-04**, extraction root-cause, #2 priority); V2 chain 770→771→772+773 queued after.
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file

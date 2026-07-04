@@ -157,6 +157,45 @@ def load_matrix(root: Path) -> JSONDict:
     return _load_yaml(root / "config" / "model_roles.yaml")
 
 
+class DeploymentProfileError(Exception):
+    """Raised when a profile cannot be resolved from ``config/deployment.yaml`` (ADR-0099 D2.2, FRE-651)."""
+
+    pass
+
+
+def load_deployment_manifest(root: Path) -> JSONDict:
+    """Load ``config/deployment.yaml`` under *root*, or ``{}`` if absent/empty."""
+    return _load_yaml(root / "config" / "deployment.yaml")
+
+
+def model_config_path_for_profile(profile: str, manifest: JSONDict, root: Path) -> Path:
+    """Resolve *profile*'s active model-definition file from the deployment manifest.
+
+    Args:
+        profile: A key under the manifest's ``profiles:`` mapping (e.g. ``"cloud"``).
+        manifest: The parsed ``config/deployment.yaml`` (see :func:`load_deployment_manifest`).
+        root: Repo (or fixture) root the manifest's relative paths resolve against.
+
+    Returns:
+        The absolute path to the profile's active model-definition file.
+
+    Raises:
+        DeploymentProfileError: If *profile* is undeclared, or declares no ``model_config_path``.
+    """
+    profiles: dict[str, JSONDict] = manifest.get("profiles", {})  # type: ignore[assignment]
+    row = profiles.get(profile)
+    if row is None:
+        raise DeploymentProfileError(
+            f"profile {profile!r} is not declared in config/deployment.yaml profiles:"
+        )
+    rel_path = row.get("model_config_path")
+    if not isinstance(rel_path, str):
+        raise DeploymentProfileError(
+            f"profile {profile!r} declares no 'model_config_path' in config/deployment.yaml"
+        )
+    return (root / rel_path).resolve()
+
+
 def resolve_active_profile(model_config_path: Path, matrix: JSONDict, root: Path) -> str | None:
     """Return the ``active_profiles`` key whose file resolves to *model_config_path*.
 
@@ -396,13 +435,165 @@ def check_matrix_shape(matrix: JSONDict) -> list[Finding]:
     return findings
 
 
+def _normalize_container_model_config_path(value: str) -> str:
+    """Strip a container's ``/app/`` mount prefix (ADR-0099 D2.2, FRE-651).
+
+    Compose files set ``AGENT_MODEL_CONFIG_PATH`` as a container-mounted path
+    (``/app/config/models.cloud.yaml``); the manifest's ``model_config_path``
+    is repo-relative (``config/models.cloud.yaml``). Normalizing lets the two
+    representations compare equal.
+    """
+    prefix = "/app/"
+    return value[len(prefix) :] if value.startswith(prefix) else value
+
+
+def _compose_model_config_paths(compose_yaml: JSONDict) -> set[str]:
+    """Every distinct ``AGENT_MODEL_CONFIG_PATH`` value set across a compose file's services.
+
+    Handles both the mapping (``KEY: value``) and list (``- KEY=value``) forms
+    docker-compose's ``environment:`` block allows. Merge keys (``<<: *anchor``)
+    are already resolved by the time PyYAML hands back *compose_yaml*.
+    """
+    services = compose_yaml.get("services")
+    if not isinstance(services, dict):
+        return set()
+
+    values: set[str] = set()
+    for service in services.values():
+        if not isinstance(service, dict):
+            continue
+        environment = service.get("environment")
+        if isinstance(environment, dict):
+            value = environment.get("AGENT_MODEL_CONFIG_PATH")
+            if isinstance(value, str):
+                values.add(value)
+        elif isinstance(environment, list):
+            for item in environment:
+                if isinstance(item, str) and item.startswith("AGENT_MODEL_CONFIG_PATH="):
+                    values.add(item.split("=", 1)[1])
+    return values
+
+
+def check_deployment_manifest_internal_consistency(manifest: JSONDict) -> list[Finding]:
+    """A profile row's own ``model_config_path`` and ``env_overrides`` must agree (FRE-651).
+
+    Without this, ``config-resolve`` (which reads ``model_config_path``) could
+    silently answer from a different file than the one ``env_overrides``
+    documents as deployed, even if that ``env_overrides`` value itself matches
+    the real compose file — the manifest row would be internally
+    self-contradictory. See :func:`check_deployment_manifest_matches_compose`
+    for the complementary manifest-vs-compose check.
+    """
+    findings: list[Finding] = []
+    profiles: dict[str, JSONDict] = manifest.get("profiles", {})  # type: ignore[assignment]
+    for profile, row in profiles.items():
+        model_config_path = row.get("model_config_path")
+        env_overrides = row.get("env_overrides", {})
+        override_value = (
+            env_overrides.get("AGENT_MODEL_CONFIG_PATH")
+            if isinstance(env_overrides, dict)
+            else None
+        )
+        if not isinstance(model_config_path, str) or not isinstance(override_value, str):
+            continue
+        if _normalize_container_model_config_path(override_value) != model_config_path:
+            findings.append(
+                Finding(
+                    check="deployment_manifest_internal_mismatch",
+                    severity="policy",
+                    message=(
+                        f"profile '{profile}' declares model_config_path={model_config_path!r} "
+                        f"but env_overrides.AGENT_MODEL_CONFIG_PATH={override_value!r} names a "
+                        "different file"
+                    ),
+                )
+            )
+    return findings
+
+
+def check_deployment_manifest_matches_compose(root: Path, manifest: JSONDict) -> list[Finding]:
+    """AC-5 — a profile's declared ``env_overrides`` must match its compose file (ADR-0099 D2.2, FRE-651).
+
+    ADR-0099 D4 lists "provenance-manifest ≠ actual compose" explicitly under
+    the *policy* severity class — a mismatch here must block CI/pre-commit but
+    never wedge startup.
+    """
+    findings: list[Finding] = []
+    profiles: dict[str, JSONDict] = manifest.get("profiles", {})  # type: ignore[assignment]
+
+    for profile, row in profiles.items():
+        compose_rel = row.get("compose_file")
+        if not isinstance(compose_rel, str):
+            continue
+        compose_yaml = _load_yaml(root / compose_rel)
+        actual_values = {
+            _normalize_container_model_config_path(v)
+            for v in _compose_model_config_paths(compose_yaml)
+        }
+
+        env_overrides = row.get("env_overrides", {})
+        declared_value = (
+            env_overrides.get("AGENT_MODEL_CONFIG_PATH")
+            if isinstance(env_overrides, dict)
+            else None
+        )
+        declared = (
+            _normalize_container_model_config_path(declared_value)
+            if isinstance(declared_value, str)
+            else None
+        )
+
+        if declared is None:
+            if actual_values:
+                findings.append(
+                    Finding(
+                        check="deployment_manifest_mismatch",
+                        severity="policy",
+                        message=(
+                            f"profile '{profile}' declares no AGENT_MODEL_CONFIG_PATH override in "
+                            f"config/deployment.yaml, but {compose_rel} sets it to "
+                            f"{sorted(actual_values)}"
+                        ),
+                    )
+                )
+            continue
+
+        if not actual_values:
+            findings.append(
+                Finding(
+                    check="deployment_manifest_mismatch",
+                    severity="policy",
+                    message=(
+                        f"profile '{profile}' declares AGENT_MODEL_CONFIG_PATH={declared_value!r} "
+                        f"in config/deployment.yaml but {compose_rel} sets no such override"
+                    ),
+                )
+            )
+        elif actual_values != {declared}:
+            findings.append(
+                Finding(
+                    check="deployment_manifest_mismatch",
+                    severity="policy",
+                    message=(
+                        f"profile '{profile}' declares AGENT_MODEL_CONFIG_PATH={declared_value!r} "
+                        f"in config/deployment.yaml but {compose_rel} sets "
+                        f"{sorted(actual_values)}"
+                    ),
+                )
+            )
+    return findings
+
+
 def run_all_checks(root: Path) -> list[Finding]:
     """Run every check against *root* and return all findings."""
     matrix = load_matrix(root)
+    manifest = load_deployment_manifest(root)
 
     findings: list[Finding] = []
     findings.extend(check_matrix_shape(matrix))
     findings.extend(check_forbidden_role_divergence_and_dangling_refs(root, matrix))
     findings.extend(check_orphan_env_keys(root))
     findings.extend(check_committed_secrets(root))
+    findings.extend(check_deployment_manifest_internal_consistency(manifest))
+    findings.extend(check_deployment_manifest_matches_compose(root, manifest))
     return findings

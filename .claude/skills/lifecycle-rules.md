@@ -95,7 +95,12 @@ Dispatch state lives in Linear, not MASTER_PLAN (process v2, 2026-07-04). A work
   warm context; absent → CLEAR, the default).
 - **Master owns every dispatch mutation** — stream labels, priority, `context:keep`, blocked-by
   relations. Workers only read. An `Approved` issue with **no** stream label is
-  approved-but-not-dispatched.
+  **approved-but-not-dispatched** — a first-class state: the owner's approval authorizes work
+  (*whether*), master's stream label schedules it (*when/where*); the two gates never collapse.
+- **Stream labels go on buildable leaf tickets only** — never on umbrellas/parents (a labeled
+  umbrella is a false head waiting to happen; umbrellas live in `Backlog` per § Ticket state).
+  Approval never cascades: every sub-issue is individually Approved by the owner and individually
+  labeled by master before it is pickable.
 - **Chains** are "blocked by" relations; only the unblocked head is pickable, and completing it
   automatically exposes the next — no re-dispatch step.
 - **Busy guard:** if any issue with this stream's label is `In Progress` **or `In Review`**, the

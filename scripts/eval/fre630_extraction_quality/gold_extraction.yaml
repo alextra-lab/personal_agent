@@ -262,9 +262,9 @@ cases:
         type: Concept
         class: World
         aliases: ["wavelength", "wavelengths"]
-        v2_type: MethodOrConcept
+        v2_type: QuantityMeasure
         v2_adjudicated: true
-        v2_adjudication_rationale: "Majority (mini+sonnet) — 'wavelength' names a measurable physical property/concept (a defined quantity), not an occurring phenomenon/event itself. Note: exposes a genuine taxonomy gap — physical quantities/measures (wavelength, mass, temperature) have no clean home in the 8-type vocabulary."
+        v2_adjudication_rationale: "Amendment 1 resolution (FRE-782/784): 'wavelength' names a measurable physical property — a raw-property QuantityMeasure anchor, unanimous 3/3 on the boundary probe (kappa 0.847). Supersedes the FRE-770 MethodOrConcept majority call, which had flagged this exact gap."
     expect_relationships:
       - source: Rayleigh Scattering
         type: RELATED_TO
@@ -568,10 +568,9 @@ cases:
         type: Topic
         class: Personal
         aliases: ["the chapter", "the chapter i'm drafting", "my chapter"]
-        v2_type: TechnicalArtifact
+        v2_type: KnowledgeArtifact
         v2_adjudicated: true
-        v2_adjudication_rationale: "3-way split (MethodOrConcept/TechnicalArtifact/Event) — no clean fit. A personal creative-writing artifact (a chapter draft) doesn't map onto any V2 type designed for world-knowledge entities. Provisionally ruled TechnicalArtifact (closest: a concrete, named authored artifact) but this exposes a genuine taxonomy gap for Personal-class creative works; NEEDS OWNER SIGN-OFF before FRE-771 treats this as settled."
-        v2_needs_owner_signoff: true
+        v2_adjudication_rationale: "Amendment 1 resolution (FRE-782/784): a drafted chapter is an authored work read to understand, unanimous 3/3 KnowledgeArtifact on the boundary probe (kappa 1.000). Resolves the FRE-770 3-way split (MethodOrConcept/TechnicalArtifact/Event) that could only provisionally rule TechnicalArtifact; sign-off cleared."
     expect_relationships:
       - {source: Neuroplasticity, type: RELATED_TO, target: Learning, v2_rel_type: RELATED_TO}
       - {source: Neuroplasticity Chapter, type: RELATED_TO, target: Neuroplasticity, v2_rel_type: RELATED_TO}
@@ -974,7 +973,9 @@ cases:
         type: Concept
         class: World
         aliases: ["redshift", "red shift"]
-        v2_type: Phenomenon
+        v2_type: QuantityMeasure
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Amendment 1 re-adjudication (FRE-784): the source text frames this as 'they measure redshift' — the measured quantity/value, per the ADR's Redshift disambiguation rule (measured quantity -> QuantityMeasure; the stretching process itself -> Phenomenon). Matches the FRE-782 boundary-probe context for this same entity."
     expect_relationships:
       - source: Redshift
         type: PART_OF

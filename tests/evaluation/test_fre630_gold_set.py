@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
 from scripts.eval.fre630_extraction_quality.gold import (
     ALLOWED_ENTITY_CLASSES,
     ALLOWED_ENTITY_TYPES,
@@ -22,6 +23,7 @@ from scripts.eval.fre630_extraction_quality.gold import (
 )
 
 GOLD_PATH = Path("scripts/eval/fre630_extraction_quality/gold_extraction.yaml")
+BOUNDARY_FIXTURE_PATH = Path("scripts/eval/fre630_extraction_quality/fre782_boundary_fixture.yaml")
 
 #: N intended for the seed/regression set (owner-approved Phase-1 scope).
 MIN_CASES = 20
@@ -261,3 +263,137 @@ def test_similar_to_coverage() -> None:
         if r.v2_rel_type == "SIMILAR_TO"
     ]
     assert similar, "no relationship labeled SIMILAR_TO under V2"
+
+
+# ── FRE-782/784: ADR-0109 Amendment 1 (8→10 types: KnowledgeArtifact + QuantityMeasure) ──
+
+
+def _find_entity(case_id: str, name: str):
+    """Look up one gold entity by (case_id, name), for a single re-typed assertion."""
+    for case in _load():
+        if case.case_id == case_id:
+            for entity in case.expect_entities:
+                if entity.name == name:
+                    return entity
+    raise AssertionError(f"entity {name!r} not found in case {case_id!r}")
+
+
+def test_v2_entity_types_is_ten_types() -> None:
+    """Amendment 1 grows the V2 entity vocabulary from 8 to 10 types.
+
+    `KnowledgeArtifact` (human-authored works) and `QuantityMeasure` (physical
+    quantities) were validated to the same entity bar as the original eight
+    (FRE-782, 3-rater boundary IAA, overall kappa 0.900) and promoted here.
+    """
+    assert ALLOWED_ENTITY_TYPES_V2 == frozenset(
+        {
+            "Person",
+            "Organization",
+            "Location",
+            "TechnicalArtifact",
+            "KnowledgeArtifact",
+            "MethodOrConcept",
+            "DomainOrTopic",
+            "Phenomenon",
+            "QuantityMeasure",
+            "Event",
+        }
+    )
+
+
+def test_neuroplasticity_chapter_types_knowledge_artifact() -> None:
+    """The Amendment 1 case resolution: `Neuroplasticity Chapter` -> KnowledgeArtifact.
+
+    FRE-770 could only provisionally rule this TechnicalArtifact (a genuine 3-way
+    rater split) and flagged it for owner sign-off. FRE-782's boundary probe
+    resolved it unanimously (3/3) as KnowledgeArtifact, so the sign-off flag
+    must now be cleared.
+    """
+    entity = _find_entity("personal-writing-project", "Neuroplasticity Chapter")
+    assert entity.v2_type == "KnowledgeArtifact"
+    assert entity.v2_needs_owner_signoff is False
+
+
+def test_wavelength_types_quantity_measure() -> None:
+    """The Amendment 1 case resolution: `Wavelength` -> QuantityMeasure.
+
+    FRE-770 majority-ruled this MethodOrConcept while flagging the gap
+    (physical quantities had no clean home in the 8-type vocabulary). FRE-782's
+    boundary probe resolved it unanimously (3/3) as QuantityMeasure.
+    """
+    entity = _find_entity("physics-scattering", "Wavelength")
+    assert entity.v2_type == "QuantityMeasure"
+
+
+#: The FRE-782 research note's per-entity table (appendix), reproduced exactly as
+#: ``{entity: (intended_side, boundary)}`` so the checked-in fixture is checked for
+#: fidelity to the source, not just aggregate counts.
+EXPECTED_BOUNDARY_PROBE: dict[str, tuple[str, bool]] = {
+    "ADR-0109": ("KnowledgeArtifact", False),
+    "GoLLIE paper": ("KnowledgeArtifact", False),
+    "architecture redesign spec": ("KnowledgeArtifact", False),
+    "Neuroplasticity Chapter": ("KnowledgeArtifact", False),
+    "master plan": ("KnowledgeArtifact", False),
+    "outage post-mortem report": ("KnowledgeArtifact", False),
+    "FRE-630 gold set": ("TechnicalArtifact", False),
+    "extraction prompt": ("TechnicalArtifact", False),
+    "gold_extraction.yaml": ("TechnicalArtifact", False),
+    "Neo4j": ("TechnicalArtifact", False),
+    "GPU": ("TechnicalArtifact", False),
+    "FastAPI": ("TechnicalArtifact", False),
+    "Wavelength": ("QuantityMeasure", False),
+    "Mass": ("QuantityMeasure", False),
+    "Temperature": ("QuantityMeasure", False),
+    "Frequency": ("QuantityMeasure", False),
+    "Luminosity": ("QuantityMeasure", False),
+    "Redshift": ("QuantityMeasure", True),
+    "Gravity": ("Phenomenon", False),
+    "Rayleigh Scattering": ("Phenomenon", False),
+    "Diffraction Limit": ("Phenomenon", True),
+    "Fourier Transform": ("MethodOrConcept", False),
+}
+
+
+def test_boundary_fixture_matches_research_note() -> None:
+    """The FRE-782 22-entity boundary probe is checked in as a re-runnable regression.
+
+    Reproduces the research note's per-entity table exactly (docs/research/
+    2026-07-04-fre-782-knowledgeartifact-quantitymeasure-boundary-iaa.md,
+    appendix) — entity-for-entity, not just aggregate counts, so a swapped
+    entity or a flipped intended_side fails this assertion.
+    """
+    doc = yaml.safe_load(BOUNDARY_FIXTURE_PATH.read_text(encoding="utf-8"))
+    probe = doc["probe"]
+    assert len(probe) == len(EXPECTED_BOUNDARY_PROBE) == 22
+
+    actual = {item["entity"]: (item["intended_side"], bool(item.get("boundary"))) for item in probe}
+    assert actual == EXPECTED_BOUNDARY_PROBE
+
+    for intended_side, _ in actual.values():
+        assert intended_side in ALLOWED_ENTITY_TYPES_V2
+
+
+def test_v2_type_definitions_match_allowed_types() -> None:
+    """The relabel script's GoLLIE definitions cover exactly the 10 allowed types.
+
+    A stale 8-type `V2_TYPE_DEFINITIONS` (missing `KnowledgeArtifact` /
+    `QuantityMeasure`) would let a rater never see the new types at all —
+    AC-8's "stale eight-type prompt" failure mode.
+    """
+    from scripts.eval.fre630_extraction_quality.relabel_v2_types import V2_TYPE_DEFINITIONS
+
+    assert V2_TYPE_DEFINITIONS.keys() == ALLOWED_ENTITY_TYPES_V2
+
+
+def test_classification_prompt_states_ten_types() -> None:
+    """The classification prompt's stated type count is 10, not the stale 8.
+
+    AC-8 names this explicitly: "a stale eight-type prompt ... fails the
+    assertion."
+    """
+    from scripts.eval.fre630_extraction_quality.relabel_v2_types import _classification_prompt
+
+    prompt = _classification_prompt("<ENTITY>", "<CONTEXT>")
+    assert "10 types" in prompt
+    assert "8 types" not in prompt
+    assert "one of the 10 keys" in prompt

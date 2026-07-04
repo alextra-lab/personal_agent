@@ -1,0 +1,160 @@
+# FRE-782 — ADR-0109 Amendment 1 boundary probe fixture (22 entities).
+#
+# Checked in verbatim from the FRE-782 research note appendix:
+# docs/research/2026-07-04-fre-782-knowledgeartifact-quantitymeasure-boundary-iaa.md
+#
+# This is the exact classification input each of the 3 blind raters saw (entity name +
+# context; `intended_side` is design intent, never shown to a rater). It validated the
+# KnowledgeArtifact/TechnicalArtifact and QuantityMeasure boundaries at 3-rater IAA
+# (overall Fleiss kappa 0.900) ahead of FRE-784 promoting the two types into the
+# committed 10-type instrument. `boundary: true` marks the two residual disagreement
+# cases (Redshift, Diffraction Limit) — real, bounded ambiguity ruled by the
+# disambiguation rules in ADR-0109 Amendment 1, not waived.
+#
+# tests/evaluation/test_fre630_gold_set.py::test_boundary_fixture_matches_research_note
+# re-checks this fixture's shape against the research note's reported counts.
+
+probe:
+  # ── KnowledgeArtifact side (6) ──────────────────────────────────────────
+  - entity: "ADR-0109"
+    context: >-
+      ADR-0109 is the architecture decision record that redesigns the entity
+      taxonomy; I'm reading it to understand the rationale for the type boundaries.
+    intended_side: KnowledgeArtifact
+    boundary: false
+
+  - entity: "GoLLIE paper"
+    context: >-
+      The GoLLIE paper (Sainz et al., ICLR 2024) argues that annotation guidelines
+      with explicit inclusion and exclusion criteria improve zero-shot information
+      extraction.
+    intended_side: KnowledgeArtifact
+    boundary: false
+
+  - entity: "architecture redesign spec"
+    context: >-
+      The architecture redesign spec documents the seven-stage pre-LLM gateway
+      pipeline and how each stage hands off to the next.
+    intended_side: KnowledgeArtifact
+    boundary: false
+
+  - entity: "Neuroplasticity Chapter"
+    context: >-
+      Back to the chapter I'm drafting on neuroplasticity — I want to tie in
+      learning. The chapter is meant to explain the ideas to a general reader.
+    intended_side: KnowledgeArtifact
+    boundary: false
+
+  - entity: "master plan"
+    context: >-
+      The master plan lays out the current priorities and the sequencing across
+      the whole portfolio so we know what to build next.
+    intended_side: KnowledgeArtifact
+    boundary: false
+
+  - entity: "outage post-mortem report"
+    context: >-
+      The outage post-mortem report walks through the incident timeline, the
+      root cause, and the follow-up action items.
+    intended_side: KnowledgeArtifact
+    boundary: false
+
+  # ── TechnicalArtifact side (6) ──────────────────────────────────────────
+  - entity: "FRE-630 gold set"
+    context: >-
+      The FRE-630 gold set is the benchmark we score the extractor against; each
+      harness run loads it and reports precision and recall.
+    intended_side: TechnicalArtifact
+    boundary: false
+
+  - entity: "extraction prompt"
+    context: >-
+      We swap the extraction prompt for the new GoLLIE definitions and re-run the
+      powered A/B against the gold.
+    intended_side: TechnicalArtifact
+    boundary: false
+
+  - entity: "gold_extraction.yaml"
+    context: >-
+      gold_extraction.yaml holds the labeled cases the harness loads and scores
+      each entity against.
+    intended_side: TechnicalArtifact
+    boundary: false
+
+  - entity: "Neo4j"
+    context: "We store the knowledge graph in Neo4j and query it over the Bolt protocol."
+    intended_side: TechnicalArtifact
+    boundary: false
+
+  - entity: "GPU"
+    context: "The embedder runs on a GPU to keep latency low under load."
+    intended_side: TechnicalArtifact
+    boundary: false
+
+  - entity: "FastAPI"
+    context: "The service is a FastAPI app that exposes the chat endpoint on port 9000."
+    intended_side: TechnicalArtifact
+    boundary: false
+
+  # ── QuantityMeasure side (6: 5 raw-property anchors + 1 boundary case) ──
+  - entity: "Wavelength"
+    context: >-
+      A diffraction grating splits light into its component wavelengths by the
+      angle at which each is diffracted.
+    intended_side: QuantityMeasure
+    boundary: false
+
+  - entity: "Mass"
+    context: "The mass of the object determines how strongly it is pulled by the gravitational field."
+    intended_side: QuantityMeasure
+    boundary: false
+
+  - entity: "Temperature"
+    context: "As the temperature rises, the reaction rate increases roughly exponentially."
+    intended_side: QuantityMeasure
+    boundary: false
+
+  - entity: "Frequency"
+    context: "The resonant frequency of the string sets the pitch you hear when it is plucked."
+    intended_side: QuantityMeasure
+    boundary: false
+
+  - entity: "Luminosity"
+    context: "The star's luminosity is the total electromagnetic energy it radiates per second."
+    intended_side: QuantityMeasure
+    boundary: false
+
+  - entity: "Redshift"
+    context: >-
+      Astronomers measure the redshift — how far the light has stretched to
+      longer wavelengths — to infer recession speed.
+    intended_side: QuantityMeasure
+    boundary: true
+
+  # ── Phenomenon anchors (3: 2 clean + 1 boundary case) ───────────────────
+  - entity: "Gravity"
+    context: "Gravity is the force that pulls any two masses toward each other."
+    intended_side: Phenomenon
+    boundary: false
+
+  - entity: "Rayleigh Scattering"
+    context: >-
+      Rayleigh scattering: shorter blue wavelengths scatter more strongly off air
+      molecules, which is why the sky is blue.
+    intended_side: Phenomenon
+    boundary: false
+
+  - entity: "Diffraction Limit"
+    context: >-
+      The diffraction limit — roughly half the wavelength of light — bounds how
+      finely an optical system can resolve detail.
+    intended_side: Phenomenon
+    boundary: true
+
+  # ── MethodOrConcept anchor (1) ───────────────────────────────────────────
+  - entity: "Fourier Transform"
+    context: >-
+      We apply a Fourier transform to move the signal from the time domain into
+      the frequency domain.
+    intended_side: MethodOrConcept
+    boundary: false

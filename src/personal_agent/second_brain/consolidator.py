@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from personal_agent.captains_log.capture import TaskCapture, read_captures
-from personal_agent.config import load_model_config
+from personal_agent.config import resolve_role_model_key
 from personal_agent.config.settings import get_settings
 from personal_agent.cost_gate import BudgetDenied
 from personal_agent.events import (
@@ -185,8 +185,7 @@ class SecondBrainConsolidator:
                 "relationships_created": 0,
             }
 
-        model_config = load_model_config()
-        entity_extraction_role = model_config.entity_extraction_role
+        entity_extraction_role = resolve_role_model_key("entity_extraction")
 
         log.info(
             "captures_found",

@@ -63,12 +63,7 @@ def _patch_routing(
     monkeypatch: pytest.MonkeyPatch, model_def: ModelDefinition, key: str = "claude_sonnet"
 ) -> None:
     monkeypatch.setattr(executor_mod, "_resolve_vision_routing_key", lambda ctx, role: key)
-    cfg = ModelConfig(
-        models={key: model_def},
-        entity_extraction_role=key,
-        captains_log_role=key,
-        insights_role=key,
-    )
+    cfg = ModelConfig(models={key: model_def})
     monkeypatch.setattr("personal_agent.config.model_loader.load_model_config", lambda *a, **k: cfg)
 
 
@@ -215,9 +210,6 @@ async def test_reservation_covers_image_estimate() -> None:
     register_model_pricing(
         ModelConfig(
             models={"claude_sonnet": _cloud_def(input_price=0.000003)},
-            entity_extraction_role="claude_sonnet",
-            captains_log_role="claude_sonnet",
-            insights_role="claude_sonnet",
         )
     )
     budget = BudgetConfig(

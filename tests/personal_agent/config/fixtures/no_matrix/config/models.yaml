@@ -1,0 +1,8 @@
+# Fixture: no config/model_roles.yaml present at this root (AC-2(b), FRE-650).
+models:
+  primary:
+    id: "test-primary"
+    provider_type: "local"
+    context_length: 8192
+    max_concurrency: 1
+    default_timeout: 60

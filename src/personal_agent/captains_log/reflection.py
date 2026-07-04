@@ -289,10 +289,9 @@ async def generate_reflection_entry(
     # Resolve the configured model for Captain's Log (ADR-0031).
     # DSPy handles both local and cloud models via configure_dspy_lm() — no
     # separate cloud branch needed (FRE-253).
-    from personal_agent.config import load_model_config
+    from personal_agent.config import resolve_role_model_key
 
-    _model_config = load_model_config()
-    _captains_log_role = _model_config.captains_log_role
+    _captains_log_role = resolve_role_model_key("captains_log")
 
     # ── DSPy → manual JSON → basic ───────────────────────────────────────────
     llm_client = LocalLLMClient(

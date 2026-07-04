@@ -1,33 +1,28 @@
-"""Unit tests for FRE-435 eval model config fidelity."""
+"""Unit tests for FRE-435 eval model config fidelity (ADR-0099 D1 stage 2, FRE-650).
+
+``_check_model_config_fidelity`` now compares matrix-resolved role dicts
+(``_pipeline_role_values``, keyed by matrix role name) rather than reading
+``ModelConfig`` role attributes directly — those attributes no longer exist
+(FRE-650 removed them from ``ModelConfig``). Tests mock
+``_pipeline_role_values`` itself, the seam the guard actually calls.
+"""
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from typing import cast
 from unittest.mock import patch
 
 import pytest
 import structlog.testing
-
-from personal_agent.llm_client.models import ModelConfig
 from scripts.eval.fre435_memory_recall import harness
 
 
-def _model_config(
-    *,
-    entity_extraction_role: str = "gpt-5.4-mini",
-    captains_log_role: str = "claude_sonnet",
-    insights_role: str = "claude_sonnet",
-) -> ModelConfig:
-    """Build the role-only config surface used by the fidelity guard."""
-    return cast(
-        ModelConfig,
-        SimpleNamespace(
-            entity_extraction_role=entity_extraction_role,
-            captains_log_role=captains_log_role,
-            insights_role=insights_role,
-        ),
-    )
+def _roles(*, entity_extraction: str = "gpt-5.4-mini") -> dict[str, str]:
+    """Build the matrix-resolved role dict the fidelity guard compares."""
+    return {
+        "entity_extraction": entity_extraction,
+        "captains_log": "claude_sonnet",
+        "insights": "claude_sonnet",
+    }
 
 
 def test_test_substrate_env_pins_prod_model_config() -> None:
@@ -38,11 +33,11 @@ def test_test_substrate_env_pins_prod_model_config() -> None:
 def test_guard_passes_on_role_match(monkeypatch: pytest.MonkeyPatch) -> None:
     """Matching active and production pipeline roles pass."""
     monkeypatch.delenv("EVAL_MODEL_CONFIG_ALLOW_DIVERGE", raising=False)
-    cfg = _model_config()
+    roles = _roles()
 
     with patch(
-        "scripts.eval.fre435_memory_recall.harness.load_model_config",
-        side_effect=[cfg, cfg],
+        "scripts.eval.fre435_memory_recall.harness._pipeline_role_values",
+        return_value=roles,
     ):
         harness._check_model_config_fidelity()
 
@@ -50,15 +45,15 @@ def test_guard_passes_on_role_match(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_guard_raises_on_undeclared_divergence(monkeypatch: pytest.MonkeyPatch) -> None:
     """An undeclared active/prod role mismatch fails closed."""
     monkeypatch.delenv("EVAL_MODEL_CONFIG_ALLOW_DIVERGE", raising=False)
-    active_cfg = _model_config(entity_extraction_role="gpt-5.4-nano")
-    prod_cfg = _model_config(entity_extraction_role="gpt-5.4-mini")
+    active_roles = _roles(entity_extraction="gpt-5.4-nano")
+    prod_roles = _roles(entity_extraction="gpt-5.4-mini")
 
     with (
         patch(
-            "scripts.eval.fre435_memory_recall.harness.load_model_config",
-            side_effect=[active_cfg, prod_cfg],
+            "scripts.eval.fre435_memory_recall.harness._pipeline_role_values",
+            side_effect=[active_roles, prod_roles],
         ),
-        pytest.raises(RuntimeError, match="entity_extraction_role"),
+        pytest.raises(RuntimeError, match="entity_extraction"),
     ):
         harness._check_model_config_fidelity()
 
@@ -66,12 +61,12 @@ def test_guard_raises_on_undeclared_divergence(monkeypatch: pytest.MonkeyPatch) 
 def test_guard_passes_on_declared_divergence(monkeypatch: pytest.MonkeyPatch) -> None:
     """A deliberately declared active/prod mismatch is allowed."""
     monkeypatch.setenv("EVAL_MODEL_CONFIG_ALLOW_DIVERGE", "1")
-    active_cfg = _model_config(entity_extraction_role="gpt-5.4-nano")
-    prod_cfg = _model_config(entity_extraction_role="gpt-5.4-mini")
+    active_roles = _roles(entity_extraction="gpt-5.4-nano")
+    prod_roles = _roles(entity_extraction="gpt-5.4-mini")
 
     with patch(
-        "scripts.eval.fre435_memory_recall.harness.load_model_config",
-        side_effect=[active_cfg, prod_cfg],
+        "scripts.eval.fre435_memory_recall.harness._pipeline_role_values",
+        side_effect=[active_roles, prod_roles],
     ):
         harness._check_model_config_fidelity()
 
@@ -79,12 +74,12 @@ def test_guard_passes_on_declared_divergence(monkeypatch: pytest.MonkeyPatch) ->
 def test_guard_logs_active_roles(monkeypatch: pytest.MonkeyPatch) -> None:
     """The guard emits the active model role values."""
     monkeypatch.delenv("EVAL_MODEL_CONFIG_ALLOW_DIVERGE", raising=False)
-    cfg = _model_config()
+    roles = _roles()
 
     with (
         patch(
-            "scripts.eval.fre435_memory_recall.harness.load_model_config",
-            side_effect=[cfg, cfg],
+            "scripts.eval.fre435_memory_recall.harness._pipeline_role_values",
+            return_value=roles,
         ),
         structlog.testing.capture_logs() as logs,
     ):
@@ -95,9 +90,9 @@ def test_guard_logs_active_roles(monkeypatch: pytest.MonkeyPatch) -> None:
         {
             "event": "eval_model_config_active",
             "log_level": "info",
-            "entity_extraction_role": "gpt-5.4-mini",
-            "captains_log_role": "claude_sonnet",
-            "insights_role": "claude_sonnet",
+            "entity_extraction": "gpt-5.4-mini",
+            "captains_log": "claude_sonnet",
+            "insights": "claude_sonnet",
             "config_path": str(harness.settings.model_config_path),
         }
     ]

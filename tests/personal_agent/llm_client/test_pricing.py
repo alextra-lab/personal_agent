@@ -43,9 +43,6 @@ def _priced_config() -> ModelConfig:
                 output_cost_per_token=_OUTPUT_PRICE,
             )
         },
-        entity_extraction_role="claude_sonnet",
-        captains_log_role="claude_sonnet",
-        insights_role="claude_sonnet",
     )
 
 

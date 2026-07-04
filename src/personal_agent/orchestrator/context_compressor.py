@@ -19,7 +19,7 @@ import json
 import time
 from typing import Any
 
-from personal_agent.config import load_model_config
+from personal_agent.config import ModelRoleError, resolve_role_model_key
 from personal_agent.llm_client.factory import get_llm_client
 from personal_agent.llm_client.types import LLMClientError, ModelRole
 from personal_agent.orchestrator.context_window import estimate_message_tokens
@@ -148,15 +148,16 @@ async def compress_turns(
     if not evicted_messages:
         return FALLBACK_MARKER
 
-    config = load_model_config()
-    if "compressor" not in config.models:
+    try:
+        compressor_role = resolve_role_model_key("compressor")
+    except ModelRoleError:
         global _compressor_role_missing_logged
         if not _compressor_role_missing_logged:
             log.warning(
                 "context_compressor_role_missing",
                 fallback="static_marker",
                 trace_id=trace_id,
-                remedy="Add 'compressor' role to active models.yaml to enable summarisation",
+                remedy="Add 'compressor' role to config/model_roles.yaml to enable summarisation",
             )
             _compressor_role_missing_logged = True
         return FALLBACK_MARKER
@@ -172,7 +173,7 @@ async def compress_turns(
             if trace_id
             else SystemTraceContext.new("context_compressor", session_id=session_id)
         )
-        client = get_llm_client(role_name="compressor")
+        client = get_llm_client(role_name=compressor_role)
         response = await client.respond(
             role=ModelRole.COMPRESSOR,
             messages=[

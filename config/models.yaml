@@ -33,12 +33,9 @@
 #   provider_type    "cloud" (set explicitly for ADR-0029 concurrency pass-through)
 
 # ── Process-to-model assignments ──────────────────────────────────────────────
-# Corrected to match prod (FRE-649, ADR-0099 D1): these are cognitive-pipeline
-# roles (divergence: forbidden in config/model_roles.yaml) — local and cloud
-# must resolve to the same model. Was gpt-5.4-nano / gpt-5.4-nano / gpt-5.4-nano.
-entity_extraction_role: gpt-5.4-mini
-captains_log_role: claude_sonnet
-insights_role: claude_sonnet
+# Role assignment lives ONLY in config/model_roles.yaml (ADR-0099 D1 stage 2,
+# FRE-650) — entity_extraction/captains_log/insights resolve via
+# resolve_role_model_key(), not a header in this file.
 
 models:
   # ── Tier 1: Primary Agent ───────────────────────────────────────

@@ -11,7 +11,12 @@ from personal_agent.config.governance_loader import (
     GovernanceConfigError,
     load_governance_config,
 )
-from personal_agent.config.model_loader import ModelConfigError, load_model_config
+from personal_agent.config.model_loader import (
+    ModelConfigError,
+    ModelRoleError,
+    load_model_config,
+    resolve_role_model_key,
+)
 from personal_agent.config.profile import (
     DelegationConfig,
     ExecutionProfile,
@@ -34,6 +39,7 @@ __all__ = [
     # Configuration loaders
     "load_governance_config",
     "load_model_config",
+    "resolve_role_model_key",
     # Execution profiles (ADR-0044)
     "ExecutionProfile",
     "DelegationConfig",
@@ -42,4 +48,5 @@ __all__ = [
     # Exception classes
     "GovernanceConfigError",
     "ModelConfigError",
+    "ModelRoleError",
 ]

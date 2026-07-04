@@ -152,9 +152,12 @@ async def _run_extractor(
     # local path by making provider None so LocalLLMClient is used, then mock it.
     with (
         patch("personal_agent.second_brain.entity_extraction.load_model_config") as mock_cfg,
+        patch(
+            "personal_agent.second_brain.entity_extraction.resolve_role_model_key",
+            return_value="primary",
+        ),
         patch("personal_agent.second_brain.entity_extraction.LocalLLMClient") as mock_client_cls,
     ):
-        mock_cfg.return_value.entity_extraction_role = "primary"
         mock_cfg.return_value.models = {}  # model_def is None → provider None → local path
         mock_client = mock_client_cls.return_value
         mock_client.respond = AsyncMock(return_value=_mock_local_response(model_json))
@@ -275,10 +278,13 @@ class TestFallbackShape:
         with (
             patch("personal_agent.second_brain.entity_extraction.load_model_config") as mock_cfg,
             patch(
+                "personal_agent.second_brain.entity_extraction.resolve_role_model_key",
+                return_value="primary",
+            ),
+            patch(
                 "personal_agent.second_brain.entity_extraction.LocalLLMClient"
             ) as mock_client_cls,
         ):
-            mock_cfg.return_value.entity_extraction_role = "primary"
             mock_cfg.return_value.models = {}
             mock_client = mock_client_cls.return_value
             mock_client.respond = AsyncMock(
@@ -432,9 +438,12 @@ class TestCloudPathTemperature:
         )
         with (
             patch("personal_agent.second_brain.entity_extraction.load_model_config") as mock_cfg,
+            patch(
+                "personal_agent.second_brain.entity_extraction.resolve_role_model_key",
+                return_value="gpt-5.4-mini",
+            ),
             patch("personal_agent.llm_client.factory.get_llm_client") as mock_get_client,
         ):
-            mock_cfg.return_value.entity_extraction_role = "gpt-5.4-mini"
             mock_cfg.return_value.models = {"gpt-5.4-mini": mock_model_def}
             mock_client = mock_get_client.return_value
             mock_client.respond = AsyncMock(
@@ -551,9 +560,12 @@ class TestModelOverrideAndCallStats:
         )
         with (
             patch("personal_agent.second_brain.entity_extraction.load_model_config") as mock_cfg,
+            patch(
+                "personal_agent.second_brain.entity_extraction.resolve_role_model_key",
+                return_value="gpt-5.4-mini",
+            ),
             patch("personal_agent.llm_client.factory.get_llm_client") as mock_get_client,
         ):
-            mock_cfg.return_value.entity_extraction_role = "gpt-5.4-mini"
             mock_cfg.return_value.models = {"gpt-5.4-mini": model_def}
             mock_client = mock_get_client.return_value
             mock_client.respond = AsyncMock(

@@ -1,0 +1,9 @@
+# Fixture: forbidden role's `all:` value is absent from models: (FRE-650).
+active_profiles:
+  local: config/models.yaml
+  cloud: config/models.yaml
+roles:
+  entity_extraction: { divergence: forbidden, all: gpt-9-ghost }
+required_secrets:
+  local: []
+  cloud: []

@@ -1,4 +1,4 @@
-"""Unit tests for scripts/check_config.py (ADR-0099 D1/D4, FRE-649).
+"""Unit tests for scripts/check_config.py (ADR-0099 D1/D4, FRE-649 + stage 2 FRE-650).
 
 Each fixture under tests/personal_agent/config/fixtures/ isolates exactly one
 violation; the real repo (post drift-correction) must pass every check clean.
@@ -10,14 +10,14 @@ from pathlib import Path
 
 from scripts.check_config import main
 
-from personal_agent.config.config_guard import run_all_checks
+from personal_agent.config.config_guard import check_matrix_shape, load_matrix, run_all_checks
 
 _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 class TestForbiddenRoleDivergence:
-    """AC-3 — guard fails on a divergent forbidden role; passes on the real repo."""
+    """AC-3 — guard fails on a definition-drift forbidden role; passes on the real repo."""
 
     def test_fails_on_divergent_forbidden_role_fixture(self) -> None:
         findings = run_all_checks(_FIXTURES / "divergent_forbidden_role")
@@ -34,13 +34,12 @@ class TestForbiddenRoleDivergence:
         findings = run_all_checks(_REPO_ROOT)
         assert findings == []
 
-    def test_real_repo_resolves_extraction_mini_both_profiles(self) -> None:
-        import yaml
-
-        local = yaml.safe_load((_REPO_ROOT / "config" / "models.yaml").read_text())
-        cloud = yaml.safe_load((_REPO_ROOT / "config" / "models.cloud.yaml").read_text())
-        assert local["entity_extraction_role"] == "gpt-5.4-mini"
-        assert cloud["entity_extraction_role"] == "gpt-5.4-mini"
+    def test_real_repo_forbidden_roles_declare_all_value(self) -> None:
+        matrix = load_matrix(_REPO_ROOT)
+        roles = matrix["roles"]
+        assert roles["entity_extraction"] == {"divergence": "forbidden", "all": "gpt-5.4-mini"}
+        assert roles["captains_log"] == {"divergence": "forbidden", "all": "claude_sonnet"}
+        assert roles["insights"] == {"divergence": "forbidden", "all": "claude_sonnet"}
 
 
 class TestOrphanEnvKeys:
@@ -88,3 +87,29 @@ class TestDanglingModelReference:
         findings = run_all_checks(_REPO_ROOT)
         dangling = [f for f in findings if f.check == "dangling_model_reference"]
         assert dangling == []
+
+
+class TestMatrixShape:
+    """A role's declared keys must match its own divergence value (FRE-650)."""
+
+    def test_flags_forbidden_role_missing_all_and_allowed_role_missing_local_or_cloud(
+        self,
+    ) -> None:
+        matrix = load_matrix(_FIXTURES / "malformed_matrix_shape")
+        findings = check_matrix_shape(matrix)
+        messages = " ".join(f.message for f in findings)
+
+        assert any("entity_extraction" in f.message and "no 'all'" in f.message for f in findings)
+        assert any(
+            "entity_extraction" in f.message and "declares 'local'/'cloud'" in f.message
+            for f in findings
+        )
+        assert any("compressor" in f.message and "declares neither" in f.message for f in findings)
+        assert any("compressor" in f.message and "declares 'all'" in f.message for f in findings)
+        assert all(f.severity == "policy" for f in findings)
+        assert "entity_extraction" in messages and "compressor" in messages
+
+    def test_no_false_positive_on_real_repo(self) -> None:
+        matrix = load_matrix(_REPO_ROOT)
+        findings = check_matrix_shape(matrix)
+        assert findings == []

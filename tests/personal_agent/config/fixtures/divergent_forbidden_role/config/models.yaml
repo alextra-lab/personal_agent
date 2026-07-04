@@ -1,8 +1,7 @@
-# Fixture: pre-correction local state (AC-3 known-bad fixture, FRE-649).
-entity_extraction_role: gpt-5.4-nano
-
+# Fixture: definition drift — same matrix key 'gpt-5.4-mini' as cloud, but a
+# different underlying id (AC-3 known-bad fixture, stage 2, FRE-650).
 models:
-  gpt-5.4-nano:
-    id: "gpt-5.4-nano"
+  gpt-5.4-mini:
+    id: "gpt-4o-mini"
     provider: "openai"
     max_tokens: 4096

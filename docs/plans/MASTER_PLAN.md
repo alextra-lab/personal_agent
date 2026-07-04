@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest) — per-ticket state.
 > **Source of truth for priorities**: this file (sequencing only; do not re-enumerate Linear here).
-> **Last updated**: 2026-07-04 (**process v2, FRE-777** — dispatch moved to Linear: `stream:*` labels + priority + blocked-by relations; Stream Board removed; new states `Awaiting Deploy`/`Verify Failed`; PR-merge no longer auto-Dones). Earlier same day: PR #350 (FRE-697) merged `0bdc6b0` → Done; build1 NEXT = FRE-769 (owner-confirmed, now encoded in Linear); prior narrative archived → [`completed/2026-07-04-master-plan-archive.md`](completed/2026-07-04-master-plan-archive.md).
+> **Last updated**: 2026-07-04 (**process v2, FRE-777** — dispatch moved to Linear: `stream:*` labels + priority + blocked-by relations; Stream Board removed; new states `Awaiting Deploy`/`Verify Failed`; PR-merge no longer auto-Dones — verified live on PR #351, the CI dedupe/path-aware merge `2f0908e`). Earlier same day: PR #350 (FRE-697) merged `0bdc6b0` → Done; build1 NEXT = FRE-769 (owner-confirmed, now encoded in Linear); prior narrative archived → [`completed/2026-07-04-master-plan-archive.md`](completed/2026-07-04-master-plan-archive.md).
 
 ---
 

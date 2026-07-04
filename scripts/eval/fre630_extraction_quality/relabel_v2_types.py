@@ -67,9 +67,20 @@ V2_TYPE_DEFINITIONS: dict[str, str] = {
         "namespaces, repos."
     ),
     "TechnicalArtifact": (
-        "a concrete, named engineered/built thing you can install, run, call, configure, "
-        "or physically use — software or hardware. Not an abstract method/idea "
-        "(-> MethodOrConcept). e.g. Python, Neo4j, FastAPI, a GPU, an oscilloscope."
+        "a concrete, named engineered/built thing you install, run, call, deploy, "
+        "configure, process, or physically use — software or hardware, and the data "
+        "assets a system runs on (datasets, benchmarks, gold files, prompts). Not a "
+        "human-authored work you read to understand (-> KnowledgeArtifact); not an "
+        "abstract method/idea (-> MethodOrConcept). e.g. Python, Neo4j, FastAPI, a GPU, "
+        "an oscilloscope, a benchmark gold file, an extraction prompt."
+    ),
+    "KnowledgeArtifact": (
+        "a concrete, named human-authored work whose purpose is to convey "
+        "understanding to a reader — a document, ADR, report, paper, article, "
+        "chapter, specification, or plan. Not a thing you run/deploy/process "
+        "(-> TechnicalArtifact); not the facts extracted from it into the KG; not a "
+        "broad field (-> DomainOrTopic). e.g. ADR-0109, the GoLLIE paper, a design "
+        "spec, a drafted book chapter, an incident post-mortem report."
     ),
     "MethodOrConcept": (
         "a specific human-invented abstract idea, method, technique, algorithm, data "
@@ -83,10 +94,18 @@ V2_TYPE_DEFINITIONS: dict[str, str] = {
         "cybersecurity, game theory."
     ),
     "Phenomenon": (
-        "a naturally-occurring physical/natural phenomenon, process, effect, force, or "
-        "observable that exists independently of human design. Not a human-invented method "
-        "(-> MethodOrConcept). e.g. cosmic microwave background, gravity, photosynthesis, "
-        "the greenhouse effect, the Maillard reaction."
+        "a naturally-occurring physical/natural phenomenon, process, effect, force, limit, "
+        "or observable that exists independently of human design. Not a human-invented "
+        "method (-> MethodOrConcept); not the quantity used to measure it "
+        "(-> QuantityMeasure). e.g. cosmic microwave background, gravity, photosynthesis, "
+        "the greenhouse effect, the Maillard reaction, the diffraction limit."
+    ),
+    "QuantityMeasure": (
+        "a named physical quantity, property, dimension, or unit of measure — an axis "
+        "along which things are measured. Not the naturally-occurring phenomenon/effect/"
+        "limit that exhibits it (-> Phenomenon); not a human-invented method to compute it "
+        "(-> MethodOrConcept); not a specific measured value. e.g. wavelength, mass, "
+        "temperature, frequency, luminosity."
     ),
     "Event": (
         "a specific named occurrence, milestone, incident, release, or time-bound activity. "
@@ -174,13 +193,13 @@ def _classification_prompt(entity_name: str, context: str) -> str:
     """
     definitions = "\n".join(f"- {key}: {desc}" for key, desc in V2_TYPE_DEFINITIONS.items())
     return (
-        "Classify the ENTITY below into exactly one of these 8 types. Each definition "
+        "Classify the ENTITY below into exactly one of these 10 types. Each definition "
         "states what to INCLUDE and EXCLUDE, with an example.\n\n"
         f"{definitions}\n\n"
         f"CONTEXT (the conversation the entity was mentioned in):\n{context}\n\n"
         f'ENTITY: "{entity_name}"\n\n'
         "Reply with ONLY a JSON object: "
-        '{"type": "<one of the 8 keys above>", "rationale": "<one short sentence>"}'
+        '{"type": "<one of the 10 keys above>", "rationale": "<one short sentence>"}'
     )
 
 

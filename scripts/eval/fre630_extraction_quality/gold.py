@@ -66,18 +66,21 @@ ALLOWED_ENTITY_TYPES = frozenset(
 )
 ALLOWED_ENTITY_CLASSES = frozenset({"World", "Personal", "System"})
 
-#: ADR-0109 V2 entity-type vocabulary (FRE-770). NOT yet the scored vocab — the
-#: live extractor/harness still speak V1 (`ALLOWED_ENTITY_TYPES`) until FRE-771
-#: swaps the prompt. This set only validates the new `v2_type` field.
+#: ADR-0109 V2 entity-type vocabulary (FRE-770; grown 8->10 by Amendment 1,
+#: FRE-782/784: adds `KnowledgeArtifact` + `QuantityMeasure`). NOT yet the scored
+#: vocab — the live extractor/harness still speak V1 (`ALLOWED_ENTITY_TYPES`)
+#: until FRE-771 swaps the prompt. This set only validates the new `v2_type` field.
 ALLOWED_ENTITY_TYPES_V2 = frozenset(
     {
         "Person",
         "Organization",
         "Location",
         "TechnicalArtifact",
+        "KnowledgeArtifact",
         "MethodOrConcept",
         "DomainOrTopic",
         "Phenomenon",
+        "QuantityMeasure",
         "Event",
     }
 )

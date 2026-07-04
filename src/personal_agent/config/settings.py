@@ -2176,31 +2176,19 @@ class AppConfig(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_config_guard_policy(self) -> "AppConfig":
-        """Tiered cross-config policy/safety hook (ADR-0099 D4, FRE-649).
+        """Orphan-``.env`` policy check (ADR-0099 D4, FRE-649).
 
-        Reads ``config/model_roles.yaml`` (if present) to:
+        Reads ``config/model_roles.yaml`` (if present) and warn-loud (never
+        raise) on any orphan ``.env.example`` key — a policy finding;
+        CI/pre-commit (``scripts/check_config.py``) is the hard gate for
+        these, not boot. A missing or unreadable matrix file is skipped
+        silently, so it can never make an otherwise-valid ``AppConfig()``
+        construction fail.
 
-        1. Warn-loud (never raise) on any orphan ``.env.example`` key — a
-           policy finding; CI/pre-commit is the hard gate for these, not boot.
-        2. Hard-fail when a secret required by the ACTIVE profile (resolved
-           from ``model_config_path`` against the matrix's ``active_profiles``)
-           is unset — a safety finding, since a cloud boot with no API key
-           degrades silently rather than failing loudly.
-
-        A missing or unreadable matrix file is itself a policy gap, not a
-        safety failure: the check is skipped rather than raised, so it can
-        never make an otherwise-valid ``AppConfig()`` construction fail.
-
-        The required-secret check (2) is skipped entirely under
-        ``Environment.TEST``. It exists to catch a real *deployment* silently
-        degrading (a cloud process booting with no API key) — not to gate
-        unit tests that construct an ``AppConfig`` pointed at
-        ``models.cloud.yaml`` purely to exercise role-resolution logic with
-        mocked LLM calls (e.g. the FRE-435/FRE-630 eval-harness test suites,
-        which pin ``AGENT_MODEL_CONFIG_PATH`` via an import-time
-        ``os.environ.setdefault`` that legitimately outlives their own test
-        module for the rest of the pytest session). Mirrors the existing
-        FRE-375 substrate guard's own TEST-environment carve-out.
+        The required-secret-per-profile *safety* check (ADR-0099 D4's other
+        half of this hook) deliberately does **not** live here — see
+        ``enforce_required_secrets`` and its call site in
+        ``load_app_config()`` for why.
         """
         root = repo_root()
         matrix = load_matrix(root)
@@ -2213,25 +2201,51 @@ class AppConfig(BaseSettings):
                 "config_guard_orphan_env_keys",
                 findings=[o.message for o in orphans],
             )
-
-        if self.environment == Environment.TEST:
-            return self
-
-        active_profile = resolve_active_profile(self.model_config_path, matrix, root)
-        required_secrets_by_profile = matrix.get("required_secrets", {})
-        required_secrets: list[str] = (
-            required_secrets_by_profile.get(active_profile, [])
-            if isinstance(required_secrets_by_profile, dict)
-            else []
-        )
-        missing = [name for name in required_secrets if getattr(self, name, None) is None]
-        if missing:
-            raise ValueError(
-                f"Active profile {active_profile!r} (resolved from model_config_path="
-                f"{self.model_config_path!r}) requires secrets {missing} but they are unset. "
-                "Set the corresponding AGENT_* env var(s) before starting."
-            )
         return self
+
+
+def enforce_required_secrets(config: "AppConfig", *, root: Path | None = None) -> None:
+    """Hard-fail if a secret required by the ACTIVE profile is unset (ADR-0099 D4, FRE-649).
+
+    Deliberately a plain function called from ``load_app_config()`` — the
+    real application-boot entry point — rather than an ``AppConfig``
+    ``model_validator``. Ad-hoc ``AppConfig()`` / ``.model_validate()``
+    construction is pervasive across the test suite (tests deliberately
+    bypass env-file loading for isolation), and several legitimate
+    eval-harness test files (FRE-435/FRE-630) pin
+    ``AGENT_MODEL_CONFIG_PATH=config/models.cloud.yaml`` via an import-time
+    ``os.environ.setdefault`` that outlives their own test module for the
+    rest of the pytest session. A pydantic validator would fire on every one
+    of those incidental constructions; a plain post-construction check called
+    only from the real boot path fires only when the application is actually
+    starting.
+
+    Args:
+        config: The constructed ``AppConfig`` to check.
+        root: Repo root override (test seam); defaults to ``repo_root()``.
+
+    Raises:
+        ValueError: When the active profile requires a secret that is unset.
+    """
+    resolved_root = root if root is not None else repo_root()
+    matrix = load_matrix(resolved_root)
+    if not matrix:
+        return
+
+    active_profile = resolve_active_profile(config.model_config_path, matrix, resolved_root)
+    required_secrets_by_profile = matrix.get("required_secrets", {})
+    required_secrets: list[str] = (
+        required_secrets_by_profile.get(active_profile, [])
+        if isinstance(required_secrets_by_profile, dict)
+        else []
+    )
+    missing = [name for name in required_secrets if getattr(config, name, None) is None]
+    if missing:
+        raise ValueError(
+            f"Active profile {active_profile!r} (resolved from model_config_path="
+            f"{config.model_config_path!r}) requires secrets {missing} but they are unset. "
+            "Set the corresponding AGENT_* env var(s) before starting."
+        )
 
 
 _settings: AppConfig | None = None
@@ -2251,6 +2265,8 @@ def load_app_config() -> AppConfig:
 
     Raises:
         ValidationError: If configuration validation fails.
+        ValueError: If a secret required by the active profile is unset
+            (ADR-0099 D4, FRE-649 — see ``enforce_required_secrets``).
     """
     log.info("loading_app_config", environment=get_environment().value)
 
@@ -2259,6 +2275,7 @@ def load_app_config() -> AppConfig:
 
     try:
         config = AppConfig()
+        enforce_required_secrets(config)
         log.info(
             "app_config_loaded",
             environment=config.environment.value,

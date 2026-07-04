@@ -1,4 +1,4 @@
-"""Tiered startup-hook tests for AppConfig._validate_config_guard_policy (FRE-649, AC-6).
+"""Tiered startup-hook tests for AppConfig's config-guard hooks (FRE-649, AC-6).
 
 Three cases (ADR-0099 D4):
 (a) safety — TEST env + prod-fingerprint substrate URI raises. This is the
@@ -7,6 +7,11 @@ Three cases (ADR-0099 D4):
 (b) policy — a planted orphan .env.example key boots and warns, never raises.
 (c) safety, per-profile — a secret required by the ACTIVE profile (cloud)
     but unset raises; the same secret unset under the local profile boots.
+    Exercises ``enforce_required_secrets`` directly (see its docstring for
+    why this is a plain function called from ``load_app_config()``, not an
+    ``AppConfig`` model_validator: ad-hoc construction is pervasive across
+    the test suite, and several eval-harness test files legitimately leak
+    ``AGENT_MODEL_CONFIG_PATH=config/models.cloud.yaml`` process-wide).
 """
 
 from __future__ import annotations
@@ -18,7 +23,7 @@ import pytest
 from pydantic import ValidationError
 
 from personal_agent.config.env_loader import Environment
-from personal_agent.config.settings import AppConfig
+from personal_agent.config.settings import AppConfig, enforce_required_secrets
 
 # `personal_agent.config.__init__` shadows the `settings` submodule attribute
 # with the eagerly-loaded AppConfig singleton (`settings = get_settings()`),
@@ -89,29 +94,32 @@ class TestPolicyWarnsAndBoots:
 
 
 class TestRequiredSecretPerActiveProfile:
-    """(c) Safety, per-profile — cloud requires anthropic/openai keys; local requires none.
-
-    Uses DEVELOPMENT, not TEST: the check is deliberately skipped under
-    Environment.TEST (see _validate_config_guard_policy's docstring) so it
-    never fires against the FRE-435/FRE-630 eval-harness unit tests, which
-    legitimately pin model_config_path=models.cloud.yaml under APP_ENV=test
-    for role-resolution testing with mocked LLM calls.
-    """
+    """(c) Safety, per-profile — cloud requires anthropic/openai keys; local requires none."""
 
     def test_missing_cloud_secret_raises(self) -> None:
-        with pytest.raises(ValidationError, match="requires secrets"):
-            make_config(
-                environment=Environment.DEVELOPMENT,
-                model_config_path="config/models.cloud.yaml",
-                anthropic_api_key=None,
-                openai_api_key=None,
-            )
+        cfg = make_config(
+            model_config_path="config/models.cloud.yaml",
+            anthropic_api_key=None,
+            openai_api_key=None,
+        )
+        with pytest.raises(ValueError, match="requires secrets"):
+            enforce_required_secrets(cfg)
 
     def test_missing_secret_under_local_profile_boots(self) -> None:
         cfg = make_config(
-            environment=Environment.DEVELOPMENT,
             model_config_path="config/models.yaml",
             anthropic_api_key=None,
             openai_api_key=None,
         )
+        enforce_required_secrets(cfg)  # does not raise
         assert cfg.anthropic_api_key is None
+
+    def test_load_app_config_calls_enforce_required_secrets(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Confirms the check is actually wired into the real boot path."""
+        calls: list[AppConfig] = []
+        monkeypatch.setattr(settings_module, "enforce_required_secrets", calls.append)
+        settings_module.load_app_config()
+        assert len(calls) == 1
+        assert isinstance(calls[0], AppConfig)

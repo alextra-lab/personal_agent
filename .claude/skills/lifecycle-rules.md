@@ -56,12 +56,45 @@ doesn't have to. Your standing mandate:
 - Deferred or parked work is marked deferred, NEVER Done.
 - New issues are created in state "Needs Approval", under a Linear project.
 - **State lifecycle — the board must not lie (be accurate, no stale entries):**
-  `Approved` (ready) → `In Progress` (a session is building it **now** — ≤1 per stream, transient; umbrellas/pillars go to `Backlog`, parked-project tickets to `Approved`, never left In Progress) → `In Review` (merged, awaiting master's **deploy + live verify** — where a deploy-hold ticket lives after merge) → `Done` (deploy-verified live; master flips it deliberately).
-- **Auto-close trap:** merging a `fre-XXX`-branched PR **auto-moves the ticket to Done** (Linear GitHub branch-link, back as of 2026-07-02). For a **deploy-hold** ticket this is a *false Done* that bypasses the deploy+verify gate — master reopens it to `In Review` at the gate (or disable the Linear auto-close). See memory `feedback_linear_github_automoves_to_done`.
+  `Approved` (ready; dispatched once it also carries a `stream:*` label) → `In Progress` (a session is
+  building it **now** — ≤1 per stream, transient; umbrellas/pillars go to `Backlog`, parked-project
+  tickets to `Approved`, never left In Progress) → `In Review` (PR open, at master's gate) →
+  `Awaiting Deploy` (merged; deploy + live verification pending) → `Done` (deploy-verified live;
+  master flips it deliberately, with the evidence comment below). Exception state: `Verify Failed`
+  (post-deploy verification failed — rolled back or rollback pending; set by master only; demands a
+  decision, never appears on the happy path).
+- **GitHub integration (retargeted 2026-07-04):** merging a `fre-XXX`-branched PR auto-moves the
+  ticket to `Awaiting Deploy` — never Done. The old auto-Done trap is closed by configuration; if a
+  merged ticket ever shows `Done` without an evidence comment, the integration mapping has drifted —
+  fix the mapping, don't just reopen the ticket.
 
 ### Evidence contract (proof of Done)
 
 A ticket is Done only when its claim maps to durable evidence. Done means a merged PR whose branch maps to the ticket (fre-XXX); if the ticket cites a backing ADR with acceptance criteria, those are separately proven. A MASTER_PLAN narrative state must match current Linear state plus merged-PR evidence. Deployed-at-SHA means git log of main equals the claimed SHA and health is green. UNVERIFIABLE (no source to check) is a first-class verdict, never silently treated as PASS. scripts/reconcile_board.py is the deterministic check.
+
+**Close-out evidence comment (master, on every Done — plain prose + links, no code blocks / CLI / SQL
+tokens; the WAF rejects them):** PR link · merge SHA · CI run link · deploy class (standing-approval
+class or ask-first, and who authorized) · deploy timestamp · health/verification result · rollback
+available yes/no · each acceptance criterion with how it was verified. A ticket reaching Done without
+this comment is drift — catch it.
+
+## Dispatch (Linear-native)
+
+Dispatch state lives in Linear, not MASTER_PLAN (process v2, 2026-07-04). A worker's NEXT is:
+
+> the FrenchForest issue that is **`Approved`** AND labeled **`stream:<mine>`** AND has **no open
+> "blocked by" relation**, ordered by **priority** (descending; `Urgent` is master's front-of-queue
+> lever, not a severity opinion), **oldest created first** on ties.
+
+- **Model** = the ticket's `Tier-*` label. **Context** = the `context:keep` label (present → KEEP the
+  warm context; absent → CLEAR, the default).
+- **Master owns every dispatch mutation** — stream labels, priority, `context:keep`, blocked-by
+  relations. Workers only read. An `Approved` issue with **no** stream label is
+  approved-but-not-dispatched.
+- **Chains** are "blocked by" relations; only the unblocked head is pickable, and completing it
+  automatically exposes the next — no re-dispatch step.
+- **Busy guard:** if any issue is `In Progress` with this stream's label, the stream is building —
+  do not resolve a new NEXT.
 
 ## Deploy
 - Deploy is a master-only action. Owner granted **standing approval (2026-06-26)** for three

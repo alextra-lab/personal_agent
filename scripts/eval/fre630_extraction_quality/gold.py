@@ -26,7 +26,9 @@ from typing import Any
 import yaml  # type: ignore[import-untyped]
 
 #: Bumped whenever the gold-case shape changes in a way that affects scoring.
-GOLD_SCHEMA_VERSION = "1.0"
+#: 1.1 (FRE-770): added the optional `v2_type` (+ adjudication metadata) fields
+#: — additive only, the scored V1 `type`/`ALLOWED_ENTITY_TYPES` are unchanged.
+GOLD_SCHEMA_VERSION = "1.1"
 
 #: The extractor's controlled relationship vocabulary (entity_extraction.py). An
 #: extracted edge type outside this set is off-vocabulary regardless of the case.
@@ -39,6 +41,22 @@ ALLOWED_ENTITY_TYPES = frozenset(
     {"Person", "Organization", "Location", "Technology", "Concept", "Event", "Topic"}
 )
 ALLOWED_ENTITY_CLASSES = frozenset({"World", "Personal", "System"})
+
+#: ADR-0109 V2 entity-type vocabulary (FRE-770). NOT yet the scored vocab — the
+#: live extractor/harness still speak V1 (`ALLOWED_ENTITY_TYPES`) until FRE-771
+#: swaps the prompt. This set only validates the new `v2_type` field.
+ALLOWED_ENTITY_TYPES_V2 = frozenset(
+    {
+        "Person",
+        "Organization",
+        "Location",
+        "TechnicalArtifact",
+        "MethodOrConcept",
+        "DomainOrTopic",
+        "Phenomenon",
+        "Event",
+    }
+)
 
 
 class GoldSetError(ValueError):
@@ -56,16 +74,28 @@ class GoldEntity:
 
     Attributes:
         name: Canonical entity name (the scoring label).
-        entity_type: One of :data:`ALLOWED_ENTITY_TYPES`.
+        entity_type: One of :data:`ALLOWED_ENTITY_TYPES` (V1, scored today).
         knowledge_class: One of :data:`ALLOWED_ENTITY_CLASSES`.
         aliases: Accepted alternative surface forms (abbreviations, reorderings,
             known synonyms) that the tiered matcher will treat as an exact hit.
+        v2_type: ADR-0109 V2 label (FRE-770), one of :data:`ALLOWED_ENTITY_TYPES_V2`
+            when set. Not yet scored — informational until FRE-771 promotes it.
+        v2_adjudicated: Whether ``v2_type`` required builder adjudication (a
+            rater majority or 3-way split), rather than unanimous agreement.
+        v2_adjudication_rationale: One-line reasoning for an adjudicated
+            ``v2_type``, empty when unanimous.
+        v2_needs_owner_signoff: Set when a 3-way rater split was adjudicated by
+            the builder but still needs owner confirmation post-hoc.
     """
 
     name: str
     entity_type: str
     knowledge_class: str
     aliases: tuple[str, ...] = ()
+    v2_type: str = ""
+    v2_adjudicated: bool = False
+    v2_adjudication_rationale: str = ""
+    v2_needs_owner_signoff: bool = False
 
 
 @dataclass(frozen=True)
@@ -166,7 +196,9 @@ def _parse_entity(raw: dict[str, Any], case_id: str) -> GoldEntity:
         The parsed :class:`GoldEntity`.
 
     Raises:
-        GoldSetError: On a missing name or an off-vocabulary type/class.
+        GoldSetError: On a missing name, an off-vocabulary type/class, or an
+            off-vocabulary ``v2_type`` (validated only when present, so a gold
+            file mid-relabel — not every entity annotated yet — still loads).
     """
     name = _as_str(raw.get("name"))
     if not name:
@@ -178,8 +210,18 @@ def _parse_entity(raw: dict[str, Any], case_id: str) -> GoldEntity:
     if knowledge_class not in ALLOWED_ENTITY_CLASSES:
         raise GoldSetError(f"{case_id}: entity {name!r} has off-vocab class {knowledge_class!r}")
     aliases = tuple(_as_str(a) for a in raw.get("aliases", []) if _as_str(a))
+    v2_type = _as_str(raw.get("v2_type"))
+    if v2_type and v2_type not in ALLOWED_ENTITY_TYPES_V2:
+        raise GoldSetError(f"{case_id}: entity {name!r} has off-vocab v2_type {v2_type!r}")
     return GoldEntity(
-        name=name, entity_type=entity_type, knowledge_class=knowledge_class, aliases=aliases
+        name=name,
+        entity_type=entity_type,
+        knowledge_class=knowledge_class,
+        aliases=aliases,
+        v2_type=v2_type,
+        v2_adjudicated=bool(raw.get("v2_adjudicated", False)),
+        v2_adjudication_rationale=_as_str(raw.get("v2_adjudication_rationale")),
+        v2_needs_owner_signoff=bool(raw.get("v2_needs_owner_signoff", False)),
     )
 
 

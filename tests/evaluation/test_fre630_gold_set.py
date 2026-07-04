@@ -13,6 +13,7 @@ from pathlib import Path
 from scripts.eval.fre630_extraction_quality.gold import (
     ALLOWED_ENTITY_CLASSES,
     ALLOWED_ENTITY_TYPES,
+    ALLOWED_ENTITY_TYPES_V2,
     ALLOWED_REL_TYPES,
     all_authored_strings,
     load_gold_set,
@@ -139,3 +140,51 @@ def test_failure_modes_are_represented() -> None:
     # All three knowledge classes are exercised.
     classes = {e.knowledge_class for c in cases for e in c.expect_entities}
     assert classes == ALLOWED_ENTITY_CLASSES, f"classes covered: {classes}"
+
+
+# ── FRE-770: ADR-0109 V2 gold relabel (v2_type dual-field) ──────────────────
+
+
+def test_all_entities_have_v2_type() -> None:
+    """Every gold entity carries a V2 (ADR-0109 8-type) label, not just V1.
+
+    A single-author or partial re-label does not satisfy FRE-770 — the ticket
+    requires every entity re-labeled via the blind multi-rater pipeline.
+    """
+    offenders = [
+        f"{c.case_id}:{e.name}"
+        for c in _load()
+        for e in c.expect_entities
+        if e.v2_type not in ALLOWED_ENTITY_TYPES_V2
+    ]
+    assert not offenders, f"entities missing/invalid v2_type: {offenders}"
+
+
+#: ADR-0109 names 5 Phenomenon examples in its own spot-check; FRE-770 must grow
+#: coverage beyond them, so the committed gold carries strictly more.
+MIN_PHENOMENON_ENTITIES = 6
+
+
+def test_phenomenon_coverage_grown_beyond_adr_spotcheck() -> None:
+    """Phenomenon coverage exceeds the ADR's own 5 spot-checked examples."""
+    phenomena = [e.name for c in _load() for e in c.expect_entities if e.v2_type == "Phenomenon"]
+    assert len(phenomena) >= MIN_PHENOMENON_ENTITIES, (
+        f"only {len(phenomena)} Phenomenon entities; need ≥{MIN_PHENOMENON_ENTITIES} "
+        "to exceed the ADR's own 5-example spot-check"
+    )
+
+
+def test_no_unresolved_signoff_without_rationale() -> None:
+    """Every entity flagged for owner sign-off carries a builder rationale.
+
+    A 3-way rater split is still adjudicated (v2_type is never left empty) but
+    flagged `v2_needs_owner_signoff` for later confirmation — that flag must
+    never appear without the reasoning that produced it.
+    """
+    offenders = [
+        f"{c.case_id}:{e.name}"
+        for c in _load()
+        for e in c.expect_entities
+        if e.v2_needs_owner_signoff and not e.v2_adjudication_rationale
+    ]
+    assert not offenders, f"sign-off flagged with no rationale: {offenders}"

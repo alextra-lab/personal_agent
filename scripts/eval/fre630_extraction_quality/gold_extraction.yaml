@@ -49,6 +49,7 @@ cases:
         type: Location
         class: World
         aliases: ["the lagoon island", "the island"]
+        v2_type: Location
     expect_relationships: []
     forbid_entities: []
     # A single afternoon visit must NOT be promoted to residence/containment semantics.
@@ -64,6 +65,7 @@ cases:
         type: Location
         class: World
         aliases: ["the mountain village", "the village"]
+        v2_type: Location
     expect_relationships: []
     forbid_rel_types: [LIVES_IN, LOCATED_IN]
 
@@ -82,10 +84,12 @@ cases:
         type: Concept
         class: World
         aliases: ["game theory"]
+        v2_type: DomainOrTopic
       - name: Nash Equilibrium
         type: Concept
         class: World
         aliases: ["nash equilibrium"]
+        v2_type: MethodOrConcept
     expect_relationships:
       - {source: Nash Equilibrium, type: PART_OF, target: Game Theory}
     dedup_variants:
@@ -101,10 +105,12 @@ cases:
         type: Topic
         class: World
         aliases: ["philosophy of mind"]
+        v2_type: DomainOrTopic
       - name: Hard Problem of Consciousness
         type: Concept
         class: World
         aliases: ["the hard problem", "hard problem"]
+        v2_type: MethodOrConcept
     expect_relationships:
       - {source: Hard Problem of Consciousness, type: PART_OF, target: Philosophy of Mind}
     dedup_variants:
@@ -125,10 +131,14 @@ cases:
         type: Concept
         class: World
         aliases: ["diffraction gratings", "diffraction grating"]
+        v2_type: TechnicalArtifact
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (full+sonnet) — a diffraction grating is a physical, buildable/usable hardware component, matching TechnicalArtifact's software-or-hardware scope; not an abstract method."
       - name: Interference
         type: Concept
         class: World
         aliases: ["interference"]
+        v2_type: Phenomenon
     expect_relationships:
       - {source: Diffraction Grating, type: USES, target: Interference}
     # A misspelled relationship type must never leak in as an :Entity.
@@ -144,6 +154,7 @@ cases:
         type: Concept
         class: World
         aliases: ["hash function"]
+        v2_type: MethodOrConcept
     expect_relationships: []
     # Conversation role labels must never become Person entities.
     forbid_entities: ["User", "Assistant", "System", "Reasoning"]
@@ -160,6 +171,9 @@ cases:
         type: Concept
         class: World
         aliases: ["typed relation extraction", "relation extraction"]
+        v2_type: DomainOrTopic
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (full+sonnet) — 'relation extraction' names a whole NLP subfield/task category encompassing many specific techniques, matching DomainOrTopic's 'broad field ... not a specific technique within it.'"
     expect_relationships: []
     # Internal tool identifiers are not world entities.
     forbid_entities: ["web_search", "run_python", "mcp_search"]
@@ -179,14 +193,17 @@ cases:
         type: Technology
         class: World
         aliases: ["fastapi"]
+        v2_type: TechnicalArtifact
       - name: Python
         type: Technology
         class: World
         aliases: ["python"]
+        v2_type: TechnicalArtifact
       - name: PostgreSQL
         type: Technology
         class: World
         aliases: ["postgres", "postgresql"]
+        v2_type: TechnicalArtifact
     expect_relationships:
       - {source: FastAPI, type: USES, target: Python}
       - {source: FastAPI, type: USES, target: PostgreSQL}
@@ -201,10 +218,12 @@ cases:
         type: Technology
         class: World
         aliases: ["linux kernel", "linux"]
+        v2_type: TechnicalArtifact
       - name: Linus Torvalds
         type: Person
         class: World
         aliases: ["torvalds"]
+        v2_type: Person
     expect_relationships:
       - {source: Linux Kernel, type: CREATED_BY, target: Linus Torvalds}
 
@@ -223,10 +242,14 @@ cases:
         type: Concept
         class: World
         aliases: ["rayleigh scattering"]
+        v2_type: Phenomenon
       - name: Wavelength
         type: Concept
         class: World
         aliases: ["wavelength", "wavelengths"]
+        v2_type: MethodOrConcept
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (mini+sonnet) — 'wavelength' names a measurable physical property/concept (a defined quantity), not an occurring phenomenon/event itself. Note: exposes a genuine taxonomy gap — physical quantities/measures (wavelength, mass, temperature) have no clean home in the 8-type vocabulary."
     expect_relationships:
       - {source: Rayleigh Scattering, type: RELATED_TO, target: Wavelength}
 
@@ -242,10 +265,12 @@ cases:
         type: Concept
         class: World
         aliases: ["cmb", "cosmic microwave background"]
+        v2_type: Phenomenon
       - name: Big Bang
         type: Event
         class: World
         aliases: ["the big bang", "big bang"]
+        v2_type: Event
     expect_relationships:
       - {source: Cosmic Microwave Background, type: RELATED_TO, target: Big Bang}
 
@@ -261,10 +286,14 @@ cases:
         type: Concept
         class: World
         aliases: ["the diffraction limit", "diffraction limit"]
+        v2_type: Phenomenon
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (full+sonnet) — the diffraction limit is a naturally-arising physical effect/constraint from wave optics, not human-invented; fits Phenomenon's 'effect ... exists independently of human design.'"
       - name: Optical Microscope
         type: Technology
         class: World
         aliases: ["optical microscope"]
+        v2_type: TechnicalArtifact
     expect_relationships:
       - {source: Diffraction Limit, type: RELATED_TO, target: Optical Microscope}
 
@@ -280,10 +309,14 @@ cases:
         type: Concept
         class: World
         aliases: ["hummus"]
+        v2_type: MethodOrConcept
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Overriding majority (TechnicalArtifact) — that type's definition is explicitly scoped to 'software or hardware' (e.g. Python, Neo4j, a GPU); a food dish doesn't fit despite being physically concrete. The conversation is about the *preparation technique*; kept consistent with the Mapo Tofu adjudication below."
       - name: Tahini
         type: Concept
         class: World
         aliases: ["tahini"]
+        v2_type: TechnicalArtifact
     expect_relationships:
       - {source: Hummus, type: USES, target: Tahini}
 
@@ -299,14 +332,19 @@ cases:
         type: Concept
         class: World
         aliases: ["the minoans", "minoan civilisation", "minoans"]
+        v2_type: DomainOrTopic
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (mini+full) — a civilisation is a historical/cultural subject of study, not a structured institution/company (Organization's definition)."
       - name: Crete
         type: Location
         class: World
         aliases: ["crete"]
+        v2_type: Location
       - name: Knossos
         type: Location
         class: World
         aliases: ["knossos"]
+        v2_type: Location
     expect_relationships:
       - {source: Knossos, type: LOCATED_IN, target: Crete}
 
@@ -320,10 +358,12 @@ cases:
         type: Location
         class: World
         aliases: ["the alhambra", "alhambra"]
+        v2_type: Location
       - name: Granada
         type: Location
         class: World
         aliases: ["granada"]
+        v2_type: Location
     # A genuine geographic containment — LOCATED_IN is CORRECT here (contrast the visit cases).
     expect_relationships:
       - {source: Alhambra, type: LOCATED_IN, target: Granada}
@@ -341,10 +381,12 @@ cases:
         type: Concept
         class: World
         aliases: ["prisoners dilemma", "the prisoner's dilemma"]
+        v2_type: MethodOrConcept
       - name: Game Theory
         type: Concept
         class: World
         aliases: ["game theory"]
+        v2_type: DomainOrTopic
     expect_relationships:
       - {source: Prisoner's Dilemma, type: PART_OF, target: Game Theory}
 
@@ -360,10 +402,12 @@ cases:
         type: Concept
         class: World
         aliases: ["a trie", "trie"]
+        v2_type: MethodOrConcept
       - name: Prefix Search
         type: Concept
         class: World
         aliases: ["prefix search"]
+        v2_type: MethodOrConcept
     expect_relationships:
       - {source: Trie, type: USES, target: Prefix Search}
 
@@ -379,10 +423,14 @@ cases:
         type: Concept
         class: World
         aliases: ["incident response", "incident-response"]
+        v2_type: MethodOrConcept
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (mini+sonnet) — names a specific structured methodology/lifecycle (defined phases: preparation, detection, containment, ...), matching MethodOrConcept's 'method ... pattern,' not a whole field."
       - name: Containment
         type: Concept
         class: World
         aliases: ["containment"]
+        v2_type: MethodOrConcept
     expect_relationships:
       - {source: Containment, type: PART_OF, target: Incident Response}
 
@@ -401,6 +449,9 @@ cases:
         type: Concept
         class: World
         aliases: ["manual gearbox", "manual transmission"]
+        v2_type: TechnicalArtifact
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (full+sonnet) — a concrete, physically installable/usable mechanical hardware component; genuinely engineered hardware, unlike the food-dish cases."
     expect_relationships: []
     # The affect toward the manual gearbox is a STANCE, not a World-description clause.
     expect_stances:
@@ -421,10 +472,14 @@ cases:
         type: Concept
         class: World
         aliases: ["ear training"]
+        v2_type: MethodOrConcept
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (mini+sonnet) — a specific practice/technique (graded drills) for building a skill, not a broad field."
       - name: Interval Recognition
         type: Concept
         class: World
         aliases: ["interval recognition"]
+        v2_type: MethodOrConcept
     expect_relationships:
       - {source: Interval Recognition, type: PART_OF, target: Ear Training}
     expect_stances:
@@ -442,10 +497,14 @@ cases:
         type: Concept
         class: World
         aliases: ["sichuan food", "sichuan cuisine"]
+        v2_type: DomainOrTopic
       - name: Mapo Tofu
         type: Concept
         class: World
         aliases: ["mapo tofu"]
+        v2_type: MethodOrConcept
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (mini+full), consistent with the Hummus adjudication above — a named dish/recipe is closer to a human-invented preparation concept than to TechnicalArtifact's software-or-hardware scope."
     expect_stances:
       - {target: Sichuan Cuisine, affect: strongly prefers}
 
@@ -464,15 +523,25 @@ cases:
         type: Concept
         class: World
         aliases: ["neuroplasticity"]
+        v2_type: Phenomenon
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (mini+sonnet) — a naturally-occurring biological process (like photosynthesis, the ADR's own Phenomenon example), not a field of study itself."
       - name: Learning
         type: Concept
         class: World
         aliases: ["learning"]
+        v2_type: DomainOrTopic
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (full+sonnet) — used generically ('the substrate of learning'), this invokes the broad subject of learning as a field of study, not a single named biological process."
       # The user's own drafted artifact is a Personal-class entity (named thing in their life).
       - name: Neuroplasticity Chapter
         type: Topic
         class: Personal
         aliases: ["the chapter", "the chapter i'm drafting", "my chapter"]
+        v2_type: TechnicalArtifact
+        v2_adjudicated: true
+        v2_adjudication_rationale: "3-way split (MethodOrConcept/TechnicalArtifact/Event) — no clean fit. A personal creative-writing artifact (a chapter draft) doesn't map onto any V2 type designed for world-knowledge entities. Provisionally ruled TechnicalArtifact (closest: a concrete, named authored artifact) but this exposes a genuine taxonomy gap for Personal-class creative works; NEEDS OWNER SIGN-OFF before FRE-771 treats this as settled."
+        v2_needs_owner_signoff: true
     expect_relationships:
       - {source: Neuroplasticity, type: RELATED_TO, target: Learning}
       - {source: Neuroplasticity Chapter, type: RELATED_TO, target: Neuroplasticity}
@@ -495,10 +564,14 @@ cases:
         type: Event
         class: System
         aliases: ["consolidation run", "consolidation attempt", "the last consolidation run"]
+        v2_type: Event
       - name: Cost Gate
         type: Technology
         class: System
         aliases: ["the cost gate", "cost gate"]
+        v2_type: TechnicalArtifact
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Overriding majority (MethodOrConcept) — the Cost Gate is a concrete, deployed software component (ADR-0065's Postgres-backed reservation system, the `cost_gate/` module), not an abstract policy; 'software or hardware' explicitly covers backend services like this."
     expect_relationships: []
     # This is agent operational state, not user knowledge — must be class=System.
 
@@ -512,10 +585,12 @@ cases:
         type: Technology
         class: System
         aliases: ["neo4j"]
+        v2_type: TechnicalArtifact
       - name: Knowledge Graph
         type: Concept
         class: System
         aliases: ["the knowledge graph", "knowledge graph"]
+        v2_type: MethodOrConcept
     expect_relationships:
       - {source: Knowledge Graph, type: PART_OF, target: Neo4j}
 
@@ -537,6 +612,7 @@ cases:
         type: Topic
         class: World
         aliases: ["robotics", "robotics engineering"]
+        v2_type: DomainOrTopic
     expect_claims:
       - {facet: employer, content_gist: the user recently started a job at a robotics firm}
 
@@ -560,6 +636,9 @@ cases:
         type: Concept
         class: World
         aliases: ["compact suvs", "compact suv"]
+        v2_type: TechnicalArtifact
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (full+sonnet) — names a vehicle category rather than one specific model, but still a concrete, physically-driveable hardware class (consistent with Manual Transmission), closer to TechnicalArtifact than to an abstract field of study."
     expect_claims:
       - {facet: car_shopping_status, content_gist: the user is actively shopping for a compact SUV}
 
@@ -583,6 +662,7 @@ cases:
         type: Topic
         class: World
         aliases: ["statistics"]
+        v2_type: DomainOrTopic
     expect_claims:
       - {facet: course_enrollment, content_gist: the user enrolled in an evening statistics course}
 
@@ -616,6 +696,7 @@ cases:
         type: Location
         class: World
         aliases: ["berlin"]
+        v2_type: Location
     # Attending a conference is a VISIT, not residence — do not promote to LIVES_IN.
     forbid_rel_types: [LIVES_IN, LOCATED_IN]
     expect_claims:
@@ -643,6 +724,9 @@ cases:
         type: Concept
         class: World
         aliases: ["plant-based", "plant based diet"]
+        v2_type: DomainOrTopic
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (mini+full) — names a broad dietary category/subject area the user has adopted, not one specific bounded technique."
     expect_claims:
       - {facet: dietary_preference, content_gist: the user has shifted to a mostly plant-based diet this year}
 
@@ -663,6 +747,7 @@ cases:
         type: Topic
         class: World
         aliases: ["behavioral economics", "behavioural economics"]
+        v2_type: DomainOrTopic
 
   - case_id: type-concept-not-technology
     tags: [type-boundary, ml, world]
@@ -678,3 +763,182 @@ cases:
         type: Concept
         class: World
         aliases: ["rag", "retrieval augmented generation", "retrieval-augmented generation"]
+        v2_type: MethodOrConcept
+
+  # =====================================================================
+  # ADR-0109 V2 GOLD RELABEL (FRE-770) — Phenomenon regression anchors +
+  # coverage grown beyond the ADR's own 5-example spot-check, plus new
+  # MethodOrConcept/DomainOrTopic boundary pairs. `type` (V1) is a best-effort
+  # mapping so these load/score under the still-live V1 harness; `v2_type`
+  # (ADR-0109 8-type) is populated via the blind 3-rater pipeline + builder
+  # adjudication, not authored by hand — see
+  # docs/research/2026-07-04-fre-770-gold-relabel-iaa.md.
+  # =====================================================================
+  - case_id: phenomenon-gravity
+    tags: [phenomenon, physics, world]
+    source:
+      user: "Why do things fall to the ground instead of floating away?"
+      assistant: >
+        Gravity is the mutual attraction between any two masses; near Earth's
+        surface it produces a roughly constant downward acceleration of about
+        9.8 meters per second squared.
+    expect_entities:
+      - name: Gravity
+        type: Concept
+        class: World
+        aliases: ["gravity"]
+        v2_type: Phenomenon
+
+  - case_id: phenomenon-photosynthesis
+    tags: [phenomenon, biology, world]
+    source:
+      user: "How do plants actually make their own food?"
+      assistant: >
+        Photosynthesis converts light energy, water, and carbon dioxide into
+        glucose and oxygen inside a plant's chloroplasts.
+    expect_entities:
+      - name: Photosynthesis
+        type: Concept
+        class: World
+        aliases: ["photosynthesis"]
+        v2_type: Phenomenon
+
+  - case_id: phenomenon-greenhouse-effect
+    tags: [phenomenon, climate, world]
+    source:
+      user: "What actually traps heat in the atmosphere?"
+      assistant: >
+        The greenhouse effect: gases like carbon dioxide and methane absorb and
+        re-radiate infrared heat, warming the surface below.
+    expect_entities:
+      - name: Greenhouse Effect
+        type: Concept
+        class: World
+        aliases: ["the greenhouse effect", "greenhouse effect"]
+        v2_type: Phenomenon
+
+  - case_id: phenomenon-black-hole
+    tags: [phenomenon, cosmology, physics, world]
+    source:
+      user: "What happens if you get too close to a black hole?"
+      assistant: >
+        Past the event horizon, gravity is so strong that not even light can
+        escape a black hole.
+    expect_entities:
+      - name: Black Hole
+        type: Concept
+        class: World
+        aliases: ["a black hole", "black hole"]
+        v2_type: Phenomenon
+
+  - case_id: phenomenon-maillard-reaction
+    tags: [phenomenon, cooking, world]
+    source:
+      user: "Why does seared steak taste so much better than boiled meat?"
+      assistant: >
+        The Maillard reaction — browning between amino acids and sugars under
+        high heat — creates hundreds of new flavor compounds that simple
+        boiling never reaches.
+    expect_entities:
+      - name: Maillard Reaction
+        type: Concept
+        class: World
+        aliases: ["the maillard reaction", "maillard reaction"]
+        v2_type: Phenomenon
+
+  # --- New coverage beyond the ADR's 5-example spot-check ---
+
+  - case_id: phenomenon-boundary-spacetime
+    tags: [phenomenon, type-boundary, physics, cosmology, world]
+    source:
+      user: "What did Einstein mean when he said gravity isn't really a force?"
+      assistant: >
+        In general relativity, gravity is the curvature of spacetime itself —
+        massive objects bend the fabric that space and time share, and other
+        objects simply follow that curve.
+    # ADR-0109 names this exact case as an unresolved risk ("is spacetime a
+    # Phenomenon or a DomainOrTopic?") — left to the rater pipeline to resolve,
+    # not pre-judged here.
+    expect_entities:
+      - name: Spacetime
+        type: Concept
+        class: World
+        aliases: ["spacetime", "space-time"]
+        v2_type: Phenomenon
+        v2_adjudicated: true
+        v2_adjudication_rationale: "Majority (full+sonnet) — resolves ADR-0109's own named open question ('is spacetime a Phenomenon or a DomainOrTopic?'): spacetime is the naturally-existing structure of the universe, independent of human design, matching Phenomenon."
+
+  - case_id: phenomenon-acoustics-resonance
+    tags: [phenomenon, acoustics, music, world]
+    source:
+      user: "Why does a wine glass sing when you rub the rim?"
+      assistant: >
+        Rubbing the rim excites the glass at one of its natural resonance
+        frequencies, and resonance amplifies that specific vibration into an
+        audible tone.
+    expect_entities:
+      - name: Resonance
+        type: Concept
+        class: World
+        aliases: ["resonance"]
+        v2_type: Phenomenon
+
+  - case_id: boundary-cybersecurity-pentest
+    tags: [type-boundary, security, csirt, world, relationships]
+    source:
+      user: "What's the difference between cybersecurity as a field and penetration testing?"
+      assistant: >
+        Cybersecurity is the broad discipline of protecting systems and data
+        from attack; penetration testing is one specific technique within it —
+        simulating a real attack to find exploitable weaknesses before an
+        adversary does.
+    expect_entities:
+      - name: Cybersecurity
+        type: Topic
+        class: World
+        aliases: ["cybersecurity", "cyber security"]
+        v2_type: DomainOrTopic
+      - name: Penetration Testing
+        type: Concept
+        class: World
+        aliases: ["penetration testing", "pen testing", "pentesting"]
+        v2_type: MethodOrConcept
+    expect_relationships:
+      - {source: Penetration Testing, type: PART_OF, target: Cybersecurity}
+
+  - case_id: boundary-buffer-overflow
+    tags: [type-boundary, security, world]
+    source:
+      user: "Can you explain what a buffer overflow actually is?"
+      assistant: >
+        A buffer overflow happens when a program writes more data into a
+        fixed-size buffer than it can hold, overwriting adjacent memory — a
+        classic technique attackers use to hijack program execution.
+    expect_entities:
+      - name: Buffer Overflow
+        type: Concept
+        class: World
+        aliases: ["buffer overflow"]
+        v2_type: MethodOrConcept
+
+  - case_id: boundary-cosmology-redshift
+    tags: [type-boundary, cosmology, physics, world, relationships]
+    source:
+      user: "How do astronomers figure out how fast a galaxy is moving away from us?"
+      assistant: >
+        They measure redshift — the stretching of light to longer wavelengths
+        as its source recedes — which is one of the main tools cosmology uses
+        to study the expanding universe.
+    expect_entities:
+      - name: Cosmology
+        type: Topic
+        class: World
+        aliases: ["cosmology"]
+        v2_type: DomainOrTopic
+      - name: Redshift
+        type: Concept
+        class: World
+        aliases: ["redshift", "red shift"]
+        v2_type: Phenomenon
+    expect_relationships:
+      - {source: Redshift, type: PART_OF, target: Cosmology}

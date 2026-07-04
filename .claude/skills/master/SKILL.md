@@ -54,6 +54,12 @@ ADR*, not merged-and-runs.** A feature / ADR-implementation ticket passes ONLY i
 Missing provenance or proof on a feature ticket → **bounce back to the build session; do not merge on
 an artifact-level "looks done"** (same bounce mechanism as the codex tier backstop, Step 2).
 
+**Bounce channel (so the worker loop can follow it).** Post every actionable bounce as a **PR comment**
+led by the exact marker **`## Master gate — BOUNCE`** — never on the ticket (that's the durable record
+channel; see lifecycle-rules § Comment channels). The worker's loop detects the marker, acks it, and
+self-fixes on its own branch (prime-worker Step 3.2a); keep evidence / AC-proof / decisions on the
+**ticket**.
+
 **Bugs — partially excluded.** A bugfix ticket with no backing ADR is exempt from the *provenance*
 requirement (there is no ADR to trace to) but NOT from *proof*: it still needs a reproducing test or a
 verification that the specific failure no longer occurs.

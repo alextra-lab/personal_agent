@@ -1,11 +1,12 @@
 ---
 name: prime-worker
-description: Run once in a build / build2 / adr worker session. Self-identifies the stream from its worktree, arms its own 20m monitor loop (survives /clear, runs till session close — no double-arm), then tests idle/building/awaiting-master from durable git state and ONLY when idle with an Approved NEXT surfaces a one-line dispatch card (model switch + CLEAR/KEEP + exact command). Advises only — never builds, clears, merges, or edits anything.
+description: Run once in a build / build2 / adr worker session. Self-identifies the stream from its worktree, arms its own 20m monitor loop (survives /clear, runs till session close — no double-arm), then tests idle/building/awaiting-master from durable git state and ONLY when idle with an Approved NEXT surfaces a one-line dispatch card (model switch + CLEAR/KEEP + exact command). Advises only, except it self-fixes a marked master bounce on its own open PR (ack → fix → make test → push); never merges, deploys, or clears.
 ---
 
 # Prime a Worker Session (build / build2 / adr)
 
-Read `.claude/skills/lifecycle-rules.md` first. This is a **monitor, not an executor.** It never
+Read `.claude/skills/lifecycle-rules.md` first. This is a **monitor, not an executor** — with one
+carve-out: it self-fixes a marked master bounce on its own open PR (Step 3.2a). Otherwise it never
 edits `src/`, never runs `/build` or `/adr`, never `/clear`s, never merges, never edits MASTER_PLAN.
 It reads durable git + Linear state and, only when the stream is genuinely idle with a ready
 NEXT, tells the owner exactly what to run. **When in doubt, stay silent.**
@@ -37,12 +38,20 @@ keeps `origin/main` current), then:
 1. **Building** — `git status --short` is non-empty **OR** `git rev-list --count origin/main..HEAD` > 0
    (uncommitted or unpushed work in flight) → **silent.**
 2. **Awaiting master** — clean, and `gh pr list --head "$(git branch --show-current)"` shows an open PR.
-   A PR is **not** master-ready until its CI is green, so check first: `gh pr checks <PR#>`.
+   Resolve in order:
+
+   **a. Master bounce to follow? (the one carve-out from advise-only.)** Fetch PR comments
+   (`gh pr view <PR#> --json comments`). If the **latest** `## Master gate — BOUNCE` comment has **no
+   worker ack after it** (an ack is a later PR comment containing `Ack: addressing master bounce`) →
+   enter **FIX MODE**:
+   - **Ack first**, before touching code: `gh pr comment <PR#> --body "Ack: addressing master bounce in next push."` — dedups against the next 20m tick.
+   - Read the bounce + the PR diff, apply the fix on **this** branch, run `make test` to green, and push.
+   - **Never merge, never deploy** — master still gates. Then **STOP** (CI re-runs; the next tick sees the ack and skips). A followed bounce ends when the PR merges — no other cleanup.
+
+   **b. No unacked bounce → master-readiness by CI.** A PR is **not** master-ready until CI is green:
+   `gh pr checks <PR#>` —
    - CI **all green** → **silent** (built + CI-green; master owns the gate).
-   - CI **failing** → **NOT silent, NOT awaiting-master**: surface one line —
-     *"Stream X · PR #N CI FAILING (`<failed check>`) — fix before the master gate; master won't merge red."*
-     A red PR is the worker's to fix, not master's to wait on. (This is the guard that stops a session
-     reporting "done / awaiting master" on a PR that never passed CI.)
+   - CI **failing** → surface one line: *"Stream X · PR #N CI FAILING (`<failed check>`) — fix before the master gate; master won't merge red."* A red PR is the worker's to fix, not master's to wait on. (This also stops a session reporting "done / awaiting master" on a PR that never passed CI.)
    - CI **pending** → one line: *"Stream X · PR #N CI still running — not yet master-ready; re-check next tick."*
 3. Otherwise (clean · nothing unpushed · no open PR) → **possibly idle** → go to Step 4. Whether it is
    truly idle vs. just-dispatched is decided by the NEXT ticket's **Linear state** in Step 4 — NOT by
@@ -81,5 +90,7 @@ the dispatch — those are the human-only gates. Master owns dispatch (labels/pr
 only ever advise the ticket master routed to this stream; you never choose your own work.
 
 ## Boundary
-Advises only. Never edits `src/`, never runs `/build` / `/adr`, never `/clear`s, never merges, never
-edits MASTER_PLAN. If any check is ambiguous, stay silent rather than guess.
+Advises only, with **one** carve-out: it may edit/commit/push **to fix a marked master bounce on its
+own open PR** (Step 3.2a) — ack first, `make test` green before pushing, and **never merge, deploy, or
+`/clear`**. Outside that bounce-fix path it never edits `src/`, never runs `/build` / `/adr`, never
+merges, never edits MASTER_PLAN. If any check is ambiguous, stay silent rather than guess.

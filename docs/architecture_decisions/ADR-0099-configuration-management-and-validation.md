@@ -1,6 +1,6 @@
 # ADR-0099 — Configuration Management & Validation (single-source role matrix · profile-divergence policy · cross-config validator)
 
-**Status:** Accepted — 2026-06-28 (owner; impl chain FRE-648 → 649 → 650 → 651 → 652 delivered; assembled-seam confirmation on the integration branch — see Status Updates — is master's gate before this flips to Implemented)
+**Status:** Implemented — 2026-07-04 (assembled seam confirmed at the master integration gate on FRE-652 / PR #366; impl chain FRE-648 → 649 → 650 → 651 → 652 all merged. The config chain is behavior-neutral and rides the next `seshat-gateway` rebuild; the child tickets flip to Done at that deploy.)
 **Date:** 2026-06-28
 **Deciders:** Project owner (authorized 2026-06-28, FRE-644)
 **Extends:** ADR-0007 (Unified Configuration Management — established `AppConfig` as the typed-scalar authority and "secrets in `.env` only"), ADR-0031 (Model Configuration Consolidation — made `models.yaml` the source of truth for model *identity*; this ADR fixes the drift that re-entered through *role assignment*)
@@ -267,6 +267,10 @@ The ADR **decides** the consolidated end-state now; it **ships** as sequenced ch
 ### 2026-07-04 — Stage 4 delivered (build2, FRE-652)
 **Changed By:** build2 session (Sonnet), FRE-652
 **Reason:** Final staged-delivery child. Retired `config/models-baseline.yaml` and `config/models.medium.yaml` (the third file the ADR named, `models.eval.yaml`, was already retired by the unrelated FRE-735); neither had a live or test reader. Added `check_no_role_headers` to `config_guard.py` so AC-2(a)'s "grep returns zero role headers" is a permanent CI/pre-commit gate, not a one-time manual check. All four assembled-seam checks (ADR Verification section, "Seam owner" paragraph) verified green on this branch: (1) `scripts/check_config.py` clean, (2) AC-2(a) grep zero + AC-2(b) deterministic-failure test pass, (3) `config-resolve --profile cloud --role entity_extraction` → `gpt-5.4-mini` from committed files only, (4) AC-1 (`test_role_resolution_golden.py`) green. **Not self-flipping Accepted → Implemented** — the ADR reserves that confirmation for the master integration gate on the assembled branch. The `claude_sonnet` `claude-sonnet-4-6` definition drift (§3/F2 of `CONFIG_INVENTORY.md`) persists in the three `models.benchmark-*.yaml` files, added after this ADR and out of this ticket's named scope — filed as a follow-up ticket for the owner to prioritize.
+
+### 2026-07-04 — Implemented (master seam confirmation, FRE-652 / PR #366)
+**Changed By:** master session, at the integration gate
+**Reason:** With PR #366 merged to `main` (`1711404`), master ran the four assembled-seam checks on the integrated branch and all pass together: (1) the cross-config guard exits clean against the real repo; (2) zero role headers across `config/*.yaml` (now permanently gated by `check_no_role_headers`) and the matrix-missing deterministic-failure test raises; (3) `config-resolve --profile cloud --role entity_extraction` → `gpt-5.4-mini` from committed files only; (4) AC-1 — one resolved `ModelDefinition` per forbidden role across profiles. The assembled intent (single source of truth for role assignment, drift structurally impossible, definition drift closed, tiered validator gating on startup + CI + pre-commit) holds → **ADR-0099 Implemented.** The impl chain (FRE-649/650/651/652) is behavior-preserving and rides the next `seshat-gateway` rebuild; those tickets flip to Done at that deploy. Residual: FRE-789 (the `claude_sonnet` drift in the never-deployed `models.benchmark-*.yaml` files, out of this ADR's scope) is an open owner decision — correct or formally allow-list.
 
 ---
 

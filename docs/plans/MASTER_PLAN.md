@@ -81,7 +81,7 @@ Recent / active (older ADRs → `docs/architecture_decisions/`):
 | **0102** | Vision doc/PDF ingestion | **Accepted** — un-paused 2026-07-04 but LOW priority. |
 | **0101** | Agent vision ingestion of attachments | **Accepted** (functionally implemented — FRE-691/669 Done, AC-10b outlier-waived). |
 | **0100** | Relevance-bounded recall | **Accepted**. |
-| **0099** | Config management & validation | **Accepted**. FRE-648 Done; FRE-649/650 **Awaiting Deploy** (behavior-preserving); FRE-651 building (build2) → 652. |
+| **0099** | Config management & validation | **Implemented** (seam confirmed on FRE-652/PR #366). Stages 648–652 all merged; chain **Awaiting-Deploy** (behavior-neutral rebuild → tickets Done). Next: config-UI capstone + lifecycle audit. Residual: FRE-789 benchmark-YAML drift. |
 | **0098** | Memory substrate & lifecycle | **Accepted** (implements 0097). Claims write-path live. |
 | **0092** | Context-Compaction Observability | **Implemented**. |
 | **0090** | Telemetry Surface Contract | **Accepted** (governs Telemetry Surface Audit). |

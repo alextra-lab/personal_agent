@@ -86,6 +86,11 @@ Dispatch state lives in Linear, not MASTER_PLAN (process v2, 2026-07-04). A work
 > "blocked by" relation**, ordered by **priority** (descending; `Urgent` is master's front-of-queue
 > lever, not a severity opinion), **oldest created first** on ties.
 
+- **A blocker is "open" until its MERGE lands** — i.e., until it reaches `Awaiting Deploy`, `Done`,
+  `Canceled`, or `Duplicate`. Chains advance at merge, not at deploy-verify: the successor builds
+  off `origin/main`, which contains the predecessor's merge regardless of deploy state. (A blocker
+  in `In Progress`/`In Review` is open.)
+
 - **Model** = the ticket's `Tier-*` label. **Context** = the `context:keep` label (present → KEEP the
   warm context; absent → CLEAR, the default).
 - **Master owns every dispatch mutation** — stream labels, priority, `context:keep`, blocked-by
@@ -93,8 +98,10 @@ Dispatch state lives in Linear, not MASTER_PLAN (process v2, 2026-07-04). A work
   approved-but-not-dispatched.
 - **Chains** are "blocked by" relations; only the unblocked head is pickable, and completing it
   automatically exposes the next — no re-dispatch step.
-- **Busy guard:** if any issue is `In Progress` with this stream's label, the stream is building —
-  do not resolve a new NEXT.
+- **Busy guard:** if any issue with this stream's label is `In Progress` **or `In Review`**, the
+  stream is occupied — do not resolve a new NEXT. (`In Review` = PR open at master's gate; a bounce
+  or red CI sends it back to this stream, so the stream is not free until the merge lands. The
+  stream frees at `Awaiting Deploy` — deploy and verification are master's, not the stream's.)
 - **No timestamp ties:** if more than one ticket in a stream is eligible (unblocked), master pins the
   intended head with priority (High = head pin; Urgent = jump). A queue must never depend on the
   oldest-created tie-break — that fallback exists for safety, not as a control.

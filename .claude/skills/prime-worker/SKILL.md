@@ -52,14 +52,16 @@ keeps `origin/main` current), then:
 ## Step 4 — Resolve NEXT from Linear (the dispatch authority; uniform for build & adr)
 Dispatch contract = lifecycle-rules § Dispatch (Linear-native). Resolve in two queries:
 
-1. **Busy guard:** `list_issues(team="FrenchForest", state="In Progress", label="stream:<mine>")` —
-   any result → a session is on it → **silent.** *(This replaces the old board-based
-   "already dispatched" check and is uniform across build & adr branch-naming schemes.)*
+1. **Busy guard:** query the stream's label in BOTH occupied states —
+   `list_issues(team="FrenchForest", state="In Progress", label="stream:<mine>")` and again with
+   `state="In Review"` — any result in either → the stream is occupied (building, or PR at master's
+   gate that could bounce back) → **silent.** The stream frees at `Awaiting Deploy` (merge landed;
+   deploy is master's). *(Uniform across build & adr branch-naming schemes.)*
 2. **Head of queue:** `list_issues(team="FrenchForest", state="Approved", label="stream:<mine>")` —
    order by priority (Urgent first, then High/Medium/Low, no-priority last), oldest created on ties;
    walk from the top and take the first issue with **no open "blocked by" relation**
-   (`get_issue(<id>, includeRelations=true)` — blocked means a `blockedBy` issue that is not
-   Done/Canceled).
+   (`get_issue(<id>, includeRelations=true)` — a blocker is open until its merge lands: open =
+   blocker in any state before `Awaiting Deploy`/`Done`/`Canceled`/`Duplicate`).
 - No candidate → **silent** (nothing dispatched to this stream — master hasn't labeled work for it).
 - Candidate found → read its **Tier label** ([O]/[S]/[H] → Opus/Sonnet/Haiku) and its **context
   flag** (`context:keep` label present → KEEP; absent → CLEAR) → **advise** (Step 5).

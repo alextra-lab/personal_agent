@@ -10,11 +10,13 @@ and tell the owner (ADR authoring is Opus-only).
 
 **Argument: none → resolve NEXT from Linear** (dispatch contract: lifecycle-rules § Dispatch).
 **FIRST `git fetch origin`** (you still need latest main for Step 0). Then: busy guard —
-`list_issues(team="FrenchForest", state="In Progress", label="stream:adr")` non-empty → STOP (a
-session is already on it); otherwise take the head of `list_issues(team="FrenchForest",
-state="Approved", label="stream:adr")` ordered by priority then oldest-created, skipping any issue
-with an open "blocked by" relation (`get_issue` with includeRelations — blocked means a blocker not
-Done/Canceled). Honor its **context flag** exactly as `/build` does —
+`list_issues(team="FrenchForest", label="stream:adr")` with `state="In Progress"`, and again with
+`state="In Review"`: either non-empty → STOP (the stream is occupied — building, or a PR at master's
+gate that could bounce back; it frees at `Awaiting Deploy`). Otherwise take the head of
+`list_issues(team="FrenchForest", state="Approved", label="stream:adr")` ordered by priority then
+oldest-created, skipping any issue with an open "blocked by" relation (`get_issue` with
+includeRelations — a blocker is open until its merge lands: any state before
+`Awaiting Deploy`/`Done`/`Canceled`/`Duplicate`). Honor its **context flag** exactly as `/build` does —
 **CLEAR** (default, no `context:keep` label): **first check if you are a blank/new session** (freshly
 started or just `/clear`ed, essentially nothing in context but this invocation); if yes, proceed; if no
 (you still carry a previous ADR's work), STOP and tell the owner to `/clear` then re-run `/adr`.

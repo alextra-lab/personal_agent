@@ -104,9 +104,10 @@ is active.
   timestamp, verification result, rollback availability, each acceptance criterion + how verified).
 - **If verification failed: state → `Verify Failed`** (not Done, not left in Awaiting Deploy), file
   the follow-up issue, consider rollback. Verify Failed is the exception flag that demands a decision.
-- **Advance dispatch (replaces advancing the board):** after every Done, re-derive the stream's
-  eligible set (`Approved` + `stream:*` label + no open blocked-by). Binding rules
-  (lifecycle-rules § Dispatch):
+- **Advance dispatch (replaces advancing the board):** run this at every MERGE, not just at Done —
+  the merge is the event that frees the stream and un-blocks chain successors (a blocker is open
+  until it reaches `Awaiting Deploy`; lifecycle-rules § Dispatch). Re-derive the stream's eligible
+  set (`Approved` + `stream:*` label + no open blocked-by). Binding rules:
   - **Exactly one intended head, always pinned.** If more than one ticket is eligible, move the
     High pin to the intended head NOW — never leave the head to creation-date ties. Verify after
     every mutation: the eligible set contains exactly one Urgent-or-High ticket.

@@ -2,7 +2,7 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest) — per-ticket state.
 > **Source of truth for priorities**: this file (sequencing only; do not re-enumerate Linear here).
-> **Last updated**: 2026-07-04 (**process v2, FRE-777** — dispatch moved to Linear: `stream:*` labels + priority + blocked-by relations; Stream Board removed; new states `Awaiting Deploy`/`Verify Failed`; PR-merge no longer auto-Dones — verified live on PR #351, the CI dedupe/path-aware merge `2f0908e`). Earlier same day: PR #350 (FRE-697) merged `0bdc6b0` → Done; build1 NEXT = FRE-769 (owner-confirmed, now encoded in Linear); prior narrative archived → [`completed/2026-07-04-master-plan-archive.md`](completed/2026-07-04-master-plan-archive.md).
+> **Last updated**: 2026-07-04 (late session). **Shipped:** FRE-777 process v2 · ADR-0109 V2 chain FRE-769/770/773 Done + **Amendment 1 (FRE-782): entity taxonomy → 10 types** (+KnowledgeArtifact +QuantityMeasure, 3-rater IAA-validated) · FRE-781 worker bounce-follow + two-channel comment contract · **ADR-0110 (FRE-783) Proposed** — external dispatch orchestrator (headless-skill spike proven; master role unchanged) + new **Build/ADR Dispatch Automation** project (FRE-785–788 Needs-Approval). **Awaiting Deploy** (behavior-preserving `seshat-gateway` rebuild pending, low-urgency): FRE-649/650 config chain · FRE-724 multipath (needs FRE-778 driver). **Dispatch now:** build1→FRE-784, build2→FRE-651, adr idle. Process-v2 baseline notes: dispatch via Linear `stream:*` + priority + blocked-by; PR-merge→Awaiting Deploy; prior narrative → [`completed/2026-07-04-master-plan-archive.md`](completed/2026-07-04-master-plan-archive.md).
 
 ---
 
@@ -70,7 +70,8 @@ Recent / active (older ADRs → `docs/architecture_decisions/`):
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| **0109** | Entity-Taxonomy V1→V2 Redesign (8-type) | **Accepted 2026-07-03** (`a43bc22`). Root-cause fix for the extraction ceiling (FRE-766). Build chain FRE-769→773 Approved. |
+| **0110** | External dispatch orchestrator (build/adr workers) | **Proposed** (PR #362, FRE-783). Headless-skill spike proven; RC-monitored, not fully unattended; master role unchanged. Impl FRE-785–788 Needs-Approval (Build/ADR Dispatch Automation project, build-stream). |
+| **0109** | Entity-Taxonomy V1→V2 Redesign (**10-type**) | **Accepted** + **Amendment 1** (FRE-782: +KnowledgeArtifact +QuantityMeasure, 3-rater IAA-validated, κ 0.900). Chain: FRE-769/770/773 Done; **FRE-784** (10-type promote, build1) → 771 (prompt swap) → 772 (KG migration). |
 | **0108** | Stored-artifact vision re-processing | **Proposed** (PR #330). Impl FRE-743–748 + bug FRE-749 Needs-Approval. |
 | **0107** | User identity for Claims + log/trace propagation | **Accepted** (PR #327). Impl FRE-738/739/740 Approved. |
 | **0106** | System/User boundary by output_kind | **Accepted**. Children FRE-728–732 Approved (W2). |
@@ -80,7 +81,7 @@ Recent / active (older ADRs → `docs/architecture_decisions/`):
 | **0102** | Vision doc/PDF ingestion | **Accepted** — un-paused 2026-07-04 but LOW priority. |
 | **0101** | Agent vision ingestion of attachments | **Accepted** (functionally implemented — FRE-691/669 Done, AC-10b outlier-waived). |
 | **0100** | Relevance-bounded recall | **Accepted**. |
-| **0099** | Config management & validation | **Accepted**. Impl FRE-648 Done → 649→652 (build2). |
+| **0099** | Config management & validation | **Accepted**. FRE-648 Done; FRE-649/650 **Awaiting Deploy** (behavior-preserving); FRE-651 building (build2) → 652. |
 | **0098** | Memory substrate & lifecycle | **Accepted** (implements 0097). Claims write-path live. |
 | **0092** | Context-Compaction Observability | **Implemented**. |
 | **0090** | Telemetry Surface Contract | **Accepted** (governs Telemetry Surface Audit). |

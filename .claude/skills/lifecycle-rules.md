@@ -108,6 +108,13 @@ Dispatch state lives in Linear, not MASTER_PLAN (process v2, 2026-07-04). A work
   labeled by master before it is pickable.
 - **Chains** are "blocked by" relations; only the unblocked head is pickable, and completing it
   automatically exposes the next — no re-dispatch step.
+- **Master removes a satisfied relation the moment its blocker merges** (reaches Awaiting
+  Deploy/Done/Canceled/Duplicate), as part of advance-dispatch. This makes the invariant hold *by
+  construction*: **a `blockedBy` relation that still exists ⟺ a genuinely-open blocker.** Workers
+  must still treat a relation to an already-terminal blocker as cleared (state-aware backstop), but
+  they should never have to — a stale-but-satisfied relation is a master bug. (Caught live on FRE-777
+  rollout: FRE-649 carried a pre-existing `blockedBy` to the already-Done FRE-648 and a worker
+  skipped it as "blocked.")
 - **Busy guard:** if any issue with this stream's label is `In Progress` **or `In Review`**, the
   stream is occupied — do not resolve a new NEXT. (`In Review` = PR open at master's gate; a bounce
   or red CI sends it back to this stream, so the stream is not free until the merge lands. The

@@ -113,7 +113,12 @@ is active.
     every mutation: the eligible set contains exactly one Urgent-or-High ticket.
   - **Sequence is written at dispatch time, not discovered later.** Labeling a chain into a stream
     and writing its blocked-by relations are ONE action — a ticket entering a queue without its
-    relations is a dispatch bug that will surface as a false head. Be equally intentional when
+    relations is a dispatch bug that will surface as a false head.
+  - **Remove satisfied relations at merge.** When a ticket merges (reaches Awaiting Deploy), delete
+    any `blockedBy` relation on its successors that pointed at it — and audit any newly-labeled
+    ticket for a *pre-existing* relation to an already-terminal blocker. A relation that still
+    exists must mean genuinely-blocked (lifecycle-rules § Dispatch); a stale-but-satisfied one makes
+    a worker skip an eligible head (caught live: FRE-649 blocked by the already-Done FRE-648). Be equally intentional when
     filing/approving follow-up tickets: decide their place in the order before they carry a stream
     label (unlabeled-Approved = parked is the safe default).
   - **Queue jumper, front:** label `stream:<s>` + priority Urgent. Do NOT re-wire chain relations

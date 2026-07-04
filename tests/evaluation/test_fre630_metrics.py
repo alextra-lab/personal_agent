@@ -294,7 +294,7 @@ def test_score_case_end_to_end_clean() -> None:
         "stances": [],
         "claims": [],
     }
-    score = score_case(case, result)
+    score = score_case(case, result, entity_type_field="v2")
     assert score.entity.precision == 1.0
     assert score.entity_type_accuracy == 1.0
     assert score.hallucination_rate == 0.0
@@ -326,7 +326,7 @@ def test_score_case_end_to_end_with_failures() -> None:
         "stances": [],
         "claims": [],
     }
-    score = score_case(case, result)
+    score = score_case(case, result, entity_type_field="v2")
     assert score.entity_type_accuracy == 0.0  # Torcello mis-typed Concept
     assert score.knowledge_class_accuracy == 0.0  # mis-classed Personal
     assert score.hallucination_rate == 0.5  # DISCUSES
@@ -381,3 +381,55 @@ class TestClaimCaseLevelRecall:
         result = claim_case_level_recall(cases)
         assert result.total == 10 and result.passing == 8
         assert result.fraction == 0.8
+
+
+# ── FRE-771: entity_type_field selects which gold type score_case scores against ──
+
+
+def _boundary_case() -> GoldCase:
+    """A single-entity case with distinct V1 and V2 gold type labels."""
+    return GoldCase(
+        case_id="fre771-boundary",
+        tags=("type-boundary",),
+        source_user="GraphRAG combines retrieval with generation.",
+        source_assistant="It is a well-known technique.",
+        expect_entities=(
+            GoldEntity(
+                name="GraphRAG",
+                entity_type="Concept",
+                knowledge_class="World",
+                v2_type="MethodOrConcept",
+            ),
+        ),
+        expect_relationships=(),
+    )
+
+
+def test_score_case_entity_type_field_v2_scores_against_v2_type() -> None:
+    """entity_type_field='v2' matches an extraction emitting the V2 label."""
+    case = _boundary_case()
+    result = {
+        "entities": [{"name": "GraphRAG", "type": "MethodOrConcept", "class": "World"}],
+        "relationships": [],
+        "stances": [],
+        "claims": [],
+    }
+    score_v2 = score_case(case, result, entity_type_field="v2")
+    assert score_v2.entity_type_accuracy == 1.0
+    score_v1 = score_case(case, result, entity_type_field="v1")
+    assert score_v1.entity_type_accuracy == 0.0
+
+
+def test_score_case_entity_type_field_v1_scores_against_v1_type() -> None:
+    """entity_type_field='v1' matches an extraction emitting the retired V1 label."""
+    case = _boundary_case()
+    result = {
+        "entities": [{"name": "GraphRAG", "type": "Concept", "class": "World"}],
+        "relationships": [],
+        "stances": [],
+        "claims": [],
+    }
+    score_v1 = score_case(case, result, entity_type_field="v1")
+    assert score_v1.entity_type_accuracy == 1.0
+    score_v2 = score_case(case, result, entity_type_field="v2")
+    assert score_v2.entity_type_accuracy == 0.0

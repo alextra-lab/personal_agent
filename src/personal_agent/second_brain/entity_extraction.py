@@ -62,14 +62,50 @@ Your final output must be valid JSON only — no markdown fences, no explanation
 _EXTRACTION_PROMPT_TEMPLATE = """\
 Analyze this conversation and extract knowledge graph elements.
 
-ENTITY TYPES — use EXACTLY one of these values, no others:
-  Person        — a real named individual (never extract "User" or "Assistant")
-  Organization  — a company, team, project group, or institution
-  Location      — a geographic place, city, country, or region
-  Technology    — a software tool, framework, language, model, or API
-  Concept       — an abstract idea, methodology, or domain principle
-  Event         — a specific named occurrence or milestone
-  Topic         — a well-defined subject area being discussed
+ENTITY TYPES — use EXACTLY one of these values, no others (ADR-0109 V2, 10-type):
+  Person              — a real, named individual human. Not "User"/"Assistant", generic
+                        roles, teams, orgs.
+  Organization        — a named company, institution, agency, department, team, or
+                        standards body. Not software products or locations.
+  Location            — a named geographic or physical place. Not organizations named
+                        after places, namespaces, repos.
+  TechnicalArtifact   — a concrete, named engineered/built thing you install, run, call,
+                        deploy, configure, process, or physically use — software or
+                        hardware, and the data assets a system runs on (datasets,
+                        benchmarks, gold files, prompts). Not a human-authored work you
+                        read to understand (-> KnowledgeArtifact); not an abstract
+                        method/idea (-> MethodOrConcept).
+                        e.g. Python, Neo4j, FastAPI, a GPU, an oscilloscope.
+  KnowledgeArtifact   — a concrete, named human-authored work whose purpose is to convey
+                        understanding to a reader — a document, ADR, report, paper,
+                        article, chapter, specification, or plan. Not a thing you
+                        run/deploy/process (-> TechnicalArtifact); not the facts
+                        extracted from it into the KG; not a broad field
+                        (-> DomainOrTopic). e.g. an ADR, a research paper, a drafted
+                        book chapter, an incident post-mortem report.
+  MethodOrConcept     — a specific human-invented abstract idea, method, technique,
+                        algorithm, data structure, pattern, or principle. Not a built
+                        artifact; not a broad field; not a natural phenomenon.
+                        e.g. GraphRAG, trie, Nash equilibrium, retrieval-augmented
+                        generation.
+  DomainOrTopic       — a broad field, domain, discipline, or subject area as a whole.
+                        Not a specific technique within it (-> MethodOrConcept).
+                        e.g. behavioral economics, cosmology, cybersecurity, game theory.
+  Phenomenon          — a naturally-occurring physical/natural phenomenon, process,
+                        effect, force, limit, or observable that exists independently of
+                        human design. Not a human-invented method (-> MethodOrConcept);
+                        not the quantity used to measure it (-> QuantityMeasure).
+                        e.g. cosmic microwave background, gravity, photosynthesis, the
+                        greenhouse effect, the diffraction limit.
+  QuantityMeasure     — a named physical quantity, property, dimension, or unit of
+                        measure — an axis along which things are measured. Not the
+                        naturally-occurring phenomenon/effect/limit that exhibits it
+                        (-> Phenomenon); not a human-invented method to compute it
+                        (-> MethodOrConcept); not a specific measured value.
+                        e.g. wavelength, mass, temperature, frequency, luminosity.
+  Event               — a specific named occurrence, milestone, incident, release, or
+                        time-bound activity. e.g. the Big Bang, ICLR 2024, a production
+                        outage.
 
 RELATIONSHIP TYPES — use EXACTLY one of these UPPER_SNAKE_CASE values, no others:
   PART_OF       — entity is a component or subset of another
@@ -175,23 +211,23 @@ EXTRACTION RULES (follow strictly):
 
 GOOD EXAMPLES:
   ✓ {{"name": "Paris", "type": "Location", "class": "World", "description": "Capital of France, subject of weather inquiry"}}
-  ✓ {{"name": "Qwen3.5", "type": "Technology", "class": "World", "description": "Local reasoning LLM used for entity extraction"}}
-  ✓ {{"name": "Postgres", "type": "Technology", "class": "System", "description": "The agent's own database, referenced in a healthcheck"}}
-  ✓ {{"name": "GraphRAG", "type": "Concept", "class": "World", "description": "Technique combining knowledge graphs with RAG retrieval"}}
-  ✓ {{"name": "Neo4j", "type": "Technology", "class": "World", "description": "A graph database management system storing data as nodes and typed relationships", "description_update_kind": "enrichment"}}  ← the turn substantively defines it
+  ✓ {{"name": "Qwen3.5", "type": "TechnicalArtifact", "class": "World", "description": "Local reasoning LLM used for entity extraction"}}
+  ✓ {{"name": "Postgres", "type": "TechnicalArtifact", "class": "System", "description": "The agent's own database, referenced in a healthcheck"}}
+  ✓ {{"name": "GraphRAG", "type": "MethodOrConcept", "class": "World", "description": "Technique combining knowledge graphs with RAG retrieval"}}
+  ✓ {{"name": "Neo4j", "type": "TechnicalArtifact", "class": "World", "description": "A graph database management system storing data as nodes and typed relationships", "description_update_kind": "enrichment"}}  ← the turn substantively defines it
   ✓ stance: {{"subject": "owner", "target": "Toyota RAV4 Hybrid", "affect": "loves the hybrid powertrain", "mastery": null, "description": "User strongly prefers the RAV4 Hybrid's drivetrain"}}
   ✓ claim:  {{"subject": "owner", "content": "The user's current car lease ends in March.", "description": "Situational constraint driving purchase timing"}}
 
 BAD EXAMPLES (never produce these):
   ✗ {{"name": "User", "type": "Person", ...}}
   ✗ {{"name": "Assistant", "type": "Person", ...}}
-  ✗ {{"name": "mcp_perplexity_ask", "type": "Technology", ...}}  ← use "Perplexity" instead
-  ✗ {{"name": "mcp_docker", "type": "Technology", ...}}           ← use "Docker" instead
-  ✗ {{"name": "search_memory", "type": "Technology", ...}}        ← internal tool, not an entity
-  ✗ {{"name": "7°C", "type": "Concept", ...}}                    ← ephemeral data value
+  ✗ {{"name": "mcp_perplexity_ask", "type": "TechnicalArtifact", ...}}  ← use "Perplexity" instead
+  ✗ {{"name": "mcp_docker", "type": "TechnicalArtifact", ...}}           ← use "Docker" instead
+  ✗ {{"name": "search_memory", "type": "TechnicalArtifact", ...}}        ← internal tool, not an entity
+  ✗ {{"name": "7°C", "type": "QuantityMeasure", ...}}                   ← ephemeral data value
   ✗ {{"name": "Météo-France", ...}}                               ← use "Météo France" (no hyphen)
   ✗ {{"name": "Test message", "type": "Message", ...}}
-  ✗ {{"name": "Topic", "type": "Topic", ...}}
+  ✗ {{"name": "DomainOrTopic", "type": "DomainOrTopic", ...}}
   ✗ {{"name": "Toyota RAV4 Hybrid", ..., "description": "a car the user loves"}}   ← stance flattened; emit a stance
   ✗ (silently omitting "my lease ends in March")                                   ← emit it as a claim
   ✗ {{"name": "my lease ends in March", "type": "Event", ...}}                     ← situational fact is a claim, not an entity
@@ -207,7 +243,7 @@ Return ONLY valid JSON (no markdown fences, no explanation):
   "entities": [
     {{
       "name": "Canonical Entity Name",
-      "type": "Person|Organization|Location|Technology|Concept|Event|Topic",
+      "type": "Person|Organization|Location|TechnicalArtifact|KnowledgeArtifact|MethodOrConcept|DomainOrTopic|Phenomenon|QuantityMeasure|Event",
       "class": "World|Personal|System",
       "description": "One sentence with useful context beyond the name",
       "description_update_kind": "new|enrichment|correction",
@@ -245,24 +281,30 @@ Return ONLY valid JSON (no markdown fences, no explanation):
 """
 
 # FRE-759: flag-gated few-shot exemplar block targeting the two measured weak spots
-# (entity_type_accuracy 0.80 — Concept/Topic/Technology confusion; claim_emission_recall
-# 0.33 — under-emitted personal claims). Spliced into the prompt as a PRE-RENDERED
-# ``.format()`` VALUE (never itself run through ``.format()``), so its literal JSON braces
-# are inert — single braces here, not the ``{{ }}`` escaping the template constant uses.
-# Ends with a trailing blank line so the ``{fewshot_exemplars}Conversation:`` splice reads
-# cleanly; empty when the flag is off, leaving the prompt byte-for-byte unchanged.
+# (entity_type_accuracy 0.80 — MethodOrConcept/DomainOrTopic/TechnicalArtifact confusion;
+# claim_emission_recall 0.33 — under-emitted personal claims). Spliced into the prompt as a
+# PRE-RENDERED ``.format()`` VALUE (never itself run through ``.format()``), so its literal
+# JSON braces are inert — single braces here, not the ``{{ }}`` escaping the template
+# constant uses. Ends with a trailing blank line so the ``{fewshot_exemplars}Conversation:``
+# splice reads cleanly; empty when the flag is off, leaving the prompt byte-for-byte
+# unchanged. Type names updated for ADR-0109 V2 (FRE-771) — the underlying disambiguation
+# lesson (specific technique vs broad field vs concrete tool) is unchanged.
 _EXTRACTION_FEWSHOT_EXEMPLARS = """\
 TYPE & CLAIM DISAMBIGUATION EXEMPLARS (few-shot — study these boundary calls):
 
-  TYPE — Concept vs Topic vs Technology (the ~20% the extractor gets wrong):
-    - A named IDEA, method, technique, or principle -> Concept.
-        "GraphRAG" -> Concept; "self-consistency decoding" -> Concept; "game theory" -> Concept.
-    - The broad SUBJECT AREA / field a turn is about -> Topic.
-        a turn broadly about "machine learning" or "cosmology" as a field -> Topic.
-    - A concrete TOOL, product, framework, language, model, or API -> Technology.
-        "Neo4j" -> Technology; "Python" -> Technology; "gpt-5.4-mini" -> Technology.
-    Contrast: "knowledge graphs" as the subject under discussion -> Topic, but the specific
-    technique "GraphRAG" -> Concept, and the database "Neo4j" -> Technology.
+  TYPE — MethodOrConcept vs DomainOrTopic vs TechnicalArtifact (the ~20% the extractor gets wrong):
+    - A specific human-invented IDEA, method, technique, or algorithm -> MethodOrConcept.
+        "GraphRAG" -> MethodOrConcept; "self-consistency decoding" -> MethodOrConcept;
+        "Nash equilibrium" -> MethodOrConcept.
+    - The broad SUBJECT AREA / field a turn is about -> DomainOrTopic.
+        a turn broadly about "machine learning" or "cosmology" as a field -> DomainOrTopic;
+        "game theory" -> DomainOrTopic.
+    - A concrete TOOL, product, framework, language, model, or piece of hardware ->
+        TechnicalArtifact. "Neo4j" -> TechnicalArtifact; "Python" -> TechnicalArtifact;
+        "gpt-5.4-mini" -> TechnicalArtifact.
+    Contrast: "knowledge graphs" as the subject under discussion -> DomainOrTopic, but the
+    specific technique "GraphRAG" -> MethodOrConcept, and the database "Neo4j" ->
+    TechnicalArtifact.
 
   CLAIMS — first-person situational facts are UNDER-emitted; never drop them:
     - "I just started a new job at a fintech startup" -> emit a claim:

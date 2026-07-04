@@ -146,7 +146,7 @@ async def _run_case(case: GoldCase, samples: int, fuzzy_threshold: float) -> Cas
         result = await entity_extraction.extract_entities_and_relationships(
             case.source_user, case.source_assistant
         )
-        score = score_case(case, result, fuzzy_threshold=fuzzy_threshold)
+        score = score_case(case, result, fuzzy_threshold=fuzzy_threshold, entity_type_field="v2")
         scores.append(score)
         log.info(
             "fre630_case_sampled",

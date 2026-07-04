@@ -19,12 +19,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from scripts.eval.fre630_extraction_quality.gold import ALLOWED_ENTITY_TYPES_V2
+
 from personal_agent.second_brain.entity_extraction import ExtractionModelOverride
 
-#: The 7 controlled entity types (a smoke result must honour these).
-_VALID_TYPES = frozenset(
-    {"Person", "Organization", "Location", "Technology", "Concept", "Event", "Topic"}
-)
+#: The 10 controlled entity types (ADR-0109 V2, live since the FRE-771 prompt swap) — a
+#: smoke result must honour these.
+_VALID_TYPES = ALLOWED_ENTITY_TYPES_V2
 _VALID_CLASSES = frozenset({"World", "Personal", "System"})
 
 

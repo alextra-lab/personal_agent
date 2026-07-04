@@ -164,7 +164,9 @@ async def _run_cell_case(
             if "Deadlock" not in err:
                 break
             await asyncio.sleep(0.25 * (attempt + 1))
-        scores.append(score_case(case, result, fuzzy_threshold=fuzzy_threshold))
+        scores.append(
+            score_case(case, result, fuzzy_threshold=fuzzy_threshold, entity_type_field="v2")
+        )
         stat = stats[-1] if stats else {}
         usage = stat.get("usage") or {}
         resources.append(

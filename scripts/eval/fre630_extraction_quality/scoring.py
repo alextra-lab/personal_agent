@@ -12,16 +12,25 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from scripts.eval.fre630_extraction_quality import metrics
-from scripts.eval.fre630_extraction_quality.gold import GoldCase
+from scripts.eval.fre630_extraction_quality.gold import GoldCase, GoldEntity
 from scripts.eval.fre630_extraction_quality.matching import (
     DEFAULT_FUZZY_THRESHOLD,
     match_entities,
     matches_any,
 )
 from scripts.eval.fre630_extraction_quality.metrics import PRF, ExtractedRel
+
+#: FRE-771 — which gold entity-type field ``score_case`` scores against. ``"v2"`` resolves
+#: each gold entity's ``v2_type or entity_type`` (the live extractor speaks the ADR-0109
+#: V2 10-type taxonomy since the FRE-771 prompt swap; the fallback keeps hand-built test
+#: fixtures that never set ``v2_type`` scoring unchanged). ``"v1"`` resolves ``entity_type``
+#: only — used solely by the FRE-771 powered A/B's monkeypatched "current" comparison arm.
+#: No default: every caller states its choice explicitly (codex plan-review finding — a
+#: silent default here would hide a scoring-semantics change).
+EntityTypeField = Literal["v1", "v2"]
 
 
 @dataclass(frozen=True)
@@ -149,11 +158,29 @@ class CaseScore:
     diffs: Mapping[str, list[str]] = field(default_factory=dict)
 
 
+def _gold_entity_type(entity: GoldEntity, entity_type_field: EntityTypeField) -> str:
+    """Resolve one gold entity's scored type string for the active field (FRE-771).
+
+    Args:
+        entity: A :class:`~scripts.eval.fre630_extraction_quality.gold.GoldEntity`.
+        entity_type_field: ``"v2"`` prefers ``v2_type``, falling back to ``entity_type``
+            when unset (hand-built fixtures without a ``v2_type``); ``"v1"`` always
+            resolves ``entity_type``.
+
+    Returns:
+        The gold type string to compare the extractor's output against.
+    """
+    if entity_type_field == "v1":
+        return entity.entity_type
+    return entity.v2_type or entity.entity_type
+
+
 def score_case(
     case: GoldCase,
     result: Mapping[str, Any],
     *,
     fuzzy_threshold: float = DEFAULT_FUZZY_THRESHOLD,
+    entity_type_field: EntityTypeField,
 ) -> CaseScore:
     """Score one gold case against one raw extractor output dict.
 
@@ -161,6 +188,10 @@ def score_case(
         case: The gold case.
         result: The dict returned by ``extract_entities_and_relationships``.
         fuzzy_threshold: Tier-3 matcher threshold.
+        entity_type_field: Which gold entity-type field to score against — ``"v2"``
+            (the live, post-FRE-771 extractor vocabulary) or ``"v1"`` (the retired
+            7-type vocabulary, only used by the FRE-771 powered A/B's comparison arm).
+            Required, not defaulted (see :data:`EntityTypeField`).
 
     Returns:
         The fully-populated :class:`CaseScore`.
@@ -170,7 +201,7 @@ def score_case(
         case.expect_entities, parsed.entity_names, fuzzy_threshold=fuzzy_threshold
     )
 
-    gold_types = {e.name: e.entity_type for e in case.expect_entities}
+    gold_types = {e.name: _gold_entity_type(e, entity_type_field) for e in case.expect_entities}
     gold_classes = {e.name: e.knowledge_class for e in case.expect_entities}
 
     tier_counts = {"exact": 0, "alias": 0, "fuzzy": 0}

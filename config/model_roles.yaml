@@ -1,10 +1,11 @@
-# config/model_roles.yaml — ADR-0099 D1 intent layer (stage 1, FRE-649)
+# config/model_roles.yaml — ADR-0099 D1 role matrix (stage 2, FRE-650)
 #
-# The ONE hand-edited home for "may this role's model assignment legitimately
-# differ across profiles?" Stage 1 is INTENT ONLY: role assignments themselves
-# still live in the per-profile model YAMLs' `<role>_role:` headers (removed
-# in stage 2 / FRE-650, the generative loader). This file is what
-# scripts/check_config.py checks those headers against.
+# The ONE hand-edited home for role→model assignment. Stage 2 makes this
+# GENERATIVE: each role now carries the actual model-key value(s), and
+# src/personal_agent/config/model_loader.py's resolve_role_model_key()
+# resolves every runtime consumer directly from this file. The per-profile
+# `<role>_role:` YAML headers stage 1 checked this file against are REMOVED
+# (there is no second place a role assignment can live).
 #
 # ── active_profiles ─────────────────────────────────────────────────────────
 # The two model-definition files actually deployed (CONFIG_INVENTORY.md §6):
@@ -20,32 +21,37 @@ active_profiles:
   cloud: config/models.cloud.yaml
 
 # ── roles ───────────────────────────────────────────────────────────────────
-# divergence: forbidden  → the role MUST resolve to the same fully-resolved
-#   ModelDefinition (id + provider + sampling params) across every active
-#   profile. A forbidden role's resolved model name must also exist as a key
-#   under each active profile's `models:` mapping (dangling-reference check).
-# divergence: allowed    → the role may legitimately differ per profile.
+# divergence: forbidden  → exactly one `all:` model key, used under every
+#   active profile (assignment drift is structurally impossible: there is no
+#   per-profile value to diverge). The key must resolve to the SAME
+#   fully-resolved ModelDefinition (id + provider + sampling params) in every
+#   active profile's models: mapping — a mismatch there is definition drift,
+#   still caught by the guard (check_forbidden_role_divergence_and_dangling_refs).
+# divergence: allowed    → a `local:`/`cloud:` model key per profile (at least
+#   one required). The role may legitimately resolve to different keys, or to
+#   the same key backed by a different ModelDefinition per profile's file.
 #
-# Stage-1 scope (ticket-level exception to ADR-0099's full target policy,
-# confirmed during codex plan-review 2026-07-04): `compressor` and `reranker`
-# are cognitive-pipeline roles the ADR's own example matrix marks forbidden,
-# but both currently diverge for reasons this ticket does not correct
-# (compressor: local nano vs cloud mini, same drift class as extraction but
-# unaddressed here; reranker: local 0.6B vs cloud 4B, an apparently deliberate
-# FRE-696 reliability tradeoff). Marking either forbidden today would fail the
-# guard on day one. `embedding` IS marked forbidden here even though nothing
-# in this ticket required it — it is already consistent across both active
-# profiles, so it costs no correction and moves stage 1 closer to the ADR's
-# full intent for free. See FRE-649 follow-up ticket for compressor/reranker.
+# `primary`/`sub_agent` are intent-only here — they are NOT resolved through
+# this matrix. They stay on the pre-existing ExecutionProfile mechanism
+# (ADR-0044, config/profiles/{local,cloud}.yaml, config/profile.py's
+# resolve_model_key()), a session-scoped runtime choice, not a deployment-
+# config divergence. FRE-650 does not touch that mechanism.
+#
+# `compressor`/`reranker` stay `allowed` (FRE-649 follow-up: owner to decide
+# whether they should become `forbidden` — reranker's 0.6B/4B split looks like
+# a deliberate FRE-696 reliability tradeoff, compressor's nano/mini split looks
+# like uncorrected drift). Both now carry real local/cloud values and resolve
+# through the matrix like every other role — this ticket changes *mechanism*
+# only, not that open divergence-*policy* question.
 roles:
-  primary:            { divergence: allowed }
-  sub_agent:           { divergence: allowed }
-  entity_extraction:  { divergence: forbidden }
-  captains_log:       { divergence: forbidden }
-  insights:           { divergence: forbidden }
-  embedding:          { divergence: forbidden }
-  compressor:         { divergence: allowed }  # FRE-649 follow-up: promote once local/cloud drift is corrected
-  reranker:           { divergence: allowed }  # FRE-649 follow-up: owner to confirm intentional 0.6B/4B split
+  primary:            { divergence: allowed, local: primary, cloud: primary }
+  sub_agent:          { divergence: allowed, local: sub_agent, cloud: sub_agent }
+  entity_extraction:  { divergence: forbidden, all: gpt-5.4-mini }
+  captains_log:       { divergence: forbidden, all: claude_sonnet }
+  insights:           { divergence: forbidden, all: claude_sonnet }
+  embedding:          { divergence: forbidden, all: embedding }
+  compressor:         { divergence: allowed, local: compressor, cloud: compressor }
+  reranker:           { divergence: allowed, local: reranker, cloud: reranker }
 
 # ── required_secrets ────────────────────────────────────────────────────────
 # Per-profile required AppConfig secret fields (ADR-0099 D4: "required secret

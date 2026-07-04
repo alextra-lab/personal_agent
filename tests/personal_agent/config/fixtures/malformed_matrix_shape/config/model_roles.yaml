@@ -1,0 +1,13 @@
+# Fixture: matrix entries whose declared keys contradict their own
+# divergence value (FRE-650). entity_extraction is forbidden but declares
+# local/cloud instead of all; compressor is allowed but declares all
+# instead of local/cloud.
+active_profiles:
+  local: config/models.yaml
+  cloud: config/models.cloud.yaml
+roles:
+  entity_extraction: { divergence: forbidden, local: gpt-5.4-mini, cloud: gpt-5.4-mini }
+  compressor: { divergence: allowed, all: compressor }
+required_secrets:
+  local: []
+  cloud: []

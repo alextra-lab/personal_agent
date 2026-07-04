@@ -23,7 +23,7 @@ from datetime import datetime
 from typing import Any
 
 from personal_agent.captains_log.capture import TaskCapture
-from personal_agent.config import load_model_config
+from personal_agent.config import load_model_config, resolve_role_model_key
 from personal_agent.config.settings import get_settings
 from personal_agent.cost_gate import BudgetDenied
 from personal_agent.llm_client import InferenceSlotTimeout, LLMTimeout, LocalLLMClient, ModelRole
@@ -128,7 +128,7 @@ async def generate_session_summary(
         return None
 
     model_config = load_model_config()
-    role_name = model_config.captains_log_role
+    role_name = resolve_role_model_key("captains_log")
     model_def = model_config.models.get(role_name)
     provider = model_def.provider if model_def else None
 

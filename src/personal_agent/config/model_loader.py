@@ -17,11 +17,26 @@ from pydantic import ValidationError
 from personal_agent.config.loader import ConfigLoadError, load_yaml_file
 from personal_agent.llm_client.models import ModelConfig
 
+#: A parsed ``config/model_roles.yaml`` mapping.
+_RoleMatrix = dict[str, object]
+
 log = structlog.get_logger(__name__)
 
 
 class ModelConfigError(ConfigLoadError):
     """Raised when model configuration cannot be loaded or is invalid."""
+
+    pass
+
+
+class ModelRoleError(ModelConfigError):
+    """Raised when a role cannot be resolved from config/model_roles.yaml.
+
+    ADR-0099 D1 stage 2 (FRE-650): there is exactly one hand-edited home for
+    role assignment (the matrix); a missing matrix, an undeclared role, or a
+    resolved model key absent from the active profile's ``models:`` mapping
+    is a deterministic failure — never a silent fallback.
+    """
 
     pass
 
@@ -110,6 +125,126 @@ def load_model_config(config_path: Path | str | None = None) -> ModelConfig:
         raise ModelConfigError(f"Model config path is not a file: {config_path}")
 
     return _load_model_config_at_path(str(config_path))
+
+
+@functools.lru_cache(maxsize=8)
+def _load_role_matrix(root_str: str) -> _RoleMatrix:
+    """Load and cache ``config/model_roles.yaml`` for a resolved repo root.
+
+    Cached by resolved root path (mirrors :func:`_load_model_config_at_path`'s
+    pattern) — tests pointing ``root`` at a fixture directory must call
+    ``_load_role_matrix.cache_clear()`` afterwards to avoid cache bleed
+    between fixture roots.
+    """
+    from personal_agent.config.config_guard import load_matrix  # noqa: PLC0415
+
+    return load_matrix(Path(root_str))
+
+
+def resolve_role_model_key(
+    role: str,
+    *,
+    config_path: Path | str | None = None,
+    root: Path | None = None,
+) -> str:
+    """Resolve a role to its model key via ``config/model_roles.yaml`` (ADR-0099 D1 stage 2).
+
+    The matrix is the one hand-edited home for role assignment. A
+    ``divergence: forbidden`` role always resolves to its single ``all:``
+    value, used under every active profile. A ``divergence: allowed`` role
+    resolves to the ``local:``/``cloud:`` value matching whichever active
+    profile ``config_path`` maps to. There is no fallback: a missing matrix,
+    an undeclared role, an unresolvable divergence value, or a resolved key
+    absent from the active profile's ``models:`` mapping all raise.
+
+    Args:
+        role: The matrix role name (e.g. ``"entity_extraction"``).
+        config_path: Model-definition file path used to detect the active
+            profile bucket (for ``allowed`` roles) and to validate the
+            resolved key exists. ``None`` uses ``settings.model_config_path``
+            (the live deployment's active config), matching
+            :func:`load_model_config`'s own convention.
+        root: Repo (or fixture) root containing ``config/model_roles.yaml``.
+            Defaults to the real repo root; tests point this at a fixture.
+
+    Returns:
+        The resolved model key — a key in the active config's ``models:`` mapping.
+
+    Raises:
+        ModelRoleError: If the matrix is missing/empty, the role is
+            undeclared, the role's divergence value has no matching entry,
+            the active profile cannot be determined, or the resolved key is
+            absent from the active profile's ``models:`` mapping.
+    """
+    from personal_agent.config.config_guard import (  # noqa: PLC0415
+        repo_root,
+        resolve_active_profile,
+    )
+
+    resolved_root = root if root is not None else repo_root()
+    matrix = _load_role_matrix(str(resolved_root))
+    if not matrix:
+        raise ModelRoleError(
+            f"config/model_roles.yaml is missing or empty under {resolved_root}; "
+            f"cannot resolve role {role!r} (ADR-0099 D1 — no fallback)"
+        )
+
+    roles = matrix.get("roles", {})
+    role_cfg = roles.get(role) if isinstance(roles, dict) else None
+    if role_cfg is None:
+        raise ModelRoleError(f"role {role!r} is not declared in config/model_roles.yaml roles:")
+
+    if config_path is None:
+        from personal_agent.config import settings  # noqa: PLC0415
+
+        config_path = settings.model_config_path
+    resolved_config_path = Path(config_path)
+    if not resolved_config_path.is_absolute():
+        resolved_config_path = (resolved_root / resolved_config_path).resolve()
+    else:
+        resolved_config_path = resolved_config_path.resolve()
+
+    divergence = role_cfg.get("divergence") if isinstance(role_cfg, dict) else None
+    raw_model_key: object
+    if divergence == "forbidden":
+        raw_model_key = role_cfg.get("all")
+        if not raw_model_key:
+            raise ModelRoleError(
+                f"role {role!r} is divergence:forbidden but has no 'all' value "
+                "in config/model_roles.yaml"
+            )
+    elif divergence == "allowed":
+        profile = resolve_active_profile(resolved_config_path, matrix, resolved_root)
+        if profile is None:
+            raise ModelRoleError(
+                "cannot determine the active profile for model_config_path="
+                f"{resolved_config_path} against config/model_roles.yaml active_profiles"
+            )
+        raw_model_key = role_cfg.get(profile)
+        if not raw_model_key:
+            raise ModelRoleError(
+                f"role {role!r} has divergence:allowed but no {profile!r} value "
+                "in config/model_roles.yaml"
+            )
+    else:
+        raise ModelRoleError(
+            f"role {role!r} has invalid divergence {divergence!r} in "
+            "config/model_roles.yaml (expected 'forbidden' or 'allowed')"
+        )
+
+    if not isinstance(raw_model_key, str):
+        raise ModelRoleError(
+            f"role {role!r} resolves to a non-string matrix value {raw_model_key!r}"
+        )
+    model_key = raw_model_key
+
+    resolved_config = load_model_config(resolved_config_path)
+    if model_key not in resolved_config.models:
+        raise ModelRoleError(
+            f"role {role!r} resolves to model key {model_key!r} which is not "
+            f"defined under models: in {resolved_config_path}"
+        )
+    return model_key
 
 
 def resolve_active_attribution(

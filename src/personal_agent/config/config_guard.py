@@ -32,6 +32,10 @@ from typing import Literal
 
 import yaml  # type: ignore[import-untyped]
 
+# model_loader.py imports from this module (resolve_role_model_key, ADR-0099
+# D1 stage 2) — this module must never import model_loader.py back, or that
+# becomes a cycle.
+
 Severity = Literal["safety", "policy"]
 #: A parsed YAML mapping (matrix, model-definition file, or role sub-mapping).
 JSONDict = dict[str, object]
@@ -125,14 +129,19 @@ def _load_yaml(path: Path) -> JSONDict:
     return content if isinstance(content, dict) else {}
 
 
-def _resolve_role_header(profile_yaml: JSONDict, role: str) -> str:
-    """Resolve a role's assignment from a profile's YAML content.
+def _resolved_role_model_key(role_cfg: JSONDict, profile: str) -> str | None:
+    """Resolve a role's model key for *profile* from the matrix entry itself.
 
-    Mirrors ``ModelConfig``'s own field default (``src/personal_agent/llm_client/models.py``):
-    an absent ``<role>_role:`` header falls back to ``"primary"``.
+    ADR-0099 D1 stage 2 (FRE-650): role assignment lives ONLY in the matrix
+    now — a ``forbidden`` role's key is its ``all:`` value (same for every
+    profile); an ``allowed`` role's key is its ``local:``/``cloud:`` value for
+    *profile*. Returns ``None`` if the entry declares no value for this case
+    (e.g. an ``allowed`` role with no value for this particular profile) —
+    the caller treats that as nothing to check, not a finding.
     """
-    value = profile_yaml.get(f"{role}_role", "primary")
-    return value if isinstance(value, str) else "primary"
+    divergence = role_cfg.get("divergence")
+    value = role_cfg.get("all") if divergence == "forbidden" else role_cfg.get(profile)
+    return value if isinstance(value, str) else None
 
 
 def _resolved_model_definition(profile_yaml: JSONDict, model_name: str) -> JSONDict | None:
@@ -183,7 +192,12 @@ def check_forbidden_role_divergence_and_dangling_refs(
     for role, role_cfg in roles.items():
         resolved: dict[str, tuple[str, JSONDict | None]] = {}
         for profile, profile_yaml in profile_yamls.items():
-            model_name = _resolve_role_header(profile_yaml, role)
+            model_name = _resolved_role_model_key(role_cfg, profile)
+            if model_name is None:
+                # No value declared for this profile (e.g. an `allowed` role
+                # with only a `local:`/`cloud:` value, not both) — nothing to
+                # check for this profile.
+                continue
             definition = _resolved_model_definition(profile_yaml, model_name)
             resolved[profile] = (model_name, definition)
             if definition is None:
@@ -212,16 +226,18 @@ def check_forbidden_role_divergence_and_dangling_refs(
             for d in definitions.values()
         }
         if len(distinct) > 1:
+            model_name = next(name for name, _ in resolved.values())
             profile_summary = ", ".join(
-                f"{profile}={name}" for profile, (name, _) in sorted(resolved.items())
+                f"{profile}={d.get('id')}" for profile, d in sorted(definitions.items())
             )
             findings.append(
                 Finding(
                     check="forbidden_role_divergence",
                     severity="policy",
                     message=(
-                        f"role '{role}' is divergence:forbidden but resolves differently "
-                        f"across active profiles: {profile_summary}"
+                        f"role '{role}' is divergence:forbidden and resolves to the same "
+                        f"model key '{model_name}' in every active profile, but the "
+                        f"underlying ModelDefinition differs (definition drift): {profile_summary}"
                     ),
                 )
             )
@@ -305,11 +321,87 @@ def check_committed_secrets(root: Path) -> list[Finding]:
     return findings
 
 
+def check_matrix_shape(matrix: JSONDict) -> list[Finding]:
+    """A role's declared keys must match its own ``divergence`` value (FRE-650).
+
+    A ``forbidden`` role must declare ``all`` and must NOT declare
+    ``local``/``cloud`` (there is no per-profile value to diverge — that is
+    the entire point of ``forbidden``). An ``allowed`` role must declare at
+    least one of ``local``/``cloud`` and must NOT declare ``all`` (an `all`
+    value on an `allowed` role is a stale/contradictory declaration). Without
+    this check, a malformed matrix silently relocates the old
+    assignment-drift failure mode into ``config/model_roles.yaml`` itself,
+    uncaught by :func:`check_forbidden_role_divergence_and_dangling_refs`.
+    """
+    findings: list[Finding] = []
+    roles: dict[str, JSONDict] = matrix.get("roles", {})  # type: ignore[assignment]
+    for role, role_cfg in roles.items():
+        divergence = role_cfg.get("divergence")
+        has_all = "all" in role_cfg
+        has_per_profile = "local" in role_cfg or "cloud" in role_cfg
+        if divergence == "forbidden":
+            if not has_all:
+                findings.append(
+                    Finding(
+                        check="matrix_shape",
+                        severity="policy",
+                        message=f"role '{role}' is divergence:forbidden but declares no 'all' value",
+                    )
+                )
+            if has_per_profile:
+                findings.append(
+                    Finding(
+                        check="matrix_shape",
+                        severity="policy",
+                        message=(
+                            f"role '{role}' is divergence:forbidden but declares "
+                            "'local'/'cloud' — a forbidden role has no per-profile value"
+                        ),
+                    )
+                )
+        elif divergence == "allowed":
+            if not has_per_profile:
+                findings.append(
+                    Finding(
+                        check="matrix_shape",
+                        severity="policy",
+                        message=(
+                            f"role '{role}' is divergence:allowed but declares neither "
+                            "'local' nor 'cloud'"
+                        ),
+                    )
+                )
+            if has_all:
+                findings.append(
+                    Finding(
+                        check="matrix_shape",
+                        severity="policy",
+                        message=(
+                            f"role '{role}' is divergence:allowed but declares 'all' "
+                            "— 'all' is only valid for a forbidden role"
+                        ),
+                    )
+                )
+        else:
+            findings.append(
+                Finding(
+                    check="matrix_shape",
+                    severity="policy",
+                    message=(
+                        f"role '{role}' has invalid divergence {divergence!r} "
+                        "(expected 'forbidden' or 'allowed')"
+                    ),
+                )
+            )
+    return findings
+
+
 def run_all_checks(root: Path) -> list[Finding]:
     """Run every check against *root* and return all findings."""
     matrix = load_matrix(root)
 
     findings: list[Finding] = []
+    findings.extend(check_matrix_shape(matrix))
     findings.extend(check_forbidden_role_divergence_and_dangling_refs(root, matrix))
     findings.extend(check_orphan_env_keys(root))
     findings.extend(check_committed_secrets(root))

@@ -21,8 +21,7 @@ from personal_agent.captains_log.suppression import (
     feedback_history_dir,
     record_rejection_suppression,
 )
-from personal_agent.config import settings
-from personal_agent.config.model_loader import load_model_config
+from personal_agent.config import resolve_role_model_key, settings
 from personal_agent.llm_client.factory import get_llm_client
 from personal_agent.llm_client.types import ModelRole
 from personal_agent.telemetry import get_logger
@@ -252,8 +251,7 @@ async def handle_deepen(event: FeedbackEvent, client: LinearClient) -> None:
         return
 
     desc = str(issue.get("description") or "")
-    cfg = load_model_config()
-    role_key = cfg.insights_role
+    role_key = resolve_role_model_key("insights")
     system = (
         "You are a senior engineer improving an internal improvement proposal. "
         "Be concrete: files, steps, risks, and measurable outcomes."
@@ -300,8 +298,7 @@ async def handle_too_vague(event: FeedbackEvent, client: LinearClient) -> None:
         return
 
     desc = str(issue.get("description") or "")
-    cfg = load_model_config()
-    role_key = cfg.captains_log_role
+    role_key = resolve_role_model_key("captains_log")
     system = (
         "You refine vague improvement proposals into actionable tickets: "
         "exact files, config keys, acceptance criteria."

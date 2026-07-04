@@ -13,10 +13,10 @@
 # Cost estimate: ~$1-3 per full 25-CP run at Sonnet pricing.
 # Ensure AGENT_CLOUD_WEEKLY_BUDGET_USD >= 15 before running.
 
-# ── Process-to-model assignments (unchanged) ─────────────────────────────────
-entity_extraction_role: claude_sonnet
-captains_log_role: claude_sonnet
-insights_role: claude_sonnet
+# ── Process-to-model assignments ──────────────────────────────────────────────
+# Role assignment lives ONLY in config/model_roles.yaml (ADR-0099 D1 stage 2,
+# FRE-650) — entity_extraction/captains_log/insights resolve via
+# resolve_role_model_key(), not a header in this file.
 
 models:
   primary:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -186,12 +186,9 @@ class TestCompressTurns:
 
         monkeypatch.setattr(cc_module, "_compressor_role_missing_logged", False)
 
-        mock_config = MagicMock()
-        mock_config.models = {}
-
         with patch(
-            "personal_agent.orchestrator.context_compressor.load_model_config",
-            return_value=mock_config,
+            "personal_agent.orchestrator.context_compressor.resolve_role_model_key",
+            side_effect=cc_module.ModelRoleError("role 'compressor' is not declared"),
         ):
             result1 = await compress_turns([_msg("user", "hello")], trace_id="t-1")
             result2 = await compress_turns([_msg("user", "world")], trace_id="t-2")

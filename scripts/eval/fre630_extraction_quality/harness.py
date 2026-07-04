@@ -76,7 +76,7 @@ from scripts.eval.fre630_extraction_quality.report import (  # noqa: E402
 )
 from scripts.eval.fre630_extraction_quality.scoring import score_case  # noqa: E402
 
-from personal_agent.config import load_model_config, settings  # noqa: E402
+from personal_agent.config import load_model_config, resolve_role_model_key, settings  # noqa: E402
 from personal_agent.second_brain import entity_extraction  # noqa: E402
 
 log = structlog.get_logger(__name__)
@@ -114,7 +114,7 @@ def _prompt_hash() -> str:
 def _build_meta(run_id: str, gold_set: str, samples: int, fuzzy_threshold: float) -> RunMeta:
     """Resolve the run provenance stamp from the active model config."""
     cfg = load_model_config()
-    role = cfg.entity_extraction_role
+    role = resolve_role_model_key("entity_extraction")
     model_def = cfg.models.get(role)
     provider = (
         (model_def.provider if model_def and model_def.provider else "local")

@@ -261,12 +261,15 @@ class TestEntityExtractionTemperatureDeployedConfig:
         ],
     )
     def test_entity_extraction_role_has_pinned_temperature(self, config_path: Path) -> None:
-        """The resolved entity_extraction_role model must have temperature == 0.0."""
-        config = load_model_config(config_path)
+        """The resolved entity_extraction role model must have temperature == 0.0."""
+        from personal_agent.config.model_loader import resolve_role_model_key
 
-        role_model = config.models[config.entity_extraction_role]
+        config = load_model_config(config_path)
+        resolved_key = resolve_role_model_key("entity_extraction", config_path=config_path)
+
+        role_model = config.models[resolved_key]
         assert role_model.temperature == 0.0, (
-            f"{config.entity_extraction_role} in {config_path} must be pinned to "
+            f"{resolved_key} in {config_path} must be pinned to "
             f"temperature=0.0, got {role_model.temperature!r}"
         )
 

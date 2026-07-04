@@ -30,7 +30,8 @@ def _make_capture(
     return TaskCapture(
         trace_id=str(uuid4()),
         session_id=session_id,
-        timestamp=datetime(2026, 5, 9, 14, 0, tzinfo=timezone.utc) + timedelta(minutes=minutes_offset),
+        timestamp=datetime(2026, 5, 9, 14, 0, tzinfo=timezone.utc)
+        + timedelta(minutes=minutes_offset),
         user_message=user,
         assistant_response=assistant,
         outcome="completed",
@@ -63,10 +64,10 @@ def _force_cloud_role(monkeypatch: pytest.MonkeyPatch) -> None:
         id = "gpt-5.4-nano"
 
     class _ModelConfig:
-        captains_log_role = "gpt-5.4-nano"
         models = {"gpt-5.4-nano": _ModelDef()}
 
     monkeypatch.setattr(ss, "load_model_config", lambda: _ModelConfig())
+    monkeypatch.setattr(ss, "resolve_role_model_key", lambda role: "gpt-5.4-nano")
 
 
 @pytest.fixture
@@ -236,10 +237,10 @@ async def test_local_path_handles_timeout(monkeypatch: pytest.MonkeyPatch) -> No
         id = "qwen-local"
 
     class _ModelConfig:
-        captains_log_role = "qwen-local"
         models = {"qwen-local": _LocalModelDef()}
 
     monkeypatch.setattr(ss, "load_model_config", lambda: _ModelConfig())
+    monkeypatch.setattr(ss, "resolve_role_model_key", lambda role: "qwen-local")
 
     class _LocalClient:
         async def respond(self, **kwargs: Any) -> Any:

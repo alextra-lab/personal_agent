@@ -77,9 +77,8 @@ from scripts.eval.fre435_memory_recall.report import (  # noqa: E402
 )
 from scripts.eval.fre435_memory_recall.scoring import flatten_recall, score_case  # noqa: E402
 
-from personal_agent.config import load_model_config, settings  # noqa: E402
+from personal_agent.config import resolve_role_model_key, settings  # noqa: E402
 from personal_agent.config.env_loader import Environment  # noqa: E402
-from personal_agent.llm_client.models import ModelConfig  # noqa: E402
 from personal_agent.memory.embeddings import generate_embedding  # noqa: E402
 from personal_agent.memory.fact import PromotionCandidate  # noqa: E402
 from personal_agent.memory.models import Entity, Relationship, TurnNode  # noqa: E402
@@ -98,12 +97,19 @@ DEFAULT_OUT = "telemetry/evaluation/fre435-memory-recall"
 DEFAULT_K_SWEEP = (1, 3, 5, 10)
 DEFAULT_PROD_K = 5
 _PROD_MODEL_CONFIG_PATH = Path("config/models.cloud.yaml")
-_PIPELINE_ROLES = ("entity_extraction_role", "captains_log_role", "insights_role")
+_PIPELINE_ROLES = ("entity_extraction", "captains_log", "insights")
 
 
-def _pipeline_role_values(config: ModelConfig) -> dict[str, str]:
-    """Return the configured model role values used by the pipeline."""
-    return {role: getattr(config, role) for role in _PIPELINE_ROLES}
+def _pipeline_role_values(config_path: Path) -> dict[str, str]:
+    """Return the matrix-resolved model key for each pipeline role under *config_path*.
+
+    ADR-0099 D1 stage 2 (FRE-650): these are all `divergence: forbidden` roles,
+    so this now always resolves to the same key regardless of config_path —
+    "evals run on prod config" is a structural guarantee, not merely checked
+    here. This still calls through the real resolver (not a bare getattr), so
+    a dangling `all:` reference under either config path still raises loudly.
+    """
+    return {role: resolve_role_model_key(role, config_path=config_path) for role in _PIPELINE_ROLES}
 
 
 def _check_model_config_fidelity() -> None:
@@ -113,10 +119,8 @@ def _check_model_config_fidelity() -> None:
         RuntimeError: If active pipeline roles diverge from production and the
             divergence was not explicitly declared.
     """
-    active_cfg = load_model_config()
-    prod_cfg = load_model_config(_PROD_MODEL_CONFIG_PATH)
-    active_roles = _pipeline_role_values(active_cfg)
-    prod_roles = _pipeline_role_values(prod_cfg)
+    active_roles = _pipeline_role_values(settings.model_config_path)
+    prod_roles = _pipeline_role_values(_PROD_MODEL_CONFIG_PATH)
     log.info(
         "eval_model_config_active",
         **active_roles,
@@ -536,7 +540,7 @@ async def run(args: argparse.Namespace) -> int:
     """
     cases = load_probe_set(Path(args.probe_set))
     _check_model_config_fidelity()
-    active_cfg = load_model_config()
+    active_extraction_model = resolve_role_model_key("entity_extraction")
     k_sweep = tuple(sorted({*args.k_sweep, args.prod_k}))
     service = MemoryService()  # fre-375-allow: settings-driven; module top pins the test substrate (:7688/:9201/:5433) + APP_ENV=test
     if not await service.connect():
@@ -562,7 +566,7 @@ async def run(args: argparse.Namespace) -> int:
         embedding_backend=embedding_backend,
         wipe_between_cases=args.wipe_between_cases,
         distractor_background=len(distractors),
-        extraction_model=active_cfg.entity_extraction_role,
+        extraction_model=active_extraction_model,
         cases=len(cases),
     )
 

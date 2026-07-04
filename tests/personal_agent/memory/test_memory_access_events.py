@@ -520,8 +520,8 @@ class TestConsolidatorAccessContext:
                 AsyncMock(return_value=extraction),
             ),
             patch(
-                "personal_agent.second_brain.consolidator.load_model_config",
-                MagicMock(return_value=MagicMock(entity_extraction_role="test")),
+                "personal_agent.second_brain.consolidator.resolve_role_model_key",
+                MagicMock(return_value="test"),
             ),
             patch(
                 "personal_agent.second_brain.consolidator.get_event_bus",
@@ -621,8 +621,8 @@ class TestConsolidatorAccessContext:
                 AsyncMock(return_value=extraction),
             ),
             patch(
-                "personal_agent.second_brain.consolidator.load_model_config",
-                MagicMock(return_value=MagicMock(entity_extraction_role="test")),
+                "personal_agent.second_brain.consolidator.resolve_role_model_key",
+                MagicMock(return_value="test"),
             ),
             patch(
                 "personal_agent.second_brain.consolidator.get_event_bus",

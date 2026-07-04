@@ -46,18 +46,19 @@ _EMBEDDING_USER_AGENT = "seshat-memory/1.0"
 
 
 def _get_embedding_config() -> tuple[str, str]:
-    """Load embedding model id and endpoint from config/models.yaml.
+    """Load embedding model id and endpoint via the role matrix.
 
     Returns:
         Tuple of (model_id, endpoint_url).
 
     Raises:
-        KeyError: If 'embedding' entry is missing from models.yaml.
+        ModelRoleError: If the 'embedding' role cannot be resolved (missing
+            matrix, or resolved key absent from the active model config).
     """
-    from personal_agent.config import load_model_config  # noqa: PLC0415
+    from personal_agent.config import load_model_config, resolve_role_model_key  # noqa: PLC0415
 
     config = load_model_config()
-    model_def = config.models["embedding"]
+    model_def = config.models[resolve_role_model_key("embedding")]
     endpoint = model_def.endpoint or "http://localhost:8503/v1"
     return model_def.id, endpoint
 

@@ -282,84 +282,16 @@ class ModelConfig(BaseModel):
     All model identity and call parameters live here (ADR-0031). Only secrets (API keys)
     and operational controls (budgets, feature flags) belong in settings.py / .env.
 
+    Cognitive-pipeline role assignment (entity extraction, Captain's Log, insights,
+    compressor, embedding, reranker) lives ONLY in config/model_roles.yaml (ADR-0099
+    D1 stage 2, FRE-650) — resolved via
+    :func:`personal_agent.config.model_loader.resolve_role_model_key`, not a field
+    on this model. There is no fallback: an absent matrix or undeclared role raises.
+
     Attributes:
         models: Dictionary mapping role names to their configuration. Includes both
             local model roles (primary, sub_agent) and cloud model
             entries (e.g. claude_sonnet, openai_o4_mini).
-        entity_extraction_role: Role key used for Second Brain entity extraction.
-            Must be a key in models. Cloud models are identified by their provider field.
-        captains_log_role: Role key used for Captain's Log reflection generation.
-            Must be a key in models. Defaults to "primary" (local fallback).
-        insights_role: Role key used for Insights Engine analysis.
-            Must be a key in models. Defaults to "primary" (local fallback).
     """
 
     models: dict[str, ModelDefinition] = Field(..., description="Model configurations by role")
-    entity_extraction_role: str = Field(
-        default="primary",
-        description="Role used for entity extraction: a key in models",
-    )
-    captains_log_role: str = Field(
-        default="primary",
-        description="Role used for Captain's Log reflection: a key in models",
-    )
-    insights_role: str = Field(
-        default="primary",
-        description="Role used for Insights Engine LLM calls: a key in models",
-    )
-
-    @model_validator(mode="after")
-    def _validate_process_roles(self) -> "ModelConfig":
-        """Ensure all process role keys resolve to entries in models.
-
-        For backward compatibility, the legacy sentinel value "claude" is accepted
-        for entity_extraction_role and silently remapped to the first cloud model
-        with provider="anthropic" if one exists, or left as-is for callers that
-        handle the old sentinel themselves.
-        """
-        self.entity_extraction_role = self._resolve_role(
-            "entity_extraction_role", self.entity_extraction_role
-        )
-        self.captains_log_role = self._resolve_role("captains_log_role", self.captains_log_role)
-        self.insights_role = self._resolve_role("insights_role", self.insights_role)
-        return self
-
-    def _resolve_role(self, field_name: str, value: str) -> str:
-        """Validate a role field and return a resolved value.
-
-        Args:
-            field_name: Name of the field being validated (for error messages).
-            value: The role string from models.yaml.
-
-        Returns:
-            Resolved role string (a key in self.models).
-
-        Raises:
-            ValueError: If value is not a valid model key and cannot be resolved.
-        """
-        valid = set(self.models.keys())
-
-        if value in valid:
-            return value
-
-        # Backward-compatible fallback: if the field was omitted and defaulted to
-        # "primary", choose a viable role from the provided models dict.
-        explicitly_set = field_name in self.model_fields_set
-        if not explicitly_set and value == "primary":
-            if self.models:
-                return "primary" if "primary" in self.models else next(iter(self.models))
-            return value
-
-        # Legacy sentinel: "claude" was the old magic string for entity_extraction_role.
-        # Remap to the first Anthropic cloud model in the registry if one exists.
-        if value == "claude":
-            anthropic_key = next(
-                (k for k, m in self.models.items() if m.provider == "anthropic"),
-                None,
-            )
-            if anthropic_key:
-                return anthropic_key
-            # No cloud model defined yet — keep sentinel for callers to handle gracefully.
-            return value
-
-        raise ValueError(f"{field_name} must be one of {sorted(valid)}, got: {value!r}")

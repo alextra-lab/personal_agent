@@ -2,7 +2,7 @@ active_profiles:
   local: config/models.yaml
   cloud: config/models.cloud.yaml
 roles:
-  entity_extraction: { divergence: allowed }
+  entity_extraction: { divergence: allowed, local: gpt-9-ghost, cloud: gpt-5.4-mini }
 required_secrets:
   local: []
   cloud: []

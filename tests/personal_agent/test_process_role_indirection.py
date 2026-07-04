@@ -7,20 +7,20 @@ regardless of whether streams point at cloud or local models.
 
 import inspect
 
-from personal_agent.config import load_model_config
+from personal_agent.config import load_model_config, resolve_role_model_key
 
 
 def test_process_role_keys_resolve_to_valid_models() -> None:
     """Process-role keys must resolve to entries in the models registry.
 
-    Defense-in-depth: ModelConfig._validate_process_roles already enforces
-    this at load time, but we assert it explicitly so a Slice 1 refactoring
-    that removes the validator is caught immediately.
+    Defense-in-depth: resolve_role_model_key already validates this at
+    resolution time (ADR-0099 D1 stage 2, FRE-650), but we assert it
+    explicitly so a refactoring that removes the check is caught immediately.
     """
     config = load_model_config()
 
-    for role_name in ("entity_extraction_role", "captains_log_role", "insights_role"):
-        role_value = getattr(config, role_name)
+    for role_name in ("entity_extraction", "captains_log", "insights"):
+        role_value = resolve_role_model_key(role_name)
         assert role_value in config.models, (
             f"{role_name}={role_value!r} does not match any entry in models"
         )

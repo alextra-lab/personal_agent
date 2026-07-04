@@ -14,7 +14,7 @@ from uuid import UUID
 
 import orjson
 
-from personal_agent.config import load_model_config, settings
+from personal_agent.config import load_model_config, resolve_role_model_key, settings
 from personal_agent.cost_gate import BudgetDenied
 from personal_agent.llm_client import InferenceSlotTimeout, LLMTimeout, LocalLLMClient, ModelRole
 from personal_agent.telemetry import get_logger
@@ -624,7 +624,7 @@ async def extract_entities_and_relationships(
         eff_temperature = model_override.temperature
         eff_model_id = model_override.model_id
     else:
-        entity_extraction_role = model_config.entity_extraction_role
+        entity_extraction_role = resolve_role_model_key("entity_extraction")
         model_def = model_config.models.get(entity_extraction_role)
         provider = model_def.provider if model_def else None
         eff_reasoning_effort = model_def.reasoning_effort if model_def else None

@@ -2,25 +2,28 @@
 
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest) — per-ticket state.
 > **Source of truth for priorities**: this file (sequencing only; do not re-enumerate Linear here).
-> **Last updated**: 2026-07-04 (master re-prime + plan reduction 96k→lean). PR #350 (FRE-697) merged `0bdc6b0` → Done (ONNX reranker benchmark, eval-only, no deploy). Board resequenced: build1 NEXT = **FRE-769** (owner-confirmed); FRE-760 → Backlog; ADR-0102 un-paused but LOW priority. Prior-session narrative archived → [`completed/2026-07-04-master-plan-archive.md`](completed/2026-07-04-master-plan-archive.md).
+> **Last updated**: 2026-07-04 (**process v2, FRE-777** — dispatch moved to Linear: `stream:*` labels + priority + blocked-by relations; Stream Board removed; new states `Awaiting Deploy`/`Verify Failed`; PR-merge no longer auto-Dones). Earlier same day: PR #350 (FRE-697) merged `0bdc6b0` → Done; build1 NEXT = FRE-769 (owner-confirmed, now encoded in Linear); prior narrative archived → [`completed/2026-07-04-master-plan-archive.md`](completed/2026-07-04-master-plan-archive.md).
 
 ---
 
-## 🎛️ Stream Board
+## Dispatch
 
-Master-maintained dispatch. `/build 1`, `/build 2`, and `/adr` resolve their NEXT ticket **and** the context action here. Master advances this at each merge. WIP = 1 live ticket per stream.
+Dispatch lives in **Linear** (process v2, 2026-07-04 — contract in `.claude/skills/lifecycle-rules.md`
+§ Dispatch): a stream's NEXT = `Approved` + `stream:<name>` label + no open blocked-by relation,
+priority-ordered. This file carries **why the sequence is what it is** — priorities, waves,
+dependency rationale — never per-ticket board state (it drifts).
 
-<!-- STREAM-BOARD:START -->
-| Stream | Command | NEXT (build this) | Context | Queued after |
-|--------|---------|-------------------|---------|--------------|
-| build · Stream 1 · **Opus** | `/build 1` | **FRE-769** [O] _(ADR-0109 V2 taxonomy do-first gate — owner-confirmed 2026-07-04; extraction root-cause fix, owner's #2 priority. ⛔ **FRE-760 → Backlog** — re-scoped Low, blocked by FRE-773.)_ | CLEAR | **V2 taxonomy chain** (root-cause of the extraction ceiling per FRE-766): 769 gate → **770** gold re-label (8-type) → **771** 8-type prompt + powered A/B → **772** KG migration (Opus, near-one-way-door) + **773** relationship-half (independent gate). Then **FRE-699** (recall parallelism) → **472**. _Context: FRE-630 Ph1 benchmark done (In Progress, multi-phase); FRE-432 Ph0 done, Ph1/2 remain (In Progress); 755/756 instrumentation. **Recall flag-flip is master-owned**: multipath on + floor 0.60 + FRE-489/670 + FRE-658 window probe._ |
-| build2 · Stream 2 · **Opus** _(owner switched Sonnet→Opus 2026-07-03; ticket tier tags are complexity labels, not the session model)_ | `/build 2` | **FRE-649** [S] _(ADR-0099 stage 1 — cross-config guard + divergence policy + drift correction; unblocked by 648. Swap candidates: 676 group-memory-identity · 710 captains-log cadence · 767 chip-discreteness)_ | CLEAR | **Priority waves (Opus/Sonnet):** W0 stability (Config 649 · Memory 620/632/676/657/677 · Linear 710) → W1 substrate (Config 650→652+735 · Memory 639–642 · Linear 720/714–716) → W2 System-boundary (728/730→731→732→729 · 738) → W3 measurement (Pedagogical 561→564→453 · Linear 719/718 · Memory 660/647). Full order → [`sessions/2026-07-02-priority-sequencing.md`](sessions/2026-07-02-priority-sequencing.md). |
-| adr · **Opus** | `/adr` | **owner-pick** _(queue thin; ADR-0108 shipped Proposed #330)_ | CLEAR | **639↔ADR-0105 reconciliation** (gate-vs-isolate for the System class — see Pillars) · FRE-565 past-conversations ADR · ADR-0094/0095 accept-or-kill (held pending Inference 432/516 measure) · pedagogical-reflection ADR (unfiled). _(ADR-0108 impl chain FRE-743–748 + bug FRE-749 = build-stream work, all Needs-Approval — owner gate.)_ |
-<!-- STREAM-BOARD:END -->
+**Sequencing rationale (current):** build1 = ADR-0109 V2 taxonomy chain 769→770→771→772 (+773
+independent gate) then 699→472 — encoded as Linear blocked-by relations. build2 = ADR-0099 chain from
+649; wave order W0 stability → W1 substrate → W2 System-boundary → W3 measurement per
+[`sessions/2026-07-02-priority-sequencing.md`](sessions/2026-07-02-priority-sequencing.md). adr =
+owner-pick (queue thin). **Recall flag-flip is master-owned**: multipath on + floor 0.60 + FRE-489/670
++ FRE-658 window probe.
 
-**Context flag:** default **CLEAR** (fresh context per ticket). **KEEP** only when NEXT is a direct follow-on to what the stream just shipped (same files/substrate) — run on the warm context, do not `/clear`.
-
-**Parked / held (not auto-dispatched):** ADR-0102 vision-doc chain FRE-682–689 (**un-paused 2026-07-04 but LOW priority** — buildable, sequenced behind Memory; not dispatched) · Inference ADR-0094/0095 trees FRE-600–604 / 607–611 (held pending FRE-432/516 measurement) · FRE-713 (trigger-gated, Backlog).
+**Parked / held (rationale only — not dispatched, no stream label):** ADR-0102 vision-doc chain
+FRE-682–689 (un-paused 2026-07-04 but LOW priority — sequenced behind Memory) · Inference
+ADR-0094/0095 trees FRE-600–604 / 607–611 (held pending FRE-432/516 measurement) · FRE-713
+(trigger-gated, Backlog) · FRE-760 (re-scoped Low, blocked by FRE-773).
 
 ---
 
@@ -101,6 +104,6 @@ Waves **A/B/C/E/I/J** ✅ complete. **D** planned, impl deferred (FRE-214 §8.7)
 ## How This File Works
 
 - **Linear is the task tracker** — this file tracks priorities and sequencing only. Do not re-enumerate per-ticket tables here (they drift).
-- **Dispatch** = the 🎛️ Stream Board. Priority order = the numbered list above. Cross-project sequencing = [`sessions/2026-07-02-priority-sequencing.md`](sessions/2026-07-02-priority-sequencing.md).
-- **Update after every ship**: advance the Stream Board + bump "Last updated". Move session narrative to `completed/` when the header grows past ~1 screen.
+- **Dispatch** = Linear (state + `stream:*` label + priority + blocked-by relations; contract in `.claude/skills/lifecycle-rules.md` § Dispatch). Priority order = the numbered list above. Cross-project sequencing = [`sessions/2026-07-02-priority-sequencing.md`](sessions/2026-07-02-priority-sequencing.md).
+- **Update after every ship**: apply any dispatch mutations in Linear + bump "Last updated". Move session narrative to `completed/` when the header grows past ~1 screen.
 - **Specs** → `docs/specs/` · **ADRs** → `docs/architecture_decisions/` · **Session plans** → `docs/superpowers/plans/` · **Archive** → `docs/plans/completed/`.

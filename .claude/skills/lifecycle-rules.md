@@ -50,6 +50,11 @@ doesn't have to. Your standing mandate:
 ## MASTER_PLAN
 - Committed to `main` only — never a feature branch.
 - "Last updated" line is bumped every time a ticket ships.
+- **Main requires green checks on every update** (ruleset "Main", 2026-07-04): direct pushes are
+  rejected, so ALL commits to main — including docs/MASTER_PLAN — land via PR. Docs use the
+  auto-merge flow (`gh pr merge --auto --squash`, /master Step 8); path-aware CI passes docs-only
+  changes in ~1–2 min. Required checks: the 6 CI jobs (Any source) + `CodeQL` aggregate + a
+  code-scanning rule.
 
 ## Ticket state
 - Implement only `Approved` tickets (verify via Linear `get_issue`).

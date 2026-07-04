@@ -8,18 +8,18 @@ description: Use in the adr session (Opus) to produce a complete ADR — discuss
 Read `.claude/skills/lifecycle-rules.md` first. Confirm the session model is Opus; if not, STOP
 and tell the owner (ADR authoring is Opus-only).
 
-**Argument: none → resolve from the Stream Board on _latest main_.** **FIRST sync to main — this is
-step one, before anything else:** `git fetch origin`, then read the board from **`origin/main`**, NOT
-your local worktree copy (it is stale whenever you are still sitting on the previous, now-merged
-per-ADR branch — the cause of resolving an already-shipped ticket as NEXT):
-`git show origin/main:docs/plans/MASTER_PLAN.md`. In it, find the `## 🎛️ Stream Board`
-(between the `<!-- STREAM-BOARD:START -->` / `END` markers); take the
-`/adr` row's **NEXT** ticket (bold `FRE-…`) and honor its **Context** flag exactly as `/build` does —
-**CLEAR** (default): **first check if you are a blank/new session** (freshly started or just `/clear`ed,
-essentially nothing in context but this invocation); if yes, proceed; if no (you still carry a previous
-ADR's work), STOP and tell the owner to `/clear` then re-run `/adr`. **KEEP**: proceed on the warm
-context regardless. An explicit `FRE-…` id overrides the board.
-If the row is missing/ambiguous, STOP and ask master.
+**Argument: none → resolve NEXT from Linear** (dispatch contract: lifecycle-rules § Dispatch).
+**FIRST `git fetch origin`** (you still need latest main for Step 0). Then: busy guard —
+`list_issues(team="FrenchForest", state="In Progress", label="stream:adr")` non-empty → STOP (a
+session is already on it); otherwise take the head of `list_issues(team="FrenchForest",
+state="Approved", label="stream:adr")` ordered by priority then oldest-created, skipping any issue
+with an open "blocked by" relation (`get_issue` with includeRelations — blocked means a blocker not
+Done/Canceled). Honor its **context flag** exactly as `/build` does —
+**CLEAR** (default, no `context:keep` label): **first check if you are a blank/new session** (freshly
+started or just `/clear`ed, essentially nothing in context but this invocation); if yes, proceed; if no
+(you still carry a previous ADR's work), STOP and tell the owner to `/clear` then re-run `/adr`.
+**KEEP** (`context:keep` label present): proceed on the warm context regardless. An explicit `FRE-…` id
+overrides the queue. If the queue is empty or ambiguous, STOP and ask master.
 
 ## Step 0 — Fresh-start (worktree reset)
 1. `git fetch origin`
@@ -35,17 +35,18 @@ If the row is missing/ambiguous, STOP and ask master.
 
 ## 1 — Discuss first
 Collaborate with the owner on the decision. Do NOT write any file until the decision is settled
-(discussion-mode default). **adr dev is always tracked by a Linear ticket** (same as build) — the
-board's `/adr` NEXT is a `FRE-…`, and `prime-worker` dispatches off its Linear state, so untracked ADR
-work is invisible to the loop. Therefore:
+(discussion-mode default). **adr dev is always tracked by a Linear ticket** (same as build) — dispatch
+resolves from Linear (`Approved` + `stream:adr` label), and `prime-worker` monitors the same queue, so
+untracked ADR work is invisible to the loop. Therefore:
 - If an ADR umbrella ticket already exists (e.g. FRE-582), **set it → In Progress** now
   (`save_issue state="In Progress"`).
 - If this is ad-hoc work with no ticket yet, **file the umbrella ticket first** (Needs Approval, under a
-  Linear project) so the work is referenced from the start; the owner approves it → it becomes the board
-  NEXT → then set it In Progress.
+  Linear project) so the work is referenced from the start; the owner approves it + master labels it
+  `stream:adr` → it becomes the queue head → then set it In Progress.
 
-Linear is disconnected from GitHub (2026-06-26), so status never moves automatically; the working
-session owns the In Progress transition, master owns Done.
+The GitHub integration automates only the PR transitions (PR opened → `In Review`, PR merged →
+`Awaiting Deploy` — retargeted 2026-07-04); the working session owns the In Progress transition,
+master owns Done.
 
 ## 2 — Write the ADR
 Start from **`docs/architecture_decisions/ADR_TEMPLATE.md`** — the project ADR format (mirrors the

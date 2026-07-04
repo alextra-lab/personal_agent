@@ -7,11 +7,11 @@ description: Use in the build session to ship a Linear FRE ticket from Approved 
 
 Read `.claude/skills/lifecycle-rules.md` first. Argument: **a stream selector** (`1` or `2`), or an explicit Linear issue ID (e.g. `FRE-471`).
 
-**Stream selector (`1`/`2`) → resolve from the Stream Board on _latest main_.** **FIRST sync to main — this is step one, before anything else:** `git fetch origin`, then read the board from **`origin/main`**, NOT your local worktree copy (it is stale whenever you are still on the previous, now-merged per-ticket branch — the cause of resolving an already-shipped ticket as NEXT): `git show origin/main:docs/plans/MASTER_PLAN.md`. In it, find the `/build <N>` row; the **NEXT** cell's bold `FRE-…` is the ticket to build. Honor that row's **Context** flag:
+**Stream selector (`1`/`2`) → resolve NEXT from Linear** (dispatch contract: lifecycle-rules § Dispatch). **FIRST `git fetch origin`** (you still need latest main for Step 0). Then: busy guard — `list_issues(team="FrenchForest", state="In Progress", label="stream:build<N>")` non-empty → STOP (a session is already on it); otherwise take the head of `list_issues(team="FrenchForest", state="Approved", label="stream:build<N>")` ordered by priority then oldest-created, skipping any issue with an open "blocked by" relation (`get_issue` with includeRelations — blocked means a blocker not Done/Canceled). That issue is the ticket to build. Honor its **context flag** (`context:keep` label → KEEP; absent → CLEAR):
 - **CLEAR** (the default): this ticket wants a fresh slate. **First check: are you a blank/new session** — freshly started or just `/clear`ed, with essentially nothing in context but this invocation and session-start priming? If **yes**, proceed. If **no** (you still carry a previous ticket's work in context), STOP and tell the owner: "FRE-… is flagged CLEAR — run `/clear`, then `/build <N>` again." A stale prior-ticket context pollutes the plan.
 - **KEEP**: the NEXT ticket is a direct follow-on (same files/substrate) — proceed on the current warm context regardless of the blank-session check; do not ask for a `/clear`.
 
-An explicit `FRE-…` id skips the board and builds that ticket (treat Context as CLEAR unless the owner says otherwise). If the board row is missing/ambiguous, STOP and ask master.
+An explicit `FRE-…` id skips the queue and builds that ticket (treat Context as CLEAR unless the owner says otherwise). If the queue is empty or ambiguous, STOP and ask master.
 
 ## Step 0 — Fresh-start (worktree reset + retire the merged branch)
 1. `git fetch --prune origin`
@@ -29,9 +29,10 @@ An explicit `FRE-…` id skips the board and builds that ticket (treat Context a
 
 ## 1 — Ticket
 `get_issue(<id>)` on FrenchForest; must be `Approved`. If `Needs Approval`, STOP and tell the owner.
-Then **set the ticket → In Progress** (`save_issue state="In Progress"`). Linear is disconnected from
-GitHub (2026-06-26) — nothing auto-moves status anymore, so the session doing the work owns the
-In Progress transition; master owns the Done transition at the gate.
+Then **set the ticket → In Progress** (`save_issue state="In Progress"`). The GitHub integration
+automates only the PR transitions (PR opened → `In Review`, PR merged → `Awaiting Deploy` — retargeted
+2026-07-04); the session doing the work owns the In Progress transition; master owns the Done
+transition at the gate.
 
 ## 2 — Scope
 Read ticket body + linked ADRs + specs. Summarize scope in 3–5 bullets. **Pull out the acceptance

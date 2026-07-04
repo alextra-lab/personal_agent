@@ -479,6 +479,8 @@ The `entity_extraction_role` / `captains_log_role` / `insights_role` headers are
 
 The two live profiles that write to the shared substrate are `models.yaml` (local dev, via `make dev`) and `models.cloud.yaml` (prod, pinned by `AGENT_MODEL_CONFIG_PATH` in `docker-compose.cloud.yml`). Their divergence is the operative one.
 
+**Update (ADR-0099 stage 4, FRE-652):** `models-baseline.yaml` and `models.medium.yaml` — both columns above — are now **retired** (deleted from the repo). Neither had a live or test reader; the header-less-fallback risk (`models.medium.yaml`) is closed by deletion, not correction. The table above is left as the point-in-time audit record; treat those two columns as historical.
+
 ---
 
 ## §3 — Model-definition drift (same role-name → different resolved model)
@@ -492,7 +494,7 @@ A role name resolving to *different real model definitions* across files. ADR-00
 | `gpt-5.4-nano` (`id:`) | `gpt-5.4-nano` | `gpt-5.4-nano` | no (ADR example now historical) |
 | `gpt-5.4-mini` (`id:`) | `gpt-5.4-mini` | `gpt-5.4-mini` | no |
 
-**Consequence:** `captains_log_role`/`insights_role` = `claude_sonnet` in prod resolves to **`claude-sonnet-5`**, but the same role in `models-baseline.yaml` / benchmarks resolves to **`claude-sonnet-4-6`** — a `forbidden`-role definition drift, exactly the class ADR-0099 D4's guard must fail on (comparing the fully-resolved `ModelDefinition`, not the name-key).
+**Consequence (as audited):** `captains_log_role`/`insights_role` = `claude_sonnet` in prod resolves to **`claude-sonnet-5`**, but the same role in `models-baseline.yaml` / benchmarks resolves to **`claude-sonnet-4-6`** — a `forbidden`-role definition drift, exactly the class ADR-0099 D4's guard must fail on (comparing the fully-resolved `ModelDefinition`, not the name-key). **Update (FRE-652):** `models-baseline.yaml` is now retired, closing its half of this drift. The identical `claude-sonnet-4-6` drift **persists, unresolved, in the three `benchmark-*.yaml` files** — those were added after the ADR and are out of FRE-652's scope (they are excluded from the guard's `active_profiles`, so the guard's `forbidden`-role check does not see them either).
 
 **`reranker` diverges local vs cloud** (contradicting ADR-0099's "embedding/reranker: consistent"):
 
@@ -576,9 +578,9 @@ Which model YAML is live depends on which compose file was deployed. Only `.clou
 | # | Finding | Class (ADR-0099 D4) | Feeds |
 |---|---|---|---|
 | F1 | **Role-assignment drift** — `entity_extraction` local `nano` ≠ prod `mini`; `captains_log`/`insights` local `nano` ≠ prod `sonnet` (§2). | Policy (undeclared `forbidden` divergence) | C1/C2 |
-| F2 | **Model-definition drift** — `claude_sonnet` = `claude-sonnet-5` (live) vs `claude-sonnet-4-6` (baseline + benchmarks) (§3). Replaces the ADR's historical `gpt-4o-mini` example. | Safety (`forbidden` role → mismatched `ModelDefinition`) | C1 guard |
+| F2 | **Model-definition drift** — `claude_sonnet` = `claude-sonnet-5` (live) vs `claude-sonnet-4-6` (baseline + benchmarks) (§3). Replaces the ADR's historical `gpt-4o-mini` example. **Resolved for `models-baseline.yaml` (FRE-652, retired); persists, out of scope, in `models.benchmark-*.yaml`.** | Safety (`forbidden` role → mismatched `ModelDefinition`) | C1 guard |
 | F3 | **`reranker` diverges local vs cloud** (0.6B vs 4B) — contradicts ADR-0099's "embedding/reranker consistent" (§3). | Policy | C1/C2 |
-| F4 | **`models.medium.yaml` header-less fallback** routes extraction/log/insights to `primary` (§2). | Policy | C2 matrix |
+| F4 | **`models.medium.yaml` header-less fallback** routes extraction/log/insights to `primary` (§2). **Resolved (FRE-652) — file retired.** | Policy | C2 matrix |
 | F5 | **Dual env-var spelling** — aliased fields bind BOTH `AGENT_<FIELD>` and the alias (e.g. `debug` ← `AGENT_DEBUG` *and* `APP_DEBUG`; `log_level` ← `AGENT_LOG_LEVEL` *and* `APP_LOG_LEVEL`). Empirically verified. A subtle footgun: two spellings, last-wins, easy to set one unaware of the other. | Policy (surface hygiene) | D4 design |
 | F6 | **ADR-0099 Context table is stale** — `models.eval.yaml` gone, 3 `benchmark-*` YAMLs added, `mcp-secrets.env` path wrong (§0). | — (ADR maintenance) | ADR-0099 update |
 | F7 | **113 `AppConfig` fields undocumented** in `.env.example` (§1, §7). | Policy (undocumented surface) | D4 coverage check |

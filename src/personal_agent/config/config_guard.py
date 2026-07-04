@@ -49,6 +49,12 @@ _ASSIGNMENT_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*(.+?)\s*$")
 # repo's angle-bracket placeholder convention (see .env.example).
 _SAFE_VALUE_RE = re.compile(r"^(\$\{.*\}|<.*>)$")
 
+# A per-profile role-assignment header (ADR-0099 D1 stage 2, FRE-650, retired these from
+# config/*.yaml — role assignment lives only in config/model_roles.yaml).
+_ROLE_HEADER_RE = re.compile(
+    r"^\s*(entity_extraction|captains_log|insights|compressor|embedding|reranker)_role\s*:"
+)
+
 # Files scanned for committed secrets, relative to a fixture/repo root.
 _SECRET_SCAN_GLOBS: tuple[str, ...] = (
     "config/*.yaml",
@@ -277,6 +283,39 @@ def check_forbidden_role_divergence_and_dangling_refs(
                         f"role '{role}' is divergence:forbidden and resolves to the same "
                         f"model key '{model_name}' in every active profile, but the "
                         f"underlying ModelDefinition differs (definition drift): {profile_summary}"
+                    ),
+                )
+            )
+    return findings
+
+
+def check_no_role_headers(root: Path) -> list[Finding]:
+    """AC-2(a) — no config/*.yaml re-declares a role-assignment header (ADR-0099 D1 stage 4).
+
+    Role assignment has lived ONLY in ``config/model_roles.yaml`` since stage 2 (FRE-650);
+    the loader already ignores a ``<role>_role:`` header wherever it appears, so this can
+    never wedge a boot (policy, not safety — ADR-0099 D4 defaults an unclassified finding
+    to policy). But a reintroduced header is a maintainability regression that silently
+    reopens the assignment-drift surface stage 2 closed, so stage 4 (FRE-652, the
+    assembled-seam gate) makes the ADR's manual "grep returns zero" check a permanent
+    CI/pre-commit gate instead of a one-time check.
+    """
+    findings: list[Finding] = []
+    for path in sorted(root.glob("config/*.yaml")):
+        if not path.is_file():
+            continue
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            match = _ROLE_HEADER_RE.match(line)
+            if match is None:
+                continue
+            findings.append(
+                Finding(
+                    check="role_header_reintroduced",
+                    severity="policy",
+                    message=(
+                        f"{path.relative_to(root)}:{lineno}: declares '{match.group(1)}_role:' — "
+                        "role assignment lives only in config/model_roles.yaml "
+                        "(ADR-0099 D1 stage 2, FRE-650)"
                     ),
                 )
             )
@@ -592,6 +631,7 @@ def run_all_checks(root: Path) -> list[Finding]:
     findings: list[Finding] = []
     findings.extend(check_matrix_shape(matrix))
     findings.extend(check_forbidden_role_divergence_and_dangling_refs(root, matrix))
+    findings.extend(check_no_role_headers(root))
     findings.extend(check_orphan_env_keys(root))
     findings.extend(check_committed_secrets(root))
     findings.extend(check_deployment_manifest_internal_consistency(manifest))

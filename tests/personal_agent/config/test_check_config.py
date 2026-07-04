@@ -98,6 +98,44 @@ class TestDanglingModelReference:
         assert dangling == []
 
 
+class TestNoRoleHeaders:
+    """AC-2(a) — no config/*.yaml re-declares a role-assignment header (ADR-0099 D1 stage 4, FRE-652).
+
+    Role assignment has lived ONLY in config/model_roles.yaml since stage 2 (FRE-650); a
+    reintroduced `<role>_role:` header would silently reopen the assignment-drift surface
+    stage 2 closed, even though the loader already ignores it. This makes the ADR's manual
+    "grep returns zero" seam check (ADR-0099 §Verification, assembled-seam item 2) a
+    permanent CI/pre-commit gate.
+    """
+
+    def test_fails_on_reintroduced_role_header_fixture(self) -> None:
+        findings = run_all_checks(_FIXTURES / "role_header_reintroduced")
+        header_findings = [f for f in findings if f.check == "role_header_reintroduced"]
+        assert len(header_findings) == 1
+        assert header_findings[0].severity == "policy"
+        assert "entity_extraction" in header_findings[0].message
+
+    def test_no_false_positive_on_real_repo(self) -> None:
+        findings = run_all_checks(_REPO_ROOT)
+        header_findings = [f for f in findings if f.check == "role_header_reintroduced"]
+        assert header_findings == []
+
+
+class TestRetiredModelDefinitionYamlsStayGone:
+    """ADR-0099 stage 4 (FRE-652) — the redundant model-definition YAMLs are retired.
+
+    config/models.eval.yaml was already retired (FRE-735); this is the stage-4 half:
+    models-baseline.yaml and models.medium.yaml consolidated away, leaving only the two
+    files config/model_roles.yaml's active_profiles names (models.yaml, models.cloud.yaml).
+    """
+
+    def test_models_baseline_yaml_does_not_exist(self) -> None:
+        assert not (_REPO_ROOT / "config" / "models-baseline.yaml").exists()
+
+    def test_models_medium_yaml_does_not_exist(self) -> None:
+        assert not (_REPO_ROOT / "config" / "models.medium.yaml").exists()
+
+
 class TestMatrixShape:
     """A role's declared keys must match its own divergence value (FRE-650)."""
 

@@ -1,0 +1,10 @@
+# Fixture: a per-profile YAML that re-declares a role-assignment header,
+# reopening the assignment-drift surface ADR-0099 D1 stage 2 (FRE-650) closed.
+entity_extraction_role: gpt-5.4-nano
+
+models:
+  gpt-5.4-nano:
+    id: "gpt-5.4-nano"
+    context_length: 128000
+    max_concurrency: 1
+    default_timeout: 60

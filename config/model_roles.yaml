@@ -14,8 +14,10 @@
 # the `cloud` bucket here is deliberate (docker-compose.eval.yml also requires
 # the same cloud API keys) — NOT a stand-in for ADR-0099 AC-7's eval-specific
 # opt-in-divergence mechanism, which is out of this ticket's scope.
-# models-baseline.yaml and the models.benchmark-*.yaml files are never
-# deployed and are intentionally excluded from the guard's active-profile set.
+# The models.benchmark-*.yaml files are never deployed and are intentionally
+# excluded from the guard's active-profile set. (models-baseline.yaml and
+# models.medium.yaml — the other two files once excluded here — were retired
+# outright in stage 4, FRE-652: no active/deployed reader ever used them.)
 active_profiles:
   local: config/models.yaml
   cloud: config/models.cloud.yaml

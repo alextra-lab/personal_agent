@@ -1,0 +1,7 @@
+# Fixture: cloud side is fine — only local dangles (AC-9, FRE-649).
+entity_extraction_role: gpt-5.4-mini
+
+models:
+  gpt-5.4-mini:
+    id: "gpt-5.4-mini"
+    provider: "openai"

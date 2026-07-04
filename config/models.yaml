@@ -33,11 +33,12 @@
 #   provider_type    "cloud" (set explicitly for ADR-0029 concurrency pass-through)
 
 # ── Process-to-model assignments ──────────────────────────────────────────────
-entity_extraction_role: gpt-5.4-nano
-captains_log_role: gpt-5.4-nano
-insights_role: gpt-5.4-nano
-# captains_log_role: claude_sonnet
-# insights_role: claude_sonnet
+# Corrected to match prod (FRE-649, ADR-0099 D1): these are cognitive-pipeline
+# roles (divergence: forbidden in config/model_roles.yaml) — local and cloud
+# must resolve to the same model. Was gpt-5.4-nano / gpt-5.4-nano / gpt-5.4-nano.
+entity_extraction_role: gpt-5.4-mini
+captains_log_role: claude_sonnet
+insights_role: claude_sonnet
 
 models:
   # ── Tier 1: Primary Agent ───────────────────────────────────────
@@ -169,9 +170,9 @@ models:
     min_concurrency: 1
     max_concurrency: 10
     default_timeout: 60
-    # FRE-758: pinned near-0 for entity-extraction determinism — this is the
-    # actual local-dev entity_extraction_role (see top of file); see gpt-5.4-mini
-    # below for the parity rationale (that entry governs the cloud/prod role).
+    # FRE-758: pinned near-0 for entity-extraction determinism. No longer the
+    # local-dev entity_extraction_role (FRE-649 corrected that to gpt-5.4-mini,
+    # below, to match prod) — kept available for local A/B use.
     temperature: 0.0
     input_cost_per_token: 0.0000002     # $0.20/MTok (ADR-0101 §8b / FRE-742 — config-owned cost matrix)
     output_cost_per_token: 0.00000125   # $1.25/MTok
@@ -187,9 +188,8 @@ models:
     min_concurrency: 1
     max_concurrency: 10
     default_timeout: 60
-    # FRE-758: not the local entity_extraction_role (gpt-5.4-nano is), but
-    # pinned for parity with config/models.cloud.yaml's gpt-5.4-mini (the
-    # prod/benchmarked entity extractor) — avoids the next config-drift surprise.
+    # FRE-758/FRE-649: the local entity_extraction_role (top of file), matching
+    # config/models.cloud.yaml's gpt-5.4-mini (the prod entity extractor).
     temperature: 0.0
     input_cost_per_token: 0.00000075    # $0.75/MTok (ADR-0101 §8b / FRE-742 — config-owned cost matrix)
     output_cost_per_token: 0.0000045    # $4.50/MTok

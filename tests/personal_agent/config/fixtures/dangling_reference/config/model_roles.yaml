@@ -1,0 +1,8 @@
+active_profiles:
+  local: config/models.yaml
+  cloud: config/models.cloud.yaml
+roles:
+  entity_extraction: { divergence: allowed }
+required_secrets:
+  local: []
+  cloud: []

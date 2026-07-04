@@ -1,0 +1,58 @@
+# config/model_roles.yaml — ADR-0099 D1 intent layer (stage 1, FRE-649)
+#
+# The ONE hand-edited home for "may this role's model assignment legitimately
+# differ across profiles?" Stage 1 is INTENT ONLY: role assignments themselves
+# still live in the per-profile model YAMLs' `<role>_role:` headers (removed
+# in stage 2 / FRE-650, the generative loader). This file is what
+# scripts/check_config.py checks those headers against.
+#
+# ── active_profiles ─────────────────────────────────────────────────────────
+# The two model-definition files actually deployed (CONFIG_INVENTORY.md §6):
+# local dev (`make dev`) uses AppConfig's model_config_path default; cloud AND
+# eval both pin AGENT_MODEL_CONFIG_PATH to models.cloud.yaml. Treating eval as
+# the `cloud` bucket here is deliberate (docker-compose.eval.yml also requires
+# the same cloud API keys) — NOT a stand-in for ADR-0099 AC-7's eval-specific
+# opt-in-divergence mechanism, which is out of this ticket's scope.
+# models-baseline.yaml and the models.benchmark-*.yaml files are never
+# deployed and are intentionally excluded from the guard's active-profile set.
+active_profiles:
+  local: config/models.yaml
+  cloud: config/models.cloud.yaml
+
+# ── roles ───────────────────────────────────────────────────────────────────
+# divergence: forbidden  → the role MUST resolve to the same fully-resolved
+#   ModelDefinition (id + provider + sampling params) across every active
+#   profile. A forbidden role's resolved model name must also exist as a key
+#   under each active profile's `models:` mapping (dangling-reference check).
+# divergence: allowed    → the role may legitimately differ per profile.
+#
+# Stage-1 scope (ticket-level exception to ADR-0099's full target policy,
+# confirmed during codex plan-review 2026-07-04): `compressor` and `reranker`
+# are cognitive-pipeline roles the ADR's own example matrix marks forbidden,
+# but both currently diverge for reasons this ticket does not correct
+# (compressor: local nano vs cloud mini, same drift class as extraction but
+# unaddressed here; reranker: local 0.6B vs cloud 4B, an apparently deliberate
+# FRE-696 reliability tradeoff). Marking either forbidden today would fail the
+# guard on day one. `embedding` IS marked forbidden here even though nothing
+# in this ticket required it — it is already consistent across both active
+# profiles, so it costs no correction and moves stage 1 closer to the ADR's
+# full intent for free. See FRE-649 follow-up ticket for compressor/reranker.
+roles:
+  primary:            { divergence: allowed }
+  sub_agent:           { divergence: allowed }
+  entity_extraction:  { divergence: forbidden }
+  captains_log:       { divergence: forbidden }
+  insights:           { divergence: forbidden }
+  embedding:          { divergence: forbidden }
+  compressor:         { divergence: allowed }  # FRE-649 follow-up: promote once local/cloud drift is corrected
+  reranker:           { divergence: allowed }  # FRE-649 follow-up: owner to confirm intentional 0.6B/4B split
+
+# ── required_secrets ────────────────────────────────────────────────────────
+# Per-profile required AppConfig secret fields (ADR-0099 D4: "required secret
+# is per-profile, not global"). Checked at AppConfig startup (safety class) —
+# fires only when the ACTIVE profile is the one requiring the secret.
+required_secrets:
+  local: []
+  cloud:
+    - anthropic_api_key
+    - openai_api_key

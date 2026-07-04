@@ -1,0 +1,7 @@
+# Fixture: role header points at a model name absent from models: (AC-9, FRE-649).
+entity_extraction_role: gpt-9-ghost
+
+models:
+  gpt-5.4-nano:
+    id: "gpt-5.4-nano"
+    provider: "openai"

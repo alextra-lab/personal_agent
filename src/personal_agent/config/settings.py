@@ -14,6 +14,12 @@ from personal_agent.config._substrate_fingerprint import (
     is_prod_neo4j_uri,
     is_prod_postgres_url,
 )
+from personal_agent.config.config_guard import (
+    check_orphan_env_keys,
+    load_matrix,
+    repo_root,
+    resolve_active_profile,
+)
 from personal_agent.config.env_loader import Environment, get_environment, load_env_files
 from personal_agent.config.validators import (
     resolve_path,
@@ -723,7 +729,9 @@ class AppConfig(BaseSettings):
         default=None, description="R2 access key id (S3 SDK credential)"
     )
     r2_secret_access_key: str | None = Field(
-        default=None, description="R2 secret access key (S3 SDK credential)"
+        default=None,
+        description="R2 secret access key (S3 SDK credential)",
+        json_schema_extra={"secret": True},
     )
     r2_region: str = Field(
         default="auto",
@@ -739,6 +747,7 @@ class AppConfig(BaseSettings):
             "Shared secret the Worker presents to /internal/artifacts/{id}. "
             "Constant-time compared via secrets.compare_digest on the gateway side."
         ),
+        json_schema_extra={"secret": True},
     )
     upload_max_size_bytes: int = Field(
         default=52_428_800,  # 50 MiB
@@ -1087,7 +1096,11 @@ class AppConfig(BaseSettings):
     # Neo4j
     neo4j_uri: str = Field(default="bolt://localhost:7687", description="Neo4j connection URI")
     neo4j_user: str = Field(default="neo4j", description="Neo4j username")
-    neo4j_password: str = Field(default="neo4j_dev_password", description="Neo4j password")
+    neo4j_password: str = Field(
+        default="neo4j_dev_password",
+        description="Neo4j password",
+        json_schema_extra={"secret": True},
+    )
 
     # Substrate isolation (FRE-375)
     allow_test_writes_to_prod_substrate: bool = Field(
@@ -1101,13 +1114,22 @@ class AppConfig(BaseSettings):
     )
 
     # Cloud API secrets (model identity lives in config/models.yaml — ADR-0031)
-    anthropic_api_key: str | None = Field(default=None, description="Anthropic API key for Claude")
-    openai_api_key: str | None = Field(default=None, description="OpenAI API key")
+    anthropic_api_key: str | None = Field(
+        default=None,
+        description="Anthropic API key for Claude",
+        json_schema_extra={"secret": True},
+    )
+    openai_api_key: str | None = Field(
+        default=None,
+        description="OpenAI API key",
+        json_schema_extra={"secret": True},
+    )
 
     # Linear (native tool — FRE-224)
     linear_api_key: str | None = Field(
         default=None,
         description="Linear Personal Access Token for the native create_linear_issue tool (FRE-224)",
+        json_schema_extra={"secret": True},
     )
     linear_agent_rate_limit_per_day: int = Field(
         default=10,
@@ -1124,7 +1146,11 @@ class AppConfig(BaseSettings):
     )
 
     # Perplexity AI (native tool — ADR-0028 Phase 2)
-    perplexity_api_key: str | None = Field(default=None, description="Perplexity API key")
+    perplexity_api_key: str | None = Field(
+        default=None,
+        description="Perplexity API key",
+        json_schema_extra={"secret": True},
+    )
     perplexity_base_url: str = Field(
         default="https://api.perplexity.ai",
         description="Perplexity API base URL",
@@ -1667,6 +1693,7 @@ class AppConfig(BaseSettings):
             "Cloudflare Zero Trust service token secret for Mac SLM tunnel. "
             "Injected as CF-Access-Client-Secret header on requests to slm.frenchforet.com."
         ),
+        json_schema_extra={"secret": True},
     )
     cf_access_team_domain: str | None = Field(
         default=None,
@@ -2147,6 +2174,79 @@ class AppConfig(BaseSettings):
             "or set AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE=1 to bypass (use with care)."
         )
 
+    @model_validator(mode="after")
+    def _validate_config_guard_policy(self) -> "AppConfig":
+        """Orphan-``.env`` policy check (ADR-0099 D4, FRE-649).
+
+        Reads ``config/model_roles.yaml`` (if present) and warn-loud (never
+        raise) on any orphan ``.env.example`` key — a policy finding;
+        CI/pre-commit (``scripts/check_config.py``) is the hard gate for
+        these, not boot. A missing or unreadable matrix file is skipped
+        silently, so it can never make an otherwise-valid ``AppConfig()``
+        construction fail.
+
+        The required-secret-per-profile *safety* check (ADR-0099 D4's other
+        half of this hook) deliberately does **not** live here — see
+        ``enforce_required_secrets`` and its call site in
+        ``load_app_config()`` for why.
+        """
+        root = repo_root()
+        matrix = load_matrix(root)
+        if not matrix:
+            return self
+
+        orphans = check_orphan_env_keys(root)
+        if orphans:
+            log.warning(
+                "config_guard_orphan_env_keys",
+                findings=[o.message for o in orphans],
+            )
+        return self
+
+
+def enforce_required_secrets(config: "AppConfig", *, root: Path | None = None) -> None:
+    """Hard-fail if a secret required by the ACTIVE profile is unset (ADR-0099 D4, FRE-649).
+
+    Deliberately a plain function called from ``load_app_config()`` — the
+    real application-boot entry point — rather than an ``AppConfig``
+    ``model_validator``. Ad-hoc ``AppConfig()`` / ``.model_validate()``
+    construction is pervasive across the test suite (tests deliberately
+    bypass env-file loading for isolation), and several legitimate
+    eval-harness test files (FRE-435/FRE-630) pin
+    ``AGENT_MODEL_CONFIG_PATH=config/models.cloud.yaml`` via an import-time
+    ``os.environ.setdefault`` that outlives their own test module for the
+    rest of the pytest session. A pydantic validator would fire on every one
+    of those incidental constructions; a plain post-construction check called
+    only from the real boot path fires only when the application is actually
+    starting.
+
+    Args:
+        config: The constructed ``AppConfig`` to check.
+        root: Repo root override (test seam); defaults to ``repo_root()``.
+
+    Raises:
+        ValueError: When the active profile requires a secret that is unset.
+    """
+    resolved_root = root if root is not None else repo_root()
+    matrix = load_matrix(resolved_root)
+    if not matrix:
+        return
+
+    active_profile = resolve_active_profile(config.model_config_path, matrix, resolved_root)
+    required_secrets_by_profile = matrix.get("required_secrets", {})
+    required_secrets: list[str] = (
+        required_secrets_by_profile.get(active_profile, [])
+        if isinstance(required_secrets_by_profile, dict)
+        else []
+    )
+    missing = [name for name in required_secrets if getattr(config, name, None) is None]
+    if missing:
+        raise ValueError(
+            f"Active profile {active_profile!r} (resolved from model_config_path="
+            f"{config.model_config_path!r}) requires secrets {missing} but they are unset. "
+            "Set the corresponding AGENT_* env var(s) before starting."
+        )
+
 
 _settings: AppConfig | None = None
 
@@ -2165,6 +2265,8 @@ def load_app_config() -> AppConfig:
 
     Raises:
         ValidationError: If configuration validation fails.
+        ValueError: If a secret required by the active profile is unset
+            (ADR-0099 D4, FRE-649 — see ``enforce_required_secrets``).
     """
     log.info("loading_app_config", environment=get_environment().value)
 
@@ -2173,6 +2275,7 @@ def load_app_config() -> AppConfig:
 
     try:
         config = AppConfig()
+        enforce_required_secrets(config)
         log.info(
             "app_config_loaded",
             environment=config.environment.value,

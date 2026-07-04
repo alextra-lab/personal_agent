@@ -1,0 +1,4 @@
+# Fixture: a real-looking secret value committed to a tracked YAML (AC-8, FRE-649).
+AGENT_OPENAI_API_KEY: "sk-live-abcdef123456"
+
+models: {}

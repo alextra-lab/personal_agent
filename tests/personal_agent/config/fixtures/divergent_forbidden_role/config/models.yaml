@@ -1,0 +1,8 @@
+# Fixture: pre-correction local state (AC-3 known-bad fixture, FRE-649).
+entity_extraction_role: gpt-5.4-nano
+
+models:
+  gpt-5.4-nano:
+    id: "gpt-5.4-nano"
+    provider: "openai"
+    max_tokens: 4096

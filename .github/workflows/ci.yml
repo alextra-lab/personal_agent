@@ -1,6 +1,11 @@
 # CI — Personal Agent
 #
-# Runs on every push and pull_request.
+# Runs on pull_request (all branches) and push to main only — PR branches are
+# validated once, not twice (process v2, FRE-777, 2026-07-04). Jobs are
+# path-aware: expensive jobs skip via job-level `if:` when their paths didn't
+# change; a skipped conclusion satisfies required status checks (unlike
+# workflow-level `paths:` filters, which leave required checks pending forever).
+# On push to main everything runs unconditionally (post-merge full validation).
 #
 # CI-vs-on-demand split (FRE-400):
 #   IN CI (this file)   — unit tests, integration tests against ephemeral containers,
@@ -19,7 +24,7 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
     branches: ["**"]
 
@@ -27,6 +32,32 @@ permissions:
   contents: read
 
 jobs:
+  # ── Changed-path detection (drives job-level skips; NOT a required check) ────
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-24.04
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      pwa: ${{ steps.filter.outputs.pwa }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'src/**'
+              - 'tests/**'
+              - 'scripts/**'
+              - 'docker/**'
+              - 'config/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.github/workflows/ci.yml'
+            pwa:
+              - 'seshat-pwa/**'
+              - '.github/workflows/ci.yml'
+
   # ── Backend unit tests ──────────────────────────────────────────────────────
   backend-unit:
     name: Backend unit tests
@@ -66,6 +97,8 @@ jobs:
   backend-integration:
     name: Backend integration tests (transport)
     runs-on: ubuntu-24.04
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.backend == 'true'
     # No Docker service container — uses the runner's apt-installed Postgres to
     # avoid Docker Hub pull failures (transient registry timeouts have broken CI).
     steps:
@@ -153,6 +186,8 @@ jobs:
   telemetry-surface:
     name: Telemetry surface reconciliation (gate)
     runs-on: ubuntu-24.04
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.backend == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -176,6 +211,8 @@ jobs:
   pwa-unit:
     name: PWA unit tests (Vitest)
     runs-on: ubuntu-24.04
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.pwa == 'true'
     defaults:
       run:
         working-directory: seshat-pwa
@@ -199,6 +236,8 @@ jobs:
   pwa-e2e:
     name: PWA e2e tests (Playwright)
     runs-on: ubuntu-24.04
+    needs: changes
+    if: github.event_name == 'push' || needs.changes.outputs.pwa == 'true'
     defaults:
       run:
         working-directory: seshat-pwa

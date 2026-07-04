@@ -81,6 +81,16 @@ dev = [
   "pip-audit>=2.0.0"          # dependency vulnerability scanning
 ]
 
+# FRE-697 — offline ONNX-reranker separation benchmark (VPS CPU, always-on private path).
+# Torch-free: onnxruntime for in-process CPU inference + transformers for the tokenizer only
+# (AutoTokenizer returns numpy; no torch import path). Eval-only — never in the prod gateway image.
+# Install with: uv sync --extra onnx-eval
+onnx-eval = [
+  "onnxruntime>=1.19",
+  "onnx>=1.16",          # onnxruntime.quantization.quantize_dynamic (int8) depends on the onnx proto lib
+  "transformers>=4.51",
+]
+
 # Note: Backend inference servers (MLX, llama.cpp) have been moved to the slm_server project.
 # Install them there: git clone https://github.com/alextra-lab/slm_server.git && cd slm_server && uv sync --extra mlx --extra llamacpp
 

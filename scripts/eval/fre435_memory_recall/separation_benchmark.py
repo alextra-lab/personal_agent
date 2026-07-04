@@ -71,6 +71,10 @@ from scripts.eval.fre435_memory_recall.calibration import propose_floor, sweep_f
 from scripts.eval.fre435_memory_recall.keyword_baseline import (  # noqa: E402
     fractional_recall_at_k,
 )
+from scripts.eval.fre435_memory_recall.onnx_reranker import (  # noqa: E402
+    DEFAULT_QWEN_INSTRUCTION,
+    OnnxArm,
+)
 from scripts.eval.fre435_memory_recall.probes import ProbeCase, load_probe_set  # noqa: E402
 from scripts.eval.fre435_memory_recall.separation_report import (  # noqa: E402
     SeparationStats,
@@ -405,6 +409,34 @@ def separation_from_scores(
     return positives, negatives
 
 
+def positives_negatives_for_case(
+    expected: set[str], cand_names: Sequence[str], scores: Sequence[float]
+) -> tuple[list[float], float]:
+    """Per-case positive/negative reranker samples over one query's candidate scores.
+
+    One definition shared by every reranker arm (HTTP + ONNX) so the benchmark semantics cannot
+    drift: positives are *per expected entity* (a compound case contributes one sample per expected
+    note actually present in the candidate set — an expected note the shortlist missed contributes
+    none, never an invented score); the negative is the query's strongest *non-expected* candidate
+    (for a control, where every candidate is a non-match, the strongest candidate overall).
+
+    Args:
+        expected: Lowercased expected entity names for the case (empty for a control).
+        cand_names: Lowercased candidate note names, aligned with ``scores``.
+        scores: Relevance scores, aligned with ``cand_names``.
+
+    Returns:
+        ``(positives, negative)`` — the per-expected-entity positive scores and the single strongest
+        non-expected (control: overall) score.
+    """
+    by_name = dict(zip(cand_names, scores, strict=True))
+    if expected:
+        positives = [by_name[n] for n in expected if n in by_name]
+        negative = max((s for n, s in by_name.items() if n not in expected), default=0.0)
+        return positives, negative
+    return [], max(scores, default=0.0)
+
+
 def _score_dim(
     cases: Sequence[ProbeCase],
     note_names: Sequence[str],
@@ -528,6 +560,51 @@ RERANKER_ARMS: dict[str, dict[str, str]] = {
         "auth": "voyage",
         "engine": "Voyage cloud (lite)",
     },
+}
+
+
+# ── FRE-697 ONNX reranker (in-process, VPS CPU) arms ──────────────────────────
+#: The always-on private path: an ONNX cross-encoder scored in-process on the VPS CPU (no laptop, no
+#: cloud, no llama.cpp causal-rerank stall). Revisions are pinned commit shas for reproducibility. bge
+#: ships a ready int8 export; the Qwen3 seq-cls arm self-quantizes the fp32 export to int8 at load, with
+#: an fp32 control for the quant-equivalence gate.
+ONNX_RERANKER_ARMS: dict[str, OnnxArm] = {
+    "onnx-bge-int8": OnnxArm(
+        name="onnx-bge-int8",
+        repo="onnx-community/bge-reranker-v2-m3-ONNX",
+        revision="6f5ff65298512715a1e669753bc754d2bc8f367b",
+        onnx_file="onnx/model_int8.onnx",
+        family="bge",
+        quantize=False,
+        precision="int8 (pre-exported)",
+        instruction="",
+        engine="bge-reranker-v2-m3 ONNX int8 (VPS CPU)",
+        max_length=512,
+    ),
+    "onnx-qwen-seqcls-fp16": OnnxArm(
+        name="onnx-qwen-seqcls-fp16",
+        repo="shawnw3i/Qwen3-Reranker-0.6B-seq-cls-ONNX",
+        revision="e5d273d8d9fbbc0dc5021008e0242d3cd85bb60d",
+        onnx_file="model.onnx",
+        family="qwen-seqcls",
+        quantize=False,
+        precision="fp16 (as published)",
+        instruction=DEFAULT_QWEN_INSTRUCTION,
+        engine="Qwen3-Reranker-0.6B seq-cls ONNX fp16 (VPS CPU)",
+        max_length=1024,
+    ),
+    "onnx-qwen-seqcls-int8": OnnxArm(
+        name="onnx-qwen-seqcls-int8",
+        repo="shawnw3i/Qwen3-Reranker-0.6B-seq-cls-ONNX",
+        revision="e5d273d8d9fbbc0dc5021008e0242d3cd85bb60d",
+        onnx_file="model.onnx",
+        family="qwen-seqcls",
+        quantize=True,
+        precision="int8-dynamic",
+        instruction=DEFAULT_QWEN_INSTRUCTION,
+        engine="Qwen3-Reranker-0.6B seq-cls ONNX int8-dynamic (VPS CPU)",
+        max_length=1024,
+    ),
 }
 
 
@@ -757,14 +834,9 @@ async def _run_reranker(arm: str, args: argparse.Namespace) -> int:
                 break
             latencies_ms.append((time.monotonic() - t0) * 1000.0)
             cand_sizes.append(len(cand_docs))
-            by_name = dict(zip(cand_names, scores, strict=True))
-            if expected:
-                positives.extend(by_name[n] for n in expected if n in by_name)
-                negatives.append(
-                    max((s for n, s in by_name.items() if n not in expected), default=0.0)
-                )
-            else:  # control — every candidate is a non-match
-                negatives.append(max(scores, default=0.0))
+            case_pos, case_neg = positives_negatives_for_case(expected, cand_names, scores)
+            positives.extend(case_pos)
+            negatives.append(case_neg)
     completed = len(latencies_ms)
     if stalled_at is not None:
         print(
@@ -835,8 +907,164 @@ async def _run_reranker(arm: str, args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_onnx_reranker(arm_name: str, args: argparse.Namespace) -> int:
+    """Score the probe through an in-process ONNX cross-encoder on the VPS CPU (FRE-697).
+
+    Mirrors :func:`_run_reranker`'s reporting shape but scores in-process (no HTTP endpoint, no laptop,
+    no cloud): loads the ONNX arm (thread-bounded CPU session, optional dynamic-int8), runs the
+    model-card instrument-verification gate (STOP on fail), reranks each query's production top-N
+    shortlist (∪ its expected notes), times each forward pass for CPU latency, and reports separation
+    (best Youden's J, overlap, robust p5/p95, clean-floor verdict) plus a provenance block.
+
+    Args:
+        arm_name: The ONNX arm key in :data:`ONNX_RERANKER_ARMS`.
+        args: Parsed CLI args (``probe``, ``out``, ``candidates``, ``threads``, ``sanity``).
+
+    Returns:
+        Process exit code (0 on success).
+
+    Raises:
+        SystemExit: On a failed instrument gate, a per-query timeout (runaway guard), or too few
+            samples to score separation.
+    """
+    from scripts.eval.fre435_memory_recall.onnx_reranker import OnnxCrossEncoder  # noqa: PLC0415
+
+    arm = ONNX_RERANKER_ARMS[arm_name]
+    cases = load_probe_set(Path(args.probe))
+    notes_by_entity, cases = _build_corpus(cases)
+    note_names = list(notes_by_entity)
+    documents = [notes_by_entity[name] for name in note_names]
+
+    cache_dir = Path(args.out) / "onnx-int8-cache"
+    scorer = OnnxCrossEncoder(arm)
+    await asyncio.to_thread(scorer.load, cache_dir=cache_dir, intra_op_threads=args.threads)
+
+    ok, true_score, best_distractor = await asyncio.to_thread(scorer.verify_instrument)
+    print(f"=== FRE-697 ONNX reranker — arm={arm_name} ({arm.engine}) ===")
+    print(
+        f"verify: true-match={true_score:.4f} best-distractor={best_distractor:.4f} "
+        f"-> {'OK (Mars ranks #1)' if ok else 'FAIL'}"
+    )
+    if not ok:
+        raise SystemExit(
+            f"[fail-loud] instrument verification failed for {arm_name}: the true match must "
+            "out-rank every distractor (wrong template / tokenizer / logit polarity?)"
+        )
+    if args.sanity:
+        return 0
+
+    shortlists: list[list[int]] | None = None
+    if args.candidates and args.candidates > 0:
+        shortlists = await _embedder_shortlist(
+            note_names, documents, [c.query for c in cases], args.candidates
+        )
+    note_index = {name: j for j, name in enumerate(note_names)}
+    positives: list[float] = []
+    negatives: list[float] = []
+    latencies_ms: list[float] = []
+    cand_sizes: list[int] = []
+    query_guard_s = 30.0  # a single CPU forward pass over ~15 docs must not pin the live host
+    for index, case in enumerate(cases):
+        expected = {n.strip().lower() for n in case.expected.entity_names if n.strip()}
+        if shortlists is not None:
+            cand_idx = list(
+                dict.fromkeys(
+                    [*shortlists[index], *(note_index[n] for n in expected if n in note_index)]
+                )
+            )
+        else:
+            cand_idx = list(range(len(note_names)))
+        cand_names = [note_names[j] for j in cand_idx]
+        cand_docs = [documents[j] for j in cand_idx]
+        t0 = time.monotonic()
+        try:
+            scores = await asyncio.wait_for(
+                asyncio.to_thread(scorer.score, case.query, cand_docs), timeout=query_guard_s
+            )
+        except TimeoutError:
+            raise SystemExit(
+                f"[fail-loud] ONNX score exceeded {query_guard_s:.0f}s at query {index + 1}"
+                f"/{len(cases)} ({case.case_id}) — aborting to protect the live host."
+            ) from None
+        latencies_ms.append((time.monotonic() - t0) * 1000.0)
+        cand_sizes.append(len(cand_docs))
+        case_pos, case_neg = positives_negatives_for_case(expected, cand_names, scores)
+        positives.extend(case_pos)
+        negatives.append(case_neg)
+
+    completed = len(latencies_ms)
+    if len(positives) < 3 or len(negatives) < 3:
+        raise SystemExit(
+            f"[partial] only {completed} queries scored "
+            f"({len(positives)} pos / {len(negatives)} neg) — too few to score separation."
+        )
+    warm = latencies_ms[1:] or latencies_ms  # drop the cold first (session warm-up) call
+    stats = summarize_separation(positives, negatives)
+    best = best_separation_at_observed(positives, negatives)
+    latency = {
+        "candidates_per_query": round(sum(cand_sizes) / len(cand_sizes), 1),
+        "warm_median_ms": round(percentile(warm, 50), 1),
+        "warm_p95_ms": round(percentile(warm, 95), 1),
+        "cold_first_ms": round(latencies_ms[0], 1),
+    }
+    run_record = {
+        "arm": arm_name,
+        "engine": arm.engine,
+        "family": arm.family,
+        "n_notes": len(note_names),
+        "n_queries": len(cases),
+        "completed_queries": completed,
+        "partial": completed != len(cases),
+        "candidates": args.candidates,
+        "probe": args.probe,
+        "instrument_true_match": round(true_score, 4),
+        "instrument_best_distractor": round(best_distractor, 4),
+        "provenance": scorer.provenance,
+        "latency": latency,
+    }
+    print(f"run-record: {json.dumps(run_record)}")
+    print(
+        f"  latency (rerank ~{latency['candidates_per_query']} candidates/query): "
+        f"warm-median={latency['warm_median_ms']}ms warm-p95={latency['warm_p95_ms']}ms "
+        f"cold-first={latency['cold_first_ms']}ms"
+    )
+    verdict = "CLEAN floor" if stats.clean_floor else "OVERLAP"
+    robust = "robust-clean" if stats.robust_clean else "robust-overlap"
+    print(
+        f"  {arm_name}: "
+        f"pos[min/med/p5={stats.pos_min:.3f}/{stats.pos_median:.3f}/{stats.pos_p5:.3f}]  "
+        f"neg[max/med/p95={stats.neg_max:.3f}/{stats.neg_median:.3f}/{stats.neg_p95:.3f}]  "
+        f"overlap[neg≥minpos={stats.neg_above_min_pos},pos≤maxneg={stats.pos_below_max_neg}]  "
+        f"n[pos={stats.n_positives},neg={stats.n_negatives}]  "
+        f"bestJ={best.youden_j:.3f}@{best.floor:.4f}(R{best.recall:.2f}/FP{best.false_positive_rate:.2f})  "
+        f"-> {verdict} / {robust}"
+    )
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"separation-{arm_name}.json"
+    out_path.write_text(
+        json.dumps(
+            {
+                "run_record": run_record,
+                "separation": stats.__dict__,
+                "best_floor": {
+                    "floor": best.floor,
+                    "recall": best.recall,
+                    "fpr": best.false_positive_rate,
+                    "youden_j": best.youden_j,
+                },
+            },
+            indent=2,
+        )
+    )
+    print(f"written: {out_path}  (gitignored — commit only curated aggregates)")
+    return 0
+
+
 def run(args: argparse.Namespace) -> int:
     """Embed the probe for one arm, sweep dimensions, write the separation report."""
+    if args.arm in ONNX_RERANKER_ARMS:
+        return asyncio.run(_run_onnx_reranker(args.arm, args))
     if args.arm in RERANKER_ARMS:
         return asyncio.run(_run_reranker(args.arm, args))
     arm = args.arm
@@ -890,8 +1118,8 @@ def main() -> int:
     parser.add_argument(
         "--arm",
         required=True,
-        choices=sorted([*ARMS, *RERANKER_ARMS]),
-        help="Embedder arm (FRE-694) or reranker arm (FRE-695).",
+        choices=sorted([*ARMS, *RERANKER_ARMS, *ONNX_RERANKER_ARMS]),
+        help="Embedder arm (FRE-694), HTTP reranker arm (FRE-695), or ONNX-CPU reranker arm (FRE-697).",
     )
     parser.add_argument("--probe", default=DEFAULT_PROBE, help="Probe YAML path.")
     parser.add_argument("--out", default=DEFAULT_OUT, help="Output dir (gitignored).")
@@ -929,6 +1157,13 @@ def main() -> int:
         default=15,
         help="Reranker: rerank the 0.6B embedder's top-N candidates per query (0 = all notes). "
         "Small N keeps each request inside the reranker context window + mirrors production.",
+    )
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=4,
+        help="ONNX reranker (FRE-697): onnxruntime intra-op thread cap on the shared VPS "
+        "(of 8 cores — leaves headroom for the live gateway).",
     )
     return run(parser.parse_args())
 

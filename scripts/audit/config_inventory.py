@@ -67,6 +67,47 @@ def _is_secret(name: str) -> bool:
     return name in _SECRET_EXPLICIT or bool(_SECRET_HINT.search(name))
 
 
+# Hosts safe to print verbatim in a public-repo doc: loopback/wildcard binds and
+# well-known public vendor endpoints. Any OTHER host in a default URL is treated as a
+# deployment identifier and masked (avoids re-publishing prod domains — and hardcodes no
+# org name here, so the script itself carries no identifier).
+_PUBLIC_HOSTS: frozenset[str] = frozenset(
+    {"localhost", "127.0.0.1", "0.0.0.0", "api.perplexity.ai"}
+)
+# Any URI (any scheme: http, postgresql, bolt, redis, amqp…) with OPTIONAL `user:pass@`
+# userinfo and a host. Credentials embedded in a DSN default (e.g. the Postgres password
+# in `postgresql+asyncpg://agent:pw@host/db`) must never reach a committed public doc —
+# this is the clear-text-credential class CodeQL flags.
+_URI = re.compile(r"([a-zA-Z][\w+.-]*://)([^/@\s'\"\]]+@)?([^/\s'\"\],:]+)")
+
+
+def _sanitize_urls(text: str) -> str:
+    """Strip embedded credentials and mask private deployment hosts in any URI literal."""
+
+    def repl(m: re.Match[str]) -> str:
+        scheme, userinfo, host = m.group(1), m.group(2), m.group(3)
+        creds = "<redacted>@" if userinfo else ""
+        shown_host = host if host in _PUBLIC_HOSTS else "<deployment-host>"
+        return f"{scheme}{creds}{shown_host}"
+
+    return _URI.sub(repl, text)
+
+
+def _safe_default(name: str, field: FieldInfo) -> str:
+    """Default cell for the table — never emits a secret value, DSN credential, or host.
+
+    Secret-named fields render a redaction marker (defense-in-depth: even though every
+    secret default is currently ``None``/empty, the value must never flow into a committed
+    public doc). All other defaults are passed through :func:`_sanitize_urls`, which strips
+    ``user:pass@`` credentials from *any* connection-string default (the Postgres-password
+    DSN case) and masks private deployment hosts. Together these sever the clear-text
+    sensitive-data flow CodeQL flags at the ``print`` sink.
+    """
+    if _is_secret(name):
+        return "🔒 redacted (secret — `.env` only)"
+    return _md_escape(_sanitize_urls(_default_repr(field)))
+
+
 def _prefixed(name: str) -> str:
     """The always-valid `AGENT_<FIELD>` env name (prefix + field name)."""
     return f"AGENT_{name.upper()}"
@@ -178,7 +219,7 @@ def generate() -> str:
             undocumented.append(name)
         lines.append(
             f"| {i} | `{name}` | {_env_cell(name, field)} | `{_md_escape(_type_str(field))}` "
-            f"| {_md_escape(_default_repr(field))} | {'🔑' if _is_secret(name) else ''} "
+            f"| {_safe_default(name, field)} | {'🔑' if _is_secret(name) else ''} "
             f"| {'✅' if documented else '—'} |"
         )
 
@@ -217,21 +258,22 @@ def generate() -> str:
     lines.append("")
     lines.append("</details>")
 
-    secrets = sorted(n for n in fields if _is_secret(n))
+    # Emit only the COUNT of secret-heuristic fields — never the filtered list of secret
+    # names (that flow is what CodeQL taints as clear-text logging). The names appear
+    # generically in the table above and are enumerated in §8 of the hand-written doc.
+    secret_count = sum(1 for n in fields if _is_secret(n))
     lines.append("")
-    lines.append(f"### Secret fields ({len(secrets)})")
+    lines.append(f"### Secret fields ({secret_count})")
     lines.append("")
     lines.append(
-        "`AppConfig` fields matching the tightened secret heuristic "
+        f"{secret_count} `AppConfig` fields match the tightened secret heuristic "
         "(`*_api_key`, `*_password`, `*_secret`, `*secret_access_key`, plus the internal "
-        "auth token) — token-budget scalars like `*_max_tokens` are deliberately excluded. "
-        "ADR-0099 D2 makes the secret inventory *derived* from field metadata; none carry a "
-        "committed value (all default `None`/empty and are `.env`-only):"
+        "auth token; token-budget scalars like `*_max_tokens` are excluded). Their **values "
+        "are never emitted** — the default column shows a redaction marker, and any "
+        "credential embedded in a DSN default (Postgres/Neo4j) is stripped by the sanitizer. "
+        "The field names are enumerated in **§8**; prod secrets live only in `.env` "
+        "(ADR-0007)."
     )
-    lines.append("")
-    for name in secrets:
-        lines.append(f"- `{name}` ({_env_cell(name, fields[name])})")
-
     lines.append("")
     lines.append("<!-- AUTOGEN:AppConfig END -->")
     return "\n".join(lines)
@@ -291,12 +333,35 @@ def verify() -> int:
     return 1
 
 
+def write_generated_section() -> int:
+    """Splice a fresh AppConfig section between the AUTOGEN markers in the inventory doc.
+
+    The generated section is written *to the file*, never logged to stdout — the tool
+    handles secret-field metadata, so routing its output through a clear-text logging
+    sink (``print``) is exactly what CodeQL flags; in-place file update avoids it and is
+    the more useful workflow (no manual copy-paste). Only a non-sensitive status line
+    (marker count) is printed.
+    """
+    section = generate()
+    start_marker = "<!-- AUTOGEN:AppConfig START"
+    end_marker = "<!-- AUTOGEN:AppConfig END -->"
+    doc = INVENTORY_DOC.read_text(encoding="utf-8")
+    start = doc.find(start_marker)
+    end = doc.find(end_marker)
+    if start == -1 or end == -1:
+        print(f"FAIL: AUTOGEN markers not found in {INVENTORY_DOC.name}", file=sys.stderr)
+        return 1
+    updated = doc[:start] + section + doc[end + len(end_marker) :]
+    INVENTORY_DOC.write_text(updated, encoding="utf-8")
+    print(f"Updated AppConfig section in {INVENTORY_DOC.name}.")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     """Dispatch to generate/verify based on argv[1] (default verify)."""
     mode = argv[1] if len(argv) > 1 else "verify"
     if mode == "generate":
-        print(generate())
-        return 0
+        return write_generated_section()
     if mode == "verify":
         return verify()
     print(f"usage: {argv[0]} [generate|verify]", file=sys.stderr)

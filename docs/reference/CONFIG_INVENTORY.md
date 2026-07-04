@@ -51,15 +51,15 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 1 | `agent_id` | `AGENT_AGENT_ID` | `str` | `'seshat-local'` |  | ✅ |
 | 2 | `agent_owner_email` | `AGENT_AGENT_OWNER_EMAIL` · `AGENT_OWNER_EMAIL` | `str \| None` | `None` |  | ✅ |
 | 3 | `allow_test_writes_to_prod_substrate` | `AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE` | `bool` | `False` |  | ✅ |
-| 4 | `allowed_ws_origins` | `AGENT_ALLOWED_WS_ORIGINS` | `list` | `['https://seshat.frenchforet.com', 'https://agent.frenchforet.com', 'http://localhost:3000']` |  | — |
-| 5 | `anthropic_api_key` | `AGENT_ANTHROPIC_API_KEY` | `str \| None` | `None` | 🔑 | ✅ |
+| 4 | `allowed_ws_origins` | `AGENT_ALLOWED_WS_ORIGINS` | `list` | `['https://<deployment-host>', 'https://<deployment-host>', 'http://localhost:3000']` |  | — |
+| 5 | `anthropic_api_key` | `AGENT_ANTHROPIC_API_KEY` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
 | 6 | `approval_timeout_seconds` | `AGENT_APPROVAL_TIMEOUT_SECONDS` | `float` | `60.0` |  | ✅ |
 | 7 | `approval_ui_enabled` | `AGENT_APPROVAL_UI_ENABLED` | `bool` | `False` |  | ✅ |
 | 8 | `artifact_decomposition_enabled` | `AGENT_ARTIFACT_DECOMPOSITION_ENABLED` | `bool` | `False` |  | — |
 | 9 | `artifact_draft_max_tokens` | `AGENT_ARTIFACT_DRAFT_MAX_TOKENS` | `int` | `32768` |  | ✅ |
 | 10 | `artifact_envelope_probe_enabled` | `AGENT_ARTIFACT_ENVELOPE_PROBE_ENABLED` | `bool` | `True` |  | — |
 | 11 | `artifact_envelope_probe_timeout_s` | `AGENT_ARTIFACT_ENVELOPE_PROBE_TIMEOUT_S` | `float` | `2.0` |  | — |
-| 12 | `artifact_resolve_internal_token` | `AGENT_ARTIFACT_RESOLVE_INTERNAL_TOKEN` | `str \| None` | `None` | 🔑 | ✅ |
+| 12 | `artifact_resolve_internal_token` | `AGENT_ARTIFACT_RESOLVE_INTERNAL_TOKEN` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
 | 13 | `artifacts_public_base_url` | `AGENT_ARTIFACTS_PUBLIC_BASE_URL` | `str \| None` | `None` |  | ✅ |
 | 14 | `attachment_cost_confirmation_threshold_usd` | `AGENT_ATTACHMENT_COST_CONFIRMATION_THRESHOLD_USD` | `float` | `0.5` |  | — |
 | 15 | `attachment_image_max_bytes` | `AGENT_ATTACHMENT_IMAGE_MAX_BYTES` | `int` | `5242880` |  | — |
@@ -75,7 +75,7 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 25 | `captains_log_index_prefix` | `AGENT_CAPTAINS_LOG_INDEX_PREFIX` | `str` | `'agent-captains'` |  | — |
 | 26 | `cf_access_aud` | `AGENT_CF_ACCESS_AUD` · `CF_ACCESS_AUD` | `str \| None` | `None` |  | ✅ |
 | 27 | `cf_access_client_id` | `AGENT_CF_ACCESS_CLIENT_ID` · `CF_ACCESS_CLIENT_ID` | `str \| None` | `None` |  | ✅ |
-| 28 | `cf_access_client_secret` | `AGENT_CF_ACCESS_CLIENT_SECRET` · `CF_ACCESS_CLIENT_SECRET` | `str \| None` | `None` | 🔑 | ✅ |
+| 28 | `cf_access_client_secret` | `AGENT_CF_ACCESS_CLIENT_SECRET` · `CF_ACCESS_CLIENT_SECRET` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
 | 29 | `cf_access_team_domain` | `AGENT_CF_ACCESS_TEAM_DOMAIN` · `CF_ACCESS_TEAM_DOMAIN` | `str \| None` | `None` |  | ✅ |
 | 30 | `cloud_weekly_budget_usd` | `AGENT_CLOUD_WEEKLY_BUDGET_USD` | `float` | `5.0` |  | ✅ |
 | 31 | `consolidator_max_extraction_attempts` | `AGENT_CONSOLIDATOR_MAX_EXTRACTION_ATTEMPTS` | `int` | `5` |  | — |
@@ -91,10 +91,10 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 41 | `context_window_max_tokens` | `AGENT_CONTEXT_WINDOW_MAX_TOKENS` | `int` | `96000` |  | ✅ |
 | 42 | `conversation_context_strategy` | `AGENT_CONVERSATION_CONTEXT_STRATEGY` | `str` | `'truncate'` |  | ✅ |
 | 43 | `conversation_max_history_messages` | `AGENT_CONVERSATION_MAX_HISTORY_MESSAGES` | `int` | `10` |  | ✅ |
-| 44 | `cors_allowed_origins` | `AGENT_CORS_ALLOWED_ORIGINS` | `list` | `['http://localhost:3000', 'https://seshat.frenchforet.com', 'https://agent.frenchforet.com']` |  | — |
+| 44 | `cors_allowed_origins` | `AGENT_CORS_ALLOWED_ORIGINS` | `list` | `['http://localhost:3000', 'https://<deployment-host>', 'https://<deployment-host>']` |  | — |
 | 45 | `data_lifecycle_enabled` | `AGENT_DATA_LIFECYCLE_ENABLED` | `bool` | `True` |  | ✅ |
 | 46 | `database_echo` | `AGENT_DATABASE_ECHO` | `bool` | `False` |  | ✅ |
-| 47 | `database_url` | `AGENT_DATABASE_URL` | `str` | `'postgresql+asyncpg://agent:agent_dev_password@localhost:5432/personal_agent'` |  | ✅ |
+| 47 | `database_url` | `AGENT_DATABASE_URL` | `str` | `'postgresql+asyncpg://<redacted>@localhost:5432/personal_agent'` |  | ✅ |
 | 48 | `debug` | `AGENT_DEBUG` · `APP_DEBUG` | `bool` | `False` |  | ✅ |
 | 49 | `dedup_similarity_threshold` | `AGENT_DEDUP_SIMILARITY_THRESHOLD` | `float` | `0.92` |  | ✅ |
 | 50 | `default_profile` | `AGENT_DEFAULT_PROFILE` | `str` | `'local'` |  | — |
@@ -160,7 +160,7 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 110 | `joinability_probe_window_hours` | `AGENT_JOINABILITY_PROBE_WINDOW_HOURS` | `int` | `24` |  | — |
 | 111 | `lexical_arm_enabled` | `AGENT_LEXICAL_ARM_ENABLED` | `bool` | `False` |  | — |
 | 112 | `linear_agent_rate_limit_per_day` | `AGENT_LINEAR_AGENT_RATE_LIMIT_PER_DAY` | `int` | `10` |  | ✅ |
-| 113 | `linear_api_key` | `AGENT_LINEAR_API_KEY` | `str \| None` | `None` | 🔑 | ✅ |
+| 113 | `linear_api_key` | `AGENT_LINEAR_API_KEY` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
 | 114 | `linear_personal_agent_label_id` | `AGENT_LINEAR_PERSONAL_AGENT_LABEL_ID` | `str \| None` | `'25004aac-3b32-4fa4-bdc2-55ff348ea842'` |  | ✅ |
 | 115 | `linear_promotion_project` | `AGENT_LINEAR_PROMOTION_PROJECT` | `str` | `'2.3 Homeostasis & Feedback'` |  | ✅ |
 | 116 | `linear_team_name` | `AGENT_LINEAR_TEAM_NAME` | `str` | `'FrenchForest'` |  | ✅ |
@@ -192,10 +192,10 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 142 | `multipath_recall_enabled` | `AGENT_MULTIPATH_RECALL_ENABLED` | `bool` | `False` |  | — |
 | 143 | `multipath_rrf_k` | `AGENT_MULTIPATH_RRF_K` | `int` | `60` |  | — |
 | 144 | `multiquery_arm_enabled` | `AGENT_MULTIQUERY_ARM_ENABLED` | `bool` | `False` |  | — |
-| 145 | `neo4j_password` | `AGENT_NEO4J_PASSWORD` | `str` | `'neo4j_dev_password'` | 🔑 | ✅ |
+| 145 | `neo4j_password` | `AGENT_NEO4J_PASSWORD` | `str` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
 | 146 | `neo4j_uri` | `AGENT_NEO4J_URI` | `str` | `'bolt://localhost:7687'` |  | ✅ |
 | 147 | `neo4j_user` | `AGENT_NEO4J_USER` | `str` | `'neo4j'` |  | ✅ |
-| 148 | `openai_api_key` | `AGENT_OPENAI_API_KEY` | `str \| None` | `None` | 🔑 | ✅ |
+| 148 | `openai_api_key` | `AGENT_OPENAI_API_KEY` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
 | 149 | `orchestration_mode` | `AGENT_ORCHESTRATION_MODE` | `str` | `'enforced'` |  | — |
 | 150 | `orchestrator_max_concurrent_tasks` | `AGENT_ORCHESTRATOR_MAX_CONCURRENT_TASKS` | `int` | `5` |  | ✅ |
 | 151 | `orchestrator_max_repeated_tool_calls` | `AGENT_ORCHESTRATOR_MAX_REPEATED_TOOL_CALLS` | `int` | `1` |  | ✅ |
@@ -203,7 +203,7 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 153 | `orchestrator_max_tool_iterations_by_task_type` | `AGENT_ORCHESTRATOR_MAX_TOOL_ITERATIONS_BY_TASK_TYPE` | `dict` | `{'conversational': 6, 'memory_recall': 8, 'analysis': 25, 'planning': 25, 'tool_use': 25, 'delegation': 25, 'self_improve': 25}` |  | — |
 | 154 | `orchestrator_task_timeout_seconds` | `AGENT_ORCHESTRATOR_TASK_TIMEOUT_SECONDS` | `int` | `300` |  | ✅ |
 | 155 | `owner_name` | `AGENT_OWNER_NAME` | `str` | `''` |  | ✅ |
-| 156 | `perplexity_api_key` | `AGENT_PERPLEXITY_API_KEY` | `str \| None` | `None` | 🔑 | ✅ |
+| 156 | `perplexity_api_key` | `AGENT_PERPLEXITY_API_KEY` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
 | 157 | `perplexity_base_url` | `AGENT_PERPLEXITY_BASE_URL` | `str` | `'https://api.perplexity.ai'` |  | ✅ |
 | 158 | `perplexity_timeout_seconds` | `AGENT_PERPLEXITY_TIMEOUT_SECONDS` | `int` | `90` |  | ✅ |
 | 159 | `planner_timeout_seconds` | `AGENT_PLANNER_TIMEOUT_SECONDS` | `float` | `30.0` |  | — |
@@ -233,7 +233,7 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 183 | `r2_bucket_name` | `AGENT_R2_BUCKET_NAME` | `str` | `'seshat-artifacts'` |  | ✅ |
 | 184 | `r2_endpoint_url` | `AGENT_R2_ENDPOINT_URL` | `str \| None` | `None` |  | ✅ |
 | 185 | `r2_region` | `AGENT_R2_REGION` | `str` | `'auto'` |  | ✅ |
-| 186 | `r2_secret_access_key` | `AGENT_R2_SECRET_ACCESS_KEY` | `str \| None` | `None` | 🔑 | ✅ |
+| 186 | `r2_secret_access_key` | `AGENT_R2_SECRET_ACCESS_KEY` | `str \| None` | 🔒 redacted (secret — `.env` only) | 🔑 | ✅ |
 | 187 | `recall_candidate_cap` | `AGENT_RECALL_CANDIDATE_CAP` | `int` | `500` |  | — |
 | 188 | `recall_per_entity_turn_cap` | `AGENT_RECALL_PER_ENTITY_TURN_CAP` | `int` | `10` |  | — |
 | 189 | `recall_similarity_floor` | `AGENT_RECALL_SIMILARITY_FLOOR` | `float` | `0.0` |  | — |
@@ -282,7 +282,7 @@ _Machine-generated — regenerate with `uv run python scripts/audit/config_inven
 | 232 | `slm_health_index_prefix` | `AGENT_SLM_HEALTH_INDEX_PREFIX` | `str` | `'agent-monitors-slm-health'` |  | — |
 | 233 | `slm_health_probe_enabled` | `AGENT_SLM_HEALTH_PROBE_ENABLED` | `bool` | `True` |  | — |
 | 234 | `slm_health_probe_interval_seconds` | `AGENT_SLM_HEALTH_PROBE_INTERVAL_SECONDS` | `float` | `300.0` |  | — |
-| 235 | `slm_health_url` | `AGENT_SLM_HEALTH_URL` | `str` | `'https://slm.frenchforet.com/health'` |  | — |
+| 235 | `slm_health_url` | `AGENT_SLM_HEALTH_URL` | `str` | `'https://<deployment-host>/health'` |  | — |
 | 236 | `slm_queue_depth_degraded` | `AGENT_SLM_QUEUE_DEPTH_DEGRADED` | `int` | `4` |  | — |
 | 237 | `structural_arm_enabled` | `AGENT_STRUCTURAL_ARM_ENABLED` | `bool` | `False` |  | — |
 | 238 | `structural_arm_top_k` | `AGENT_STRUCTURAL_ARM_TOP_K` | `int` | `50` |  | — |
@@ -456,16 +456,7 @@ Fields with no matching env-var line in `.env.example` — the coverage gap ADR-
 
 ### Secret fields (8)
 
-`AppConfig` fields matching the tightened secret heuristic (`*_api_key`, `*_password`, `*_secret`, `*secret_access_key`, plus the internal auth token) — token-budget scalars like `*_max_tokens` are deliberately excluded. ADR-0099 D2 makes the secret inventory *derived* from field metadata; none carry a committed value (all default `None`/empty and are `.env`-only):
-
-- `anthropic_api_key` (`AGENT_ANTHROPIC_API_KEY`)
-- `artifact_resolve_internal_token` (`AGENT_ARTIFACT_RESOLVE_INTERNAL_TOKEN`)
-- `cf_access_client_secret` (`AGENT_CF_ACCESS_CLIENT_SECRET` · `CF_ACCESS_CLIENT_SECRET`)
-- `linear_api_key` (`AGENT_LINEAR_API_KEY`)
-- `neo4j_password` (`AGENT_NEO4J_PASSWORD`)
-- `openai_api_key` (`AGENT_OPENAI_API_KEY`)
-- `perplexity_api_key` (`AGENT_PERPLEXITY_API_KEY`)
-- `r2_secret_access_key` (`AGENT_R2_SECRET_ACCESS_KEY`)
+8 `AppConfig` fields match the tightened secret heuristic (`*_api_key`, `*_password`, `*_secret`, `*secret_access_key`, plus the internal auth token; token-budget scalars like `*_max_tokens` are excluded). Their **values are never emitted** — the default column shows a redaction marker, and any credential embedded in a DSN default (Postgres/Neo4j) is stripped by the sanitizer. The field names are enumerated in **§8**; prod secrets live only in `.env` (ADR-0007).
 
 <!-- AUTOGEN:AppConfig END -->
 
@@ -574,7 +565,9 @@ Which model YAML is live depends on which compose file was deployed. Only `.clou
 
 ## §8 — Secret inventory (ADR-0099 D2, derived)
 
-8 `AppConfig` fields match the tightened secret heuristic (§1). **None carry a committed value** — all default `None`/empty and are `.env`-only, satisfying ADR-0007's "secrets in `.env` only." Full list with accepted env spellings in §1's *Secret fields* block: `anthropic_api_key`, `openai_api_key`, `perplexity_api_key`, `linear_api_key`, `neo4j_password`, `cf_access_client_secret`, `r2_secret_access_key`, `artifact_resolve_internal_token`.
+8 `AppConfig` fields match the tightened secret heuristic: `anthropic_api_key`, `openai_api_key`, `perplexity_api_key`, `linear_api_key`, `neo4j_password`, `cf_access_client_secret`, `r2_secret_access_key`, `artifact_resolve_internal_token`.
+
+**Committed-value check (corrected — FRE-648 CodeQL remediation).** The six API-key-style fields default `None`. But **two defaults did carry a clear-text credential**: `neo4j_password` defaulted to `'neo4j_dev_password'`, and `database_url`'s DSN embedded `agent:agent_dev_password@…`. These are **dev placeholders** (the same values docker-compose supplies via `${…:-dev_password}`) — **prod passwords use `${…:?required}` with no default**, so no production secret was ever a committed default. Even so, clear-text credentials must not be re-published: this inventory now **redacts every secret field's default** (🔒 marker) and **strips `user:pass@` credentials from all DSN defaults** via `scripts/audit/config_inventory.py::_sanitize_urls`. This resolved a CodeQL high-severity "clear-text logging of sensitive information" alert. **Follow-up for the owner:** consider moving `neo4j_password`/`database_url` dev-placeholder defaults out of `settings.py` (env-only) so the source itself carries no credential (an `src/` change beyond this docs ticket).
 
 ---
 

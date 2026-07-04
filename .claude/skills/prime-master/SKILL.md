@@ -20,7 +20,9 @@ If any fails: finish or record it (bump MASTER_PLAN "Last updated") before clear
 1. MEMORY.md is auto-loaded — standing rules apply.
 2. Read MASTER_PLAN: header, "Last updated", Pending Verification, Needs Approval.
 3. `git status` · `git worktree list` · `gh pr list` (open PRs awaiting master).
-4. Linear: list In Progress + Pending Verification tickets on FrenchForest.
+4. Linear: list `In Progress` + `In Review` + `Awaiting Deploy` + `Verify Failed` tickets on
+   FrenchForest — In Review = PRs at the gate; Awaiting Deploy = merged-not-verified (master's
+   queue); Verify Failed = open exceptions demanding a decision.
 5. `curl -s http://localhost:9001/health` — live gateway health + note deployed SHA (`git log -1 --oneline`).
 6. **Arm the PR-gate loop (master always runs this).** `/loop 10m` is a cron — it **survives `/clear`
    and runs until the session closes** — so a loop armed before this re-prime is *still running*.

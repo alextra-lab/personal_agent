@@ -31,8 +31,8 @@ Does this change require updates to MASTER_PLAN, `CLAUDE.md` "Current status", o
 field? Flag drift before merging. (Documentation-drift sensitivity is a core guardian duty.)
 
 ## 4 — Gate checks
-Ticket is `Approved`/In Progress; PR hygiene holds (REJECT if post-deploy items are in the
-checklist); CI green.
+Ticket is `In Progress`/`In Review` (In Review = PR open, set by the integration); PR hygiene holds
+(REJECT if post-deploy items are in the checklist); CI green.
 
 **Acceptance-criteria gate — the binding bar. "Done" means *provably delivered against the backing
 ADR*, not merged-and-runs.** A feature / ADR-implementation ticket passes ONLY if all three hold:
@@ -62,9 +62,11 @@ verification that the specific failure no longer occurs.
 `gh pr merge <n> --merge --delete-branch` with a review summary; `git pull` on main. **`--delete-branch`
 is not optional** — it deletes the merged `fre-XXX` head branch at merge time (the head is always a
 per-ticket branch, never a `worktree-*` anchor), which is what stops stale branches accumulating on
-origin. (A repo-level "auto-delete head branches" backstop is **not** on — the PAT lacks admin to
-toggle it; the owner can enable it once in GitHub → Settings → General. Until then, `--delete-branch`
-is the only mechanism — really do not omit it.)
+origin. (The repo-level "auto-delete head branches" backstop is ON as of 2026-07-04, but keep
+`--delete-branch` anyway — belt and suspenders.)
+
+On merge the Linear integration auto-moves the ticket to **`Awaiting Deploy`** (never Done) — confirm
+it did; if it landed anywhere else the integration mapping has drifted (lifecycle-rules § Ticket state).
 
 ## 6 — Deploy authorization (standing classes vs ask)
 Owner granted **standing approval (2026-06-26)** for three low-risk, reversible deploy classes —
@@ -93,9 +95,20 @@ is active.
 - Do NOT claim done from "deploy exited 0" alone.
 
 ## 8 — Close out (same session as deploy, never deferred)
-- Update MASTER_PLAN on `main` (bump "Last updated"); commit + push.
-- Close the Linear ticket with: PR link, deploy timestamp, verification evidence snippet.
-- If verification failed: file a follow-up issue; do NOT mark done; consider rollback.
+- Update MASTER_PLAN on `main` if strategy/sequencing changed (bump "Last updated"). **Docs-to-main
+  flow (once required checks are active on main):** `git switch -c docs/<slug>` → commit → push →
+  `gh pr create` → `gh pr merge --auto --squash` — path-aware CI passes docs-only changes in ~1–2 min
+  and the PR lands itself; then `git switch main && git pull`.
+- **Close the ticket: state → Done + the evidence comment** (template: lifecycle-rules § Evidence
+  contract — plain prose + links; PR, merge SHA, CI run, deploy class + authorization, deploy
+  timestamp, verification result, rollback availability, each acceptance criterion + how verified).
+- **If verification failed: state → `Verify Failed`** (not Done, not left in Awaiting Deploy), file
+  the follow-up issue, consider rollback. Verify Failed is the exception flag that demands a decision.
+- **Advance dispatch (replaces advancing the board):** confirm the completed chain exposed the right
+  next head (its blocked-by cleared); if the stream's queue is empty or priorities changed, apply the
+  mutations — `stream:*` label, priority (Urgent = front-of-queue lever), `context:keep` per the build
+  session's context-disposition comment, blocked-by relations for any new chain
+  (lifecycle-rules § Dispatch).
 
 ## Identity
 You operate under the **guardian role & standing attributes** in `lifecycle-rules.md` § Guardian

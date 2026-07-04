@@ -1,5 +1,7 @@
 # Master Plan — Personal Agent
 
+> 🔴 **RESUME (2026-07-04 reset) — read [`sessions/2026-07-04-master-handoff-resequencing.md`](sessions/2026-07-04-master-handoff-resequencing.md) FIRST.** Mid-task: gate/merge **PR #350 (FRE-697, reviewed PASS, no deploy)** → then **master board resequencing**. Also: ADR-0102 un-paused at ticket level (FRE-691/669 Done, ADR-0101 Implemented, AC-10b outlier-waived) but board text below still says paused; **FRE-769–773 (ADR-0109 V2 taxonomy) Approved**.
+
 > **Source of truth for work items**: [Linear (FrenchForest)](https://linear.app/frenchforest)
 > **Source of truth for priorities**: This file
 ## 🎛️ Stream Board

@@ -15,6 +15,8 @@ from scripts.eval.fre630_extraction_quality.gold import (
     ALLOWED_ENTITY_TYPES,
     ALLOWED_ENTITY_TYPES_V2,
     ALLOWED_REL_TYPES,
+    ALLOWED_REL_TYPES_V2,
+    REL_V2_NO_EDGE,
     all_authored_strings,
     load_gold_set,
 )
@@ -188,3 +190,74 @@ def test_no_unresolved_signoff_without_rationale() -> None:
         if e.v2_needs_owner_signoff and not e.v2_adjudication_rationale
     ]
     assert not offenders, f"sign-off flagged with no rationale: {offenders}"
+
+
+# ── FRE-773: ADR-0109 V2 relationship relabel (v2_rel_type dual-field) ───────
+
+
+def test_all_relationships_have_v2_rel_type() -> None:
+    """Every gold relationship carries a V2 (ADR-0109) label, not just V1.
+
+    A valid ``v2_rel_type`` is one of the 6 V2 keys or the ``REL_V2_NO_EDGE``
+    marker (the V2 vocab saying no edge should exist). FRE-773 requires every
+    relationship re-labeled via the blind multi-rater pipeline — a partial or
+    single-author relabel does not satisfy the ticket.
+    """
+    allowed = ALLOWED_REL_TYPES_V2 | {REL_V2_NO_EDGE}
+    offenders = [
+        f"{c.case_id}:{r.source}->{r.target}"
+        for c in _load()
+        for r in c.expect_relationships
+        if r.v2_rel_type not in allowed
+    ]
+    assert not offenders, f"relationships missing/invalid v2_rel_type: {offenders}"
+
+
+def test_rel_no_unresolved_signoff_without_rationale() -> None:
+    """Every relationship flagged for owner sign-off carries a builder rationale.
+
+    A 3-way split or a converged ``NONE`` is still adjudicated (``v2_rel_type``
+    is never left empty) but flagged ``v2_needs_owner_signoff`` — that flag must
+    never appear without the reasoning that produced it.
+    """
+    offenders = [
+        f"{c.case_id}:{r.source}->{r.target}"
+        for c in _load()
+        for r in c.expect_relationships
+        if r.v2_needs_owner_signoff and not r.v2_adjudication_rationale
+    ]
+    assert not offenders, f"rel sign-off flagged with no rationale: {offenders}"
+
+
+def test_no_edge_marker_requires_signoff() -> None:
+    """The ``REL_V2_NO_EDGE`` marker is never a silent, clean-looking label.
+
+    Codex "no silent coercion" contract (FRE-773): a rater-converged "no edge"
+    outcome must surface as an owner decision, so any relationship whose
+    ``v2_rel_type`` is the NONE marker MUST also carry ``v2_needs_owner_signoff``
+    and a rationale — never a bare marker that reads as settled.
+    """
+    offenders = [
+        f"{c.case_id}:{r.source}->{r.target}"
+        for c in _load()
+        for r in c.expect_relationships
+        if r.v2_rel_type == REL_V2_NO_EDGE
+        and not (r.v2_needs_owner_signoff and r.v2_adjudication_rationale)
+    ]
+    assert not offenders, f"NONE marker without sign-off+rationale: {offenders}"
+
+
+def test_similar_to_coverage() -> None:
+    """At least one relationship is labeled SIMILAR_TO under V2.
+
+    The V1 gold had zero SIMILAR_TO edges; FRE-773 grows coverage of the ADR's
+    named relationship faults, and a vocab type with no example can't be
+    measured for agreement at all.
+    """
+    similar = [
+        f"{c.case_id}:{r.source}->{r.target}"
+        for c in _load()
+        for r in c.expect_relationships
+        if r.v2_rel_type == "SIMILAR_TO"
+    ]
+    assert similar, "no relationship labeled SIMILAR_TO under V2"

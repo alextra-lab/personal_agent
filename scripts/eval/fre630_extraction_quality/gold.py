@@ -28,13 +28,37 @@ import yaml  # type: ignore[import-untyped]
 #: Bumped whenever the gold-case shape changes in a way that affects scoring.
 #: 1.1 (FRE-770): added the optional `v2_type` (+ adjudication metadata) fields
 #: — additive only, the scored V1 `type`/`ALLOWED_ENTITY_TYPES` are unchanged.
-GOLD_SCHEMA_VERSION = "1.1"
+#: 1.2 (FRE-773): added the optional `v2_rel_type` (+ adjudication metadata) fields
+#: on relationships — additive only, the scored V1 `rel_type`/`ALLOWED_REL_TYPES`
+#: are unchanged.
+GOLD_SCHEMA_VERSION = "1.2"
 
 #: The extractor's controlled relationship vocabulary (entity_extraction.py). An
 #: extracted edge type outside this set is off-vocabulary regardless of the case.
 ALLOWED_REL_TYPES = frozenset(
     {"PART_OF", "USES", "RELATED_TO", "SIMILAR_TO", "CREATED_BY", "LOCATED_IN"}
 )
+
+#: ADR-0109 V2 relationship vocabulary (FRE-773). Same 6 keys as V1 — the V2 change
+#: is the *definitions* (directional, GoLLIE inclusion/exclusion) and the gating of
+#: RELATED_TO as a last-resort None-of-the-Above fallback, not the key set. NOT yet
+#: the scored vocab — the live extractor/harness still speak V1 (`ALLOWED_REL_TYPES`)
+#: until a future prompt swap. This set only validates the new `v2_rel_type` field.
+ALLOWED_REL_TYPES_V2 = frozenset(
+    {"PART_OF", "USES", "RELATED_TO", "SIMILAR_TO", "CREATED_BY", "LOCATED_IN"}
+)
+
+#: The V2 gated last-resort relationship — emitted only when a clear association
+#: exists but no specific type applies (never when a specific type fits).
+REL_TYPE_NOTA = "RELATED_TO"
+
+#: FRE-773 — a machine-checkable marker meaning "the V2 vocab says NO edge should
+#: exist between this pair" (the ADR-0109 emit-nothing-if-none-fits rule). It is
+#: deliberately NOT a member of `ALLOWED_REL_TYPES_V2`, so a rater-converged
+#: "no edge" outcome can never be silently read as a real relationship type. A
+#: relationship carrying this value always co-carries `v2_needs_owner_signoff`
+#: (the V1 edge is retained; pruning the gold is out of scope for FRE-773).
+REL_V2_NO_EDGE = "NONE"
 
 #: The 7 entity types and 3 knowledge classes the extractor is allowed to emit.
 ALLOWED_ENTITY_TYPES = frozenset(
@@ -104,13 +128,30 @@ class GoldRelationship:
 
     Attributes:
         source: Source gold entity canonical name.
-        rel_type: One of :data:`ALLOWED_REL_TYPES`.
+        rel_type: One of :data:`ALLOWED_REL_TYPES` (V1, scored today).
         target: Target gold entity canonical name.
+        v2_rel_type: ADR-0109 V2 label (FRE-773), one of
+            :data:`ALLOWED_REL_TYPES_V2` — or :data:`REL_V2_NO_EDGE` when the V2
+            vocab says no edge should exist between this pair — when set. Not yet
+            scored; informational until a future prompt swap promotes it.
+        v2_adjudicated: Whether ``v2_rel_type`` required builder adjudication (a
+            rater majority, a 3-way split, or a converged ``NONE``), rather than
+            unanimous agreement on a single type.
+        v2_adjudication_rationale: One-line reasoning for an adjudicated
+            ``v2_rel_type``, empty when unanimous.
+        v2_needs_owner_signoff: Set when the adjudication still needs owner
+            confirmation — a 3-way rater split, or a converged ``NONE`` (the V2
+            vocab contradicting the V1 gold edge). Always ``True`` when
+            ``v2_rel_type == REL_V2_NO_EDGE``.
     """
 
     source: str
     rel_type: str
     target: str
+    v2_rel_type: str = ""
+    v2_adjudicated: bool = False
+    v2_adjudication_rationale: str = ""
+    v2_needs_owner_signoff: bool = False
 
 
 @dataclass(frozen=True)
@@ -226,7 +267,21 @@ def _parse_entity(raw: dict[str, Any], case_id: str) -> GoldEntity:
 
 
 def _parse_relationship(raw: dict[str, Any], case_id: str) -> GoldRelationship:
-    """Parse one gold relationship, validating the edge type is in vocabulary."""
+    """Parse one gold relationship, validating the edge type is in vocabulary.
+
+    Args:
+        raw: The mapping from YAML.
+        case_id: Owning case id (for error messages).
+
+    Returns:
+        The parsed :class:`GoldRelationship`.
+
+    Raises:
+        GoldSetError: On a missing source/target, an off-vocabulary V1 ``type``,
+            or an off-vocabulary ``v2_rel_type`` (validated only when present, so a
+            gold file mid-relabel still loads — a valid ``v2_rel_type`` is one of
+            :data:`ALLOWED_REL_TYPES_V2` or the :data:`REL_V2_NO_EDGE` marker).
+    """
     source = _as_str(raw.get("source"))
     target = _as_str(raw.get("target"))
     rel_type = _as_str(raw.get("type"))
@@ -234,7 +289,21 @@ def _parse_relationship(raw: dict[str, Any], case_id: str) -> GoldRelationship:
         raise GoldSetError(f"{case_id}: relationship missing source/target")
     if rel_type not in ALLOWED_REL_TYPES:
         raise GoldSetError(f"{case_id}: relationship has off-vocab type {rel_type!r}")
-    return GoldRelationship(source=source, rel_type=rel_type, target=target)
+    v2_rel_type = _as_str(raw.get("v2_rel_type"))
+    if v2_rel_type and v2_rel_type not in ALLOWED_REL_TYPES_V2 and v2_rel_type != REL_V2_NO_EDGE:
+        raise GoldSetError(
+            f"{case_id}: relationship {source!r}->{target!r} has off-vocab "
+            f"v2_rel_type {v2_rel_type!r}"
+        )
+    return GoldRelationship(
+        source=source,
+        rel_type=rel_type,
+        target=target,
+        v2_rel_type=v2_rel_type,
+        v2_adjudicated=bool(raw.get("v2_adjudicated", False)),
+        v2_adjudication_rationale=_as_str(raw.get("v2_adjudication_rationale")),
+        v2_needs_owner_signoff=bool(raw.get("v2_needs_owner_signoff", False)),
+    )
 
 
 def _parse_case(raw: dict[str, Any]) -> GoldCase:
@@ -336,9 +405,9 @@ def all_authored_strings(cases: Sequence[GoldCase]) -> list[str]:
     for case in cases:
         out.extend([case.case_id, case.source_user, case.source_assistant, *case.tags])
         for e in case.expect_entities:
-            out.extend([e.name, *e.aliases])
+            out.extend([e.name, *e.aliases, e.v2_adjudication_rationale])
         for r in case.expect_relationships:
-            out.extend([r.source, r.target])
+            out.extend([r.source, r.target, r.v2_adjudication_rationale])
         for s in case.expect_stances:
             out.extend([s.target, s.affect])
         for c in case.expect_claims:

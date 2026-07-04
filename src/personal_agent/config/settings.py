@@ -2190,6 +2190,17 @@ class AppConfig(BaseSettings):
         A missing or unreadable matrix file is itself a policy gap, not a
         safety failure: the check is skipped rather than raised, so it can
         never make an otherwise-valid ``AppConfig()`` construction fail.
+
+        The required-secret check (2) is skipped entirely under
+        ``Environment.TEST``. It exists to catch a real *deployment* silently
+        degrading (a cloud process booting with no API key) — not to gate
+        unit tests that construct an ``AppConfig`` pointed at
+        ``models.cloud.yaml`` purely to exercise role-resolution logic with
+        mocked LLM calls (e.g. the FRE-435/FRE-630 eval-harness test suites,
+        which pin ``AGENT_MODEL_CONFIG_PATH`` via an import-time
+        ``os.environ.setdefault`` that legitimately outlives their own test
+        module for the rest of the pytest session). Mirrors the existing
+        FRE-375 substrate guard's own TEST-environment carve-out.
         """
         root = repo_root()
         matrix = load_matrix(root)
@@ -2202,6 +2213,9 @@ class AppConfig(BaseSettings):
                 "config_guard_orphan_env_keys",
                 findings=[o.message for o in orphans],
             )
+
+        if self.environment == Environment.TEST:
+            return self
 
         active_profile = resolve_active_profile(self.model_config_path, matrix, root)
         required_secrets_by_profile = matrix.get("required_secrets", {})

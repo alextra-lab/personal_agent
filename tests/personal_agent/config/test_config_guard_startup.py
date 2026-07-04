@@ -89,11 +89,19 @@ class TestPolicyWarnsAndBoots:
 
 
 class TestRequiredSecretPerActiveProfile:
-    """(c) Safety, per-profile — cloud requires anthropic/openai keys; local requires none."""
+    """(c) Safety, per-profile — cloud requires anthropic/openai keys; local requires none.
+
+    Uses DEVELOPMENT, not TEST: the check is deliberately skipped under
+    Environment.TEST (see _validate_config_guard_policy's docstring) so it
+    never fires against the FRE-435/FRE-630 eval-harness unit tests, which
+    legitimately pin model_config_path=models.cloud.yaml under APP_ENV=test
+    for role-resolution testing with mocked LLM calls.
+    """
 
     def test_missing_cloud_secret_raises(self) -> None:
         with pytest.raises(ValidationError, match="requires secrets"):
             make_config(
+                environment=Environment.DEVELOPMENT,
                 model_config_path="config/models.cloud.yaml",
                 anthropic_api_key=None,
                 openai_api_key=None,
@@ -101,6 +109,7 @@ class TestRequiredSecretPerActiveProfile:
 
     def test_missing_secret_under_local_profile_boots(self) -> None:
         cfg = make_config(
+            environment=Environment.DEVELOPMENT,
             model_config_path="config/models.yaml",
             anthropic_api_key=None,
             openai_api_key=None,

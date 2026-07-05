@@ -693,7 +693,9 @@ def _gate_blocked_result(
     }
 
 
-# Entity type keywords for recall intent (ADR-0025) — map words to graph entity_type
+# Entity type keywords for recall intent (ADR-0025) — map words to graph entity_type.
+# Values are the ADR-0109 V2 10-type taxonomy (FRE-794); location/person/organization are
+# stable across V1->V2, the rest were remapped from the retired Technology/Topic/Concept.
 _ENTITY_TYPE_KEYWORDS: dict[str, str] = {
     "location": "Location",
     "locations": "Location",
@@ -710,13 +712,19 @@ _ENTITY_TYPE_KEYWORDS: dict[str, str] = {
     "org": "Organization",
     "company": "Organization",
     "companies": "Organization",
-    "tool": "Technology",
-    "tools": "Technology",
-    "technology": "Technology",
-    "topic": "Topic",
-    "topics": "Topic",
-    "concept": "Concept",
-    "concepts": "Concept",
+    "tool": "TechnicalArtifact",
+    "tools": "TechnicalArtifact",
+    "technology": "TechnicalArtifact",
+    "topic": "DomainOrTopic",
+    "topics": "DomainOrTopic",
+    "concept": "MethodOrConcept",
+    "concepts": "MethodOrConcept",
+    "phenomenon": "Phenomenon",
+    "phenomena": "Phenomenon",
+    "quantity": "QuantityMeasure",
+    "quantities": "QuantityMeasure",
+    "measurement": "QuantityMeasure",
+    "measurements": "QuantityMeasure",
 }
 
 
@@ -724,7 +732,7 @@ def _extract_entity_type_hints(user_message: str) -> list[str]:
     """Map words in the query to entity_type values (ADR-0025).
 
     e.g. "What Greek locations" -> ["Location"]
-         "What tools have I used" -> ["Technology"]
+         "What tools have I used" -> ["TechnicalArtifact"]
          "What have I discussed" -> []
     """
     words = (user_message or "").lower().split()

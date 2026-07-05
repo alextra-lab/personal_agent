@@ -16,6 +16,7 @@ from personal_agent.llm_client.models import ToolCallingStrategy
 from personal_agent.memory.models import MemoryQueryResult, TurnNode
 from personal_agent.orchestrator import Channel, Orchestrator
 from personal_agent.orchestrator.executor import (
+    _ENTITY_TYPE_KEYWORDS,
     _build_assistant_tool_calls,
     _extract_entity_type_hints,
     _format_broad_recall,
@@ -50,19 +51,36 @@ class TestMemoryRecallHelpers:
         assert _extract_entity_type_hints("org and companies") == ["Organization"]
 
     def test_extract_entity_type_hints_technology(self) -> None:
-        """Technology keywords map to Technology type."""
-        assert _extract_entity_type_hints("What tools have I used recently?") == ["Technology"]
-        assert _extract_entity_type_hints("technology and tools") == ["Technology"]
+        """Technology keywords map to the V2 TechnicalArtifact type (ADR-0109)."""
+        assert _extract_entity_type_hints("What tools have I used recently?") == [
+            "TechnicalArtifact"
+        ]
+        assert _extract_entity_type_hints("technology and tools") == ["TechnicalArtifact"]
 
     def test_extract_entity_type_hints_topic(self) -> None:
-        """Topic keywords map to Topic type."""
-        assert _extract_entity_type_hints("What topic have we covered?") == ["Topic"]
-        assert _extract_entity_type_hints("topics I asked about") == ["Topic"]
+        """Topic keywords map to the V2 DomainOrTopic type (ADR-0109)."""
+        assert _extract_entity_type_hints("What topic have we covered?") == ["DomainOrTopic"]
+        assert _extract_entity_type_hints("topics I asked about") == ["DomainOrTopic"]
 
     def test_extract_entity_type_hints_concept(self) -> None:
-        """Concept keywords map to Concept type."""
-        assert _extract_entity_type_hints("What concepts did I mention?") == ["Concept"]
-        assert _extract_entity_type_hints("concept we discussed") == ["Concept"]
+        """Concept keywords map to the V2 MethodOrConcept type (ADR-0109)."""
+        assert _extract_entity_type_hints("What concepts did I mention?") == ["MethodOrConcept"]
+        assert _extract_entity_type_hints("concept we discussed") == ["MethodOrConcept"]
+
+    def test_extract_entity_type_hints_phenomenon(self) -> None:
+        """Phenomenon keywords map to the V2 Phenomenon type (ADR-0109)."""
+        assert _extract_entity_type_hints("What phenomenon did we discuss?") == ["Phenomenon"]
+        assert _extract_entity_type_hints("phenomena I asked about") == ["Phenomenon"]
+
+    def test_extract_entity_type_hints_quantity_measure(self) -> None:
+        """Quantity/measurement keywords map to the V2 QuantityMeasure type (ADR-0109)."""
+        assert _extract_entity_type_hints("What quantity did we measure?") == ["QuantityMeasure"]
+        assert _extract_entity_type_hints("measurements and quantities") == ["QuantityMeasure"]
+
+    def test_entity_type_keywords_has_no_retired_v1_types(self) -> None:
+        """ADR-0109: no keyword resolves to a retired V1 type string (FRE-794)."""
+        retired = {"Technology", "Topic", "Concept"}
+        assert not retired & set(_ENTITY_TYPE_KEYWORDS.values())
 
     def test_extract_entity_type_hints_multiple_types(self) -> None:
         """Multiple keywords yield deduplicated types."""

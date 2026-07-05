@@ -1,5 +1,6 @@
 """Tests for search_memory tool (ADR-0026)."""
 
+import re
 import sys
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -35,6 +36,29 @@ def test_search_memory_tool_definition() -> None:
     assert "limit" in param_names
     assert search_memory_tool.risk_level == "low"
     assert "NORMAL" in search_memory_tool.allowed_modes
+
+
+def test_search_memory_entity_types_schema_is_v2_taxonomy() -> None:
+    """ADR-0109: entity_types description advertises exactly the V2 10-type vocabulary (FRE-794)."""
+    entity_types_param = next(p for p in search_memory_tool.parameters if p.name == "entity_types")
+    description = entity_types_param.description
+    v2_types = {
+        "Person",
+        "Organization",
+        "Location",
+        "TechnicalArtifact",
+        "KnowledgeArtifact",
+        "MethodOrConcept",
+        "DomainOrTopic",
+        "Phenomenon",
+        "QuantityMeasure",
+        "Event",
+    }
+    for entity_type in v2_types:
+        assert entity_type in description
+    retired = {"Technology", "Topic", "Concept"}
+    for retired_type in retired:
+        assert re.search(rf"\b{retired_type}\b", description) is None
 
 
 def test_looks_like_broad_query() -> None:

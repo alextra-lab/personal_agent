@@ -26,9 +26,12 @@ from scripts.dispatch.next_resolver import IssueSnapshot
 from scripts.dispatch.orchestrator import (
     DEFAULT_STALL_TIMEOUT_S,
     DispatchRecord,
+    check_preconditions,
     decide,
+    is_anthropic_endpoint,
     main,
     model_for_labels,
+    rc_server_alive,
     run_once,
 )
 
@@ -212,7 +215,18 @@ def test_decide_surfaced_clear_when_owner_acted() -> None:
 # --- run_once --------------------------------------------------------------
 
 
-def _run(state, runner, board, *, now=0.0, execute=True, notifier=None, stall=60):
+def _run(
+    state,
+    runner,
+    board,
+    *,
+    now=0.0,
+    execute=True,
+    notifier=None,
+    stall=60,
+    rc_alive=None,
+    kill_switch_engaged=None,
+):
     persisted: list[dict[str, DispatchRecord]] = []
     result = run_once(
         ["build1"],
@@ -225,6 +239,8 @@ def _run(state, runner, board, *, now=0.0, execute=True, notifier=None, stall=60
         persist=lambda st: persisted.append(dict(st)),
         logger=_NullLogger(),
         execute=execute,
+        rc_alive=rc_alive,
+        kill_switch_engaged=kill_switch_engaged or (lambda: False),
     )
     return result, persisted
 
@@ -313,6 +329,7 @@ def test_main_once_dry_run_no_launch(tmp_path, monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr(orch, "load_linear_key", lambda: "key")
     monkeypatch.setattr(orch, "fetch_board", lambda stream, key: [])
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)  # precondition depends on it
     state_file = tmp_path / "state.json"
     rc = main(["--once", "--state-file", str(state_file), "--streams", "build1"])
     assert rc == 0
@@ -320,3 +337,111 @@ def test_main_once_dry_run_no_launch(tmp_path, monkeypatch: pytest.MonkeyPatch) 
 
 def test_default_stall_timeout_is_positive() -> None:
     assert DEFAULT_STALL_TIMEOUT_S > 0
+
+
+def test_main_fails_fast_on_off_anthropic_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """AC-b: an off-Anthropic endpoint fails fast before the loop."""
+    import scripts.dispatch.orchestrator as orch
+
+    monkeypatch.setattr(orch, "load_linear_key", lambda: "key")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://localhost:4000")
+    assert main(["--once", "--streams", "build1"]) == 1
+
+
+# --- preconditions (AC-b: fail fast when unmet) ----------------------------
+
+
+def test_is_anthropic_endpoint_unset_is_ok() -> None:
+    assert is_anthropic_endpoint("") is True
+    assert is_anthropic_endpoint("   ") is True
+
+
+def test_is_anthropic_endpoint_anthropic_host_is_ok() -> None:
+    assert is_anthropic_endpoint("https://api.anthropic.com") is True
+    assert is_anthropic_endpoint("https://api.anthropic.com/v1") is True
+
+
+def test_is_anthropic_endpoint_off_anthropic_is_not_ok() -> None:
+    assert is_anthropic_endpoint("http://localhost:4000") is False
+    assert is_anthropic_endpoint("https://gateway.example.com") is False
+
+
+def test_check_preconditions_ok_with_key_and_no_base_url() -> None:
+    pre = check_preconditions({}, "linear-key")
+    assert pre.ok is True
+    assert pre.reason == ""
+
+
+def test_check_preconditions_missing_key_distinct_reason() -> None:
+    pre = check_preconditions({}, None)
+    assert pre.ok is False
+    assert "linear-api-key" in pre.reason
+
+
+def test_check_preconditions_off_anthropic_distinct_reason() -> None:
+    pre = check_preconditions({"ANTHROPIC_BASE_URL": "http://localhost:4000"}, "linear-key")
+    assert pre.ok is False
+    assert "rc-endpoint" in pre.reason
+    # auth/entitlement is NOT conflated into the static precondition.
+    assert "auth" not in pre.reason.lower()
+
+
+# --- liveness probe (AC-a: refuse to dispatch when RC is down) --------------
+
+
+def test_rc_server_alive_up_when_probe_exits_zero() -> None:
+    runner = _RecordingRunner()  # default returncode 0
+    assert rc_server_alive(runner) is True
+    assert any("agents" in c for c in runner.calls)
+
+
+def test_rc_server_alive_down_when_probe_exits_nonzero() -> None:
+    runner = _RecordingRunner({"agents": _FakeRunResult(returncode=1)})
+    assert rc_server_alive(runner) is False
+
+
+def test_run_once_rc_down_blocks_launch_no_dispatch() -> None:
+    """AC-a: RC down → zero launches, a dispatch_blocked notify, no record."""
+    runner = _RecordingRunner()
+    board = [_issue("FRE-1", "Approved", _OPUS)]
+    notifier = _Notifier()
+    state, _ = _run({}, runner, board, notifier=notifier, rc_alive=lambda: False)
+    assert "build1" not in state  # never marked in-flight
+    assert not any("new-session" in c for c in runner.calls)  # no tmux launch
+    assert [e for e, _ in notifier.events] == ["dispatch_blocked"]
+    assert notifier.events[0][1]["reason"] == "rc-down"
+
+
+def test_run_once_kill_switch_blocks_launch_no_dispatch() -> None:
+    runner = _RecordingRunner()
+    board = [_issue("FRE-1", "Approved", _OPUS)]
+    notifier = _Notifier()
+    state, _ = _run({}, runner, board, notifier=notifier, kill_switch_engaged=lambda: True)
+    assert "build1" not in state
+    assert not any("new-session" in c for c in runner.calls)
+    assert notifier.events[0][1]["reason"] == "kill-switch"
+
+
+def test_run_once_kill_switch_precedes_rc_check() -> None:
+    """Kill switch is reported even if RC is also down (deterministic reason)."""
+    runner = _RecordingRunner()
+    board = [_issue("FRE-1", "Approved", _OPUS)]
+    notifier = _Notifier()
+    _run(
+        {},
+        runner,
+        board,
+        notifier=notifier,
+        rc_alive=lambda: False,
+        kill_switch_engaged=lambda: True,
+    )
+    assert notifier.events[0][1]["reason"] == "kill-switch"
+
+
+def test_run_once_launch_proceeds_when_alive_and_no_kill_switch() -> None:
+    """Regression: the guard does not block a healthy dispatch."""
+    runner = _RecordingRunner()
+    board = [_issue("FRE-1", "Approved", _OPUS)]
+    state, _ = _run({}, runner, board, rc_alive=lambda: True)
+    assert state["build1"].phase == "launched"
+    assert any("new-session" in c for c in runner.calls)

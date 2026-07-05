@@ -11,6 +11,13 @@ edits `src/`, never runs `/build` or `/adr`, never `/clear`s, never merges, neve
 It reads durable git + Linear state and, only when the stream is genuinely idle with a ready
 NEXT, tells the owner exactly what to run. **When in doubt, stay silent.**
 
+**Automated dispatch (ADR-0110).** An external orchestrator (`scripts/dispatch/`, systemd) can
+*actuate* what this monitor only *advises* — resolve NEXT, set the model tier, and launch via Remote
+Control, so the owner watches + answers prompts from any device instead of typing switch→clear→command.
+Both read the **same** Linear-native dispatch contract; the orchestrator is dispatch-only and leaves
+master's role and both approval gates unchanged. This monitor stays valuable either way (it surfaces
+state and self-fixes bounces). See `docs/runbooks/dispatch-orchestrator.md`.
+
 **Run `/prime-worker` once** when you open a worker session. It arms its own **20m loop** (Step 2),
 which is a cron — it **survives `/clear` and runs until the session is closed** — so you never type
 `/loop` and never re-arm. The same command works in all three worker sessions; this skill

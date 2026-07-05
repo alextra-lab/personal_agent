@@ -46,9 +46,10 @@ import json
 import os
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Literal, Protocol
+from urllib.parse import urlparse
 
 import structlog
 
@@ -90,7 +91,129 @@ DEFAULT_STALL_TIMEOUT_S: float = 3600.0
 # Poll interval for the daemon loop (``--loop``).
 DEFAULT_POLL_INTERVAL_S: float = 300.0
 
+# The only endpoint host at which Remote Control is enabled — it is disabled
+# when ``ANTHROPIC_BASE_URL`` points anywhere else (an LLM gateway/proxy),
+# per the RC docs (v2.1.196+).
+_ANTHROPIC_API_HOST: str = "api.anthropic.com"
+
+# Default kill-switch flag file: its mere presence halts all dispatch.
+DEFAULT_KILL_SWITCH_FILE: str = "telemetry/dispatch.disabled"
+
 DecisionKind = Literal["launch", "await", "stall", "run_complete", "clear", "skip", "hold"]
+
+
+@dataclasses.dataclass(frozen=True)
+class Precondition:
+    """The result of the enable-once precondition check (ADR-0110 T4).
+
+    Attributes:
+        ok: Whether the statically-checkable preconditions are met.
+        reason: Empty when ``ok``; otherwise a distinct, actionable reason
+            string (never conflating unrelated failures).
+    """
+
+    ok: bool
+    reason: str
+
+
+def is_anthropic_endpoint(base_url: str) -> bool:
+    """Return whether ``base_url`` keeps Remote Control enabled.
+
+    Remote Control is disabled when ``ANTHROPIC_BASE_URL`` points at a host
+    other than ``api.anthropic.com`` (RC docs, v2.1.196+). An empty/unset value
+    means the default Anthropic endpoint, which is fine.
+
+    Args:
+        base_url: The ``ANTHROPIC_BASE_URL`` value (may be empty).
+
+    Returns:
+        ``True`` if unset/empty or the host is ``api.anthropic.com``.
+    """
+    if not base_url.strip():
+        return True
+    return (urlparse(base_url).hostname or "") == _ANTHROPIC_API_HOST
+
+
+def check_preconditions(env: Mapping[str, str], api_key: str | None) -> Precondition:
+    """Check the statically-verifiable enable-once preconditions (AC-b).
+
+    Covers only what is deterministic from configuration: the Linear API key
+    (the resolver needs it) and the Remote-Control endpoint
+    (``ANTHROPIC_BASE_URL``). Remote-Control **auth/entitlement/subscription**
+    are *not* checkable from the environment — those are the human enable-once
+    steps in the runbook, verified with ``claude doctor`` and, at runtime, by
+    the liveness guard (``rc_server_alive``) which refuses to dispatch when RC
+    is unreachable. The two failure reasons are kept distinct, never merged.
+
+    Args:
+        env: The process environment (e.g. ``os.environ``).
+        api_key: The resolved Linear API key, or ``None``.
+
+    Returns:
+        A ``Precondition`` — ``ok`` with an empty reason, or not-ok with a
+        distinct, actionable reason string.
+    """
+    if not api_key:
+        return Precondition(
+            False,
+            "linear-api-key-missing: AGENT_LINEAR_API_KEY is not configured; "
+            "the dispatch resolver cannot read the board",
+        )
+    base_url = env.get("ANTHROPIC_BASE_URL", "")
+    if not is_anthropic_endpoint(base_url):
+        return Precondition(
+            False,
+            f"rc-endpoint-off-anthropic: ANTHROPIC_BASE_URL={base_url!r} points off "
+            f"{_ANTHROPIC_API_HOST}; Remote Control is disabled off-endpoint — unset it "
+            "(see docs/runbooks/dispatch-orchestrator.md)",
+        )
+    return Precondition(True, "")
+
+
+def rc_server_alive(runner: CommandRunner) -> bool:
+    """Probe **global** Remote-Control reachability (AC-a liveness guard).
+
+    Runs ``claude agents --json --all`` (no TTY needed) and treats a zero exit
+    as reachable. This proves RC is reachable at all, **not** that any specific
+    stream's session or the templated RC unit is healthy — it is deliberately a
+    global reachability signal. The orchestrator refuses to launch when this is
+    down; the small time-of-check/time-of-use window (RC dying between the probe
+    and the launch) is backstopped by the stall timeout.
+
+    Args:
+        runner: The command runner seam (shells ``claude``).
+
+    Returns:
+        ``True`` if the probe exits zero, else ``False``.
+    """
+    return runner(["claude", "agents", "--json", "--all"]).returncode == 0
+
+
+def _kill_switch_engaged(path: Path) -> bool:
+    """Return whether the kill-switch flag file exists (halts all dispatch)."""
+    return path.exists()
+
+
+def _launch_block_reason(
+    rc_alive: Callable[[], bool], kill_switch_engaged: Callable[[], bool]
+) -> str | None:
+    """Return why a launch must be blocked this tick, or ``None`` to proceed.
+
+    The kill switch is checked first so its reason is deterministic even when
+    RC is also down.
+
+    Args:
+        rc_alive: Predicate — is Remote Control reachable.
+        kill_switch_engaged: Predicate — is the kill switch engaged.
+
+    Returns:
+        ``"kill-switch"``, ``"rc-down"``, or ``None`` (launch permitted).
+    """
+    if kill_switch_engaged():
+        return "kill-switch"
+    if not rc_alive():
+        return "rc-down"
+    return None
 
 
 class Notifier(Protocol):
@@ -338,6 +461,8 @@ def run_once(
     persist: Callable[[dict[str, DispatchRecord]], None],
     logger: Logger,
     execute: bool,
+    rc_alive: Callable[[], bool] | None = None,
+    kill_switch_engaged: Callable[[], bool] = lambda: False,
 ) -> dict[str, DispatchRecord]:
     """Run one orchestration tick across ``streams``, mutating and returning state.
 
@@ -356,10 +481,17 @@ def run_once(
         persist: Persists the state dict after a mutation.
         logger: Structured logger.
         execute: Whether to actually launch (else dry-run, no side effects).
+        rc_alive: Predicate for Remote-Control reachability (AC-a). Defaults to
+            probing via ``rc_server_alive(runner)``; a launch is refused when it
+            returns ``False``.
+        kill_switch_engaged: Predicate for the kill switch (defaults to off);
+            when engaged, all launches are refused.
 
     Returns:
         The updated state dict.
     """
+    if rc_alive is None:
+        rc_alive = lambda: rc_server_alive(runner)  # noqa: E731
     for stream in streams:
         trace_id = str(uuid.uuid4())
         issues = board_fetcher(stream)
@@ -395,6 +527,8 @@ def run_once(
             persist=persist,
             logger=logger,
             execute=execute,
+            rc_alive=rc_alive,
+            kill_switch_engaged=kill_switch_engaged,
         )
     return state
 
@@ -410,12 +544,32 @@ def _apply(
     persist: Callable[[dict[str, DispatchRecord]], None],
     logger: Logger,
     execute: bool,
+    rc_alive: Callable[[], bool],
+    kill_switch_engaged: Callable[[], bool],
 ) -> None:
     """Apply one decision's side effects (launch / notify / record mutation)."""
     stream = decision.stream
     match decision.kind:
         case "launch":
             assert decision.ticket is not None and decision.model is not None
+            if execute:
+                blocked = _launch_block_reason(rc_alive, kill_switch_engaged)
+                if blocked is not None:
+                    logger.warning(
+                        "dispatch_blocked",
+                        trace_id=trace_id,
+                        stream=stream,
+                        ticket=decision.ticket,
+                        reason=blocked,
+                    )
+                    notifier(
+                        "dispatch_blocked",
+                        trace_id=trace_id,
+                        stream=stream,
+                        ticket=decision.ticket,
+                        reason=blocked,
+                    )
+                    return  # no launch, no record — the stream stays eligible.
             warm = find_warm_session(stream, runner) if decision.context_keep else None
             plan = plan_launch(
                 stream,
@@ -554,16 +708,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=DEFAULT_POLL_INTERVAL_S,
         help="Loop poll interval seconds.",
     )
+    parser.add_argument(
+        "--kill-switch-file",
+        default=DEFAULT_KILL_SWITCH_FILE,
+        help="Flag file whose presence halts all dispatch (kill switch).",
+    )
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="Check preconditions + RC liveness, report, and exit (for ExecStartPre).",
+    )
     args = parser.parse_args(argv)
 
     api_key = load_linear_key()
-    if not api_key:
-        print("no AGENT_LINEAR_API_KEY configured", flush=True)
+    precondition = check_preconditions(os.environ, api_key)
+    if not precondition.ok:
+        print(f"precondition unmet: {precondition.reason}", flush=True)
         return 1
+    assert api_key is not None  # narrowed: check_preconditions is not-ok without a key
+
+    if args.preflight:
+        alive = rc_server_alive(subprocess_runner)
+        print(f"preflight: preconditions ok; remote-control reachable={alive}", flush=True)
+        return 0 if alive else 1
 
     logger = structlog.get_logger(__name__)
     notifier = _structlog_notifier(logger)
     state_path = Path(args.state_file)
+    kill_switch_path = Path(args.kill_switch_file)
 
     def tick() -> None:
         state = load_state(state_path)
@@ -578,6 +750,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             persist=lambda st: save_state(state_path, st),
             logger=logger,
             execute=args.execute,
+            kill_switch_engaged=lambda: _kill_switch_engaged(kill_switch_path),
         )
 
     if args.loop:

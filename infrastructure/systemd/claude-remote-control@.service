@@ -1,0 +1,30 @@
+[Unit]
+# Templated Remote Control server, one instance per dispatch stream:
+#   systemctl enable --now claude-remote-control@build1
+#   systemctl enable --now claude-remote-control@build2
+#   systemctl enable --now claude-remote-control@adr
+# %i is the stream key; the wrapper resolves it to the stream's worktree.
+Description=Claude Code Remote Control server for dispatch stream %i (ADR-0110 T4)
+Documentation=https://linear.app/frenchforest/issue/FRE-788
+Documentation=file:///opt/seshat/docs/runbooks/dispatch-orchestrator.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=debian
+Group=debian
+WorkingDirectory=/opt/seshat
+# Resolve the stream to its worktree and exec `claude remote-control` (server
+# mode) there. Remote Control exits after a prolonged network outage (RC docs);
+# Restart=always brings it back — the guardrail the orchestrator's liveness
+# check pairs with (ADR-0110 Risks, "RC server process dies ... no auto-restart").
+ExecStart=/opt/seshat/.venv/bin/python -m scripts.dispatch.rc_server %i
+Restart=always
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,30 @@
+[Unit]
+# The dispatch orchestrator daemon (ADR-0110 T4): polls each stream, and when a
+# stream is idle with a NEXT ticket, launches its worker through the launcher.
+# It is dispatch-only — never merges, deploys, closes tickets, or edits
+# MASTER_PLAN (ADR-0110 §5). It refuses to launch when Remote Control is down
+# (liveness guard) or the kill switch is set (telemetry/dispatch.disabled).
+Description=Seshat dispatch orchestrator loop (ADR-0110 T4)
+Documentation=https://linear.app/frenchforest/issue/FRE-788
+Documentation=file:///opt/seshat/docs/runbooks/dispatch-orchestrator.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=debian
+Group=debian
+WorkingDirectory=/opt/seshat
+# Fail fast at start if the enable-once preconditions are unmet (Linear API key
+# present, RC endpoint on api.anthropic.com, RC reachable).
+ExecStartPre=/opt/seshat/.venv/bin/python -m scripts.dispatch.orchestrator --preflight
+# The daemon poll loop; --execute actually launches (the guardrails keep it safe).
+ExecStart=/opt/seshat/.venv/bin/python -m scripts.dispatch.orchestrator --loop --execute
+Restart=always
+RestartSec=30
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

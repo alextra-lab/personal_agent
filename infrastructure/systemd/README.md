@@ -27,6 +27,11 @@ ls -la telemetry/soak/                         # dated output files
 | Unit | Purpose | Schedule |
 |---|---|---|
 | `seshat-soak.service` + `.timer` | FRE-380 Stage 1 daily soak measurement | 09:00 UTC daily |
+| `claude-remote-control@.service` | Remote Control server per dispatch stream (ADR-0110 T4); `@build1`/`@build2`/`@adr` | long-running (`Restart=always`) |
+| `seshat-dispatch-orchestrator.service` | Dispatch orchestrator loop (ADR-0110 T4); dispatch-only | long-running (`Restart=always`) |
+
+See `docs/runbooks/dispatch-orchestrator.md` for the dispatch units' enable-once
+precondition, guardrails, and recovery.
 
 ## Adding a new timer
 

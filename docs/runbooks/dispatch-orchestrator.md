@@ -114,9 +114,12 @@ launcher — is master's live verification (resolve → launch → owner-monitor
 
 ## Relationship to the prime-worker monitor
 
-The `prime-worker` in-session monitor and this orchestrator read the **same**
-Linear-native dispatch contract (`.claude/skills/lifecycle-rules.md` § Dispatch).
-The monitor **advises** (surfaces a dispatch card; the owner actuates); the
-orchestrator **actuates** (resolves NEXT, sets the model tier, launches). They
-are two front-ends on one contract — the orchestrator does not replace the
-monitor's role of surfacing state, it removes the manual switch→clear→type step.
+The orchestrator **owns dispatch** — it resolves each stream's NEXT (the
+Linear-native contract, `.claude/skills/lifecycle-rules.md` § Dispatch), sets the
+model tier, and launches the worker with the resolved ticket seeded
+(`/build <FRE-id>` / `/adr <FRE-id>`). The `prime-worker` skill is now a **pure
+PR-feedback monitor** (FRE-806): it no longer resolves NEXT or advises a command
+— that was duplicated logic. After a build opens a PR, its only job is the watch
+loop over its own PR, self-fixing on a master bounce **or** a red CI, until the
+PR merges. The build/adr skills arm this monitor early so it runs even when the
+orchestrator (not a manual `/prime-worker`) was the launch entry point.

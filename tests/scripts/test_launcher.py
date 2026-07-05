@@ -60,9 +60,19 @@ class _RecordingRunner:
 
 def test_topology_maps_each_stream() -> None:
     assert topology_for("build1").tmux_session == "cc-build"
-    assert topology_for("build1").dispatch_command == "/build 1"
+    assert topology_for("build1").skill_command == "/build"
     assert topology_for("build2").tmux_session == "cc-build2"
-    assert topology_for("adr").dispatch_command == "/adr"
+    assert topology_for("adr").skill_command == "/adr"
+
+
+def test_seed_carries_resolved_ticket() -> None:
+    """AC3: the seed carries the orchestrator-resolved ticket, not a stream number."""
+    build = plan_launch("build1", "FRE-806", "opus", context_keep=False)
+    assert build.command is not None
+    assert "/build FRE-806" in " ".join(build.command)
+    adr = plan_launch("adr", "FRE-806", "opus", context_keep=False)
+    assert adr.command is not None
+    assert "/adr FRE-806" in " ".join(adr.command)
 
 
 def test_unknown_stream_raises() -> None:
@@ -91,7 +101,7 @@ def test_clear_full_caps_launches_at_model_with_seed() -> None:
     joined = " ".join(plan.command)
     assert "--model opus" in joined
     assert f"--session-id {plan.session_id}" in joined
-    assert "/build 1" in joined  # the intended seed argument (argv, not a live-run proof)
+    assert "/build FRE-786" in joined  # the seed carries the resolved ticket (AC3)
     assert "|" not in joined  # never piped
 
 
@@ -129,7 +139,7 @@ def test_clear_model_set_off_is_manual_model_required() -> None:
     assert plan.command is None  # never launches at an unproven model
     assert plan.reset_worktree is False
     assert "opus" in plan.card  # names the exact model
-    assert "/build 1" in plan.card  # and the exact command
+    assert "/build FRE-786" in plan.card  # and the exact command
 
 
 # --- ADR §4 middle degradation: auto-seed off, model-set on -----------------
@@ -142,8 +152,8 @@ def test_clear_auto_seed_off_is_prepare_without_seed() -> None:
     assert plan.command is not None
     joined = " ".join(plan.command)
     assert "--model opus" in joined
-    assert "/build 1" not in joined  # no seed positional
-    assert "/build 1" in plan.card  # but surfaced for the owner to tap-send
+    assert "/build FRE-786" not in joined  # no seed positional
+    assert "/build FRE-786" in plan.card  # but surfaced for the owner to tap-send
 
 
 # --- deterministic session id (codex #1) -----------------------------------

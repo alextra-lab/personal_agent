@@ -1,0 +1,594 @@
+#!/usr/bin/env python3
+"""Dispatch launch primitive — Remote Control session launcher (FRE-786, ADR-0110 T2).
+
+Given a dispatch stream, its ticket, a model tier, and the ticket's context
+flag, decide *how* to start (or refuse to start) that stream's worker session,
+and — on ``--execute`` — perform the launch. Mirrors
+``scripts/dispatch/next_resolver.py``'s pure/IO split: a pure planner
+(``plan_launch``) produces a ``LaunchPlan`` discriminated union that is fully
+unit-inspectable, and a thin IO seam (``execute_plan`` with an injectable
+runner) performs the side effects.
+
+The launcher honours the ADR-0110 context contract and graceful degradation
+(§2, §4), and — critically — never *claims* a model or context state it cannot
+prove:
+
+- **CLEAR** ticket, all Remote-Control mechanics available → ``launch``: a
+  fresh, correctly-modelled tmux + Remote-Control session, seeded with the
+  stream's skill command.
+- **CLEAR**, auto-seed unavailable → ``prepare``: a correctly-modelled fresh
+  session, with the exact command surfaced for the owner to send.
+- **CLEAR**, programmatic model-set unavailable → ``manual-model-required``:
+  **no launch** — the card names the exact model and command (AC-7a).
+- **KEEP** ticket → ``manual-continuation``: never a fresh/cleared session and
+  never a machine launch; the card names the required model (stating the
+  launcher has *not* verified/switched it) and continues in the stream's warm
+  session only on an exact single match (AC-2 KEEP path).
+
+The three Remote-Control mechanics (auto-seed a first turn, set the model at
+launch, poll completion) were proven live in FRE-786 Part 1, so the default
+capabilities are both on; ``--no-auto-seed`` / ``--no-model-set`` force them
+off to exercise the fallbacks. The **live** owner-in-loop dispatch (session
+self-reports its tier, first action invokes the skill, owner answers a prompt
+from a device) is the ADR's T3 seam, which master owns — Remote Control
+inherently requires the owner's device.
+
+Preconditions for a real launch (recorded per the ticket): Remote Control
+entitlement on the claude.ai account, ``claude auth login`` completed on the
+VPS, and Remote Control is disabled when ``ANTHROPIC_BASE_URL`` points
+off-Anthropic.
+
+Callable by hand::
+
+    python -m scripts.dispatch.launcher --stream build1 --model opus            # dry-run
+    python -m scripts.dispatch.launcher --stream build1 --model opus --keep      # KEEP fallback card
+    python -m scripts.dispatch.launcher --stream build1 --model opus --no-model-set  # manual-model-required
+    python -m scripts.dispatch.launcher --stream build1 --model opus --execute   # actually launch
+"""
+
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import json
+import os
+import shlex
+import subprocess  # noqa: S404 - launches trusted, argv-built git/tmux/claude commands
+import sys
+import uuid
+from collections.abc import Sequence
+from typing import Literal, Protocol
+
+# Model tiers the launcher will place on a command line. Validated so no
+# free-form value ever reaches the tmux-parsed inner command (codex #4).
+_MODELS: frozenset[str] = frozenset({"opus", "sonnet", "haiku"})
+
+# Fixed namespace for deterministic, addressable session ids. Derived once from
+# a stable URL string (no wall-clock / randomness), so a given dispatch always
+# maps to the same id.
+_SESSION_NS: uuid.UUID = uuid.uuid5(uuid.NAMESPACE_URL, "https://frenchforest/seshat/dispatch")
+
+PlanOutcome = Literal["launch", "prepare", "manual-model-required", "manual-continuation"]
+ResultOutcome = Literal[
+    "launch",
+    "prepare",
+    "manual-model-required",
+    "manual-continuation",
+    "worktree-dirty",
+    "launch-failed",
+]
+
+
+class RunResult(Protocol):
+    """The subset of ``subprocess.CompletedProcess`` the seam reads."""
+
+    returncode: int
+    stdout: str
+
+
+class CommandRunner(Protocol):
+    """A callable that runs an argv and returns its result (injectable seam)."""
+
+    def __call__(self, argv: Sequence[str]) -> RunResult:
+        """Run ``argv`` and return its result."""
+        ...
+
+
+@dataclasses.dataclass(frozen=True)
+class StreamTopology:
+    """The fixed per-stream launch coordinates.
+
+    Attributes:
+        stream: Dispatch stream key (``build1``/``build2``/``adr``).
+        worktree: Repo-relative worktree path the session runs in.
+        tmux_session: The named tmux session (a local attach seat beside RC).
+        dispatch_command: The skill command that starts the ticket.
+    """
+
+    stream: str
+    worktree: str
+    tmux_session: str
+    dispatch_command: str
+
+
+_TOPOLOGY: dict[str, StreamTopology] = {
+    "build1": StreamTopology("build1", ".claude/worktrees/build", "cc-build", "/build 1"),
+    "build2": StreamTopology("build2", ".claude/worktrees/build2", "cc-build2", "/build 2"),
+    "adr": StreamTopology("adr", ".claude/worktrees/adrs", "cc-adrs", "/adr"),
+}
+
+
+@dataclasses.dataclass(frozen=True)
+class LauncherCapabilities:
+    """Which undocumented Remote-Control mechanics are available.
+
+    Both default on — proven live in FRE-786 Part 1. Forced off to exercise the
+    ADR §4 fallbacks (and AC-7a).
+
+    Attributes:
+        auto_seed: Whether a launch can seed a slash command as the first turn.
+        model_set: Whether the model tier can be set programmatically at launch.
+    """
+
+    auto_seed: bool = True
+    model_set: bool = True
+
+
+DEFAULT_CAPABILITIES = LauncherCapabilities()
+
+
+@dataclasses.dataclass(frozen=True)
+class LaunchPlan:
+    """A fully-decided, side-effect-free launch decision.
+
+    Attributes:
+        outcome: The decided plan outcome (discriminated union).
+        stream: Dispatch stream key.
+        ticket: The ticket identifier (e.g. ``FRE-786``).
+        model: The resolved, validated model tier.
+        context: ``clear`` or ``keep`` — the ticket's context contract.
+        tmux_session: The stream's named tmux session.
+        worktree: The stream's repo-relative worktree.
+        session_id: Deterministic session id for a launch/prepare, the resolved
+            warm session id for a manual-continuation, else ``None``.
+        command: The tmux argv to run, or ``None`` for a manual outcome.
+        reset_worktree: Whether execution should preflight the worktree (CLEAR
+            launch/prepare only — never for KEEP).
+        card: The device-visible message; for manual outcomes this is the
+            deliverable.
+    """
+
+    outcome: PlanOutcome
+    stream: str
+    ticket: str
+    model: str
+    context: Literal["clear", "keep"]
+    tmux_session: str
+    worktree: str
+    session_id: str | None
+    command: tuple[str, ...] | None
+    reset_worktree: bool
+    card: str
+
+
+@dataclasses.dataclass(frozen=True)
+class LaunchResult:
+    """The outcome of executing a plan.
+
+    Attributes:
+        outcome: The execution outcome (may differ from the plan outcome when a
+            preflight aborts or tmux fails).
+        card: The device-visible message describing what happened.
+        launched: Whether a session was actually started.
+    """
+
+    outcome: ResultOutcome
+    card: str
+    launched: bool
+
+
+def topology_for(stream: str) -> StreamTopology:
+    """Return the launch topology for a dispatch stream.
+
+    Args:
+        stream: The dispatch stream key (``build1``/``build2``/``adr``).
+
+    Returns:
+        The stream's ``StreamTopology``.
+
+    Raises:
+        ValueError: The stream is not a known dispatch stream.
+    """
+    try:
+        return _TOPOLOGY[stream]
+    except KeyError as exc:
+        raise ValueError(f"unknown dispatch stream: {stream!r}") from exc
+
+
+def session_id_for(stream: str, ticket: str, model: str, context: str) -> str:
+    """Return a deterministic, addressable session id for a dispatch.
+
+    Includes the ticket id so two dispatches on the same stream/model/context
+    get distinct ids (codex #1) — the id is addressable in ``claude agents``
+    and never resumes a prior ticket's context.
+
+    Args:
+        stream: Dispatch stream key.
+        ticket: Ticket identifier.
+        model: Model tier.
+        context: ``clear`` or ``keep``.
+
+    Returns:
+        A UUID string.
+    """
+    return str(uuid.uuid5(_SESSION_NS, f"{stream}:{ticket}:{model}:{context}"))
+
+
+def _build_tmux_command(
+    topology: StreamTopology, model: str, session_id: str, seed: str | None
+) -> tuple[str, ...]:
+    """Build the detached tmux launch argv.
+
+    The final element is the claude invocation, which tmux parses as a shell
+    command — so it is assembled with ``shlex.join`` over a validated argv,
+    never string-concatenated (codex #4), and never piped (PTY intact).
+
+    Args:
+        topology: The stream's launch coordinates.
+        model: The validated model tier.
+        session_id: The deterministic session id.
+        seed: The skill command to seed as the first turn, or ``None`` to start
+            without a seed (the ``prepare`` path).
+
+    Returns:
+        The ``tmux new-session`` argv.
+    """
+    inner_argv = [
+        "claude",
+        "--remote-control",
+        topology.tmux_session,
+        "--model",
+        model,
+        "--session-id",
+        session_id,
+    ]
+    if seed is not None:
+        inner_argv.append(seed)
+    inner = shlex.join(inner_argv)
+    return (
+        "tmux",
+        "new-session",
+        "-d",
+        "-s",
+        topology.tmux_session,
+        "-c",
+        topology.worktree,
+        inner,
+    )
+
+
+def _launch_card(topology: StreamTopology, model: str, session_id: str) -> str:
+    """Card summarising a full machine launch."""
+    return (
+        f"[{topology.stream}] launch → {topology.tmux_session}: {model} · "
+        f"{topology.dispatch_command} (session {session_id[:8]}); "
+        f"attach locally: tmux attach -t {topology.tmux_session}"
+    )
+
+
+def _prepare_card(topology: StreamTopology, model: str) -> str:
+    """Card for a prepared-but-unseeded session (auto-seed unavailable)."""
+    return (
+        f"[{topology.stream}] prepare → {topology.tmux_session} started at {model}; "
+        f"send {topology.dispatch_command} to begin"
+    )
+
+
+def _manual_model_card(topology: StreamTopology, model: str) -> str:
+    """Card for the model-set-unavailable fallback (AC-7a)."""
+    return (
+        f"[{topology.stream}] manual-model-required → set the model to {model}, then run "
+        f"{topology.dispatch_command} (the launcher did not set the model and will not launch "
+        f"at an unproven model)"
+    )
+
+
+def _manual_continuation_card(
+    topology: StreamTopology, model: str, warm_session_id: str | None
+) -> str:
+    """Card for the KEEP path — always manual, never a fresh session (AC-2 KEEP)."""
+    if warm_session_id is not None:
+        target = f"continue in warm session {warm_session_id[:8]} ({topology.worktree})"
+    else:
+        target = f"no single warm session found for {topology.worktree}; attach/continue manually"
+    return (
+        f"[{topology.stream}] manual-continuation → {target}; required model {model} (the launcher "
+        f"has NOT verified or switched it); run {topology.dispatch_command}"
+    )
+
+
+def plan_launch(
+    stream: str,
+    ticket: str,
+    model: str,
+    *,
+    context_keep: bool,
+    capabilities: LauncherCapabilities = DEFAULT_CAPABILITIES,
+    warm_session_id: str | None = None,
+) -> LaunchPlan:
+    """Decide how to launch (or refuse to launch) a stream's worker session.
+
+    Pure and side-effect-free — the returned ``LaunchPlan`` fully describes the
+    decision and is the unit-test proof surface for AC-2 and AC-7a.
+
+    Args:
+        stream: Dispatch stream key (``build1``/``build2``/``adr``).
+        ticket: Ticket identifier (e.g. ``FRE-786``).
+        model: Model tier — must be one of ``opus``/``sonnet``/``haiku``.
+        context_keep: ``True`` for a ``context:keep`` ticket (warm context),
+            ``False`` for the CLEAR default (fresh session).
+        capabilities: Which Remote-Control mechanics are available.
+        warm_session_id: The stream's warm session id, if resolved (KEEP only).
+
+    Returns:
+        The decided ``LaunchPlan``.
+
+    Raises:
+        ValueError: The stream or model is not recognised.
+    """
+    topology = topology_for(stream)
+    if model not in _MODELS:
+        raise ValueError(f"unknown model tier: {model!r} (expected one of {sorted(_MODELS)})")
+
+    if context_keep:
+        # KEEP is never machine-auto-launched and never reset/cleared (ADR §2).
+        return LaunchPlan(
+            outcome="manual-continuation",
+            stream=stream,
+            ticket=ticket,
+            model=model,
+            context="keep",
+            tmux_session=topology.tmux_session,
+            worktree=topology.worktree,
+            session_id=warm_session_id,
+            command=None,
+            reset_worktree=False,
+            card=_manual_continuation_card(topology, model, warm_session_id),
+        )
+
+    # CLEAR: cannot prove the model → refuse to launch (AC-7a).
+    if not capabilities.model_set:
+        return LaunchPlan(
+            outcome="manual-model-required",
+            stream=stream,
+            ticket=ticket,
+            model=model,
+            context="clear",
+            tmux_session=topology.tmux_session,
+            worktree=topology.worktree,
+            session_id=None,
+            command=None,
+            reset_worktree=False,
+            card=_manual_model_card(topology, model),
+        )
+
+    # CLEAR + model-set available: launch (seeded) or prepare (owner sends the command).
+    session_id = session_id_for(stream, ticket, model, "clear")
+    seed = topology.dispatch_command if capabilities.auto_seed else None
+    command = _build_tmux_command(topology, model, session_id, seed)
+    if capabilities.auto_seed:
+        outcome: PlanOutcome = "launch"
+        card = _launch_card(topology, model, session_id)
+    else:
+        outcome = "prepare"
+        card = _prepare_card(topology, model)
+    return LaunchPlan(
+        outcome=outcome,
+        stream=stream,
+        ticket=ticket,
+        model=model,
+        context="clear",
+        tmux_session=topology.tmux_session,
+        worktree=topology.worktree,
+        session_id=session_id,
+        command=command,
+        reset_worktree=True,
+        card=card,
+    )
+
+
+def _subprocess_runner(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    """Default runner: run an argv, capturing output, never via a shell."""
+    return subprocess.run(  # noqa: S603 - argv-built from validated inputs, no shell
+        list(argv), capture_output=True, text=True, check=False
+    )
+
+
+def _preflight_worktree(worktree: str, runner: CommandRunner) -> bool:
+    """Preflight a CLEAR worktree: fetch origin, then verify it is clean.
+
+    Only the dirty case is guarded here — the fresh-branch cut is delegated to
+    the worker's ``/build`` (or ``/adr``) Step 0, which owns the full safety
+    gate. Never destroys uncommitted work.
+
+    Args:
+        worktree: The repo-relative worktree path.
+        runner: The command runner seam.
+
+    Returns:
+        ``True`` if the worktree is clean, ``False`` if it has uncommitted
+        changes (launch must abort).
+    """
+    runner(["git", "-C", worktree, "fetch", "--prune", "origin"])
+    status = runner(["git", "-C", worktree, "status", "--porcelain"])
+    return not status.stdout.strip()
+
+
+def execute_plan(plan: LaunchPlan, runner: CommandRunner = _subprocess_runner) -> LaunchResult:
+    """Execute a launch plan, performing side effects via the runner seam.
+
+    Manual outcomes (``manual-model-required``/``manual-continuation``) perform
+    no side effect. A CLEAR launch/prepare first preflights the worktree
+    (aborting on uncommitted changes) and then starts the tmux session; a tmux
+    failure (including a session that already exists) is reported as
+    ``launch-failed``, never a claimed launch.
+
+    Args:
+        plan: The decided plan.
+        runner: The command runner seam (injectable for tests).
+
+    Returns:
+        The ``LaunchResult``.
+    """
+    if plan.command is None:
+        return LaunchResult(outcome=plan.outcome, card=plan.card, launched=False)
+
+    if plan.reset_worktree and not _preflight_worktree(plan.worktree, runner):
+        return LaunchResult(
+            outcome="worktree-dirty",
+            card=(
+                f"[{plan.stream}] worktree-dirty → {plan.worktree} has uncommitted changes; "
+                f"aborted launch (your working changes are untouched)"
+            ),
+            launched=False,
+        )
+
+    result = runner(plan.command)
+    if result.returncode != 0:
+        return LaunchResult(
+            outcome="launch-failed",
+            card=(
+                f"[{plan.stream}] launch-failed → tmux new-session for {plan.tmux_session} "
+                f"failed (the session may already exist); no launch claimed"
+            ),
+            launched=False,
+        )
+    return LaunchResult(outcome=plan.outcome, card=plan.card, launched=True)
+
+
+def _cwd_matches(cwd: str, worktree: str) -> bool:
+    """Return True if an absolute session cwd corresponds to a stream worktree."""
+    return os.path.normpath(cwd).endswith(os.path.normpath(worktree))
+
+
+def find_warm_session(stream: str, runner: CommandRunner = _subprocess_runner) -> str | None:
+    """Resolve the stream's warm Remote-Control session id, if unambiguous.
+
+    Parses ``claude agents --json --all`` and matches sessions by working
+    directory. Returns a session id **only on an exact single match** — zero or
+    multiple matches yield ``None`` (codex #2: never guess which session is the
+    warm one).
+
+    Args:
+        stream: Dispatch stream key.
+        runner: The command runner seam.
+
+    Returns:
+        The matching ``sessionId``, or ``None``.
+    """
+    topology = topology_for(stream)
+    result = runner(["claude", "agents", "--json", "--all"])
+    try:
+        raw: object = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(raw, list):
+        sessions: list[object] = raw
+    elif isinstance(raw, dict):
+        candidate = raw.get("agents") or raw.get("sessions") or []
+        sessions = candidate if isinstance(candidate, list) else []
+    else:
+        sessions = []
+    matches = [
+        session
+        for session in sessions
+        if isinstance(session, dict)
+        and _cwd_matches(str(session.get("cwd", "")), topology.worktree)
+    ]
+    if len(matches) == 1:
+        session_id = matches[0].get("sessionId")
+        return str(session_id) if session_id is not None else None
+    return None
+
+
+def _plan_to_json(plan: LaunchPlan) -> dict[str, object]:
+    """Serialize a ``LaunchPlan`` to a JSON-safe dict."""
+    return {
+        "outcome": plan.outcome,
+        "stream": plan.stream,
+        "ticket": plan.ticket,
+        "model": plan.model,
+        "context": plan.context,
+        "tmux_session": plan.tmux_session,
+        "worktree": plan.worktree,
+        "session_id": plan.session_id,
+        "command": list(plan.command) if plan.command is not None else None,
+        "reset_worktree": plan.reset_worktree,
+        "card": plan.card,
+    }
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Entry point. Plans (and, with ``--execute``, performs) a stream dispatch."""
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("--stream", required=True, help="Dispatch stream: build1, build2, adr.")
+    parser.add_argument("--model", required=True, help="Model tier: opus, sonnet, haiku.")
+    parser.add_argument("--ticket", default="UNSPECIFIED", help="Ticket id, e.g. FRE-786.")
+    parser.add_argument(
+        "--keep", action="store_true", help="Treat as a context:keep ticket (warm context)."
+    )
+    parser.add_argument(
+        "--no-auto-seed", action="store_true", help="Force the auto-seed mechanic off."
+    )
+    parser.add_argument(
+        "--no-model-set", action="store_true", help="Force programmatic model-set off."
+    )
+    parser.add_argument(
+        "--execute", action="store_true", help="Perform the launch (default: dry-run)."
+    )
+    parser.add_argument("--json", action="store_true", help="Emit the plan as JSON.")
+    args = parser.parse_args(argv)
+
+    capabilities = LauncherCapabilities(
+        auto_seed=not args.no_auto_seed, model_set=not args.no_model_set
+    )
+    warm_session_id = find_warm_session(args.stream) if (args.keep and args.execute) else None
+
+    try:
+        plan = plan_launch(
+            args.stream,
+            args.ticket,
+            args.model,
+            context_keep=args.keep,
+            capabilities=capabilities,
+            warm_session_id=warm_session_id,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if args.execute:
+        result = execute_plan(plan)
+        if args.json:
+            print(
+                json.dumps(
+                    {"outcome": result.outcome, "card": result.card, "launched": result.launched}
+                )
+            )
+        else:
+            print(result.outcome)
+            print(result.card)
+        return 0
+
+    if args.json:
+        print(json.dumps(_plan_to_json(plan), indent=2))
+    else:
+        print(plan.outcome)
+        print(plan.card)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

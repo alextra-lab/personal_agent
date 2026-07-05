@@ -112,6 +112,17 @@ launcher — is master's live verification (resolve → launch → owner-monitor
 → end-at-PR → advance, once per stream).** The orchestrator's guardrails
 (liveness, precondition, kill switch, stall) are correct under either.
 
+**RESOLVED 2026-07-05 — per-session tmux launcher, proven live end-to-end.** The
+assembled seam ran once for a build stream: the orchestrator resolved build1's NEXT
+(FRE-472), the T2 launcher spawned a fresh per-session RC tmux session (`cc-build`)
+seeded `/build FRE-472` at Opus, the owner answered a permission prompt from a device
+(AC-3 live), the worker opened PR #393, master merged, and a follow-up `--once` tick
+cleared the record on the terminal merge state (`kind=clear reason=merged` — advance
+only on merge, never on silence). The **per-session tmux launcher is the proven
+substrate**; the server-mode `claude-remote-control@` daemon units are shipped but
+NOT yet proven live. Still outstanding: the same demo once for **adr** (no Approved
+adr ticket existed at demo time), and **AC-5** (the two-worker pytest-lock collision).
+
 ## Relationship to the prime-worker monitor
 
 The orchestrator **owns dispatch** — it resolves each stream's NEXT (the
@@ -123,3 +134,45 @@ PR-feedback monitor** (FRE-806): it no longer resolves NEXT or advises a command
 loop over its own PR, self-fixing on a master bounce **or** a red CI, until the
 PR merges. The build/adr skills arm this monitor early so it runs even when the
 orchestrator (not a manual `/prime-worker`) was the launch entry point.
+
+## Production cutover — settled posture + phased checklist
+
+**Settled autonomy posture (owner, 2026-07-05 — do NOT re-open).** An orchestrated
+session may run ONLY the kick-off skills `prime-worker` / `build` / `adr` (plus
+`loop`, prime-worker's monitor-arm) — the entire allowlist, committed to
+`.claude/settings.json` `permissions.allow` (PR #395). **Everything else inside a
+build the owner approves remotely via RC, in real time.** `--dangerously-skip-permissions`
+is never used, now or planned. Master's gate and both approval gates are unchanged.
+There is no "how autonomous" dial — this is the ceiling.
+
+**Status:** the seam is proven live end-to-end (see *Open seam* above — FRE-472 via the
+per-session tmux launcher). The allowlist is merged to `main`. What remains is a
+deliberate, phased cutover — not a single flip, because it changes the owner's
+workflow and lets a daemon launch real (Opus) builds.
+
+Phased checklist:
+
+- [ ] **Prereq — allowlist reaches the worktrees.** PR #395 is on `main`; each worker
+  worktree must **sync main** (fresh branch off `origin/main`) so kick-off runs
+  promptless. Until synced, orchestrated launches still prompt on `loop`/`build`/`adr`.
+- [ ] **Prereq — the orchestrator owns the worker sessions.** The owner stops manually
+  opening `cc-build`/`cc-build2`/`cc-adrs` (the tmux names collide — both can't
+  coexist); the orchestrator launches them. Kill any stale manual session for a stream
+  before its first orchestrated launch.
+- [ ] **Phase A — supervised `--once` (build confidence).** Run
+  `orchestrator --once --execute --streams <one>` on demand a few times across streams;
+  owner monitors via RC. Prove **AC-5** here: two concurrent orchestrated workers both
+  reach the test phase → the `check-pytest-lock` hook blocks the second (one live
+  pytest, a logged block, no hook-stripping). Prove **adr** here too (needs an Approved
+  adr-stream ticket).
+- [ ] **Phase B — supervised `--loop` in tmux (not systemd).** Run
+  `orchestrator --loop --execute` in a watched tmux window, kill-switch handy, for a
+  session — proves poll cadence + advance + stall handling under real load.
+- [ ] **Phase C — official (systemd enable).**
+  `sudo systemctl enable --now seshat-dispatch-orchestrator`. New default: keep
+  Approved+`stream:*` tickets flowing, monitor via RC, answer build-time prompts.
+  Retire the manual "master briefs → owner primes" step and update MASTER_PLAN's
+  Dispatch section.
+
+**Halt at any point:** `touch telemetry/dispatch.disabled` (kill switch) or
+`sudo systemctl stop seshat-dispatch-orchestrator`.

@@ -24,6 +24,9 @@ from scripts.eval.fre630_extraction_quality.gold import (
 
 GOLD_PATH = Path("scripts/eval/fre630_extraction_quality/gold_extraction.yaml")
 BOUNDARY_FIXTURE_PATH = Path("scripts/eval/fre630_extraction_quality/fre782_boundary_fixture.yaml")
+FRE790_BOUNDARY_FIXTURE_PATH = Path(
+    "scripts/eval/fre630_extraction_quality/fre790_phenomenon_domain_boundary_fixture.yaml"
+)
 
 #: N intended for the seed/regression set (owner-approved Phase-1 scope).
 MIN_CASES = 20
@@ -371,6 +374,79 @@ def test_boundary_fixture_matches_research_note() -> None:
 
     for intended_side, _ in actual.values():
         assert intended_side in ALLOWED_ENTITY_TYPES_V2
+
+
+#: The FRE-790 Phenomenon ↔ DomainOrTopic boundary probe's per-entity table,
+#: reproduced exactly as ``{entity: (intended_side, boundary)}`` (research note:
+#: docs/research/2026-07-05-fre-790-phenomenon-domain-boundary-iaa.md, appendix).
+#: ``intended_side`` is design intent, never shown to a rater; ``boundary`` marks the
+#: six genuinely dual-natured Phenomenon↔DomainOrTopic cases (TCP + Fourier are
+#: ``False`` distractors). A swapped entity or flipped flag fails the assertion below.
+EXPECTED_FRE790_PROBE: dict[str, tuple[str, bool]] = {
+    # Phenomenon anchors — clean (8)
+    "Gravity": ("Phenomenon", False),
+    "Photosynthesis": ("Phenomenon", False),
+    "the greenhouse effect": ("Phenomenon", False),
+    "Superconductivity": ("Phenomenon", False),
+    "Turbulence": ("Phenomenon", False),
+    "the Doppler effect": ("Phenomenon", False),
+    "Rayleigh Scattering": ("Phenomenon", False),
+    "the Maillard reaction": ("Phenomenon", False),
+    # DomainOrTopic anchors — clean (8)
+    "Cosmology": ("DomainOrTopic", False),
+    "Cybersecurity": ("DomainOrTopic", False),
+    "Thermodynamics": ("DomainOrTopic", False),
+    "Neuroscience": ("DomainOrTopic", False),
+    "Fluid Dynamics": ("DomainOrTopic", False),
+    "Number Theory": ("DomainOrTopic", False),
+    "Behavioral Economics": ("DomainOrTopic", False),
+    "Organic Chemistry": ("DomainOrTopic", False),
+    # Phenomenon ↔ DomainOrTopic boundary cases (6)
+    "Spacetime": ("Phenomenon", True),
+    "Electromagnetism": ("Phenomenon", True),
+    "Magnetism": ("Phenomenon", True),
+    "Electricity": ("Phenomenon", True),
+    "Acoustics": ("DomainOrTopic", True),
+    "Optics": ("DomainOrTopic", True),
+    # Non-boundary distractors (2)
+    "TCP": ("TechnicalArtifact", False),
+    "Fourier Transform": ("MethodOrConcept", False),
+}
+
+
+def test_fre790_boundary_fixture_matches_research_note() -> None:
+    """The FRE-790 24-entity Phenomenon↔DomainOrTopic probe is a re-runnable regression.
+
+    Reproduces the research note's per-entity table exactly (docs/research/
+    2026-07-05-fre-790-phenomenon-domain-boundary-iaa.md, appendix) —
+    entity-for-entity, not just aggregate counts, so a swapped entity or a
+    flipped intended_side / boundary flag fails this assertion.
+    """
+    doc = yaml.safe_load(FRE790_BOUNDARY_FIXTURE_PATH.read_text(encoding="utf-8"))
+    probe = doc["probe"]
+    assert len(probe) == len(EXPECTED_FRE790_PROBE) == 24
+
+    actual = {item["entity"]: (item["intended_side"], bool(item.get("boundary"))) for item in probe}
+    assert actual == EXPECTED_FRE790_PROBE
+
+    for intended_side, _ in actual.values():
+        assert intended_side in ALLOWED_ENTITY_TYPES_V2
+
+    # The probe is weighted onto the two target types so per-type Fleiss kappa is a
+    # powered read (FRE-771's n=12 was not): >= 8 intended positives on each side.
+    intended_sides = [side for side, _ in actual.values()]
+    assert intended_sides.count("Phenomenon") >= 8
+    assert intended_sides.count("DomainOrTopic") >= 8
+    # Exactly six genuinely dual Phenomenon↔DomainOrTopic boundary cases.
+    boundary_entities = {e for e, (_, b) in actual.items() if b}
+    assert boundary_entities == {
+        "Spacetime",
+        "Electromagnetism",
+        "Magnetism",
+        "Electricity",
+        "Acoustics",
+        "Optics",
+    }
 
 
 def test_v2_type_definitions_match_allowed_types() -> None:

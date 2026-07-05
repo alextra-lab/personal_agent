@@ -116,8 +116,9 @@ async def test_scheduler_quality_monitor_events_are_queryable() -> None:
             0,
             20,
             0.1,  # graph report pass 1
-            3,    # empty_description_entity_count pass 1 (FRE-374)
-            5,    # redundant_relationship_pairs pass 1 (FRE-374)
+            3,  # empty_description_entity_count pass 1 (FRE-374)
+            5,  # redundant_relationship_pairs pass 1 (FRE-374)
+            20,  # relationship_bearing_pairs pass 1 (FRE-620)
             10,
             100,
             20,  # entity report pass 2 (inside detect_anomalies)
@@ -127,8 +128,9 @@ async def test_scheduler_quality_monitor_events_are_queryable() -> None:
             0,
             20,
             0.1,  # graph report pass 2 (inside detect_anomalies)
-            3,    # empty_description_entity_count pass 2 (FRE-374)
-            5,    # redundant_relationship_pairs pass 2 (FRE-374)
+            3,  # empty_description_entity_count pass 2 (FRE-374)
+            5,  # redundant_relationship_pairs pass 2 (FRE-374)
+            20,  # relationship_bearing_pairs pass 2 (FRE-620)
         ]
     )
     monitor._run_list_query = AsyncMock(  # type: ignore[method-assign]
@@ -146,9 +148,9 @@ async def test_scheduler_quality_monitor_events_are_queryable() -> None:
         ]
     )
     telemetry_queries.get_event_count = AsyncMock(  # type: ignore[method-assign]
-        side_effect=lambda event_type, days: 100
-        if event_type == "entity_extraction_started"
-        else 10
+        side_effect=lambda event_type, days: (
+            100 if event_type == "entity_extraction_started" else 10
+        )
     )
     telemetry_queries.get_daily_event_counts = AsyncMock(  # type: ignore[method-assign]
         return_value={

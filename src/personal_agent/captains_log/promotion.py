@@ -69,7 +69,13 @@ class PromotionCriteria(BaseModel):
         default=5, ge=1, description="Cap on issues created per pipeline run (ADR-0040 default 5)"
     )
     excluded_categories: list[ChangeCategory] = Field(
-        default_factory=list, description="Categories to skip during promotion"
+        default_factory=lambda: [ChangeCategory.KNOWLEDGE_QUALITY],
+        description=(
+            "Categories to skip during promotion. Defaults to excluding "
+            "KNOWLEDGE_QUALITY (FRE-620 promotion floor): only RELIABILITY/high-severity "
+            "proposals auto-promote to Linear; KNOWLEDGE_QUALITY/medium ones accrue on the "
+            "dashboard and the standing graph-hygiene backlog ticket (FRE-621) instead."
+        ),
     )
 
 
@@ -409,7 +415,19 @@ class PromotionPipeline:
                 )
 
     async def _existing_linear_issue_for_fingerprint(self, fingerprint: str) -> str | None:
-        """Return Linear issue identifier if one already contains this fingerprint."""
+        """Return Linear issue identifier if one already contains this fingerprint.
+
+        Uses `includeArchived=False`, so the disposition chosen when a promoted ticket is
+        closed determines whether its fingerprint stays suppressed (FRE-620):
+
+        - Noise/structural anomalies (e.g. `insufficient_data`, a stale threshold) →
+          cancel-not-archive. The ticket is a permanent tombstone; this lookup keeps
+          matching it (cancelled issues are still returned when archived=False), so the
+          same non-issue never re-promotes.
+        - Reliability anomalies (genuine regressions) → archive on close. Archiving removes
+          the issue from this lookup, freeing the fingerprint so a real recurrence
+          re-promotes instead of being silently suppressed forever.
+        """
         if self._linear_client is None:
             return None
         fpl = fingerprint.lower().strip()

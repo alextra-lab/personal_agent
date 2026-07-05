@@ -49,7 +49,14 @@ class TestClassifySmoke:
 
     def test_ok_on_contract_honouring_output(self) -> None:
         """Valid vocabulary → ok."""
-        result = {"entities": [{"name": "Neo4j", "type": "Technology", "class": "World"}]}
+        result = {"entities": [{"name": "Neo4j", "type": "TechnicalArtifact", "class": "World"}]}
+        assert classify_smoke(result, [{"error_class": None}]) == "ok"
+
+    def test_ok_on_new_v2_only_type(self) -> None:
+        """A V2-only type (FRE-771) classifies ok, not schema_violation (D4)."""
+        result = {
+            "entities": [{"name": "ADR-0109", "type": "KnowledgeArtifact", "class": "System"}]
+        }
         assert classify_smoke(result, [{"error_class": None}]) == "ok"
 
     def test_provider_rejection_takes_precedence_over_content(self) -> None:

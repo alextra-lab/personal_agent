@@ -67,13 +67,19 @@ def _report() -> RunReport:
     run_a = CaseRun(
         case_id="a",
         tags=("physics",),
-        samples=(score_case(case_a, _perfect_result()), score_case(case_a, _perfect_result())),
+        samples=(
+            score_case(case_a, _perfect_result(), entity_type_field="v2"),
+            score_case(case_a, _perfect_result(), entity_type_field="v2"),
+        ),
     )
     # case b: one perfect sample, one empty-fallback sample → variance in the band
     run_b = CaseRun(
         case_id="b",
         tags=("cooking",),
-        samples=(score_case(case_b, _perfect_result()), score_case(case_b, _miss_result())),
+        samples=(
+            score_case(case_b, _perfect_result(), entity_type_field="v2"),
+            score_case(case_b, _miss_result(), entity_type_field="v2"),
+        ),
     )
     return RunReport(meta=_meta(samples=2), cases=(run_a, run_b))
 

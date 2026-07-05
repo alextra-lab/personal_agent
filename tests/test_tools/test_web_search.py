@@ -4,16 +4,36 @@ Tests use mocked httpx responses — no SearXNG container required.
 The executor returns dict[str, Any] on success and raises ToolExecutionError on failure.
 """
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import yaml
 
 from personal_agent.telemetry.trace import TraceContext
 from personal_agent.tools.executor import ToolExecutionError
 from personal_agent.tools.web import web_search_executor, web_search_tool
 
 _CTX = TraceContext.new_trace()
+
+
+# ── SearXNG config regression tests ────────────────────────────────────────
+
+
+def test_chefkoch_not_in_general_category() -> None:
+    """Chefkoch (recipe engine) must not be tagged under the default 'general' category.
+
+    FRE-796: chefkoch was misconfigured with categories: general, so every
+    default-category web_search call included German recipe results —
+    confirmed live via a query about French/American Revolutionary War debt
+    that returned "Creamy tomato pasta" and "Cheeseburger" recipes. It stays
+    reachable via engines=chefkoch or categories=recipes.
+    """
+    cfg = yaml.safe_load(Path("docker/searxng/settings.yml").read_text())
+    chefkoch = next(e for e in cfg["engines"] if e["name"] == "chefkoch")
+    assert chefkoch["categories"] != "general"
+    assert chefkoch["categories"] == "recipes"
 
 
 def _mock_searxng_response(

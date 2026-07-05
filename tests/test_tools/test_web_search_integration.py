@@ -59,6 +59,34 @@ async def test_web_search_category_routing_it() -> None:
     assert len(engines_used) > 0, "Expected engine attribution in results"
 
 
+@pytest.mark.asyncio
+async def test_web_search_general_category_excludes_chefkoch() -> None:
+    """FRE-796 regression: default 'general' category must not surface chefkoch recipes.
+
+    chefkoch was previously misconfigured with categories: general, so any
+    general-category query whose text loosely matched German recipe titles
+    (e.g. "American ...") returned off-topic recipe results — reproduced
+    live with the exact query below, which returned "Creamy tomato pasta"
+    and "Cheeseburger" among the results before the fix.
+    """
+    from personal_agent.tools.web import web_search_executor
+
+    result = await web_search_executor(
+        query=(
+            "did the US repay France for American Revolution war debt "
+            "French Revolution financial crisis"
+        ),
+        categories="general",
+        ctx=_CTX,
+    )
+
+    assert isinstance(result, dict)
+    engines_used = {r["engine"] for r in result["results"] if r.get("engine")}
+    assert "chefkoch" not in engines_used, (
+        f"chefkoch recipe engine leaked into general-category results: {engines_used}"
+    )
+
+
 def test_searxng_health_check() -> None:
     """SearXNG /healthz endpoint returns 200."""
     resp = httpx.get(f"{SEARXNG_URL}/healthz", timeout=5)

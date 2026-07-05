@@ -55,6 +55,23 @@ def test_tool_definition() -> None:
     assert {"query", "mode"} <= param_names
 
 
+def test_mode_to_model_matches_current_catalog() -> None:
+    """_MODE_TO_MODEL must track Perplexity's current model catalog exactly.
+
+    FRE-796: "reason" mapped to the retired "sonar-reasoning" id, which
+    Perplexity deprecated 2025-12-15, breaking every reason-mode call.
+    This guard test fails fast in CI on a future catalog rename instead
+    of only failing live.
+    """
+    from personal_agent.tools.perplexity import _MODE_TO_MODEL
+
+    assert _MODE_TO_MODEL == {
+        "ask": "sonar",
+        "reason": "sonar-reasoning-pro",
+        "research": "sonar-deep-research",
+    }
+
+
 # ── Validation tests ───────────────────────────────────────────────────────
 
 
@@ -105,7 +122,7 @@ async def test_ask_mode_success() -> None:
 
 @pytest.mark.asyncio
 async def test_reason_mode_uses_correct_model() -> None:
-    """Reason mode uses sonar-reasoning model."""
+    """Reason mode uses sonar-reasoning-pro model."""
     body = _perplexity_response("Reasoning answer.")
     resp = _mock_response(200, body)
     with patch("personal_agent.tools.perplexity.settings") as mock_settings:
@@ -119,13 +136,13 @@ async def test_reason_mode_uses_correct_model() -> None:
                 query="Compare A vs B", mode="reason", ctx=_CTX
             )
 
-    assert result["model"] == "sonar-reasoning"
+    assert result["model"] == "sonar-reasoning-pro"
     assert result["mode"] == "reason"
     # Check the payload sent to the API
     call_args = client.post.call_args
     payload = call_args.kwargs.get("json") or call_args.args[1] if call_args.args else {}
     if isinstance(call_args.kwargs.get("json"), dict):
-        assert call_args.kwargs["json"]["model"] == "sonar-reasoning"
+        assert call_args.kwargs["json"]["model"] == "sonar-reasoning-pro"
 
 
 @pytest.mark.asyncio
@@ -176,6 +193,36 @@ async def test_http_error_raises() -> None:
         with patch("personal_agent.tools.perplexity.httpx.AsyncClient") as mock_cls:
             mock_cls.return_value = _mock_client(resp)
             with pytest.raises(ToolExecutionError, match="HTTP 401"):
+                await perplexity_query_executor(query="What is Python?", ctx=_CTX)
+
+
+@pytest.mark.asyncio
+async def test_http_error_surfaces_api_error_body() -> None:
+    """The raised error carries the real Perplexity API error body, not just a status code.
+
+    FRE-796: a deprecated-model call surfaced only "HTTP 400" in earlier
+    incidents, forcing a session-transcript dig to find the real cause.
+    The error body must reach the tool's error return directly.
+    """
+    resp = _mock_response(
+        400,
+        {
+            "error": {
+                "message": (
+                    "The 'sonar-reasoning' model has been deprecated and is no longer "
+                    "available. Please refer to https://docs.perplexity.ai/docs/"
+                    "getting-started/models for supported models."
+                )
+            }
+        },
+    )
+    with patch("personal_agent.tools.perplexity.settings") as mock_settings:
+        mock_settings.perplexity_api_key = "test-key"
+        mock_settings.perplexity_base_url = "https://api.perplexity.ai"
+        mock_settings.perplexity_timeout_seconds = 90
+        with patch("personal_agent.tools.perplexity.httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value = _mock_client(resp)
+            with pytest.raises(ToolExecutionError, match="has been deprecated"):
                 await perplexity_query_executor(query="What is Python?", ctx=_CTX)
 
 

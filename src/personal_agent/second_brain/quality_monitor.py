@@ -17,12 +17,12 @@ def _new_qm_trace_id() -> str:
     return SystemTraceContext.new("quality_monitor").trace_id
 
 
-ENTITY_RATIO_TARGET = (0.5, 2.0)
+ENTITY_RATIO_TARGET = (2.0, 5.0)  # FRE-620: re-derived from a validated live baseline of 3.22-3.56
 RELATIONSHIP_DENSITY_TARGET = (1.0, 3.0)
 DUPLICATE_RATE_TARGET_MAX = 0.05
 EXTRACTION_FAILURE_RATE_TARGET_MAX = 0.01
-EMPTY_DESCRIPTION_RATE_TARGET_MAX = 0.10  # FRE-374: >10% empty descriptions
-REDUNDANT_RELATIONSHIP_PAIRS_TARGET_MAX = 50  # FRE-374: >50 redundant-type pairs
+REDUNDANT_RELATIONSHIP_PAIR_RATE_TARGET_MAX = 0.10  # FRE-620: rate, not absolute count
+MIN_ABSOLUTE_SPIKE = 15  # FRE-620: floor so trivial deltas on a near-zero baseline don't fire
 
 
 @dataclass(frozen=True)
@@ -56,6 +56,7 @@ class GraphHealthReport:
     # FRE-374: content quality signals
     empty_description_entity_count: int = 0
     redundant_relationship_pairs: int = 0
+    relationship_bearing_pairs: int = 0  # FRE-620: denominator for the redundant-pair rate
 
 
 @dataclass(frozen=True)
@@ -188,7 +189,7 @@ class ConsolidationQualityMonitor:
         """
         trace_id = trace_id or _new_qm_trace_id()
         conversation_count = int(
-            await self._run_scalar_query("MATCH (c:Conversation) RETURN count(c) AS value")
+            await self._run_scalar_query("MATCH (t:Turn) RETURN count(t) AS value")
         )
         entity_count = int(
             await self._run_scalar_query("MATCH (e:Entity) RETURN count(e) AS value")
@@ -253,7 +254,7 @@ class ConsolidationQualityMonitor:
             await self._run_scalar_query("MATCH (e:Entity) RETURN count(e) AS value")
         )
         conversation_nodes = int(
-            await self._run_scalar_query("MATCH (c:Conversation) RETURN count(c) AS value")
+            await self._run_scalar_query("MATCH (t:Turn) RETURN count(t) AS value")
         )
         relationship_count = int(
             await self._run_scalar_query(
@@ -280,7 +281,7 @@ class ConsolidationQualityMonitor:
             )
         )
         timestamps = await self._run_list_query(
-            "MATCH (c:Conversation) WHERE c.timestamp IS NOT NULL RETURN c.timestamp AS value ORDER BY c.timestamp ASC"
+            "MATCH (t:Turn) WHERE t.timestamp IS NOT NULL RETURN t.timestamp AS value ORDER BY t.timestamp ASC"
         )
 
         relationship_density = (
@@ -309,6 +310,16 @@ class ConsolidationQualityMonitor:
                 """
             )
         )
+        relationship_bearing_pairs = int(
+            await self._run_scalar_query(
+                """
+                MATCH (a:Entity)-[r]-(b:Entity)
+                WHERE id(a) < id(b)
+                WITH a, b, count(*) AS cnt
+                RETURN count(*) AS value
+                """
+            )
+        )
 
         report = GraphHealthReport(
             total_nodes=total_nodes,
@@ -322,6 +333,7 @@ class ConsolidationQualityMonitor:
             max_temporal_gap_hours=max_temporal_gap_hours,
             empty_description_entity_count=empty_description_count,
             redundant_relationship_pairs=redundant_relationship_pairs,
+            relationship_bearing_pairs=relationship_bearing_pairs,
         )
         log.info(
             "quality_monitor_graph_report",
@@ -331,6 +343,7 @@ class ConsolidationQualityMonitor:
             max_temporal_gap_hours=round(report.max_temporal_gap_hours, 2),
             empty_description_entity_count=report.empty_description_entity_count,
             redundant_relationship_pairs=report.redundant_relationship_pairs,
+            relationship_bearing_pairs=report.relationship_bearing_pairs,
             trace_id=trace_id,
         )
         return report
@@ -355,22 +368,43 @@ class ConsolidationQualityMonitor:
         graph = await self.check_graph_health(trace_id=trace_id)
         anomalies: list[Anomaly] = []
 
-        anomalies.extend(
-            _range_anomaly(
-                "entity_conversation_ratio_out_of_range",
-                quality.entities_per_conversation_ratio,
-                ENTITY_RATIO_TARGET,
-                "Entity-to-conversation ratio outside target range.",
+        # FRE-620: ratio and density have different denominators (turns vs entities) — an
+        # empty/disconnected graph must never masquerade as a range anomaly on either one.
+        disconnected = not self._memory_service.connected
+        ratio_insufficient = disconnected or quality.conversations == 0
+        density_insufficient = disconnected or graph.entity_nodes == 0
+        if ratio_insufficient or density_insufficient:
+            anomalies.append(
+                Anomaly(
+                    anomaly_type="insufficient_data",
+                    severity="medium",
+                    message=(
+                        "Quality monitor ran against an empty or disconnected graph "
+                        f"(connected={self._memory_service.connected}, "
+                        f"turns={quality.conversations}, entities={graph.entity_nodes}); "
+                        "ratio/density checks skipped rather than risk a false anomaly."
+                    ),
+                    observed_value=0.0,
+                )
             )
-        )
-        anomalies.extend(
-            _range_anomaly(
-                "relationship_density_out_of_range",
-                graph.relationship_density,
-                RELATIONSHIP_DENSITY_TARGET,
-                "Relationship density outside target range.",
+        if not ratio_insufficient:
+            anomalies.extend(
+                _range_anomaly(
+                    "entity_conversation_ratio_out_of_range",
+                    quality.entities_per_conversation_ratio,
+                    ENTITY_RATIO_TARGET,
+                    "Entity-to-conversation ratio outside target range.",
+                )
             )
-        )
+        if not density_insufficient:
+            anomalies.extend(
+                _range_anomaly(
+                    "relationship_density_out_of_range",
+                    graph.relationship_density,
+                    RELATIONSHIP_DENSITY_TARGET,
+                    "Relationship density outside target range.",
+                )
+            )
         if quality.duplicate_rate > DUPLICATE_RATE_TARGET_MAX:
             anomalies.append(
                 Anomaly(
@@ -402,36 +436,32 @@ class ConsolidationQualityMonitor:
                 )
             )
 
-        # FRE-374: empty-description rate anomaly
-        if graph.entity_nodes > 0:
-            empty_rate = graph.empty_description_entity_count / graph.entity_nodes
-            if empty_rate > EMPTY_DESCRIPTION_RATE_TARGET_MAX:
-                anomalies.append(
-                    Anomaly(
-                        anomaly_type="empty_description_rate_high",
-                        severity="medium",
-                        message=(
-                            f"Empty-description entity rate {empty_rate:.1%} exceeds "
-                            f"{EMPTY_DESCRIPTION_RATE_TARGET_MAX:.0%} target "
-                            f"({graph.empty_description_entity_count} of {graph.entity_nodes} entities)."
-                        ),
-                        observed_value=empty_rate,
-                        expected_range=(0.0, EMPTY_DESCRIPTION_RATE_TARGET_MAX),
-                    )
-                )
+        # FRE-620: empty-description rate demoted to dashboard/info only. Already
+        # render-mitigated (ADR-0073/FRE-374, executor.py:1337) — stored cruft the LLM never
+        # sees, so it's no longer worth an anomaly ticket. empty_description_entity_count
+        # stays on GraphHealthReport/logs for visibility. Real cruft is tracked by the
+        # standing graph-hygiene backlog ticket (FRE-621).
 
-        # FRE-374: redundant relationship pairs anomaly
-        if graph.redundant_relationship_pairs > REDUNDANT_RELATIONSHIP_PAIRS_TARGET_MAX:
+        # FRE-620: redundant relationship pairs as a rate, not an absolute count — the raw
+        # count grows with the graph and was permanently past the old fixed threshold.
+        redundant_pair_rate = (
+            graph.redundant_relationship_pairs / graph.relationship_bearing_pairs
+            if graph.relationship_bearing_pairs > 0
+            else 0.0
+        )
+        if redundant_pair_rate > REDUNDANT_RELATIONSHIP_PAIR_RATE_TARGET_MAX:
             anomalies.append(
                 Anomaly(
                     anomaly_type="redundant_relationship_pairs_high",
                     severity="medium",
                     message=(
-                        f"Redundant-relationship-type pairs ({graph.redundant_relationship_pairs}) "
-                        f"exceeds threshold of {REDUNDANT_RELATIONSHIP_PAIRS_TARGET_MAX}."
+                        f"Redundant-relationship-type pair rate {redundant_pair_rate:.1%} exceeds "
+                        f"{REDUNDANT_RELATIONSHIP_PAIR_RATE_TARGET_MAX:.0%} target "
+                        f"({graph.redundant_relationship_pairs} of "
+                        f"{graph.relationship_bearing_pairs} relationship-bearing pairs)."
                     ),
-                    observed_value=float(graph.redundant_relationship_pairs),
-                    expected_range=(0.0, float(REDUNDANT_RELATIONSHIP_PAIRS_TARGET_MAX)),
+                    observed_value=redundant_pair_rate,
+                    expected_range=(0.0, REDUNDANT_RELATIONSHIP_PAIR_RATE_TARGET_MAX),
                 )
             )
 
@@ -581,6 +611,8 @@ def _detect_spike(daily_counts: dict[str, int]) -> Anomaly | None:
     if baseline_mean <= 0.0:
         return None
     if latest_value <= max(threshold, baseline_mean * 2.0):
+        return None
+    if (latest_value - baseline_mean) < MIN_ABSOLUTE_SPIKE:
         return None
 
     return Anomaly(

@@ -103,6 +103,10 @@ class TestFormatLinearDescription:
         """ADR-0040 default max issues per run."""
         assert PromotionCriteria().max_existing_linear_issues == 5
 
+    def test_default_excludes_knowledge_quality(self) -> None:
+        """FRE-620 promotion floor: only RELIABILITY/high-severity auto-promotes by default."""
+        assert PromotionCriteria().excluded_categories == [ChangeCategory.KNOWLEDGE_QUALITY]
+
     def test_handles_no_proposed_change(self) -> None:
         """Test that Linear description handles entries without proposed_change."""
         entry = CaptainLogEntry(
@@ -246,6 +250,33 @@ class TestScanPromotableEntries:
         criteria = PromotionCriteria(excluded_categories=[ChangeCategory.SAFETY])
         pipeline = PromotionPipeline(log_dir=log_dir, criteria=criteria)
         assert len(pipeline.scan_promotable_entries()) == 0
+
+    def test_default_criteria_skips_knowledge_quality_promotes_reliability(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """FRE-620: under the default promotion floor, a medium KNOWLEDGE_QUALITY entry
+        (e.g. a graph-quality anomaly) does not reach Linear, but a high RELIABILITY one does.
+        """
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        _write_entry(
+            log_dir,
+            entry_id="CL-20260220-120000-kq",
+            what="Knowledge quality anomaly",
+            category=ChangeCategory.KNOWLEDGE_QUALITY,
+        )
+        _write_entry(
+            log_dir,
+            entry_id="CL-20260220-120000-rel",
+            what="Reliability anomaly",
+            category=ChangeCategory.RELIABILITY,
+        )
+
+        pipeline = PromotionPipeline(log_dir=log_dir)
+        promotable = {entry.entry_id for entry in pipeline.scan_promotable_entries()}
+
+        assert "CL-20260220-120000-kq" not in promotable
+        assert "CL-20260220-120000-rel" in promotable
 
     def test_custom_criteria(self, tmp_path: pathlib.Path) -> None:
         """Test that scan respects custom criteria."""

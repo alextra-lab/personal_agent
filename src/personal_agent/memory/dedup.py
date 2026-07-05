@@ -59,7 +59,7 @@ async def check_entity_duplicate(
 
     Args:
         name: Proposed entity name.
-        entity_type: Entity type (e.g., "Technology").
+        entity_type: Entity type (e.g., "TechnicalArtifact").
         embedding: Embedding vector for the proposed entity.
         neo4j_session: Active Neo4j async session.
 

@@ -41,8 +41,9 @@ search_memory_tool = ToolDefinition(
             type="array",
             description=(
                 "Optional filter by entity type. "
-                "Valid values: Location, Person, Organization, Technology, "
-                "Topic, Concept, Event. Leave empty to search all types."
+                "Valid values: Person, Organization, Location, TechnicalArtifact, "
+                "KnowledgeArtifact, MethodOrConcept, DomainOrTopic, Phenomenon, "
+                "QuantityMeasure, Event. Leave empty to search all types."
             ),
             required=False,
             default=None,

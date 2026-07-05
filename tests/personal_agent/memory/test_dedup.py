@@ -3,6 +3,11 @@
 
 The dedup pipeline checks vector similarity before MERGE to prevent
 near-duplicate explosion (40 mentions → 500 nodes → should be ~10).
+
+Fixture entity_type values are arbitrary strings — dedup.py filters generically on
+whatever type value its caller supplies (no hardcoded taxonomy), so these fixtures use
+the ADR-0109 V2 taxonomy (FRE-794) purely for consistency with the live extractor, not
+because dedup.py depends on the specific strings.
 """
 
 from __future__ import annotations
@@ -42,7 +47,7 @@ class TestCheckEntityDuplicate:
         ):
             result = await check_entity_duplicate(
                 name="PostgreSQL",
-                entity_type="Technology",
+                entity_type="TechnicalArtifact",
                 embedding=[0.1] * 1536,
                 neo4j_session=AsyncMock(),
             )
@@ -55,11 +60,13 @@ class TestCheckEntityDuplicate:
         with patch(
             "personal_agent.memory.dedup._find_similar_entities",
             new_callable=AsyncMock,
-            return_value=[{"name": "PostgreSQL", "similarity": 1.0, "entity_type": "Technology"}],
+            return_value=[
+                {"name": "PostgreSQL", "similarity": 1.0, "entity_type": "TechnicalArtifact"}
+            ],
         ):
             result = await check_entity_duplicate(
                 name="PostgreSQL",
-                entity_type="Technology",
+                entity_type="TechnicalArtifact",
                 embedding=[0.1] * 1536,
                 neo4j_session=AsyncMock(),
             )
@@ -72,11 +79,13 @@ class TestCheckEntityDuplicate:
         with patch(
             "personal_agent.memory.dedup._find_similar_entities",
             new_callable=AsyncMock,
-            return_value=[{"name": "Postgres", "similarity": 0.92, "entity_type": "Technology"}],
+            return_value=[
+                {"name": "Postgres", "similarity": 0.92, "entity_type": "TechnicalArtifact"}
+            ],
         ):
             result = await check_entity_duplicate(
                 name="PostgreSQL Database",
-                entity_type="Technology",
+                entity_type="TechnicalArtifact",
                 embedding=[0.1] * 1536,
                 neo4j_session=AsyncMock(),
             )
@@ -89,11 +98,11 @@ class TestCheckEntityDuplicate:
         with patch(
             "personal_agent.memory.dedup._find_similar_entities",
             new_callable=AsyncMock,
-            return_value=[{"name": "Redis", "similarity": 0.3, "entity_type": "Technology"}],
+            return_value=[{"name": "Redis", "similarity": 0.3, "entity_type": "TechnicalArtifact"}],
         ):
             result = await check_entity_duplicate(
                 name="PostgreSQL",
-                entity_type="Technology",
+                entity_type="TechnicalArtifact",
                 embedding=[0.1] * 1536,
                 neo4j_session=AsyncMock(),
             )
@@ -128,6 +137,29 @@ class TestFindSimilarEntities:
         cypher = session.run.await_args.args[0]
         assert "node.user_id IS NULL" in cypher
 
+    @pytest.mark.asyncio
+    async def test_scopes_by_v2_entity_type_value(self) -> None:
+        """Dedup grain is generic — it binds whatever V2 type string the caller supplies.
+
+        ADR-0109 (FRE-794): dedup.py has no hardcoded taxonomy; the Cypher WHERE
+        clause filters on the caller-supplied entity_type parameter, so it operates
+        correctly on the retired V1 strings, the V2 strings, or anything else.
+        """
+        session = AsyncMock()
+        result_obj = AsyncMock()
+        result_obj.data = AsyncMock(return_value=[])
+        session.run = AsyncMock(return_value=result_obj)
+
+        await _find_similar_entities(
+            embedding=[0.1] * 1536,
+            entity_type="TechnicalArtifact",
+            neo4j_session=session,
+            top_k=5,
+        )
+
+        session.run.assert_awaited_once()
+        assert session.run.await_args.kwargs["entity_type"] == "TechnicalArtifact"
+
 
 class TestAllcapsGuard:
     """Tests for the ALL_CAPS name-pattern guard (FRE-412)."""
@@ -142,12 +174,12 @@ class TestAllcapsGuard:
             "personal_agent.memory.dedup._find_similar_entities",
             new_callable=AsyncMock,
             return_value=[
-                {"name": "model_call_error", "similarity": 0.935, "entity_type": "Concept"}
+                {"name": "model_call_error", "similarity": 0.935, "entity_type": "MethodOrConcept"}
             ],
         ):
             result = await check_entity_duplicate(
                 name="LLM_CALL",
-                entity_type="Concept",
+                entity_type="MethodOrConcept",
                 embedding=[0.1] * 1536,
                 neo4j_session=AsyncMock(),
             )
@@ -159,11 +191,11 @@ class TestAllcapsGuard:
         with patch(
             "personal_agent.memory.dedup._find_similar_entities",
             new_callable=AsyncMock,
-            return_value=[{"name": "HTTP", "similarity": 0.95, "entity_type": "Concept"}],
+            return_value=[{"name": "HTTP", "similarity": 0.95, "entity_type": "MethodOrConcept"}],
         ):
             result = await check_entity_duplicate(
                 name="HTTPS",
-                entity_type="Concept",
+                entity_type="MethodOrConcept",
                 embedding=[0.1] * 1536,
                 neo4j_session=AsyncMock(),
             )
@@ -176,11 +208,13 @@ class TestAllcapsGuard:
         with patch(
             "personal_agent.memory.dedup._find_similar_entities",
             new_callable=AsyncMock,
-            return_value=[{"name": "LLM_CALL", "similarity": 0.94, "entity_type": "Concept"}],
+            return_value=[
+                {"name": "LLM_CALL", "similarity": 0.94, "entity_type": "MethodOrConcept"}
+            ],
         ):
             result = await check_entity_duplicate(
                 name="llm_call_wrapper",
-                entity_type="Concept",
+                entity_type="MethodOrConcept",
                 embedding=[0.1] * 1536,
                 neo4j_session=AsyncMock(),
             )
@@ -207,11 +241,13 @@ class TestAllcapsGuard:
         with patch(
             "personal_agent.memory.dedup._find_similar_entities",
             new_callable=AsyncMock,
-            return_value=[{"name": "Redis", "similarity": 0.88, "entity_type": "Technology"}],
+            return_value=[
+                {"name": "Redis", "similarity": 0.88, "entity_type": "TechnicalArtifact"}
+            ],
         ):
             result = await check_entity_duplicate(
                 name="RedisQueue",
-                entity_type="Technology",
+                entity_type="TechnicalArtifact",
                 embedding=[0.1] * 1536,
                 neo4j_session=AsyncMock(),
             )

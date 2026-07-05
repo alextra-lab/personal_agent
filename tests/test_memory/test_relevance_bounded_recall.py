@@ -9,6 +9,8 @@ candidate Cypher is exercised by the integration tests in
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from personal_agent.config.settings import AppConfig
 from personal_agent.memory.models import MemoryQuery, TurnNode
 from personal_agent.memory.service import (
@@ -198,8 +200,17 @@ class TestBuildMemoryRecallEvent:
 class TestSettingsDefaults:
     """AC-7 posture: relevance-bounded recall is off by default, floor is 0.0."""
 
-    def test_defaults_off_and_zero_floor(self) -> None:
-        """The flag defaults off and the floor defaults to 0.0 (legacy-equivalent)."""
+    def test_defaults_off_and_zero_floor(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The flag defaults off and the floor defaults to 0.0 (legacy-equivalent).
+
+        FRE-677: ``AppConfig`` reads ``os.environ`` via the ``AGENT_`` prefix, so
+        the live ``.env`` flag state (loaded into the environment by any earlier
+        test) would otherwise leak in and make this default-posture assertion
+        order-dependent. Clear the two vars so we assert the model field defaults,
+        not machine-specific config.
+        """
+        monkeypatch.delenv("AGENT_RELEVANCE_BOUNDED_RECALL_ENABLED", raising=False)
+        monkeypatch.delenv("AGENT_RECALL_SIMILARITY_FLOOR", raising=False)
         cfg = AppConfig()
         assert cfg.relevance_bounded_recall_enabled is False
         assert cfg.recall_similarity_floor == 0.0

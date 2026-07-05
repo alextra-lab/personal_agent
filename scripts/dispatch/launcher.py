@@ -397,7 +397,7 @@ def plan_launch(
     )
 
 
-def _subprocess_runner(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
+def subprocess_runner(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
     """Default runner: run an argv, capturing output, never via a shell."""
     return subprocess.run(  # noqa: S603 - argv-built from validated inputs, no shell
         list(argv), capture_output=True, text=True, check=False
@@ -424,7 +424,7 @@ def _preflight_worktree(worktree: str, runner: CommandRunner) -> bool:
     return not status.stdout.strip()
 
 
-def execute_plan(plan: LaunchPlan, runner: CommandRunner = _subprocess_runner) -> LaunchResult:
+def execute_plan(plan: LaunchPlan, runner: CommandRunner = subprocess_runner) -> LaunchResult:
     """Execute a launch plan, performing side effects via the runner seam.
 
     Manual outcomes (``manual-model-required``/``manual-continuation``) perform
@@ -471,7 +471,7 @@ def _cwd_matches(cwd: str, worktree: str) -> bool:
     return os.path.normpath(cwd).endswith(os.path.normpath(worktree))
 
 
-def find_warm_session(stream: str, runner: CommandRunner = _subprocess_runner) -> str | None:
+def find_warm_session(stream: str, runner: CommandRunner = subprocess_runner) -> str | None:
     """Resolve the stream's warm Remote-Control session id, if unambiguous.
 
     Parses ``claude agents --json --all`` and matches sessions by working

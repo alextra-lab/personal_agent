@@ -36,9 +36,9 @@
     "youden_j": 0.8766666666666666
   },
   "decision": "fallback",
-  "probe_code_version": "0b6c7b3",
-  "git_dirty": true,
+  "probe_code_version": "550d690",
+  "git_dirty": false,
   "corpus_sha256": "33d5c3e649c18779d343608c9db392ba0ac1360e0091d465979d7379294836c4",
   "pairs_sha256": "9e85842c7b8546329dc3b1cbce126b86b53c957cd36f41e0fd0674c66dd503f3",
-  "run_id": "run-0b6c7b3-33d5c3e6"
+  "run_id": "run-550d690-33d5c3e6"
 }

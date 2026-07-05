@@ -13,8 +13,19 @@ Covers ADR-0110 acceptance criteria:
 
 from __future__ import annotations
 
+import io
+import json
+import urllib.error
+
 import pytest
-from scripts.dispatch.next_resolver import Blocker, IssueSnapshot, resolve_next, stream_label
+from scripts.dispatch.next_resolver import (
+    Blocker,
+    IssueSnapshot,
+    fetch_board,
+    resolve_next,
+    stream_label,
+)
+from scripts.reconcile_board import load_linear_key
 
 
 def _issue(
@@ -260,3 +271,120 @@ def test_cross_stream_blocker_still_blocks_if_open() -> None:
     result = resolve_next([blocked, fallback], "build2")
     assert result is not None
     assert result.identifier == "FRE-16"
+
+
+# --- fetch_board parsing (FRE-804) ------------------------------------------
+#
+# These mock only the network (urlopen); they exercise the real query→parse
+# path. The live query's *validity* against Linear's schema is a separate
+# concern covered by the integration test below — a mock cannot validate
+# GraphQL, which is exactly how the FRE-804 400 slipped past the unit suite.
+
+
+class _FakeResponse:
+    """Minimal context-manager stand-in for a urlopen response."""
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    def __enter__(self) -> _FakeResponse:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self._body
+
+
+def _board_body(nodes: list[dict[str, object]]) -> bytes:
+    return json.dumps({"data": {"issues": {"nodes": nodes}}}).encode()
+
+
+def test_fetch_board_keeps_only_blocks_inverse_relations(monkeypatch: pytest.MonkeyPatch) -> None:
+    # One issue whose inverse-relations mix a "related" and a "blocks" edge.
+    # Only the "blocks" edge is a real blocker; "related" must be dropped
+    # (the FRE-804 regression — the server filter was removed, so the parse
+    # must filter by type client-side).
+    node = {
+        "identifier": "FRE-100",
+        "state": {"name": "Approved"},
+        "priority": 2,
+        "createdAt": "2026-07-01T00:00:00Z",
+        "labels": {"nodes": [{"name": "stream:build1"}]},
+        "inverseRelations": {
+            "nodes": [
+                {"type": "related", "issue": {"identifier": "FRE-90", "state": {"name": "Done"}}},
+                {
+                    "type": "blocks",
+                    "issue": {"identifier": "FRE-91", "state": {"name": "In Progress"}},
+                },
+            ]
+        },
+    }
+    monkeypatch.setattr(
+        "urllib.request.urlopen", lambda *a, **k: _FakeResponse(_board_body([node]))
+    )
+    snapshots = fetch_board("build1", "fake-key")
+    assert len(snapshots) == 1
+    snap = snapshots[0]
+    assert snap.identifier == "FRE-100"
+    assert snap.state == "Approved"
+    assert snap.priority == 2
+    assert snap.created_at == "2026-07-01T00:00:00Z"
+    assert snap.labels == frozenset({"stream:build1"})
+    # The "related" edge is excluded; only the "blocks" edge is a blocker.
+    assert snap.blocked_by == (Blocker(identifier="FRE-91", state="In Progress"),)
+
+
+def test_fetch_board_surfaces_http_error_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A swallowed 400 body is what made FRE-804 hard to diagnose; the error
+    # must now carry the GraphQL validation message.
+    body = b'{"errors":[{"message":"Unknown argument \\"filter\\""}]}'
+
+    def _raise(*a: object, **k: object) -> None:
+        raise urllib.error.HTTPError(
+            url="https://api.linear.app/graphql",
+            code=400,
+            msg="Bad Request",
+            hdrs=None,  # type: ignore[arg-type]
+            fp=io.BytesIO(body),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", _raise)
+    with pytest.raises(RuntimeError) as excinfo:
+        fetch_board("build1", "fake-key")
+    assert "400" in str(excinfo.value)
+    assert "Unknown argument" in str(excinfo.value)
+
+
+def test_fetch_board_surfaces_graphql_errors_on_200(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A 200 carrying GraphQL `errors` must not silently resolve to an empty
+    # board — that would look like "no work" instead of a broken query.
+    body = json.dumps({"errors": [{"message": "boom"}]}).encode()
+    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: _FakeResponse(body))
+    with pytest.raises(RuntimeError, match="GraphQL errors"):
+        fetch_board("build1", "fake-key")
+
+
+@pytest.mark.integration
+def test_fetch_board_live_query_is_valid() -> None:
+    """Prove the board-fetch query validates against Linear's live schema.
+
+    This is the check the mocked unit tests structurally cannot provide (a
+    mock never validates GraphQL) and whose absence let the FRE-804 400 ship.
+    Skipped when no API key is configured.
+    """
+    api_key = load_linear_key()
+    if not api_key:
+        pytest.skip("no AGENT_LINEAR_API_KEY configured")
+    snapshots = fetch_board("build1", api_key)
+    # A valid response is a list (possibly empty); every field the resolver
+    # reads must populate on real issues.
+    assert isinstance(snapshots, list)
+    for snap in snapshots:
+        assert snap.identifier
+        assert snap.state
+        assert stream_label("build1") in snap.labels
+        for blocker in snap.blocked_by:
+            assert blocker.identifier

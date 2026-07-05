@@ -1079,6 +1079,15 @@ class AppConfig(BaseSettings):
     )
     database_echo: bool = Field(default=False, description="Echo SQL queries (for debugging)")
 
+    # sysgraph — isolated System-graph schema (ADR-0105 D2/FRE-714). A distinct
+    # role/connection so the recall/user-facing role is never granted access
+    # (physical isolation proven at the DB permission layer, AC-2).
+    sysgraph_database_url: str = Field(
+        default="postgresql+asyncpg://sysgraph_role:sysgraph_dev_password@localhost:5432/personal_agent",
+        description="PostgreSQL URL for the isolated sysgraph schema (ADR-0105 D2). "
+        "Connects as the dedicated sysgraph_role, never the app's main role.",
+    )
+
     # Elasticsearch
     elasticsearch_url: str = Field(default="http://localhost:9200", description="Elasticsearch URL")
     elasticsearch_index_prefix: str = Field(
@@ -2137,11 +2146,11 @@ class AppConfig(BaseSettings):
         """Refuse to start in TEST environment when substrate URIs point to prod defaults.
 
         This guard prevents test runs from accidentally writing to the production
-        Neo4j graph, Elasticsearch indices, or PostgreSQL database.  It fires
-        when ALL three conditions hold:
+        Neo4j graph, Elasticsearch indices, or PostgreSQL database (main app or
+        sysgraph).  It fires when ALL three conditions hold:
 
         1. ``environment == Environment.TEST``
-        2. At least one of the three substrate URIs matches the default prod
+        2. At least one of the four substrate URIs matches the default prod
            fingerprint (localhost on the canonical port).
         3. ``allow_test_writes_to_prod_substrate`` is not set.
 
@@ -2161,6 +2170,8 @@ class AppConfig(BaseSettings):
             offenders.append(f"elasticsearch_url={self.elasticsearch_url!r}")
         if is_prod_postgres_url(self.database_url):
             offenders.append(f"database_url={self.database_url!r}")
+        if is_prod_postgres_url(self.sysgraph_database_url):
+            offenders.append(f"sysgraph_database_url={self.sysgraph_database_url!r}")
 
         if not offenders:
             return self
@@ -2171,6 +2182,7 @@ class AppConfig(BaseSettings):
             "Set AGENT_NEO4J_URI=bolt://localhost:7688 (test stack), "
             "AGENT_ELASTICSEARCH_URL=http://localhost:9201, "
             "AGENT_DATABASE_URL=<test-db-url>, "
+            "AGENT_SYSGRAPH_DATABASE_URL=<test-db-url>, "
             "or set AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE=1 to bypass (use with care)."
         )
 

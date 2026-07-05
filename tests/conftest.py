@@ -22,6 +22,10 @@ os.environ.setdefault(
     "AGENT_DATABASE_URL",
     "postgresql+asyncpg://agent:agent_dev_password@localhost:5433/personal_agent",
 )
+os.environ.setdefault(
+    "AGENT_SYSGRAPH_DATABASE_URL",
+    "postgresql+asyncpg://sysgraph_role:sysgraph_dev_password@localhost:5433/personal_agent",
+)
 os.environ.setdefault("AGENT_ELASTICSEARCH_INDEX_PREFIX", "agent-logs-test")
 os.environ.setdefault("AGENT_CAPTAINS_LOG_INDEX_PREFIX", "agent-captains-test")
 

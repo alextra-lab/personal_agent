@@ -365,7 +365,8 @@ CREATE TABLE IF NOT EXISTS artifacts (
     tags            TEXT[] NOT NULL DEFAULT '{}',
     embedding       vector(1024) NULL,
     created_by      TEXT NOT NULL CHECK (created_by IN ('agent', 'user')),
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    upload_pending  BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE INDEX IF NOT EXISTS idx_artifacts_owner_type_created

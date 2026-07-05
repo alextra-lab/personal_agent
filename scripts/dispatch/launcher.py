@@ -102,20 +102,43 @@ class StreamTopology:
         stream: Dispatch stream key (``build1``/``build2``/``adr``).
         worktree: Repo-relative worktree path the session runs in.
         tmux_session: The named tmux session (a local attach seat beside RC).
-        dispatch_command: The skill command that starts the ticket.
+        skill_command: The base skill command (``/build`` or ``/adr``) — the
+            resolved ticket id is appended to form the seed (FRE-806), so the
+            worker builds the orchestrator-resolved ticket rather than
+            re-deriving a stream's NEXT.
     """
 
     stream: str
     worktree: str
     tmux_session: str
-    dispatch_command: str
+    skill_command: str
 
 
 _TOPOLOGY: dict[str, StreamTopology] = {
-    "build1": StreamTopology("build1", ".claude/worktrees/build", "cc-build", "/build 1"),
-    "build2": StreamTopology("build2", ".claude/worktrees/build2", "cc-build2", "/build 2"),
+    "build1": StreamTopology("build1", ".claude/worktrees/build", "cc-build", "/build"),
+    "build2": StreamTopology("build2", ".claude/worktrees/build2", "cc-build2", "/build"),
     "adr": StreamTopology("adr", ".claude/worktrees/adrs", "cc-adrs", "/adr"),
 }
+
+
+def seed_command(topology: StreamTopology, ticket: str) -> str:
+    """Return the seed command carrying the resolved ticket (FRE-806, AC3).
+
+    The orchestrator has already resolved the stream's NEXT, so the seed passes
+    that ticket to the worker explicitly (``/build FRE-806`` / ``/adr FRE-806``)
+    rather than re-deriving it. The build/adr skills accept an explicit
+    ``FRE-…`` id, and the auto-seed path is CLEAR-only by construction (KEEP
+    tickets return ``manual-continuation`` and never reach here), so the
+    explicit-id CLEAR semantics are correct for it.
+
+    Args:
+        topology: The stream's launch coordinates.
+        ticket: The orchestrator-resolved ticket identifier (e.g. ``FRE-806``).
+
+    Returns:
+        The seed command, e.g. ``/build FRE-806``.
+    """
+    return f"{topology.skill_command} {ticket}"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -267,34 +290,34 @@ def _build_tmux_command(
     )
 
 
-def _launch_card(topology: StreamTopology, model: str, session_id: str) -> str:
+def _launch_card(topology: StreamTopology, model: str, session_id: str, dispatch: str) -> str:
     """Card summarising a full machine launch."""
     return (
         f"[{topology.stream}] launch → {topology.tmux_session}: {model} · "
-        f"{topology.dispatch_command} (session {session_id[:8]}); "
+        f"{dispatch} (session {session_id[:8]}); "
         f"attach locally: tmux attach -t {topology.tmux_session}"
     )
 
 
-def _prepare_card(topology: StreamTopology, model: str) -> str:
+def _prepare_card(topology: StreamTopology, model: str, dispatch: str) -> str:
     """Card for a prepared-but-unseeded session (auto-seed unavailable)."""
     return (
         f"[{topology.stream}] prepare → {topology.tmux_session} started at {model}; "
-        f"send {topology.dispatch_command} to begin"
+        f"send {dispatch} to begin"
     )
 
 
-def _manual_model_card(topology: StreamTopology, model: str) -> str:
+def _manual_model_card(topology: StreamTopology, model: str, dispatch: str) -> str:
     """Card for the model-set-unavailable fallback (AC-7a)."""
     return (
         f"[{topology.stream}] manual-model-required → set the model to {model}, then run "
-        f"{topology.dispatch_command} (the launcher did not set the model and will not launch "
+        f"{dispatch} (the launcher did not set the model and will not launch "
         f"at an unproven model)"
     )
 
 
 def _manual_continuation_card(
-    topology: StreamTopology, model: str, warm_session_id: str | None
+    topology: StreamTopology, model: str, warm_session_id: str | None, dispatch: str
 ) -> str:
     """Card for the KEEP path — always manual, never a fresh session (AC-2 KEEP)."""
     if warm_session_id is not None:
@@ -303,7 +326,7 @@ def _manual_continuation_card(
         target = f"no single warm session found for {topology.worktree}; attach/continue manually"
     return (
         f"[{topology.stream}] manual-continuation → {target}; required model {model} (the launcher "
-        f"has NOT verified or switched it); run {topology.dispatch_command}"
+        f"has NOT verified or switched it); run {dispatch}"
     )
 
 
@@ -340,6 +363,9 @@ def plan_launch(
     if model not in _MODELS:
         raise ValueError(f"unknown model tier: {model!r} (expected one of {sorted(_MODELS)})")
 
+    # The seed carries the orchestrator-resolved ticket (FRE-806, AC3).
+    dispatch = seed_command(topology, ticket)
+
     if context_keep:
         # KEEP is never machine-auto-launched and never reset/cleared (ADR §2).
         return LaunchPlan(
@@ -353,7 +379,7 @@ def plan_launch(
             session_id=warm_session_id,
             command=None,
             reset_worktree=False,
-            card=_manual_continuation_card(topology, model, warm_session_id),
+            card=_manual_continuation_card(topology, model, warm_session_id, dispatch),
         )
 
     # CLEAR: cannot prove the model → refuse to launch (AC-7a).
@@ -369,19 +395,19 @@ def plan_launch(
             session_id=None,
             command=None,
             reset_worktree=False,
-            card=_manual_model_card(topology, model),
+            card=_manual_model_card(topology, model, dispatch),
         )
 
     # CLEAR + model-set available: launch (seeded) or prepare (owner sends the command).
     session_id = session_id_for(stream, ticket, model, "clear")
-    seed = topology.dispatch_command if capabilities.auto_seed else None
+    seed = dispatch if capabilities.auto_seed else None
     command = _build_tmux_command(topology, model, session_id, seed)
     if capabilities.auto_seed:
         outcome: PlanOutcome = "launch"
-        card = _launch_card(topology, model, session_id)
+        card = _launch_card(topology, model, session_id, dispatch)
     else:
         outcome = "prepare"
-        card = _prepare_card(topology, model)
+        card = _prepare_card(topology, model, dispatch)
     return LaunchPlan(
         outcome=outcome,
         stream=stream,

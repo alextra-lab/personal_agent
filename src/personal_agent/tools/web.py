@@ -62,7 +62,7 @@ web_search_tool = ToolDefinition(
         "  - Unit conversion: query '20 °C in °F' or '10 EUR in USD' (use symbols, not words) → converted value\n"
         "  - Calculator: query '2^10 * 3' → computed result\n"
         "\nWeather: use engines='openmeteo' or categories='weather' for current conditions + hourly forecast.\n"
-        "\nCategories: general (default), it, science, news, weather, social_media, files, images, music, videos.\n"
+        "\nCategories: general (default), it, science, news, weather, social_media, files, images, music, videos, recipes.\n"
         "Use 'it' for programming questions, 'science' for academic research, "
         "'news' for current events, 'social_media' for Reddit/Lemmy discussions.\n"
         "Prefer perplexity_query for synthesized answers with citations."
@@ -82,10 +82,12 @@ web_search_tool = ToolDefinition(
             type="string",
             description=(
                 "Comma-separated SearXNG categories to search. "
-                "Options: general, it, science, news, weather, social_media, files, images, music, videos. "
+                "Options: general, it, science, news, weather, social_media, files, images, "
+                "music, videos, recipes. "
                 "Default: 'general'. Use 'it' for programming questions, "
                 "'science' for academic research, 'weather' for forecasts, "
-                "'social_media' for Reddit/Lemmy community discussions."
+                "'social_media' for Reddit/Lemmy community discussions, "
+                "'recipes' for cooking/recipe results (chefkoch)."
             ),
             required=False,
             default=None,

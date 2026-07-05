@@ -21,7 +21,7 @@ log = get_logger(__name__)
 # Perplexity model IDs per mode (see https://docs.perplexity.ai/guides/model-cards)
 _MODE_TO_MODEL: dict[str, str] = {
     "ask": "sonar",
-    "reason": "sonar-reasoning",
+    "reason": "sonar-reasoning-pro",
     "research": "sonar-deep-research",
 }
 

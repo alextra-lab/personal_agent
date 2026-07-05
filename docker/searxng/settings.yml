@@ -223,11 +223,15 @@ engines:
   # Note: chefkoch is the primary recipe engine available in SearXNG.
   # For English recipes, use !g site:allrecipes.com or !g site:seriouseats.com
   # via the google engine — there is no dedicated English recipe engine upstream.
+  # FRE-796: was tagged categories: general, so every default-category web
+  # search included German recipe results (chefkoch titles loosely matched
+  # unrelated queries containing words like "American"). Scoped to its own
+  # category — still reachable via engines=chefkoch or categories=recipes.
   - name: chefkoch
     engine: chefkoch
     shortcut: ck
     disabled: false
-    categories: general
+    categories: recipes
 
   # ── Weather ─────────────────────────────────────────────
   # WeatherUnderground has no SearXNG engine. openmeteo is the

@@ -179,6 +179,9 @@ telemetry/evaluation/fre630-extraction-quality/
 # FRE-577 occupancy curve eval run outputs (regeneratable)
 telemetry/evaluation/eval-04b-occupancy-curve/
 
+# FRE-720 separation-probe run outputs (raw runs never committed; curated probe_result.json is)
+telemetry/evaluation/fre720-insights-separation/
+
 # deploy-approval-gate runtime sentinel (never committed)
 .claude/.deploy-approved
 

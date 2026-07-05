@@ -1,0 +1,527 @@
+# FRE-720 -- real proposal-corpus subset used by pairs.yaml (ADR-0105 D10 / AC-8).
+# Source: agent-captains-reflections-* (Elasticsearch), field `proposed_change`,
+# excluding eval_mode: true docs. Pulled 2026-07-05 from the local ES instance.
+# `text` is the verbatim `what` + "\n\n" + `why` fields of the real reflection doc.
+entries:
+  CL-20260415-213647-c9662b44-001:
+    text: 'Add a lightweight fast-path for trivial UI test prompts to skip non-essential analysis steps
+      (e.g., decomposition assessment) and reduce state transitions when no tools are required.
+
+
+      Evidence shows only one LLM call and no tool activity; yet multiple orchestration phases and state
+      transitions occurred, contributing to ~3s end-to-end latency. Skipping redundant steps for simple
+      prompts can lower latency and cost.'
+    category: performance
+    scope: orchestrator
+    timestamp: '2026-04-15T21:36:47.795552Z'
+  CL-20260416-144730-6d946b32-001:
+    text: 'Reduce the number of LLM calls and/or tool invocations for simple “formatting/example” requests;
+      streamline orchestration for single-turn outputs.
+
+
+      This task produced a successful, likely straightforward markdown example, yet required 2 LLM calls
+      and a tool call, contributing to ~9.6s total latency. Fewer calls should reduce cost and improve
+      responsiveness, while fewer state transitions/monitor overhead can simplify execution for trivial
+      tasks.'
+    category: performance
+    scope: orchestrator
+    timestamp: '2026-04-16T14:47:30.857922Z'
+  CL-20260417-131407-956a5f46-001:
+    text: 'Reduce the number of LLM round-trips for simple greeting/initial-test intents by adding an
+      early-exit response path (or a single-pass generation mode) when the user message matches low-complexity
+      patterns (e.g., “Good afternoon”, “initial test”).
+
+
+      Telemetry indicates 2 LLM calls (avg ~4.66s each) dominate request duration; for low-complexity
+      inputs, a second call may be unnecessary, lowering latency and cost while improving responsiveness.'
+    category: performance
+    scope: orchestrator
+    timestamp: '2026-04-17T13:14:07.557492Z'
+  CL-20260417-141031-58632735-001:
+    text: 'Reduce end-to-end latency by tightening the LLM call configuration and adding a fast-path for
+      simple beta-test/intro messages (e.g., short acknowledgment + next-step questions) without full
+      context budgeting or extended generation.
+
+
+      The single LLM call accounts for nearly all runtime (avg ~5898ms). For a straightforward greeting/eligibility
+      request, a shorter response mode would likely satisfy the user while improving responsiveness and
+      cost.'
+    category: performance
+    scope: orchestrator
+    timestamp: '2026-04-17T14:10:31.283775Z'
+  CL-20260417-200451-46352988-001:
+    text: 'Reduce the number of LLM calls by consolidating reasoning into a single post-tool generation
+      step (or fewer gateway/model round-trips), and only call the memory search tool when the destination
+      is not already present in the current context.
+
+
+      The task completed successfully but required 4 LLM calls and total duration of 4.9s for a simple
+      retrieval-and-answer. Consolidating LLM steps should lower latency and cost while preserving correctness.
+      Conditional tool usage can avoid unnecessary tool calls in cases where the destination is already
+      known from prior conversation context.'
+    category: performance
+    scope: orchestrator
+    timestamp: '2026-04-17T20:04:51.405394Z'
+  CL-20260418-050649-30ad3ced-001:
+    text: 'Add a fast-path for simple governance/tool-visibility questions that bypasses memory enrichment,
+      proactive memory budgeting, and context compression when not needed; also improve observability
+      by logging MCP tool names and results (or at least whether any MCP tool was successfully discovered/queried).
+
+
+      The task is a straightforward inquiry; the observed 38.7s duration with 6 LLM calls and multiple
+      context/memory steps suggests avoidable overhead. Better tool-level telemetry would confirm whether
+      MCP tools were actually discovered/used versus only inferred by the LLM.'
+    category: performance
+    scope: orchestrator
+    timestamp: '2026-04-18T05:06:49.882136Z'
+  CL-20260419-060606-d8c6a43e-001:
+    text: 'Add an early-exit/fast-path for health/status queries that primarily require a concise system
+      self-check and user-facing reassurance, reducing the number of LLM calls and tool invocations (e.g.,
+      skip memory enrichment/context compression when not needed, and avoid redundant gateway/tool steps
+      when infra health is already confirmed).
+
+
+      The telemetry shows 2 LLM calls and 3 tool calls plus memory/context operations for a request that
+      appears to be a simple status/health report. A fast-path would lower latency and cost, and better
+      align execution with the user’s immediate concern (is the system functioning).'
+    category: performance
+    scope: orchestrator
+    timestamp: '2026-04-19T06:06:06.532727Z'
+  CL-20260421-154859-58ebba16-001:
+    text: 'Add a lightweight fast-path for ultra-short, low-risk queries (e.g., ''Quick health check.
+      All ok?'') to reduce tool usage and LLM roundtrips: (1) bypass proactive memory enrichment and context
+      compression for such intents, (2) cap tool attempts to 0-1 unless infra_health_checked indicates
+      issues, and (3) reduce to a single LLM call for final response when no external data is required.
+
+
+      Evidence shows disproportionate internal activity relative to the simple request: 42 LLM calls,
+      20 tool executions, and repeated tool-call blocking (18) with a tool iteration limit reached. This
+      likely increases latency and cost without improving answer quality for a straightforward health
+      check.'
+    category: performance
+    scope: orchestrator
+    timestamp: '2026-04-21T15:48:59.444530Z'
+  CL-20260422-043108-2594a37f-001:
+    text: 'Reduce unnecessary LLM round-trips and prevent repeated tool-call attempts by adding an early-exit/short-circuit
+      path for simple health-check queries (e.g., “Any errors in the list 9 hours? Captain’s log up to
+      date. Knowledge graph current?”). Specifically: (1) detect health-check intent and require only
+      the minimal set of sources, (2) add a retry/backoff guard that stops re-attempting the same tool
+      within the same run after a block, and (3) cap the number of LLM calls per health-check to a small
+      fixed number (e.g., 3–6) by using a single consolidated prompt that pulls all required statuses
+      at once.
+
+
+      Telemetry indicates 42 LLM calls and governance blocks for repeated tool calls (18 blocked) plus
+      a tool iteration limit hit (1). For a simple status query, this suggests avoidable overhead and
+      potential latency from iterative planning/verification rather than direct retrieval.'
+    category: performance
+    scope: orchestrator
+    timestamp: '2026-04-22T04:31:08.902754Z'
+  CL-20260427-171627-d2d71fc6-001:
+    text: 'Add silent error handling and retry logic for `capture_write_failed` telemetry events, and
+      log a warning with the failure reason so it can be debugged.
+
+
+      The `capture_write_failed` event appears in the telemetry but the failure reason is opaque. Lost
+      captures mean degraded observability and potential gaps in the agent''s memory/logging system. Without
+      visibility into why captures fail, the issue cannot be diagnosed or fixed.'
+    category: observability
+    scope: captains_log
+    timestamp: '2026-04-27T17:16:27.136217Z'
+  CL-20260427-173836-d40c57fd-001:
+    text: 'Investigate and fix the recurring `capture_write_failed` event that silently drops execution
+      captures.
+
+
+      The `capture_write_failed` event appears across multiple traces and represents silent data loss
+      in the observability pipeline. If execution captures (likely CaptainsLog or similar) are failing
+      to write, retrospective analysis, debugging, and learning from past sessions is degraded. Since
+      it fails silently without affecting the user-facing reply, it may have been masked for a long time.'
+    category: observability
+    scope: captains_log
+    timestamp: '2026-04-27T17:38:36.145688Z'
+  CL-20260427-173217-cae57b3c-001:
+    text: 'Investigate and fix the `capture_write_failed` event that occurs silently during task completion.
+      Add alerting or retry logic when capture writes fail, and surface the failure more prominently in
+      logs.
+
+
+      Silently failing capture writes degrade the telemetry data quality that the system relies on for
+      exactly the kind of query the user is making (p95 latency, historical metrics). If capture writes
+      fail regularly, the historical dataset becomes incomplete, leading to inaccurate answers to observability
+      queries. Currently this failure is swallowed without retry or escalation.'
+    category: reliability
+    scope: captains_log
+    timestamp: '2026-04-27T17:32:17.501882Z'
+  CL-20260427-172249-98f5ba3f-001:
+    text: 'Add error handling and retry logic for `capture_write_failed` events, and surface capture failures
+      as warnings in the telemetry system rather than silent drops.
+
+
+      A `capture_write_failed` event occurred silently during this trace. If capture writes fail silently
+      without retry or alerting, audit trails and interaction logs will have gaps. This is an observability
+      reliability issue — the very system designed to record what happened can fail without any escalation,
+      making debugging and compliance harder.'
+    category: reliability
+    scope: captains_log
+    timestamp: '2026-04-27T17:22:49.728314Z'
+  CL-20260427-174551-8dad2ef8-001:
+    text: 'Surface `capture_write_failed` events as observable warnings in telemetry/logs with context
+      about what failed to write, why, and which subsystem was affected (e.g., captains_log, second_brain,
+      metrics store).
+
+
+      Currently, `capture_write_failed` fires silently. If captains_log writes fail, conversation context
+      and task history are silently lost, which degrades long-term memory, debugging capability, and audit
+      trails. Operators have no visibility into write failures unless they inspect raw event counts. This
+      is a hidden reliability gap that compounds over time.'
+    category: observability
+    scope: captains_log
+    timestamp: '2026-04-27T17:45:51.424713Z'
+  CL-20260416-151434-725b210b-001:
+    text: 'Add explicit error classification and retry/fallback behavior for Elasticsearch tool calls,
+      and reduce unnecessary tool invocations by gating the query based on whether retrieval is required
+      for the user’s intent.
+
+
+      The only observed failure is a tool-layer Elasticsearch HTTP error, yet the system reports an ''Unknown
+      error'' at the task level. This indicates insufficient mapping from tool errors to user/task-level
+      error causes and/or missing fallback handling. Additionally, tool_call_started (2) vs tool_call_completed
+      (1) suggests either redundant calls or incomplete recovery after failure.'
+    category: reliability
+    scope: tools
+    timestamp: '2026-04-16T15:14:34.670402Z'
+  CL-20260419-034811-37a2e7b5-001:
+    text: 'Add a failure-aware Elasticsearch retrieval strategy: (1) implement exponential backoff with
+      a strict max-attempts per query, (2) short-circuit further Elasticsearch calls after a threshold
+      of consecutive failures, (3) cache successful query results keyed by trace/user intent, and (4)
+      when Elasticsearch is failing, switch to a deterministic fallback (e.g., use only in-memory/contextual
+      data) without re-querying.
+
+
+      Evidence shows 7 Elasticsearch HTTP errors and 7 failed tool calls out of 8 queries started, with
+      only 1 successful completion. This indicates that repeated tool attempts are unlikely to succeed
+      and are driving extra LLM cycles and latency. A failure-aware strategy reduces wasted calls, improves
+      reliability, and lowers end-to-end duration.'
+    category: reliability
+    scope: tools
+    timestamp: '2026-04-19T03:48:11.340332Z'
+  CL-20260421-182521-7b845f66-001:
+    text: 'Add a preflight and fallback strategy for Elasticsearch queries: (1) validate index/permissions
+      and query shape before issuing ES calls, (2) implement exponential backoff with fewer retries for
+      known HTTP error classes, (3) short-circuit repeated tool calls by caching identical query payloads
+      per run, and (4) if ES fails, switch to a secondary retrieval source or generate candidate entities/relationships
+      from LLM-only using the last successful snapshot.
+
+
+      Telemetry shows 7 ES HTTP errors and 7 tool failures, with repeated tool-call blocking and an iteration
+      limit reached. This indicates wasted calls and reduced retrieval effectiveness, which likely limited
+      new entity/relationship discovery in the knowledge graph.'
+    category: reliability
+    scope: tools
+    timestamp: '2026-04-21T18:25:21.308578Z'
+  CL-20260425-204707-61292e97-001:
+    text: '1. Add a **retrieval-failure circuit breaker**: if Elasticsearch returns repeated HTTP errors
+      within a threshold, stop retrying and switch to a fallback retrieval strategy (e.g., memory search
+      only, cached results, or narrower query).
+
+      2. Fix **error/flag plumbing** so that tool failures correctly set `had_errors` and populate `failure_excerpt`
+      (even if the task still completes via fallback).
+
+      3. Reduce **tool-loop iterations** by implementing a structured retry policy (max attempts + explicit
+      backoff + exit conditions tied to error type).
+
+      4. Add a **fallback reconstruction mode** for “reconstruct prior conversation” requests when retrieval
+      fails (e.g., ask the user for scope, or attempt to reconstruct from locally stored summaries only).
+
+
+      - Prevents wasted time (44.9s) on repeated failing Elasticsearch calls.
+
+      - Makes system behavior transparent: operators and developers can tell whether completion was achieved
+      with full retrieval or degraded fallback.
+
+      - Improves reliability of “yesterday/day-before” reconstruction tasks by ensuring they still produce
+      useful output when search backends fail.'
+    category: reliability
+    scope: orchestrator
+    timestamp: '2026-04-25T20:47:07.120698Z'
+  CL-20260423-193403-a5e592ac-001:
+    text: 'Add an **input-quality / clarification gate** in the orchestrator before generating a user-facing
+      reply, and enable a **lightweight fast-path** for trivial “confirmation/command acknowledgement”
+      intents to reduce LLM calls.
+
+
+      - Prevents low-quality or garbled user messages from being answered confidently without ensuring
+      the user’s intent is understood.
+
+      - Reduces cost and latency by avoiding unnecessary multi-call LLM flows when the task is essentially
+      acknowledgement.
+
+      - Improves user experience by asking a short clarifying question when the prompt is ambiguous or
+      contains apparent corruption.'
+    category: ux
+    scope: orchestrator
+    timestamp: '2026-04-23T19:34:03.435438Z'
+  CL-20260424-134503-3e32121c-001:
+    text: 'Add a lightweight follow-up question (or clarification step) when the user’s historical query
+      is **too broad** (5000–2000 BC) by asking for **region/civilization focus**, and optionally split
+      the response into two sections: (1) Matala clarification and (2) history timeline for the chosen
+      region. Also, if no region is provided, include a brief “high-level global overview” plus a prompt
+      to narrow.
+
+
+      Without a specified geography/civilization, the history window is large enough that answers tend
+      to become either (a) overly general, or (b) implicitly favor one region, which can miss user intent.
+      Clarifying the scope improves relevance and reduces the chance the user must re-ask.'
+    category: ux
+    scope: orchestrator
+    timestamp: '2026-04-24T13:45:03.340763Z'
+  CL-20260424-135405-bf8d1f05-001:
+    text: 'Add a lightweight clarification + structured scaffolding step before the main answer when the
+      user query is underspecified (e.g., “fit in” across groups like Celts and Vikings). Specifically:
+
+      1) Ask (or infer) which “fit in” meaning is intended: **timeline, geography, cultural influence,
+      or interaction with a third group/framework**.
+
+      2) Use a fixed outline (e.g., **approx. dates → region → distinguishing traits → interactions/overlaps
+      → how they relate to the user’s broader topic**) and then fill with model knowledge.
+
+      3) Reduce over-aggressive context compression for this query type (prefer keeping high-salience
+      historical facts) or tag memory items with “must-keep” when classification indicates a historical
+      overview is required.
+
+
+      - “Fit in” is ambiguous; without clarification or scaffolding, the model may choose the wrong interpretive
+      frame, leading to an answer that is directionally plausible but not what the user meant.
+
+      - The presence of **context_compression_triggered** suggests useful details may have been trimmed;
+      for historical grouping questions, retaining key anchors (dates/regions/overlaps) is important.
+
+      - Adding a minimal clarification (or an inference step) can increase answer relevance while still
+      keeping total steps low.'
+    category: ux
+    scope: orchestrator
+    timestamp: '2026-04-24T13:54:05.227952Z'
+  CL-20260425-203044-9730c3ff-001:
+    text: 'Add an early “clarify user intent” branch for very short/ambiguous inputs to reduce unnecessary
+      LLM/tool/context steps.
+
+
+      For inputs like “I do”, the model likely cannot confidently proceed. Asking a targeted clarification
+      upfront can:
+
+      - reduce sequential LLM calls,
+
+      - reduce context sanitization/compression churn,
+
+      - lower latency and token usage,
+
+      - improve UX by requesting only what’s needed.'
+    category: ux
+    scope: orchestrator
+    timestamp: '2026-04-25T20:30:44.766089Z'
+  CL-20260423-193440-e3276472-001:
+    text: 'Add an explicit “tool necessity” explanation layer: whenever the orchestrator decides to call
+      tools, log and surface a short rationale (e.g., “tool required to X because Y”) and expose it in
+      trace/diagnostics; additionally, add a user-facing “I’ll use tools to…” message at the start of
+      the tool loop.
+
+
+      This directly addresses the user’s confusion (“Why are you trying to use tools?”). Even if tool
+      usage is correct and gated, the absence of transparent justification reduces trust and increases
+      perceived unnecessary complexity. Clear explanations also help debugging when tool calls are expected
+      to be minimal but still feel opaque.'
+    category: ux
+    scope: orchestrator
+    timestamp: '2026-04-23T19:34:40.882410Z'
+  CL-20260423-193633-3c13522c-001:
+    text: "Add an explicit “tool result visibility” behavior:\n- When tools are used, show either:\n \
+      \ 1) a **human-readable summary** of the tool result, or  \n  2) the **full result only if it’s\
+      \ safe and non-sensitive**, otherwise show a sanitized excerpt; and  \n- Provide a consistent label\
+      \ like “(tool result summarized)” so users understand why they’re not seeing raw command output.\n\
+      \nRight now the user experience is confusing: seeing only “the tool command” makes it look like\
+      \ the tool never executed or that results are being hidden arbitrarily. A controlled summarization\
+      \ policy improves:\n- **UX clarity** (user can trust the tool contributed),\n- **safety** (still\
+      \ avoids dumping raw tool payloads),\n- **robustness** against prompt injection via tool outputs."
+    category: ux
+    scope: orchestrator
+    timestamp: '2026-04-23T19:36:33.826406Z'
+  CL-20260423-194158-cb023512-001:
+    text: 'Add a governance/UI layer that **suppresses tool-call details and debug message dumps** in
+      normal mode, only showing:
+
+      - a concise “what you’re doing” summary (e.g., “Generating response…”),
+
+      - and the final answer,
+
+      while enabling tool-call visibility only under an explicit “verbose/debug” user toggle.
+
+
+      This directly addresses the user’s complaint that the system appears to “do the same thing” and
+      “show tool calls,” even when there are no underlying repeated tool executions. Reducing internal
+      trace verbosity improves UX, prevents confusion, and makes the system feel more purpose-driven.'
+    category: ux
+    scope: governance
+    timestamp: '2026-04-23T19:41:58.421547Z'
+  CL-20260417-201007-da52a101-001:
+    text: 'Add a dedicated, minimal tool step to directly read and parse /opt/seshat/.env (and optionally
+      any referenced include files) and then explicitly enumerate which core functionality flags are disabled.
+      Ensure the final response includes the key findings (e.g., enabled/disabled status for each relevant
+      flag) and reduce reliance on sysdiag for this specific check.
+
+
+      This would make the task outcome deterministic and aligned with the user request, reduce unnecessary
+      sysdiag/tool iterations, and prevent guardrail triggers (repeated tool-call blocking / iteration
+      limit). It also improves observability by tying the final answer to concrete file contents.'
+    category: reliability
+    scope: tools
+    timestamp: '2026-04-17T20:10:07.602439Z'
+  CL-20260418-095438-2cb30456-001:
+    text: 'Add an explicit verification step for Linear connectivity/control (e.g., a lightweight tool
+      call or gateway check that confirms whether Linear credentials are configured and whether any Linear
+      API endpoints are reachable), and surface that result in the final answer. If no tool exists, add
+      a governance/config check that reads integration status (enabled/disabled, credentials present,
+      last sync timestamp).
+
+
+      The current execution produced a completion response but telemetry shows no Linear-specific tool
+      activity. This risks answering based on assumptions rather than confirmed integration state. A deterministic
+      check would improve reliability and reduce user uncertainty.'
+    category: reliability
+    scope: tools
+    timestamp: '2026-04-18T09:54:38.733264Z'
+  CL-20260418-102656-9852b909-001:
+    text: 'Add an explicit file-access/visibility check step for docker-compose.cloud.yaml (e.g., attempt
+      to locate/read the file via an appropriate tool or workspace index) and include the result (found/not
+      found, path) in the final answer. If direct reading is not allowed, return a clear statement about
+      what the agent can access and why.
+
+
+      The current execution shows tool usage (run_sysdiag) but no evidence of an actual docker-compose.cloud.yaml
+      lookup. An explicit check would improve correctness and reduce reliance on assumptions, improving
+      user trust and UX.'
+    category: reliability
+    scope: tools
+    timestamp: '2026-04-18T10:26:56.723720Z'
+  CL-20260424-181436-a33a9486-001:
+    text: '- Add **preflight validation** for Linear issue creation inputs (schema/required fields/allowed
+      project/labels).
+
+      - Introduce **fail-fast categorization**: classify tool_call_failed into “retryable” vs “terminal/non-actionable,”
+      and stop or reduce iterations when failures repeat with the same signature.
+
+      - Reduce LLM/tool loop turns by using a **single structured plan** for the “health check icon for
+      local path” change and minimizing iterative context compression.
+
+      - Improve **observability on swallowed failures**: ensure tool failures that do not set had_errors
+      still emit structured diagnostics tied to the user-visible result.
+
+
+      - The repeated pattern of `tool_call_failed: 12` indicates a recurring, likely deterministic issue.
+      Validating before calling the tool prevents wasted LLM/tool cycles and lowers latency.
+
+      - Fail-fast logic prevents the orchestrator from continuing to iterate when subsequent steps are
+      doomed to fail for the same reason.
+
+      - Fewer LLM turns and fewer context sanitization/compression events should reduce total runtime.
+
+      - Better diagnostics helps reconcile “COMPLETED” with internal tool failures, reducing future uncertainty
+      and enabling targeted fixes.'
+    category: reliability
+    scope: tools
+    timestamp: '2026-04-24T18:14:36.559126Z'
+  CL-20260425-153010-7b3a7830-001:
+    text: 'Ensure “current system CPU load” queries use a true host-level/system-level metric source (not
+      only request-scoped CPU samples), and report it with timestamp.
+
+
+      Users asking for “current system CPU load” likely expect host-wide real-time CPU (e.g., from RequestMonitor/OS
+      metrics). Request-scoped CPU can underrepresent true system load and may lag behind the user’s query
+      time.'
+    category: observability
+    scope: telemetry
+    timestamp: '2026-04-25T15:30:10.069281Z'
+  CL-20260423-152744-2a0e6936-001:
+    text: 'Add prompt_cache observability and determinism safeguards:
+
+      1) Emit prompt_cache hit/miss telemetry with cache key fingerprint (hash) and the “cacheable prompt
+      segment” boundaries for each LLM call.
+
+      2) Log (redacted) or hash every dynamic component that contributes to the prompt: memory enrichment
+      payload, context budget result, and the final ordered message list.
+
+      3) Ensure deterministic ordering/serialization for all context/memory-injected content (e.g., stable
+      sorting, fixed formatting, no unordered map iteration).
+
+      4) Add a prompt_cache “invalidation policy” for volatile instructions/metadata (timestamps, run
+      IDs, debug wrappers, non-semantic fields) and explicitly exclude them from the cache key/input to
+      the cache.
+
+      5) Add a guardrail: if memory enrichment is “fresh” (budget trimmed differently, different retrieval
+      result), force bypass or include a retrieval-result fingerprint in the cache key.
+
+
+      Without cache hit/miss visibility and cache-key composition, it’s impossible to confirm whether
+      the regression is:
+
+      - correctness (wrong/stale cached completion),
+
+      - eligibility (cache never hit due to nondeterminism), or
+
+      - key collisions (too-broad cache keys).
+
+      Deterministic prompt assembly plus explicit cache invalidation for volatile parts will either restore
+      the intended caching benefits or prevent incorrect cache reuse.'
+    category: observability
+    scope: llm_client
+    timestamp: '2026-04-23T15:27:44.139181Z'
+  CL-20260425-163730-0ea06d23-001:
+    text: 'Add explicit mode-manager transition telemetry (with old/new mode) and label state_transition
+      events by subsystem.
+
+
+      So the requested “whether the mode manager has had any transitions” question can be answered deterministically
+      from telemetry, rather than inferring from generic `state_transition` counts.'
+    category: observability
+    scope: telemetry
+    timestamp: '2026-04-25T16:37:30.390436Z'
+  CL-20260428-090252-957d0846-001:
+    text: 'Add a `--duration` (or `--window`) and `--interval` flag to the `run_sysdiag` tool that allows
+      a single call to return a time-series of samples (e.g., `run_sysdiag --metrics load,swap,io --window
+      5m --interval 30s`), returning all samples in one structured response rather than requiring repeated
+      point-in-time invocations.
+
+
+      The current design forces the agent to approximate historical data by calling the tool many times,
+      which inflates step count (13 calls), triggers tool-budget warnings, compresses context, and stretches
+      wall-clock time to ~97 seconds for a simple retrospective query. A single batch call would satisfy
+      the same information need in one round trip, cutting tool calls by ~10x and LLM turns substantially.'
+    category: performance
+    scope: tools
+    timestamp: '2026-04-28T09:02:52.798271Z'
+  CL-20260429-093732-51a33806-001:
+    text: 'Add a concise system-level summary or "next ticket" heuristic hint to the `linear_find_issues`
+      tool description, guiding the model to request a minimal filtered result set (e.g., highest-priority
+      unstarted issues in the current cycle) rather than a broad dump.
+
+
+      `context_compression_triggered` on a 3-step task indicates the Linear tool returned more data than
+      the context budget comfortably held. A smaller, pre-filtered result would avoid triggering compression,
+      reduce token count passed to the synthesis LLM call, and lower response latency. It would also improve
+      answer quality by surfacing only actionable tickets.'
+    category: performance
+    scope: tools
+    timestamp: '2026-04-29T09:37:32.858748Z'
+  CL-20260429-051232-3397df1b-001:
+    text: 'Add a minimum token/character threshold guard to the proactive memory suggestion pipeline so
+      it skips analysis for messages below a configurable minimum length (e.g., < 20 characters or < 5
+      words).
+
+
+      The proactive memory suggestion pipeline currently fires on every request regardless of message
+      length or complexity. For trivially short messages like "Success", "OK", "Thanks", or single-word
+      inputs, the pipeline will always return empty results (as evidenced here). This wastes compute and
+      adds latency on a code path that will never produce useful output for such inputs.'
+    category: performance
+    scope: second_brain
+    timestamp: '2026-04-29T05:12:32.507474Z'

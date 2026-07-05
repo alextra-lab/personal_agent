@@ -10,6 +10,11 @@ node's scalar ``entity_type`` property from the inherited V1 vocabulary to the V
     (``MethodOrConcept``/``DomainOrTopic``/``Phenomenon``/``QuantityMeasure``/``KnowledgeArtifact``),
     **fail-closed**: an out-of-set / empty / errored classification leaves the node ``Concept`` and
     records it as ``unclassified`` (a re-run retries it — the migration never guesses a type).
+    Classification is **batched** (FRE-801): ``--classify-batch-size`` (default 40) Concept nodes go in
+    one model call behind a byte-identical, provider-cached definition prefix, cutting calls ~20-50×;
+    fail-closed stays strictly per-entity (one bad line never fails the batch). The run report prints
+    model-call/batch counts, token totals (incl. cached), cost, and a World/Personal/System class
+    breakdown.
 
 Idempotent: every write is guarded by ``WHERE entity_type = <V1>`` (already-migrated nodes are skipped)
 and stamped with an update-provenance marker (``entity_type_migration`` = the run id, ADR-0074's
@@ -20,9 +25,15 @@ so a fail-closed node is not re-fetched within a run.
 Snapshot + rollback: a reversible ``{name, entity_type}`` snapshot is written before mutating; ``--rollback``
 restores ``entity_type`` from a snapshot by name (the MERGE key). Take a full Neo4j dump too before a prod run.
 
+Optional ``--exclude-system`` skips ``System``-class nodes (FRE-639/ADR-0105 candidates) — but only when
+the ``class`` property is actually populated on ``:Entity`` nodes; no code writes it today, so absent a
+real graph proving otherwise the flag is a **no-op** and the report says so. The owner decides at the
+dry-run from the printed class breakdown.
+
 Usage:
     uv run python scripts/migrate_fre772_entity_type_v2.py --dry-run --confirm-prod   # preview, no writes
     uv run python scripts/migrate_fre772_entity_type_v2.py --confirm-prod             # migrate
+    uv run python scripts/migrate_fre772_entity_type_v2.py --dry-run --exclude-system --confirm-prod  # preview, skip System
     uv run python scripts/migrate_fre772_entity_type_v2.py --rollback \
         --snapshot-path <file> --confirm-prod                                         # restore
 
@@ -35,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import re
 import sys
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
@@ -64,6 +76,14 @@ PROMPT_VERSION = "fre772-v1"
 
 DEFAULT_BATCH_SIZE = 500
 DEFAULT_CONCURRENCY = 4
+# Concept nodes classified per model call (FRE-801). 40 sits inside the 25-50 target: enough to
+# amortise the ~280-token definition prefix and clear the provider auto-cache threshold, small
+# enough that one batch's output stays parseable in stable numbered order.
+DEFAULT_CLASSIFY_BATCH_SIZE = 40
+
+# Knowledge-class axis (ADR-0097/0098). Orthogonal to entity type; written on no ``:Entity`` node
+# today, so ``--exclude-system`` degrades to a no-op unless a real graph proves it populated.
+_KNOWN_CLASSES = frozenset({"World", "Personal", "System"})
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +116,31 @@ class ClassifyResult:
     reason: str = ""
 
 
-Classifier = Callable[[str, str], Awaitable[ClassifyResult]]
+@dataclass(frozen=True)
+class BatchClassifyResult:
+    """Outcome of classifying one batch of ``Concept`` nodes (FRE-801).
+
+    Attributes:
+        results: Exactly one :class:`ClassifyResult` per input node, in the same order. A per-entity
+            fail-closed outcome (``entity_type=None``) leaves that node ``Concept``; one bad entity
+            never fails the batch.
+        cost_usd: Cost of the single batch call (0.0 for the test fake / a free local model).
+        input_tokens: Prompt tokens billed for the call (``usage.prompt_tokens``).
+        output_tokens: Completion tokens for the call (``usage.completion_tokens``).
+        cached_tokens: Prompt tokens served from the provider cache (``usage.cache_read_input_tokens``);
+            the observable proof the byte-identical definition prefix was cached.
+    """
+
+    results: Sequence[ClassifyResult]
+    cost_usd: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_tokens: int = 0
+
+
+# A batch classifier maps N Concept nodes → one :class:`BatchClassifyResult` (FRE-801). The old
+# per-entity ``Classifier`` is retired: one call per node re-sent the definition block 3888 times.
+BatchClassifier = Callable[[Sequence["ConceptNode"]], Awaitable[BatchClassifyResult]]
 
 
 @dataclass
@@ -116,6 +160,17 @@ class MigrationReport:
     concept_unclassified: list[dict[str, str]] = field(default_factory=list)
     concept_total: int = 0
     cost_usd: float = 0.0
+    # FRE-801 classifier-call economics (AC1 evidence).
+    model_calls: int = 0
+    batch_count: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_tokens: int = 0
+    # FRE-801 knowledge-class breakdown + optional System exclusion (AC3).
+    class_histogram: dict[str, int] = field(default_factory=dict)
+    class_populated: bool = False
+    exclude_system_requested: bool = False
+    exclude_system: bool = False
     v1_remnants_after: dict[str, int] = field(default_factory=dict)
     success: bool = False
 
@@ -128,15 +183,19 @@ class MigrationReport:
 class GraphProtocol(Protocol):
     """The minimal graph operations the migration needs (real impl: :class:`_Neo4jGraph`)."""
 
-    async def count_by_type(self) -> dict[str, int]: ...
+    async def count_by_type(self, *, exclude_system: bool = False) -> dict[str, int]: ...
+
+    async def count_by_class(self) -> dict[str, int]: ...
 
     async def snapshot(self) -> list[dict[str, str]]: ...
 
     async def remap_deterministic(
-        self, v1: str, v2: str, *, run_id: str, now: str, batch: int
+        self, v1: str, v2: str, *, run_id: str, now: str, batch: int, exclude_system: bool = False
     ) -> int: ...
 
-    async def fetch_concepts(self, cursor: str | None, limit: int) -> list[ConceptNode]: ...
+    async def fetch_concepts(
+        self, cursor: str | None, limit: int, *, exclude_system: bool = False
+    ) -> list[ConceptNode]: ...
 
     async def set_entity_type(self, element_id: str, v2: str, *, run_id: str, now: str) -> None: ...
 
@@ -151,13 +210,23 @@ class _Neo4jGraph:
     def __init__(self, driver: object) -> None:
         self._driver = driver
 
-    async def count_by_type(self) -> dict[str, int]:
+    async def count_by_type(self, *, exclude_system: bool = False) -> dict[str, int]:
+        # coalesce(e.class,'') <> 'System' includes null/absent class (only literal System is skipped).
+        where = "WHERE coalesce(e.class, '') <> 'System' " if exclude_system else ""
         async with self._driver.session() as session:  # type: ignore[attr-defined]
             result = await session.run(
-                "MATCH (e:Entity) RETURN coalesce(e.entity_type, '') AS t, count(*) AS n"
+                f"MATCH (e:Entity) {where}RETURN coalesce(e.entity_type, '') AS t, count(*) AS n"
             )
             rows = await result.data()
         return {row["t"]: row["n"] for row in rows}
+
+    async def count_by_class(self) -> dict[str, int]:
+        async with self._driver.session() as session:  # type: ignore[attr-defined]
+            result = await session.run(
+                "MATCH (e:Entity) RETURN coalesce(e.class, '(unset)') AS c, count(*) AS n"
+            )
+            rows = await result.data()
+        return {row["c"]: row["n"] for row in rows}
 
     async def snapshot(self) -> list[dict[str, str]]:
         async with self._driver.session() as session:  # type: ignore[attr-defined]
@@ -169,13 +238,15 @@ class _Neo4jGraph:
         return [{"name": r["name"], "entity_type": r["entity_type"]} for r in rows]
 
     async def remap_deterministic(
-        self, v1: str, v2: str, *, run_id: str, now: str, batch: int
+        self, v1: str, v2: str, *, run_id: str, now: str, batch: int, exclude_system: bool = False
     ) -> int:
+        system_filter = "AND coalesce(e.class, '') <> 'System' " if exclude_system else ""
         total = 0
         async with self._driver.session() as session:  # type: ignore[attr-defined]
             while True:
                 result = await session.run(
                     "MATCH (e:Entity) WHERE e.entity_type = $v1 "
+                    f"{system_filter}"
                     "WITH e LIMIT $batch "
                     "SET e.entity_type = $v2, "
                     "    e.entity_type_migration = $run_id, "
@@ -194,10 +265,14 @@ class _Neo4jGraph:
                     break
         return total
 
-    async def fetch_concepts(self, cursor: str | None, limit: int) -> list[ConceptNode]:
+    async def fetch_concepts(
+        self, cursor: str | None, limit: int, *, exclude_system: bool = False
+    ) -> list[ConceptNode]:
+        system_filter = "AND coalesce(e.class, '') <> 'System' " if exclude_system else ""
         async with self._driver.session() as session:  # type: ignore[attr-defined]
             result = await session.run(
                 "MATCH (e:Entity) WHERE e.entity_type = 'Concept' "
+                f"{system_filter}"
                 "AND ($cursor IS NULL OR elementId(e) > $cursor) "
                 "RETURN elementId(e) AS eid, e.name AS name, "
                 "       coalesce(e.description, '') AS description "
@@ -265,9 +340,14 @@ _CLASSIFIER_SYSTEM = (
     "Output only one type name from the allowed set, nothing else."
 )
 
-_CLASSIFIER_TEMPLATE = """\
-Classify the following knowledge-graph entity into EXACTLY ONE of these five types.
-Output only the type name, nothing else.
+# FRE-801 cache-stable prefix: the system-independent instruction + the five type definitions + the
+# numbered-output instruction. This string MUST be a byte-identical prefix on every batch call — only
+# the entity batch (:func:`_render_batch`) is appended after it — so the provider automatically caches
+# it after the first call (verified by ``cached_tokens`` in the run report). Never interpolate anything
+# variable into this constant. The definition wording is unchanged from the pre-FRE-801 template, so
+# classification behaviour is identical.
+_CLASSIFIER_PREFIX = """\
+Classify each knowledge-graph entity below into EXACTLY ONE of these five types.
 
 MethodOrConcept — a specific human-invented abstract idea, method, technique, algorithm, data
   structure, pattern, or principle. e.g. GraphRAG, trie, Nash equilibrium.
@@ -281,10 +361,77 @@ QuantityMeasure — a named physical quantity, property, dimension, or unit of m
 KnowledgeArtifact — a concrete, named human-authored work whose purpose is to convey understanding to a
   reader — a document, ADR, report, paper, article, chapter, specification, or plan.
 
-Entity name: {name}
-Entity description: {description}
+For EACH numbered entity below, output one line of the form
+  <number>. <TypeName>
+using the entity's own number, exactly one type name from the five above, and nothing else on the line.
+Output the lines in the same order as the entities, one line per entity.
 
-Type:"""
+Entities:
+"""
+
+# A batch output line: leading entity number, a separator, then the answer text.
+_BATCH_LINE_RE = re.compile(r"^\s*(\d+)\s*[.):\-]\s*(.*)$")
+
+
+def _render_batch(nodes: Sequence[ConceptNode]) -> str:
+    """Render the variable tail of the batch prompt (numbered entities), appended after the prefix."""
+    return "\n".join(
+        f"{i}. name: {node.name} | description: {node.description or '(none)'}"
+        for i, node in enumerate(nodes, start=1)
+    )
+
+
+def _build_batch_prompt(nodes: Sequence[ConceptNode]) -> str:
+    """Return the full user prompt: the byte-identical prefix + the numbered entity batch.
+
+    Args:
+        nodes: The Concept nodes in this batch (order fixes the output numbering).
+
+    Returns:
+        A prompt whose first ``len(_CLASSIFIER_PREFIX)`` chars are always ``_CLASSIFIER_PREFIX``.
+    """
+    return _CLASSIFIER_PREFIX + _render_batch(nodes)
+
+
+def _parse_batch_classification(content: str, count: int) -> list[tuple[str | None, str]]:
+    """Map a batch response to one ``(entity_type | None, reason)`` per entity, fail-closed per entity.
+
+    Strict numbered mapping — no positional fallback. A line is trusted only via its explicit entity
+    number; a duplicated number is untrustworthy for *both* lines (the model may have mis-numbered), a
+    missing number leaves that entity unresolved, and an ambiguous/out-of-set answer resolves to no type.
+    In every anomaly the entity stays ``Concept`` and is reported unclassified — the migration never
+    guesses and never assigns a type to the wrong entity. A whole-batch numbering failure fails every
+    entity closed (safe; a re-run retries them).
+
+    Args:
+        content: Raw model output for the batch.
+        count: Number of entities in the batch (indices ``1..count``).
+
+    Returns:
+        A list of length ``count``; entry ``i`` is the outcome for the ``(i+1)``-th entity.
+    """
+    seen: dict[int, str | None] = {}
+    duplicated: set[int] = set()
+    for line in content.splitlines():
+        match = _BATCH_LINE_RE.match(line)
+        if not match:
+            continue
+        idx = int(match.group(1))
+        if idx in seen:
+            duplicated.add(idx)
+        seen[idx] = _parse_classification(match.group(2))
+
+    out: list[tuple[str | None, str]] = []
+    for i in range(1, count + 1):
+        if i in duplicated:
+            out.append((None, "ambiguous_index"))
+        elif i not in seen:
+            out.append((None, "missing"))
+        elif seen[i] is None:
+            out.append((None, "out_of_set"))
+        else:
+            out.append((seen[i], ""))
+    return out
 
 
 def _parse_classification(content: str) -> str | None:
@@ -304,16 +451,18 @@ def _parse_classification(content: str) -> str | None:
     return None
 
 
-def _build_llm_classifier() -> tuple[Classifier, str]:
-    """Build the production LiteLLM-backed classifier and return it with its model id.
+def _build_llm_batch_classifier() -> tuple[BatchClassifier, str]:
+    """Build the production LiteLLM-backed BATCH classifier and return it with its model id (FRE-801).
 
-    The classifier resolves the ``entity_extraction`` role so its cost lands in that budget lane and
-    carries a ``SystemTraceContext`` so its cost/log rows join (ADR-0074). Any exception is caught and
-    surfaced as a fail-closed :class:`ClassifyResult` (``entity_type=None``) so one bad node never aborts
-    the run.
+    One ``respond()`` call classifies a whole batch: the byte-identical :data:`_CLASSIFIER_PREFIX` is
+    sent once, with only the numbered entity batch appended, so the definition block is billed at the
+    provider cached rate after the first call. The classifier resolves the ``entity_extraction`` role so
+    its cost lands in that budget lane and carries a ``SystemTraceContext`` so its cost/log rows join
+    (ADR-0074). Any exception is caught and surfaced as a fully fail-closed batch (every entity
+    ``entity_type=None``, reason ``"error"``) so one bad batch never aborts the run.
 
     Returns:
-        A ``(classifier, model_id)`` pair.
+        A ``(batch_classifier, model_id)`` pair.
     """
     from personal_agent.llm_client import ModelRole
     from personal_agent.llm_client.factory import get_llm_client
@@ -322,8 +471,8 @@ def _build_llm_classifier() -> tuple[Classifier, str]:
     role = resolve_role_model_key("entity_extraction")
     client = get_llm_client(role_name=role)
 
-    async def classify(name: str, description: str) -> ClassifyResult:
-        prompt = _CLASSIFIER_TEMPLATE.format(name=name, description=description or "(none)")
+    async def classify(nodes: Sequence[ConceptNode]) -> BatchClassifyResult:
+        prompt = _build_batch_prompt(nodes)
         try:
             response = await client.respond(
                 role=ModelRole.PRIMARY,
@@ -331,16 +480,28 @@ def _build_llm_classifier() -> tuple[Classifier, str]:
                 system_prompt=_CLASSIFIER_SYSTEM,
                 trace_ctx=SystemTraceContext.new("entity_type_migration"),
             )
-        except Exception as exc:  # noqa: BLE001 — fail-closed: never abort the run on one node
+        except Exception as exc:  # noqa: BLE001 — fail-closed: never abort the run on one batch
             log.warning(
-                "fre772_classify_error", entity=name, error=str(exc), error_type=type(exc).__name__
+                "fre772_classify_error",
+                batch_size=len(nodes),
+                error=str(exc),
+                error_type=type(exc).__name__,
             )
-            return ClassifyResult(entity_type=None, cost_usd=0.0, reason="error")
-        entity_type = _parse_classification(response.get("content") or "")
-        cost = float(response.get("cost_usd") or 0.0)
-        if entity_type is None:
-            return ClassifyResult(entity_type=None, cost_usd=cost, reason="out_of_set")
-        return ClassifyResult(entity_type=entity_type, cost_usd=cost)
+            return BatchClassifyResult(
+                results=[ClassifyResult(entity_type=None, reason="error") for _ in nodes]
+            )
+        parsed = _parse_batch_classification(response.get("content") or "", len(nodes))
+        results = [
+            ClassifyResult(entity_type=entity_type, reason=reason) for entity_type, reason in parsed
+        ]
+        usage = response.get("usage") or {}
+        return BatchClassifyResult(
+            results=results,
+            cost_usd=float(response.get("cost_usd") or 0.0),
+            input_tokens=int(usage.get("prompt_tokens") or 0),
+            output_tokens=int(usage.get("completion_tokens") or 0),
+            cached_tokens=int(usage.get("cache_read_input_tokens") or 0),
+        )
 
     return classify, role
 
@@ -352,27 +513,33 @@ def _build_llm_classifier() -> tuple[Classifier, str]:
 
 async def run_migration(
     graph: GraphProtocol,
-    classifier: Classifier,
+    classifier: BatchClassifier,
     *,
     run_id: str,
     now: str,
     classifier_model: str,
     dry_run: bool = False,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    classify_batch_size: int = DEFAULT_CLASSIFY_BATCH_SIZE,
     concurrency: int = DEFAULT_CONCURRENCY,
+    exclude_system: bool = False,
     snapshot_path: Path | None = None,
 ) -> MigrationReport:
     """Re-type every V1 entity node to V2, idempotently. Returns the run report.
 
     Args:
         graph: The graph seam (real Neo4j or an in-memory fake).
-        classifier: Async callable classifying one ``Concept`` node into a conceptual V2 type.
+        classifier: Async callable classifying a batch of ``Concept`` nodes into conceptual V2 types.
         run_id: Stable id stamped on every migrated node as update provenance.
         now: ISO-8601 timestamp stamped alongside ``run_id``.
         classifier_model: Model id recorded in the report.
         dry_run: When True, issue **zero** writes — still counts and previews Concept classifications.
         batch_size: Max nodes mutated per transaction / read per Concept page.
-        concurrency: Max concurrent classifier calls.
+        classify_batch_size: Concept nodes classified per model call (FRE-801 batching).
+        concurrency: Max concurrent classifier (batch) calls.
+        exclude_system: When True *and* the ``class`` property is populated, skip System-class nodes
+            entirely (deterministic remap + Concept read). When ``class`` is unpopulated this is a no-op
+            (there is no populated class to filter on) and the report records it as such.
         snapshot_path: When set and not ``dry_run``, write a reversible ``{name, entity_type}`` snapshot
             before mutating.
 
@@ -388,51 +555,88 @@ async def run_migration(
     )
     report.before_histogram = await graph.count_by_type()
 
+    # Knowledge-class breakdown + no-op-when-unpopulated exclusion (FRE-801 AC3). ``class`` is written
+    # on no ``:Entity`` node today, so on a real graph this is almost certainly all "(unset)".
+    report.class_histogram = await graph.count_by_class()
+    report.class_populated = any(
+        cls in _KNOWN_CLASSES and n > 0 for cls, n in report.class_histogram.items()
+    )
+    report.exclude_system_requested = exclude_system
+    effective_exclude_system = exclude_system and report.class_populated
+    report.exclude_system = effective_exclude_system
+
     if not dry_run and snapshot_path is not None:
         snap = await graph.snapshot()
         snapshot_path.write_bytes(orjson.dumps(snap))
         log.info("fre772_snapshot_written", path=str(snapshot_path), nodes=len(snap))
 
     # 1) Deterministic remaps (string changes only).
+    dry_run_type_counts = (
+        await graph.count_by_type(exclude_system=True)
+        if dry_run and effective_exclude_system
+        else report.before_histogram
+    )
     for v1, v2 in V1_TO_V2_DETERMINISTIC.items():
         if dry_run:
-            count = report.before_histogram.get(v1, 0)
+            count = dry_run_type_counts.get(v1, 0)
         else:
             count = await graph.remap_deterministic(
-                v1, v2, run_id=run_id, now=now, batch=batch_size
+                v1,
+                v2,
+                run_id=run_id,
+                now=now,
+                batch=batch_size,
+                exclude_system=effective_exclude_system,
             )
         report.deterministic[f"{v1}->{v2}"] = count
 
     # 2) Concept re-classification, paged by an elementId cursor (fail-closed nodes are cursored past).
+    #    Each DB page is chunked into ``classify_batch_size`` groups; each group is one model call, so
+    #    the ~280-token definition prefix is sent once per group instead of once per node.
     classified: Counter[str] = Counter()
     semaphore = asyncio.Semaphore(concurrency)
     cursor: str | None = None
     while True:
-        batch = await graph.fetch_concepts(cursor, batch_size)
-        if not batch:
+        page = await graph.fetch_concepts(
+            cursor, batch_size, exclude_system=effective_exclude_system
+        )
+        if not page:
             break
-        cursor = batch[-1].element_id
+        cursor = page[-1].element_id
 
-        async def _classify(node: ConceptNode) -> tuple[ConceptNode, ClassifyResult]:
+        sub_batches = [
+            page[i : i + classify_batch_size] for i in range(0, len(page), classify_batch_size)
+        ]
+
+        async def _classify(
+            group: Sequence[ConceptNode],
+        ) -> tuple[Sequence[ConceptNode], BatchClassifyResult]:
             async with semaphore:
-                return node, await classifier(node.name, node.description)
+                return group, await classifier(group)
 
-        results = await asyncio.gather(*(_classify(n) for n in batch))
-        for node, res in results:
-            report.concept_total += 1
+        for group, res in await asyncio.gather(*(_classify(g) for g in sub_batches)):
+            report.model_calls += 1
+            report.batch_count += 1
             report.cost_usd += res.cost_usd
-            target = res.entity_type
-            if target is not None and target in V1_CONCEPT_TARGET_TYPES:
-                classified[target] += 1
-                if not dry_run:
-                    await graph.set_entity_type(node.element_id, target, run_id=run_id, now=now)
-            else:
-                reason = res.reason or "out_of_set"
-                report.concept_unclassified.append(
-                    {"name": node.name, "element_id": node.element_id, "reason": reason}
-                )
-                if not dry_run:
-                    await graph.mark_error(node.element_id, reason, now=now)
+            report.input_tokens += res.input_tokens
+            report.output_tokens += res.output_tokens
+            report.cached_tokens += res.cached_tokens
+            # strict=False by design: a short/oversized result list from a misbehaving classifier
+            # must not abort the run — unmatched nodes stay Concept and are retried next run.
+            for node, entity_res in zip(group, res.results, strict=False):
+                report.concept_total += 1
+                target = entity_res.entity_type
+                if target is not None and target in V1_CONCEPT_TARGET_TYPES:
+                    classified[target] += 1
+                    if not dry_run:
+                        await graph.set_entity_type(node.element_id, target, run_id=run_id, now=now)
+                else:
+                    reason = entity_res.reason or "out_of_set"
+                    report.concept_unclassified.append(
+                        {"name": node.name, "element_id": node.element_id, "reason": reason}
+                    )
+                    if not dry_run:
+                        await graph.mark_error(node.element_id, reason, now=now)
     report.concept_classified = dict(classified)
 
     report.after_histogram = await graph.count_by_type()
@@ -519,7 +723,22 @@ def _print_summary(report: MigrationReport) -> None:
     if report.concept_unclassified:
         for row in report.concept_unclassified:
             print(f"  UNCLASSIFIED  {row['name']!r} ({row['reason']})")
+    print(
+        f"model calls: {report.model_calls} (batches: {report.batch_count}); "
+        f"tokens in={report.input_tokens} out={report.output_tokens} cached={report.cached_tokens}"
+    )
     print(f"cost_usd: {report.cost_usd:.4f}")
+    print(f"class breakdown: {dict(sorted(report.class_histogram.items()))}")
+    if not report.class_populated:
+        if report.exclude_system_requested:
+            print(
+                "  class is unpopulated on :Entity nodes — --exclude-system is a NO-OP "
+                "(nothing to filter); the run was class-blind."
+            )
+        else:
+            print("  class is unpopulated on :Entity nodes (run is class-blind).")
+    elif report.exclude_system:
+        print("  --exclude-system ACTIVE: System-class nodes were left untouched.")
     print(f"v1_remnants_after: {report.v1_remnants_after or 'none'}")
     print(f"success: {report.success}")
 
@@ -550,6 +769,18 @@ def _parse_args() -> argparse.Namespace:
         "--report-path", type=Path, default=None, help="Where to write the JSON report."
     )
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument(
+        "--classify-batch-size",
+        type=int,
+        default=DEFAULT_CLASSIFY_BATCH_SIZE,
+        help="Concept nodes classified per model call (FRE-801 batching; default 40).",
+    )
+    parser.add_argument(
+        "--exclude-system",
+        action="store_true",
+        default=False,
+        help="Skip System-class nodes (no-op unless the 'class' property is populated on :Entity nodes).",
+    )
     parser.add_argument(
         "--skip-consumer-check",
         action="store_true",
@@ -620,7 +851,7 @@ async def _amain(args: argparse.Namespace) -> int:
         # (ADR-0065) — register it before building the classifier (FRE-800).
         cost_gate = await _setup_cost_gate()
 
-        classifier, model = _build_llm_classifier()
+        classifier, model = _build_llm_batch_classifier()
         report = await run_migration(
             graph,
             classifier,
@@ -629,6 +860,8 @@ async def _amain(args: argparse.Namespace) -> int:
             classifier_model=model,
             dry_run=args.dry_run,
             batch_size=args.batch_size,
+            classify_batch_size=args.classify_batch_size,
+            exclude_system=args.exclude_system,
             snapshot_path=args.snapshot_path,
         )
         _print_summary(report)

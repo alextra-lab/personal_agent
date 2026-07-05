@@ -13,13 +13,16 @@ neither fails this test nor is depended upon.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
 import pytest_asyncio
 from scripts.migrate_fre772_entity_type_v2 import (
+    BatchClassifyResult,
     ClassifyResult,
+    ConceptNode,
     _Neo4jGraph,
     run_migration,
 )
@@ -83,11 +86,16 @@ async def test_migration_retypes_seeded_nodes_end_to_end(driver) -> None:
                 b=n("trie"),
             )
 
-        # Classifier types 'trie' but not 'spacetime' (fail-closed).
-        async def classifier(name: str, description: str) -> ClassifyResult:
-            if name == n("trie"):
-                return ClassifyResult(entity_type="MethodOrConcept")
-            return ClassifyResult(entity_type=None, reason="out_of_set")
+        # Batch classifier types 'trie' but not 'spacetime' (fail-closed).
+        async def classifier(nodes: Sequence[ConceptNode]) -> BatchClassifyResult:
+            return BatchClassifyResult(
+                results=[
+                    ClassifyResult(entity_type="MethodOrConcept")
+                    if node.name == n("trie")
+                    else ClassifyResult(entity_type=None, reason="out_of_set")
+                    for node in nodes
+                ]
+            )
 
         graph = _Neo4jGraph(driver)
         run_id = f"fre772-it-{uuid4()}"
@@ -139,10 +147,15 @@ async def test_migration_retypes_seeded_nodes_end_to_end(driver) -> None:
 
         # --- idempotent re-run: deterministic no-op, fail-closed Concept retried ---
         # This time the classifier can type spacetime → it converts on the retry.
-        async def classifier2(name: str, description: str) -> ClassifyResult:
-            if name == n("spacetime"):
-                return ClassifyResult(entity_type="Phenomenon")
-            return ClassifyResult(entity_type=None, reason="out_of_set")
+        async def classifier2(nodes: Sequence[ConceptNode]) -> BatchClassifyResult:
+            return BatchClassifyResult(
+                results=[
+                    ClassifyResult(entity_type="Phenomenon")
+                    if node.name == n("spacetime")
+                    else ClassifyResult(entity_type=None, reason="out_of_set")
+                    for node in nodes
+                ]
+            )
 
         await run_migration(
             graph, classifier2, run_id=run_id, now=now, classifier_model="fake", batch_size=2
@@ -159,6 +172,38 @@ async def test_migration_retypes_seeded_nodes_end_to_end(driver) -> None:
                 prefix=prefix,
             )
             assert (await result.single())["n"] == 0
+
+        # --- FRE-801 --exclude-system: with class populated, a System node is left untouched while
+        #     a World node in the same run is remapped (proves the class filter is real Cypher). ---
+        async with driver.session() as session:
+            await session.run(
+                "MERGE (e:Entity {name: $name}) SET e.entity_type = 'Technology', e.class = 'System'",
+                name=n("sysnode"),
+            )
+            await session.run(
+                "MERGE (e:Entity {name: $name}) SET e.entity_type = 'Topic', e.class = 'World'",
+                name=n("worldnode"),
+            )
+
+        async def classifier3(nodes: Sequence[ConceptNode]) -> BatchClassifyResult:
+            return BatchClassifyResult(
+                results=[ClassifyResult(entity_type=None, reason="out_of_set") for _ in nodes]
+            )
+
+        excl_report = await run_migration(
+            graph,
+            classifier3,
+            run_id=run_id,
+            now=now,
+            classifier_model="fake",
+            batch_size=2,
+            exclude_system=True,
+        )
+        assert excl_report.class_populated is True
+        assert excl_report.exclude_system is True
+        # System node untouched; World node remapped in the same run.
+        assert (await _props(driver, n("sysnode")))["entity_type"] == "Technology"
+        assert (await _props(driver, n("worldnode")))["entity_type"] == "DomainOrTopic"
     finally:
         async with driver.session() as session:
             await session.run(

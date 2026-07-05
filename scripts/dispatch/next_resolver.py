@@ -58,6 +58,13 @@ _TERMINAL_BLOCKER_STATES: frozenset[str] = frozenset(
 # Urgent (1).
 _PRIORITY_RANK: dict[int, int] = {1: 0, 2: 1, 3: 2, 4: 3, 0: 4}
 
+# Linear's issue-relation type denoting a "blocks" relation. On an issue,
+# `inverseRelations` yields relations where this issue is the *related* side,
+# so a "blocks" inverse-relation is a blocker of this issue. The connection
+# accepts no server-side `filter` argument — passing one returns HTTP 400
+# (FRE-804) — so `type` is selected and filtered client-side.
+_BLOCKS_RELATION_TYPE = "blocks"
+
 
 @dataclasses.dataclass(frozen=True)
 class Blocker:
@@ -177,6 +184,8 @@ def fetch_board(stream: str, api_key: str) -> list[IssueSnapshot]:
         RuntimeError: The Linear API request failed or returned malformed data.
     """
     label = stream_label(stream)
+    # `inverseRelations` takes no server-side filter (FRE-804): `type` is
+    # selected on each relation node and filtered client-side below.
     query = (
         "query StreamIssues($label: String!) {"
         "  issues(filter: { labels: { name: { eq: $label } } }) {"
@@ -186,8 +195,8 @@ def fetch_board(stream: str, api_key: str) -> list[IssueSnapshot]:
         "      priority"
         "      createdAt"
         "      labels { nodes { name } }"
-        '      inverseRelations(filter: { type: { eq: "blocks" } }) {'
-        "        nodes { issue { identifier state { name } } }"
+        "      inverseRelations {"
+        "        nodes { type issue { identifier state { name } } }"
         "      }"
         "    }"
         "  }"
@@ -203,8 +212,18 @@ def fetch_board(stream: str, api_key: str) -> list[IssueSnapshot]:
     try:
         with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310
             data = json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        # Surface the response body — GraphQL validation errors (HTTP 400)
+        # carry the actionable message here, so a swallowed body must not hide
+        # live-query drift again (FRE-804).
+        body = exc.read().decode(errors="replace")
+        raise RuntimeError(f"Linear API request failed: HTTP {exc.code}: {body}") from exc
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Linear API request failed: {exc}") from exc
+    # A 200 response can still carry GraphQL errors instead of data — surface
+    # them loudly rather than silently resolving to an empty board (FRE-804).
+    if data.get("errors"):
+        raise RuntimeError(f"Linear API returned GraphQL errors: {data['errors']}")
     nodes = (data.get("data") or {}).get("issues", {}).get("nodes", [])
     snapshots: list[IssueSnapshot] = []
     for node in nodes:
@@ -215,6 +234,7 @@ def fetch_board(stream: str, api_key: str) -> list[IssueSnapshot]:
                 state=(rel["issue"].get("state") or {}).get("name"),
             )
             for rel in node["inverseRelations"]["nodes"]
+            if rel.get("type") == _BLOCKS_RELATION_TYPE
         )
         snapshots.append(
             IssueSnapshot(

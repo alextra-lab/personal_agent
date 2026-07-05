@@ -1,0 +1,44 @@
+{
+  "corpus_source": "agent-captains-reflections-* (Elasticsearch), field `proposed_change`, excluding eval_mode: true docs",
+  "query_description": "35 real proposals selected as same-idea clusters (fast-path/reduce-LLM-calls, capture_write_failed retry/alert, ES retry/backoff, ux clarification-gate, ux tool-visibility) plus same-category-and-topical-family hard-negative singletons (verify-before-acting, add-telemetry-for-X, skip-work-for-trivial-input families); see pairs.yaml notes for per-pair provenance.",
+  "time_window": {
+    "start": "2026-04-15T21:36:47.795552Z",
+    "end": "2026-04-29T09:37:32.858748Z"
+  },
+  "item_counts": {
+    "corpus_docs": 35,
+    "total_corpus_at_pull_time": 1857
+  },
+  "pair_counts": {
+    "positive": 25,
+    "negative": 24
+  },
+  "cosine_distributions": {
+    "n_positives": 25,
+    "n_negatives": 24,
+    "pos_min": 0.5474871552116958,
+    "pos_median": 0.7980420327140179,
+    "pos_max": 0.9624803156891537,
+    "pos_p5": 0.6104431887002602,
+    "neg_min": 0.26967684524524566,
+    "neg_median": 0.4623915698421954,
+    "neg_max": 0.6205015427994386,
+    "neg_p95": 0.6124739718174381,
+    "neg_above_min_pos": 5,
+    "pos_below_max_neg": 2,
+    "clean_floor": false,
+    "robust_clean": false
+  },
+  "chosen_floor": {
+    "floor": 0.6,
+    "recall": 0.96,
+    "fpr": 0.08333333333333333,
+    "youden_j": 0.8766666666666666
+  },
+  "decision": "fallback",
+  "probe_code_version": "0b6c7b3",
+  "git_dirty": true,
+  "corpus_sha256": "33d5c3e649c18779d343608c9db392ba0ac1360e0091d465979d7379294836c4",
+  "pairs_sha256": "9e85842c7b8546329dc3b1cbce126b86b53c957cd36f41e0fd0674c66dd503f3",
+  "run_id": "run-0b6c7b3-33d5c3e6"
+}

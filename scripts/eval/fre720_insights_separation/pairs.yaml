@@ -1,0 +1,258 @@
+# FRE-720 -- labeled positive/negative proposal pairs (ADR-0105 D10 / AC-8).
+# `a`/`b` reference entry_ids in corpus.yaml. `label` is positive (same idea,
+# reworded) or negative (same category+topical-family, genuinely distinct idea --
+# a hard near-miss, not a random cross-topic pair; see codex plan-review revision).
+pairs:
+- pair_id: P001
+  a: CL-20260415-213647-c9662b44-001
+  b: CL-20260416-144730-6d946b32-001
+  label: positive
+  note: 'Same idea, reworded: skip orchestration steps for trivial/simple prompts.'
+- pair_id: P002
+  a: CL-20260416-144730-6d946b32-001
+  b: CL-20260417-131407-956a5f46-001
+  label: positive
+  note: 'Same idea, reworded: reduce LLM round-trips for simple/low-complexity intents.'
+- pair_id: P003
+  a: CL-20260417-131407-956a5f46-001
+  b: CL-20260417-141031-58632735-001
+  label: positive
+  note: 'Same idea, reworded: fast-path short response mode for simple greeting/intro messages.'
+- pair_id: P004
+  a: CL-20260417-141031-58632735-001
+  b: CL-20260417-200451-46352988-001
+  label: positive
+  note: 'Same idea, reworded: consolidate/reduce LLM calls for simple retrieval-and-answer tasks.'
+- pair_id: P005
+  a: CL-20260417-200451-46352988-001
+  b: CL-20260418-050649-30ad3ced-001
+  label: positive
+  note: 'Same idea, reworded: bypass memory enrichment/context steps for simple questions.'
+- pair_id: P006
+  a: CL-20260418-050649-30ad3ced-001
+  b: CL-20260419-060606-d8c6a43e-001
+  label: positive
+  note: 'Same idea, reworded: fast-path for simple status/health-check queries.'
+- pair_id: P007
+  a: CL-20260419-060606-d8c6a43e-001
+  b: CL-20260421-154859-58ebba16-001
+  label: positive
+  note: 'Same idea, reworded: cap tool/LLM iterations for trivial health-check queries.'
+- pair_id: P008
+  a: CL-20260421-154859-58ebba16-001
+  b: CL-20260422-043108-2594a37f-001
+  label: positive
+  note: 'Same idea, reworded: reduce repeated tool calls + LLM round-trips for simple status queries.'
+- pair_id: P009
+  a: CL-20260415-213647-c9662b44-001
+  b: CL-20260422-043108-2594a37f-001
+  label: positive
+  note: 'Same idea across the full cluster span (non-adjacent pair): reduce orchestration overhead for
+    simple requests.'
+- pair_id: P010
+  a: CL-20260427-171627-d2d71fc6-001
+  b: CL-20260427-173836-d40c57fd-001
+  label: positive
+  note: 'Same idea, reworded: capture_write_failed silently drops data; add retry/alert.'
+- pair_id: P011
+  a: CL-20260427-173836-d40c57fd-001
+  b: CL-20260427-173217-cae57b3c-001
+  label: positive
+  note: 'Same idea, cross-category (observability -> reliability label): capture_write_failed needs surfacing
+    + retry.'
+- pair_id: P012
+  a: CL-20260427-173217-cae57b3c-001
+  b: CL-20260427-172249-98f5ba3f-001
+  label: positive
+  note: 'Same idea, reworded (both reliability): surface + retry capture_write_failed.'
+- pair_id: P013
+  a: CL-20260427-172249-98f5ba3f-001
+  b: CL-20260427-174551-8dad2ef8-001
+  label: positive
+  note: 'Same idea, cross-category (reliability -> observability label): capture_write_failed observability
+    gap.'
+- pair_id: P014
+  a: CL-20260427-171627-d2d71fc6-001
+  b: CL-20260427-172249-98f5ba3f-001
+  label: positive
+  note: 'Same idea, cross-category, non-adjacent: capture_write_failed retry/alerting.'
+- pair_id: P015
+  a: CL-20260416-151434-725b210b-001
+  b: CL-20260419-034811-37a2e7b5-001
+  label: positive
+  note: 'Same idea, reworded: ES retry/backoff/fallback after repeated HTTP errors.'
+- pair_id: P016
+  a: CL-20260419-034811-37a2e7b5-001
+  b: CL-20260421-182521-7b845f66-001
+  label: positive
+  note: 'Same idea, reworded: ES preflight + backoff + fallback on repeated failures.'
+- pair_id: P017
+  a: CL-20260421-182521-7b845f66-001
+  b: CL-20260425-204707-61292e97-001
+  label: positive
+  note: 'Same idea, reworded: ES circuit-breaker + fallback retrieval strategy.'
+- pair_id: P018
+  a: CL-20260416-151434-725b210b-001
+  b: CL-20260425-204707-61292e97-001
+  label: positive
+  note: 'Same idea, non-adjacent: ES failure-aware retry/circuit-breaker strategy.'
+- pair_id: P019
+  a: CL-20260423-193403-a5e592ac-001
+  b: CL-20260424-134503-3e32121c-001
+  label: positive
+  note: 'Same idea, reworded: add a clarification step when the user query is ambiguous/too broad.'
+- pair_id: P020
+  a: CL-20260424-134503-3e32121c-001
+  b: CL-20260424-135405-bf8d1f05-001
+  label: positive
+  note: 'Same idea, reworded: clarify/scaffold response when query intent is underspecified.'
+- pair_id: P021
+  a: CL-20260424-135405-bf8d1f05-001
+  b: CL-20260425-203044-9730c3ff-001
+  label: positive
+  note: 'Same idea, reworded: early clarification branch for ambiguous/short input.'
+- pair_id: P022
+  a: CL-20260423-193403-a5e592ac-001
+  b: CL-20260425-203044-9730c3ff-001
+  label: positive
+  note: 'Same idea, non-adjacent: clarification gate for ambiguous user intent.'
+- pair_id: P023
+  a: CL-20260423-193440-e3276472-001
+  b: CL-20260423-193633-3c13522c-001
+  label: positive
+  note: 'Same idea, reworded: make tool usage/results transparent to the user.'
+- pair_id: P024
+  a: CL-20260423-193633-3c13522c-001
+  b: CL-20260423-194158-cb023512-001
+  label: positive
+  note: 'Same idea, reworded: control what tool/debug detail is shown to the user.'
+- pair_id: P025
+  a: CL-20260423-193440-e3276472-001
+  b: CL-20260423-194158-cb023512-001
+  label: positive
+  note: 'Same idea, non-adjacent: user-facing tool-activity transparency/visibility control.'
+- pair_id: P026
+  a: CL-20260416-151434-725b210b-001
+  b: CL-20260417-201007-da52a101-001
+  label: negative
+  note: 'Same category (reliability) + same family (verify-before-acting) but distinct: ES retry vs .env
+    parsing check.'
+- pair_id: P027
+  a: CL-20260419-034811-37a2e7b5-001
+  b: CL-20260418-095438-2cb30456-001
+  label: negative
+  note: 'Same category+family: ES retry/backoff vs Linear connectivity verification.'
+- pair_id: P028
+  a: CL-20260421-182521-7b845f66-001
+  b: CL-20260418-102656-9852b909-001
+  label: negative
+  note: 'Same category+family: ES preflight vs docker-compose file visibility check.'
+- pair_id: P029
+  a: CL-20260425-204707-61292e97-001
+  b: CL-20260424-181436-a33a9486-001
+  label: negative
+  note: 'Same category+family: ES circuit-breaker vs Linear issue-creation preflight validation.'
+- pair_id: P030
+  a: CL-20260427-173217-cae57b3c-001
+  b: CL-20260416-151434-725b210b-001
+  label: negative
+  note: 'Same category (reliability), different idea: capture_write_failed vs ES retry.'
+- pair_id: P031
+  a: CL-20260427-172249-98f5ba3f-001
+  b: CL-20260419-034811-37a2e7b5-001
+  label: negative
+  note: 'Same category (reliability), different idea: capture_write_failed vs ES backoff.'
+- pair_id: P032
+  a: CL-20260417-201007-da52a101-001
+  b: CL-20260418-102656-9852b909-001
+  label: negative
+  note: 'Same category+family (verify a specific file is accessible), distinct targets: .env vs docker-compose.yaml.'
+- pair_id: P033
+  a: CL-20260418-095438-2cb30456-001
+  b: CL-20260424-181436-a33a9486-001
+  label: negative
+  note: 'Same category+family (Linear tool reliability), distinct asks: connectivity check vs issue-creation
+    preflight.'
+- pair_id: P034
+  a: CL-20260417-201007-da52a101-001
+  b: CL-20260418-095438-2cb30456-001
+  label: negative
+  note: 'Same category+family (verify-before-acting), distinct targets: .env parsing vs Linear connectivity.'
+- pair_id: P035
+  a: CL-20260427-171627-d2d71fc6-001
+  b: CL-20260425-153010-7b3a7830-001
+  label: negative
+  note: 'Same category (observability), different idea: capture_write_failed vs CPU-load metric source.'
+- pair_id: P036
+  a: CL-20260427-173836-d40c57fd-001
+  b: CL-20260423-152744-2a0e6936-001
+  label: negative
+  note: 'Same category (observability), different idea: capture_write_failed vs prompt_cache telemetry.'
+- pair_id: P037
+  a: CL-20260427-174551-8dad2ef8-001
+  b: CL-20260425-163730-0ea06d23-001
+  label: negative
+  note: 'Same category (observability), different idea: capture_write_failed vs mode-transition telemetry.'
+- pair_id: P038
+  a: CL-20260425-153010-7b3a7830-001
+  b: CL-20260423-152744-2a0e6936-001
+  label: negative
+  note: 'Same category+family (add telemetry for X), distinct signals: CPU load vs prompt-cache hit/miss.'
+- pair_id: P039
+  a: CL-20260423-152744-2a0e6936-001
+  b: CL-20260425-163730-0ea06d23-001
+  label: negative
+  note: 'Same category+family (add telemetry for X), distinct signals: prompt-cache vs mode-transition.'
+- pair_id: P040
+  a: CL-20260425-153010-7b3a7830-001
+  b: CL-20260425-163730-0ea06d23-001
+  label: negative
+  note: 'Same category+family (add telemetry for X), distinct signals: CPU load vs mode-transition.'
+- pair_id: P041
+  a: CL-20260415-213647-c9662b44-001
+  b: CL-20260429-051232-3397df1b-001
+  label: negative
+  note: 'Same category+family (skip work for trivial input), different subsystem: orchestrator-wide fast-path
+    vs proactive-memory token-length gate.'
+- pair_id: P042
+  a: CL-20260422-043108-2594a37f-001
+  b: CL-20260429-051232-3397df1b-001
+  label: negative
+  note: 'Same category+family (skip work for trivial input), different subsystem: reduce tool/LLM iterations
+    vs proactive-memory length gate.'
+- pair_id: P043
+  a: CL-20260428-090252-957d0846-001
+  b: CL-20260429-093732-51a33806-001
+  label: negative
+  note: 'Same category (performance), different idea: sysdiag sampling-window flag vs linear_find_issues
+    tool-description hint.'
+- pair_id: P044
+  a: CL-20260429-051232-3397df1b-001
+  b: CL-20260428-090252-957d0846-001
+  label: negative
+  note: 'Same category (performance), different idea: trivial-input skip vs diagnostic-tooling flag.'
+- pair_id: P045
+  a: CL-20260423-193403-a5e592ac-001
+  b: CL-20260423-193440-e3276472-001
+  label: negative
+  note: 'Same category (ux), different idea: clarification gate vs tool-necessity transparency.'
+- pair_id: P046
+  a: CL-20260424-134503-3e32121c-001
+  b: CL-20260423-193633-3c13522c-001
+  label: negative
+  note: 'Same category (ux), different idea: query-scope clarification vs tool-result visibility policy.'
+- pair_id: P047
+  a: CL-20260424-135405-bf8d1f05-001
+  b: CL-20260423-194158-cb023512-001
+  label: negative
+  note: 'Same category (ux), different idea: intent clarification vs debug-detail suppression.'
+- pair_id: P048
+  a: CL-20260425-203044-9730c3ff-001
+  b: CL-20260423-193440-e3276472-001
+  label: negative
+  note: 'Same category (ux), different idea: early clarify-intent branch vs tool-necessity transparency.'
+- pair_id: P049
+  a: CL-20260423-193403-a5e592ac-001
+  b: CL-20260423-194158-cb023512-001
+  label: negative
+  note: 'Same category (ux), different idea: clarification gate vs debug-detail suppression.'

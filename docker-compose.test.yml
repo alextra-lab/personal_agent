@@ -24,7 +24,7 @@ services:
     image: pgvector/pgvector:pg17
     environment:
       POSTGRES_USER: agent
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agent_dev_password}
+      POSTGRES_PASSWORD: agent_dev_password
       POSTGRES_DB: personal_agent
     volumes:
       - postgres_test_data:/var/lib/postgresql/data

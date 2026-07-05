@@ -41,7 +41,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 from uuid import uuid4
 
 import orjson
@@ -53,6 +53,9 @@ from personal_agent.second_brain.taxonomy import (
     V1_TO_V2_DETERMINISTIC,
 )
 from personal_agent.telemetry import get_logger
+
+if TYPE_CHECKING:
+    from personal_agent.cost_gate import CostGate
 
 log = get_logger(__name__)
 
@@ -556,6 +559,26 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+async def _setup_cost_gate() -> CostGate:
+    """Construct, connect, and register a CostGate mirroring the gateway app's startup wiring.
+
+    ``LiteLLMClient.respond`` calls ``get_default_gate()`` (ADR-0065), which raises ``RuntimeError``
+    when no gate is registered — the standalone script never did this, so every Concept
+    classification failed fast and the dry-run reported 3888 UNCLASSIFIED at cost 0.0000 (FRE-800).
+    Must be called, and the gate registered, before any ``respond()`` call.
+
+    Returns:
+        The connected, registered ``CostGate``. The caller owns disconnecting it.
+    """
+    from personal_agent.cost_gate import CostGate, load_budget_config, set_default_gate
+
+    budget_config = load_budget_config()
+    gate = CostGate(config=budget_config, db_url=settings.database_url)
+    await gate.connect()
+    set_default_gate(gate)
+    return gate
+
+
 async def _amain(args: argparse.Namespace) -> int:
     try:
         from neo4j import AsyncGraphDatabase
@@ -574,6 +597,7 @@ async def _amain(args: argparse.Namespace) -> int:
         return 1
 
     graph = _Neo4jGraph(driver)
+    cost_gate: CostGate | None = None
     try:
         if args.rollback:
             if not args.snapshot_path or not args.snapshot_path.exists():
@@ -592,6 +616,10 @@ async def _amain(args: argparse.Namespace) -> int:
             )
             return 3
 
+        # Every Concept classification is a paid LLM call gated by the Cost Check Gate
+        # (ADR-0065) — register it before building the classifier (FRE-800).
+        cost_gate = await _setup_cost_gate()
+
         classifier, model = _build_llm_classifier()
         report = await run_migration(
             graph,
@@ -609,6 +637,15 @@ async def _amain(args: argparse.Namespace) -> int:
             print(f"report written: {args.report_path}")
         return 0 if (report.success or args.dry_run) else 4
     finally:
+        if cost_gate is not None:
+            from personal_agent.cost_gate import set_default_gate
+
+            set_default_gate(None)
+            # This one-shot script has no reaper task running (unlike the gateway app's
+            # 30s-cadence background sweep) — reap once here so a mid-run crash doesn't
+            # leave a reservation occupying budget headroom for its full 180s TTL.
+            await cost_gate.reap_stale()
+            await cost_gate.disconnect()
         await driver.close()
 
 

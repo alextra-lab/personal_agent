@@ -7,6 +7,7 @@ The real Cypher (:class:`_Neo4jGraph`) is exercised by ``test_migrate_fre772_int
 
 from __future__ import annotations
 
+import argparse
 from collections import Counter
 from collections.abc import Sequence
 
@@ -14,11 +15,14 @@ import pytest
 from scripts.migrate_fre772_entity_type_v2 import (
     ClassifyResult,
     ConceptNode,
+    MigrationReport,
     _map_speaks_v2,
     _parse_classification,
     run_migration,
     run_rollback,
 )
+
+from personal_agent.cost_gate import CostGate, get_default_gate_or_none, set_default_gate
 
 _RUN_ID = "fre772-test"
 _NOW = "2026-07-05T00:00:00+00:00"
@@ -329,6 +333,113 @@ def test_parse_classification_requires_unambiguous_single_hit() -> None:
     assert _parse_classification("Person") is None  # not a conceptual target
     assert _parse_classification("could be MethodOrConcept or DomainOrTopic") is None  # ambiguous
     assert _parse_classification("") is None
+
+
+@pytest.mark.asyncio
+async def test_setup_cost_gate_connects_and_registers_default_gate(monkeypatch) -> None:
+    """FRE-800: _setup_cost_gate must connect the gate and register it via set_default_gate."""
+    from scripts.migrate_fre772_entity_type_v2 import _setup_cost_gate
+
+    set_default_gate(None)
+    connected = False
+
+    async def _fake_connect(self: CostGate) -> None:
+        nonlocal connected
+        connected = True
+
+    monkeypatch.setattr(CostGate, "connect", _fake_connect)
+    try:
+        assert get_default_gate_or_none() is None
+        gate = await _setup_cost_gate()
+        assert connected is True
+        assert get_default_gate_or_none() is gate
+    finally:
+        set_default_gate(None)
+
+
+@pytest.mark.asyncio
+async def test_amain_registers_cost_gate_before_building_classifier(monkeypatch) -> None:
+    """FRE-800 regression guard.
+
+    The gate must be live before the first classify call, and torn down afterward — guards
+    against the migration script silently reverting to the pre-fix ordering where
+    LiteLLMClient.respond raised 'No CostGate registered' on every Concept node.
+    """
+    import neo4j
+    import scripts.migrate_fre772_entity_type_v2 as mod
+
+    set_default_gate(None)
+
+    class _FakeDriver:
+        async def verify_connectivity(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(neo4j.AsyncGraphDatabase, "driver", lambda *a, **kw: _FakeDriver())
+    monkeypatch.setattr(mod, "_consumer_speaks_v2", lambda: True)
+
+    async def _fake_connect(self: CostGate) -> None:
+        return None
+
+    async def _fake_reap_stale(self: CostGate) -> int:
+        return 0
+
+    monkeypatch.setattr(CostGate, "connect", _fake_connect)
+    monkeypatch.setattr(CostGate, "reap_stale", _fake_reap_stale)
+
+    gate_was_registered_at_classifier_build = False
+
+    def _fake_build_llm_classifier():
+        nonlocal gate_was_registered_at_classifier_build
+        gate_was_registered_at_classifier_build = get_default_gate_or_none() is not None
+
+        async def _classify(name: str, description: str) -> ClassifyResult:
+            return ClassifyResult(entity_type=None)
+
+        return _classify, "fake-model"
+
+    monkeypatch.setattr(mod, "_build_llm_classifier", _fake_build_llm_classifier)
+
+    async def _fake_run_migration(*args, **kwargs) -> MigrationReport:
+        return MigrationReport(
+            run_id="x",
+            dry_run=True,
+            prompt_version="x",
+            classifier_model="x",
+            started_at="x",
+        )
+
+    monkeypatch.setattr(mod, "run_migration", _fake_run_migration)
+
+    args = argparse.Namespace(
+        confirm_prod=True,
+        dry_run=True,
+        rollback=False,
+        snapshot_path=None,
+        report_path=None,
+        batch_size=500,
+        skip_consumer_check=False,
+    )
+    reap_called = False
+    _orig_fake_reap_stale = _fake_reap_stale
+
+    async def _counting_fake_reap_stale(self: CostGate) -> int:
+        nonlocal reap_called
+        reap_called = True
+        return await _orig_fake_reap_stale(self)
+
+    monkeypatch.setattr(CostGate, "reap_stale", _counting_fake_reap_stale)
+
+    try:
+        rc = await mod._amain(args)
+        assert rc == 0
+        assert gate_was_registered_at_classifier_build is True
+        assert reap_called is True  # crash-recovery sweep runs in the finally block
+        assert get_default_gate_or_none() is None  # torn down in the finally block
+    finally:
+        set_default_gate(None)
 
 
 def test_preflight_gate_logic_v1_refuses_v2_opens() -> None:

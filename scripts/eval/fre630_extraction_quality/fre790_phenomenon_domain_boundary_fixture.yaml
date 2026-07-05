@@ -1,0 +1,190 @@
+# FRE-790 — ADR-0109 Phenomenon ↔ DomainOrTopic boundary probe fixture (24 entities).
+#
+# Checked in verbatim alongside the FRE-790 research note:
+# docs/research/2026-07-05-fre-790-phenomenon-domain-boundary-iaa.md
+#
+# Grows a dedicated, properly-powered probe on the ONE edge FRE-771's underpowered
+# (n=12) powered A/B flagged — Phenomenon ↔ DomainOrTopic — the edge ADR-0109's own
+# Risks section named as untested ("is 'spacetime' a Phenomenon or a DomainOrTopic?").
+# Mirrors the FRE-782 instrument exactly: each of 3 blind model raters (gpt-5.4-mini,
+# gpt-5.4, claude-sonnet-5) saw only the ADR-0109 10-type definitions + the `context`
+# below + the entity name; `intended_side` is design intent, NEVER shown to a rater.
+# The measurement is rater↔rater Fleiss kappa (IAA), not accuracy against intent.
+#
+# `boundary: true` marks the six genuinely dual-natured cases where the word names
+# both a natural phenomenon/effect/force AND the field that studies it — their context
+# is written to keep BOTH readings live (not to force one side); the note reports which
+# reading each afforded. TCP and the Fourier transform are `boundary: false`
+# distractors: neither is a Phenomenon↔DomainOrTopic dual case, they force the raters
+# to actively reject the two nearest non-boundary types (TechnicalArtifact,
+# MethodOrConcept) and are reported separately from the six boundary cases.
+#
+# tests/evaluation/test_fre630_gold_set.py::test_fre790_boundary_fixture_matches_research_note
+# re-checks this fixture's shape against the research note's reported counts.
+
+probe:
+  # ── Phenomenon anchors — clean (8) ──────────────────────────────────────
+  - entity: "Gravity"
+    context: "Gravity is the force that pulls any two masses toward each other."
+    intended_side: Phenomenon
+    boundary: false
+
+  - entity: "Photosynthesis"
+    context: >-
+      In photosynthesis the leaf captures sunlight to turn water and carbon
+      dioxide into sugar.
+    intended_side: Phenomenon
+    boundary: false
+
+  - entity: "the greenhouse effect"
+    context: >-
+      The greenhouse effect traps outgoing infrared radiation and warms the
+      lower atmosphere.
+    intended_side: Phenomenon
+    boundary: false
+
+  - entity: "Superconductivity"
+    context: >-
+      Cooled below its critical temperature, the metal shows superconductivity
+      and carries current with zero resistance.
+    intended_side: Phenomenon
+    boundary: false
+
+  - entity: "Turbulence"
+    context: >-
+      As the flow speeds up, the smooth streamlines break down into chaotic
+      turbulence.
+    intended_side: Phenomenon
+    boundary: false
+
+  - entity: "the Doppler effect"
+    context: >-
+      The siren's pitch drops as the ambulance passes — the Doppler effect
+      shifting the sound's frequency.
+    intended_side: Phenomenon
+    boundary: false
+
+  - entity: "Rayleigh Scattering"
+    context: >-
+      Rayleigh scattering sends the shorter blue wavelengths bouncing off air
+      molecules, which is why the sky is blue.
+    intended_side: Phenomenon
+    boundary: false
+
+  - entity: "the Maillard reaction"
+    context: >-
+      The Maillard reaction browns the crust and builds the roasted flavour as
+      the loaf bakes.
+    intended_side: Phenomenon
+    boundary: false
+
+  # ── DomainOrTopic anchors — clean (8) ───────────────────────────────────
+  - entity: "Cosmology"
+    context: >-
+      Cosmology studies the origin, evolution, and large-scale structure of the
+      universe.
+    intended_side: DomainOrTopic
+    boundary: false
+
+  - entity: "Cybersecurity"
+    context: >-
+      After a decade in networking she moved into cybersecurity, defending banks
+      from intrusion.
+    intended_side: DomainOrTopic
+    boundary: false
+
+  - entity: "Thermodynamics"
+    context: "Thermodynamics is the branch of physics that relates heat, work, and energy."
+    intended_side: DomainOrTopic
+    boundary: false
+
+  - entity: "Neuroscience"
+    context: >-
+      Neuroscience spans molecular signalling all the way up to whole-brain
+      cognition.
+    intended_side: DomainOrTopic
+    boundary: false
+
+  - entity: "Fluid Dynamics"
+    context: >-
+      The aircraft designer took a graduate course in fluid dynamics to model
+      the airflow over the wing.
+    intended_side: DomainOrTopic
+    boundary: false
+
+  - entity: "Number Theory"
+    context: >-
+      Number theory is the study of the integers and the properties of the prime
+      numbers.
+    intended_side: DomainOrTopic
+    boundary: false
+
+  - entity: "Behavioral Economics"
+    context: >-
+      Behavioral economics blends psychology with economics to explain why
+      people deviate from rational choice.
+    intended_side: DomainOrTopic
+    boundary: false
+
+  - entity: "Organic Chemistry"
+    context: >-
+      She teaches organic chemistry, the study of carbon-based compounds and how
+      they react.
+    intended_side: DomainOrTopic
+    boundary: false
+
+  # ── Phenomenon ↔ DomainOrTopic boundary cases (6, dual-reading contexts) ─
+  - entity: "Spacetime"
+    context: >-
+      General relativity treats spacetime as a four-dimensional fabric that
+      curves in the presence of mass.
+    intended_side: Phenomenon
+    boundary: true
+
+  - entity: "Electromagnetism"
+    context: >-
+      Electromagnetism binds electric and magnetic forces into one of the four
+      fundamental interactions of nature.
+    intended_side: Phenomenon
+    boundary: true
+
+  - entity: "Magnetism"
+    context: >-
+      Magnetism emerges when the electron spins in a material line up and
+      reinforce one another.
+    intended_side: Phenomenon
+    boundary: true
+
+  - entity: "Electricity"
+    context: >-
+      He's fascinated by electricity, from the crackle of static on a doorknob
+      to the theory behind a circuit.
+    intended_side: Phenomenon
+    boundary: true
+
+  - entity: "Acoustics"
+    context: "The acoustics of the old hall gave every note a long, warm decay."
+    intended_side: DomainOrTopic
+    boundary: true
+
+  - entity: "Optics"
+    context: >-
+      Optics describes how light bends through a lens, reflects off a mirror,
+      and spreads out by diffraction.
+    intended_side: DomainOrTopic
+    boundary: true
+
+  # ── Non-boundary distractors (2) ────────────────────────────────────────
+  - entity: "TCP"
+    context: >-
+      TCP guarantees that the bytes arrive in order and without loss over an IP
+      network.
+    intended_side: TechnicalArtifact
+    boundary: false
+
+  - entity: "Fourier Transform"
+    context: >-
+      We apply a Fourier transform to move the signal from the time domain into
+      the frequency domain.
+    intended_side: MethodOrConcept
+    boundary: false

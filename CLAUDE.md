@@ -155,6 +155,7 @@ Expansion paths:
 | `delegation/` | Protocol adapters for structured delegation handoffs |
 | `gateway/` | Versioned REST API for external clients — knowledge, sessions, observations, chat (FRE-206) |
 | `cost_gate/` | Atomic Postgres-backed cost reservation and budget enforcement (ADR-0065) |
+| `sysgraph/` | Isolated System-graph store (proposals/stats/tickets/outcomes) in its own Postgres schema, physically separate from the Neo4j user KG (ADR-0105) |
 | `observability/` | Joinability probe and infrastructure monitors (ADR-0074) |
 | `storage/` | Object store wrappers for artifact byte persistence (ADR-0069) |
 | `ui/` | `service_cli.py` — the `uv run agent` entrypoint; connects to :9000 |

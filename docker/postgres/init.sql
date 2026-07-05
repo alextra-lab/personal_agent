@@ -417,3 +417,126 @@ CREATE TABLE IF NOT EXISTS user_constraint_preferences (
     source_session_id UUID,
     PRIMARY KEY (user_id, constraint_name)
 );
+
+-- ===========================================================================
+-- sysgraph schema (ADR-0105 D2/D3 / FRE-714)
+--
+-- Isolated System-graph store for the self-improvement pipeline (proposals,
+-- stats, tickets, outcomes), physically separate from the Neo4j user-memory
+-- KG. Isolation proven at the DB permission layer (AC-2): a dedicated
+-- sysgraph_role owns this schema exclusively; recall_role stands in for the
+-- recall/user-facing connection and is granted nothing here. No pgvector
+-- column yet — gated on the FRE-720 separation-probe measurement (D10).
+-- Mirrored in docker/postgres/migrations/0014_sysgraph_schema.sql for
+-- existing DBs.
+-- ===========================================================================
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'sysgraph_role') THEN
+        CREATE ROLE sysgraph_role LOGIN PASSWORD 'sysgraph_dev_password';
+    END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'recall_role') THEN
+        CREATE ROLE recall_role LOGIN PASSWORD 'recall_dev_password';
+    END IF;
+END
+$$;
+
+GRANT CONNECT ON DATABASE personal_agent TO sysgraph_role, recall_role;
+
+CREATE SCHEMA IF NOT EXISTS sysgraph AUTHORIZATION sysgraph_role;
+
+REVOKE ALL ON SCHEMA sysgraph FROM PUBLIC;
+REVOKE ALL ON SCHEMA sysgraph FROM recall_role;
+REVOKE ALL ON SCHEMA public FROM sysgraph_role;
+
+SET ROLE sysgraph_role;
+
+CREATE TABLE IF NOT EXISTS sysgraph.proposal (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source      TEXT NOT NULL CHECK (source IN ('statistical_detector', 'reflection')),
+    category    TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    what        TEXT NOT NULL,
+    why         TEXT,
+    how         TEXT,
+    seen_count  INTEGER NOT NULL DEFAULT 1,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sysgraph_proposal_fingerprint ON sysgraph.proposal(fingerprint);
+CREATE INDEX IF NOT EXISTS idx_sysgraph_proposal_source_category ON sysgraph.proposal(source, category);
+
+CREATE TABLE IF NOT EXISTS sysgraph.stat (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        TEXT NOT NULL,
+    value       DOUBLE PRECISION,
+    metadata    JSONB NOT NULL DEFAULT '{}',
+    observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sysgraph_stat_name ON sysgraph.stat(name, observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS sysgraph.ticket (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    linear_issue_id TEXT NOT NULL UNIQUE,
+    title           TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS sysgraph.outcome (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    result      TEXT NOT NULL CHECK (result IN ('shipped', 'owner-rejected', 'canceled-as-noise', 'deferred')),
+    observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS sysgraph.derives_from (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    proposal_id UUID NOT NULL REFERENCES sysgraph.proposal(id) ON DELETE CASCADE,
+    stat_id     UUID NOT NULL REFERENCES sysgraph.stat(id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (proposal_id, stat_id)
+);
+
+CREATE TABLE IF NOT EXISTS sysgraph.promoted_to (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    proposal_id UUID NOT NULL REFERENCES sysgraph.proposal(id) ON DELETE CASCADE,
+    ticket_id   UUID NOT NULL REFERENCES sysgraph.ticket(id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (proposal_id, ticket_id)
+);
+CREATE INDEX IF NOT EXISTS idx_sysgraph_promoted_to_ticket ON sysgraph.promoted_to(ticket_id);
+
+CREATE TABLE IF NOT EXISTS sysgraph.produced (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    ticket_id  UUID NOT NULL REFERENCES sysgraph.ticket(id) ON DELETE CASCADE,
+    outcome_id UUID NOT NULL REFERENCES sysgraph.outcome(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (ticket_id, outcome_id)
+);
+
+-- CORRELATES_WITH / INFLUENCE: polymorphic Proposal<->Proposal or Proposal<->Stat
+-- edges. No DB-level FK across the two possible node tables (heterogeneous
+-- target type) — validated at the sysgraph repository layer, not the schema.
+CREATE TABLE IF NOT EXISTS sysgraph.correlates_with (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    from_node_type TEXT NOT NULL CHECK (from_node_type IN ('proposal', 'stat')),
+    from_node_id   UUID NOT NULL,
+    to_node_type   TEXT NOT NULL CHECK (to_node_type IN ('proposal', 'stat')),
+    to_node_id     UUID NOT NULL,
+    weight         DOUBLE PRECISION,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sysgraph_correlates_from ON sysgraph.correlates_with(from_node_type, from_node_id);
+
+CREATE TABLE IF NOT EXISTS sysgraph.influence (
+    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    from_node_type TEXT NOT NULL CHECK (from_node_type IN ('proposal', 'stat')),
+    from_node_id   UUID NOT NULL,
+    to_node_type   TEXT NOT NULL CHECK (to_node_type IN ('proposal', 'stat')),
+    to_node_id     UUID NOT NULL,
+    weight         DOUBLE PRECISION,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_sysgraph_influence_from ON sysgraph.influence(from_node_type, from_node_id);
+
+RESET ROLE;

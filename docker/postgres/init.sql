@@ -487,6 +487,8 @@ CREATE TABLE IF NOT EXISTS sysgraph.outcome (
     result      TEXT NOT NULL CHECK (result IN ('shipped', 'owner-rejected', 'canceled-as-noise', 'deferred')),
     observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- Supports get_signal()'s windowed (observed_at) filter (ADR-0105 D7 / FRE-717).
+CREATE INDEX IF NOT EXISTS idx_sysgraph_outcome_observed_at ON sysgraph.outcome(observed_at);
 
 CREATE TABLE IF NOT EXISTS sysgraph.derives_from (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -505,12 +507,25 @@ CREATE TABLE IF NOT EXISTS sysgraph.promoted_to (
 );
 CREATE INDEX IF NOT EXISTS idx_sysgraph_promoted_to_ticket ON sysgraph.promoted_to(ticket_id);
 
+-- ticket_id UNIQUE: a ticket has exactly one terminal outcome (ADR-0105 D7 /
+-- FRE-717) — subsumes the narrower (ticket_id, outcome_id) pairing FRE-714
+-- originally declared.
 CREATE TABLE IF NOT EXISTS sysgraph.produced (
     id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    ticket_id  UUID NOT NULL REFERENCES sysgraph.ticket(id) ON DELETE CASCADE,
+    ticket_id  UUID NOT NULL UNIQUE REFERENCES sysgraph.ticket(id) ON DELETE CASCADE,
     outcome_id UUID NOT NULL REFERENCES sysgraph.outcome(id) ON DELETE CASCADE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (ticket_id, outcome_id)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Realized-value suppression cooldown (ADR-0105 D7 / FRE-717). The value itself
+-- (v) is computed on read from sysgraph.outcome rows, never persisted here —
+-- see docker/postgres/migrations/0017_sysgraph_signal.sql.
+CREATE TABLE IF NOT EXISTS sysgraph.signal (
+    source           TEXT NOT NULL CHECK (source IN ('statistical_detector', 'reflection')),
+    category         TEXT NOT NULL,
+    suppressed_until TIMESTAMPTZ,
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (source, category)
 );
 
 -- CORRELATES_WITH / INFLUENCE: polymorphic Proposal<->Proposal or Proposal<->Stat

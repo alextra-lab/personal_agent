@@ -1572,6 +1572,50 @@ class AppConfig(BaseSettings):
         description="Linear project name for promoted improvement issues",
     )
 
+    # Outcome ingestion + realized-value signal (ADR-0105 D7 / FRE-717)
+    outcome_ingestion_enabled: bool = Field(
+        default=True,
+        description="Enable daily ticket-outcome ingestion into the sysgraph realized-value signal",
+    )
+    outcome_ingestion_hour_utc: int = Field(
+        default=8,
+        ge=0,
+        le=23,
+        description="UTC hour for daily outcome-ingestion sweep (distinct from feedback polling's 7)",
+    )
+    signal_window_days: int = Field(
+        default=90,
+        ge=1,
+        description="Trailing window (days) over which realized-value v is computed (ADR-0105 D7)",
+    )
+    signal_smoothing_prior: float = Field(
+        default=2.0,
+        ge=0,
+        description="Additive-smoothing prior in v = Sum(weights) / (n + prior); pulls cold-start "
+        "keys toward 0 so one early verdict cannot swing a source",
+    )
+    signal_priority_clamp: float = Field(
+        default=0.5,
+        ge=0,
+        le=1.0,
+        description="Bound on v's promotion-ranking modulation: priority x (1 + clamp(v, -bound, bound))",
+    )
+    signal_suppression_threshold: float = Field(
+        default=-0.4,
+        description="v at or below this value triggers suppression (with signal_suppression_min_n)",
+    )
+    signal_suppression_min_n: int = Field(
+        default=5,
+        ge=1,
+        description="Minimum in-window outcome count before suppression can trigger",
+    )
+    signal_suppression_cooldown_days: int = Field(
+        default=30,
+        ge=1,
+        description="Suppression cooldown duration once triggered, parallel to the fingerprint "
+        "suppression in captains_log/suppression.py",
+    )
+
     # Knowledge Graph Freshness (ADR-0042)
     freshness_enabled: bool = Field(
         default=False,

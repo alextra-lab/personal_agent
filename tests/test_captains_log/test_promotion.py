@@ -25,6 +25,7 @@ from personal_agent.captains_log.promotion import (
     _format_linear_description,
     _map_seen_count_to_priority,
 )
+from personal_agent.sysgraph.repository import SignalValue
 
 
 class TestPriorityMapping:
@@ -720,6 +721,7 @@ class TestAdr0105BidirectionalLinkage:
 
         sysgraph_repo = MagicMock()
         sysgraph_repo.record_promotion = AsyncMock()
+        sysgraph_repo.get_signal = AsyncMock(return_value=SignalValue(0.0, 0, False))
 
         async def mock_create(*args: object) -> str | None:
             return "FRE-NEW"
@@ -759,6 +761,7 @@ class TestAdr0105BidirectionalLinkage:
         mock_create = AsyncMock(side_effect=AssertionError("should not be called"))
         sysgraph_repo = MagicMock()
         sysgraph_repo.record_promotion = AsyncMock()
+        sysgraph_repo.get_signal = AsyncMock(return_value=SignalValue(0.0, 0, False))
 
         pipeline = PromotionPipeline(
             log_dir=log_dir,
@@ -785,6 +788,7 @@ class TestAdr0105BidirectionalLinkage:
 
         sysgraph_repo = MagicMock()
         sysgraph_repo.record_promotion = AsyncMock()
+        sysgraph_repo.get_signal = AsyncMock(return_value=SignalValue(0.0, 0, False))
 
         async def mock_create(*args: object) -> str | None:
             return "FRE-NEW"
@@ -850,3 +854,130 @@ class TestAdr0105BidirectionalLinkage:
         await pipeline.run()
 
         es_handler.es_logger.update_by_query.assert_not_awaited()
+
+
+class TestAdr0105SignalReadInPromotion:
+    """ADR-0105 D7/AC-6: promotion reads the realized-value signal before capping."""
+
+    @pytest.mark.asyncio
+    async def test_no_sysgraph_repo_leaves_order_unchanged(self, tmp_path: pathlib.Path) -> None:
+        """sysgraph_repo=None fails open -- identical to today's un-ranked behavior."""
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        _write_entry(
+            log_dir,
+            entry_id="CL-20260220-120000-001",
+            what="Proposal A",
+            source=ProposalSource.REFLECTION,
+        )
+
+        created: list[str] = []
+
+        async def mock_create(*args: object) -> str | None:
+            created.append(str(args[0]))
+            return "FRE-A"
+
+        pipeline = PromotionPipeline(log_dir=log_dir, create_issue_fn=mock_create)
+        promoted = await pipeline.run()
+
+        assert len(promoted) == 1
+
+    @pytest.mark.asyncio
+    async def test_suppressed_entry_is_excluded(self, tmp_path: pathlib.Path) -> None:
+        """A suppressed (source, category) entry never reaches _create_linear_issue."""
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        _write_entry(
+            log_dir,
+            entry_id="CL-20260220-120000-001",
+            what="Suppressed proposal",
+            category=ChangeCategory.RELIABILITY,
+            source=ProposalSource.REFLECTION,
+        )
+
+        sysgraph_repo = MagicMock()
+        sysgraph_repo.get_signal = AsyncMock(
+            return_value=SignalValue(value=-0.6, n=6, suppressed=True)
+        )
+        mock_create = AsyncMock(return_value="FRE-SHOULD-NOT-CREATE")
+
+        pipeline = PromotionPipeline(
+            log_dir=log_dir, create_issue_fn=mock_create, sysgraph_repo=sysgraph_repo
+        )
+        promoted = await pipeline.run()
+
+        assert promoted == []
+        mock_create.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_ranks_by_realized_value_before_capping(self, tmp_path: pathlib.Path) -> None:
+        """Two same-seen_count candidates: higher-v category is promoted when the cap admits one."""
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        _write_entry(
+            log_dir,
+            entry_id="CL-20260220-120000-001",
+            what="Low-value proposal",
+            seen_count=5,
+            category=ChangeCategory.RELIABILITY,
+            source=ProposalSource.REFLECTION,
+        )
+        _write_entry(
+            log_dir,
+            entry_id="CL-20260220-120000-002",
+            what="High-value proposal",
+            seen_count=5,
+            category=ChangeCategory.COST,
+            source=ProposalSource.REFLECTION,
+        )
+
+        def _signal_for(source: str, category: str) -> SignalValue:
+            if category == "cost":
+                return SignalValue(value=0.4, n=3, suppressed=False)
+            return SignalValue(value=-0.1, n=2, suppressed=False)
+
+        sysgraph_repo = MagicMock()
+        sysgraph_repo.get_signal = AsyncMock(side_effect=_signal_for)
+        created_titles: list[str] = []
+
+        async def mock_create(title: str, *args: object) -> str | None:
+            created_titles.append(title)
+            return "FRE-WINNER"
+
+        pipeline = PromotionPipeline(
+            log_dir=log_dir,
+            criteria=PromotionCriteria(max_existing_linear_issues=1),
+            create_issue_fn=mock_create,
+            sysgraph_repo=sysgraph_repo,
+        )
+        promoted = await pipeline.run()
+
+        assert len(promoted) == 1
+        assert "High-value proposal" in created_titles[0]
+
+    @pytest.mark.asyncio
+    async def test_signal_read_failure_degrades_to_unmodulated_score(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """get_signal raising for one entry does not block the run (fail open)."""
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        _write_entry(
+            log_dir,
+            entry_id="CL-20260220-120000-001",
+            what="Errors on signal read",
+            source=ProposalSource.REFLECTION,
+        )
+
+        sysgraph_repo = MagicMock()
+        sysgraph_repo.get_signal = AsyncMock(side_effect=RuntimeError("db down"))
+
+        async def mock_create(*args: object) -> str | None:
+            return "FRE-OK"
+
+        pipeline = PromotionPipeline(
+            log_dir=log_dir, create_issue_fn=mock_create, sysgraph_repo=sysgraph_repo
+        )
+        promoted = await pipeline.run()
+
+        assert len(promoted) == 1

@@ -30,6 +30,14 @@ All variables use the `AGENT_` prefix (see `AppConfig` in `src/personal_agent/co
 | `AGENT_FEEDBACK_SUPPRESSION_DAYS` | How long rejections suppress similar fingerprints (default `30`). |
 | `AGENT_FEEDBACK_MAX_REEVALUATIONS` | Cap on Deepen / Too Vague rounds per issue (default `2`). |
 | `AGENT_FEEDBACK_DEFER_REVISIT_DAYS` | Defer window placeholder (default `90`). |
+| `AGENT_OUTCOME_INGESTION_ENABLED` | Daily ticket-outcome ingestion into the realized-value signal, ADR-0105 D7 (default `true`). |
+| `AGENT_OUTCOME_INGESTION_HOUR_UTC` | Hour (0–23 UTC) for the daily outcome-ingestion job (default `8`). |
+| `AGENT_SIGNAL_WINDOW_DAYS` | Trailing window (days) the realized-value signal is computed over (default `90`). |
+| `AGENT_SIGNAL_SMOOTHING_PRIOR` | Additive-smoothing prior in `v = Σweights / (n + prior)` (default `2.0`). |
+| `AGENT_SIGNAL_PRIORITY_CLAMP` | Bound on promotion-ranking modulation (default `0.5`). |
+| `AGENT_SIGNAL_SUPPRESSION_THRESHOLD` | `v` at/below this value triggers suppression (default `-0.4`). |
+| `AGENT_SIGNAL_SUPPRESSION_MIN_N` | Minimum in-window outcomes before suppression can trigger (default `5`). |
+| `AGENT_SIGNAL_SUPPRESSION_COOLDOWN_DAYS` | Suppression cooldown once triggered (default `30`). |
 
 Copy commented defaults from `.env.example` into `.env` and uncomment to override.
 
@@ -37,6 +45,7 @@ Copy commented defaults from `.env.example` into `.env` and uncomment to overrid
 
 - **Promotion**: Fixed in code as **Sunday, 10:00 UTC** (`PROMOTION_WEEKDAY`, `PROMOTION_HOUR_UTC` in `src/personal_agent/brainstem/scheduler.py`). Changing this requires a code edit today; env-driven promotion time is not implemented yet.
 - **Feedback polling**: **Daily** at `AGENT_FEEDBACK_POLLING_HOUR_UTC`.
+- **Outcome ingestion** (ADR-0105 D7): **Daily** at `AGENT_OUTCOME_INGESTION_HOUR_UTC` — sweeps promoted tickets awaiting an outcome, classifies shipped/owner-rejected/canceled-as-noise from Linear workflow state + labels, and updates the realized-value signal the next promotion run reads back to rank and suppress proposals.
 - **Insights** (related): daily / weekly hours via `AGENT_INSIGHTS_*` in `.env.example`.
 
 ## Telemetry

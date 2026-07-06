@@ -320,6 +320,11 @@ class PromotionPipeline:
             log.info("promotion_pipeline_no_entries")
             return []
 
+        entries = await self._apply_signal_ranking(entries)
+        if not entries:
+            log.info("promotion_pipeline_all_suppressed")
+            return []
+
         if self._create_issue_fn is not None and self._linear_client is not None:
             try:
                 count = await self._linear_client.count_open_issues(settings.linear_team_name)
@@ -447,6 +452,59 @@ class PromotionPipeline:
                     error=str(exc),
                     trace_id=entry_trace.get(entry_id),
                 )
+
+    async def _apply_signal_ranking(self, entries: list[CaptainLogEntry]) -> list[CaptainLogEntry]:
+        """Rank by realized value and drop suppressed (source, category) pairs.
+
+        ADR-0105 D7/AC-6: the next promotion run's ordering/suppression must
+        reflect the outcome-ingestion signal. Fails open — identical to
+        today's un-ranked scan order — whenever ``sysgraph_repo`` is
+        unavailable or a signal read errors, matching every other best-effort
+        sysgraph call in this file.
+
+        Args:
+            entries: Promotable entries in scan order.
+
+        Returns:
+            Entries ranked by ``seen_count x (1 + clamp(v, +/-clamp))``
+            descending, with suppressed ``(source, category)`` pairs dropped.
+        """
+        if self._sysgraph_repo is None:
+            return entries
+
+        scored: list[tuple[float, CaptainLogEntry]] = []
+        for entry in entries:
+            pc = entry.proposed_change
+            if pc is None or pc.source is None or pc.category is None:
+                scored.append((float(pc.seen_count) if pc else 0.0, entry))
+                continue
+            try:
+                signal = await self._sysgraph_repo.get_signal(pc.source.value, pc.category.value)
+            except Exception as exc:
+                log.warning(
+                    "promotion_signal_read_failed",
+                    entry_id=entry.entry_id,
+                    error=str(exc),
+                    trace_id=_trace_id_from_entry(entry),
+                )
+                scored.append((float(pc.seen_count), entry))
+                continue
+            if signal.suppressed:
+                log.info(
+                    "promotion_suppressed_by_signal",
+                    entry_id=entry.entry_id,
+                    source=pc.source.value,
+                    category=pc.category.value,
+                    value=signal.value,
+                    trace_id=_trace_id_from_entry(entry),
+                )
+                continue
+            clamp = settings.signal_priority_clamp
+            modulation = 1.0 + max(-clamp, min(clamp, signal.value))
+            scored.append((pc.seen_count * modulation, entry))
+
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        return [entry for _, entry in scored]
 
     async def _existing_linear_issue_for_fingerprint(self, fingerprint: str) -> str | None:
         """Return Linear issue identifier if one already contains this fingerprint.

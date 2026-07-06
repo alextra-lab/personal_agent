@@ -456,7 +456,7 @@ CREATE TABLE IF NOT EXISTS sysgraph.proposal (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     source      TEXT NOT NULL CHECK (source IN ('statistical_detector', 'reflection')),
     category    TEXT NOT NULL,
-    fingerprint TEXT NOT NULL,
+    fingerprint TEXT NOT NULL UNIQUE,
     what        TEXT NOT NULL,
     why         TEXT,
     how         TEXT,
@@ -464,7 +464,6 @@ CREATE TABLE IF NOT EXISTS sysgraph.proposal (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_sysgraph_proposal_fingerprint ON sysgraph.proposal(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_sysgraph_proposal_source_category ON sysgraph.proposal(source, category);
 
 CREATE TABLE IF NOT EXISTS sysgraph.stat (

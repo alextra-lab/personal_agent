@@ -262,18 +262,42 @@ def build_consolidation_promotion_handler(
         promo_criteria = criteria or PromotionCriteria(
             max_existing_linear_issues=_settings.promotion_initial_cap,
         )
-        pipeline = PromotionPipeline(
-            criteria=promo_criteria,
-            linear_client=linear_client,
-            create_issue_fn=(linear_client.create_issue if linear_client else None),
-        )
-        promoted = await pipeline.run()
-        log.info(
-            "promotion_from_consolidation",
-            event_id=event.event_id,
-            promoted_count=len(promoted),
-            trace_id=event.trace_id,
-        )
+
+        # ADR-0105 D4: best-effort sysgraph connection for the promotion-time
+        # proposal<->ticket linkage write. A connect failure (missing deps, DB
+        # down, wrong role) must never block Linear promotion — degrade to
+        # sysgraph_repo=None, which PromotionPipeline treats as "skip linkage".
+        sysgraph_repo = None
+        try:
+            from personal_agent.sysgraph import SysgraphRepository
+
+            sysgraph_repo = SysgraphRepository(_settings.sysgraph_database_url)
+            await sysgraph_repo.connect()
+        except Exception as exc:
+            log.warning(
+                "promotion_sysgraph_connect_failed",
+                error=str(exc),
+                trace_id=event.trace_id,
+            )
+            sysgraph_repo = None
+
+        try:
+            pipeline = PromotionPipeline(
+                criteria=promo_criteria,
+                linear_client=linear_client,
+                create_issue_fn=(linear_client.create_issue if linear_client else None),
+                sysgraph_repo=sysgraph_repo,
+            )
+            promoted = await pipeline.run()
+            log.info(
+                "promotion_from_consolidation",
+                event_id=event.event_id,
+                promoted_count=len(promoted),
+                trace_id=event.trace_id,
+            )
+        finally:
+            if sysgraph_repo is not None:
+                await sysgraph_repo.disconnect()
 
     return handler
 

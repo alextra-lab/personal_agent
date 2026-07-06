@@ -15,7 +15,7 @@ import json
 import pathlib
 from collections.abc import Callable, Coroutine
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
@@ -27,11 +27,17 @@ from personal_agent.captains_log.models import (
     CaptainLogEntry,
     CaptainLogStatus,
     ChangeCategory,
+    ProposalSource,
 )
 from personal_agent.config import settings
+from personal_agent.sysgraph import SysgraphRepository
+from personal_agent.sysgraph.repository import ProposalRecord
 from personal_agent.telemetry import get_logger
 
 log = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from personal_agent.telemetry.es_handler import ElasticsearchHandler
 
 
 def _trace_id_from_entry(entry: CaptainLogEntry) -> str | None:
@@ -120,6 +126,27 @@ def _format_linear_description(entry: CaptainLogEntry) -> str:
         f"**Category**: `{pc.category.value if pc.category else 'unknown'}`",
         f"**Scope**: `{pc.scope.value if pc.scope else 'unknown'}`",
         "",
+        "## Rationale",
+        "",
+        entry.rationale,
+    ]
+
+    # ADR-0105 D5/AC-4: every substantive field present on the source proposal
+    # carries through verbatim — no truncation, no summarizing (only the title
+    # truncates pc.what[:80]).
+    if entry.experiment_design:
+        lines += ["", "## Experiment Design", ""]
+        lines += [f"- {step}" for step in entry.experiment_design]
+
+    if entry.expected_outcome:
+        lines += ["", "## Expected Outcome", "", entry.expected_outcome]
+
+    if entry.potential_implementation:
+        lines += ["", "## Potential Implementation", ""]
+        lines += [f"- {step}" for step in entry.potential_implementation]
+
+    lines += [
+        "",
         "## Evidence",
         "",
         f"- Observed **{pc.seen_count}** time(s)",
@@ -174,6 +201,8 @@ class PromotionPipeline:
         criteria: PromotionCriteria | None = None,
         create_issue_fn: LinearIssueCreator | None = None,
         linear_client: LinearClient | None = None,
+        sysgraph_repo: SysgraphRepository | None = None,
+        es_handler: "ElasticsearchHandler | None" = None,
     ) -> None:
         """Initialize the promotion pipeline.
 
@@ -184,6 +213,13 @@ class PromotionPipeline:
                 labels, state, project) -> issue_identifier | None.
                 If None, promotable entries are identified but not pushed to Linear.
             linear_client: Optional Linear MCP client for budget and duplicate checks.
+            sysgraph_repo: Optional connected SysgraphRepository (ADR-0105 D4). When
+                None, the graph-side proposal<->ticket linkage is skipped entirely —
+                never blocks Linear promotion.
+            es_handler: Optional Elasticsearch handler used to stamp linear_issue_id
+                onto the source `agent-insights-*` document for STATISTICAL_DETECTOR-
+                sourced promotions (ADR-0105 D4). Falls back to
+                ``CaptainLogManager._default_es_handler`` when not provided.
         """
         if log_dir is None:
             project_root = pathlib.Path(__file__).parent.parent.parent.parent
@@ -192,6 +228,8 @@ class PromotionPipeline:
         self.criteria = criteria or PromotionCriteria()
         self._create_issue_fn = create_issue_fn
         self._linear_client = linear_client
+        self._sysgraph_repo = sysgraph_repo
+        self._es_handler = es_handler
 
     def scan_promotable_entries(self) -> list[CaptainLogEntry]:
         """Find all AWAITING_APPROVAL entries that meet promotion criteria.
@@ -333,16 +371,12 @@ class PromotionPipeline:
                             linear_issue_id=existing_id,
                             trace_id=_trace_id_from_entry(entry),
                         )
-                        self._mark_promoted(entry, existing_id)
-                        promoted.append(
-                            {"entry_id": entry.entry_id, "linear_issue_id": existing_id}
-                        )
+                        await self._finalize_promotion(entry, existing_id, promoted)
                         continue
 
                 linear_id = await self._create_linear_issue(entry)
                 if linear_id:
-                    self._mark_promoted(entry, linear_id)
-                    promoted.append({"entry_id": entry.entry_id, "linear_issue_id": linear_id})
+                    await self._finalize_promotion(entry, linear_id, promoted)
             except Exception as exc:
                 log.warning(
                     "promotion_linear_create_failed",
@@ -534,3 +568,104 @@ class PromotionPipeline:
                     error=str(exc),
                     trace_id=_trace_id_from_entry(entry),
                 )
+
+    async def _finalize_promotion(
+        self,
+        entry: CaptainLogEntry,
+        linear_issue_id: str,
+        promoted: list[dict[str, str]],
+    ) -> None:
+        """Mark the entry promoted and record its linkage (ADR-0105 D4/AC-3).
+
+        Shared by both the fresh-Linear-issue path and the dedup-linked-to-an-
+        existing-issue path — both represent "this proposal now maps to this
+        ticket" and must both get the graph/ES linkage.
+
+        Args:
+            entry: The promoted Captain's Log entry.
+            linear_issue_id: The Linear issue identifier (freshly created or an
+                existing duplicate match).
+            promoted: The running list of promoted {entry_id, linear_issue_id}
+                dicts this call appends to.
+        """
+        self._mark_promoted(entry, linear_issue_id)
+        promoted.append({"entry_id": entry.entry_id, "linear_issue_id": linear_issue_id})
+        await self._record_sysgraph_linkage(entry, linear_issue_id)
+        pc = entry.proposed_change
+        if pc is not None and pc.source == ProposalSource.STATISTICAL_DETECTOR and pc.fingerprint:
+            await self._stamp_insight_linkage(pc.fingerprint, linear_issue_id)
+
+    async def _record_sysgraph_linkage(self, entry: CaptainLogEntry, linear_issue_id: str) -> None:
+        """Write the proposal<->ticket PROMOTED_TO edge (ADR-0105 D4), best-effort.
+
+        Skips (logged, not fabricated) when the entry predates the ADR-0105 D1
+        source discriminator — `sysgraph.proposal.source` is NOT NULL and cannot
+        hold a guessed value.
+
+        Args:
+            entry: The promoted Captain's Log entry.
+            linear_issue_id: The Linear issue identifier just linked.
+        """
+        if self._sysgraph_repo is None:
+            return
+        pc = entry.proposed_change
+        if pc is None or pc.source is None or not pc.fingerprint:
+            log.info(
+                "sysgraph_linkage_skipped_no_source",
+                entry_id=entry.entry_id,
+                trace_id=_trace_id_from_entry(entry),
+            )
+            return
+        try:
+            proposal = ProposalRecord(
+                source=pc.source.value,
+                category=pc.category.value if pc.category else "unknown",
+                fingerprint=pc.fingerprint,
+                what=pc.what,
+                why=pc.why,
+                how=pc.how,
+                seen_count=pc.seen_count,
+            )
+            await self._sysgraph_repo.record_promotion(
+                proposal, linear_issue_id=linear_issue_id, ticket_title=entry.title
+            )
+        except Exception as exc:
+            log.warning(
+                "sysgraph_linkage_write_failed",
+                entry_id=entry.entry_id,
+                error=str(exc),
+                trace_id=_trace_id_from_entry(entry),
+            )
+
+    async def _stamp_insight_linkage(self, fingerprint: str, linear_issue_id: str) -> None:
+        """Stamp linear_issue_id onto matching agent-insights-* docs (ADR-0105 D4), best-effort.
+
+        Matches every historical detection doc sharing this fingerprint via
+        `_update_by_query` rather than a deterministic doc id — insight docs are
+        an intentional time series (one per detection run), not deduped by
+        fingerprint, so overwriting by id would collapse that series.
+
+        Args:
+            fingerprint: The STATISTICAL_DETECTOR proposal's fingerprint — shared
+                with the `agent-insights-*` document via `_fingerprint_for_insight`.
+            linear_issue_id: The Linear issue identifier just linked.
+        """
+        from personal_agent.captains_log.manager import CaptainLogManager
+
+        handler = self._es_handler or CaptainLogManager._default_es_handler
+        if handler is None or not getattr(handler, "_connected", False):
+            return
+        try:
+            await handler.es_logger.update_by_query(
+                "agent-insights-*",
+                {"term": {"fingerprint": fingerprint}},
+                "ctx._source.linear_issue_id = params.linear_issue_id",
+                {"linear_issue_id": linear_issue_id},
+            )
+        except Exception as exc:
+            log.warning(
+                "promotion_insight_linkage_stamp_failed",
+                fingerprint=fingerprint,
+                linear_issue_id=linear_issue_id,
+                error=str(exc),
+            )

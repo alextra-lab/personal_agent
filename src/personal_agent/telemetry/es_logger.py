@@ -99,6 +99,43 @@ class ElasticsearchLogger:
             log.warning("elasticsearch_index_failed", index=index_name, error=str(e))
             return None
 
+    async def update_by_query(
+        self,
+        index_pattern: str,
+        query: dict[str, Any],
+        script_source: str,
+        params: dict[str, Any],
+    ) -> int:
+        """Partial-update matching documents via a Painless script.
+
+        Best-effort: returns 0 (never raises) when not connected or on any
+        client error, mirroring :meth:`index_document`'s failure handling.
+
+        Args:
+            index_pattern: Index or index pattern to search (e.g. ``agent-insights-*``).
+            query: ES query DSL dict selecting the documents to update.
+            script_source: Painless script source (e.g.
+                ``"ctx._source.linear_issue_id = params.linear_issue_id"``).
+            params: Script parameters.
+
+        Returns:
+            Number of documents updated, or 0 if not connected or on failure.
+        """
+        if not self.client:
+            log.warning("elasticsearch_not_connected", index=index_pattern)
+            return 0
+        try:
+            result = await self.client.update_by_query(
+                index=index_pattern,
+                query=query,
+                script={"source": script_source, "params": params, "lang": "painless"},
+                conflicts="proceed",
+            )
+            return int(result.get("updated", 0))
+        except Exception as e:
+            log.warning("elasticsearch_update_by_query_failed", index=index_pattern, error=str(e))
+            return 0
+
     async def log_event(
         self,
         event_type: str,

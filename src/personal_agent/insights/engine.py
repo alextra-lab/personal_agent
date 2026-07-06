@@ -686,13 +686,7 @@ class InsightsEngine:
                 for metric_name, metric_value in insight.evidence.items()
             ]
             now = datetime.now(timezone.utc)
-            if insight.insight_type == "anomaly":
-                observation_date = now.strftime("%Y-%m-%d")
-                fingerprint = _cost_fingerprint("daily_cost_spike", observation_date)
-            else:
-                fingerprint = _pattern_fingerprint(
-                    insight.insight_type, insight.pattern_kind, insight.title
-                )
+            fingerprint = _fingerprint_for_insight(insight, now)
             proposed_change = ProposedChange(
                 what=f"Address insight pattern: {insight.title}",
                 why=insight.summary,
@@ -1145,8 +1139,30 @@ class InsightsEngine:
                 "actionable": insight.actionable,
                 "evidence": insight.evidence,
                 "analysis_window_days": days,
+                "fingerprint": _fingerprint_for_insight(insight, now),
+                # ADR-0105 D4: aspirational until a promotion stamps the real ticket id
+                # via PromotionPipeline._stamp_insight_linkage (ES update_by_query).
+                "linear_issue_id": None,
             }
             schedule_es_index(index_name, document)
+
+
+def _fingerprint_for_insight(insight: Insight, now: datetime) -> str:
+    """Deterministic fingerprint shared between the ES insight doc and the promoted proposal.
+
+    Both the ES doc (ADR-0105 D4) and the CaptainLogEntry must compute this
+    identically, since promotion looks up the ES doc by this value.
+
+    Args:
+        insight: The insight to fingerprint.
+        now: The moment of generation (anomaly fingerprints key on the date).
+
+    Returns:
+        16-hex-char deterministic fingerprint.
+    """
+    if insight.insight_type == "anomaly":
+        return _cost_fingerprint("daily_cost_spike", now.strftime("%Y-%m-%d"))
+    return _pattern_fingerprint(insight.insight_type, insight.pattern_kind, insight.title)
 
 
 def _metric_value(raw: object) -> float | int | str:

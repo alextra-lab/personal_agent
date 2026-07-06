@@ -1,0 +1,32 @@
+[Unit]
+# The event-driven gating watcher (FRE-823): polls gh/Linear/tmux with ZERO LLM
+# context and pokes the persistent CC sessions via `tmux send-keys` — /master
+# <PR#> to cc-master when a PR is master-ready, /prime-worker to cc-<stream> on a
+# master bounce or a red CI. It is the event-driven replacement for the polling
+# /loop crons removed 2026-07-06 (which blew the 5-min prompt-cache TTL, FRE-822).
+# It never merges, deploys, closes tickets, edits MASTER_PLAN, or launches a
+# fresh `claude -p`; it only actuates a trigger into an existing, idle session.
+# It shares the orchestrator's kill switch (telemetry/dispatch.disabled).
+Description=Seshat event-driven gating watcher (FRE-823)
+Documentation=https://linear.app/frenchforest/issue/FRE-823
+Documentation=file:///opt/seshat/docs/runbooks/dispatch-orchestrator.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=debian
+Group=debian
+WorkingDirectory=/opt/seshat
+# Fail fast at start if the Linear key is missing or gh is unavailable.
+ExecStartPre=/opt/seshat/.venv/bin/python -m scripts.dispatch.gating_watcher --preflight
+# The daemon poll loop; --execute actually sends keys (the guardrails keep it safe).
+ExecStart=/opt/seshat/.venv/bin/python -m scripts.dispatch.gating_watcher --loop --execute
+Restart=always
+RestartSec=30
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

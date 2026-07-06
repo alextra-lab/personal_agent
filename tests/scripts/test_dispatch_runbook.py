@@ -32,3 +32,13 @@ def test_runbook_documents_enable_once_precondition() -> None:
     assert "claude auth login" in text
     assert "anthropic_base_url" in text
     assert "kill switch" in text
+
+
+def test_runbook_documents_gating_watcher_triggers() -> None:
+    """FRE-823: the runbook documents the watcher's two send-keys triggers."""
+    text = " ".join(_RUNBOOK.read_text().lower().split())
+    assert "gating watcher" in text
+    assert "cc-master" in text
+    assert "/prime-worker" in text
+    # the shared kill switch halts both the orchestrator and the watcher
+    assert "halts **both**" in _RUNBOOK.read_text().lower() or "halts both" in text

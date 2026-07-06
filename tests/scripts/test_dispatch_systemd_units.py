@@ -40,3 +40,17 @@ def test_orchestrator_unit_preflights_before_starting() -> None:
     unit = _read("seshat-dispatch-orchestrator.service")
     assert "--preflight" in unit
     assert "ExecStartPre" in unit
+
+
+def test_gating_watcher_unit_runs_the_loop_and_restarts() -> None:
+    """FRE-823: the gating watcher runs the poll loop and restarts on failure."""
+    unit = _read("seshat-gating-watcher.service")
+    assert "scripts.dispatch.gating_watcher --loop --execute" in unit
+    assert "Restart=always" in unit
+
+
+def test_gating_watcher_unit_preflights_before_starting() -> None:
+    """FRE-823: the watcher preflights (Linear key + gh) before the loop."""
+    unit = _read("seshat-gating-watcher.service")
+    assert "--preflight" in unit
+    assert "ExecStartPre" in unit

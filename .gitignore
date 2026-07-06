@@ -132,6 +132,8 @@ current_session
 telemetry/security/
 telemetry/graph_quality/
 telemetry/within_session_compression/
+telemetry/dispatch_state.json
+telemetry/dispatch.disabled
 
 # Claude Code
 .claude/worktrees/

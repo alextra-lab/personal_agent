@@ -135,6 +135,59 @@ loop over its own PR, self-fixing on a master bounce **or** a red CI, until the
 PR merges. The build/adr skills arm this monitor early so it runs even when the
 orchestrator (not a manual `/prime-worker`) was the launch entry point.
 
+## Gating watcher (FRE-823) — event-driven send-keys triggers
+
+The **gating watcher** (`scripts/dispatch/gating_watcher.py`,
+`seshat-gating-watcher.service`) is the event-driven replacement for the polling
+`/loop` crons removed 2026-07-06 (they re-read a session's context every tick and
+blew the 5-min prompt-cache TTL — an uncached-cost blowup, FRE-822). It runs
+**outside** every CC session and holds **no LLM context**: it polls `gh`/Linear/
+`tmux` only, so a short poll interval is cheap. It only *actuates* the trigger —
+master's gate and both approval gates are unchanged (like the orchestrator, it
+never merges, deploys, closes tickets, or edits MASTER_PLAN).
+
+**Two triggers.** For each open PR (read once via `gh pr view` so a tick is
+internally consistent):
+- **Master ← new PR.** CI green, not `CONFLICTING`, and no unacked
+  `## Master gate — BOUNCE` → `tmux send-keys -t cc-master "/master <PR#>"`.
+  Dedup on `(PR#, head SHA)`: a bounce+push mints a new SHA → re-sent when it
+  re-greens.
+- **Worker ← bounce / red CI.** An unacked `## Master gate — BOUNCE` **or** a
+  failed CI check on the head SHA with no `Ack: addressing red CI at <sha>` →
+  `tmux send-keys -t cc-<stream> "/prime-worker"`. The stream is resolved from
+  the PR branch (`fre-<id>`) → the ticket's `stream:*` label →
+  `cc-build`/`cc-build2`/`cc-adrs`. The ack markers prime-worker already posts
+  are the dedup key.
+
+**Injection safety.** A command is sent only into a session that **exists**
+(`tmux has-session`) AND is **idle at a prompt** (`capture-pane` shows the input
+prompt and no busy/permission marker — a session waiting on an owner decision is
+treated as busy and never interrupted). A missing or busy target is skipped +
+logged, never crashed. The idle check is best-effort — the watcher only actuates;
+master's and worker's own gates re-read live state and are authoritative. (Known
+residual: an unsent human draft in the input box would receive the appended
+command — inherent to the capture-pane approach.)
+
+**Kill switch (shared).** `touch telemetry/dispatch.disabled` halts **both** the
+orchestrator and the watcher immediately; remove it to resume. The watcher pokes
+local tmux, so it does not depend on Remote-Control reachability.
+
+**Dedup TTLs.** State is `telemetry/gating_watcher_state.json`
+(`{"sent": {"<kind>:<pr>:<sha>": epoch}}`, atomic write, pruned each tick). Because
+`send-keys` is at-least-once, dedup is timestamped, not permanent: master entries
+carry a long re-arm TTL (a genuinely stuck send re-nudges once instead of being
+suppressed forever); worker entries carry a short in-flight lease over the
+send→pre-ack window (the ack markers remain the primary key).
+
+Enable it alongside the orchestrator (single instance — one serial `--loop`):
+```
+sudo install -m 644 infrastructure/systemd/seshat-gating-watcher.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now seshat-gating-watcher
+```
+Preflight by hand: `/opt/seshat/.venv/bin/python -m scripts.dispatch.gating_watcher --preflight`
+(checks the Linear key + gh; exit 0 when both are present).
+
 ## Production cutover — settled posture + phased checklist
 
 **Settled autonomy posture (owner, 2026-07-05 — do NOT re-open).** An orchestrated

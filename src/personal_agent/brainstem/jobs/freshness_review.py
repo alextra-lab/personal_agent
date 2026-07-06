@@ -19,6 +19,7 @@ from personal_agent.captains_log.models import (
     ChangeCategory,
     ChangeScope,
     Metric,
+    ProposalSource,
     ProposedChange,
     TelemetryRef,
 )
@@ -161,6 +162,7 @@ def _build_entity_dormant_proposal(
             ),
             category=ChangeCategory.KNOWLEDGE_QUALITY,
             scope=ChangeScope.SECOND_BRAIN,
+            source=ProposalSource.STATISTICAL_DETECTOR,
             fingerprint=fp,
         ),
         supporting_metrics=supporting,
@@ -226,6 +228,7 @@ def _build_relationship_dormant_proposal(
             ),
             category=ChangeCategory.KNOWLEDGE_QUALITY,
             scope=ChangeScope.SECOND_BRAIN,
+            source=ProposalSource.STATISTICAL_DETECTOR,
             fingerprint=fp,
         ),
         supporting_metrics=supporting,

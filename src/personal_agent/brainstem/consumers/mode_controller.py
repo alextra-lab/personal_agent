@@ -31,6 +31,7 @@ from personal_agent.captains_log.models import (
     CaptainLogEntryType,
     ChangeCategory,
     ChangeScope,
+    ProposalSource,
     ProposedChange,
 )
 from personal_agent.config import settings
@@ -348,6 +349,7 @@ class ModeControllerConsumer:
                 ),
                 category=ChangeCategory.RELIABILITY,
                 scope=ChangeScope.BRAINSTEM,
+                source=ProposalSource.STATISTICAL_DETECTOR,
                 fingerprint=fingerprint,
             ),
             supporting_metrics=[

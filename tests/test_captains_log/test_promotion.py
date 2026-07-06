@@ -9,12 +9,14 @@ import pytest
 
 import personal_agent.captains_log.promotion as promotion_module
 from personal_agent.captains_log.dedup import compute_proposal_fingerprint
+from personal_agent.captains_log.manager import CaptainLogManager
 from personal_agent.captains_log.models import (
     CaptainLogEntry,
     CaptainLogEntryType,
     CaptainLogStatus,
     ChangeCategory,
     ChangeScope,
+    ProposalSource,
     ProposedChange,
 )
 from personal_agent.captains_log.promotion import (
@@ -287,6 +289,106 @@ class TestScanPromotableEntries:
         criteria = PromotionCriteria(min_seen_count=2, min_age_days=0)
         pipeline = PromotionPipeline(log_dir=log_dir, criteria=criteria)
         assert len(pipeline.scan_promotable_entries()) == 1
+
+
+class TestAdr0105SourceDiscriminatorConvergence:
+    """ADR-0105 D1 / FRE-715 AC-1: one entrypoint, both source values, none missing."""
+
+    def test_one_scan_returns_both_source_values(self, tmp_path: pathlib.Path) -> None:
+        """Both producers persist via one CaptainLogManager; one PromotionPipeline
+        scan over that shared directory returns both, each tagged by source.
+        """
+        log_dir = tmp_path / "captains_log"
+        manager = CaptainLogManager(log_dir=log_dir)
+        old_enough = datetime.now(timezone.utc) - timedelta(days=14)
+
+        statistical_entry = CaptainLogEntry(
+            entry_id="",
+            type=CaptainLogEntryType.CONFIG_PROPOSAL,
+            title="Task: statistical",
+            rationale="From the statistical detector",
+            proposed_change=ProposedChange(
+                what="Address insight pattern: cost spike",
+                why="Cost spike detected",
+                how="Investigate and mitigate",
+                category=ChangeCategory.COST,
+                scope=ChangeScope.LLM_CLIENT,
+                source=ProposalSource.STATISTICAL_DETECTOR,
+                fingerprint=compute_proposal_fingerprint(
+                    ChangeCategory.COST,
+                    ChangeScope.LLM_CLIENT,
+                    "Address insight pattern: cost spike",
+                ),
+                seen_count=5,
+                first_seen=old_enough,
+            ),
+        )
+        reflection_entry = CaptainLogEntry(
+            entry_id="",
+            type=CaptainLogEntryType.REFLECTION,
+            title="Task: reflection",
+            rationale="From the LLM reflector",
+            proposed_change=ProposedChange(
+                what="Add retry logic",
+                why="Improves reliability",
+                how="Wrap calls in tenacity",
+                category=ChangeCategory.RELIABILITY,
+                scope=ChangeScope.LLM_CLIENT,
+                source=ProposalSource.REFLECTION,
+                fingerprint=compute_proposal_fingerprint(
+                    ChangeCategory.RELIABILITY, ChangeScope.LLM_CLIENT, "Add retry logic"
+                ),
+                seen_count=5,
+                first_seen=old_enough,
+            ),
+        )
+
+        with patch("personal_agent.captains_log.manager.schedule_es_index"):
+            manager.save_entry(statistical_entry)
+            manager.save_entry(reflection_entry)
+
+        # One PromotionPipeline, one scan, over the directory both producers wrote to.
+        pipeline = PromotionPipeline(log_dir=log_dir)
+        entries = pipeline.scan_promotable_entries()
+
+        sources = {e.proposed_change.source for e in entries if e.proposed_change}
+        assert sources == {ProposalSource.STATISTICAL_DETECTOR, ProposalSource.REFLECTION}
+        # No produced proposal lacks a source.
+        assert all(e.proposed_change and e.proposed_change.source is not None for e in entries)
+
+    def test_scan_promotable_entries_defined_exactly_once(self) -> None:
+        """Structural check: only PromotionPipeline scans CL proposals for promotion.
+
+        Other CL-*.json scanners exist (ES backfill replay, retention/archival)
+        but they serve different purposes and use different method names; only
+        one function in the codebase is named ``scan_promotable_entries``.
+        """
+        import ast
+
+        src_root = pathlib.Path(__file__).resolve().parents[2] / "src" / "personal_agent"
+        defining_files = []
+        for py_file in src_root.rglob("*.py"):
+            tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.FunctionDef) and node.name == "scan_promotable_entries":
+                    defining_files.append(py_file)
+
+        assert defining_files == [src_root / "captains_log" / "promotion.py"]
+
+    def test_producers_never_call_linear_directly(self) -> None:
+        """Neither producer talks to Linear directly — both reach it only
+        through the single PromotionPipeline entrypoint.
+        """
+        src_root = pathlib.Path(__file__).resolve().parents[2] / "src" / "personal_agent"
+        producer_files = [
+            src_root / "insights" / "engine.py",
+            src_root / "captains_log" / "reflection.py",
+            src_root / "captains_log" / "reflection_dspy.py",
+        ]
+        for f in producer_files:
+            text = f.read_text(encoding="utf-8")
+            assert "LinearClient" not in text, f"{f} must not construct a Linear client"
+            assert "create_issue" not in text, f"{f} must not call Linear directly"
 
 
 class TestPromotionPipelineRun:

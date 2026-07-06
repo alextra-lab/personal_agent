@@ -547,6 +547,14 @@ class TestCompactionQualityCaptainLogHandler:
         await handler(_cq_event())
 
         mock_manager_instance.save_entry.assert_called_once()
+        # Local import: this module keeps captains_log out of top-level
+        # imports (see module docstring — mcp-less test env stubs it).
+        from personal_agent.captains_log.models import ProposalSource
+
+        entry = mock_manager_instance.save_entry.call_args[0][0]
+        assert entry.proposed_change is not None
+        # ADR-0105 D1: rule-based detectors tag the statistical_detector source.
+        assert entry.proposed_change.source == ProposalSource.STATISTICAL_DETECTOR
 
     @pytest.mark.asyncio
     async def test_lazy_manager_instantiated_when_not_passed(self) -> None:

@@ -38,6 +38,7 @@ from personal_agent.captains_log.models import (
     CaptainLogStatus,
     ChangeCategory,
     ChangeScope,
+    ProposalSource,
     ProposedChange,
     TelemetryRef,
 )
@@ -479,6 +480,7 @@ def generate_reflection_dspy(
                 how=_ensure_str(getattr(result, "proposed_change_how", ""), ""),
                 category=cast(ChangeCategory | None, category),
                 scope=cast(ChangeScope | None, scope),
+                source=ProposalSource.REFLECTION,
                 fingerprint=fingerprint,
                 first_seen=datetime.now(timezone.utc),
             )

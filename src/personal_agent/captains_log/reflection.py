@@ -26,6 +26,7 @@ from personal_agent.captains_log.models import (
     CaptainLogStatus,
     ChangeCategory,
     ChangeScope,
+    ProposalSource,
     ProposedChange,
     TelemetryRef,
 )
@@ -566,6 +567,7 @@ def _build_proposed_change(raw: dict[str, str] | None) -> ProposedChange | None:
         how=raw["how"],
         category=category,
         scope=scope,
+        source=ProposalSource.REFLECTION,
         fingerprint=fingerprint,
         first_seen=datetime.now(timezone.utc),
     )

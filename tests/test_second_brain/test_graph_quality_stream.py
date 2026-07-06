@@ -27,12 +27,12 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 import pytest
 
 from personal_agent.events.models import (
-    GraphQualityAnomalyEvent,
-    MemoryStalenessReviewedEvent,
-    ModeAdvisoryEvent,
     STREAM_GRAPH_QUALITY_ANOMALY,
     STREAM_MEMORY_STALENESS_REVIEWED,
     STREAM_MODE_TRANSITION,
+    GraphQualityAnomalyEvent,
+    MemoryStalenessReviewedEvent,
+    ModeAdvisoryEvent,
 )
 from personal_agent.insights.fingerprints import cost_fingerprint, pattern_fingerprint
 from personal_agent.memory.freshness import StalenessTier, staleness_tier_from_freshness_score
@@ -43,7 +43,6 @@ from personal_agent.second_brain.quality_monitor import (
     _dominant_tier,
     _range_anomaly,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -275,11 +274,10 @@ class TestStream8DurableBeforeBus:
     async def test_durable_before_bus_order(self, tmp_path: Path) -> None:
         """JSONL is written before bus.publish is called (ADR-0054 D4)."""
         import dataclasses
-        import json
 
-        from personal_agent.second_brain.quality_monitor import GraphQualityAnomaly
         from personal_agent.events.models import GraphQualityAnomalyEvent
         from personal_agent.insights.fingerprints import pattern_fingerprint
+        from personal_agent.second_brain.quality_monitor import GraphQualityAnomaly
 
         call_order: list[str] = []
         mock_bus = AsyncMock()
@@ -360,9 +358,9 @@ class TestStream8DurableBeforeBus:
 class TestStream6DurableBeforeBus:
     async def test_jsonl_written_for_staleness_review(self, tmp_path: Path) -> None:
         """JSONL file is written and contains the summary fields."""
-        from personal_agent.second_brain.quality_monitor import GraphStalenessReviewSummary
         import dataclasses
-        import json
+
+        from personal_agent.second_brain.quality_monitor import GraphStalenessReviewSummary
 
         output_dir = tmp_path / "freshness_review"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -404,18 +402,22 @@ class TestGraphQualityHandlerAnomalyEvent:
         manager = MagicMock()
         manager.save_entry = MagicMock(return_value=None)
 
-        from personal_agent.captains_log.models import ChangeCategory, ChangeScope
+        from personal_agent.captains_log.models import ChangeCategory, ChangeScope, ProposalSource
 
         settings_mock = MagicMock()
         settings_mock.graph_quality_governance_enabled = False
         settings_mock.freshness_dormant_entity_proposal_threshold = 5
 
-        with patch(
-            "personal_agent.events.pipeline_handlers.get_settings",
-            return_value=settings_mock,
-        ) if False else patch(
-            "personal_agent.config.settings.get_settings",
-            return_value=settings_mock,
+        with (
+            patch(
+                "personal_agent.events.pipeline_handlers.get_settings",
+                return_value=settings_mock,
+            )
+            if False
+            else patch(
+                "personal_agent.config.settings.get_settings",
+                return_value=settings_mock,
+            )
         ):
             from personal_agent.events.pipeline_handlers import (
                 build_graph_quality_captain_log_handler,
@@ -429,6 +431,8 @@ class TestGraphQualityHandlerAnomalyEvent:
         entry = manager.save_entry.call_args[0][0]
         assert entry.proposed_change.category == ChangeCategory.RELIABILITY
         assert entry.proposed_change.scope == ChangeScope.SECOND_BRAIN
+        # ADR-0105 D1: rule-based detectors tag the statistical_detector source.
+        assert entry.proposed_change.source == ProposalSource.STATISTICAL_DETECTOR
 
     async def test_medium_severity_uses_knowledge_quality_category(self) -> None:
         manager = MagicMock()
@@ -540,7 +544,7 @@ class TestGraphQualityHandlerStalenessEvent:
         settings_mock.freshness_dormant_entity_proposal_threshold = 1
         settings_mock.graph_quality_governance_enabled = False
 
-        from personal_agent.captains_log.models import ChangeScope
+        from personal_agent.captains_log.models import ChangeScope, ProposalSource
 
         with patch("personal_agent.config.settings.get_settings", return_value=settings_mock):
             from personal_agent.events.pipeline_handlers import (
@@ -553,6 +557,8 @@ class TestGraphQualityHandlerStalenessEvent:
 
         entry = manager.save_entry.call_args[0][0]
         assert entry.proposed_change.scope == ChangeScope.SECOND_BRAIN
+        # ADR-0105 D1: rule-based detectors tag the statistical_detector source.
+        assert entry.proposed_change.source == ProposalSource.STATISTICAL_DETECTOR
 
 
 # ---------------------------------------------------------------------------

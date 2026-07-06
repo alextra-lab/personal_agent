@@ -1,9 +1,19 @@
 # ADR-0111: Infrastructure Topology & Data-Custody Policy (CPU-only single-box baseline; owner-controlled personal-data plane)
 
-**Status:** Proposed
+**Status:** Superseded by [ADR-0112](ADR-0112-configurable-substrate-backends.md) — pending its merge (proposed 2026-07-06; master finalizes both statuses at the gate)
 **Date:** 2026-07-06
 **Deciders:** Project owner
 **Tags:** infrastructure, topology, capacity, data-custody, threat-model, ovh, csirt, cost
+
+> **Superseded (2026-07-06).** Extended owner discussion reframed this decision. Seshat is a
+> personal agent whose data already transits a frontier chat API; the enterprise custody
+> fortress here (deny all managed services, HDS/BAA framing, a CPU-only hardware ladder) was
+> disproportionate, and this ADR was drafted without the required collaborative discussion. The
+> correct decision — owner-controlled *storage* by default, managed *API endpoints* under
+> no-train/no-log terms, configurable backends, an open-weight SOTA embedder (OVH-managed
+> Qwen3-Embedding-8B with a same-model local fallback) — is **[ADR-0112](ADR-0112-configurable-substrate-backends.md)**.
+> The one decision retained from here is durability (restore-tested, custody-bound backups),
+> carried into ADR-0112 §D7.
 
 **Related:** ADR-0105 (isolated System graph; private embedding path), ADR-0098 (memory substrate & lifecycle), ADR-0074 (observability / substrate guard pattern), ADR-0069 (artifact substrate)
 

@@ -302,7 +302,13 @@ services:
       - /opt/seshat/.env
     environment:
       # ── Docker-internal service URLs (override .env localhost values) ──────────
-      AGENT_DATABASE_URL: postgresql+asyncpg://agent:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required — set in .env}@postgres:5432/personal_agent
+      # App connects as the restricted non-superuser `seshat_app` role (FRE-808);
+      # it has no access to schema sysgraph. Set SESHAT_APP_PASSWORD in .env and
+      # run `ALTER ROLE seshat_app PASSWORD …` on the DB to match (migration 0015).
+      AGENT_DATABASE_URL: postgresql+asyncpg://seshat_app:${SESHAT_APP_PASSWORD:?SESHAT_APP_PASSWORD required — set in .env}@postgres:5432/personal_agent
+      # Superuser handle for migrations / admin DDL only — never used by the
+      # request path (FRE-808).
+      AGENT_DATABASE_ADMIN_URL: postgresql+asyncpg://agent:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required — set in .env}@postgres:5432/personal_agent
       AGENT_NEO4J_URI: bolt://neo4j:7687
       AGENT_NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD required — set in .env}
       AGENT_ELASTICSEARCH_URL: http://elasticsearch:9200

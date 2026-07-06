@@ -71,7 +71,9 @@ def _strip_transaction_wrapper(sql: str) -> str:
 @pytest_asyncio.fixture
 async def ephemeral_schema():
     """Create a one-shot schema in the test-stack DB, drop it at teardown."""
-    dsn = _normalize_asyncpg_dsn(settings.database_url)
+    # FRE-808: CREATE/DROP SCHEMA needs the superuser admin DSN, not the
+    # restricted app role that AGENT_DATABASE_URL now points at.
+    dsn = _normalize_asyncpg_dsn(settings.database_admin_url)
     schema = f"migration_test_{uuid4().hex[:8]}"
     try:
         conn = await asyncpg.connect(dsn, timeout=5)

@@ -540,3 +540,43 @@ CREATE TABLE IF NOT EXISTS sysgraph.influence (
 CREATE INDEX IF NOT EXISTS idx_sysgraph_influence_from ON sysgraph.influence(from_node_type, from_node_id);
 
 RESET ROLE;
+
+-- ===========================================================================
+-- App role — the live AGENT_DATABASE_URL connection (ADR-0105 T1 / FRE-808)
+--
+-- Today the app connects as the `agent` bootstrap SUPERUSER, which bypasses
+-- every grant — so the sysgraph isolation above would not stop a stray
+-- sysgraph query from the app's connection. `seshat_app` is a non-superuser
+-- login role scoped to exactly the public-schema DML the app needs; it is
+-- granted NOTHING on schema sysgraph, so `SELECT … FROM sysgraph.*` from the
+-- app connection raises `permission denied` (the real AC-2 proof, not the
+-- recall_role stand-in). Migrations / admin DDL continue to run as the `agent`
+-- superuser via AGENT_DATABASE_ADMIN_URL.
+--
+-- Dev password shipped here; production sets a real SESHAT_APP_PASSWORD secret
+-- via `ALTER ROLE seshat_app PASSWORD …` at deploy (see 0015 migration header).
+-- ===========================================================================
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'seshat_app') THEN
+        CREATE ROLE seshat_app LOGIN PASSWORD 'seshat_app_dev_password';
+    END IF;
+END
+$$;
+
+GRANT CONNECT ON DATABASE personal_agent TO seshat_app;
+GRANT USAGE ON SCHEMA public TO seshat_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO seshat_app;
+GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO seshat_app;
+
+-- Future public objects created by the bootstrap superuser (fresh-install
+-- init.sql tables below this line, and every later migration run as `agent`)
+-- auto-grant to the app role, so new tables never need a manual GRANT.
+ALTER DEFAULT PRIVILEGES FOR ROLE agent IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO seshat_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE agent IN SCHEMA public
+    GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO seshat_app;
+
+-- Intentionally NO grant on schema sysgraph: seshat_app is not a superuser and
+-- has no USAGE there, so the app connection is denied — physical isolation now
+-- holds against the actual deployed connection, not just the recall_role proxy.

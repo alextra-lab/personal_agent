@@ -2,7 +2,7 @@
 -- Migration: 0011 — sessions.user_id schema divergence (FRE-591)
 --
 -- Idempotent. Apply against existing databases via:
---   psql $AGENT_DATABASE_URL -f docker/postgres/migrations/0011_sessions_user_id.sql
+--   psql $AGENT_DATABASE_ADMIN_URL -f docker/postgres/migrations/0011_sessions_user_id.sql
 --
 -- Fresh installs receive this column via docker/postgres/init.sql, which only
 -- runs on an empty Postgres volume.

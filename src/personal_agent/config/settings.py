@@ -1073,9 +1073,20 @@ class AppConfig(BaseSettings):
     )
 
     # Database (Postgres)
+    # Connects as `seshat_app`, a non-superuser role scoped to the public-schema
+    # DML the app needs (ADR-0105 T1 / FRE-808). It is granted nothing on schema
+    # sysgraph, so the app connection cannot reach the isolated System graph even
+    # under a future bug. Admin/migration DDL uses `database_admin_url` below.
     database_url: str = Field(
+        default="postgresql+asyncpg://seshat_app:seshat_app_dev_password@localhost:5432/personal_agent",
+        description="PostgreSQL database URL — the restricted seshat_app app role (FRE-808)",
+    )
+    # Superuser credential for schema bootstrap + migrations (CREATE ROLE / CREATE
+    # SCHEMA / SET ROLE), which the restricted app role cannot run. Never used by
+    # request-path code — only by migration tooling and admin/DDL test fixtures.
+    database_admin_url: str = Field(
         default="postgresql+asyncpg://agent:agent_dev_password@localhost:5432/personal_agent",
-        description="PostgreSQL database URL",
+        description="PostgreSQL admin URL — the `agent` superuser for migrations/DDL (FRE-808)",
     )
     database_echo: bool = Field(default=False, description="Echo SQL queries (for debugging)")
 
@@ -2170,6 +2181,8 @@ class AppConfig(BaseSettings):
             offenders.append(f"elasticsearch_url={self.elasticsearch_url!r}")
         if is_prod_postgres_url(self.database_url):
             offenders.append(f"database_url={self.database_url!r}")
+        if is_prod_postgres_url(self.database_admin_url):
+            offenders.append(f"database_admin_url={self.database_admin_url!r}")
         if is_prod_postgres_url(self.sysgraph_database_url):
             offenders.append(f"sysgraph_database_url={self.sysgraph_database_url!r}")
 
@@ -2182,6 +2195,7 @@ class AppConfig(BaseSettings):
             "Set AGENT_NEO4J_URI=bolt://localhost:7688 (test stack), "
             "AGENT_ELASTICSEARCH_URL=http://localhost:9201, "
             "AGENT_DATABASE_URL=<test-db-url>, "
+            "AGENT_DATABASE_ADMIN_URL=<test-db-url>, "
             "AGENT_SYSGRAPH_DATABASE_URL=<test-db-url>, "
             "or set AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE=1 to bypass (use with care)."
         )

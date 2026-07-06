@@ -32,6 +32,73 @@ async def test_recall_role_denied_on_sysgraph(recall_role_pool: asyncpg.Pool) ->
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_app_role_denied_on_sysgraph(app_role_pool: asyncpg.Pool) -> None:
+    """FRE-808 core proof: the app's *actual* seshat_app connection is denied on sysgraph.
+
+    FRE-714 proved AC-2(a) only against ``recall_role`` (a stand-in) because the
+    real app connection ran as the ``agent`` superuser, which bypasses every
+    grant. After FRE-808 the app connects as ``seshat_app``; a stray sysgraph
+    query from that connection now raises a real permission error.
+    """
+    async with app_role_pool.acquire() as conn:
+        with pytest.raises(asyncpg.exceptions.InsufficientPrivilegeError):
+            await conn.fetch("SELECT * FROM sysgraph.proposal")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_app_role_is_not_superuser(app_role_pool: asyncpg.Pool) -> None:
+    """FRE-808 AC-1: the app's live role is a non-superuser (grants are enforced)."""
+    async with app_role_pool.acquire() as conn:
+        is_super = await conn.fetchval("SELECT rolsuper FROM pg_roles WHERE rolname = 'seshat_app'")
+        assert is_super is False, "seshat_app must not be a superuser"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_app_role_can_use_public_tables(app_role_pool: asyncpg.Pool) -> None:
+    """FRE-808 AC-2 (positive): seshat_app has exactly the public-schema DML it needs.
+
+    Exercises a plain read plus an INSERT with a pgvector embedding cast and a
+    vector-distance ordering (the artifacts/notes-search path) inside a rolled-back
+    transaction, proving the grants + the ``vector`` type/operators are usable.
+    """
+    async with app_role_pool.acquire() as conn:
+        await conn.fetchval("SELECT count(*) FROM sessions")  # SELECT grant
+        tx = conn.transaction()
+        await tx.start()
+        try:
+            user_id = await conn.fetchval(
+                "INSERT INTO users (email) VALUES ($1) RETURNING user_id",
+                "fre808-app-role-probe@example.test",
+            )
+            embedding = "[" + ",".join(["0.01"] * 1024) + "]"
+            await conn.execute(
+                """
+                INSERT INTO artifacts
+                    (id, user_id, type, content_type, size_bytes, r2_key, created_by, embedding)
+                VALUES
+                    (gen_random_uuid(), $1, 'note', 'text/plain', 3, $2, 'agent',
+                     CAST($3 AS vector))
+                """,
+                user_id,
+                "fre808/app-role-probe",
+                embedding,
+            )
+            # Vector-distance read (the notes_search operator path).
+            rows = await conn.fetch(
+                "SELECT id FROM artifacts WHERE user_id = $1 "
+                "ORDER BY embedding <=> CAST($2 AS vector) LIMIT 1",
+                user_id,
+                embedding,
+            )
+            assert len(rows) == 1
+        finally:
+            await tx.rollback()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_sysgraph_role_has_no_public_table_privilege(agent_pool: asyncpg.Pool) -> None:
     """Symmetric to AC-2(a): sysgraph_role has no grant on a user-facing table.
 

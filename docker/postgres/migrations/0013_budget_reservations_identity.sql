@@ -2,7 +2,7 @@
 -- Migration: 0013 — budget_reservations identity threading (FRE-693, ADR-0074 §8c)
 --
 -- Idempotent. Apply against existing databases via:
---   psql $AGENT_DATABASE_URL -f docker/postgres/migrations/0013_budget_reservations_identity.sql
+--   psql $AGENT_DATABASE_ADMIN_URL -f docker/postgres/migrations/0013_budget_reservations_identity.sql
 --
 -- Fresh installs receive these columns via docker/postgres/init.sql, which only
 -- runs on an empty Postgres volume.

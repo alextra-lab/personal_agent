@@ -7,7 +7,7 @@
 -- yet resolved; add the column in a follow-up migration once it reports.
 --
 -- Idempotent. Apply against existing databases via:
---   psql $AGENT_DATABASE_URL -f docker/postgres/migrations/0014_sysgraph_schema.sql
+--   psql $AGENT_DATABASE_ADMIN_URL -f docker/postgres/migrations/0014_sysgraph_schema.sql
 --
 -- Fresh installs receive these tables via docker/postgres/init.sql, which
 -- only runs on an empty Postgres volume. This file mirrors that DDL so
@@ -21,12 +21,11 @@ BEGIN;
 -- recall_role: stands in for "the recall/user-facing connection" per
 -- ADR-0105 AC-2(a) — a non-superuser role that is never granted anything on
 -- sysgraph, proving the permission-denied requirement at the DB layer.
--- NOTE: the app's actual live connection (AGENT_DATABASE_URL) still runs as
--- the `agent` bootstrap superuser today and bypasses all grants; migrating
--- it to a restricted role is tracked as a separate follow-up ticket, not
--- this migration. The isolation this file proves is the schema/role design
--- and the repository-boundary discipline (no recall/tutor code path opens
--- this schema), not a guarantee against every possible future superuser query.
+-- NOTE: when this migration shipped, the app's actual live connection
+-- (AGENT_DATABASE_URL) still ran as the `agent` bootstrap superuser and
+-- bypassed all grants; migration 0015 (FRE-808) moves it to the restricted
+-- non-superuser `seshat_app` role, so the isolation now holds against the
+-- deployed connection too, not just the recall_role stand-in.
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'sysgraph_role') THEN

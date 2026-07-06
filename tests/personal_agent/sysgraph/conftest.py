@@ -54,7 +54,32 @@ async def sysgraph_pool() -> AsyncIterator[asyncpg.Pool]:
 
 @pytest_asyncio.fixture
 async def agent_pool() -> AsyncIterator[asyncpg.Pool]:
-    """Direct asyncpg pool as ``agent`` (the migration-running superuser)."""
+    """Direct asyncpg pool as ``agent`` (the migration-running superuser).
+
+    Bound to ``database_admin_url`` — after FRE-808 ``database_url`` is the
+    restricted ``seshat_app`` role, so the superuser handle is the admin URL.
+    """
+    pool = await asyncpg.create_pool(
+        _normalize_asyncpg_dsn(settings.database_admin_url),
+        min_size=1,
+        max_size=1,
+        command_timeout=10,
+    )
+    assert pool is not None
+    try:
+        yield pool
+    finally:
+        await pool.close()
+
+
+@pytest_asyncio.fixture
+async def app_role_pool() -> AsyncIterator[asyncpg.Pool]:
+    """Direct asyncpg pool as the app's live ``seshat_app`` role (FRE-808).
+
+    This is the app's *actual* deployed connection (``AGENT_DATABASE_URL``), used
+    to prove the sysgraph isolation holds against it — not just the ``recall_role``
+    stand-in FRE-714 tested.
+    """
     pool = await asyncpg.create_pool(
         _normalize_asyncpg_dsn(settings.database_url),
         min_size=1,

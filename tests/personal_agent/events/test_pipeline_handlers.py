@@ -67,6 +67,13 @@ def _promotion_modules(pipeline_instance: MagicMock) -> dict[str, MagicMock]:
     }
 
 
+def _sysgraph_modules(repo_instance: MagicMock) -> dict[str, MagicMock]:
+    """Stub the sysgraph module so SysgraphRepository resolves to a mock (ADR-0105 D4)."""
+    mock_sysgraph_mod = MagicMock()
+    mock_sysgraph_mod.SysgraphRepository = MagicMock(return_value=repo_instance)
+    return {"personal_agent.sysgraph": mock_sysgraph_mod}
+
+
 def _captain_log_modules(manager_instance: MagicMock) -> dict[str, MagicMock]:
     """Stub the captains_log.manager + models modules."""
     mock_manager_mod = MagicMock()
@@ -466,6 +473,66 @@ class TestConsolidationPromotionHandler:
             )
 
         mock_pipeline.run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_connects_sysgraph_repo_and_passes_to_pipeline(self) -> None:
+        """ADR-0105 D4: the handler connects a SysgraphRepository, passes it to
+        PromotionPipeline, and disconnects it afterward.
+        """
+        mock_pipeline_cls = MagicMock()
+        mock_pipeline = MagicMock()
+        mock_pipeline.run = AsyncMock(return_value=[])
+        mock_pipeline_cls.return_value = mock_pipeline
+
+        mock_repo = MagicMock()
+        mock_repo.connect = AsyncMock()
+        mock_repo.disconnect = AsyncMock()
+
+        handler = build_consolidation_promotion_handler(linear_client=None)
+        with pytest.MonkeyPatch().context() as mp:
+            for k, v in {
+                **_promotion_modules(mock_pipeline),
+                **_sysgraph_modules(mock_repo),
+            }.items():
+                mp.setitem(sys.modules, k, v)
+            sys.modules[
+                "personal_agent.captains_log.promotion"
+            ].PromotionPipeline = mock_pipeline_cls
+            await handler(_consolidation_event())
+
+        mock_repo.connect.assert_awaited_once()
+        mock_repo.disconnect.assert_awaited_once()
+        _, kwargs = mock_pipeline_cls.call_args
+        assert kwargs["sysgraph_repo"] is mock_repo
+
+    @pytest.mark.asyncio
+    async def test_sysgraph_connect_failure_degrades_to_none(self) -> None:
+        """A sysgraph connect failure never blocks promotion — degrades to sysgraph_repo=None."""
+        mock_pipeline_cls = MagicMock()
+        mock_pipeline = MagicMock()
+        mock_pipeline.run = AsyncMock(return_value=[])
+        mock_pipeline_cls.return_value = mock_pipeline
+
+        mock_repo = MagicMock()
+        mock_repo.connect = AsyncMock(side_effect=RuntimeError("db down"))
+        mock_repo.disconnect = AsyncMock()
+
+        handler = build_consolidation_promotion_handler(linear_client=None)
+        with pytest.MonkeyPatch().context() as mp:
+            for k, v in {
+                **_promotion_modules(mock_pipeline),
+                **_sysgraph_modules(mock_repo),
+            }.items():
+                mp.setitem(sys.modules, k, v)
+            sys.modules[
+                "personal_agent.captains_log.promotion"
+            ].PromotionPipeline = mock_pipeline_cls
+            await handler(_consolidation_event())
+
+        mock_pipeline.run.assert_awaited_once()
+        _, kwargs = mock_pipeline_cls.call_args
+        assert kwargs["sysgraph_repo"] is None
+        mock_repo.disconnect.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

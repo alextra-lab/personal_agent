@@ -31,6 +31,53 @@ class GraphNode:
     depth: int
 
 
+@dataclass(frozen=True)
+class ProposalRecord:
+    """Fields needed to upsert a ``sysgraph.proposal`` row (ADR-0105 D4)."""
+
+    source: Literal["statistical_detector", "reflection"]
+    category: str
+    fingerprint: str
+    what: str
+    why: str | None
+    how: str | None
+    seen_count: int
+
+
+_RECORD_PROMOTION_UPSERT_PROPOSAL = """
+INSERT INTO sysgraph.proposal (source, category, fingerprint, what, why, how, seen_count)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (fingerprint) DO UPDATE
+    SET seen_count = EXCLUDED.seen_count, updated_at = NOW()
+RETURNING id;
+"""
+
+_RECORD_PROMOTION_UPSERT_TICKET = """
+INSERT INTO sysgraph.ticket (linear_issue_id, title)
+VALUES ($1, $2)
+ON CONFLICT (linear_issue_id) DO NOTHING
+RETURNING id;
+"""
+
+_RECORD_PROMOTION_SELECT_TICKET = """
+SELECT id FROM sysgraph.ticket WHERE linear_issue_id = $1;
+"""
+
+_RECORD_PROMOTION_LINK_EDGE = """
+INSERT INTO sysgraph.promoted_to (proposal_id, ticket_id)
+VALUES ($1, $2)
+ON CONFLICT (proposal_id, ticket_id) DO NOTHING;
+"""
+
+_TICKET_SOURCE_PROPOSAL_QUERY = """
+SELECT p.id
+FROM sysgraph.promoted_to pt
+JOIN sysgraph.ticket t ON t.id = pt.ticket_id
+JOIN sysgraph.proposal p ON p.id = pt.proposal_id
+WHERE t.linear_issue_id = $1;
+"""
+
+
 _PROPOSAL_LINEAGE_QUERY = """
 WITH RECURSIVE lineage(node_type, node_id, depth) AS (
     SELECT 'proposal'::text, $1::uuid, 0
@@ -136,6 +183,67 @@ class SysgraphRepository:
             GraphNode(node_type=r["node_type"], node_id=r["node_id"], depth=r["depth"])
             for r in rows
         ]
+
+    async def record_promotion(
+        self,
+        proposal: ProposalRecord,
+        linear_issue_id: str,
+        ticket_title: str | None = None,
+    ) -> None:
+        """Upsert proposal + ticket nodes and link them via PROMOTED_TO (ADR-0105 D4/D7).
+
+        One transaction — writes are transactional with promotion (D2). Both the
+        proposal (keyed on fingerprint) and the ticket (keyed on linear_issue_id)
+        are idempotent upserts, so calling this repeatedly for the same
+        proposal/ticket pair never creates duplicate nodes or edges.
+
+        Args:
+            proposal: The source proposal's fields.
+            linear_issue_id: The Linear ticket identifier just created (or matched
+                as an existing duplicate) by the promotion pipeline.
+            ticket_title: Optional ticket title for the ticket node.
+        """
+        assert self.pool is not None, "call connect() first"
+        async with self.pool.acquire() as conn, conn.transaction():
+            proposal_id = await conn.fetchval(
+                _RECORD_PROMOTION_UPSERT_PROPOSAL,
+                proposal.source,
+                proposal.category,
+                proposal.fingerprint,
+                proposal.what,
+                proposal.why,
+                proposal.how,
+                proposal.seen_count,
+            )
+            ticket_id = await conn.fetchval(
+                _RECORD_PROMOTION_UPSERT_TICKET, linear_issue_id, ticket_title
+            )
+            if ticket_id is None:
+                ticket_id = await conn.fetchval(_RECORD_PROMOTION_SELECT_TICKET, linear_issue_id)
+            await conn.execute(_RECORD_PROMOTION_LINK_EDGE, proposal_id, ticket_id)
+        log.info(
+            "sysgraph_promotion_linked",
+            proposal_id=str(proposal_id),
+            ticket_id=str(ticket_id),
+            linear_issue_id=linear_issue_id,
+        )
+
+    async def ticket_source_proposal(self, linear_issue_id: str) -> UUID | None:
+        """Resolve a promoted ticket back to its source proposal id (ADR-0105 D4/AC-3).
+
+        The ticket -> source-proposal-id direction of the bidirectional linkage,
+        via the PROMOTED_TO edge.
+
+        Args:
+            linear_issue_id: The Linear ticket identifier.
+
+        Returns:
+            The source proposal's id, or ``None`` if the ticket has no linkage.
+        """
+        assert self.pool is not None, "call connect() first"
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(_TICKET_SOURCE_PROPOSAL_QUERY, linear_issue_id)
+        return row["id"] if row else None
 
     async def one_hop_correlations(
         self, node_type: Literal["proposal", "stat"], node_id: UUID

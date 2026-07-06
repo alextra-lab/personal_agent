@@ -340,3 +340,66 @@ class TestIndexInsightsPartitioning:
         # Monthly: exactly YYYY-MM (two dash-separated parts), not a daily YYYY-MM-DD.
         assert len(suffix.split("-")) == 2, f"expected monthly YYYY-MM, got {index_name!r}"
         datetime.strptime(suffix, "%Y-%m")  # parses as a month
+
+
+class TestInsightsEsLinkageField:
+    """ADR-0105 D4/FRE-716: agent-insights-* docs carry the linkage field."""
+
+    def test_indexed_document_carries_fingerprint_and_null_linear_issue_id(self) -> None:
+        """The document gets an aspirational-null linear_issue_id and a fingerprint,
+        not the current no-linkage-field-at-all state.
+        """
+        from personal_agent.insights import engine as engine_mod
+
+        eng = InsightsEngine.__new__(InsightsEngine)
+        insight = Insight(
+            insight_type="correlation",
+            pattern_kind="",
+            title="Higher failure risk when memory is elevated",
+            summary="s",
+            confidence=0.68,
+            evidence={"tasks": 12},
+        )
+        captured: list[dict[str, object]] = []
+        with patch.object(
+            engine_mod,
+            "schedule_es_index",
+            side_effect=lambda _idx, doc: captured.append(doc),
+        ):
+            eng._index_insights([insight], days=7)
+
+        assert len(captured) == 1
+        doc = captured[0]
+        assert doc["linear_issue_id"] is None
+        assert doc["fingerprint"] == _pattern_fingerprint(
+            insight.insight_type, insight.pattern_kind, insight.title
+        )
+
+    @pytest.mark.asyncio
+    async def test_indexed_fingerprint_matches_captain_log_proposal_fingerprint(self) -> None:
+        """The ES doc's fingerprint is byte-identical to the promoted CL entry's —
+        this identity is what makes the later promotion-time ES lookup work at all.
+        """
+        from personal_agent.insights import engine as engine_mod
+
+        engine = InsightsEngine.__new__(InsightsEngine)
+        insight = Insight(
+            insight_type="delegation",
+            pattern_kind="delegation_rounds",
+            title="Delegations require 3+ rounds at p75",
+            summary="s",
+            confidence=0.7,
+            evidence={"p75_rounds": 3},
+        )
+
+        captured: list[dict[str, object]] = []
+        with patch.object(
+            engine_mod,
+            "schedule_es_index",
+            side_effect=lambda _idx, doc: captured.append(doc),
+        ):
+            engine._index_insights([insight], days=7)
+
+        proposals = await InsightsEngine.create_captain_log_proposals(engine, [insight])
+
+        assert captured[0]["fingerprint"] == proposals[0].proposed_change.fingerprint

@@ -120,6 +120,107 @@ class TestFormatLinearDescription:
         assert _format_linear_description(entry) == ""
 
 
+class TestVerbatimSubstanceCarryThrough:
+    """ADR-0105 D5/AC-4: promoted tickets carry full substance, not a thin summary."""
+
+    def test_rationale_appears_verbatim(self) -> None:
+        """entry.rationale (always present) appears in full in the description."""
+        rationale = (
+            "This is a long multi-sentence rationale explaining exactly why the "
+            "reflection pipeline flagged this pattern, with specific detail that "
+            "must survive into the ticket body unabridged."
+        )
+        entry = CaptainLogEntry(
+            entry_id="CL-test-rationale",
+            type=CaptainLogEntryType.REFLECTION,
+            title="Test",
+            rationale=rationale,
+            proposed_change=ProposedChange(
+                what="Add retry logic",
+                why="Improves reliability",
+                how="Use tenacity",
+                category=ChangeCategory.RELIABILITY,
+                scope=ChangeScope.LLM_CLIENT,
+            ),
+        )
+        desc = _format_linear_description(entry)
+        assert rationale in desc
+
+    def test_experiment_design_items_appear_verbatim(self) -> None:
+        """Each experiment_design list item appears in full, not joined/summarized."""
+        steps = [
+            "Step one: instrument the retry path with a counter metric.",
+            "Step two: run for 7 days and compare failure rate against baseline.",
+        ]
+        entry = CaptainLogEntry(
+            entry_id="CL-test-experiment",
+            type=CaptainLogEntryType.HYPOTHESIS,
+            title="Test",
+            rationale="Test rationale",
+            proposed_change=ProposedChange(
+                what="Add retry logic",
+                why="Improves reliability",
+                how="Use tenacity",
+                category=ChangeCategory.RELIABILITY,
+                scope=ChangeScope.LLM_CLIENT,
+            ),
+            experiment_design=steps,
+        )
+        desc = _format_linear_description(entry)
+        for step in steps:
+            assert step in desc
+
+    def test_expected_outcome_and_potential_implementation_appear_verbatim(self) -> None:
+        """expected_outcome (str) and potential_implementation (list[str]) carry through."""
+        expected_outcome = "Failure rate drops below 2% within the 7-day window."
+        implementation_steps = [
+            "Wrap the LLM client call in a tenacity retry decorator.",
+            "Cap retries at 3 with exponential backoff.",
+        ]
+        entry = CaptainLogEntry(
+            entry_id="CL-test-outcome",
+            type=CaptainLogEntryType.IDEA,
+            title="Test",
+            rationale="Test rationale",
+            proposed_change=ProposedChange(
+                what="Add retry logic",
+                why="Improves reliability",
+                how="Use tenacity",
+                category=ChangeCategory.RELIABILITY,
+                scope=ChangeScope.LLM_CLIENT,
+            ),
+            expected_outcome=expected_outcome,
+            potential_implementation=implementation_steps,
+        )
+        desc = _format_linear_description(entry)
+        assert expected_outcome in desc
+        for step in implementation_steps:
+            assert step in desc
+
+    def test_absent_optional_fields_produce_no_empty_sections(self) -> None:
+        """When experiment_design/expected_outcome/potential_implementation are unset,
+        no stray section headers are added (only rationale is unconditional).
+        """
+        entry = CaptainLogEntry(
+            entry_id="CL-test-minimal",
+            type=CaptainLogEntryType.REFLECTION,
+            title="Test",
+            rationale="Just a rationale.",
+            proposed_change=ProposedChange(
+                what="Add retry logic",
+                why="Improves reliability",
+                how="Use tenacity",
+                category=ChangeCategory.RELIABILITY,
+                scope=ChangeScope.LLM_CLIENT,
+            ),
+        )
+        desc = _format_linear_description(entry)
+        assert "Just a rationale." in desc
+        assert "## Experiment Design" not in desc
+        assert "## Expected Outcome" not in desc
+        assert "## Potential Implementation" not in desc
+
+
 def _write_entry(
     log_dir: pathlib.Path,
     entry_id: str = "CL-20260220-120000-001",
@@ -131,6 +232,7 @@ def _write_entry(
     scope: ChangeScope = ChangeScope.LLM_CLIENT,
     linear_issue_id: str | None = None,
     eval_mode: bool = False,
+    source: ProposalSource | None = None,
 ) -> pathlib.Path:
     """Helper to write a CL entry JSON file to disk."""
     if first_seen is None:
@@ -149,6 +251,7 @@ def _write_entry(
             "how": "Test method",
             "category": category.value,
             "scope": scope.value,
+            "source": source.value if source else None,
             "fingerprint": fp,
             "seen_count": seen_count,
             "first_seen": first_seen.isoformat(),
@@ -601,3 +704,149 @@ class TestIntegrationDedupToPromotion:
         final_data = json.loads(files[0].read_text())
         assert final_data["status"] == "approved"
         assert final_data["linear_issue_id"] == "FRE-NEW"
+
+
+class TestAdr0105BidirectionalLinkage:
+    """ADR-0105 D4/AC-3: promotion writes sysgraph linkage + stamps ES insight docs."""
+
+    @pytest.mark.asyncio
+    async def test_run_records_sysgraph_linkage_when_repo_provided(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """A fresh promotion calls sysgraph_repo.record_promotion with the proposal + ticket."""
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        _write_entry(log_dir, source=ProposalSource.REFLECTION)
+
+        sysgraph_repo = MagicMock()
+        sysgraph_repo.record_promotion = AsyncMock()
+
+        async def mock_create(*args: object) -> str | None:
+            return "FRE-NEW"
+
+        pipeline = PromotionPipeline(
+            log_dir=log_dir, create_issue_fn=mock_create, sysgraph_repo=sysgraph_repo
+        )
+        promoted = await pipeline.run()
+
+        assert len(promoted) == 1
+        sysgraph_repo.record_promotion.assert_awaited_once()
+        _, kwargs = sysgraph_repo.record_promotion.call_args
+        assert kwargs["linear_issue_id"] == "FRE-NEW"
+
+    @pytest.mark.asyncio
+    async def test_run_records_sysgraph_linkage_on_dedup_linked_branch_too(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """The dedup-linked-to-existing-issue branch also writes the graph linkage."""
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        fp_path = _write_entry(log_dir, source=ProposalSource.STATISTICAL_DETECTOR)
+        data = json.loads(fp_path.read_text())
+        fp = data["proposed_change"]["fingerprint"]
+
+        lc = MagicMock()
+        lc.count_open_issues = AsyncMock(return_value=50)
+        lc.list_issues = AsyncMock(
+            return_value=[
+                {
+                    "id": "other-uuid",
+                    "identifier": "FF-EXISTING",
+                    "description": f"Prior\n<!-- fingerprint: {fp} -->\n",
+                }
+            ]
+        )
+        mock_create = AsyncMock(side_effect=AssertionError("should not be called"))
+        sysgraph_repo = MagicMock()
+        sysgraph_repo.record_promotion = AsyncMock()
+
+        pipeline = PromotionPipeline(
+            log_dir=log_dir,
+            criteria=PromotionCriteria(min_seen_count=3, min_age_days=7),
+            create_issue_fn=mock_create,
+            linear_client=lc,
+            sysgraph_repo=sysgraph_repo,
+        )
+        promoted = await pipeline.run()
+
+        assert promoted[0]["linear_issue_id"] == "FF-EXISTING"
+        sysgraph_repo.record_promotion.assert_awaited_once()
+        _, kwargs = sysgraph_repo.record_promotion.call_args
+        assert kwargs["linear_issue_id"] == "FF-EXISTING"
+
+    @pytest.mark.asyncio
+    async def test_run_skips_sysgraph_linkage_when_source_is_none(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """Legacy entries with no source discriminator are skipped, not fabricated."""
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        _write_entry(log_dir, source=None)
+
+        sysgraph_repo = MagicMock()
+        sysgraph_repo.record_promotion = AsyncMock()
+
+        async def mock_create(*args: object) -> str | None:
+            return "FRE-NEW"
+
+        pipeline = PromotionPipeline(
+            log_dir=log_dir, create_issue_fn=mock_create, sysgraph_repo=sysgraph_repo
+        )
+        promoted = await pipeline.run()
+
+        assert len(promoted) == 1
+        sysgraph_repo.record_promotion.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_run_stamps_es_insight_linkage_only_for_statistical_detector(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """The ES agent-insights-* stamp fires only for STATISTICAL_DETECTOR-sourced entries."""
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        fp_path = _write_entry(
+            log_dir, entry_id="CL-stat-001", source=ProposalSource.STATISTICAL_DETECTOR
+        )
+        data = json.loads(fp_path.read_text())
+        fp = data["proposed_change"]["fingerprint"]
+
+        es_handler = MagicMock()
+        es_handler._connected = True
+        es_handler.es_logger.update_by_query = AsyncMock(return_value=1)
+
+        async def mock_create(*args: object) -> str | None:
+            return "FRE-NEW"
+
+        pipeline = PromotionPipeline(
+            log_dir=log_dir, create_issue_fn=mock_create, es_handler=es_handler
+        )
+        await pipeline.run()
+
+        es_handler.es_logger.update_by_query.assert_awaited_once()
+        args, _ = es_handler.es_logger.update_by_query.call_args
+        assert args[0] == "agent-insights-*"
+        assert args[1] == {"term": {"fingerprint": fp}}
+        assert args[3] == {"linear_issue_id": "FRE-NEW"}
+
+    @pytest.mark.asyncio
+    async def test_run_does_not_stamp_es_for_reflection_source(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """Reflection-sourced entries have no ES insights doc to stamp."""
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        _write_entry(log_dir, source=ProposalSource.REFLECTION)
+
+        es_handler = MagicMock()
+        es_handler._connected = True
+        es_handler.es_logger.update_by_query = AsyncMock(return_value=1)
+
+        async def mock_create(*args: object) -> str | None:
+            return "FRE-NEW"
+
+        pipeline = PromotionPipeline(
+            log_dir=log_dir, create_issue_fn=mock_create, es_handler=es_handler
+        )
+        await pipeline.run()
+
+        es_handler.es_logger.update_by_query.assert_not_awaited()

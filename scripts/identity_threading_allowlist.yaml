@@ -49,7 +49,7 @@
 # --- Telemetry sink: a bulk index failure spans the whole batch; trace_id is a
 #     per-event loop variable, not a single id for the failed batch. ---
 - path: src/personal_agent/telemetry/es_logger.py
-  line: 180
+  line: 217
   pattern: log
   reason: "elasticsearch_bulk_failed — batch-level sink failure, no single trace_id for the bulk"
 

@@ -10,6 +10,7 @@ import pytest
 import pytest_asyncio
 
 from personal_agent.sysgraph import SysgraphRepository
+from personal_agent.sysgraph.repository import ProposalRecord
 
 
 @pytest_asyncio.fixture
@@ -111,6 +112,147 @@ async def test_one_hop_correlations_finds_neighbor(
     assert neighbors[0].node_type == "proposal"
     assert neighbors[0].node_id == seeded_correlation["to_id"]
     assert neighbors[0].depth == 1
+
+
+@pytest_asyncio.fixture
+async def _cleanup_promotion_rows(
+    sysgraph_pool: asyncpg.Pool,
+) -> AsyncIterator[None]:
+    """Delete any proposal/ticket rows this test's fingerprint/linear_issue_id created."""
+    try:
+        yield
+    finally:
+        async with sysgraph_pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM sysgraph.proposal WHERE fingerprint = 'fp-record-promotion-test'"
+            )
+            await conn.execute(
+                "DELETE FROM sysgraph.ticket WHERE linear_issue_id = 'FRE-TEST-RECORD-PROMOTION'"
+            )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_record_promotion_creates_proposal_ticket_and_edge(
+    sysgraph_repo: SysgraphRepository,
+    sysgraph_pool: asyncpg.Pool,
+    _cleanup_promotion_rows: None,
+) -> None:
+    """record_promotion upserts proposal + ticket and links them via PROMOTED_TO (ADR-0105 D4)."""
+    proposal = ProposalRecord(
+        source="reflection",
+        category="reliability",
+        fingerprint="fp-record-promotion-test",
+        what="Add retry logic",
+        why="Improves reliability",
+        how="Wrap calls in tenacity",
+        seen_count=5,
+    )
+
+    await sysgraph_repo.record_promotion(
+        proposal, linear_issue_id="FRE-TEST-RECORD-PROMOTION", ticket_title="Add retry logic"
+    )
+
+    async with sysgraph_pool.acquire() as conn:
+        proposal_row = await conn.fetchrow(
+            "SELECT id, seen_count FROM sysgraph.proposal WHERE fingerprint = $1",
+            "fp-record-promotion-test",
+        )
+        ticket_row = await conn.fetchrow(
+            "SELECT id FROM sysgraph.ticket WHERE linear_issue_id = $1",
+            "FRE-TEST-RECORD-PROMOTION",
+        )
+        edge_row = await conn.fetchrow(
+            "SELECT proposal_id, ticket_id FROM sysgraph.promoted_to "
+            "WHERE proposal_id = $1 AND ticket_id = $2",
+            proposal_row["id"],
+            ticket_row["id"],
+        )
+
+    assert proposal_row is not None
+    assert proposal_row["seen_count"] == 5
+    assert ticket_row is not None
+    assert edge_row is not None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_record_promotion_is_idempotent(
+    sysgraph_repo: SysgraphRepository,
+    sysgraph_pool: asyncpg.Pool,
+    _cleanup_promotion_rows: None,
+) -> None:
+    """Calling record_promotion twice for the same fingerprint/ticket updates, not duplicates."""
+    proposal = ProposalRecord(
+        source="statistical_detector",
+        category="cost",
+        fingerprint="fp-record-promotion-test",
+        what="Address cost spike",
+        why="Cost spike detected",
+        how="Investigate and mitigate",
+        seen_count=3,
+    )
+
+    await sysgraph_repo.record_promotion(
+        proposal, linear_issue_id="FRE-TEST-RECORD-PROMOTION", ticket_title="Cost spike"
+    )
+    updated = ProposalRecord(**{**proposal.__dict__, "seen_count": 4})
+    await sysgraph_repo.record_promotion(
+        updated, linear_issue_id="FRE-TEST-RECORD-PROMOTION", ticket_title="Cost spike"
+    )
+
+    async with sysgraph_pool.acquire() as conn:
+        proposal_rows = await conn.fetch(
+            "SELECT id, seen_count FROM sysgraph.proposal WHERE fingerprint = $1",
+            "fp-record-promotion-test",
+        )
+        ticket_rows = await conn.fetch(
+            "SELECT id FROM sysgraph.ticket WHERE linear_issue_id = $1",
+            "FRE-TEST-RECORD-PROMOTION",
+        )
+        edge_rows = await conn.fetch(
+            "SELECT * FROM sysgraph.promoted_to WHERE proposal_id = $1",
+            proposal_rows[0]["id"],
+        )
+
+    assert len(proposal_rows) == 1
+    assert proposal_rows[0]["seen_count"] == 4
+    assert len(ticket_rows) == 1
+    assert len(edge_rows) == 1
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ticket_source_proposal_resolves_reverse_direction(
+    sysgraph_repo: SysgraphRepository,
+    _cleanup_promotion_rows: None,
+) -> None:
+    """AC-3: ticket -> source-proposal-id resolves via the PROMOTED_TO edge."""
+    proposal = ProposalRecord(
+        source="reflection",
+        category="reliability",
+        fingerprint="fp-record-promotion-test",
+        what="Add retry logic",
+        why="Improves reliability",
+        how="Wrap calls in tenacity",
+        seen_count=1,
+    )
+    await sysgraph_repo.record_promotion(
+        proposal, linear_issue_id="FRE-TEST-RECORD-PROMOTION", ticket_title="Add retry logic"
+    )
+
+    resolved = await sysgraph_repo.ticket_source_proposal("FRE-TEST-RECORD-PROMOTION")
+
+    assert resolved is not None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ticket_source_proposal_none_when_not_promoted(
+    sysgraph_repo: SysgraphRepository,
+) -> None:
+    """A ticket id with no PROMOTED_TO edge resolves to None, not an error."""
+    assert await sysgraph_repo.ticket_source_proposal("FRE-DOES-NOT-EXIST") is None
 
 
 @pytest.mark.integration

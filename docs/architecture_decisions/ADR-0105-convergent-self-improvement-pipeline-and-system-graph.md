@@ -322,6 +322,10 @@ The existing `dedup.py` keys on a **text-exact fingerprint**, so the same idea i
 **Changed By:** Project owner (via master gate)
 **Reason:** Owner-accepted 2026-07-02. The build wave (children FRE-714–721) is greenlit; the one risky decision — **D10 semantic dedup** — stays gated behind the FRE-720 separation-probe measurement, so acceptance commits to the **isolated-sysgraph substrate** + producer convergence (D1) + verbatim promotion (D5) + one funnel (D6) + Postgres tuning (D8), **not** to unmeasured semantic dedup. Locks the System-isolation approach coordinated with Memory's ADR-0098 D1 System class (FRE-639) and ADR-0106 (FRE-728–732).
 
+### 2026-07-06 - Amended by ADR-0112 (embedder path → config default, not a mandate)
+**Changed By:** Project owner (adr session, Opus), FRE-809
+**Reason:** [ADR-0112](ADR-0112-configurable-substrate-backends.md) amends the D10 clause "embedder only on the always-on private VPS CPU path, never laptop-GPU." For a personal agent whose data already transits a frontier chat API, the embedder path is reframed from a **hardcoded mandate** to a **default configuration profile**: the private/local path remains the default, but a **managed embedding endpoint under no-train/no-log terms is a permitted config choice** — specifically OVH AI Endpoints `Qwen3-Embedding-8B` (SOTA, open-weight, EU/GDPR), with the **same model self-hostable as a seamless local fallback**. The **"never laptop-GPU" availability guard still holds** for the always-on synchronous path (a home GPU is not always-on); the only relaxation is permitting an always-on *managed EU endpoint* under acceptable terms. D10's semantic-dedup gate and the isolated-sysgraph substrate are otherwise unchanged.
+
 ---
 
 **Template Version:** 1.1

@@ -1,0 +1,8 @@
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  debian@vps-5a0f676b:/opt/seshat/.claude/worktrees/build
+  ⏵⏵ accept edits on (shift+tab to cycle) · PR #414 · ← for agents
+                                        new task? /clear to save 610.8k tokens
+                                                                           /rc
+

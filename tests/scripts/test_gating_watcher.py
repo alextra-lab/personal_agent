@@ -89,7 +89,13 @@ def _pr(
     )
 
 
-_IDLE_PANE = "╭─────╮\n│ >                    │\n╰─────╯\n  ? for shortcuts"
+_FIXTURES_DIR = Path("tests/fixtures")
+# Real ``tmux capture-pane -p`` output (FRE-825: the prior synthetic ``│ >``
+# fixture never matched any live pane — this is the actual rendering).
+_REAL_IDLE_PANE = (_FIXTURES_DIR / "gating_watcher_real_idle_pane.txt").read_text(encoding="utf-8")
+_REAL_BUSY_SPINNER_PANE = (_FIXTURES_DIR / "gating_watcher_real_busy_pane.txt").read_text(
+    encoding="utf-8"
+)
 _BUSY_PANE = "✽ Working… (esc to interrupt)"
 
 
@@ -185,12 +191,21 @@ def test_ci_red_ack_absent() -> None:
 # --- session_is_idle -------------------------------------------------------
 
 
-def test_session_idle_true_at_prompt() -> None:
-    assert session_is_idle(_IDLE_PANE) is True
+def test_session_idle_true_at_real_captured_prompt() -> None:
+    # FRE-825: real ``tmux capture-pane`` output, not synthetic ``│ >`` text.
+    assert session_is_idle(_REAL_IDLE_PANE) is True
 
 
 def test_session_idle_false_when_busy() -> None:
     assert session_is_idle(_BUSY_PANE) is False
+
+
+def test_session_idle_false_on_real_captured_busy_spinner() -> None:
+    # FRE-825: a real captured in-progress pane (``<verb>ing… (Nm Ns · ...)``)
+    # — the caret box renders even mid-turn, so the spinner is the only signal.
+    # This fixture predates ``esc to interrupt``/``Running…`` appearing at all,
+    # so it regression-tests ``_BUSY_SPINNER_RE`` specifically.
+    assert session_is_idle(_REAL_BUSY_SPINNER_PANE) is False
 
 
 def test_session_idle_false_on_permission_prompt() -> None:
@@ -200,6 +215,13 @@ def test_session_idle_false_on_permission_prompt() -> None:
 
 def test_session_idle_false_on_blank_or_shell() -> None:
     assert session_is_idle("debian@vps:/opt/seshat$ ") is False
+
+
+def test_session_idle_true_with_ellipsis_paren_prose_not_on_status_line() -> None:
+    # _BUSY_SPINNER_RE is anchored to a ``●``-prefixed status line so ordinary
+    # transcript prose containing "word… (" does not false-positive as busy.
+    pane = "Retrying the request… (will give up after 3 attempts)\n❯\xa0"
+    assert session_is_idle(pane) is True
 
 
 # --- session_for_labels ----------------------------------------------------
@@ -388,7 +410,7 @@ def test_send_idle_session_injects() -> None:
     runner = _RecordingRunner(
         {
             ("tmux", "has-session"): _FakeRunResult(returncode=0),
-            ("tmux", "capture-pane"): _FakeRunResult(returncode=0, stdout=_IDLE_PANE),
+            ("tmux", "capture-pane"): _FakeRunResult(returncode=0, stdout=_REAL_IDLE_PANE),
         }
     )
     assert send_to_session("cc-master", "/master 1", runner) == "sent"
@@ -406,7 +428,7 @@ def _idle_runner() -> _RecordingRunner:
     return _RecordingRunner(
         {
             ("tmux", "has-session"): _FakeRunResult(returncode=0),
-            ("tmux", "capture-pane"): _FakeRunResult(returncode=0, stdout=_IDLE_PANE),
+            ("tmux", "capture-pane"): _FakeRunResult(returncode=0, stdout=_REAL_IDLE_PANE),
         }
     )
 

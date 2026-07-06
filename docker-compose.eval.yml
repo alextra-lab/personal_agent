@@ -152,7 +152,10 @@ services:
     container_name: cloud-sim-seshat-gateway-control
     environment:
       # Infrastructure wiring — eval substrate (isolated from prod)
-      AGENT_DATABASE_URL: postgresql+asyncpg://agent:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@postgres-eval:5432/personal_agent
+      # App connects as the restricted `seshat_app` role (FRE-808); internal eval
+      # stack falls back to the init.sql dev password when the secret is unset.
+      AGENT_DATABASE_URL: postgresql+asyncpg://seshat_app:${SESHAT_APP_PASSWORD:-seshat_app_dev_password}@postgres-eval:5432/personal_agent
+      AGENT_DATABASE_ADMIN_URL: postgresql+asyncpg://agent:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@postgres-eval:5432/personal_agent
       AGENT_NEO4J_URI: bolt://neo4j-eval:7687
       AGENT_NEO4J_USER: neo4j
       AGENT_NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD required}
@@ -184,7 +187,10 @@ services:
     container_name: cloud-sim-seshat-gateway-treatment
     environment:
       # Infrastructure wiring — eval substrate (isolated from prod)
-      AGENT_DATABASE_URL: postgresql+asyncpg://agent:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@postgres-eval:5432/personal_agent
+      # App connects as the restricted `seshat_app` role (FRE-808); internal eval
+      # stack falls back to the init.sql dev password when the secret is unset.
+      AGENT_DATABASE_URL: postgresql+asyncpg://seshat_app:${SESHAT_APP_PASSWORD:-seshat_app_dev_password}@postgres-eval:5432/personal_agent
+      AGENT_DATABASE_ADMIN_URL: postgresql+asyncpg://agent:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@postgres-eval:5432/personal_agent
       AGENT_NEO4J_URI: bolt://neo4j-eval:7687
       AGENT_NEO4J_USER: neo4j
       AGENT_NEO4J_PASSWORD: ${NEO4J_PASSWORD:?NEO4J_PASSWORD required}

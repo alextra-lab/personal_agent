@@ -2,7 +2,7 @@
 -- Migration: 0003 — Artifact substrate (ADR-0069 / FRE-227)
 --
 -- Idempotent. Apply against existing databases via:
---   psql $AGENT_DATABASE_URL -f docker/postgres/migrations/0003_artifacts_schema.sql
+--   psql $AGENT_DATABASE_ADMIN_URL -f docker/postgres/migrations/0003_artifacts_schema.sql
 --
 -- Fresh installs receive these tables via docker/postgres/init.sql, which
 -- only runs on an empty Postgres volume. This file mirrors the substrate

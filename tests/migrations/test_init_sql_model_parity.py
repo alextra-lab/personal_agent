@@ -95,7 +95,9 @@ async def init_sql_schema():
     ``vector`` type and ``CREATE EXTENSION IF NOT EXISTS vector`` resolve from the
     extension's ``public`` install.
     """
-    dsn = _normalize_asyncpg_dsn(settings.database_url)
+    # FRE-808: full init.sql + CREATE/DROP SCHEMA need the superuser admin DSN,
+    # not the restricted app role that AGENT_DATABASE_URL now points at.
+    dsn = _normalize_asyncpg_dsn(settings.database_admin_url)
     schema = f"parity_test_{uuid4().hex[:8]}"
     try:
         conn = await asyncpg.connect(dsn, timeout=5)

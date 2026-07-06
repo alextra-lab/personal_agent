@@ -2,7 +2,7 @@
 -- Migration: 0007 — Server-authoritative session execution profile (ADR-0079 / FRE-416)
 --
 -- Idempotent. Apply against existing databases via:
---   psql $AGENT_DATABASE_URL -f docker/postgres/migrations/0007_session_execution_profile.sql
+--   psql $AGENT_DATABASE_ADMIN_URL -f docker/postgres/migrations/0007_session_execution_profile.sql
 --
 -- Fresh installs receive this column via docker/postgres/init.sql, which
 -- only runs on an empty Postgres volume.

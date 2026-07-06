@@ -2,7 +2,7 @@
 -- Migration: 0005 — WebSocket session event buffer (ADR-0075 / FRE-388)
 --
 -- Idempotent. Apply against existing databases via:
---   psql $AGENT_DATABASE_URL -f docker/postgres/migrations/0005_websocket_session_events.sql
+--   psql $AGENT_DATABASE_ADMIN_URL -f docker/postgres/migrations/0005_websocket_session_events.sql
 --
 -- Fresh installs receive this table via docker/postgres/init.sql, which
 -- only runs on an empty Postgres volume.

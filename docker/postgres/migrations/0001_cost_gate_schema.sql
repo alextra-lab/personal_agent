@@ -2,7 +2,7 @@
 -- Migration: 0001 — Cost Check Gate schema (ADR-0065 / FRE-303)
 --
 -- Idempotent. Apply against existing databases via:
---   psql $AGENT_DATABASE_URL -f docker/postgres/migrations/0001_cost_gate_schema.sql
+--   psql $AGENT_DATABASE_ADMIN_URL -f docker/postgres/migrations/0001_cost_gate_schema.sql
 --
 -- Fresh installs receive these tables via docker/postgres/init.sql, which
 -- only runs on an empty Postgres volume. This file mirrors the gate-related

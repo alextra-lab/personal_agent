@@ -21,7 +21,8 @@ _TEST_SAFE_URLS: dict[str, object] = {
     "environment": Environment.TEST,
     "neo4j_uri": "bolt://localhost:7688",  # non-prod port
     "elasticsearch_url": "http://localhost:9201",  # non-prod port
-    "database_url": "postgresql+asyncpg://agent:pw@localhost:5433/personal_agent_test",
+    "database_url": "postgresql+asyncpg://seshat_app:pw@localhost:5433/personal_agent_test",
+    "database_admin_url": "postgresql+asyncpg://agent:pw@localhost:5433/personal_agent_test",
 }
 
 
@@ -53,18 +54,29 @@ class TestValidatorRaises:
     def test_raises_when_test_env_with_prod_neo4j_uri(self) -> None:
         """ValidationError raised when TEST env + Neo4j on default port 7687."""
         with pytest.raises(ValidationError, match="prod/dev defaults"):
-            make_config(neo4j_uri="bolt://localhost:7687")  # fre-375-allow: tests the prod-URI guard itself
+            make_config(
+                neo4j_uri="bolt://localhost:7687",  # fre-375-allow: tests the prod-URI guard itself
+            )
 
     def test_raises_when_test_env_with_prod_elasticsearch_url(self) -> None:
         """ValidationError raised when TEST env + Elasticsearch on default port 9200."""
         with pytest.raises(ValidationError, match="prod/dev defaults"):
-            make_config(elasticsearch_url="http://localhost:9200")  # fre-375-allow: tests the prod-URI guard itself
+            make_config(
+                elasticsearch_url="http://localhost:9200",  # fre-375-allow: tests the prod-URI guard itself
+            )
 
     def test_raises_when_test_env_with_prod_postgres_url(self) -> None:
         """ValidationError raised when TEST env + PostgreSQL on default port 5432."""
         with pytest.raises(ValidationError, match="prod/dev defaults"):
             make_config(
-                database_url="postgresql+asyncpg://agent:pw@localhost:5432/personal_agent"
+                database_url="postgresql+asyncpg://seshat_app:pw@localhost:5432/personal_agent"
+            )
+
+    def test_raises_when_test_env_with_prod_admin_url(self) -> None:
+        """ValidationError raised when TEST env + admin URL on default port 5432 (FRE-808)."""
+        with pytest.raises(ValidationError, match="prod/dev defaults"):
+            make_config(
+                database_admin_url="postgresql+asyncpg://agent:pw@localhost:5432/personal_agent"
             )
 
     def test_raises_when_test_env_with_multiple_prod_uris(self) -> None:
@@ -78,7 +90,9 @@ class TestValidatorRaises:
     def test_error_message_names_offending_uri(self) -> None:
         """Error message names the offending URI for actionability."""
         with pytest.raises(ValidationError) as exc_info:
-            make_config(neo4j_uri="bolt://localhost:7687")  # fre-375-allow: tests the prod-URI guard itself
+            make_config(
+                neo4j_uri="bolt://localhost:7687",  # fre-375-allow: tests the prod-URI guard itself
+            )
         # The error message must reference the offending field
         assert "neo4j_uri" in str(exc_info.value)
 

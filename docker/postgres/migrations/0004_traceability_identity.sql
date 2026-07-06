@@ -2,7 +2,7 @@
 -- Migration: 0004 — End-to-end traceability identity columns (ADR-0074 / FRE-376)
 --
 -- Idempotent. Apply against existing databases via:
---   psql $AGENT_DATABASE_URL -f docker/postgres/migrations/0004_traceability_identity.sql
+--   psql $AGENT_DATABASE_ADMIN_URL -f docker/postgres/migrations/0004_traceability_identity.sql
 --
 -- Fresh installs receive these columns via docker/postgres/init.sql, which
 -- only runs on an empty Postgres volume. This file mirrors the schema deltas

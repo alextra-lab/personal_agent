@@ -2,7 +2,7 @@
 -- Migration: 0006 — User constraint governance preferences (ADR-0076 / FRE-389)
 --
 -- Idempotent. Apply against existing databases via:
---   psql $AGENT_DATABASE_URL -f docker/postgres/migrations/0006_constraint_preferences.sql
+--   psql $AGENT_DATABASE_ADMIN_URL -f docker/postgres/migrations/0006_constraint_preferences.sql
 --
 -- Fresh installs receive this table via docker/postgres/init.sql, which
 -- only runs on an empty Postgres volume.

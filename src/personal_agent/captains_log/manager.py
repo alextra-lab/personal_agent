@@ -381,6 +381,12 @@ class CaptainLogManager:
         Also appends the new entry's entry_id (if set) to related_entry_ids and
         refreshes supporting_metrics if the new entry carries different ones.
 
+        ADR-0105 D1: if the stored (existing) entry predates the ``source``
+        discriminator and has none, but the incoming duplicate carries one,
+        backfill it onto the stored entry — otherwise a merged legacy entry
+        could stay source-less indefinitely even after every producer sets
+        the field. An existing source is never overwritten.
+
         Args:
             existing_path: Path to the existing JSON file.
             new_entry: The incoming (duplicate) entry.
@@ -393,6 +399,9 @@ class CaptainLogManager:
         pc = data.get("proposed_change", {})
 
         pc["seen_count"] = pc.get("seen_count", 1) + 1
+
+        if not pc.get("source") and new_entry.proposed_change and new_entry.proposed_change.source:
+            pc["source"] = new_entry.proposed_change.source.value
 
         new_id = new_entry.entry_id or ""
         related = pc.get("related_entry_ids", [])

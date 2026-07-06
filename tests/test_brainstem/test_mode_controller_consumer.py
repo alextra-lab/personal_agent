@@ -25,7 +25,6 @@ from personal_agent.brainstem.consumers.mode_controller import (
 from personal_agent.events.models import MetricsSampledEvent, ModeTransitionEvent
 from personal_agent.governance.models import Mode
 
-
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
@@ -183,10 +182,13 @@ async def test_captain_log_proposal_on_threshold_breach() -> None:
 
     mock_cl.save_entry.assert_called_once()
     # Verify the entry passed to save_entry is a CONFIG_PROPOSAL.
-    from personal_agent.captains_log.models import CaptainLogEntryType
+    from personal_agent.captains_log.models import CaptainLogEntryType, ProposalSource
 
     entry_arg = mock_cl.save_entry.call_args[0][0]
     assert entry_arg.type == CaptainLogEntryType.CONFIG_PROPOSAL
+    # ADR-0105 D1: rule-based detectors tag the statistical_detector source.
+    assert entry_arg.proposed_change is not None
+    assert entry_arg.proposed_change.source == ProposalSource.STATISTICAL_DETECTOR
 
 
 @pytest.mark.asyncio
@@ -196,7 +198,9 @@ async def test_captain_log_proposal_fingerprint_is_correct() -> None:
     consumer, _ = _make_consumer(threshold=3, captain_log_manager=mock_cl)
 
     for i in range(3):
-        await consumer.handle(_make_transition_event(from_mode=Mode.NORMAL, to_mode=Mode.ALERT, index=i + 1))
+        await consumer.handle(
+            _make_transition_event(from_mode=Mode.NORMAL, to_mode=Mode.ALERT, index=i + 1)
+        )
 
     expected_fp = _compute_calibration_fingerprint(Mode.NORMAL, Mode.ALERT)
     entry_arg = mock_cl.save_entry.call_args[0][0]

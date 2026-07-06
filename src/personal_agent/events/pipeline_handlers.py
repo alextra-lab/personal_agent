@@ -454,6 +454,7 @@ def build_error_pattern_captain_log_handler(manager: Any | None = None) -> Any:
             CaptainLogEntryType,
             ChangeCategory,
             Metric,
+            ProposalSource,
             ProposedChange,
             TelemetryRef,
         )
@@ -493,6 +494,7 @@ def build_error_pattern_captain_log_handler(manager: Any | None = None) -> Any:
                 ),
                 category=ChangeCategory.RELIABILITY,
                 scope=scope,
+                source=ProposalSource.STATISTICAL_DETECTOR,
                 fingerprint=event.fingerprint,
                 first_seen=None,
             ),
@@ -571,6 +573,7 @@ def build_compaction_quality_captain_log_handler(manager: Any | None = None) -> 
             CaptainLogEntryType,
             ChangeCategory,
             Metric,
+            ProposalSource,
             ProposedChange,
             TelemetryRef,
         )
@@ -610,6 +613,7 @@ def build_compaction_quality_captain_log_handler(manager: Any | None = None) -> 
                 ),
                 category=ChangeCategory.KNOWLEDGE_QUALITY,
                 scope=ChangeScope.ORCHESTRATOR,
+                source=ProposalSource.STATISTICAL_DETECTOR,
                 fingerprint=event.fingerprint,
                 first_seen=None,
             ),
@@ -704,6 +708,7 @@ async def _handle_graph_quality_anomaly(
         CaptainLogEntryType,
         ChangeCategory,
         Metric,
+        ProposalSource,
         ProposedChange,
         TelemetryRef,
     )
@@ -741,6 +746,7 @@ async def _handle_graph_quality_anomaly(
             ),
             category=category,
             scope=ChangeScope.SECOND_BRAIN,
+            source=ProposalSource.STATISTICAL_DETECTOR,
             fingerprint=event.fingerprint,
             first_seen=None,
         ),
@@ -819,6 +825,7 @@ async def _handle_staleness_reviewed(
         CaptainLogEntry,
         CaptainLogEntryType,
         ChangeCategory,
+        ProposalSource,
         ProposedChange,
         TelemetryRef,
     )
@@ -868,6 +875,7 @@ async def _handle_staleness_reviewed(
             ),
             category=ChangeCategory.KNOWLEDGE_QUALITY,
             scope=ChangeScope.SECOND_BRAIN,
+            source=ProposalSource.STATISTICAL_DETECTOR,
             fingerprint=event.fingerprint,
             first_seen=None,
         ),

@@ -21,13 +21,13 @@ from personal_agent.captains_log.models import (
     CaptainLogEntryType,
     ChangeCategory,
     ChangeScope,
+    ProposalSource,
 )
 from personal_agent.events.models import (
     ConsolidationCompletedEvent,
     ErrorPatternDetectedEvent,
 )
 from personal_agent.events.pipeline_handlers import build_error_pattern_captain_log_handler
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -106,6 +106,8 @@ async def test_handler_sets_reliability_category() -> None:
     entry = mock_manager.save_entry.call_args[0][0]
     assert entry.proposed_change is not None
     assert entry.proposed_change.category == ChangeCategory.RELIABILITY
+    # ADR-0105 D1: rule-based detectors tag the statistical_detector source.
+    assert entry.proposed_change.source == ProposalSource.STATISTICAL_DETECTOR
 
 
 @pytest.mark.asyncio
@@ -201,6 +203,5 @@ async def test_scope_derivation(component: str, expected_scope: ChangeScope) -> 
     entry = mock_manager.save_entry.call_args[0][0]
     assert entry.proposed_change is not None
     assert entry.proposed_change.scope == expected_scope, (
-        f"component={component!r} → expected {expected_scope}, "
-        f"got {entry.proposed_change.scope}"
+        f"component={component!r} → expected {expected_scope}, got {entry.proposed_change.scope}"
     )

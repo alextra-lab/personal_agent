@@ -49,6 +49,19 @@ class ChangeScope(str, Enum):
     CROSS_CUTTING = "cross_cutting"
 
 
+class ProposalSource(str, Enum):
+    """Producer that generated a ProposedChange (ADR-0105 D1).
+
+    The self-improvement pipeline has one promotion path fed by multiple
+    producers; this discriminator makes the origin queryable without a
+    second pipeline. Extensible — a new producer adds a member here rather
+    than a competing promotion path.
+    """
+
+    STATISTICAL_DETECTOR = "statistical_detector"
+    REFLECTION = "reflection"
+
+
 class Metric(BaseModel):
     """Structured metric with typed value and optional unit.
 
@@ -114,6 +127,14 @@ class ProposedChange(BaseModel):
     how: str = Field(..., description="How to implement it")
     category: ChangeCategory | None = Field(None, description="Improvement category (ADR-0030)")
     scope: ChangeScope | None = Field(None, description="Target subsystem (ADR-0030)")
+    source: ProposalSource | None = Field(
+        None,
+        description=(
+            "Producer that generated this proposal (ADR-0105 D1). Optional for "
+            "backward compatibility with proposals recorded before this field "
+            "existed; every current producer sets it explicitly."
+        ),
+    )
     fingerprint: str | None = Field(
         None, description="Semantic dedup key: sha256(category:scope:normalized_what)[:16]"
     )

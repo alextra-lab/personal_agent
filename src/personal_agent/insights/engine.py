@@ -1,4 +1,10 @@
-"""Proactive insights engine for cross-data pattern detection (FRE-24)."""
+"""Proactive insights engine for cross-data pattern detection (FRE-24).
+
+This engine is the ``statistical_detector`` source in the converged
+self-improvement pipeline (ADR-0105 D1) — one of the sources of insights
+feeding the single Captain's Log promotion entrypoint, alongside the LLM
+reflection source (``captains_log/reflection.py``). Not a separate product.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +20,7 @@ from personal_agent.captains_log.models import (
     ChangeCategory,
     ChangeScope,
     Metric,
+    ProposalSource,
     ProposedChange,
 )
 from personal_agent.captains_log.suppression import feedback_history_dir
@@ -695,6 +702,7 @@ class InsightsEngine:
                 ),
                 category=_category_for_insight_type(insight.insight_type),
                 scope=_scope_for_insight_type(insight.insight_type),
+                source=ProposalSource.STATISTICAL_DETECTOR,
                 fingerprint=fingerprint,
                 first_seen=now,
             )

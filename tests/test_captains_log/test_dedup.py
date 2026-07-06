@@ -16,6 +16,7 @@ from personal_agent.captains_log.models import (
     CaptainLogStatus,
     ChangeCategory,
     ChangeScope,
+    ProposalSource,
     ProposedChange,
 )
 
@@ -285,6 +286,75 @@ class TestDedupOnWrite:
         final = json.loads(path1.read_text())
         assert final["status"] == CaptainLogStatus.APPROVED.value
         assert final["proposed_change"]["seen_count"] == 2
+
+    def test_merge_backfills_missing_source_from_duplicate(self, tmp_path: pathlib.Path) -> None:
+        """ADR-0105 D1: a legacy (source-less) stored entry gets backfilled on merge.
+
+        Without this, a proposal produced before the ``source`` field existed
+        could stay source-less forever even after every producer started
+        setting it, because dedup only touched seen_count/related_entry_ids.
+        """
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+
+        cat = ChangeCategory.RELIABILITY
+        scope = ChangeScope.LLM_CLIENT
+        what = "Add retry logic"
+        fp = compute_proposal_fingerprint(cat, scope, what)
+
+        legacy_data = {
+            "entry_id": "CL-legacy-001",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "type": "reflection",
+            "title": "Task: test",
+            "rationale": "Written before ADR-0105",
+            "proposed_change": {
+                "what": what,
+                "why": "Improves reliability",
+                "how": "Wrap calls in tenacity",
+                "category": cat.value,
+                "scope": scope.value,
+                "fingerprint": fp,
+                "seen_count": 1,
+            },
+            "status": CaptainLogStatus.AWAITING_APPROVAL.value,
+        }
+        legacy_path = log_dir / "CL-legacy-001-test.json"
+        legacy_path.write_text(json.dumps(legacy_data, indent=2))
+
+        manager = CaptainLogManager(log_dir=log_dir)
+        new_entry = self._make_entry(what=what, entry_id="CL-dup-001", fingerprint=fp)
+        new_entry.proposed_change.source = ProposalSource.STATISTICAL_DETECTOR
+
+        with patch("personal_agent.captains_log.manager.schedule_es_index"):
+            path = manager.save_entry(new_entry)
+
+        assert path == legacy_path
+        data = json.loads(legacy_path.read_text())
+        assert data["proposed_change"]["source"] == ProposalSource.STATISTICAL_DETECTOR.value
+        assert data["proposed_change"]["seen_count"] == 2
+
+    def test_merge_never_overwrites_existing_source(self, tmp_path: pathlib.Path) -> None:
+        """A stored entry's source, once set, is never clobbered by a later duplicate."""
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+
+        manager = CaptainLogManager(log_dir=log_dir)
+        first = self._make_entry(entry_id="CL-src-001")
+        first.proposed_change.source = ProposalSource.REFLECTION
+
+        with patch("personal_agent.captains_log.manager.schedule_es_index"):
+            path1 = manager.save_entry(first)
+
+        second = self._make_entry(entry_id="CL-src-002")
+        second.proposed_change.source = ProposalSource.STATISTICAL_DETECTOR
+
+        with patch("personal_agent.captains_log.manager.schedule_es_index"):
+            path2 = manager.save_entry(second)
+
+        assert path1 == path2
+        data = json.loads(path1.read_text())
+        assert data["proposed_change"]["source"] == ProposalSource.REFLECTION.value
 
 
 class TestBackwardCompatibility:

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from personal_agent.captains_log.models import ChangeCategory, ChangeScope
+from personal_agent.captains_log.models import ChangeCategory, ChangeScope, ProposalSource
 from personal_agent.insights.engine import (
     CostAnomaly,
     Insight,
@@ -127,6 +127,8 @@ class TestInsightsEngine:
         assert proposal.type.value == "config_proposal"
         assert proposal.proposed_change is not None
         assert proposal.metrics_structured is not None
+        # ADR-0105 D1: the statistical detector source must be tagged.
+        assert proposal.proposed_change.source == ProposalSource.STATISTICAL_DETECTOR
 
     async def test_analyze_patterns_indexes_insights_to_es(self) -> None:
         """Generated insights are sent to the insights index writer."""

@@ -82,9 +82,11 @@
             "fingerprint": { "type": "keyword" },
             "seen_count": { "type": "integer" },
             "first_seen": { "type": "date" },
-            "related_entry_ids": { "type": "keyword" }
+            "related_entry_ids": { "type": "keyword" },
+            "source": { "type": "keyword" }
           }
         },
+        "ticket_outcome": { "type": "keyword" },
         "supporting_metrics": { "type": "keyword" },
         "metrics_structured": {
           "type": "nested",
@@ -130,7 +132,7 @@
     }
   },
   "_meta": {
-    "description": "Captain's Log reflection docs (self-improvement proposals). Daily index agent-captains-reflections-YYYY-MM-DD. Split out of the shared agent-captains-template in FRE-534/A2. Adds reflection-only shape: proposed_change.{category,scope,fingerprint,seen_count,first_seen,related_entry_ids}, impact_assessment, linear_issue_id, related_experiments.",
+    "description": "Captain's Log reflection docs (self-improvement proposals). Daily index agent-captains-reflections-YYYY-MM-DD. Split out of the shared agent-captains-template in FRE-534/A2. Adds reflection-only shape: proposed_change.{category,scope,fingerprint,seen_count,first_seen,related_entry_ids}, impact_assessment, linear_issue_id, related_experiments. proposed_change.source added FRE-719 (ADR-0105 D6) -- the FRE-715 source discriminator (statistical_detector|reflection), explicitly mapped for the self-improvement funnel's source facet. ticket_outcome added FRE-719 -- the ADR-0105 D7 outcome (shipped|owner-rejected|canceled-as-noise), stamped by outcome_ingestion.py once a promoted ticket reaches a terminal state; distinct from the pre-existing unrelated root-level 'outcome' field (never populated by CaptainLogEntry, a leftover from the template split -- not reused here to avoid a semantic collision).",
     "managed_by": "scripts/setup-elasticsearch.sh"
   }
 }

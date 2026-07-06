@@ -598,6 +598,77 @@ class TestPromotionPipelineRun:
         mock_create.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_issue_budget_pause_emits_throttle_event(self, tmp_path: pathlib.Path) -> None:
+        """ADR-0105 D6/FRE-719: the budget throttle emits an explicit funnel-state event.
+
+        Without this the throttle is only a log.warning -- invisible to the funnel
+        dashboard, which is exactly what D6 requires to fix (a governed rate must
+        read as a visible funnel state, not a silent line).
+        """
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        _write_entry(log_dir)
+
+        mock_create = AsyncMock(return_value="FF-1")
+        lc = MagicMock()
+        lc.count_open_issues = AsyncMock(return_value=201)
+        lc.list_issues = AsyncMock(return_value=[])
+
+        es_handler = MagicMock()
+        es_handler._connected = True
+        es_handler.es_logger.index_document = AsyncMock(return_value="doc-id")
+
+        with patch.object(promotion_module.settings, "issue_budget_threshold", 200):
+            pipeline = PromotionPipeline(
+                log_dir=log_dir,
+                criteria=PromotionCriteria(min_seen_count=3, min_age_days=7),
+                create_issue_fn=mock_create,
+                linear_client=lc,
+                es_handler=es_handler,
+            )
+            await pipeline.run()
+
+        es_handler.es_logger.index_document.assert_awaited_once()
+        args, kwargs = es_handler.es_logger.index_document.call_args
+        index_name = args[0] if args else kwargs["index_name"]
+        assert index_name.startswith("agent-captains-funnel-events-")
+        doc = args[1] if len(args) > 1 else kwargs["document"]
+        assert doc["event_type"] == "throttled_budget"
+        assert doc["current_count"] == 201
+        assert doc["threshold"] == 200
+        assert "@timestamp" in doc
+
+    @pytest.mark.asyncio
+    async def test_issue_budget_ok_does_not_emit_throttle_event(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """No throttle event fires when the promotion count is under budget."""
+        log_dir = tmp_path / "captains_log"
+        log_dir.mkdir()
+        _write_entry(log_dir)
+
+        mock_create = AsyncMock(return_value="FF-1")
+        lc = MagicMock()
+        lc.count_open_issues = AsyncMock(return_value=10)
+        lc.list_issues = AsyncMock(return_value=[])
+
+        es_handler = MagicMock()
+        es_handler._connected = True
+        es_handler.es_logger.index_document = AsyncMock(return_value="doc-id")
+
+        with patch.object(promotion_module.settings, "issue_budget_threshold", 200):
+            pipeline = PromotionPipeline(
+                log_dir=log_dir,
+                criteria=PromotionCriteria(min_seen_count=3, min_age_days=7),
+                create_issue_fn=mock_create,
+                linear_client=lc,
+                es_handler=es_handler,
+            )
+            await pipeline.run()
+
+        es_handler.es_logger.index_document.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_linear_duplicate_links_existing_issue(self, tmp_path: pathlib.Path) -> None:
         """ADR-0040: fingerprint match in Linear links CL entry without new save_issue."""
         log_dir = tmp_path / "captains_log"
@@ -805,7 +876,12 @@ class TestAdr0105BidirectionalLinkage:
     async def test_run_stamps_es_insight_linkage_only_for_statistical_detector(
         self, tmp_path: pathlib.Path
     ) -> None:
-        """The ES agent-insights-* stamp fires only for STATISTICAL_DETECTOR-sourced entries."""
+        """The ES agent-insights-* stamp fires only for STATISTICAL_DETECTOR-sourced entries.
+
+        A statistical-detector promotion now stamps BOTH agent-insights-* (by
+        fingerprint, existing FRE-716 behavior) and agent-captains-reflections-*
+        (by entry_id, FRE-719 — see test_run_stamps_reflection_linkage_for_every_source).
+        """
         log_dir = tmp_path / "captains_log"
         log_dir.mkdir()
         fp_path = _write_entry(
@@ -826,20 +902,27 @@ class TestAdr0105BidirectionalLinkage:
         )
         await pipeline.run()
 
-        es_handler.es_logger.update_by_query.assert_awaited_once()
-        args, _ = es_handler.es_logger.update_by_query.call_args
-        assert args[0] == "agent-insights-*"
+        calls = es_handler.es_logger.update_by_query.call_args_list
+        insight_calls = [c for c in calls if c.args[0] == "agent-insights-*"]
+        assert len(insight_calls) == 1
+        args = insight_calls[0].args
         assert args[1] == {"term": {"fingerprint": fp}}
         assert args[3] == {"linear_issue_id": "FRE-NEW"}
 
     @pytest.mark.asyncio
-    async def test_run_does_not_stamp_es_for_reflection_source(
+    async def test_run_stamps_reflection_linkage_for_every_source(
         self, tmp_path: pathlib.Path
     ) -> None:
-        """Reflection-sourced entries have no ES insights doc to stamp."""
+        """agent-captains-reflections-* is stamped with linear_issue_id for every source.
+
+        FRE-719 (ADR-0105 D6): _mark_promoted only mutated the on-disk JSON, so the
+        ES document the funnel dashboard reads never carried linear_issue_id for
+        reflection-sourced proposals. Both sources now get the reflections-index
+        stamp, keyed on the deterministic entry_id doc id (CaptainLogManager.save_entry).
+        """
         log_dir = tmp_path / "captains_log"
         log_dir.mkdir()
-        _write_entry(log_dir, source=ProposalSource.REFLECTION)
+        _write_entry(log_dir, entry_id="CL-refl-001", source=ProposalSource.REFLECTION)
 
         es_handler = MagicMock()
         es_handler._connected = True
@@ -853,7 +936,14 @@ class TestAdr0105BidirectionalLinkage:
         )
         await pipeline.run()
 
-        es_handler.es_logger.update_by_query.assert_not_awaited()
+        calls = es_handler.es_logger.update_by_query.call_args_list
+        reflection_calls = [c for c in calls if c.args[0] == "agent-captains-reflections-*"]
+        assert len(reflection_calls) == 1
+        args = reflection_calls[0].args
+        assert args[1] == {"term": {"entry_id": "CL-refl-001"}}
+        assert args[3] == {"linear_issue_id": "FRE-NEW"}
+        # No insights-index stamp for a reflection-sourced entry.
+        assert not [c for c in calls if c.args[0] == "agent-insights-*"]
 
 
 class TestAdr0105SignalReadInPromotion:

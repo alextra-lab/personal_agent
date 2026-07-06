@@ -380,6 +380,39 @@ def test_subagents_pins_its_shape() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Self-improvement funnel (ADR-0105 D6, FRE-719).
+# --------------------------------------------------------------------------- #
+
+
+def test_reflections_source_and_ticket_outcome_are_explicit() -> None:
+    """proposed_change.source and ticket_outcome are explicitly mapped keywords.
+
+    FRE-715 added the ``source`` discriminator to ``ProposedChange`` but never
+    mapped it in ES (it fell through to a dynamic keyword). FRE-719 (ADR-0105
+    D6/AC-5) needs it explicit for the funnel's source facet. ``ticket_outcome``
+    is the ADR-0105 D7 outcome, stamped by outcome_ingestion.py -- distinct from
+    the pre-existing unrelated root-level ``outcome`` field (never populated by
+    any CaptainLogEntry field; not reused to avoid a semantic collision).
+    """
+    props = _props(_load("captains-reflections-index-template.json"))
+    assert props["proposed_change"]["properties"]["source"]["type"] == "keyword"
+    assert props["ticket_outcome"]["type"] == "keyword"
+
+
+def test_funnel_events_template_is_explicit_dynamic_false() -> None:
+    """The new funnel-events family is dynamic:false with the throttle event's fields."""
+    tpl = _load("captains-funnel-events-index-template.json")
+    assert tpl["index_patterns"] == ["agent-captains-funnel-events-*"]
+    mappings = tpl["template"]["mappings"]
+    assert mappings.get("dynamic") is False
+    props = mappings["properties"]
+    assert props["@timestamp"]["type"] == "date"
+    assert props["event_type"]["type"] == "keyword"
+    assert props["current_count"]["type"] == "integer"
+    assert props["threshold"]["type"] == "integer"
+
+
+# --------------------------------------------------------------------------- #
 # Registration parity: script <-> files, and stale-template teardown.
 # --------------------------------------------------------------------------- #
 

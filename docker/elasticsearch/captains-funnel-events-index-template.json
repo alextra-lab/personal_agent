@@ -1,0 +1,25 @@
+{
+  "index_patterns": ["agent-captains-funnel-events-*"],
+  "priority": 110,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0,
+      "index.codec": "best_compression",
+      "index.refresh_interval": "5s"
+    },
+    "mappings": {
+      "dynamic": false,
+      "properties": {
+        "@timestamp":     { "type": "date" },
+        "event_type":     { "type": "keyword" },
+        "current_count":  { "type": "integer" },
+        "threshold":      { "type": "integer" }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Self-improvement funnel pipeline-level events (ADR-0105 D6, FRE-719). One doc per event; today the only event_type is throttled_budget, emitted by promotion.py when the ADR-0040 review-bandwidth gate (issue_budget_threshold) pauses promotion -- makes the throttle a first-class queryable funnel state instead of a silent log.warning. dynamic:false — this is a small, purpose-built event stream (not a proposal document), explicit fields only. Index pattern agent-captains-funnel-events-YYYY-MM-DD.",
+    "managed_by": "scripts/setup-elasticsearch.sh"
+  }
+}

@@ -5,11 +5,11 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
 from personal_agent.brainstem.jobs.outcome_ingestion import (
     _classify_outcome,
     run_outcome_ingestion,
 )
-
 from personal_agent.sysgraph.repository import SignalValue
 
 
@@ -123,6 +123,100 @@ class TestRunOutcomeIngestion:
         await run_outcome_ingestion(client, trace_id="test-trace")
 
         client.get_issue.assert_not_awaited()
+
+    async def test_recorded_outcome_stamps_ticket_outcome_onto_es_doc(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FRE-719 (ADR-0105 D6): a recorded outcome is stamped onto the source ES doc.
+
+        Without this, the promoted proposal document never carries a queryable
+        shipped/canceled signal -- the funnel dashboard has nothing to facet on.
+        """
+        repo = MagicMock()
+        repo.connect = AsyncMock()
+        repo.disconnect = AsyncMock()
+        repo.tickets_awaiting_outcome = AsyncMock(return_value=["FRE-123"])
+        repo.ticket_source_kind = AsyncMock(return_value=("reflection", "reliability"))
+        repo.get_signal = AsyncMock(return_value=SignalValue(value=0.0, n=0, suppressed=False))
+        repo.record_outcome = AsyncMock(return_value=True)
+        repo.compute_and_apply_signal = AsyncMock(
+            return_value=SignalValue(value=0.333, n=1, suppressed=False)
+        )
+        monkeypatch.setattr(
+            "personal_agent.sysgraph.SysgraphRepository", MagicMock(return_value=repo)
+        )
+
+        client = MagicMock()
+        client.get_issue = AsyncMock(return_value=_issue("Done"))
+
+        es_handler = MagicMock()
+        es_handler._connected = True
+        es_handler.es_logger.update_by_query = AsyncMock(return_value=1)
+
+        await run_outcome_ingestion(client, trace_id="test-trace", es_handler=es_handler)
+
+        es_handler.es_logger.update_by_query.assert_awaited_once_with(
+            "agent-captains-reflections-*",
+            {"term": {"linear_issue_id": "FRE-123"}},
+            "ctx._source.ticket_outcome = params.ticket_outcome",
+            {"ticket_outcome": "shipped"},
+        )
+
+    async def test_not_recorded_outcome_does_not_stamp_es(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An already-recorded (not newly-recorded) outcome does not re-stamp ES."""
+        repo = MagicMock()
+        repo.connect = AsyncMock()
+        repo.disconnect = AsyncMock()
+        repo.tickets_awaiting_outcome = AsyncMock(return_value=["FRE-789"])
+        repo.ticket_source_kind = AsyncMock(return_value=("reflection", "reliability"))
+        repo.get_signal = AsyncMock(return_value=SignalValue(value=0.0, n=1, suppressed=False))
+        repo.record_outcome = AsyncMock(return_value=False)  # already recorded
+        repo.compute_and_apply_signal = AsyncMock()
+        monkeypatch.setattr(
+            "personal_agent.sysgraph.SysgraphRepository", MagicMock(return_value=repo)
+        )
+
+        client = MagicMock()
+        client.get_issue = AsyncMock(return_value=_issue("Done"))
+
+        es_handler = MagicMock()
+        es_handler._connected = True
+        es_handler.es_logger.update_by_query = AsyncMock(return_value=1)
+
+        await run_outcome_ingestion(client, trace_id="test-trace", es_handler=es_handler)
+
+        es_handler.es_logger.update_by_query.assert_not_awaited()
+
+    async def test_es_stamp_failure_does_not_propagate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failing ES stamp is fail-open, matching every other sysgraph call in this file."""
+        repo = MagicMock()
+        repo.connect = AsyncMock()
+        repo.disconnect = AsyncMock()
+        repo.tickets_awaiting_outcome = AsyncMock(return_value=["FRE-123"])
+        repo.ticket_source_kind = AsyncMock(return_value=("reflection", "reliability"))
+        repo.get_signal = AsyncMock(return_value=SignalValue(value=0.0, n=0, suppressed=False))
+        repo.record_outcome = AsyncMock(return_value=True)
+        repo.compute_and_apply_signal = AsyncMock(
+            return_value=SignalValue(value=0.333, n=1, suppressed=False)
+        )
+        monkeypatch.setattr(
+            "personal_agent.sysgraph.SysgraphRepository", MagicMock(return_value=repo)
+        )
+
+        client = MagicMock()
+        client.get_issue = AsyncMock(return_value=_issue("Done"))
+
+        es_handler = MagicMock()
+        es_handler._connected = True
+        es_handler.es_logger.update_by_query = AsyncMock(side_effect=RuntimeError("boom"))
+
+        await run_outcome_ingestion(client, trace_id="test-trace", es_handler=es_handler)
+
+        repo.disconnect.assert_awaited_once()
 
     async def test_already_recorded_does_not_recompute_signal(
         self, monkeypatch: pytest.MonkeyPatch

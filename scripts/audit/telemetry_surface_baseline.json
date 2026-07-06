@@ -43,5 +43,14 @@
     "source": "docker/elasticsearch/topology-index-template.json",
     "note": "ACCEPTED — reviewed-correct (FRE-555). topology 'decomposition_reason' is a short routing-decision categorical (keyword, per the template _meta routing-surface note); ignore_above:1024 is never exceeded. TEXT_TRAP_HINT false-fires on the word 'reason'.",
     "detail": "long-text field 'decomposition_reason' is keyword ignore_above:1024; values over the limit are silently dropped from the index"
+  },
+  {
+    "check": "trap-lint",
+    "klass": "numeric-as-long",
+    "family": "docker/elasticsearch/captains-funnel-events-index-template.json",
+    "field": "threshold",
+    "source": "docker/elasticsearch/captains-funnel-events-index-template.json",
+    "note": "ACCEPTED — reviewed-correct (FRE-719). This is the configured issue_budget_threshold CAP (an integer open-issue count, e.g. 200), not a ratio/percentage value; integer is intentional. FLOAT_HINT false-fires on the word 'threshold'; no static linter can tell a threshold count from a threshold ratio.",
+    "detail": "'threshold' is numeric/duration-named but mapped 'integer'; a non-integer value is rejected or truncated (the 0.0→long trap)"
   }
 ]

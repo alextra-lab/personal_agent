@@ -125,6 +125,8 @@ class BrainstemScheduler:
         self.memory_service: MemoryService | None = memory_service
         self._last_freshness_review_week: tuple[int, int] | None = None
         self.feedback_polling_hour_utc = settings.feedback_polling_hour_utc
+        self._last_outcome_ingestion_date: date | None = None  # ADR-0105 D7
+        self.outcome_ingestion_hour_utc = settings.outcome_ingestion_hour_utc
         self.quality_monitor = quality_monitor or ConsolidationQualityMonitor(
             memory_service=memory_service,
             telemetry_queries=TelemetryQueries(
@@ -736,6 +738,33 @@ class BrainstemScheduler:
                         log.warning(
                             "feedback_polling_failed",
                             error=str(poll_err),
+                            exc_info=True,
+                            trace_id=iteration_trace_id,
+                        )
+
+                # Daily ticket-outcome ingestion (ADR-0105 D7 / FRE-717)
+                if (
+                    self._linear_client is not None
+                    and getattr(settings, "outcome_ingestion_enabled", True)
+                    and now.hour == self.outcome_ingestion_hour_utc
+                    and (
+                        self._last_outcome_ingestion_date is None
+                        or self._last_outcome_ingestion_date != today
+                    )
+                ):
+                    try:
+                        from personal_agent.brainstem.jobs.outcome_ingestion import (
+                            run_outcome_ingestion,
+                        )
+
+                        await run_outcome_ingestion(
+                            self._linear_client, trace_id=iteration_trace_id
+                        )
+                        self._last_outcome_ingestion_date = today
+                    except Exception as outcome_err:
+                        log.warning(
+                            "outcome_ingestion_failed",
+                            error=str(outcome_err),
                             exc_info=True,
                             trace_id=iteration_trace_id,
                         )

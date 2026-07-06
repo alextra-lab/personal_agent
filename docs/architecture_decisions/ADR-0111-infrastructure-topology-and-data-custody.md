@@ -1,6 +1,6 @@
 # ADR-0111: Infrastructure Topology & Data-Custody Policy (CPU-only single-box baseline; owner-controlled personal-data plane)
 
-**Status:** Superseded by [ADR-0112](ADR-0112-configurable-substrate-backends.md) — pending its merge (proposed 2026-07-06; master finalizes both statuses at the gate)
+**Status:** Superseded by [ADR-0112](ADR-0112-configurable-substrate-backends.md) (2026-07-06)
 **Date:** 2026-07-06
 **Deciders:** Project owner
 **Tags:** infrastructure, topology, capacity, data-custody, threat-model, ovh, csirt, cost

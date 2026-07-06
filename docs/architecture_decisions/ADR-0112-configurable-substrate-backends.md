@@ -1,6 +1,6 @@
 # ADR-0112: Configurable Substrate Backends — Owner-Controlled Storage by Default, Managed API Endpoints by Choice
 
-**Status:** Proposed
+**Status:** Accepted (2026-07-06 — owner-ratified across the extended discussion; supersedes ADR-0111. Implemented when the config-seam acceptance set is proven.)
 **Date:** 2026-07-06
 **Deciders:** Project owner
 **Tags:** infrastructure, substrate, embeddings, configuration, privacy, personal-agent

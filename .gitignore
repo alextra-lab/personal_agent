@@ -184,6 +184,9 @@ telemetry/evaluation/eval-04b-occupancy-curve/
 # FRE-720 separation-probe run outputs (raw runs never committed; curated probe_result.json is)
 telemetry/evaluation/fre720-insights-separation/
 
+# FRE-817 corpus A/B run outputs (raw runs never committed; docs/research writeup is)
+telemetry/evaluation/fre817-corpus-ab/
+
 # deploy-approval-gate runtime sentinel (never committed)
 .claude/.deploy-approved
 

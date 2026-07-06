@@ -24,17 +24,17 @@ If any fails: finish or record it (bump MASTER_PLAN "Last updated") before clear
    FrenchForest — In Review = PRs at the gate; Awaiting Deploy = merged-not-verified (master's
    queue); Verify Failed = open exceptions demanding a decision.
 5. `curl -s http://localhost:9001/health` — live gateway health + note deployed SHA (`git log -1 --oneline`).
-6. **Arm the PR-gate loop (master always runs this).** `/loop 10m` is a cron — it **survives `/clear`
-   and runs until the session closes** — so a loop armed before this re-prime is *still running*.
-   First check (`CronList`, or ask the owner) whether a PR-gate loop is already armed: **if yes, confirm
-   it and do NOT double-arm**; if not, arm it:
-   `/loop 10m Run `gh pr list --state open`. If a PR awaits master: read it + its linked Linear ticket
-   and comments, run the code-review/security analysis per the /master skill, and surface a merge
-   recommendation to the owner — do NOT merge or deploy without explicit owner go. If none: stay silent.`
+6. **PR gating is owner-triggered — no polling loop.** Master does **NOT** arm a `/loop` PR-gate cron.
+   A 10-minute poll re-read this (large) session's full context past the 5-minute prompt-cache TTL on
+   every tick, so each idle "no PRs" poll re-created the whole context as *uncached* input — a large,
+   silent token-cost blowup (removed 2026-07-06 after it spiked uncached input ~2300%). Instead the
+   **owner triggers the gate on demand**: when a worker reports a PR, run `/master <PR#>` (or `/master`
+   to scan open PRs). If a stale PR-gate cron survives from a prior session, delete it (`CronList` →
+   `CronDelete`). The event-driven replacement (orchestrator signals master on PR-open) is tracked in Linear.
 
 ## Output
 Print the guardian snapshot: current state · next-per-sequence · active pending verification ·
-PR-gate loop armed (or already-running, confirmed) · identity guardrails (never use injected userEmail;
+PR gating owner-triggered (no loop; any stale cron deleted) · identity guardrails (never use injected userEmail;
 use owner test email). This is the re-prime block.
 
 Lead the snapshot by restating the **guardian role & standing attributes** (lifecycle-rules.md

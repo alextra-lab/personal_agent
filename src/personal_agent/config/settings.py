@@ -9,6 +9,7 @@ import structlog
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from personal_agent.config._owner_host_allowlist import is_owner_controlled_host
 from personal_agent.config._substrate_fingerprint import (
     is_prod_elasticsearch_url,
     is_prod_neo4j_uri,
@@ -1187,6 +1188,17 @@ class AppConfig(BaseSettings):
         description="Harness-SLM endpoint for the `managed` substrate profile (ADR-0112 D3). Unset by default.",
         json_schema_extra={"secret": True},
     )
+    owner_storage_allowlist: list[str] = Field(
+        default=["postgres", "neo4j", "elasticsearch"],
+        description=(
+            "Owner-controlled storage hosts (ADR-0112 AC-1), checked in addition to "
+            "loopback (always allowed). Each entry is an exact hostname or a CIDR "
+            "range (e.g. '10.0.0.0/8'). Defaults to the Docker Compose service names "
+            "the private profile's stores resolve to on the owner's VPS "
+            "(docker-compose.cloud.yml). Enforced only when substrate_profile == "
+            "'private'."
+        ),
+    )
 
     # Cloud API secrets (model identity lives in config/models.yaml — ADR-0031)
     anthropic_api_key: str | None = Field(
@@ -2297,6 +2309,55 @@ class AppConfig(BaseSettings):
             "AGENT_DATABASE_ADMIN_URL=<test-db-url>, "
             "AGENT_SYSGRAPH_DATABASE_URL=<test-db-url>, "
             "or set AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE=1 to bypass (use with care)."
+        )
+
+    @model_validator(mode="after")
+    def _validate_owner_storage_allowlist(self) -> "AppConfig":
+        """Refuse to boot when the private profile's stores resolve off the owner allowlist.
+
+        ADR-0112 AC-1: in the `private` (default) substrate profile, every resolved
+        Postgres/Neo4j/Elasticsearch target must be owner-controlled — loopback, or a
+        host declared in `owner_storage_allowlist`. A provider/managed hostname can
+        never be passed off as owned by default.
+
+        Fires whenever `substrate_profile == "private"` — independent of
+        `environment` (this is a custody guard, not a test-isolation guard; the
+        automated test suite instead declares `AGENT_SUBSTRATE_PROFILE=test` via
+        `tests/conftest.py` to stay out of scope).
+
+        Checks the same five Postgres/Neo4j/Elasticsearch fields the FRE-375 guard
+        above checks, since `config/substrate.yaml`'s `private` profile maps its
+        `postgres`/`neo4j`/`elasticsearch` components to exactly `database_url`/
+        `neo4j_uri`/`elasticsearch_url` (see
+        tests/personal_agent/config/test_substrate_manifest_drift.py, which fails
+        loudly if that mapping ever changes).
+
+        Raises:
+            ValueError: When a store resolves to a host outside the allowlist.
+        """
+        if self.substrate_profile != "private":
+            return self
+
+        offenders: list[str] = []
+        if not is_owner_controlled_host(self.database_url, self.owner_storage_allowlist):
+            offenders.append(f"database_url={self.database_url!r}")
+        if not is_owner_controlled_host(self.database_admin_url, self.owner_storage_allowlist):
+            offenders.append(f"database_admin_url={self.database_admin_url!r}")
+        if not is_owner_controlled_host(self.sysgraph_database_url, self.owner_storage_allowlist):
+            offenders.append(f"sysgraph_database_url={self.sysgraph_database_url!r}")
+        if not is_owner_controlled_host(self.neo4j_uri, self.owner_storage_allowlist):
+            offenders.append(f"neo4j_uri={self.neo4j_uri!r}")
+        if not is_owner_controlled_host(self.elasticsearch_url, self.owner_storage_allowlist):
+            offenders.append(f"elasticsearch_url={self.elasticsearch_url!r}")
+
+        if not offenders:
+            return self
+
+        raise ValueError(
+            f"substrate_profile='private' but the following stores resolve off the "
+            f"owner allowlist (ADR-0112 AC-1): {', '.join(offenders)}. Add the host "
+            "to AGENT_OWNER_STORAGE_ALLOWLIST, point it at a loopback/owned host, or "
+            "set AGENT_SUBSTRATE_PROFILE=managed if this is an intentional managed backend."
         )
 
     @model_validator(mode="after")

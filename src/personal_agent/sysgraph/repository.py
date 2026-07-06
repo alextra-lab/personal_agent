@@ -56,6 +56,17 @@ class SignalValue:
     suppressed: bool
 
 
+_ReadBeforeEmitDecision = Literal["decided_skip", "reinforced", "generate_new"]
+
+
+@dataclass(frozen=True)
+class ReadBeforeEmitResult:
+    """Outcome of a generation-time read-before-emit check (ADR-0105 D9/D10)."""
+
+    decision: _ReadBeforeEmitDecision
+    proposal_id: UUID | None
+
+
 @dataclass(frozen=True)
 class ProposalRecord:
     """Fields needed to upsert a ``sysgraph.proposal`` row (ADR-0105 D4)."""
@@ -67,6 +78,7 @@ class ProposalRecord:
     why: str | None
     how: str | None
     seen_count: int
+    scope: str | None = None
 
 
 _RECORD_PROMOTION_UPSERT_PROPOSAL = """
@@ -164,6 +176,36 @@ INSERT INTO sysgraph.signal (source, category, suppressed_until)
 VALUES ($1, $2, $3)
 ON CONFLICT (source, category) DO UPDATE
     SET suppressed_until = EXCLUDED.suppressed_until, updated_at = NOW();
+"""
+
+# ADR-0105 D9/D10 / FRE-721 — generation-time read-before-emit queries.
+# Deliberately NOT the same upsert as promotion's ON CONFLICT clause: that one
+# overwrites seen_count with the caller's authoritative count (correct once,
+# at promotion time); this one increments, since a repeated generation-time
+# detection of the identical fingerprint must accumulate, never clobber a
+# previously-recorded higher count.
+
+_ADVISORY_LOCK_QUERY = "SELECT pg_advisory_xact_lock(hashtext($1));"
+
+_FIND_AWAITING_PROPOSAL_QUERY = """
+SELECT id, fingerprint, seen_count
+FROM sysgraph.proposal
+WHERE source = $1 AND category = $2 AND scope IS NOT DISTINCT FROM $3
+ORDER BY created_at DESC
+LIMIT 1;
+"""
+
+_REINFORCE_PROPOSAL_QUERY = """
+UPDATE sysgraph.proposal SET seen_count = seen_count + 1, updated_at = NOW()
+WHERE id = $1;
+"""
+
+_GENERATION_TIME_UPSERT_PROPOSAL = """
+INSERT INTO sysgraph.proposal (source, category, fingerprint, what, why, how, seen_count, scope)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (fingerprint) DO UPDATE
+    SET seen_count = sysgraph.proposal.seen_count + 1, updated_at = NOW()
+RETURNING id;
 """
 
 
@@ -522,3 +564,65 @@ class SysgraphRepository:
                 suppressed_until=suppressed_until.isoformat(),
             )
         return signal
+
+    async def read_before_emit(
+        self,
+        source: str,
+        category: str,
+        scope: str | None,
+        proposal: ProposalRecord,
+    ) -> ReadBeforeEmitResult:
+        """Generation-time read-before-emit, transactional (ADR-0105 D9/D10, FRE-721/T7).
+
+        A producer calls this immediately before it would otherwise record a new
+        proposal. Branches on the fallback match key ``(source, category, scope)``
+        — D10's separation probe (FRE-720) found no clean semantic floor on this
+        corpus, so this is category+scope grouping, never vector clustering.
+
+        Serialized per key via a transaction-scoped Postgres advisory lock: no
+        unique constraint exists at ``(source, category, scope)`` grain (only
+        ``fingerprint`` is unique), so without the lock two concurrent producers
+        could both observe "no existing awaiting proposal" and each insert one.
+
+        Args:
+            source: Proposal source discriminator (ADR-0105 D1).
+            category: Proposal category.
+            scope: Proposal scope — the cheap fallback facet (D9); ``None``
+                matches only other ``None`` scopes, never a wildcard.
+            proposal: Fields for a new proposal row. Only used on the
+                ``generate_new`` branch.
+
+        Returns:
+            ``decided_skip`` when this ``(source, category)`` kind already has
+            a terminal, non-``deferred`` outcome (ADR-0105 D7) — no write.
+            ``reinforced`` when an awaiting (not-yet-decided) equivalent
+            already exists — its ``seen_count`` is incremented in place,
+            ``proposal_id`` is the existing row's id. ``generate_new`` when
+            nothing equivalent exists — a new row is inserted, ``proposal_id``
+            is the new row's id.
+        """
+        assert self.pool is not None, "call connect() first"
+        lock_key = f"{source}:{category}:{scope or ''}"
+        async with self.pool.acquire() as conn, conn.transaction():
+            await conn.execute(_ADVISORY_LOCK_QUERY, lock_key)
+            decided = bool(await conn.fetchval(_IS_KIND_DECIDED_QUERY, source, category))
+            if decided:
+                return ReadBeforeEmitResult(decision="decided_skip", proposal_id=None)
+
+            existing = await conn.fetchrow(_FIND_AWAITING_PROPOSAL_QUERY, source, category, scope)
+            if existing is not None:
+                await conn.execute(_REINFORCE_PROPOSAL_QUERY, existing["id"])
+                return ReadBeforeEmitResult(decision="reinforced", proposal_id=existing["id"])
+
+            new_id = await conn.fetchval(
+                _GENERATION_TIME_UPSERT_PROPOSAL,
+                proposal.source,
+                proposal.category,
+                proposal.fingerprint,
+                proposal.what,
+                proposal.why,
+                proposal.how,
+                proposal.seen_count,
+                proposal.scope,
+            )
+            return ReadBeforeEmitResult(decision="generate_new", proposal_id=new_id)

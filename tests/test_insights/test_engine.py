@@ -312,6 +312,93 @@ class TestCreateCaptainLogProposalsFingerprinted:
         )
 
 
+@pytest.mark.asyncio
+class TestCreateCaptainLogProposalsReadBeforeEmit:
+    """ADR-0105 D9/FRE-721: generation-time read-before-emit gates proposal creation."""
+
+    async def test_no_sysgraph_repo_wired_behaves_unchanged(self) -> None:
+        """sysgraph_repo=None (the default) never suppresses a proposal."""
+        engine = InsightsEngine(telemetry_queries=AsyncMock())
+        insight = Insight(
+            insight_type="anomaly",
+            title="Cost spike detected",
+            summary="Cost spike: $2.50 today vs $0.50 avg.",
+            confidence=0.80,
+            evidence={"observed_cost_usd": 2.5, "baseline_cost_usd": 0.5},
+            actionable=True,
+        )
+        proposals = await engine.create_captain_log_proposals([insight])
+        assert len(proposals) == 1
+
+    async def test_decided_skip_suppresses_the_proposal(self) -> None:
+        """An equivalent already-decided kind means no CaptainLogEntry is appended."""
+        from personal_agent.sysgraph.dedup import ReadBeforeEmitDecision, ReadBeforeEmitResult
+
+        engine = InsightsEngine(telemetry_queries=AsyncMock(), sysgraph_repo=object())  # type: ignore[arg-type]
+        insight = Insight(
+            insight_type="anomaly",
+            title="Cost spike detected",
+            summary="Cost spike: $2.50 today vs $0.50 avg.",
+            confidence=0.80,
+            evidence={"observed_cost_usd": 2.5, "baseline_cost_usd": 0.5},
+            actionable=True,
+        )
+        with patch(
+            "personal_agent.insights.engine.check_before_emit",
+            new=AsyncMock(
+                return_value=ReadBeforeEmitResult(decision=ReadBeforeEmitDecision.DECIDED_SKIP)
+            ),
+        ):
+            proposals = await engine.create_captain_log_proposals([insight])
+        assert proposals == []
+
+    async def test_reinforced_suppresses_the_proposal(self) -> None:
+        """An equivalent still-awaiting kind reinforces sysgraph, no fresh CaptainLogEntry."""
+        from personal_agent.sysgraph.dedup import ReadBeforeEmitDecision, ReadBeforeEmitResult
+
+        engine = InsightsEngine(telemetry_queries=AsyncMock(), sysgraph_repo=object())  # type: ignore[arg-type]
+        insight = Insight(
+            insight_type="anomaly",
+            title="Cost spike detected",
+            summary="Cost spike: $2.50 today vs $0.50 avg.",
+            confidence=0.80,
+            evidence={"observed_cost_usd": 2.5, "baseline_cost_usd": 0.5},
+            actionable=True,
+        )
+        with patch(
+            "personal_agent.insights.engine.check_before_emit",
+            new=AsyncMock(
+                return_value=ReadBeforeEmitResult(decision=ReadBeforeEmitDecision.REINFORCED)
+            ),
+        ):
+            proposals = await engine.create_captain_log_proposals([insight])
+        assert proposals == []
+
+    async def test_generate_new_and_degraded_still_produce_a_proposal(self) -> None:
+        """GENERATE_NEW and DEGRADED_GENERATE_NEW both proceed exactly as before this ticket."""
+        from personal_agent.sysgraph.dedup import ReadBeforeEmitDecision, ReadBeforeEmitResult
+
+        insight = Insight(
+            insight_type="anomaly",
+            title="Cost spike detected",
+            summary="Cost spike: $2.50 today vs $0.50 avg.",
+            confidence=0.80,
+            evidence={"observed_cost_usd": 2.5, "baseline_cost_usd": 0.5},
+            actionable=True,
+        )
+        for decision in (
+            ReadBeforeEmitDecision.GENERATE_NEW,
+            ReadBeforeEmitDecision.DEGRADED_GENERATE_NEW,
+        ):
+            engine = InsightsEngine(telemetry_queries=AsyncMock(), sysgraph_repo=object())  # type: ignore[arg-type]
+            with patch(
+                "personal_agent.insights.engine.check_before_emit",
+                new=AsyncMock(return_value=ReadBeforeEmitResult(decision=decision)),
+            ):
+                proposals = await engine.create_captain_log_proposals([insight])
+            assert len(proposals) == 1
+
+
 class TestIndexInsightsPartitioning:
     """_index_insights writes to a monthly index (FRE-543)."""
 
@@ -383,6 +470,7 @@ class TestInsightsEsLinkageField:
         from personal_agent.insights import engine as engine_mod
 
         engine = InsightsEngine.__new__(InsightsEngine)
+        engine._sysgraph_repo = None  # __new__ bypasses __init__ (ADR-0105 D9/FRE-721 attr)
         insight = Insight(
             insight_type="delegation",
             pattern_kind="delegation_rounds",

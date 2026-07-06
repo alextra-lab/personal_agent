@@ -419,7 +419,7 @@ def test_real_joinability_template_is_fully_clean() -> None:
 
 def test_real_committed_floor_is_exactly_the_allowlisted_exceptions() -> None:
     # FRE-555: after the _meta-detection fix + the two dashboard fixes, the only residual floor
-    # findings are the 5 reviewed-correct / deferred trap-lint exceptions captured in the committed
+    # findings are the reviewed-correct / deferred trap-lint exceptions captured in the committed
     # allowlist. Locks completeness: a *new* floor finding fails this test (and CI).
     report = run_checks(DEFAULT_TEMPLATES_DIR, DEFAULT_DASHBOARDS_DIR)
     keys = {finding_key(f) for f in report.floor}
@@ -429,6 +429,7 @@ def test_real_committed_floor_is_exactly_the_allowlisted_exceptions() -> None:
         "probe_duration_ms",  # *_ms → float pending reindex (follow-up)
         "reason",  # short keyword enum, keyword correct
         "decomposition_reason",  # short keyword enum, keyword correct
+        "threshold",  # issue_budget_threshold cap (integer count), deliberately pinned (FRE-719)
     }
     assert {k[3] for k in keys} == expected_fields, sorted(k[3] for k in keys)
     assert all(k[0] == "trap-lint" for k in keys), keys

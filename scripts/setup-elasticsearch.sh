@@ -271,6 +271,12 @@ put_and_apply_template "Index template: agent-captains-subagents-template" \
   "/_index_template/agent-captains-subagents-template" \
   "$PROJECT_ROOT/docker/elasticsearch/captains-subagents-index-template.json"
 
+# 3a-ii. Self-improvement funnel events (ADR-0105 D6, FRE-719). Date-partitioned,
+#        no write alias — apply_live_index_mapping skips cleanly via its 404 path.
+put_and_apply_template "Index template: agent-captains-funnel-events-template" \
+  "/_index_template/agent-captains-funnel-events-template" \
+  "$PROJECT_ROOT/docker/elasticsearch/captains-funnel-events-index-template.json"
+
 # 3b. Insights engine template (FRE-534/A2 — family previously untemplated).
 #     ILM (FRE-543): monthly agent-insights-YYYY-MM, delete at 365d (min_age).
 put_resource "ILM policy: agent-insights-policy" \

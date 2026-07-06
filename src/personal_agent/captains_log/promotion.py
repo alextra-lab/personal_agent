@@ -334,6 +334,7 @@ class PromotionPipeline:
                         current_count=count,
                         threshold=settings.issue_budget_threshold,
                     )
+                    await self._emit_throttle_event(count, settings.issue_budget_threshold)
                     return []
                 if count > settings.issue_budget_threshold - 20:
                     log.warning(
@@ -649,6 +650,7 @@ class PromotionPipeline:
         self._mark_promoted(entry, linear_issue_id)
         promoted.append({"entry_id": entry.entry_id, "linear_issue_id": linear_issue_id})
         await self._record_sysgraph_linkage(entry, linear_issue_id)
+        await self._stamp_reflection_linkage(entry.entry_id, linear_issue_id)
         pc = entry.proposed_change
         if pc is not None and pc.source == ProposalSource.STATISTICAL_DETECTOR and pc.fingerprint:
             await self._stamp_insight_linkage(pc.fingerprint, linear_issue_id)
@@ -693,6 +695,79 @@ class PromotionPipeline:
                 entry_id=entry.entry_id,
                 error=str(exc),
                 trace_id=_trace_id_from_entry(entry),
+            )
+
+    async def _emit_throttle_event(self, current_count: int, threshold: int) -> None:
+        """Emit the ADR-0040 budget throttle as a queryable funnel-state event, best-effort.
+
+        ADR-0105 D6: the throttle must be a first-class visible funnel state, not
+        only the existing ``log.warning``. Writes to a small purpose-built index
+        rather than the proposal-shaped ``agent-captains-reflections-*`` since this
+        is a pipeline-level event, not tied to any single proposal document.
+
+        Args:
+            current_count: Open-issue count that tripped the threshold.
+            threshold: The configured ``issue_budget_threshold``.
+        """
+        from personal_agent.captains_log.manager import CaptainLogManager
+
+        handler = self._es_handler or CaptainLogManager._default_es_handler
+        if handler is None or not getattr(handler, "_connected", False):
+            return
+        now = datetime.now(timezone.utc)
+        index_name = f"agent-captains-funnel-events-{now.strftime('%Y-%m-%d')}"
+        try:
+            await handler.es_logger.index_document(
+                index_name,
+                {
+                    "@timestamp": now.isoformat(),
+                    "event_type": "throttled_budget",
+                    "current_count": current_count,
+                    "threshold": threshold,
+                },
+            )
+        except Exception as exc:
+            log.warning(
+                "promotion_throttle_event_emit_failed",
+                current_count=current_count,
+                threshold=threshold,
+                error=str(exc),
+            )
+
+    async def _stamp_reflection_linkage(self, entry_id: str, linear_issue_id: str) -> None:
+        """Stamp linear_issue_id onto the agent-captains-reflections-* doc (ADR-0105 D6), best-effort.
+
+        Unlike ``_stamp_insight_linkage`` (STATISTICAL_DETECTOR-only, keyed on
+        fingerprint against ``agent-insights-*``), this applies to every source:
+        ``agent-captains-reflections-*`` is the single unified real-document source
+        (FRE-715 convergence) the ADR-0105 D6 funnel dashboard reads for "promoted."
+        ``_mark_promoted`` only mutates the on-disk JSON, so without this the ES
+        document never carries ``linear_issue_id``. Keyed on the deterministic
+        ``entry_id`` doc id (see ``CaptainLogManager.save_entry``), which is already
+        explicitly mapped.
+
+        Args:
+            entry_id: The promoted entry's id (also its ES document id).
+            linear_issue_id: The Linear issue identifier just linked.
+        """
+        from personal_agent.captains_log.manager import CaptainLogManager
+
+        handler = self._es_handler or CaptainLogManager._default_es_handler
+        if handler is None or not getattr(handler, "_connected", False):
+            return
+        try:
+            await handler.es_logger.update_by_query(
+                "agent-captains-reflections-*",
+                {"term": {"entry_id": entry_id}},
+                "ctx._source.linear_issue_id = params.linear_issue_id",
+                {"linear_issue_id": linear_issue_id},
+            )
+        except Exception as exc:
+            log.warning(
+                "promotion_reflection_linkage_stamp_failed",
+                entry_id=entry_id,
+                linear_issue_id=linear_issue_id,
+                error=str(exc),
             )
 
     async def _stamp_insight_linkage(self, fingerprint: str, linear_issue_id: str) -> None:

@@ -114,6 +114,11 @@ server) is **deferred to future-work** (see Consequences) — it is owner-contro
 custody-eligible, but it fails the availability requirement for the synchronous hot path, so
 its only legitimate role is async/batch/offline compute, revisited if and when acquired.
 
+**GPU** remains out of scope for the always-on inference plane per the owner's fixed
+constraint — but see **Addendum A**, which records a scoped, custody-compatible exception for
+*ephemeral batch* GPU (a by-the-hour owner-account instance for a bulk re-embed), distinct
+from the standing always-on tier.
+
 ### D2 — Growth trigger (RAM-floor + sustained saturation)
 
 Escalation from Step 1 to Step 2/3 is a **fired condition, not a guess.** After on-box
@@ -517,7 +522,60 @@ executing).
 
 ---
 
+## Addendum A — GPU options (2026-07-06)
+
+Added post-merge at the owner's question ("does OVH offer interesting VPS/bare-metal with
+small but sufficient GPUs?"). This **refines, does not overturn**, the fixed no-GPU constraint:
+GPU stays out of scope for the **always-on inference plane**; a **narrow, custody-compatible
+exception** is recorded for *ephemeral batch* GPU.
+
+**What OVH offers (checked 2026-07-06).**
+- **VPS line: no GPU** — VPS is CPU-only; GPU lives in two other product lines.
+- **Public Cloud GPU instances** (single-tenant VMs, hourly): **NVIDIA L4 — 24 GB VRAM, from
+  ~€0.75/hr** is the small-but-ample fit (24 GB dwarfs Seshat's 0.6–4B models); **V100
+  (16/32 GB) from ~€0.45/hr** is cheaper still; L40S (~€1.40/hr) and A100 (~€1.52–2.75/hr) are
+  overkill.
+- **GPU bare metal** (dedicated, monthly): e.g. *Scale-GPU-1* (2× L4) — fixed monthly, much
+  pricier than the hourly instances.
+
+**Why it does not change the always-on decision.** The hourly prices are built for burst. A
+single L4 running 24/7 is **~€540/month — roughly 20–50× the CPU VPS**. The measured reality
+is CPU-idle (load 0.72/8) with RAM the only pressure, so paying that to accelerate a
+not-CPU-starved always-on path is poor value; D1's on-box-first ($0) path is unaffected.
+
+**Custody note (important).** The no-GPU rule is a **cost choice, not a custody one.** A GPU
+instance **in the owner's own OVH account** is owner-administered, single-tenant compute, so
+under D3 it is **allowed** for personal-data compute — unlike OVH *managed* embedding /
+AI Endpoints (multi-tenant → denied). GPU is foreclosed here only by price/preference, not by
+the custody boundary.
+
+**The scoped exception — ephemeral batch GPU for a bulk re-embed.** The one genuinely
+CPU-bound job is a **full re-embed** (a one-way door on any embedder-model change — the whole
+Neo4j corpus, hours on CPU). For *that* job, a **by-the-hour owner-account L4** (a few hours ≈
+**€2–5 total**) is a clean, custody-compatible accelerator: spin up, re-embed, tear down. This
+is the same async/batch role the ADR deferred to a home box (Option 3), delivered cheaper and
+with no hardware. **Not ticketed** — it attaches naturally to a future embedder-swap (the held
+FRE-656 embedder-benchmark track), to be used then rather than built now. The always-on hot
+path stays CPU-on-box; GPU appears only for the occasional heavy batch.
+
+**References (Addendum A):**
+- OVHcloud L4 Cloud GPU instance — https://www.ovhcloud.com/en/public-cloud/gpu/l4/
+- OVHcloud Cloud GPU range — https://www.ovhcloud.com/en/public-cloud/gpu/
+- OVHcloud GPU bare-metal / dedicated servers — https://www.ovhcloud.com/en/bare-metal/gpu-dedicated-server/
+- OVHcloud Public Cloud price list — https://www.ovhcloud.com/en/public-cloud/prices/
+
+---
+
 ## Status Updates
+
+### 2026-07-06 - Addendum A (GPU options)
+**Changed By:** adr session (Opus), FRE-809
+**Reason:** Post-merge addendum answering the owner's GPU question. Records OVH's small-GPU
+options (L4/V100), confirms the no-GPU constraint holds for the always-on plane on cost
+grounds, clarifies that an owner-account GPU is custody-*compatible* (cost, not custody, is the
+gate), and carves a narrow exception: ephemeral by-the-hour GPU for a bulk re-embed (attaches
+to a future embedder swap; not ticketed). No change to any D1–D6 decision or acceptance
+criterion.
 
 ### 2026-07-06 - Proposed
 **Changed By:** adr session (Opus), FRE-809

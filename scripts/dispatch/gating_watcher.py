@@ -97,10 +97,28 @@ _STREAM_FROM_LABEL: dict[str, str] = {
 }
 
 # Idle/busy heuristic over ``capture-pane -p`` (best-effort, fail-safe = busy).
-# Idle requires a positive Claude input-prompt marker AND no busy marker; a
-# pending permission/decision prompt counts as busy so a session waiting on the
-# owner (e.g. master on a deploy-authorization decision) is never interrupted.
-_IDLE_MARKERS: tuple[str, ...] = ("│ >", "? for shortcuts")
+# Idle requires the literal input-prompt line — a bare ``❯`` caret alone on its
+# line, nothing else — AND no busy marker. Real RC panes render neither
+# ``│ >`` nor ``? for shortcuts`` (FRE-825: those markers never matched any
+# live pane, so the watcher never injected); the caret box is rendered even
+# mid-turn, so a pending permission/decision prompt or an in-progress status
+# spinner both count as busy so a session mid-turn or awaiting the owner is
+# never interrupted.
+_IDLE_PROMPT_RE: re.Pattern[str] = re.compile(r"^\s*❯\s*$", re.MULTILINE)
+# The live in-progress status line — a ``●``-prefixed line carrying an
+# ellipsis followed by a parenthesised stats blurb, e.g.
+# ``● Clauding… (1m 2s · ↓ 3.4k tokens · thought for 4s)`` or
+# ``● Assembling and verifying system_health.ndjson… (12m 35s · ↑ 42.9k
+# tokens)`` — captured live from three separate real sessions (FRE-825): the
+# lead verb/description varies per tick, so the anchor is the whole-line shape
+# (``●`` … ``…`` … ``(...)`` to end of line), not any one verb. Distinct from
+# the completed ``✻ <verb> for Ns`` summary shown at idle, which never carries
+# an ellipsis. Anchored to the full line (not a bare ``\w…\s*\(`` substring
+# search) so it does not fire on an ellipsis+paren appearing inside ordinary
+# prose elsewhere in the pane. The caret box is rendered even while this
+# spinner is live, so this is the only reliable busy signal for a mid-turn
+# pane once the tool-call-specific markers below don't match.
+_BUSY_SPINNER_RE: re.Pattern[str] = re.compile(r"^\s*●\s.*…\s*\([^\n)]*\)\s*$", re.MULTILINE)
 _BUSY_MARKERS: tuple[str, ...] = (
     "esc to interrupt",
     "Do you want",
@@ -331,9 +349,10 @@ def has_ci_red_ack(comment_bodies: Sequence[str], head_sha: str) -> bool:
 def session_is_idle(pane_text: str) -> bool:
     """Return whether a captured tmux pane looks idle at a Claude input prompt.
 
-    Best-effort heuristic (fail-safe = not idle): idle iff a positive input
-    prompt marker is present AND no busy marker (an active spinner /
-    ``esc to interrupt`` or a pending permission/decision prompt) is present.
+    Best-effort heuristic (fail-safe = not idle): idle iff the bare-caret input
+    prompt line is present AND no busy marker (a tool-call-specific marker, an
+    in-progress status spinner, or a pending permission/decision prompt) is
+    present.
 
     Args:
         pane_text: The ``tmux capture-pane -p`` output.
@@ -344,7 +363,9 @@ def session_is_idle(pane_text: str) -> bool:
     """
     if any(marker in pane_text for marker in _BUSY_MARKERS):
         return False
-    return any(marker in pane_text for marker in _IDLE_MARKERS)
+    if _BUSY_SPINNER_RE.search(pane_text):
+        return False
+    return bool(_IDLE_PROMPT_RE.search(pane_text))
 
 
 def session_for_labels(labels: Collection[str]) -> str | None:

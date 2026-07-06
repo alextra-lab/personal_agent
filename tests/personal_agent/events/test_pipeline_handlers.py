@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import sys
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -604,6 +604,20 @@ def _cq_event(
 
 class TestCompactionQualityCaptainLogHandler:
     """Tests for the context-quality → captain-log consumer (FRE-249)."""
+
+    @pytest.fixture(autouse=True)
+    def _no_sysgraph_suppression(self) -> object:
+        """These tests exercise CL entry construction, not ADR-0105 D9 read-before-emit.
+
+        Without this, the handler's real (best-effort) sysgraph connect can reach the
+        live test-Postgres substrate and, after enough runs, accumulate a matching
+        proposal row that gets reinforced — nondeterministically skipping ``save_entry``.
+        """
+        with patch(
+            "personal_agent.events.pipeline_handlers._read_before_emit_suppresses",
+            new=AsyncMock(return_value=False),
+        ):
+            yield
 
     @pytest.mark.asyncio
     async def test_saves_captain_log_entry(self) -> None:

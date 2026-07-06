@@ -44,6 +44,7 @@ from personal_agent.service.models import (
     SessionUpdate,
 )
 from personal_agent.service.repositories.session_repository import SessionRepository
+from personal_agent.sysgraph import SysgraphRepository, set_default_sysgraph_repo
 from personal_agent.telemetry import add_elasticsearch_handler, get_logger
 from personal_agent.telemetry.es_handler import ElasticsearchHandler
 from personal_agent.telemetry.request_timer import RequestTimer
@@ -686,6 +687,19 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             )
             memory_service = None
 
+    # Sysgraph (ADR-0105 D9/FRE-721): one process-level connected repository, shared
+    # via set_default_sysgraph_repo so the per-turn Captain's Log reflection path
+    # (orchestrator/executor.py -> captains_log/reflection.py) never opens a fresh
+    # asyncpg pool on every single turn. Best-effort — a connect failure must never
+    # block startup; the shared getter simply returns None (feature degrades open).
+    try:
+        sysgraph_repo = SysgraphRepository(settings.sysgraph_database_url)
+        await sysgraph_repo.connect()
+        set_default_sysgraph_repo(sysgraph_repo)
+        log.info("sysgraph_shared_repo_initialized")
+    except Exception as sysgraph_e:
+        log.warning("sysgraph_shared_repo_connect_failed", error=str(sysgraph_e))
+
     metrics_daemon = MetricsDaemon(
         poll_interval_seconds=settings.metrics_daemon_poll_interval_seconds,
         es_emit_interval_seconds=settings.metrics_daemon_es_emit_interval_seconds,
@@ -1208,6 +1222,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     if memory_service:
         await memory_service.disconnect()
+
+    # Sysgraph shared repo teardown (ADR-0105 D9/FRE-721)
+    from personal_agent.sysgraph import get_default_sysgraph_repo
+
+    shared_sysgraph_repo = get_default_sysgraph_repo()
+    if shared_sysgraph_repo is not None:
+        await shared_sysgraph_repo.disconnect()
+        set_default_sysgraph_repo(None)
 
     # Route-trace ledger teardown (FRE-452)
     from personal_agent.observability.route_trace import get_route_trace_ledger

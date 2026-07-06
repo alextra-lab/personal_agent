@@ -32,6 +32,9 @@ from personal_agent.insights.fingerprints import (
 )
 from personal_agent.llm_client.cost_tracker import CostTrackerService
 from personal_agent.memory.service import MemoryService
+from personal_agent.sysgraph import SysgraphRepository
+from personal_agent.sysgraph.dedup import ReadBeforeEmitDecision, check_before_emit
+from personal_agent.sysgraph.repository import ProposalRecord
 from personal_agent.telemetry import TaskPatternReport, TelemetryQueries, get_logger
 
 log = get_logger(__name__)
@@ -94,6 +97,7 @@ class InsightsEngine:
         telemetry_queries: TelemetryQueries | None = None,
         memory_service: MemoryService | None = None,
         cost_tracker: CostTrackerService | None = None,
+        sysgraph_repo: SysgraphRepository | None = None,
     ) -> None:
         """Initialize dependencies used for cross-data analysis.
 
@@ -101,10 +105,14 @@ class InsightsEngine:
             telemetry_queries: Elasticsearch telemetry query adapter.
             memory_service: Neo4j memory graph service.
             cost_tracker: PostgreSQL-backed API cost tracker.
+            sysgraph_repo: Optional connected SysgraphRepository (ADR-0105 D9/FRE-721).
+                When None, generation-time read-before-emit is skipped entirely —
+                unchanged behavior — never blocks insight generation.
         """
         self._queries = telemetry_queries or TelemetryQueries()
         self._memory = memory_service or MemoryService()
         self._cost_tracker = cost_tracker or CostTrackerService()
+        self._sysgraph_repo = sysgraph_repo
 
     async def analyze_patterns(self, days: int = 7) -> list[Insight]:
         """Find patterns across telemetry, graph memory, and cost data.
@@ -687,6 +695,8 @@ class InsightsEngine:
             ]
             now = datetime.now(timezone.utc)
             fingerprint = _fingerprint_for_insight(insight, now)
+            category = _category_for_insight_type(insight.insight_type)
+            scope = _scope_for_insight_type(insight.insight_type)
             proposed_change = ProposedChange(
                 what=f"Address insight pattern: {insight.title}",
                 why=insight.summary,
@@ -694,12 +704,44 @@ class InsightsEngine:
                     "Run targeted mitigation experiment for 7 days, monitor impact metrics, "
                     "and apply change if confidence improves."
                 ),
-                category=_category_for_insight_type(insight.insight_type),
-                scope=_scope_for_insight_type(insight.insight_type),
+                category=category,
+                scope=scope,
                 source=ProposalSource.STATISTICAL_DETECTOR,
                 fingerprint=fingerprint,
                 first_seen=now,
             )
+
+            # ADR-0105 D9/FRE-721: read sysgraph before recording this proposal. An
+            # equivalent already-decided or still-awaiting idea suppresses a fresh
+            # row here — this never blocks (fails open to GENERATE_NEW) when
+            # sysgraph is unwired or unreachable.
+            read_before_emit = await check_before_emit(
+                self._sysgraph_repo,
+                source=ProposalSource.STATISTICAL_DETECTOR.value,
+                category=category.value,
+                scope=scope.value,
+                proposal=ProposalRecord(
+                    source=ProposalSource.STATISTICAL_DETECTOR.value,
+                    category=category.value,
+                    fingerprint=fingerprint,
+                    what=proposed_change.what,
+                    why=proposed_change.why,
+                    how=proposed_change.how,
+                    seen_count=1,
+                    scope=scope.value,
+                ),
+            )
+            if read_before_emit.decision in (
+                ReadBeforeEmitDecision.DECIDED_SKIP,
+                ReadBeforeEmitDecision.REINFORCED,
+            ):
+                log.info(
+                    "insights_proposal_suppressed_by_read_before_emit",
+                    insight_type=insight.insight_type,
+                    decision=read_before_emit.decision.value,
+                )
+                continue
+
             proposals.append(
                 CaptainLogEntry(
                     entry_id="",

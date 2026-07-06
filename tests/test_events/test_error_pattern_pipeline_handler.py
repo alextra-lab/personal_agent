@@ -13,7 +13,7 @@ Tests verify:
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -63,6 +63,23 @@ def _make_event(
 # ---------------------------------------------------------------------------
 # Basic behaviour
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _no_sysgraph_suppression() -> object:
+    """These are entry-construction unit tests, not ADR-0105 D9 read-before-emit tests.
+
+    Without this, the handler's real (best-effort) sysgraph connect can reach the live
+    test-Postgres substrate and, after enough runs, accumulate a matching proposal row
+    that gets reinforced — nondeterministically suppressing ``save_entry`` and breaking
+    these tests. Force the unrelated read-before-emit branch to always report
+    "not suppressed" so entry construction is tested in isolation.
+    """
+    with patch(
+        "personal_agent.events.pipeline_handlers._read_before_emit_suppresses",
+        new=AsyncMock(return_value=False),
+    ):
+        yield
 
 
 @pytest.mark.asyncio

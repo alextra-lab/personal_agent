@@ -36,6 +36,9 @@ from personal_agent.captains_log.prompt_manifest import (
 )
 from personal_agent.config import settings
 from personal_agent.llm_client import LocalLLMClient, ModelRole
+from personal_agent.sysgraph import SysgraphRepository, get_default_sysgraph_repo
+from personal_agent.sysgraph.dedup import ReadBeforeEmitDecision, check_before_emit
+from personal_agent.sysgraph.repository import ProposalRecord
 from personal_agent.telemetry import get_logger
 from personal_agent.telemetry.metrics import get_trace_events
 from personal_agent.telemetry.trace import SystemTraceContext
@@ -232,6 +235,7 @@ async def generate_reflection_entry(
     max_iterations: int = 0,
     session_id: str | None = None,
     eval_mode: bool = False,
+    sysgraph_repo: SysgraphRepository | None = None,
 ) -> CaptainLogEntry:
     """Generate an LLM-based reflection entry analyzing task execution.
 
@@ -259,6 +263,11 @@ async def generate_reflection_entry(
         eval_mode: True when the task originated from an eval run (FRE-523).
             Stamped onto the returned entry so the promotion pipeline skips it
             (no Linear issues filed off eval prompts).
+        sysgraph_repo: Optional connected SysgraphRepository for the ADR-0105
+            D9/FRE-721 generation-time read-before-emit check. When ``None``
+            (the default), falls back to the process-level shared repository
+            via ``get_default_sysgraph_repo()`` — never blocks reflection
+            generation when sysgraph is unwired or unreachable.
 
     Returns:
         A rich CaptainLogEntry with LLM-generated insights.
@@ -375,6 +384,7 @@ async def generate_reflection_entry(
                     session_id=session_id,
                 )
             entry.eval_mode = eval_mode  # FRE-523 provenance
+            await _apply_read_before_emit(entry, sysgraph_repo, trace_id=trace_id)
             return entry
         except Exception as e:
             # DSPy failed, fallback to manual
@@ -511,6 +521,7 @@ async def generate_reflection_entry(
         )
 
         entry.eval_mode = eval_mode  # FRE-523 provenance
+        await _apply_read_before_emit(entry, sysgraph_repo, trace_id=trace_id)
         return entry
 
     except Exception as e:
@@ -571,6 +582,56 @@ def _build_proposed_change(raw: dict[str, str] | None) -> ProposedChange | None:
         fingerprint=fingerprint,
         first_seen=datetime.now(timezone.utc),
     )
+
+
+async def _apply_read_before_emit(
+    entry: CaptainLogEntry,
+    sysgraph_repo: SysgraphRepository | None,
+    *,
+    trace_id: str | None,
+) -> None:
+    """ADR-0105 D9/FRE-721: suppress `entry.proposed_change` for a decided/awaiting equivalent.
+
+    Mutates `entry` in place — sets `proposed_change` to `None` when an equivalent
+    idea is already decided or still awaiting (the rationale/metrics still flow
+    through, "at most an annotation" per AC-9). No-op when the entry carries no
+    proposal, or its category/scope don't resolve to known enums.
+
+    Args:
+        entry: The reflection entry about to be returned to the caller.
+        sysgraph_repo: Explicit repo override, or None to use the shared
+            process-level singleton (``get_default_sysgraph_repo()``).
+        trace_id: Originating request trace_id for log correlation (ADR-0074 §I3).
+    """
+    pc = entry.proposed_change
+    if pc is None or pc.category is None or pc.scope is None or not pc.fingerprint:
+        return
+
+    repo = sysgraph_repo if sysgraph_repo is not None else get_default_sysgraph_repo()
+    result = await check_before_emit(
+        repo,
+        source=ProposalSource.REFLECTION.value,
+        category=pc.category.value,
+        scope=pc.scope.value,
+        proposal=ProposalRecord(
+            source=ProposalSource.REFLECTION.value,
+            category=pc.category.value,
+            fingerprint=pc.fingerprint,
+            what=pc.what,
+            why=pc.why,
+            how=pc.how,
+            seen_count=1,
+            scope=pc.scope.value,
+        ),
+        trace_id=trace_id,
+    )
+    if result.decision in (ReadBeforeEmitDecision.DECIDED_SKIP, ReadBeforeEmitDecision.REINFORCED):
+        log.info(
+            "reflection_proposal_suppressed_by_read_before_emit",
+            decision=result.decision.value,
+            trace_id=trace_id,
+        )
+        entry.proposed_change = None
 
 
 def _summarize_telemetry(

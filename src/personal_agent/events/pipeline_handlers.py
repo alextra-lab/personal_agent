@@ -7,7 +7,7 @@ lazily so the module loads cheaply and stays testable with lightweight mocks.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from personal_agent.captains_log.models import ChangeScope
 from personal_agent.events.models import (
@@ -44,6 +44,77 @@ def _default_elasticsearch_async_client() -> Any | None:
         return getattr(handler.es_logger, "client", None)
     except Exception:
         return None
+
+
+async def _read_before_emit_suppresses(
+    *,
+    source: Literal["statistical_detector", "reflection"],
+    category: str,
+    scope: str,
+    fingerprint: str,
+    what: str,
+    why: str | None,
+    how: str | None,
+    trace_id: str | None,
+) -> bool:
+    """ADR-0105 D9/FRE-721 read-before-emit for the direct event->CONFIG_PROPOSAL handlers.
+
+    These handlers (error-pattern, compaction-quality, graph-quality, staleness)
+    build a ``CaptainLogEntry`` directly from a typed event rather than through
+    ``InsightsEngine.create_captain_log_proposals`` — D9's "before a ... statistical
+    producer records a proposal" applies here too. Connects/disconnects its own
+    ``SysgraphRepository`` per call, mirroring ``build_consolidation_promotion_handler``'s
+    best-effort pattern — never blocks or fails the calling handler.
+
+    Returns:
+        ``True`` when the caller should skip ``manager.save_entry(entry)`` entirely
+        (an equivalent already-decided or still-awaiting idea absorbed this
+        detection); ``False`` otherwise (generate-new or a degraded/unwired read).
+    """
+    from personal_agent.config.settings import get_settings
+    from personal_agent.sysgraph import SysgraphRepository
+    from personal_agent.sysgraph.dedup import ReadBeforeEmitDecision, check_before_emit
+    from personal_agent.sysgraph.repository import ProposalRecord
+
+    _settings = get_settings()
+    sysgraph_repo: SysgraphRepository | None = None
+    try:
+        sysgraph_repo = SysgraphRepository(_settings.sysgraph_database_url)
+        await sysgraph_repo.connect()
+    except Exception as exc:
+        log.warning(
+            "direct_proposal_sysgraph_connect_failed",
+            error=str(exc),
+            trace_id=trace_id,
+        )
+        sysgraph_repo = None
+
+    try:
+        result = await check_before_emit(
+            sysgraph_repo,
+            source=source,
+            category=category,
+            scope=scope,
+            proposal=ProposalRecord(
+                source=source,
+                category=category,
+                fingerprint=fingerprint,
+                what=what,
+                why=why,
+                how=how,
+                seen_count=1,
+                scope=scope,
+            ),
+            trace_id=trace_id,
+        )
+    finally:
+        if sysgraph_repo is not None:
+            await sysgraph_repo.disconnect()
+
+    return result.decision in (
+        ReadBeforeEmitDecision.DECIDED_SKIP,
+        ReadBeforeEmitDecision.REINFORCED,
+    )
 
 
 def build_consolidation_insights_handler(
@@ -88,9 +159,34 @@ def build_consolidation_insights_handler(
         from personal_agent.insights.engine import InsightsEngine
         from personal_agent.telemetry.queries import TelemetryQueries
 
+        _settings = get_settings()
         shared_es = _default_elasticsearch_async_client()
         queries = TelemetryQueries(es_client=shared_es)
-        engine = InsightsEngine(telemetry_queries=queries, memory_service=memory_service)
+
+        # ADR-0105 D9/FRE-721: best-effort sysgraph connection for the generation-time
+        # read-before-emit check inside create_captain_log_proposals. A connect
+        # failure must never block insights analysis — degrade to sysgraph_repo=None,
+        # which InsightsEngine treats as "skip the read" (mirrors the promotion
+        # handler's existing sysgraph wiring below).
+        sysgraph_repo = None
+        try:
+            from personal_agent.sysgraph import SysgraphRepository
+
+            sysgraph_repo = SysgraphRepository(_settings.sysgraph_database_url)
+            await sysgraph_repo.connect()
+        except Exception as exc:
+            log.warning(
+                "insights_sysgraph_connect_failed",
+                error=str(exc),
+                trace_id=event.trace_id,
+            )
+            sysgraph_repo = None
+
+        engine = InsightsEngine(
+            telemetry_queries=queries,
+            memory_service=memory_service,
+            sysgraph_repo=sysgraph_repo,
+        )
         try:
             insights = await engine.analyze_patterns(days=7)
             log.info(
@@ -120,6 +216,8 @@ def build_consolidation_insights_handler(
             await _save_proposals(proposals, trace_id=event.trace_id)
         finally:
             await queries.disconnect()
+            if sysgraph_repo is not None:
+                await sysgraph_repo.disconnect()
 
     return handler
 
@@ -544,6 +642,23 @@ def build_error_pattern_captain_log_handler(manager: Any | None = None) -> Any:
             potential_implementation=None,
         )
 
+        if await _read_before_emit_suppresses(
+            source=ProposalSource.STATISTICAL_DETECTOR.value,
+            category=ChangeCategory.RELIABILITY.value,
+            scope=scope.value,
+            fingerprint=event.fingerprint,
+            what=entry.proposed_change.what if entry.proposed_change else "",
+            why=entry.proposed_change.why if entry.proposed_change else None,
+            how=entry.proposed_change.how if entry.proposed_change else None,
+            trace_id=event.trace_id,
+        ):
+            log.info(
+                "error_pattern_proposal_suppressed_by_read_before_emit",
+                fingerprint=event.fingerprint,
+                trace_id=event.trace_id,
+            )
+            return
+
         _manager.save_entry(entry)
         log.info(
             "error_pattern_captain_log_saved",
@@ -665,6 +780,23 @@ def build_compaction_quality_captain_log_handler(manager: Any | None = None) -> 
             expected_outcome=None,
             potential_implementation=None,
         )
+
+        if await _read_before_emit_suppresses(
+            source=ProposalSource.STATISTICAL_DETECTOR.value,
+            category=ChangeCategory.KNOWLEDGE_QUALITY.value,
+            scope=ChangeScope.ORCHESTRATOR.value,
+            fingerprint=event.fingerprint,
+            what=entry.proposed_change.what if entry.proposed_change else "",
+            why=entry.proposed_change.why if entry.proposed_change else None,
+            how=entry.proposed_change.how if entry.proposed_change else None,
+            trace_id=event.trace_id,
+        ):
+            log.info(
+                "compaction_quality_proposal_suppressed_by_read_before_emit",
+                fingerprint=event.fingerprint,
+                trace_id=event.trace_id,
+            )
+            return
 
         _manager.save_entry(entry)
         log.info(
@@ -792,17 +924,37 @@ async def _handle_graph_quality_anomaly(
         potential_implementation=None,
     )
 
-    _manager.save_entry(entry)
-    log.info(
-        "graph_quality_anomaly_captain_log_saved",
+    suppressed = await _read_before_emit_suppresses(
+        source=ProposalSource.STATISTICAL_DETECTOR.value,
+        category=category.value,
+        scope=ChangeScope.SECOND_BRAIN.value,
         fingerprint=event.fingerprint,
-        anomaly_type=event.anomaly_type,
-        severity=event.severity,
-        observation_date=event.observation_date,
+        what=entry.proposed_change.what if entry.proposed_change else "",
+        why=entry.proposed_change.why if entry.proposed_change else None,
+        how=entry.proposed_change.how if entry.proposed_change else None,
         trace_id=event.trace_id,
     )
+    if suppressed:
+        log.info(
+            "graph_quality_anomaly_proposal_suppressed_by_read_before_emit",
+            fingerprint=event.fingerprint,
+            trace_id=event.trace_id,
+        )
+    else:
+        _manager.save_entry(entry)
+        log.info(
+            "graph_quality_anomaly_captain_log_saved",
+            fingerprint=event.fingerprint,
+            anomaly_type=event.anomaly_type,
+            severity=event.severity,
+            observation_date=event.observation_date,
+            trace_id=event.trace_id,
+        )
 
-    # Phase 2 governance: high-severity → ModeAdvisoryEvent (flag-gated, default off)
+    # Phase 2 governance: high-severity → ModeAdvisoryEvent (flag-gated, default off).
+    # Fires regardless of read-before-emit suppression — the mode advisory is a live
+    # governance response to THIS anomaly occurring now, independent of whether a
+    # duplicate Captain's Log ticket-proposal was filed for it.
     if event.severity == "high" and cfg.graph_quality_governance_enabled:
         await _publish_mode_advisory(event)
 
@@ -919,6 +1071,23 @@ async def _handle_staleness_reviewed(
         expected_outcome=None,
         potential_implementation=None,
     )
+
+    if await _read_before_emit_suppresses(
+        source=ProposalSource.STATISTICAL_DETECTOR.value,
+        category=ChangeCategory.KNOWLEDGE_QUALITY.value,
+        scope=ChangeScope.SECOND_BRAIN.value,
+        fingerprint=event.fingerprint,
+        what=entry.proposed_change.what if entry.proposed_change else "",
+        why=entry.proposed_change.why if entry.proposed_change else None,
+        how=entry.proposed_change.how if entry.proposed_change else None,
+        trace_id=event.trace_id,
+    ):
+        log.info(
+            "staleness_review_proposal_suppressed_by_read_before_emit",
+            fingerprint=event.fingerprint,
+            trace_id=event.trace_id,
+        )
+        return
 
     _manager.save_entry(entry)
     log.info(

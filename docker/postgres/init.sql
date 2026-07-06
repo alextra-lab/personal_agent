@@ -461,10 +461,13 @@ CREATE TABLE IF NOT EXISTS sysgraph.proposal (
     why         TEXT,
     how         TEXT,
     seen_count  INTEGER NOT NULL DEFAULT 1,
+    scope       TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_sysgraph_proposal_source_category ON sysgraph.proposal(source, category);
+CREATE INDEX IF NOT EXISTS idx_sysgraph_proposal_source_category_scope
+    ON sysgraph.proposal(source, category, scope);
 
 CREATE TABLE IF NOT EXISTS sysgraph.stat (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),

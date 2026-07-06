@@ -1,6 +1,6 @@
 ---
 name: prime-worker
-description: Run once in a build / build2 / adr worker session. Self-identifies the stream from its worktree, arms its own 20m monitor loop (survives /clear, runs till session close — no double-arm), then becomes a pure PR-feedback monitor over its own open PR — self-fixing on a marked master bounce OR a red CI (ack → fix → make test → push → stop). It never resolves NEXT, never advises what to run, never merges, deploys, or clears — the orchestrator owns dispatch.
+description: Run on demand in a build / build2 / adr worker session to check its own open PR — a pure PR-feedback check that self-fixes on a marked master bounce OR a red CI (ack → fix → make test → push → stop). No polling loop (removed 2026-07-06 — it blew the prompt-cache TTL); the owner re-triggers it. It never resolves NEXT, never advises what to run, never merges, deploys, or clears — the orchestrator owns dispatch.
 ---
 
 # Prime a Worker Session (build / build2 / adr)
@@ -18,26 +18,25 @@ monitor **no longer resolves NEXT or advises the owner what to run** — that wa
 drift trap (two resolvers of the same NEXT). The orchestrator is dispatch-only and leaves master's
 role and both approval gates unchanged. See `docs/runbooks/dispatch-orchestrator.md`.
 
-**Run `/prime-worker` once** when you open a worker session (the orchestrated launch path arms this
-loop for you — see the build/adr skills). It arms its own **20m loop** (Step 2), a cron that
-**survives `/clear` and runs until the session is closed** — so you never type `/loop` and never
-re-arm. The same command works in all three worker sessions; this skill self-identifies from its
-worktree.
+**Run `/prime-worker` on demand** — once each time you want to check this worker's open PR (typically
+after master bounces it or CI changes). It does **not** arm a loop (removed 2026-07-06 — a 20-minute
+poll re-read the full session context past the 5-minute prompt-cache TTL every tick, spiking
+uncached-token cost). Re-run it to re-check. The same command works in all three worker sessions; this
+skill self-identifies from its worktree.
 
 ## Step 1 — Self-identify the stream from the worktree
 `git rev-parse --show-toplevel` → map the basename:
 - `…/worktrees/build`  → **Stream 1**
 - `…/worktrees/build2` → **Stream 2**
 - `…/worktrees/adrs`   → **adr** (the adr session is **Opus-only**)
-- **anything else** (primary `/opt/seshat`, `looptest`, `kibana`, …) → **STOP. Arm nothing. Output
-  nothing.** Not a worker session — do not act. (This gate runs *before* arming, so a stray
-  `/prime-worker` in master or a test worktree never leaves a loop behind.)
+- **anything else** (primary `/opt/seshat`, `looptest`, `kibana`, …) → **STOP. Do nothing. Output
+  nothing.** Not a worker session — do not act.
 
-## Step 2 — Arm the loop, once (idempotent — never double-arm)
-Only reached in a real worker session. Check `CronList` for an existing `/prime-worker` loop:
-- **already armed** (you ran this after a `/clear`, this *is* a loop tick, or the orchestrated build
-  entry armed it) → do **not** arm again; continue to Step 3.
-- **none** → arm `/loop 20m /prime-worker`, then continue to Step 3.
+## Step 2 — No loop (run on demand)
+This skill does **not** arm a `/loop` cron (removed 2026-07-06 — 20-minute polling blew the 5-minute
+prompt-cache TTL, spiking uncached-token cost). Run `/prime-worker` once per invocation: do the state
+check + self-fix (Step 3) a single time, then stop. If a stale `/prime-worker` cron survives from
+before this change, delete it (`CronList` → `CronDelete`). Continue to Step 3.
 
 ## Step 3 — Determine state from durable git/gh (never from conversation memory)
 Self-memory breaks the instant the session is `/clear`ed; git does not. `git fetch origin` (cheap —

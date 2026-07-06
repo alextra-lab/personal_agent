@@ -50,13 +50,11 @@ The GitHub integration automates only the PR transitions (PR opened → `In Revi
 `Awaiting Deploy` — retargeted 2026-07-04); the working session owns the In Progress transition,
 master owns Done.
 
-## 1.5 — Arm the PR-feedback monitor (idempotent — do this now, before writing)
-Arm the monitor loop **now**, before the ADR work — so under orchestrated dispatch (where the entry
-was `/adr <FRE-id>`, not `/prime-worker`) a watcher is running the PR once it opens. Check `CronList`
-for an existing `/prime-worker` loop:
-- **already armed** (a manual `/prime-worker`, a prior tick, or a re-entry) → do **not** arm again.
-- **none** → arm `/loop 20m /prime-worker`. It stays silent while the ADR is in flight and only acts
-  once there is an open PR (bounce / CI-red self-fix). It never double-arms.
+## 1.5 — (no monitor loop)
+Do **not** arm a `/loop` monitor. A 20-minute poll re-read the session context past the 5-minute
+prompt-cache TTL every tick → an uncached-token cost blowup (removed 2026-07-06). This ADR session
+does its work and **stops at PR**. If master bounces the PR or CI goes red, the **owner re-runs
+`/prime-worker` in this session** on demand to self-fix (its Step 3.2).
 
 ## 2 — Write the ADR
 Start from **`docs/architecture_decisions/ADR_TEMPLATE.md`** — the project ADR format (mirrors the

@@ -8,7 +8,7 @@ in test_launcher.py). They pin the acceptance-criteria invariants:
 
   AC1 — prime-worker no longer resolves NEXT / surfaces a dispatch card.
   AC2 — the self-fix path triggers on master-bounce OR CI-red (same shape).
-  AC4 — the build and adr skills arm the monitor loop idempotently.
+  AC4 — the build and adr skills do NOT arm a polling loop (removed 2026-07-06, FRE-822).
 """
 
 from __future__ import annotations
@@ -55,16 +55,19 @@ def test_self_fix_triggers_on_bounce_and_ci_red() -> None:
     assert "never merge" in text
 
 
-# --- AC4: build + adr arm the monitor loop idempotently --------------------
+# --- AC4: build + adr no longer arm a polling loop (FRE-822 cache-TTL fix) --
+# The 20m /prime-worker cron fired past the 5-min prompt-cache TTL every tick,
+# re-reading the full session context uncached. Removed — the owner triggers the
+# worker's PR-feedback check on demand (/prime-worker), same logic, no cron.
 
 
-def test_build_skill_arms_the_monitor_loop() -> None:
+def test_build_skill_arms_no_loop() -> None:
     text = _norm(_read("build/SKILL.md"))
-    assert "/loop 20m /prime-worker" in text
-    assert "cronlist" in text  # idempotent guard (no double-arm)
+    assert "/loop 20m /prime-worker" not in text  # no polling cron armed
+    assert "no monitor loop" in text  # on-demand: owner re-runs /prime-worker
 
 
-def test_adr_skill_arms_the_monitor_loop() -> None:
+def test_adr_skill_arms_no_loop() -> None:
     text = _norm(_read("adr/SKILL.md"))
-    assert "/loop 20m /prime-worker" in text
-    assert "cronlist" in text
+    assert "/loop 20m /prime-worker" not in text
+    assert "no monitor loop" in text

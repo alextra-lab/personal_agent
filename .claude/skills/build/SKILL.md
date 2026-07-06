@@ -34,13 +34,11 @@ automates only the PR transitions (PR opened → `In Review`, PR merged → `Awa
 2026-07-04); the session doing the work owns the In Progress transition; master owns the Done
 transition at the gate.
 
-## 1.5 — Arm the PR-feedback monitor (idempotent — do this now, before the build)
-Arm the monitor loop **now**, before the long build work — so if this build crashes mid-flight, a
-watcher is already running its own PR (under orchestrated dispatch the entry was `/build <FRE-id>`, not
-`/prime-worker`, so nothing else arms it). Check `CronList` for an existing `/prime-worker` loop:
-- **already armed** (a manual `/prime-worker`, a prior tick, or a re-entry) → do **not** arm again.
-- **none** → arm `/loop 20m /prime-worker`. It stays silent while this build is in flight (it sees
-  "Building") and only acts once there is an open PR (bounce / CI-red self-fix). It never double-arms.
+## 1.5 — (no monitor loop)
+Do **not** arm a `/loop` monitor. A 20-minute poll re-read the session context past the 5-minute
+prompt-cache TTL every tick → an uncached-token cost blowup (removed 2026-07-06). This build session
+just does its work and **stops at PR**. If master bounces the PR or CI goes red, the **owner re-runs
+`/prime-worker` in this session** on demand to self-fix (its Step 3.2).
 
 ## 2 — Scope
 Read ticket body + linked ADRs + specs. Summarize scope in 3–5 bullets. **Pull out the acceptance

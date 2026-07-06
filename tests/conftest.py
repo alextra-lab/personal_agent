@@ -18,6 +18,10 @@ import os
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("AGENT_NEO4J_URI", "bolt://localhost:7688")
 os.environ.setdefault("AGENT_ELASTICSEARCH_URL", "http://localhost:9201")
+# FRE-819: the ADR-0112 AC-1 owner-storage-allowlist guard fires whenever
+# substrate_profile=="private" (its default), regardless of environment — so the
+# test suite must declare a non-"private" profile to stay out of its scope.
+os.environ.setdefault("AGENT_SUBSTRATE_PROFILE", "test")
 # FRE-808: the app-under-test connects as the restricted, non-superuser
 # `seshat_app` role; admin/DDL fixtures (migration tests, full-init.sql parity)
 # use AGENT_DATABASE_ADMIN_URL (the `agent` superuser). Both point at the test

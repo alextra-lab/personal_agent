@@ -1133,6 +1133,61 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # ── Configurable substrate backends (ADR-0112 D3 / AC-2, FRE-816) ─────────
+    # The backend-selection seam: config/substrate.yaml declares, per profile,
+    # which backend every substrate component (postgres/neo4j/elasticsearch,
+    # embedder/reranker/slm, vector_index) resolves to; src/personal_agent/
+    # config/substrate.py resolves it. `substrate_profile` selects the active
+    # profile; the AGENT_MANAGED_* fields carry the `managed` profile's targets
+    # (optional — the owner's `private` default never needs them). All resolve
+    # through AppConfig so the resolver never reads os.environ directly.
+    substrate_profile: str = Field(
+        default="private",
+        description=(
+            "Active substrate-backend profile (ADR-0112 D3): one of the profiles "
+            "declared in config/substrate.yaml — 'private' (default, owner-controlled), "
+            "'managed', 'dev', 'test'. Selects each component's backend with no code change."
+        ),
+    )
+    managed_database_url: str | None = Field(
+        default=None,
+        description=(
+            "PostgreSQL URL for the `managed` substrate profile (ADR-0112 D3). "
+            "Unset by default — set only when running the managed profile."
+        ),
+        json_schema_extra={"secret": True},
+    )
+    managed_neo4j_uri: str | None = Field(
+        default=None,
+        description="Neo4j URI for the `managed` substrate profile (ADR-0112 D3). Unset by default.",
+        json_schema_extra={"secret": True},
+    )
+    managed_elasticsearch_url: str | None = Field(
+        default=None,
+        description=(
+            "Elasticsearch URL for the `managed` substrate profile (ADR-0112 D3). Unset by default."
+        ),
+        json_schema_extra={"secret": True},
+    )
+    managed_embedding_endpoint: str | None = Field(
+        default=None,
+        description=(
+            "Embedder endpoint for the `managed` substrate profile (ADR-0112 D3 — e.g. the "
+            "OVH AI Endpoints Qwen3-Embedding-8B base URL). Unset by default."
+        ),
+        json_schema_extra={"secret": True},
+    )
+    managed_reranker_endpoint: str | None = Field(
+        default=None,
+        description="Reranker endpoint for the `managed` substrate profile (ADR-0112 D3). Unset by default.",
+        json_schema_extra={"secret": True},
+    )
+    managed_slm_endpoint: str | None = Field(
+        default=None,
+        description="Harness-SLM endpoint for the `managed` substrate profile (ADR-0112 D3). Unset by default.",
+        json_schema_extra={"secret": True},
+    )
+
     # Cloud API secrets (model identity lives in config/models.yaml — ADR-0031)
     anthropic_api_key: str | None = Field(
         default=None,
@@ -2274,6 +2329,53 @@ def enforce_required_secrets(config: "AppConfig", *, root: Path | None = None) -
         )
 
 
+def _log_active_substrate_profile(config: "AppConfig") -> None:
+    """Log the declared substrate backends for the active profile (ADR-0112 / FRE-816).
+
+    Boot observability for the backend-selection seam: emits, at startup, which
+    profile is active and — per D3 component — its declared custody ``kind`` and
+    ``source``. Reads the manifest declaration only (via
+    ``config_guard.load_substrate_manifest``); it deliberately does NOT resolve
+    targets, so it stays free of the model-loader import chain that runs during
+    the settings-module partial-import window. Never logs a target *value* (a
+    ``managed_*`` URL may embed a credential). Non-fatal: any error warns, never
+    wedges boot.
+    """
+    try:
+        from personal_agent.config.config_guard import (  # noqa: PLC0415
+            load_substrate_manifest,
+            repo_root,
+        )
+
+        manifest = load_substrate_manifest(repo_root())
+        profiles = manifest.get("profiles")
+        rows = profiles.get(config.substrate_profile) if isinstance(profiles, dict) else None
+        if not isinstance(rows, dict):
+            log.warning(
+                "substrate_profile_undeclared",
+                substrate_profile=config.substrate_profile,
+            )
+            return
+        log.info(
+            "substrate_profile_active",
+            substrate_profile=config.substrate_profile,
+            backends={
+                component: {
+                    "kind": row.get("kind"),
+                    "source": row.get("source"),
+                }
+                for component, row in rows.items()
+                if isinstance(row, dict)
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 — boot observability must never down the service
+        log.warning(
+            "substrate_profile_log_failed",
+            substrate_profile=config.substrate_profile,
+            error=str(exc),
+        )
+
+
 _settings: AppConfig | None = None
 
 
@@ -2302,6 +2404,7 @@ def load_app_config() -> AppConfig:
     try:
         config = AppConfig()
         enforce_required_secrets(config)
+        _log_active_substrate_profile(config)
         log.info(
             "app_config_loaded",
             environment=config.environment.value,

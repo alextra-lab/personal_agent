@@ -1,0 +1,92 @@
+# config/substrate.yaml — ADR-0112 D3 / AC-2 backend-selection seam (FRE-816)
+#
+# The single declarative home for "which backend does each substrate component
+# use, per config profile?" — the axis neither config/deployment.yaml (model-
+# definition-file selection) nor config/profiles/*.yaml (per-session
+# ExecutionProfile: models/cost/delegation) represents. ADR-0112 D3 requires
+# every substrate component be pointable, by configuration profile, at a
+# local/self-hosted OR managed/certified backend with NO code change; this
+# manifest + src/personal_agent/config/substrate.py are that seam.
+#
+# ── Components (the D3 canonical set — every profile must declare ALL of them;
+#    an omission is exactly ADR-0112 AC-2's "fails if any D3-listed component is
+#    hardcoded/omitted", caught by config_guard.check_substrate_manifest) ──────
+#   postgres · neo4j · elasticsearch   → the persistent private stores (D1)
+#   embedder · reranker · slm          → the ephemeral-compute API endpoints (D2)
+#   vector_index                       → the search/vector index; rides the
+#                                        Neo4j entity_embedding index today
+#
+# ── source grammar (resolved by substrate.py; all resolve THROUGH AppConfig,
+#    never os.getenv) ───────────────────────────────────────────────────────────
+#   setting:<field>          getattr(settings, field)  — an AppConfig field
+#   model_endpoint:<role>    the `endpoint` of the active model-file's model-def
+#                            for <role> (config/models*.yaml, ADR-0031/0099)
+#   backed_by:<component>    this component rides another component's backend
+#                            (vector_index → neo4j) — resolves to that target
+#
+# ── kind ────────────────────────────────────────────────────────────────────
+#   local | managed  — the declared custody stance for the row. Consumed by the
+#   later AC-1 storage-allowlist guard and AC-3 managed-terms-gate; FRE-816 only
+#   records it (no enforcement of custody here).
+#
+# ── scope note (FRE-816 = AC-2 branch b) ────────────────────────────────────
+#   Only local backends are wired into serving paths today, so this ticket
+#   satisfies AC-2's config-test escape-hatch ("a second profile resolves
+#   through the same interface with no code edit"), NOT the "boots and serves
+#   under both profiles" branch. Rewiring serving paths to CONSUME resolve_
+#   substrate() is runtime adoption — the AC-5/AC-9 tickets. The `managed`
+#   profile's targets come from the optional AGENT_MANAGED_* fields (unset by
+#   default; the owner's `private` default never needs them).
+
+default_profile: private
+
+profiles:
+  # ── private (default): owner-controlled storage + reasonable-terms endpoints.
+  #    The custody win — "off the grid" where it counts (ADR-0112 D1/D2). Every
+  #    source mirrors exactly what the running app reads today, so the seam is a
+  #    faithful reflection of reality, not a parallel fiction.
+  private:
+    postgres:      { kind: local, source: "setting:database_url" }
+    neo4j:         { kind: local, source: "setting:neo4j_uri" }
+    elasticsearch: { kind: local, source: "setting:elasticsearch_url" }
+    embedder:      { kind: local, source: "model_endpoint:embedding" }
+    reranker:      { kind: local, source: "model_endpoint:reranker" }
+    slm:           { kind: local, source: "setting:llm_base_url" }
+    vector_index:  { kind: local, source: "backed_by:neo4j" }
+
+  # ── managed (opt-in): any operator needing compliance/SOTA managed substrate
+  #    selects it by config — same harness, no code change (ADR-0112 D3). Targets
+  #    live in the optional AGENT_MANAGED_* AppConfig fields (default None until
+  #    an operator sets them). A None target is a first-class "unconfigured
+  #    managed backend" state that the AC-1/AC-3 guards judge later — not here.
+  managed:
+    postgres:      { kind: managed, source: "setting:managed_database_url" }
+    neo4j:         { kind: managed, source: "setting:managed_neo4j_uri" }
+    elasticsearch: { kind: managed, source: "setting:managed_elasticsearch_url" }
+    embedder:      { kind: managed, source: "setting:managed_embedding_endpoint" }
+    reranker:      { kind: managed, source: "setting:managed_reranker_endpoint" }
+    slm:           { kind: managed, source: "setting:managed_slm_endpoint" }
+    vector_index:  { kind: managed, source: "backed_by:neo4j" }
+
+  # ── dev / test: local, disposable, isolated backends. FRE-816 establishes the
+  #    PROFILE MECHANISM only; full dev/test resource + data isolation (the
+  #    FRE-375 test stack on :7688/:9201/:5433, stubbed paid endpoints) is wired
+  #    and enforced by the AC-9 ticket. Sources are the same AppConfig fields as
+  #    `private` because under APP_ENV=test the FRE-375 conftest already points
+  #    those settings at the isolated test stack.
+  dev:
+    postgres:      { kind: local, source: "setting:database_url" }
+    neo4j:         { kind: local, source: "setting:neo4j_uri" }
+    elasticsearch: { kind: local, source: "setting:elasticsearch_url" }
+    embedder:      { kind: local, source: "model_endpoint:embedding" }
+    reranker:      { kind: local, source: "model_endpoint:reranker" }
+    slm:           { kind: local, source: "setting:llm_base_url" }
+    vector_index:  { kind: local, source: "backed_by:neo4j" }
+  test:
+    postgres:      { kind: local, source: "setting:database_url" }
+    neo4j:         { kind: local, source: "setting:neo4j_uri" }
+    elasticsearch: { kind: local, source: "setting:elasticsearch_url" }
+    embedder:      { kind: local, source: "model_endpoint:embedding" }
+    reranker:      { kind: local, source: "model_endpoint:reranker" }
+    slm:           { kind: local, source: "setting:llm_base_url" }
+    vector_index:  { kind: local, source: "backed_by:neo4j" }

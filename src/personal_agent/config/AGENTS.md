@@ -44,7 +44,9 @@ poll_interval = settings.brainstem_sensor_poll_interval_seconds
 ### Configuration Sources and Precedence
 
 1. **Environment variables** (highest priority) - from `.env` files or system env
-2. **YAML configuration files** - `config/governance/*.yaml`, `config/models.yaml`
+2. **YAML configuration files** - `config/governance/*.yaml`, `config/models.yaml`,
+   `config/substrate.yaml` (ADR-0112 substrate backend-selection seam — resolved by
+   `substrate.py`, validated by `config_guard.check_substrate_manifest`)
 3. **Default values** - hardcoded in `AppConfig` model
 
 **Precedence rule**: Environment variables > YAML files > Defaults

@@ -174,6 +174,168 @@ def load_deployment_manifest(root: Path) -> JSONDict:
     return _load_yaml(root / "config" / "deployment.yaml")
 
 
+# ── Substrate backend-selection seam (ADR-0112 D3 / AC-2, FRE-816) ────────────
+
+#: The D3 canonical substrate components every profile in ``config/substrate.yaml``
+#: must declare. A profile omitting any of these is exactly ADR-0112 AC-2's
+#: "fails if any D3-listed component is hardcoded/omitted" — an embedder-only
+#: seam, or one omitting the search/vector index, must fail the guard.
+REQUIRED_SUBSTRATE_COMPONENTS: frozenset[str] = frozenset(
+    {"postgres", "neo4j", "elasticsearch", "embedder", "reranker", "slm", "vector_index"}
+)
+
+#: The source-grammar prefixes a substrate row's ``source`` may use (see
+#: config/substrate.yaml + substrate.py). Kept here so the guard and the
+#: resolver agree on one vocabulary.
+_SUBSTRATE_SOURCE_KINDS: frozenset[str] = frozenset({"setting", "model_endpoint", "backed_by"})
+_SUBSTRATE_BACKEND_KINDS: frozenset[str] = frozenset({"local", "managed"})
+
+
+def load_substrate_manifest(root: Path) -> JSONDict:
+    """Load ``config/substrate.yaml`` under *root*, or ``{}`` if absent/empty."""
+    return _load_yaml(root / "config" / "substrate.yaml")
+
+
+def _appconfig_field_names() -> frozenset[str]:
+    """Every declared ``AppConfig`` field name (for ``setting:<field>`` validation)."""
+    from personal_agent.config.settings import AppConfig  # noqa: PLC0415 — avoid import cycle
+
+    return frozenset(AppConfig.model_fields.keys())
+
+
+def _check_substrate_row(
+    profile: str,
+    component: str,
+    row: object,
+    app_fields: frozenset[str],
+    matrix_roles: JSONDict,
+    declared_components: frozenset[str],
+) -> list[Finding]:
+    """Validate one ``(profile, component)`` row's ``kind`` + ``source`` reference."""
+    findings: list[Finding] = []
+    where = f"substrate profile '{profile}' component '{component}'"
+    if not isinstance(row, dict):
+        return [Finding("substrate_manifest_shape", "policy", f"{where}: not a mapping")]
+
+    kind = row.get("kind")
+    if kind not in _SUBSTRATE_BACKEND_KINDS:
+        findings.append(
+            Finding(
+                "substrate_manifest_shape",
+                "policy",
+                f"{where}: invalid kind {kind!r} (expected one of {sorted(_SUBSTRATE_BACKEND_KINDS)})",
+            )
+        )
+
+    source = row.get("source")
+    if not isinstance(source, str) or ":" not in source:
+        findings.append(
+            Finding(
+                "substrate_manifest_shape",
+                "policy",
+                f"{where}: source {source!r} must be '<kind>:<ref>' "
+                f"(kinds: {sorted(_SUBSTRATE_SOURCE_KINDS)})",
+            )
+        )
+        return findings
+
+    source_kind, ref = source.split(":", 1)
+    if source_kind not in _SUBSTRATE_SOURCE_KINDS:
+        findings.append(
+            Finding(
+                "substrate_manifest_shape",
+                "policy",
+                f"{where}: unknown source kind {source_kind!r} in {source!r}",
+            )
+        )
+    elif source_kind == "setting" and ref not in app_fields:
+        findings.append(
+            Finding(
+                "substrate_source_dangling",
+                "policy",
+                f"{where}: source {source!r} names AppConfig field {ref!r} which does not exist",
+            )
+        )
+    elif source_kind == "model_endpoint" and ref not in matrix_roles:
+        findings.append(
+            Finding(
+                "substrate_source_dangling",
+                "policy",
+                f"{where}: source {source!r} names model role {ref!r} which is not declared "
+                "in config/model_roles.yaml roles:",
+            )
+        )
+    elif source_kind == "backed_by" and ref not in declared_components:
+        findings.append(
+            Finding(
+                "substrate_source_dangling",
+                "policy",
+                f"{where}: source {source!r} references component {ref!r} which this "
+                "profile does not declare",
+            )
+        )
+    return findings
+
+
+def check_substrate_manifest(root: Path) -> list[Finding]:
+    """ADR-0112 AC-2 — every profile declares all D3 components; every source is well-formed.
+
+    A component **omitted** from a profile is exactly AC-2's failure mode ("fails
+    if any D3-listed component is hardcoded/omitted — an embedder-only seam, or
+    one omitting the search/vector index, must fail this"). Also validates each
+    row's ``kind`` and ``source`` reference so a malformed manifest is caught in
+    CI/pre-commit, not at boot. All findings are ``policy`` (block CI/pre-commit;
+    never wedge startup), consistent with the deployment-manifest checks.
+
+    A **missing** ``config/substrate.yaml`` yields no findings (a fixture/test
+    root legitimately has none) — mirroring the deployment-manifest checks.
+    """
+    manifest = load_substrate_manifest(root)
+    if not manifest:
+        return []
+
+    profiles = manifest.get("profiles")
+    if not isinstance(profiles, dict) or not profiles:
+        return [
+            Finding(
+                "substrate_manifest_shape",
+                "policy",
+                "config/substrate.yaml declares no non-empty 'profiles:' mapping",
+            )
+        ]
+
+    raw_roles = load_matrix(root).get("roles", {})
+    matrix_roles: JSONDict = raw_roles if isinstance(raw_roles, dict) else {}
+    app_fields = _appconfig_field_names()
+
+    findings: list[Finding] = []
+    for profile, rows in profiles.items():
+        if not isinstance(rows, dict):
+            findings.append(
+                Finding(
+                    "substrate_manifest_shape",
+                    "policy",
+                    f"substrate profile '{profile}' is not a mapping of components",
+                )
+            )
+            continue
+        declared = frozenset(rows.keys())
+        for component in sorted(REQUIRED_SUBSTRATE_COMPONENTS - declared):
+            findings.append(
+                Finding(
+                    "substrate_component_missing",
+                    "policy",
+                    f"substrate profile '{profile}' omits required component '{component}' "
+                    "(ADR-0112 AC-2 — every D3 component must be selectable by profile)",
+                )
+            )
+        for component, row in rows.items():
+            findings.extend(
+                _check_substrate_row(profile, component, row, app_fields, matrix_roles, declared)
+            )
+    return findings
+
+
 def model_config_path_for_profile(profile: str, manifest: JSONDict, root: Path) -> Path:
     """Resolve *profile*'s active model-definition file from the deployment manifest.
 
@@ -636,4 +798,5 @@ def run_all_checks(root: Path) -> list[Finding]:
     findings.extend(check_committed_secrets(root))
     findings.extend(check_deployment_manifest_internal_consistency(manifest))
     findings.extend(check_deployment_manifest_matches_compose(root, manifest))
+    findings.extend(check_substrate_manifest(root))
     return findings

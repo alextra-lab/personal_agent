@@ -118,6 +118,28 @@ class TestManagedUsesManagedFields:
         assert resolution.backends["postgres"].target is None
 
 
+class TestManagedEmbedderProfile:
+    """ADR-0112 AC-5/AC-6 (FRE-821): storage stays local, only embedder is managed."""
+
+    def test_embedder_resolves_managed(self, managed_settings: AppConfig) -> None:
+        resolution = resolve_substrate("managed_embedder", settings=managed_settings)
+        assert resolution.backends["embedder"].kind == "managed"
+        assert resolution.backends["embedder"].target == _MANAGED["managed_embedding_endpoint"]
+
+    @pytest.mark.parametrize("component", sorted(REQUIRED_SUBSTRATE_COMPONENTS - {"embedder"}))
+    def test_every_other_component_matches_private(
+        self, component: str, managed_settings: AppConfig
+    ) -> None:
+        private = resolve_substrate("private", settings=managed_settings)
+        managed_embedder = resolve_substrate("managed_embedder", settings=managed_settings)
+        assert managed_embedder.backends[component].kind == "local"
+        assert managed_embedder.backends[component].target == private.backends[component].target
+
+    def test_declares_all_d3_components(self, managed_settings: AppConfig) -> None:
+        resolution = resolve_substrate("managed_embedder", settings=managed_settings)
+        assert set(resolution.backends) >= REQUIRED_SUBSTRATE_COMPONENTS
+
+
 class TestSubstrateCli:
     def test_cli_prints_table(self, capsys: pytest.CaptureFixture[str]) -> None:
         exit_code = main(["--profile", "private"])

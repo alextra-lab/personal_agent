@@ -46,15 +46,17 @@ run yet — the default deployed profile is still `private` (local 0.6B).
    AGENT_LOCAL_FALLBACK_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-8B
    ```
 
-4. **Flip the profile and dimension together, in the same deploy** (splitting
-   these across two deploys would boot with a dimension/index mismatch):
+4. **Flip the profile:**
    ```
    AGENT_SUBSTRATE_PROFILE=managed_embedder
-   AGENT_EMBEDDING_DIMENSIONS=4096
    ```
-   `MemoryService.ensure_vector_index()` will drop/recreate `entity_embedding` at
-   the new width on boot — this is expected and coordinated with step 2's
-   re-embed, not an accident to guard against.
+   `AGENT_EMBEDDING_DIMENSIONS` stays at its default `1024` — that is the
+   measured MRL sweet spot for the 8B model (nDCG@5 peaks at 1024, beating
+   native 4096 — FRE-826), not a value you set to the 8B's native width. Since
+   the width is unchanged from what's already indexed,
+   `MemoryService.ensure_vector_index()` will **not** drop/recreate
+   `entity_embedding` on boot — the index shape stays put; only its *contents*
+   change, via step 2's re-embed.
 
 5. **Verify AC-6 live**, before removing the old container:
    ```bash
@@ -81,6 +83,7 @@ run yet — the default deployed profile is still `private` (local 0.6B).
 
 ## Rollback
 
-Revert `AGENT_SUBSTRATE_PROFILE` to `private` and `AGENT_EMBEDDING_DIMENSIONS`
-to `1024`, redeploy. Keep the old 0.6B container/image available until AC-5/AC-6
-are confirmed live — do not delete it in the same change that flips the profile.
+Revert `AGENT_SUBSTRATE_PROFILE` to `private`, redeploy (`AGENT_EMBEDDING_DIMENSIONS`
+needs no change — it never left its default `1024`). Keep the old 0.6B
+container/image available until AC-5/AC-6 are confirmed live — do not delete
+it in the same change that flips the profile.

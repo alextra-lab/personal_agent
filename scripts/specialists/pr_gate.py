@@ -26,7 +26,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess
 import uuid
 from collections.abc import Sequence
 from pathlib import Path
@@ -41,9 +40,14 @@ from scripts.specialists.harness import (
     Verdict,
     assemble_invocation,
     blocks_merge,
+    claude_headless_runner,
     load_template,
     run_specialist,
 )
+
+# ``claude_headless_runner`` is re-exported for backward compatibility: it moved
+# to the harness (shared by every specialist) but callers still import it here.
+__all__ = ["claude_headless_runner", "review_pr", "build_invocation", "fetch_pr_artifact"]
 
 # The fixed adversarial template this specialist runs from (harness-validated to
 # live under .claude/agents/, content-versioned into every verdict).
@@ -59,11 +63,6 @@ _ADR_TOKEN_FULL_RE = re.compile(r"\AADR-(\d{4})\Z")
 # ANSI/terminal control escape sequences, stripped from the dry-run print so a
 # dry-run of an untrusted artifact can never be a terminal-injection vector.
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
-
-# The default model for the live specialist run (Opus per ADR §6 — depth is
-# bought with Opus subagents, not by downgrading).
-DEFAULT_SPECIALIST_MODEL = "opus"
-DEFAULT_SPECIALIST_TIMEOUT_S = 300.0
 
 
 def _run_text(runner: CommandRunner, argv: Sequence[str]) -> str:
@@ -224,38 +223,6 @@ def review_pr(
         pr, runner, template_path=template_path, adr_override=adr_override, repo_root=repo_root
     )
     return run_specialist(inv, specialist_runner)
-
-
-def claude_headless_runner(
-    model: str = DEFAULT_SPECIALIST_MODEL, *, timeout_s: float = DEFAULT_SPECIALIST_TIMEOUT_S
-) -> SpecialistRunner:
-    """Build the production specialist runner — a fresh, stateless ``claude -p``.
-
-    No-tools is enforced at this boundary (``--allowed-tools`` with an empty
-    allowlist), not trusted to the template frontmatter — the reviewer needs no
-    tools because the artifact is already in its prompt.
-
-    Args:
-        model: The model to run (default Opus per ADR §6).
-        timeout_s: Wall-clock timeout for the review.
-
-    Returns:
-        A :data:`SpecialistRunner` that runs the invocation's prompt via ``claude
-        -p`` and returns its stdout.
-    """
-
-    def run(inv: SpecialistInvocation) -> str:
-        result = subprocess.run(  # noqa: S603 - argv is fixed; prompt goes via stdin, no shell
-            ["claude", "-p", "--model", model, "--allowed-tools", ""],  # noqa: S607
-            input=inv.prompt,
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            check=False,
-        )
-        return result.stdout
-
-    return run
 
 
 def _strip_ansi(text: str) -> str:

@@ -1,6 +1,6 @@
 # ADR-0113: Self-Driving Delivery Loop — Autonomous Actuation, Distributed & Human-Gated Judgment
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-07-07
 **Deciders:** Owner (autonomy posture — merge/deploy gates, send-keys boundary, staged rollout), adr session (Opus, design), Codex (adversarial design review)
 **Tags:** dev-process, orchestration, autonomy, claude-code, dispatch, review-gates, remote-control, FRE-828
@@ -464,6 +464,14 @@ Owner decisions: autonomous merge with a narrow sensitive-path carve-out; deploy
 tickets; staged rollout (shadow → graduated). Cost guard/alarm considered and withdrawn — subagent spawn
 is a native capability, and the only new autonomous vector (send-keys loop) is bounded by the debounced
 idempotent trigger ledger. Implementation tickets to follow under the FRE-828 umbrella.
+
+### 2026-07-07 - Accepted (master gate)
+**Changed By:** master session, FRE-828
+**Reason:** Merged via PR #423 (82509e0) after the master gate. The design was owner-ratified in the
+adr session; master verified the artifact (completeness, faithfulness to the ratified boundaries,
+non-negotiables intact) and merged. Accepted = the design is ratified; the ADR reaches Implemented only
+when the assembled loop is demonstrated end-to-end (the FRE-828 seam, still open). Implementation chain
+FRE-829–835 filed under the Build/ADR Dispatch Automation project — Needs Approval.
 
 ---
 

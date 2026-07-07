@@ -224,6 +224,41 @@ clearing mechanism yet — that is out of scope for FRE-829, tracked under FRE-8
 
 Override the path with `--ledger-file` (systemd unit unchanged — defaults are fine).
 
+### send-keys whitelist wrapper (FRE-831) — not yet wired into any live sender
+
+`scripts/dispatch/send_keys_whitelist.py` is the mechanically-enforced boundary ADR-0113 §2 calls
+for: a **non-LLM grammar parser + pane attestation** in front of `tmux send-keys`, so master's own
+future actuation toward workers cannot rationalize a free-form instruction into a whitelisted
+command. It is a self-contained library today — **neither `gating_watcher.py` nor any master skill
+calls it yet**; that consolidation is a follow-up ticket, kept separate so this module's own PR
+stayed one phase.
+
+**Closed grammar** — exactly `/build <1|2|FRE-<digits>>` and bare `/prime-worker`, nothing else.
+Matched with `str.fullmatch` over ASCII-only character classes (never the Unicode-permissive `\d`
+regex shorthand), so a lookalike digit, an embedded newline, or a trailing newline all fail
+outright — the grammar has no character class that admits them. **No `/master` entry, by design**:
+this wrapper targets *LLM-driven* actuation specifically (master deciding to poke a worker); the
+watcher's own `/master <PR#>` trigger is emitted by a dumb, contextless sensor, not an LLM, so it
+has no role here and keeps its existing crash-safety from the trigger ledger unchanged.
+
+**Pane attestation is command-role-aware, not just membership.** Every attested pane is derived from
+`launcher.topology_for` (`cc-build`, `cc-build2`, `cc-adrs`), never a hand-duplicated literal — but
+`/build` is only valid at a build pane (`cc-build`/`cc-build2`); `cc-adrs` runs `/adr`, not `/build`,
+so a `/build` sent there is refused even though `cc-adrs` is a real, known pane. `/prime-worker` is
+valid at any of the three.
+
+**A refusal never touches the ledger or `tmux` (ADR-0113 AC-10).** Grammar and pane checks both run
+before any side effect; a refused send is logged (`send_keys_whitelist_refused`, with the rejected
+text truncated to 200 characters — never logged unbounded, since a free-form send is exactly the
+attacker-controlled-content case). An approved send is ledger-integrated: `record_pending` →
+`mark_send_started` → `tmux send-keys` → `mark_sent`/`mark_consumed` (or `mark_consumed` alone if
+the target pane is busy/absent) — the same ledger-before-send/consumed-after shape
+`gating_watcher.run_once` already uses, so a future caller inherits crash-safety for free instead of
+re-deriving it. `event_id` is a caller-supplied idempotency key (mirror the watcher's own
+`<kind>:<pr>:<sha>` pattern); the wrapper trusts it rather than deriving one, since it has no
+visibility into the caller's own dedup-relevant context. An optional `kill_switch_engaged` predicate
+provides defense-in-depth on top of (not instead of) a caller's own tick-level kill-switch check.
+
 ## Production cutover — settled posture + phased checklist
 
 **Settled autonomy posture (owner, 2026-07-05 — do NOT re-open).** An orchestrated

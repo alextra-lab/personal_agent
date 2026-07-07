@@ -188,6 +188,42 @@ sudo systemctl enable --now seshat-gating-watcher
 Preflight by hand: `/opt/seshat/.venv/bin/python -m scripts.dispatch.gating_watcher --preflight`
 (checks the Linear key + gh; exit 0 when both are present).
 
+### Trigger ledger (FRE-829) — durable, crash-safe actuation
+
+Every actual `tmux send-keys` the watcher performs is also recorded in the **trigger ledger**
+(`scripts/dispatch/trigger_ledger.py`, state at `telemetry/trigger_ledger.json`) — the durable
+substrate ADR-0113's self-driving delivery loop builds on. This is separate from the dedup TTLs
+above: the TTL dict decides *whether to attempt* an actuation this tick; the ledger makes the
+*attempt itself* crash-safe and gives a future `prime-master` (FRE-832) a durable source to
+reconstruct in-flight actuation from after a `/clear` — never from conversation.
+
+**Write ordering — ledger-before-send, consumed-after.** For each actuation: write a pending entry
+→ mark send-started → call `tmux send-keys` → mark sent (only after a confirmed `"sent"` result) →
+mark consumed. A crash lands in one of three distinguishable places, each handled differently:
+
+- **Never attempted** (no send-started marker) → safe to retry — the next tick's `reconcile()`
+  resends it and closes it out. Exactly one net actuation.
+- **Ambiguous, crashed mid-send** (send-started marked, but never confirmed sent) → *never*
+  auto-retried (a blind replay here could double-send a not-fully-idempotent action) — surfaced in
+  the ledger (`surfaced_at` set) for owner intervention instead.
+- **Known sent** (confirmed before the crash) → the next tick just closes the bookkeeping; never
+  replayed.
+
+A busy/absent target (the existing injection-safety skip) is recorded as **abandoned**, not
+ambiguous — it is immediately eligible for a fresh attempt next tick, same as before this ticket.
+
+**Reconciliation runs every tick**, immediately after the kill-switch check and before any new
+board decision — so "restart" and "the tick after a crash" are the same code path. Duplicate or
+replayed events dedupe against the ledger itself (folding in the trigger's own TTL window), so a
+lost write to the TTL dict above can never cause a same-tick double-send.
+
+**Retention.** `--ledger-retention-days` (default 7) prunes only *consumed* entries past that age
+or whose PR has closed. An unconsumed entry — pending or surfaced — is **never** pruned regardless
+of age; a `surfaced_at` entry sits in the ledger file until an owner clears it (no automated
+clearing mechanism yet — that is out of scope for FRE-829, tracked under FRE-832).
+
+Override the path with `--ledger-file` (systemd unit unchanged — defaults are fine).
+
 ## Production cutover — settled posture + phased checklist
 
 **Settled autonomy posture (owner, 2026-07-05 — do NOT re-open).** An orchestrated

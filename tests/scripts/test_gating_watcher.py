@@ -12,6 +12,11 @@ Covers the ticket's acceptance criteria:
   AC-4 no LLM context (import-purity)
   AC-5 injection safety (existing + idle session only)
   AC-6 continuity (never `claude -p`; actuation is `tmux send-keys` only)
+
+Also covers FRE-829's wiring of the durable trigger ledger into `run_once`
+(the ledger's own crash/dedup semantics are unit-tested independently in
+`test_trigger_ledger.py`) — this file only proves the *integration points*:
+where a ledger entry is written, abandoned, or left untouched.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ from scripts.dispatch.gating_watcher import (
     session_for_labels,
     session_is_idle,
 )
+from scripts.dispatch.trigger_ledger import snapshot_unconsumed
 
 _MODULE_PATH = Path("scripts/dispatch/gating_watcher.py")
 
@@ -589,3 +595,175 @@ def test_module_imports_no_llm_client() -> None:
         name for name in imported for bad in forbidden if name == bad or name.startswith(bad + ".")
     }
     assert offending == set(), f"watcher must import no LLM client, found: {offending}"
+
+
+# --- FRE-829: trigger ledger wiring -----------------------------------------
+
+
+def test_run_once_ledger_records_and_consumes_on_successful_send() -> None:
+    ledger: dict = {}
+    runner = _idle_runner()
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [_pr()],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    unconsumed = snapshot_unconsumed(ledger)
+    assert unconsumed == ()  # fully closed out
+    entry = ledger["master:412:abc1234def5678"]
+    assert entry.sent_at is not None
+    assert entry.consumed_at is not None
+
+
+def test_run_once_ledger_untouched_for_idle_pr() -> None:
+    ledger: dict = {}
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [_pr(ci="pending")],
+        session_resolver=_no_session,
+        runner=_idle_runner(),
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    assert ledger == {}
+
+
+def test_run_once_ledger_untouched_in_dry_run() -> None:
+    ledger: dict = {}
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [_pr()],
+        session_resolver=_no_session,
+        runner=_idle_runner(),
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=False,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    assert ledger == {}
+
+
+def test_run_once_ledger_untouched_for_unroutable_worker() -> None:
+    pr = _pr(comment_bodies=("## Master gate — BOUNCE",))
+    ledger: dict = {}
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [pr],
+        session_resolver=_no_session,  # unroutable
+        runner=_idle_runner(),
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    assert ledger == {}
+
+
+def test_run_once_ledger_abandoned_on_busy_session() -> None:
+    runner = _RecordingRunner(
+        {
+            ("tmux", "has-session"): _FakeRunResult(returncode=0),
+            ("tmux", "capture-pane"): _FakeRunResult(returncode=0, stdout=_BUSY_PANE),
+        }
+    )
+    ledger: dict = {}
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [_pr()],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    entry = ledger["master:412:abc1234def5678"]
+    assert entry.sent_at is None  # never actually sent
+    assert entry.consumed_at is not None  # abandoned -- eligible for a fresh attempt
+
+
+def test_run_once_reconciles_pending_ledger_entry_before_new_decisions() -> None:
+    # Seed a ledger entry representing a crash right after ledger-write (no
+    # send ever attempted) -- run_once must reconcile it (complete-exactly-once)
+    # before evaluating any new board state, even when the board has no
+    # matching PR this tick.
+    from scripts.dispatch.trigger_ledger import record_pending
+
+    seeded, _ = record_pending(
+        {},
+        event_id="master:999:deadbeef",
+        source="master-ready",
+        target_pane="cc-master",
+        ticket="999",
+        command="/master 999",
+        preconditions={"head_sha": "deadbeef"},
+        now=50.0,
+        ttl_s=600.0,
+    )
+    runner = _idle_runner()
+    ledger = dict(seeded)
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [],  # nothing new this tick
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    sends = [c for c in runner.calls if c[:2] == ("tmux", "send-keys")]
+    assert ("tmux", "send-keys", "-t", "cc-master", "-l", "/master 999") in sends
+    assert ledger["master:999:deadbeef"].consumed_at is not None
+
+
+def test_run_once_kill_switch_skips_ledger_reconcile_too() -> None:
+    from scripts.dispatch.trigger_ledger import record_pending
+
+    seeded, _ = record_pending(
+        {},
+        event_id="master:999:deadbeef",
+        source="master-ready",
+        target_pane="cc-master",
+        ticket="999",
+        command="/master 999",
+        preconditions={"head_sha": "deadbeef"},
+        now=50.0,
+        ttl_s=600.0,
+    )
+    ledger = dict(seeded)
+    runner = _idle_runner()
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [_pr()],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        kill_switch_engaged=lambda: True,
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    assert runner.calls == []
+    assert ledger["master:999:deadbeef"].consumed_at is None  # untouched -- not reconciled

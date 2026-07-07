@@ -1147,7 +1147,9 @@ class AppConfig(BaseSettings):
         description=(
             "Active substrate-backend profile (ADR-0112 D3): one of the profiles "
             "declared in config/substrate.yaml — 'private' (default, owner-controlled), "
-            "'managed', 'dev', 'test'. Selects each component's backend with no code change."
+            "'managed' (all components managed), 'managed_embedder' (storage stays local; "
+            "only the embedder is managed — ADR-0112 AC-5/AC-6, FRE-821), 'dev', 'test'. "
+            "Selects each component's backend with no code change."
         ),
     )
     managed_database_url: str | None = Field(
@@ -1177,6 +1179,38 @@ class AppConfig(BaseSettings):
             "OVH AI Endpoints Qwen3-Embedding-8B base URL). Unset by default."
         ),
         json_schema_extra={"secret": True},
+    )
+    managed_embedding_token: str | None = Field(
+        default=None,
+        description=(
+            "Bearer token for the managed embedder endpoint (ADR-0112 AC-5/AC-6, FRE-821 — "
+            "e.g. the OVH AI Endpoints API token). Unset by default."
+        ),
+        json_schema_extra={"secret": True},
+    )
+    managed_embedding_model: str = Field(
+        default="Qwen3-Embedding-8B",
+        description=(
+            "Model id sent to the managed embedder endpoint (ADR-0112 AC-5/AC-6, FRE-821). "
+            "Must name the same weights revision as local_fallback_embedding_model — the "
+            "config_guard identity check enforces this."
+        ),
+    )
+    local_fallback_embedding_endpoint: str | None = Field(
+        default=None,
+        description=(
+            "Same-model local fallback embedder endpoint (ADR-0112 D4/AC-6, FRE-821) — used "
+            "only when the `managed_embedder` substrate profile's managed call fails. Unset "
+            "by default (no fallback attempted until an operator provisions one)."
+        ),
+    )
+    local_fallback_embedding_model: str = Field(
+        default="Qwen/Qwen3-Embedding-8B",
+        description=(
+            "Model id requested from the local fallback embedder endpoint (ADR-0112 AC-6, "
+            "FRE-821). Must name the same weights revision as managed_embedding_model — the "
+            "config_guard identity check enforces this."
+        ),
     )
     managed_reranker_endpoint: str | None = Field(
         default=None,

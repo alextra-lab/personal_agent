@@ -28,9 +28,12 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import yaml  # type: ignore[import-untyped]
+
+if TYPE_CHECKING:
+    from personal_agent.config.settings import AppConfig
 
 # model_loader.py imports from this module (resolve_role_model_key, ADR-0099
 # D1 stage 2) — this module must never import model_loader.py back, or that
@@ -561,6 +564,52 @@ def check_committed_secrets(root: Path) -> list[Finding]:
     return findings
 
 
+def check_embedding_fallback_identity(settings: AppConfig | None = None) -> list[Finding]:
+    """ADR-0112 AC-6 (FRE-821) — managed + local-fallback embedder configs pin the same revision.
+
+    Strips an optional provider prefix (e.g. ``"Qwen/"``) from either side, then
+    requires an **exact, case-sensitive** match of what remains — a fuzzy or
+    substring comparison would not actually prove "same weights revision" (AC-6's
+    bar). Output dimension and normalization/pooling are not checked here: both
+    sides share the single ``embedding_dimensions`` request parameter by
+    construction (no second field to drift), and pooling is a container command-
+    line flag, not an AppConfig field — attested manually in the deploy runbook
+    and cross-checked live by the probe script's rank-order sanity check.
+
+    Args:
+        settings: The ``AppConfig`` to compare. ``None`` constructs a fresh
+            default instance (mirrors the other checks reading from the
+            committed repo state, not a live singleton).
+
+    Returns:
+        A single-element list with one ``policy`` finding if the two model ids
+        name different revisions, else an empty list.
+    """
+    from personal_agent.config.settings import AppConfig  # noqa: PLC0415 — avoid import cycle
+
+    if settings is None:
+        settings = AppConfig()
+
+    managed = settings.managed_embedding_model
+    local = settings.local_fallback_embedding_model
+    if _strip_provider_prefix(managed) == _strip_provider_prefix(local):
+        return []
+    return [
+        Finding(
+            "embedding_fallback_identity_mismatch",
+            "policy",
+            f"managed_embedding_model {managed!r} and local_fallback_embedding_model "
+            f"{local!r} do not name the same weights revision (ADR-0112 AC-6 requires "
+            "an identical model on both sides for a same-space failover)",
+        )
+    ]
+
+
+def _strip_provider_prefix(model_id: str) -> str:
+    """Strip a leading ``'<org>/'`` provider prefix (e.g. ``'Qwen/'``), if present."""
+    return model_id.split("/", 1)[1] if "/" in model_id else model_id
+
+
 def check_matrix_shape(matrix: JSONDict) -> list[Finding]:
     """A role's declared keys must match its own ``divergence`` value (FRE-650).
 
@@ -799,4 +848,5 @@ def run_all_checks(root: Path) -> list[Finding]:
     findings.extend(check_deployment_manifest_internal_consistency(manifest))
     findings.extend(check_deployment_manifest_matches_compose(root, manifest))
     findings.extend(check_substrate_manifest(root))
+    findings.extend(check_embedding_fallback_identity())
     return findings

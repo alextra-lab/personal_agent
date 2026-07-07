@@ -15,11 +15,13 @@ from personal_agent.config.config_guard import (
     _normalize_container_model_config_path,
     check_deployment_manifest_internal_consistency,
     check_deployment_manifest_matches_compose,
+    check_embedding_fallback_identity,
     check_matrix_shape,
     load_deployment_manifest,
     load_matrix,
     run_all_checks,
 )
+from personal_agent.config.settings import AppConfig
 
 _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -205,6 +207,48 @@ class TestDeploymentManifestMatchesCompose:
         assert findings == []
 
     def test_run_all_checks_includes_deployment_checks_on_real_repo(self) -> None:
+        assert run_all_checks(_REPO_ROOT) == []
+
+
+class TestEmbeddingFallbackIdentity:
+    """ADR-0112 AC-6 (FRE-821) — managed + local-fallback embedder configs must pin
+    the same weights revision (exact match after an optional 'Qwen/'-style provider
+    prefix is stripped from either side) — not a fuzzy/substring comparison.
+    """
+
+    def test_default_pairing_matches(self) -> None:
+        assert check_embedding_fallback_identity(AppConfig()) == []
+
+    def test_mismatched_revision_is_flagged(self) -> None:
+        settings = AppConfig(
+            managed_embedding_model="Qwen3-Embedding-8B",
+            local_fallback_embedding_model="Qwen/Qwen3-Embedding-0.6B",
+        )
+        findings = check_embedding_fallback_identity(settings)
+        assert len(findings) == 1
+        assert findings[0].check == "embedding_fallback_identity_mismatch"
+        assert findings[0].severity == "policy"
+        assert "Qwen3-Embedding-8B" in findings[0].message
+        assert "Qwen3-Embedding-0.6B" in findings[0].message
+
+    def test_prefix_only_difference_is_not_flagged(self) -> None:
+        settings = AppConfig(
+            managed_embedding_model="Qwen3-Embedding-8B",
+            local_fallback_embedding_model="Qwen/Qwen3-Embedding-8B",
+        )
+        assert check_embedding_fallback_identity(settings) == []
+
+    def test_case_sensitive_mismatch_is_flagged(self) -> None:
+        # Exact match, not fuzzy — a case difference is a real revision question,
+        # not something to silently accept.
+        settings = AppConfig(
+            managed_embedding_model="qwen3-embedding-8b",
+            local_fallback_embedding_model="Qwen3-Embedding-8B",
+        )
+        findings = check_embedding_fallback_identity(settings)
+        assert len(findings) == 1
+
+    def test_run_all_checks_includes_identity_check_on_real_repo(self) -> None:
         assert run_all_checks(_REPO_ROOT) == []
 
 

@@ -68,6 +68,23 @@ profiles:
     slm:           { kind: managed, source: "setting:managed_slm_endpoint" }
     vector_index:  { kind: managed, source: "backed_by:neo4j" }
 
+  # ── managed_embedder (opt-in, ADR-0112 AC-5/AC-6, FRE-821): the actual
+  #    "owner-controlled storage + reasonable-terms API endpoint" combination
+  #    D3's `private` prose describes — every component local/owned (identical to
+  #    `private`) except the embedder, which points at the OVH AI Endpoints
+  #    Qwen3-Embedding-8B managed endpoint (ADR-0112 D4's chosen spine). Distinct
+  #    from `managed` above, which also moves storage to managed backends —
+  #    ADR-0112 D5 keeps stores on the VPS, so embedder adoption must not ride
+  #    the all-managed profile.
+  managed_embedder:
+    postgres:      { kind: local, source: "setting:database_url" }
+    neo4j:         { kind: local, source: "setting:neo4j_uri" }
+    elasticsearch: { kind: local, source: "setting:elasticsearch_url" }
+    embedder:      { kind: managed, source: "setting:managed_embedding_endpoint" }
+    reranker:      { kind: local, source: "model_endpoint:reranker" }
+    slm:           { kind: local, source: "setting:llm_base_url" }
+    vector_index:  { kind: local, source: "backed_by:neo4j" }
+
   # ── dev / test: local, disposable, isolated backends. FRE-816 establishes the
   #    PROFILE MECHANISM only; full dev/test resource + data isolation (the
   #    FRE-375 test stack on :7688/:9201/:5433, stubbed paid endpoints) is wired

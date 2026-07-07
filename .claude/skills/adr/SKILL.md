@@ -35,9 +35,31 @@ overrides the queue. If the queue is empty or ambiguous, STOP and ask master.
    - `git branch -d <merged-adr-branch>`
    - `git push origin --delete <merged-adr-branch>`
 
-## 1 — Discuss first
-Collaborate with the owner on the decision. Do NOT write any file until the decision is settled
-(discussion-mode default). **adr dev is always tracked by a Linear ticket** (same as build) — dispatch
+## 1 — Discuss FIRST — genuinely, with the owner (hard gate, not a formality)
+
+**This is the load-bearing step. Violating it is the single worst failure of this skill.**
+
+The anti-pattern that is FORBIDDEN (it happened on FRE-809 and the owner rejected the ADR outright):
+*read the ticket → ask 2–3 clarifying questions → immediately write the ADR and open the PR.* That is
+NOT discussion. "Three questions and voilà, a PR and an ADR" is exactly what must never happen.
+
+What discussion actually means here — you are ideating WITH the owner, as a peer, before a single
+file is written:
+- **Open by laying out the decision and the real tension** — what's genuinely hard or contested about it,
+  not a checklist of clarifications.
+- **Weigh pros and cons out loud, together.** Present the alternatives (the ADR needs ≥2 anyway) and
+  argue them — surface trade-offs, name what you'd reject and why, and invite the owner to push back.
+- **Expect multiple rounds of back-and-forth.** The owner will challenge, add constraints, redirect,
+  and ideate. Follow their lead; change your position when they're right; defend it when you have
+  reason. This is a conversation, possibly a long one — not an interview.
+- **Do NOT write ANY file, and do NOT open a PR, until the owner EXPLICITLY signals the design is
+  settled** (e.g. "write it up", "draft it now"). Absent that explicit go, you are still discussing.
+  If unsure whether they've said go, ask — never assume.
+
+Only after that explicit go do you proceed to Step 2 (write). The discussion is the ADR's real work;
+the document just records a decision you and the owner reached together.
+
+**adr dev is always tracked by a Linear ticket** (same as build) — dispatch
 resolves from Linear (`Approved` + `stream:adr` label), and `prime-worker` monitors the same queue, so
 untracked ADR work is invisible to the loop. Therefore:
 - If an ADR umbrella ticket already exists (e.g. FRE-582), **set it → In Progress** now

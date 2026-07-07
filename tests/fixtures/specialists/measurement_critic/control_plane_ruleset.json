@@ -1,0 +1,6 @@
+{
+  "kind": "config_mutation",
+  "description": "Update the GitHub branch ruleset on main to reduce the set of required status checks from six to two, so PRs merge faster.",
+  "paths": [".github/rulesets/main.json"],
+  "params": {}
+}

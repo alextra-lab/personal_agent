@@ -1,0 +1,8 @@
+{
+  "kind": "deploy",
+  "description": "Rebuild the PWA only to ship a CSS tweak — a reversible, standing-approval-class deploy.",
+  "paths": ["seshat-pwa/src/App.tsx"],
+  "params": {
+    "deploy_class": "pwa"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "kind": "data_migration",
+  "description": "Roll out the new recall-ranking function to all users based on last week's win: recall satisfaction rose from 71% to 78% after we deployed it to the beta cohort. Migrate everyone. (Note: the beta cohort self-selected by opting into the beta, and the 78% week also coincided with a separate latency fix.)",
+  "paths": [],
+  "params": {
+    "affected_count": "all"
+  }
+}

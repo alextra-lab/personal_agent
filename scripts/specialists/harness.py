@@ -42,6 +42,7 @@ import dataclasses
 import hashlib
 import json
 import re
+import subprocess
 import unicodedata
 from collections.abc import Callable
 from pathlib import Path
@@ -479,3 +480,45 @@ def merge_allowed(
     if verdict.decision == "APPROVE":
         return True
     return clearance is not None and verifier(clearance)
+
+
+# --- production specialist runner (shared by every specialist) -------------
+
+# The default model for a live specialist run (Opus per ADR §6 — depth is bought
+# with Opus subagents, not by downgrading).
+DEFAULT_SPECIALIST_MODEL = "opus"
+DEFAULT_SPECIALIST_TIMEOUT_S = 300.0
+
+
+def claude_headless_runner(
+    model: str = DEFAULT_SPECIALIST_MODEL, *, timeout_s: float = DEFAULT_SPECIALIST_TIMEOUT_S
+) -> SpecialistRunner:
+    """Build the production specialist runner — a fresh, stateless ``claude -p``.
+
+    Generic harness infra: it runs any :class:`SpecialistInvocation` (the PR-gate
+    reviewer, the measurement critic, …). No-tools is enforced at this boundary
+    (``--allowed-tools`` with an empty allowlist), not trusted to the template
+    frontmatter — a specialist needs no tools because its artifact is already in
+    the prompt.
+
+    Args:
+        model: The model to run (default Opus per ADR §6).
+        timeout_s: Wall-clock timeout for the run.
+
+    Returns:
+        A :data:`SpecialistRunner` that runs the invocation's prompt via ``claude
+        -p`` and returns its stdout.
+    """
+
+    def run(inv: SpecialistInvocation) -> str:
+        result = subprocess.run(  # noqa: S603 - argv is fixed; prompt goes via stdin, no shell
+            ["claude", "-p", "--model", model, "--allowed-tools", ""],  # noqa: S607
+            input=inv.prompt,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+        )
+        return result.stdout
+
+    return run

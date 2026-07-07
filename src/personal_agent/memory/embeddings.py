@@ -32,7 +32,11 @@ logger = structlog.get_logger(__name__)
 
 
 class EmbeddingResponseError(Exception):
-    """Raised when a managed embeddings response is malformed (row-count mismatch).
+    """Raised when an embeddings response is malformed.
+
+    Covers a row-count mismatch, a per-vector length that doesn't match the
+    configured dimension, or a degenerate (zero) vector that can't be
+    renormalized.
 
     A dedicated exception (not ``SystemExit`` — the eval-harness pattern this is
     adapted from uses ``SystemExit`` to hard-abort a one-off script, which would
@@ -105,12 +109,14 @@ async def _generate_vectors(texts: list[str], settings: AppConfig) -> list[list[
         response = await _call_embeddings_api(texts=texts, model=model_id, endpoint=endpoint)
         return [[float(x) for x in d.embedding] for d in response.data]
 
+    dimensions = settings.embedding_dimensions
     try:
         return await _embed_managed(
             texts,
             settings.managed_embedding_endpoint or "",
             settings.managed_embedding_token or "",
             settings.managed_embedding_model,
+            dimensions=dimensions,
         )
     except Exception as exc:
         if not settings.local_fallback_embedding_endpoint:
@@ -125,7 +131,14 @@ async def _generate_vectors(texts: list[str], settings: AppConfig) -> list[list[
             model=settings.local_fallback_embedding_model,
             endpoint=settings.local_fallback_embedding_endpoint,
         )
-        return [[float(x) for x in d.embedding] for d in response.data]
+        # The same-model local server is not known to honor the OpenAI
+        # `dimensions` request param the way OVH does, so it answers at its
+        # native width (e.g. 4096 for the 8B model) -- truncate+renormalize
+        # client-side so the fallback lands in the same space as the managed
+        # path (ADR-0112 AC-6, FRE-826).
+        return [
+            _to_target_dimension([float(x) for x in d.embedding], dimensions) for d in response.data
+        ]
 
 
 async def generate_embedding(
@@ -196,11 +209,51 @@ async def generate_embeddings_batch(
         return [[0.0] * settings.embedding_dimensions for _ in texts]
 
 
+def _renormalize(vec: list[float]) -> list[float]:
+    """L2-renormalize *vec* to unit length.
+
+    MRL (Matryoshka) truncation — server- or client-side — yields a coherent
+    lower-dimensional embedding but does not preserve unit norm; every vector
+    this module returns must be unit length for cosine similarity to behave
+    as callers expect.
+
+    Raises:
+        EmbeddingResponseError: If vec is the zero vector (degenerate embedding).
+    """
+    norm = sum(x * x for x in vec) ** 0.5
+    if norm == 0.0:
+        raise EmbeddingResponseError("cannot renormalize a zero vector (degenerate embedding)")
+    return [x / norm for x in vec]
+
+
+def _to_target_dimension(vec: list[float], dimensions: int) -> list[float]:
+    """Truncate a native-width embedding to *dimensions* and renormalize.
+
+    Matryoshka-trained embedders (Qwen3-Embedding) produce vectors whose
+    leading N components are themselves a coherent lower-dimensional
+    embedding, so a too-long vector (e.g. a local-fallback server that
+    doesn't honor the OpenAI ``dimensions`` request param) is truncated then
+    renormalized — mirrors
+    ``scripts/eval/fre435_memory_recall/separation_report.truncate_renormalize``.
+    Fails loud on a too-short vector rather than silently zero-padding.
+
+    Raises:
+        EmbeddingResponseError: If vec is shorter than dimensions.
+    """
+    if len(vec) < dimensions:
+        raise EmbeddingResponseError(
+            f"embedding vector has {len(vec)} components, shorter than the configured "
+            f"{dimensions} -- refusing to zero-pad a degenerate response"
+        )
+    return _renormalize(vec[:dimensions])
+
+
 async def _embed_managed_batch(
     texts: list[str],
     base_url: str,
     token: str,
     model: str,
+    dimensions: int,
     client: httpx.AsyncClient,
 ) -> list[list[float]]:
     """One managed-embedder request for a batch within the endpoint's size limit.
@@ -209,8 +262,15 @@ async def _embed_managed_batch(
     before extraction — the response is never trusted to preserve input order
     (adapted from the FRE-817 corpus-A/B harness's already-tested OVH helper,
     ``scripts/eval/fre817_corpus_ab_embedder/corpus_ab.py::_embed_ovh_batch``).
+
+    Requests server-side MRL truncation to *dimensions* (OVH honors the OpenAI
+    ``dimensions`` param, verified live — FRE-826) and enforces the response
+    actually came back at that exact width: a mismatch means the endpoint
+    didn't honor the request, which is a server-side anomaly worth failing
+    loud on rather than silently re-truncating. Server-side MRL truncation
+    doesn't renormalize, so the result is L2-renormalized before returning.
     """
-    payload = {"model": model, "input": texts}
+    payload = {"model": model, "input": texts, "dimensions": dimensions}
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     url = f"{base_url.rstrip('/')}/embeddings"
     response = await client.post(url, json=payload, headers=headers)
@@ -222,7 +282,15 @@ async def _embed_managed_batch(
             "inputs -- truncated/expanded response, refusing to score"
         )
     ordered = sorted(rows, key=lambda row: row["index"])
-    return [[float(x) for x in row["embedding"]] for row in ordered]
+    vectors = [[float(x) for x in row["embedding"]] for row in ordered]
+    for vec in vectors:
+        if len(vec) != dimensions:
+            raise EmbeddingResponseError(
+                f"managed embeddings response returned a {len(vec)}-dim vector, expected "
+                f"{dimensions} (settings.embedding_dimensions) -- the endpoint did not "
+                "honor the requested width"
+            )
+    return [_renormalize(vec) for vec in vectors]
 
 
 async def _embed_managed(
@@ -232,6 +300,7 @@ async def _embed_managed(
     model: str,
     *,
     client: httpx.AsyncClient | None = None,
+    dimensions: int | None = None,
 ) -> list[list[float]]:
     """Embed via the managed embedder endpoint (OVH AI Endpoints Qwen3-Embedding-8B).
 
@@ -245,27 +314,35 @@ async def _embed_managed(
         token: Bearer token.
         model: Model id to request.
         client: Injected client for testing; a real one is opened when omitted.
+        dimensions: Target embedding width requested from the endpoint (server-side
+            MRL truncation, FRE-826). Defaults to ``settings.embedding_dimensions``
+            when omitted (live callers, e.g. the FRE-821 failover probe, don't
+            need to plumb it through explicitly).
 
     Returns:
-        Embedding vectors in input order.
+        Unit-length embedding vectors, each exactly ``dimensions`` components,
+        in input order.
 
     Raises:
         httpx.HTTPStatusError: On a non-2xx response.
-        EmbeddingResponseError: On a response whose row count doesn't match the
-            input count.
+        EmbeddingResponseError: On a response whose row count or per-vector
+            length doesn't match the request, or a degenerate (zero) vector.
     """
+    if dimensions is None:
+        dimensions = get_settings().embedding_dimensions
     chunks = [
         texts[start : start + _MANAGED_MAX_BATCH]
         for start in range(0, len(texts), _MANAGED_MAX_BATCH)
     ]
     if client is not None:
         results = [
-            await _embed_managed_batch(chunk, base_url, token, model, client) for chunk in chunks
+            await _embed_managed_batch(chunk, base_url, token, model, dimensions, client)
+            for chunk in chunks
         ]
     else:
         async with httpx.AsyncClient(timeout=120.0) as owned_client:
             results = [
-                await _embed_managed_batch(chunk, base_url, token, model, owned_client)
+                await _embed_managed_batch(chunk, base_url, token, model, dimensions, owned_client)
                 for chunk in chunks
             ]
     return [vec for batch in results for vec in batch]

@@ -73,22 +73,37 @@ async def _embed_both(
     fallback_model: str,
 ) -> tuple[list[list[float]], list[list[float]]]:
     """Embed *texts* through both the managed and local-fallback endpoints."""
+    from scripts.eval.fre435_memory_recall.separation_report import truncate_renormalize
+
+    from personal_agent.config import get_settings
     from personal_agent.memory.embeddings import _call_embeddings_api, _embed_managed
 
     base_url, token, model = _managed_credentials()
-    managed_task = _embed_managed(list(texts), base_url, token, model)
 
     prefix = (
         "Instruct: Given a query, retrieve relevant entities and passages\nQuery: "
         if mode == "query"
         else ""
     )
-    fallback_texts = [f"{prefix}{t}" for t in texts]
+    # Both endpoints must receive the SAME mode-prefixed texts -- `_embed_managed`
+    # requires already-prefixed input (its docstring), and comparing a
+    # query-mode fallback embedding against a document-mode managed embedding
+    # would silently corrupt the AC-6 cosine/overlap numbers (FRE-826).
+    prefixed_texts = [f"{prefix}{t}" for t in texts]
+    managed_task = _embed_managed(prefixed_texts, base_url, token, model)
+
     fallback_response = await _call_embeddings_api(
-        texts=fallback_texts, model=fallback_model, endpoint=fallback_endpoint
+        texts=prefixed_texts, model=fallback_model, endpoint=fallback_endpoint
     )
     managed_vecs = await managed_task
-    fallback_vecs = [[float(x) for x in d.embedding] for d in fallback_response.data]
+    # The local-fallback server is not known to honor the OpenAI `dimensions`
+    # request param, so it answers at its native width -- truncate+renormalize
+    # to the same configured width the managed path already returns (FRE-826).
+    dimensions = get_settings().embedding_dimensions
+    fallback_vecs = [
+        truncate_renormalize([float(x) for x in d.embedding], dimensions)
+        for d in fallback_response.data
+    ]
     return managed_vecs, fallback_vecs
 
 

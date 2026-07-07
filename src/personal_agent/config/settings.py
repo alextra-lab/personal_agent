@@ -521,7 +521,12 @@ class AppConfig(BaseSettings):
     # Only runtime knobs belong here.
     embedding_dimensions: int = Field(
         default=1024,
-        description="Embedding vector dimensions (1024 native for Qwen3-Embedding-0.6B)",
+        description=(
+            "Embedding vector dimensions: 1024 native for Qwen3-Embedding-0.6B "
+            "(local/private profile) and also the measured MRL sweet-spot for the "
+            "managed Qwen3-Embedding-8B profile (nDCG@5 peaks at 1024, beating "
+            "native 4096 -- FRE-826)"
+        ),
     )
     embedding_batch_size: int = Field(
         default=20,

@@ -136,6 +136,8 @@ async def test_stance_and_claim_are_wired_into_core(
 
     memory_service.assert_claim.assert_awaited_once()
     claim_arg = memory_service.assert_claim.await_args.args[0]
+    # ADR-0107 §2: the acting user's id is threaded through, not the owner sentinel.
+    assert memory_service.assert_claim.await_args.kwargs["user_id"] == capture.user_id
     assert isinstance(claim_arg, Claim)
     assert claim_arg.content == "The user's car lease ends in March."
     assert claim_arg.knowledge_class == "Personal"

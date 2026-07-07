@@ -1583,6 +1583,9 @@ class MemoryService:
 
         now = datetime.now(timezone.utc)
         # ADR-0074 identity threading: trace_id/session_id ride on the edge.
+        # ADR-0107 §3: deliberately still the is_owner sentinel, not user_id — a Stance
+        # is the harness owner's worldview toward World knowledge, not a per-User fact
+        # (unlike assert_claim, which ADR-0107 §2 moved to per-User resolution).
         query = (
             "MATCH (o:Person {is_owner: true})\n"
             "MATCH (c:Entity {name: $target})\n"
@@ -1647,9 +1650,10 @@ class MemoryService:
         self,
         claim: Claim,
         *,
+        user_id: UUID,
         trace_id: str | None = None,
     ) -> str:
-        """Assert a durable Claim under the owner, killing first-write-wins (ADR-0098 D2).
+        """Assert a durable Claim under the acting User, killing first-write-wins.
 
         Durable facts are living: a new Claim about the same fact-slot (matched by
         content-embedding similarity, :data:`CLAIM_MATCH_THRESHOLD`) either supersedes
@@ -1658,11 +1662,21 @@ class MemoryService:
         last-write-wins). Superseded Claims are retained with ``valid_to``/``invalid_at``/
         ``superseded_by`` set; the current Claim is the one with both temporal bounds null.
 
-        Owner-sentinel resolution and the full write are one atomic statement. Skipped
-        (logged) when the owner node is absent — a Claim is never written orphaned.
+        Resolves the subject Person by ``user_id`` (ADR-0107 §2), mirroring the
+        existing ``PARTICIPATED_IN`` precedent (ADR-0052) — never by name, and never
+        the ``is_owner`` sentinel, so every authenticated user's Personal claims
+        attach to their own Person node instead of silently collapsing onto the
+        owner. Matching/supersession is likewise scoped to that user's own current
+        Claims: a claim never matches or supersedes a different user's claim.
+
+        User-resolution and the full write are one atomic statement. Skipped
+        (logged) when the target Person node is absent — a Claim is never written
+        orphaned, and this method never provisions a Person (that is
+        ``get_or_provision_user_person``'s job, run earlier in the request).
 
         Args:
             claim: The Claim to assert (content, class, confidence, provenance).
+            user_id: The acting authenticated user's UUID (ADR-0107 §2).
             trace_id: Request/consolidation trace id for log correlation (ADR-0074 §I3).
 
         Returns:
@@ -1675,16 +1689,18 @@ class MemoryService:
         embedding = await generate_embedding(claim.content)
         now = datetime.now(timezone.utc)
         claim_id = str(uuid4())
+        user_id_str = str(user_id)
 
         try:
             async with self.driver.session() as session:
-                # Fetch the owner's current Claims (bounded set) for similarity matching.
+                # Fetch this user's current Claims (bounded set) for similarity matching.
                 current = await session.run(
-                    "MATCH (o:Person {is_owner: true})-[:HAS_FACT]->(cl:Claim)\n"
+                    "MATCH (o:Person {user_id: $user_id})-[:HAS_FACT]->(cl:Claim)\n"
                     "WHERE cl.valid_to IS NULL AND cl.invalid_at IS NULL\n"
                     "RETURN cl.claim_id AS claim_id, cl.content AS content,\n"
                     "       cl.confidence AS confidence, cl.observed_at AS observed_at,\n"
                     "       cl.embedding AS embedding, cl.facet AS facet",
+                    user_id=user_id_str,
                 )
                 candidates: list[ClaimRecord] = []
                 async for row in current:
@@ -1724,7 +1740,7 @@ class MemoryService:
                     new_invalid_at = now.isoformat()
 
                 write = await session.run(
-                    "MATCH (o:Person {is_owner: true})\n"
+                    "MATCH (o:Person {user_id: $user_id})\n"
                     "WITH o\n"
                     "CALL {\n"
                     "    WITH o\n"
@@ -1744,6 +1760,7 @@ class MemoryService:
                     "    observed_at: $observed_at, extracted_at: $extracted_at\n"
                     "})\n"
                     "RETURN cl.claim_id AS claim_id, invalidated",
+                    user_id=user_id_str,
                     supersede_ids=supersede_ids,
                     claim_id=claim_id,
                     content=claim.content,
@@ -1765,7 +1782,11 @@ class MemoryService:
                 )
                 record = await write.single()
                 if record is None:
-                    log.warning("assert_claim_skipped_no_owner", trace_id=trace_id)
+                    log.warning(
+                        "assert_claim_skipped_no_user_person",
+                        trace_id=trace_id,
+                        user_id=user_id_str,
+                    )
                     return ""
                 log.info(
                     "claim_asserted",

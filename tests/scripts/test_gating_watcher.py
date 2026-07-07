@@ -230,6 +230,41 @@ def test_session_idle_true_with_ellipsis_paren_prose_not_on_status_line() -> Non
     assert session_is_idle(pane) is True
 
 
+def test_session_idle_true_when_marker_words_appear_only_in_scrollback_prose() -> None:
+    # FRE-845: a completed turn's own response prose routinely contains
+    # phrasing that overlaps a busy-marker word ("Do you want...?", a
+    # numbered list, "Running the tests…", "Compacting the summary…"). The
+    # busy-marker substring check must be scoped to the pane's active/live
+    # region near the input box, not the whole scrollback -- otherwise a
+    # long-idle master with such prose still visible above the box is
+    # chronically mis-flagged busy (the live incident: gating_skip
+    # reason=busy every tick for ~3 hours with a master sitting idle).
+    prose = (
+        "Do you want me to proceed with the migration? Here is the plan:\n"
+        "1. Yes, run the migration script now.\n"
+        "2. No, and tell Claude to hold off until review.\n"
+        "The test suite finished Running… (all green)\n"
+        "Compacting the summary below for readability.\n"
+    )
+    padding = "\n".join(f"filler transcript line {i}" for i in range(40))
+    pane = prose + "\n" + padding + "\n" + _REAL_IDLE_PANE
+    assert session_is_idle(pane) is True
+
+
+def test_session_idle_false_on_tall_permission_prompt_near_bottom() -> None:
+    # A multi-option decision prompt can push its "Do you want"/"1. Yes" text
+    # a little higher than a single-line prompt -- still within the active
+    # region near the bottom of the pane, so it must still read busy.
+    prompt = (
+        "Do you want to proceed with this multi-file refactor?\n"
+        "❯ 1. Yes\n"
+        "  2. Yes, and don't ask again for file edits\n"
+        "  3. No, and tell Claude what to do differently\n"
+    )
+    pane = "some earlier transcript line\n" * 10 + prompt
+    assert session_is_idle(pane) is False
+
+
 # --- session_for_labels ----------------------------------------------------
 
 

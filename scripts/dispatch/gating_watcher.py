@@ -129,6 +129,16 @@ _BUSY_MARKERS: tuple[str, ...] = (
     "Compacting",
     "Running…",
 )
+# Trailing pane lines treated as the "active region" for the substring
+# busy-marker check (FRE-845). ``tmux capture-pane -p`` returns the whole
+# visible screen, and a completed turn's own response prose routinely
+# contains phrasing that overlaps a marker word (a question, a numbered
+# list, "Running the tests…"); substring-matching the markers over that
+# scrollback chronically flagged an idle master as busy. The live input box,
+# an in-progress spinner, and a genuine permission/decision prompt all render
+# within the pane's last lines, so restricting the marker check to this
+# trailing window is sufficient without parsing the box structure itself.
+_ACTIVE_REGION_LINES = 30
 
 # Dedup TTLs. master: a long self-heal re-arm; worker: a short in-flight lease
 # (long enough for prime-worker to post its ack, short enough to re-arm if it
@@ -347,13 +357,28 @@ def has_ci_red_ack(comment_bodies: Sequence[str], head_sha: str) -> bool:
     return False
 
 
+def _active_region(pane_text: str) -> str:
+    """Return the pane's trailing lines -- the live input/status area.
+
+    Args:
+        pane_text: The ``tmux capture-pane -p`` output.
+
+    Returns:
+        The last ``_ACTIVE_REGION_LINES`` lines (the whole text if shorter).
+    """
+    lines = pane_text.splitlines()
+    return "\n".join(lines[-_ACTIVE_REGION_LINES:])
+
+
 def session_is_idle(pane_text: str) -> bool:
     """Return whether a captured tmux pane looks idle at a Claude input prompt.
 
     Best-effort heuristic (fail-safe = not idle): idle iff the bare-caret input
     prompt line is present AND no busy marker (a tool-call-specific marker, an
     in-progress status spinner, or a pending permission/decision prompt) is
-    present.
+    present. The substring busy-marker check is scoped to the pane's trailing
+    active region (FRE-845) — response prose further up the scrollback that
+    happens to contain a marker word must not flag an otherwise-idle pane.
 
     Args:
         pane_text: The ``tmux capture-pane -p`` output.
@@ -362,7 +387,7 @@ def session_is_idle(pane_text: str) -> bool:
         ``True`` only when the pane both shows the input prompt and shows no
         busy marker.
     """
-    if any(marker in pane_text for marker in _BUSY_MARKERS):
+    if any(marker in _active_region(pane_text) for marker in _BUSY_MARKERS):
         return False
     if _BUSY_SPINNER_RE.search(pane_text):
         return False

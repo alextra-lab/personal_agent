@@ -70,6 +70,7 @@ from typing import Literal, Protocol
 
 import structlog
 
+from scripts.dispatch import trigger_ledger
 from scripts.dispatch.launcher import CommandRunner, subprocess_runner, topology_for
 from scripts.reconcile_board import load_linear_key
 
@@ -701,6 +702,8 @@ def run_once(
     kill_switch_engaged: Callable[[], bool] = lambda: False,
     master_ttl_s: float = DEFAULT_MASTER_TTL_S,
     worker_ttl_s: float = DEFAULT_WORKER_TTL_S,
+    ledger: trigger_ledger.Ledger | None = None,
+    ledger_persist: Callable[[trigger_ledger.Ledger], None] = lambda _l: None,
 ) -> dict[str, float]:
     """Run one watcher tick, mutating and returning the dedup store.
 
@@ -721,6 +724,10 @@ def run_once(
         kill_switch_engaged: Predicate — when engaged, all actuation is skipped.
         master_ttl_s: Master suppression TTL.
         worker_ttl_s: Worker suppression TTL.
+        ledger: The durable trigger ledger (FRE-829), reconciled at the start
+            of every tick and written to at the send boundary. ``None``
+            allocates a fresh (empty) ledger.
+        ledger_persist: Persists the ledger after each transition.
 
     Returns:
         The updated dedup store.
@@ -729,6 +736,16 @@ def run_once(
     if kill_switch_engaged():
         logger.warning("gating_blocked", trace_id=trace_id, reason="kill-switch")
         return state
+    if ledger is None:
+        ledger = {}
+
+    def _retry_pending(entry: trigger_ledger.LedgerEntry) -> trigger_ledger.SendOutcome:
+        return send_to_session(entry.target_pane, entry.command, runner)
+
+    ledger = trigger_ledger.reconcile(
+        ledger, now=now, execute_pending=_retry_pending, persist=ledger_persist, logger=logger
+    )
+
     prs = board_fetcher()
     triggers = decide(
         prs,
@@ -753,6 +770,25 @@ def run_once(
             continue
         if not execute:
             continue
+        ledger, record_outcome = trigger_ledger.record_pending(
+            ledger,
+            event_id=trigger.dedup_key,
+            source=trigger.reason,
+            target_pane=trigger.session,
+            ticket=str(trigger.pr),
+            command=trigger.command,
+            preconditions={"head_sha": trigger.head_sha},
+            now=now,
+            ttl_s=trigger.ttl_s,
+        )
+        ledger_persist(ledger)
+        if record_outcome == "duplicate":
+            logger.warning(
+                "gating_skip", trace_id=trace_id, reason="ledger-duplicate", pr=trigger.pr
+            )
+            continue
+        ledger = trigger_ledger.mark_send_started(ledger, trigger.dedup_key, now)
+        ledger_persist(ledger)
         outcome = send_to_session(trigger.session, trigger.command, runner)
         if outcome == "sent":
             logger.info(
@@ -762,8 +798,12 @@ def run_once(
                 session=trigger.session,
                 command=trigger.command,
             )
+            ledger = trigger_ledger.mark_sent(ledger, trigger.dedup_key, now)
+            ledger_persist(ledger)
             state[trigger.dedup_key] = now
             persist(state)
+            ledger = trigger_ledger.mark_consumed(ledger, trigger.dedup_key, now)
+            ledger_persist(ledger)
         else:
             logger.warning(
                 "gating_skip",
@@ -772,6 +812,10 @@ def run_once(
                 pr=trigger.pr,
                 session=trigger.session,
             )
+            # Abandoned, not sent -- record_pending never suppresses this on a
+            # future attempt (no TTL window applies to a non-send).
+            ledger = trigger_ledger.mark_consumed(ledger, trigger.dedup_key, now)
+            ledger_persist(ledger)
     pruned = prune_state(
         state,
         now=now,
@@ -788,6 +832,17 @@ def run_once(
 def _default_state_path() -> Path:
     """Return the default dedup-store path under the repo's telemetry dir."""
     return Path("telemetry") / "gating_watcher_state.json"
+
+
+def _default_ledger_path() -> Path:
+    """Return the default trigger-ledger path under the repo's telemetry dir."""
+    return Path("telemetry") / "trigger_ledger.json"
+
+
+# How long a *consumed* ledger entry is retained for audit purposes. An
+# unconsumed (pending or surfaced) entry is never pruned regardless of age
+# (trigger_ledger.prune_ledger).
+DEFAULT_LEDGER_RETENTION_S: float = 7 * 24 * 3600.0  # 7 days
 
 
 def _resolver(api_key: str, logger: Logger) -> Callable[[str | None], str | None]:
@@ -841,6 +896,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Flag file whose presence halts all actuation (shared kill switch).",
     )
     parser.add_argument(
+        "--ledger-file",
+        default=str(_default_ledger_path()),
+        help="Path to the durable trigger ledger (FRE-829).",
+    )
+    parser.add_argument(
+        "--ledger-retention-days",
+        type=float,
+        default=DEFAULT_LEDGER_RETENTION_S / 86400.0,
+        help="Days a consumed ledger entry is retained before pruning.",
+    )
+    parser.add_argument(
         "--preflight",
         action="store_true",
         help="Check the Linear key and gh availability, report, and exit (for ExecStartPre).",
@@ -859,15 +925,28 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     logger = structlog.get_logger(__name__)
     state_path = Path(args.state_file)
+    ledger_path = Path(args.ledger_file)
     kill_switch_path = Path(args.kill_switch_file)
     resolver = _resolver(api_key, logger)
+    ledger_retention_s = args.ledger_retention_days * 86400.0
 
     def tick() -> None:
         state = load_state(state_path)
+        ledger = trigger_ledger.load_ledger(ledger_path, logger)
+        fetched_prs: list[PullRequest] = []
+        board_fetched = False
+
+        def _board_fetcher() -> list[PullRequest]:
+            nonlocal board_fetched
+            prs = fetch_open_prs(subprocess_runner)
+            fetched_prs[:] = prs
+            board_fetched = True
+            return prs
+
         run_once(
             state,
             now=time.time(),
-            board_fetcher=lambda: fetch_open_prs(subprocess_runner),
+            board_fetcher=_board_fetcher,
             session_resolver=resolver,
             runner=subprocess_runner,
             persist=lambda st: save_state(state_path, st),
@@ -876,7 +955,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             kill_switch_engaged=lambda: _kill_switch_engaged(kill_switch_path),
             master_ttl_s=args.master_ttl,
             worker_ttl_s=args.worker_ttl,
+            ledger=ledger,
+            ledger_persist=lambda lg: trigger_ledger.save_ledger(ledger_path, lg),
         )
+        if not board_fetched:
+            return  # kill-switch halted the tick before the board was read
+        # ledger_persist wrote every transition through run_once; reload the
+        # latest state rather than pruning the stale pre-tick snapshot.
+        latest_ledger = trigger_ledger.load_ledger(ledger_path, logger)
+        pruned = trigger_ledger.prune_ledger(
+            latest_ledger,
+            now=time.time(),
+            retention_s=ledger_retention_s,
+            open_prs=[pr.number for pr in fetched_prs],
+        )
+        if pruned != latest_ledger:
+            trigger_ledger.save_ledger(ledger_path, pruned)
 
     if args.loop:
         while True:

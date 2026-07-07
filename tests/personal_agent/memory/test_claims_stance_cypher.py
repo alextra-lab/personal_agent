@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
+from uuid import UUID
 
 import pytest
 
@@ -19,6 +20,8 @@ from personal_agent.memory.models import Claim, Stance
 from personal_agent.memory.service import MemoryService
 
 _NOW = datetime(2026, 3, 1, tzinfo=timezone.utc)
+_USER_A = UUID("00000000-0000-0000-0000-00000000000a")
+_USER_B = UUID("00000000-0000-0000-0000-00000000000b")
 
 
 class _AsyncRows:
@@ -112,14 +115,21 @@ async def test_assert_claim_fresh_creates_current_claim() -> None:
         "personal_agent.memory.service.generate_embedding",
         new=AsyncMock(return_value=[1.0, 0.0]),
     ):
-        claim_id = await service.assert_claim(claim, trace_id="trace-1")
+        claim_id = await service.assert_claim(claim, user_id=_USER_A, trace_id="trace-1")
 
     assert claim_id  # non-empty id returned
     # First run() is the candidate fetch; second is the write.
-    fetch_cypher, _ = captured[0]
+    fetch_cypher, fetch_params = captured[0]
     write_cypher, write_params = captured[1]
     assert "HAS_FACT" in fetch_cypher and "cl.valid_to IS NULL" in fetch_cypher
     assert "cl.facet AS facet" in fetch_cypher  # FRE-712: facet fetched for matching
+    # ADR-0107 §2: resolves the acting User, not the is_owner sentinel.
+    assert "Person {user_id: $user_id}" in fetch_cypher
+    assert "Person {user_id: $user_id}" in write_cypher
+    assert "is_owner" not in fetch_cypher
+    assert "is_owner" not in write_cypher
+    assert fetch_params["user_id"] == str(_USER_A)
+    assert write_params["user_id"] == str(_USER_A)
     assert "CREATE (o)-[:HAS_FACT]->(cl:Claim" in write_cypher
     # Fresh claim is current: both temporal bounds null, nothing superseded.
     assert write_params["new_valid_to"] is None
@@ -132,8 +142,29 @@ async def test_assert_claim_fresh_creates_current_claim() -> None:
 
 
 @pytest.mark.asyncio
-async def test_assert_claim_skips_when_owner_absent() -> None:
-    # Write returns no record → owner :Person {is_owner:true} does not exist.
+async def test_assert_claim_scopes_candidate_pool_to_acting_user() -> None:
+    """ADR-0107 §2: a claim asserted for user B must never match/supersede user A's claims.
+
+    The candidate-fetch query is scoped by user_id, so a different user's current
+    Claims are never even fetched into the matching pool.
+    """
+    service, captured = _service_capturing(current_rows=[])
+    claim = Claim(content="The user's lease ends in March.", confidence=0.8, observed_at=_NOW)
+
+    with patch(
+        "personal_agent.memory.service.generate_embedding",
+        new=AsyncMock(return_value=[1.0, 0.0]),
+    ):
+        await service.assert_claim(claim, user_id=_USER_B, trace_id="trace-1")
+
+    fetch_cypher, fetch_params = captured[0]
+    assert "Person {user_id: $user_id}" in fetch_cypher
+    assert fetch_params["user_id"] == str(_USER_B)
+
+
+@pytest.mark.asyncio
+async def test_assert_claim_skips_when_user_person_absent() -> None:
+    # Write returns no record → :Person {user_id: ...} does not exist.
     service, captured = _service_capturing(current_rows=[])
 
     async def capture_run(cypher: str, **kwargs: object):
@@ -150,5 +181,5 @@ async def test_assert_claim_skips_when_owner_absent() -> None:
         "personal_agent.memory.service.generate_embedding",
         new=AsyncMock(return_value=[1.0, 0.0]),
     ):
-        claim_id = await service.assert_claim(claim)
+        claim_id = await service.assert_claim(claim, user_id=_USER_A)
     assert claim_id == ""

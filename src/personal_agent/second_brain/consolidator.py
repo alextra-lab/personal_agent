@@ -722,9 +722,10 @@ class SecondBrainConsolidator:
                 relationship_element_ids.append(rel_eid)
 
         # ADR-0098 D2 (FRE-638): wire the FRE-637 stances[]/claims[] into Core.
-        # Stances become native owner→World HAS_STANCE edges; Personal claims become
-        # living Claim nodes (correction / bitemporal supersession). Both resolve the
-        # "owner" sentinel to the is_owner Person node inside the service methods.
+        # Stances become native owner→World HAS_STANCE edges, resolving the is_owner
+        # sentinel (unchanged, ADR-0107 §3). Personal claims become living Claim nodes
+        # (correction / bitemporal supersession), resolving the acting user's own
+        # Person node by user_id (ADR-0107 §2) — capture.user_id is already in scope.
         stances_created = 0
         for stance_data in extraction_result.get("stances", []):
             stance = _build_stance(stance_data)
@@ -738,7 +739,9 @@ class SecondBrainConsolidator:
             claim = _build_claim(claim_data)
             if claim is None:
                 continue
-            if await self.memory_service.assert_claim(claim, trace_id=capture.trace_id):
+            if await self.memory_service.assert_claim(
+                claim, user_id=capture.user_id, trace_id=capture.trace_id
+            ):
                 claims_created += 1
 
         # FRE-307: terminal success row.

@@ -13,6 +13,9 @@ assert, without depending on the live embedder.
 - AC-5 (native Stance traversal): owner -[:HAS_STANCE]-> WorldConcept -[:RELATED_TO]->
   WorldConcept returns in one Cypher query, no cross-store hop.
 - REJECT: a weaker contradicting Claim does not clobber the current one.
+- ADR-0107 AC-1: a Claim asserted for a non-owner user attaches to that user's own
+  Person node, matches/supersedes only within that user's own Claims, and never
+  collides with another user's claim on the same fact-slot.
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from __future__ import annotations
 import math
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
+from uuid import UUID
 
 import pytest
 import pytest_asyncio
@@ -31,6 +35,8 @@ pytestmark = pytest.mark.integration
 
 _T0 = datetime(2026, 3, 1, tzinfo=timezone.utc)
 _T1 = _T0 + timedelta(days=90)
+_OWNER_UID = UUID("00000000-0000-0000-0000-000000000001")
+_USER_B_UID = UUID("00000000-0000-0000-0000-000000000002")
 
 
 def _fake_embed(text: str) -> list[float]:
@@ -51,9 +57,13 @@ async def owner_service():
         await s.run("MATCH (c:Claim) DETACH DELETE c")
         await s.run("MATCH (:Person {is_owner: true})-[r:HAS_STANCE]->() DELETE r")
         await s.run("MATCH (p:Person {is_owner: true}) DETACH DELETE p")
+        await s.run(
+            "MATCH (p:Person {user_id: $user_id}) DETACH DELETE p", user_id=str(_USER_B_UID)
+        )
         await s.run("MATCH (e:Entity) WHERE e.name STARTS WITH 'FRE638_' DETACH DELETE e")
         await s.run(
-            "CREATE (o:Person {user_id: 'fre638-owner', is_owner: true, name: 'Test Owner'})"
+            "CREATE (o:Person {user_id: $user_id, is_owner: true, name: 'Test Owner'})",
+            user_id=str(_OWNER_UID),
         )
 
     yield service
@@ -61,29 +71,34 @@ async def owner_service():
     async with service.driver.session() as s:
         await s.run("MATCH (c:Claim) DETACH DELETE c")
         await s.run("MATCH (p:Person {is_owner: true}) DETACH DELETE p")
+        await s.run(
+            "MATCH (p:Person {user_id: $user_id}) DETACH DELETE p", user_id=str(_USER_B_UID)
+        )
         await s.run("MATCH (e:Entity) WHERE e.name STARTS WITH 'FRE638_' DETACH DELETE e")
     await service.disconnect()
 
 
-async def _current_claims(service: MemoryService) -> list[dict]:
+async def _current_claims(service: MemoryService, user_id: UUID = _OWNER_UID) -> list[dict]:
     assert service.driver is not None
     async with service.driver.session() as s:
         result = await s.run(
-            "MATCH (:Person {is_owner: true})-[:HAS_FACT]->(c:Claim)\n"
+            "MATCH (:Person {user_id: $user_id})-[:HAS_FACT]->(c:Claim)\n"
             "WHERE c.valid_to IS NULL AND c.invalid_at IS NULL\n"
-            "RETURN c.content AS content, c.claim_id AS claim_id"
+            "RETURN c.content AS content, c.claim_id AS claim_id",
+            user_id=str(user_id),
         )
         return [dict(r) async for r in result]
 
 
-async def _all_claims(service: MemoryService) -> list[dict]:
+async def _all_claims(service: MemoryService, user_id: UUID = _OWNER_UID) -> list[dict]:
     assert service.driver is not None
     async with service.driver.session() as s:
         result = await s.run(
-            "MATCH (:Person {is_owner: true})-[:HAS_FACT]->(c:Claim)\n"
+            "MATCH (:Person {user_id: $user_id})-[:HAS_FACT]->(c:Claim)\n"
             "RETURN c.content AS content, c.claim_id AS claim_id, c.valid_from AS valid_from,\n"
             "       c.valid_to AS valid_to, c.invalid_at AS invalid_at,\n"
-            "       c.superseded_by AS superseded_by, c.supersession_reason AS reason"
+            "       c.superseded_by AS superseded_by, c.supersession_reason AS reason",
+            user_id=str(user_id),
         )
         return [dict(r) async for r in result]
 
@@ -95,10 +110,12 @@ async def test_ac1_wrong_first_fact_is_correctable(owner_service: MemoryService)
         new=AsyncMock(side_effect=lambda t: _fake_embed(t)),
     ):
         await owner_service.assert_claim(
-            Claim(content="The lease ends in Jaunary.", confidence=0.5, observed_at=_T0)
+            Claim(content="The lease ends in Jaunary.", confidence=0.5, observed_at=_T0),
+            user_id=_OWNER_UID,
         )
         await owner_service.assert_claim(
-            Claim(content="The lease ends in March.", confidence=0.8, observed_at=_T1)
+            Claim(content="The lease ends in March.", confidence=0.8, observed_at=_T1),
+            user_id=_OWNER_UID,
         )
 
     current = await _current_claims(owner_service)
@@ -120,10 +137,12 @@ async def test_ac2_evolution_is_bitemporal_not_destructive(owner_service: Memory
         new=AsyncMock(side_effect=lambda t: _fake_embed(t)),
     ):
         await owner_service.assert_claim(
-            Claim(content="The lease ends in March.", confidence=0.8, observed_at=_T0)
+            Claim(content="The lease ends in March.", confidence=0.8, observed_at=_T0),
+            user_id=_OWNER_UID,
         )
         await owner_service.assert_claim(
-            Claim(content="The lease ends in June.", confidence=0.8, observed_at=_T1)
+            Claim(content="The lease ends in June.", confidence=0.8, observed_at=_T1),
+            user_id=_OWNER_UID,
         )
 
     current = await _current_claims(owner_service)
@@ -149,10 +168,12 @@ async def test_reject_weaker_contradiction_does_not_clobber(
         new=AsyncMock(side_effect=lambda t: _fake_embed(t)),
     ):
         await owner_service.assert_claim(
-            Claim(content="The lease ends in March.", confidence=0.8, observed_at=_T0)
+            Claim(content="The lease ends in March.", confidence=0.8, observed_at=_T0),
+            user_id=_OWNER_UID,
         )
         await owner_service.assert_claim(
-            Claim(content="The lease ends in December.", confidence=0.4, observed_at=_T1)
+            Claim(content="The lease ends in December.", confidence=0.4, observed_at=_T1),
+            user_id=_OWNER_UID,
         )
 
     current = await _current_claims(owner_service)
@@ -244,10 +265,12 @@ async def test_ac_a_same_facet_groups_the_slot(owner_service: MemoryService) -> 
         new=AsyncMock(side_effect=_embed_map(mapping)),
     ):
         await owner_service.assert_claim(
-            Claim(content=old, confidence=0.8, observed_at=_T0, facet="lease_end_date")
+            Claim(content=old, confidence=0.8, observed_at=_T0, facet="lease_end_date"),
+            user_id=_OWNER_UID,
         )
         await owner_service.assert_claim(
-            Claim(content=new, confidence=0.8, observed_at=_T1, facet="lease_end_date")
+            Claim(content=new, confidence=0.8, observed_at=_T1, facet="lease_end_date"),
+            user_id=_OWNER_UID,
         )
     current = await _current_claims(owner_service)
     assert [c["content"] for c in current] == [new]  # grouped + superseded
@@ -265,10 +288,12 @@ async def test_ac_b_different_facet_moderate_similarity_does_not_collide(
         new=AsyncMock(side_effect=_embed_map(mapping)),
     ):
         await owner_service.assert_claim(
-            Claim(content=a, confidence=0.8, observed_at=_T0, facet="lease_end_date")
+            Claim(content=a, confidence=0.8, observed_at=_T0, facet="lease_end_date"),
+            user_id=_OWNER_UID,
         )
         await owner_service.assert_claim(
-            Claim(content=b, confidence=0.8, observed_at=_T1, facet="monthly_rent")
+            Claim(content=b, confidence=0.8, observed_at=_T1, facet="monthly_rent"),
+            user_id=_OWNER_UID,
         )
     current = await _current_claims(owner_service)
     assert {c["content"] for c in current} == {a, b}  # both stay current — no false collide
@@ -286,10 +311,12 @@ async def test_ac_c_facet_drift_recovers_on_near_identical_content(
         new=AsyncMock(side_effect=_embed_map(mapping)),
     ):
         await owner_service.assert_claim(
-            Claim(content=old, confidence=0.8, observed_at=_T0, facet="lease_end_date")
+            Claim(content=old, confidence=0.8, observed_at=_T0, facet="lease_end_date"),
+            user_id=_OWNER_UID,
         )
         await owner_service.assert_claim(
-            Claim(content=new, confidence=0.8, observed_at=_T1, facet="current_lease_expiration")
+            Claim(content=new, confidence=0.8, observed_at=_T1, facet="current_lease_expiration"),
+            user_id=_OWNER_UID,
         )
     current = await _current_claims(owner_service)
     assert [c["content"] for c in current] == [new]  # drift did not strand the stale fact
@@ -307,9 +334,12 @@ async def test_ac_c2_new_facet_supersedes_legacy_no_facet_claim(
         new=AsyncMock(side_effect=_embed_map(mapping)),
     ):
         # Legacy claim: no facet (FRE-638-era row).
-        await owner_service.assert_claim(Claim(content=old, confidence=0.8, observed_at=_T0))
         await owner_service.assert_claim(
-            Claim(content=new, confidence=0.8, observed_at=_T1, facet="lease_end_date")
+            Claim(content=old, confidence=0.8, observed_at=_T0), user_id=_OWNER_UID
+        )
+        await owner_service.assert_claim(
+            Claim(content=new, confidence=0.8, observed_at=_T1, facet="lease_end_date"),
+            user_id=_OWNER_UID,
         )
     current = await _current_claims(owner_service)
     assert [c["content"] for c in current] == [new]
@@ -325,7 +355,8 @@ async def test_ac_d_explicit_correction_label(owner_service: MemoryService) -> N
         new=AsyncMock(side_effect=_embed_map(mapping)),
     ):
         await owner_service.assert_claim(
-            Claim(content=old, confidence=0.8, observed_at=_T0, facet="lease_end_date")
+            Claim(content=old, confidence=0.8, observed_at=_T0, facet="lease_end_date"),
+            user_id=_OWNER_UID,
         )
         await owner_service.assert_claim(
             Claim(
@@ -334,7 +365,8 @@ async def test_ac_d_explicit_correction_label(owner_service: MemoryService) -> N
                 observed_at=_T1,
                 facet="lease_end_date",
                 update_kind="correction",
-            )
+            ),
+            user_id=_OWNER_UID,
         )
     superseded = [c for c in await _all_claims(owner_service) if c["content"] == old][0]
     assert superseded["reason"] == "correction"  # explicit signal, not the heuristic
@@ -350,7 +382,8 @@ async def test_ac_e_explicit_evolution_label(owner_service: MemoryService) -> No
         new=AsyncMock(side_effect=_embed_map(mapping)),
     ):
         await owner_service.assert_claim(
-            Claim(content=old, confidence=0.5, observed_at=_T0, facet="lease_end_date")
+            Claim(content=old, confidence=0.5, observed_at=_T0, facet="lease_end_date"),
+            user_id=_OWNER_UID,
         )
         await owner_service.assert_claim(
             Claim(
@@ -359,7 +392,120 @@ async def test_ac_e_explicit_evolution_label(owner_service: MemoryService) -> No
                 observed_at=_T1,
                 facet="lease_end_date",
                 update_kind="evolution",
-            )
+            ),
+            user_id=_OWNER_UID,
         )
     superseded = [c for c in await _all_claims(owner_service) if c["content"] == old][0]
     assert superseded["reason"] == "evolution"  # explicit signal overrides the heuristic
+
+
+# ---------------------------------------------------------------------------
+# ADR-0107 §2: assert_claim resolves to the acting User, not the is_owner sentinel
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_adr0107_ac1_claim_attaches_to_acting_user_not_owner(
+    owner_service: MemoryService,
+) -> None:
+    """A claim asserted for a non-owner user attaches to that user's own Person."""
+    assert owner_service.driver is not None
+    async with owner_service.driver.session() as s:
+        await s.run(
+            "CREATE (:Person {user_id: $user_id, is_owner: false, name: 'User B'})",
+            user_id=str(_USER_B_UID),
+        )
+
+    with patch(
+        "personal_agent.memory.service.generate_embedding",
+        new=AsyncMock(side_effect=lambda t: _fake_embed(t)),
+    ):
+        claim_id = await owner_service.assert_claim(
+            Claim(content="The lease ends in March.", confidence=0.8, observed_at=_T0),
+            user_id=_USER_B_UID,
+        )
+
+    assert claim_id  # written, not vacuously skipped
+    assert await _current_claims(owner_service, user_id=_OWNER_UID) == []
+    user_b_current = await _current_claims(owner_service, user_id=_USER_B_UID)
+    assert len(user_b_current) == 1
+    assert user_b_current[0]["content"] == "The lease ends in March."
+
+
+@pytest.mark.asyncio
+async def test_two_users_same_fact_slot_are_independent(owner_service: MemoryService) -> None:
+    """Two users' claims on the same fact-slot never match/supersede each other."""
+    assert owner_service.driver is not None
+    async with owner_service.driver.session() as s:
+        await s.run(
+            "CREATE (:Person {user_id: $user_id, is_owner: false, name: 'User B'})",
+            user_id=str(_USER_B_UID),
+        )
+
+    with patch(
+        "personal_agent.memory.service.generate_embedding",
+        new=AsyncMock(side_effect=lambda t: _fake_embed(t)),
+    ):
+        await owner_service.assert_claim(
+            Claim(content="The lease ends in March.", confidence=0.8, observed_at=_T0),
+            user_id=_OWNER_UID,
+        )
+        # Same content/facet, different user — must not supersede the owner's claim.
+        await owner_service.assert_claim(
+            Claim(content="The lease ends in March.", confidence=0.8, observed_at=_T1),
+            user_id=_USER_B_UID,
+        )
+
+    owner_current = await _current_claims(owner_service, user_id=_OWNER_UID)
+    user_b_current = await _current_claims(owner_service, user_id=_USER_B_UID)
+    assert len(owner_current) == 1
+    assert len(user_b_current) == 1
+    assert owner_current[0]["claim_id"] != user_b_current[0]["claim_id"]
+
+
+@pytest.mark.asyncio
+async def test_within_user_supersession_still_works_when_scoped(
+    owner_service: MemoryService,
+) -> None:
+    """Scoping candidate-fetch by user_id doesn't break same-user supersession."""
+    assert owner_service.driver is not None
+    async with owner_service.driver.session() as s:
+        await s.run(
+            "CREATE (:Person {user_id: $user_id, is_owner: false, name: 'User B'})",
+            user_id=str(_USER_B_UID),
+        )
+
+    with patch(
+        "personal_agent.memory.service.generate_embedding",
+        new=AsyncMock(side_effect=lambda t: _fake_embed(t)),
+    ):
+        await owner_service.assert_claim(
+            Claim(content="The lease ends in March.", confidence=0.5, observed_at=_T0),
+            user_id=_USER_B_UID,
+        )
+        await owner_service.assert_claim(
+            Claim(content="The lease ends in June.", confidence=0.8, observed_at=_T1),
+            user_id=_USER_B_UID,
+        )
+
+    current = await _current_claims(owner_service, user_id=_USER_B_UID)
+    assert [c["content"] for c in current] == ["The lease ends in June."]
+    all_claims = await _all_claims(owner_service, user_id=_USER_B_UID)
+    assert len(all_claims) == 2  # original retained as superseded, not destroyed
+
+
+@pytest.mark.asyncio
+async def test_assert_claim_skips_when_target_user_person_absent(
+    owner_service: MemoryService,
+) -> None:
+    """A user_id with no :Person node is a no-op skip, never a dangling write."""
+    unknown_user = UUID("00000000-0000-0000-0000-0000000000ff")
+    with patch(
+        "personal_agent.memory.service.generate_embedding",
+        new=AsyncMock(side_effect=lambda t: _fake_embed(t)),
+    ):
+        claim_id = await owner_service.assert_claim(
+            Claim(content="The lease ends in March.", confidence=0.8, observed_at=_T0),
+            user_id=unknown_user,
+        )
+    assert claim_id == ""

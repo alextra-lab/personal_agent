@@ -1,0 +1,4 @@
+{
+  "title": "Add a retry budget to the SearXNG web-search tool executor",
+  "description": "The web_search tool currently has no retry on a transient SearXNG 502/503; a single flaky response fails the whole tool call. Propose adding a bounded exponential-backoff retry (max 2 retries, jittered) inside tools/web_search.py's executor, with a structlog warning on each retry and a hard failure surfaced normally after the budget is exhausted. No prior ADR addresses SearXNG retry behavior."
+}

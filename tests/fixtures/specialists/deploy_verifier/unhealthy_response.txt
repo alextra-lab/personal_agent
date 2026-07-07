@@ -1,0 +1,1 @@
+{"status": "degraded", "reason": "database connection pool exhausted", "uptime_s": 12}

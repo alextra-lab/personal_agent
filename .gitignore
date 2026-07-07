@@ -195,3 +195,4 @@ telemetry/evaluation/fre817-corpus-ab/
 
 # master deploy snapshots (never commit — large Neo4j dumps)
 .backups/
+telemetry/gating_watcher_state.json

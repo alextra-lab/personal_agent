@@ -63,11 +63,26 @@ the next session a wrong turn.
 
 ---
 
-## 3 — Checkpoint durable state
+## 3 — Checkpoint + compact MASTER_PLAN
 
-- Bump MASTER_PLAN header + "Last updated" to today; reflect what shipped this session (one line each) and
-  what's genuinely next. Commit via the docs-to-main flow (`git switch -c docs/<slug-no-fre-token>` → PR →
-  `--auto --squash`), or direct if that's the standing flow.
+The plan is split in two — keep it that way:
+- **`docs/plans/MASTER_PLAN.md`** = master's *concise* plan: current live-env / standing state + active
+  priorities & sequencing + the Recent-decisions block. **The ONLY plan file the re-prime loads** — every
+  line here is context paid for on every reset, so keep it lean.
+- **`docs/plans/MASTER_PLAN_HISTORY.md`** = the grepable, append-only narrative (what shipped, when, why).
+  Searched on demand, **never** auto-loaded.
+
+Do:
+- Bump MASTER_PLAN "Last updated" to today; reflect what shipped (one line each) + what's genuinely next.
+- **Compact:** move any completed / superseded session narrative out of MASTER_PLAN and **append it to
+  MASTER_PLAN_HISTORY** (move, don't delete — it stays grepable, nothing is lost). A bloated concise-plan
+  is dead weight the re-prime re-reads forever.
+- **Judgment guard (important):** a *deep* restructure of the concise plan is riskiest in exactly the
+  heavy/dull session a reset follows. If unsure what's still load-bearing, do the **safe** compaction
+  (append only clearly-completed narrative to HISTORY; keep anything you're unsure about) and **flag a deep
+  pass as an early-fresh-session task** in the Step-4 verdict. Recoverability is high — everything moved is
+  grepable in HISTORY — so bias toward moving *completed* narrative, not toward rewriting live state at 60%.
+- Commit via docs-to-main (`git switch -c docs/<slug-no-fre-token>` → PR → `--auto --squash`).
 - Confirm Linear reflects reality (Done tickets closed with evidence, Awaiting-Deploy queue accurate).
 
 ---

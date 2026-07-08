@@ -26,11 +26,15 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from scripts.dispatch.gating_watcher import (
+    DEFAULT_CONTEXT_PRESSURE_THRESHOLD,
     MASTER_SESSION,
     Candidate,
+    ContextReading,
     PullRequest,
+    _context_pressure_threshold_default,
     ci_status,
     classify_pr,
+    context_pressure,
     decide,
     fetch_open_prs,
     has_ci_red_ack,
@@ -769,6 +773,392 @@ def test_run_once_reconciles_pending_ledger_entry_before_new_decisions() -> None
     sends = [c for c in runner.calls if c[:2] == ("tmux", "send-keys")]
     assert ("tmux", "send-keys", "-t", "cc-master", "-l", "/master 999") in sends
     assert ledger["master:999:deadbeef"].consumed_at is not None
+
+
+# --- _context_pressure_threshold_default (code-review finding, malformed env) ---
+
+
+def test_context_pressure_threshold_default_unset_env(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.delenv("AGENT_CONTEXT_PRESSURE_THRESHOLD", raising=False)
+    assert _context_pressure_threshold_default() == DEFAULT_CONTEXT_PRESSURE_THRESHOLD
+
+
+def test_context_pressure_threshold_default_valid_env(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setenv("AGENT_CONTEXT_PRESSURE_THRESHOLD", "55")
+    assert _context_pressure_threshold_default() == 55.0
+
+
+def test_context_pressure_threshold_default_malformed_env_falls_back(monkeypatch) -> None:  # noqa: ANN001
+    # A crash here would take down the whole watcher process (all triggers,
+    # not just context-pressure) -- must degrade to the default, never raise.
+    monkeypatch.setenv("AGENT_CONTEXT_PRESSURE_THRESHOLD", "not-a-number")
+    assert _context_pressure_threshold_default() == DEFAULT_CONTEXT_PRESSURE_THRESHOLD
+
+
+def test_context_pressure_threshold_default_empty_env_falls_back(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setenv("AGENT_CONTEXT_PRESSURE_THRESHOLD", "")
+    assert _context_pressure_threshold_default() == DEFAULT_CONTEXT_PRESSURE_THRESHOLD
+
+
+# --- context_pressure (AC-1) ------------------------------------------------
+
+
+def test_context_pressure_below_threshold_excluded() -> None:
+    readings = [ContextReading(session="cc-master", ctx=650_000, model="claude-opus-4-8")]  # 65%
+    assert context_pressure(readings, threshold=70.0) == []
+
+
+def test_context_pressure_at_threshold_included() -> None:
+    readings = [ContextReading(session="cc-master", ctx=700_000, model="claude-opus-4-8")]  # 70%
+    assert context_pressure(readings, threshold=70.0) == [("cc-master", 70.0)]
+
+
+def test_context_pressure_above_threshold_included() -> None:
+    readings = [ContextReading(session="cc-master", ctx=900_000, model="claude-sonnet-5")]  # 90%
+    assert context_pressure(readings, threshold=70.0) == [("cc-master", 90.0)]
+
+
+def test_context_pressure_haiku_window_is_200k_not_1m() -> None:
+    # 150k/200k = 75% on haiku's window; would be 15% on a 1M window.
+    readings = [ContextReading(session="cc-worker", ctx=150_000, model="claude-haiku-4-5")]
+    assert context_pressure(readings, threshold=70.0) == [("cc-worker", 75.0)]
+
+
+def test_context_pressure_unmapped_model_falls_back_to_default_window() -> None:
+    readings = [ContextReading(session="cc-x", ctx=750_000, model="some-unmapped-model")]
+    assert context_pressure(readings, threshold=70.0) == [("cc-x", 75.0)]
+
+
+def test_context_pressure_multiple_readings_filters_independently() -> None:
+    readings = [
+        ContextReading(session="cc-master", ctx=900_000, model="claude-opus-4-8"),  # 90% -> in
+        ContextReading(session="cc-worker", ctx=100_000, model="claude-opus-4-8"),  # 10% -> out
+    ]
+    assert context_pressure(readings, threshold=70.0) == [("cc-master", 90.0)]
+
+
+# --- prune_state: context-pressure key shape (design decision) -------------
+
+
+def test_prune_state_keeps_context_pressure_key_within_ttl() -> None:
+    # 2-part key (no PR component) must not be pruned by open-PR membership.
+    sent = {"ctxpressure:cc-master": 100.0}
+    kept = prune_state(sent, now=200.0, max_ttl_s=600.0, open_prs=[412])
+    assert kept == {"ctxpressure:cc-master": 100.0}
+
+
+def test_prune_state_drops_expired_context_pressure_key() -> None:
+    sent = {"ctxpressure:cc-master": 100.0}
+    kept = prune_state(sent, now=800.0, max_ttl_s=600.0, open_prs=[412])
+    assert kept == {}
+
+
+# --- run_once: context-pressure nudge (AC-2, AC-3) --------------------------
+
+
+def _pressure_reading(
+    ctx: int = 750_000, model: str = "claude-opus-4-8", session: str = MASTER_SESSION
+) -> ContextReading:
+    return ContextReading(session=session, ctx=ctx, model=model)  # 75% at default opus window
+
+
+class _RecordingLogger:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, object]]] = []
+
+    def info(self, event: str, **fields: object) -> None:
+        self.events.append((event, fields))
+
+    def warning(self, event: str, **fields: object) -> None:
+        self.events.append((event, fields))
+
+
+def test_run_once_context_pressure_logs_regardless_of_execute() -> None:
+    logger = _RecordingLogger()
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [],
+        session_resolver=_no_session,
+        runner=_idle_runner(),
+        persist=lambda _s: None,
+        logger=logger,
+        execute=False,
+        context_reader=lambda: [_pressure_reading()],
+    )
+    ctx_events = [f for e, f in logger.events if e == "context_pressure"]
+    assert ctx_events == [
+        {"trace_id": ctx_events[0]["trace_id"], "session": MASTER_SESSION, "pct": 75.0}
+    ]
+
+
+def test_run_once_context_pressure_dry_run_sends_nothing() -> None:
+    runner = _idle_runner()
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=False,
+        context_reader=lambda: [_pressure_reading()],
+    )
+    assert not any(c[:2] == ("tmux", "send-keys") for c in runner.calls)
+
+
+def test_run_once_context_pressure_below_threshold_sends_nothing() -> None:
+    runner = _idle_runner()
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        context_reader=lambda: [_pressure_reading(ctx=100_000)],  # 10% << 70% default
+    )
+    assert not any(c[:2] == ("tmux", "send-keys") for c in runner.calls)
+
+
+def test_run_once_context_pressure_busy_session_skips() -> None:
+    runner = _RecordingRunner(
+        {
+            ("tmux", "has-session"): _FakeRunResult(returncode=0),
+            ("tmux", "capture-pane"): _FakeRunResult(returncode=0, stdout=_BUSY_PANE),
+        }
+    )
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        context_reader=lambda: [_pressure_reading()],
+    )
+    assert not any(c[:2] == ("tmux", "send-keys") for c in runner.calls)
+
+
+def test_run_once_context_pressure_sends_nudge_when_idle_and_over_threshold() -> None:
+    runner = _idle_runner()
+    state: dict[str, float] = {}
+    run_once(
+        state,
+        now=100.0,
+        board_fetcher=lambda: [],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda st: state.update(st),
+        logger=_NullLogger(),
+        execute=True,
+        context_reader=lambda: [_pressure_reading()],
+    )
+    send_calls = [c for c in runner.calls if c[:2] == ("tmux", "send-keys") and len(c) == 6]
+    assert send_calls == [("tmux", "send-keys", "-t", MASTER_SESSION, "-l", send_calls[0][5])]
+    assert send_calls[0][5].startswith("Context at 75% —")
+    assert state == {"ctxpressure:cc-master": 100.0}
+
+
+def test_run_once_context_pressure_dedup_suppresses_second_tick_within_ttl() -> None:
+    state: dict[str, float] = {}
+    run_once(
+        state,
+        now=100.0,
+        board_fetcher=lambda: [],
+        session_resolver=_no_session,
+        runner=_idle_runner(),
+        persist=lambda st: state.update(st),
+        logger=_NullLogger(),
+        execute=True,
+        context_reader=lambda: [_pressure_reading()],
+    )
+    assert state == {"ctxpressure:cc-master": 100.0}
+
+    runner2 = _idle_runner()
+    run_once(
+        dict(state),
+        now=150.0,  # well within DEFAULT_MASTER_TTL_S (6h)
+        board_fetcher=lambda: [],
+        session_resolver=_no_session,
+        runner=runner2,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        context_reader=lambda: [_pressure_reading()],
+    )
+    assert not any(c[:2] == ("tmux", "send-keys") for c in runner2.calls)
+
+
+def test_run_once_context_pressure_re_arms_after_ttl() -> None:
+    state = {"ctxpressure:cc-master": 100.0}
+    runner = _idle_runner()
+    run_once(
+        state,
+        now=100.0 + 21600.0 + 1.0,  # past the 6h default TTL
+        board_fetcher=lambda: [],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda st: state.update(st),
+        logger=_NullLogger(),
+        execute=True,
+        context_reader=lambda: [_pressure_reading()],
+    )
+    assert any(c[:2] == ("tmux", "send-keys") for c in runner.calls)
+
+
+def test_run_once_context_pressure_defaults_do_not_affect_pr_only_ticks() -> None:
+    # No context_reader passed -> default (empty) means zero behavior change (AC-4 regression guard).
+    runner = _idle_runner()
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [_pr()],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+    )
+    sends = [c for c in runner.calls if c[:2] == ("tmux", "send-keys")]
+    assert len(sends) == 2  # exactly the /master trigger's send-keys pair, nothing extra
+    assert ("tmux", "send-keys", "-t", "cc-master", "-l", "/master 412") in sends
+
+
+# --- run_once: context-pressure wired through trigger_ledger (FRE-848) -----
+
+
+def test_run_once_context_pressure_ledger_records_and_consumes_on_send() -> None:
+    ledger: dict = {}
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [],
+        session_resolver=_no_session,
+        runner=_idle_runner(),
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        context_reader=lambda: [_pressure_reading()],
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    assert snapshot_unconsumed(ledger) == ()  # fully closed out
+    entry = ledger["ctxpressure:cc-master"]
+    assert entry.ticket == "cc-master"
+    assert entry.sent_at is not None
+    assert entry.consumed_at is not None
+
+
+def test_run_once_context_pressure_ledger_abandoned_on_busy_session() -> None:
+    runner = _RecordingRunner(
+        {
+            ("tmux", "has-session"): _FakeRunResult(returncode=0),
+            ("tmux", "capture-pane"): _FakeRunResult(returncode=0, stdout=_BUSY_PANE),
+        }
+    )
+    ledger: dict = {}
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        context_reader=lambda: [_pressure_reading()],
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    entry = ledger["ctxpressure:cc-master"]
+    assert entry.sent_at is None  # never actually sent
+    assert entry.consumed_at is not None  # abandoned -- eligible for a fresh attempt
+
+
+def test_run_once_context_pressure_ledger_untouched_below_threshold() -> None:
+    ledger: dict = {}
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [],
+        session_resolver=_no_session,
+        runner=_idle_runner(),
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        context_reader=lambda: [_pressure_reading(ctx=100_000)],  # 10% << 70%
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    assert ledger == {}
+
+
+def test_run_once_context_pressure_ledger_survives_a_pr_prune_tick() -> None:
+    # Regression lock for the FRE-849-scoped fix: a ctxpressure ledger entry
+    # must not be evicted by open-PR pruning logic just because its ticket
+    # ("cc-master") is never a PR number. Simulate the trailing prune a real
+    # tick() performs (open_prs from an unrelated PR-only board).
+    from scripts.dispatch.trigger_ledger import prune_ledger
+
+    ledger: dict = {}
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [_pr()],  # an unrelated open PR, #412
+        session_resolver=_no_session,
+        runner=_idle_runner(),
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        context_reader=lambda: [_pressure_reading()],
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    pruned = prune_ledger(ledger, now=100.0, retention_s=7 * 24 * 3600.0, open_prs=[412])
+    assert "ctxpressure:cc-master" in pruned
+
+
+def test_run_once_context_pressure_ledger_reconciles_pending_entry_before_new_decisions() -> None:
+    # A crash right after ledger-write (no send ever attempted) must be
+    # retried at the top of the next tick -- mirrors the PR-trigger
+    # equivalent test.
+    from scripts.dispatch.trigger_ledger import record_pending
+
+    seeded, _ = record_pending(
+        {},
+        event_id="ctxpressure:cc-master",
+        source="context-pressure",
+        target_pane="cc-master",
+        ticket="cc-master",
+        command="Context at 75% ...",
+        preconditions={},
+        now=50.0,
+        ttl_s=21600.0,
+    )
+    runner = _idle_runner()
+    ledger = dict(seeded)
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [],
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=True,
+        context_reader=lambda: [],  # nothing new this tick -- reconcile alone must retry
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    sends = [c for c in runner.calls if c[:2] == ("tmux", "send-keys")]
+    assert ("tmux", "send-keys", "-t", "cc-master", "-l", "Context at 75% ...") in sends
+    assert ledger["ctxpressure:cc-master"].consumed_at is not None
 
 
 def test_run_once_kill_switch_skips_ledger_reconcile_too() -> None:

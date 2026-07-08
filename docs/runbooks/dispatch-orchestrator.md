@@ -146,8 +146,8 @@ blew the 5-min prompt-cache TTL — an uncached-cost blowup, FRE-822). It runs
 master's gate and both approval gates are unchanged (like the orchestrator, it
 never merges, deploys, closes tickets, or edits MASTER_PLAN).
 
-**Two triggers.** For each open PR (read once via `gh pr view` so a tick is
-internally consistent):
+**Two PR triggers + one context-pressure nudge.** For each open PR (read once via
+`gh pr view` so a tick is internally consistent):
 - **Master ← new PR.** CI green, not `CONFLICTING`, and no unacked
   `## Master gate — BOUNCE` → `tmux send-keys -t cc-master "/master <PR#>"`.
   Dedup on `(PR#, head SHA)`: a bounce+push mints a new SHA → re-sent when it
@@ -158,6 +158,27 @@ internally consistent):
   the PR branch (`fre-<id>`) → the ticket's `stream:*` label →
   `cc-build`/`cc-build2`/`cc-adrs`. The ack markers prime-worker already posts
   are the dedup key.
+
+**Master ← context pressure (FRE-848).** After the PR-trigger loop, the watcher
+reads master's own live context% in-process (imports `resolve_jsonl`/
+`read_context` from `scripts.dispatch.context_probe`, FRE-847 — no subprocess
+wrapper). If usage is at/over `--context-pressure-threshold` (env
+`AGENT_CONTEXT_PRESSURE_THRESHOLD`, default **70**) it reuses `send_to_session`
+(same idle/existence gate as the PR triggers) to type a plain-text nudge into
+`cc-master`: *"Context at `<pct>`% — checkpoint MASTER_PLAN + run the
+prime-master pre-reset gate; consider `/clear` at the next clean boundary."*
+This does not act on master's behalf — it only puts the suggestion in front of
+the human operator supervising that session (Remote Control), who decides
+whether to act. Dedup key is `ctxpressure:cc-master` (session-scoped, no PR/SHA
+component — deliberately 2 colon-parts so it never collides with `prune_state`'s
+open-PR pruning, which only strips a `<pr>` component from `master:`/`worker:`
+keys), TTL-only, reusing the master TTL below. A `context_pressure` log line is
+emitted every tick regardless of `--execute`, so pressure is observable in
+dry-run. Like the two PR triggers, the actual send is also wired through the
+trigger ledger below (`source="context-pressure"`, `ticket="cc-master"`) for
+the same crash-safety guarantee — `prune_ledger`'s open-PR eviction is scoped
+to numeric (PR) tickets only, so this session-keyed entry ages out by
+retention alone, never by a PR-closure check that could never apply to it.
 
 **Injection safety.** A command is sent only into a session that **exists**
 (`tmux has-session`) AND is **idle at a prompt** (`capture-pane` shows the input
@@ -173,11 +194,14 @@ orchestrator and the watcher immediately; remove it to resume. The watcher pokes
 local tmux, so it does not depend on Remote-Control reachability.
 
 **Dedup TTLs.** State is `telemetry/gating_watcher_state.json`
-(`{"sent": {"<kind>:<pr>:<sha>": epoch}}`, atomic write, pruned each tick). Because
-`send-keys` is at-least-once, dedup is timestamped, not permanent: master entries
-carry a long re-arm TTL (a genuinely stuck send re-nudges once instead of being
-suppressed forever); worker entries carry a short in-flight lease over the
-send→pre-ack window (the ack markers remain the primary key).
+(`{"sent": {"<kind>:<pr>:<sha>": epoch}}` for the two PR triggers, plus
+`"ctxpressure:<session>": epoch` for the context-pressure nudge; atomic write,
+pruned each tick). Because `send-keys` is at-least-once, dedup is timestamped,
+not permanent: master entries carry a long re-arm TTL (a genuinely stuck send
+re-nudges once instead of being suppressed forever); worker entries carry a
+short in-flight lease over the send→pre-ack window (the ack markers remain the
+primary key); the context-pressure entry reuses the master TTL (one nudge per
+~6h pressure episode).
 
 Enable it alongside the orchestrator (single instance — one serial `--loop`):
 ```
@@ -218,9 +242,11 @@ replayed events dedupe against the ledger itself (folding in the trigger's own T
 lost write to the TTL dict above can never cause a same-tick double-send.
 
 **Retention.** `--ledger-retention-days` (default 7) prunes only *consumed* entries past that age
-or whose PR has closed. An unconsumed entry — pending or surfaced — is **never** pruned regardless
-of age; a `surfaced_at` entry sits in the ledger file until an owner clears it (no automated
-clearing mechanism yet — that is out of scope for FRE-829, tracked under FRE-832).
+or whose PR has closed (PR-ticketed entries only — a session-keyed entry like the context-pressure
+nudge's, FRE-848, has no PR to close against, so it ages out by the retention window alone). An
+unconsumed entry — pending or surfaced — is **never** pruned regardless of age; a `surfaced_at`
+entry sits in the ledger file until an owner clears it (no automated clearing mechanism yet — that
+is out of scope for FRE-829, tracked under FRE-832).
 
 Override the path with `--ledger-file` (systemd unit unchanged — defaults are fine).
 

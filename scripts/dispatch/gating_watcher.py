@@ -60,6 +60,7 @@ import dataclasses
 import json
 import os
 import re
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -70,7 +71,7 @@ from typing import Literal, Protocol
 
 import structlog
 
-from scripts.dispatch import trigger_ledger
+from scripts.dispatch import context_probe, trigger_ledger
 from scripts.dispatch.launcher import CommandRunner, subprocess_runner, topology_for
 from scripts.reconcile_board import load_linear_key
 
@@ -145,6 +146,16 @@ _ACTIVE_REGION_LINES = 30
 # never appears).
 DEFAULT_MASTER_TTL_S: float = 21600.0  # 6 h
 DEFAULT_WORKER_TTL_S: float = 900.0  # 15 min
+
+# Context-pressure nudge (FRE-848): master checkpoint alert threshold + the
+# dedup TTL for it. Reuses the master TTL -- one nudge per pressure episode,
+# self-heals after 6h if master is still over threshold.
+DEFAULT_CONTEXT_PRESSURE_THRESHOLD: float = 70.0
+DEFAULT_CONTEXT_PRESSURE_TTL_S: float = DEFAULT_MASTER_TTL_S
+_CONTEXT_PRESSURE_NUDGE = (
+    "Context at {pct}% — checkpoint MASTER_PLAN + run the prime-master pre-reset gate; "
+    "consider /clear at the next clean boundary."
+)
 
 # Poll interval for the daemon loop. Cheap — the watcher holds no LLM context.
 DEFAULT_POLL_INTERVAL_S: float = 60.0
@@ -237,6 +248,21 @@ class Trigger:
     command: str
     dedup_key: str
     ttl_s: float
+
+
+@dataclasses.dataclass(frozen=True)
+class ContextReading:
+    """One session's raw context usage (a ``context_probe.read_context`` output).
+
+    Attributes:
+        session: The tmux session the reading is for (e.g. ``cc-master``).
+        ctx: Context-window tokens (input + cache_read + cache_creation).
+        model: The model id of the last main-chain turn.
+    """
+
+    session: str
+    ctx: int
+    model: str
 
 
 # --- pure helpers ----------------------------------------------------------
@@ -409,6 +435,31 @@ def session_for_labels(labels: Collection[str]) -> str | None:
         if stream is not None:
             return topology_for(stream).tmux_session
     return None
+
+
+def context_pressure(
+    readings: Sequence[ContextReading], threshold: float
+) -> list[tuple[str, float]]:
+    """Return the ``(session, pct)`` pairs whose context usage is at/over ``threshold``.
+
+    Delegates the per-model window table to ``context_probe`` so the mapping is
+    defined in one place (FRE-847).
+
+    Args:
+        readings: Raw per-session context readings.
+        threshold: The percent threshold (e.g. ``70.0``).
+
+    Returns:
+        ``(session, pct)`` for every reading whose ``pct >= threshold``, in
+        input order.
+    """
+    pressures: list[tuple[str, float]] = []
+    for reading in readings:
+        window = context_probe.MODEL_WINDOWS.get(reading.model, context_probe.DEFAULT_WINDOW)
+        pct = 100 * reading.ctx / window if window else 0.0
+        if pct >= threshold:
+            pressures.append((reading.session, pct))
+    return pressures
 
 
 def _suppressed(sent: Mapping[str, float], key: str, now: float, ttl_s: float) -> bool:
@@ -729,13 +780,16 @@ def run_once(
     worker_ttl_s: float = DEFAULT_WORKER_TTL_S,
     ledger: trigger_ledger.Ledger | None = None,
     ledger_persist: Callable[[trigger_ledger.Ledger], None] = lambda _l: None,
+    context_reader: Callable[[], Sequence[ContextReading]] = lambda: (),
+    context_pressure_threshold: float = DEFAULT_CONTEXT_PRESSURE_THRESHOLD,
+    context_pressure_ttl_s: float = DEFAULT_CONTEXT_PRESSURE_TTL_S,
 ) -> dict[str, float]:
     """Run one watcher tick, mutating and returning the dedup store.
 
     All wall-clock and IO is injected (``now``, ``board_fetcher``,
-    ``session_resolver``, ``runner``, ``persist``) so the tick is fully
-    unit-testable. In dry-run (``execute=False``) it logs each decision and
-    sends nothing.
+    ``session_resolver``, ``runner``, ``persist``, ``context_reader``) so the
+    tick is fully unit-testable. In dry-run (``execute=False``) it logs each
+    decision and sends nothing.
 
     Args:
         state: The dedup store, mutated in place.
@@ -753,6 +807,11 @@ def run_once(
             of every tick and written to at the send boundary. ``None``
             allocates a fresh (empty) ledger.
         ledger_persist: Persists the ledger after each transition.
+        context_reader: Returns the raw context readings to check for pressure
+            (FRE-848). Defaults to none — a caller that doesn't pass this gets
+            no context-pressure behavior at all.
+        context_pressure_threshold: Percent threshold for the master nudge.
+        context_pressure_ttl_s: Suppression TTL for the context-pressure nudge.
 
     Returns:
         The updated dedup store.
@@ -841,10 +900,59 @@ def run_once(
             # future attempt (no TTL window applies to a non-send).
             ledger = trigger_ledger.mark_consumed(ledger, trigger.dedup_key, now)
             ledger_persist(ledger)
+
+    for session, pct in context_pressure(context_reader(), context_pressure_threshold):
+        logger.info("context_pressure", trace_id=trace_id, session=session, pct=round(pct, 1))
+        if not execute:
+            continue
+        key = f"ctxpressure:{session}"
+        if _suppressed(state, key, now, context_pressure_ttl_s):
+            continue
+        command = _CONTEXT_PRESSURE_NUDGE.format(pct=round(pct))
+        ledger, record_outcome = trigger_ledger.record_pending(
+            ledger,
+            event_id=key,
+            source="context-pressure",
+            target_pane=session,
+            ticket=session,  # non-numeric -- prune_ledger ages it out by TTL, not open-PR closure
+            command=command,
+            preconditions={"pct": str(round(pct, 1))},
+            now=now,
+            ttl_s=context_pressure_ttl_s,
+        )
+        ledger_persist(ledger)
+        if record_outcome == "duplicate":
+            logger.warning(
+                "context_pressure_skip",
+                trace_id=trace_id,
+                session=session,
+                reason="ledger-duplicate",
+            )
+            continue
+        ledger = trigger_ledger.mark_send_started(ledger, key, now)
+        ledger_persist(ledger)
+        outcome = send_to_session(session, command, runner)
+        if outcome == "sent":
+            logger.info(
+                "context_pressure_send", trace_id=trace_id, session=session, pct=round(pct, 1)
+            )
+            ledger = trigger_ledger.mark_sent(ledger, key, now)
+            ledger_persist(ledger)
+            state[key] = now
+            persist(state)
+            ledger = trigger_ledger.mark_consumed(ledger, key, now)
+            ledger_persist(ledger)
+        else:
+            logger.warning(
+                "context_pressure_skip", trace_id=trace_id, session=session, reason=outcome
+            )
+            ledger = trigger_ledger.mark_consumed(ledger, key, now)
+            ledger_persist(ledger)
+
     pruned = prune_state(
         state,
         now=now,
-        max_ttl_s=max(master_ttl_s, worker_ttl_s),
+        max_ttl_s=max(master_ttl_s, worker_ttl_s, context_pressure_ttl_s),
         open_prs=[pr.number for pr in prs],
     )
     if pruned != state:
@@ -868,6 +976,46 @@ def _default_ledger_path() -> Path:
 # unconsumed (pending or surfaced) entry is never pruned regardless of age
 # (trigger_ledger.prune_ledger).
 DEFAULT_LEDGER_RETENTION_S: float = 7 * 24 * 3600.0  # 7 days
+
+
+def _context_pressure_threshold_default() -> float:
+    """Resolve the ``--context-pressure-threshold`` CLI default, never raising.
+
+    A malformed ``AGENT_CONTEXT_PRESSURE_THRESHOLD`` must not crash the whole
+    watcher over one optional feature's config -- falls back to the module
+    default and warns on stderr (no structlog logger exists yet this early in
+    ``main()``, at argparse-build time).
+
+    Returns:
+        The parsed threshold, or ``DEFAULT_CONTEXT_PRESSURE_THRESHOLD`` if the
+        env var is unset or not a valid float.
+    """
+    raw = os.environ.get("AGENT_CONTEXT_PRESSURE_THRESHOLD")
+    if raw is None:
+        return DEFAULT_CONTEXT_PRESSURE_THRESHOLD
+    try:
+        return float(raw)
+    except ValueError:
+        print(
+            f"warning: AGENT_CONTEXT_PRESSURE_THRESHOLD={raw!r} is not a number; "
+            f"falling back to {DEFAULT_CONTEXT_PRESSURE_THRESHOLD}",
+            file=sys.stderr,
+        )
+        return DEFAULT_CONTEXT_PRESSURE_THRESHOLD
+
+
+def _master_context_reader() -> list[ContextReading]:
+    """Read master's live context usage in-process (FRE-848; no subprocess wrapper).
+
+    Returns:
+        A single-element list with master's reading, or ``[]`` if its
+        transcript could not be resolved.
+    """
+    jsonl = context_probe.resolve_jsonl(MASTER_SESSION)
+    if not jsonl or not os.path.exists(jsonl):
+        return []
+    ctx, model = context_probe.read_context(jsonl)
+    return [ContextReading(MASTER_SESSION, ctx, model)]
 
 
 def _resolver(api_key: str, logger: Logger) -> Callable[[str | None], str | None]:
@@ -936,6 +1084,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Check the Linear key and gh availability, report, and exit (for ExecStartPre).",
     )
+    parser.add_argument(
+        "--context-pressure-threshold",
+        type=float,
+        default=_context_pressure_threshold_default(),
+        help="Context-pressure percent threshold for the master nudge "
+        "(env AGENT_CONTEXT_PRESSURE_THRESHOLD, default 70).",
+    )
     args = parser.parse_args(argv)
 
     api_key = load_linear_key()
@@ -982,6 +1137,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             worker_ttl_s=args.worker_ttl,
             ledger=ledger,
             ledger_persist=lambda lg: trigger_ledger.save_ledger(ledger_path, lg),
+            context_reader=_master_context_reader,
+            context_pressure_threshold=args.context_pressure_threshold,
         )
         if not board_fetched:
             return  # kill-switch halted the tick before the board was read

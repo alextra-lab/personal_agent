@@ -134,6 +134,7 @@ telemetry/graph_quality/
 telemetry/within_session_compression/
 telemetry/dispatch_state.json
 telemetry/dispatch.disabled
+telemetry/trigger_ledger.json
 
 # Claude Code
 .claude/worktrees/

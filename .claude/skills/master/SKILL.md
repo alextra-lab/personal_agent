@@ -15,15 +15,19 @@ constraints, prior-deploy evidence) that the PR body often does NOT restate. Sur
 the comments that bears on correctness / scope / acceptance / how to deploy before merging.
 
 ## 2 — Analyze the diff
-- **Code-review runs in the BUILD session before the PR, not here** (shift-left; build fixes its own
-  findings on-branch — see build skill Step 8). At the gate, **confirm build ran it**: the PR body
-  should note the code-review (and security-review, when the diff touches inputs / subprocess / files
-  / auth / secrets / network) ran and what was addressed. A real-logic diff (src / script /
-  behavioural config) with **no** review noted → **bounce** (same mechanism as the codex backstop
-  below); do not run the full workflow yourself at the gate.
-- Master still does a **light spot-review**: read the diff for what build's review would miss — scope,
-  doc-drift, acceptance-criteria adherence — and block merge on real issues. Reserve running the
-  code-review skill yourself for when build's review is absent or looks thin on a risky diff.
+- **The code-review + security-review run in the BUILD session before the PR, not here** (shift-left;
+  build fixes its own findings on-branch — see build skill Step 8). Build hands you a **self-review
+  summary** in its handoff comment: the effort level, what the reviews flagged, what it fixed, and
+  anything it left unfixed and why.
+- **You are the executive: take that summary and decide next steps — don't re-run the work.** Validate
+  it (spot-check that the reported findings were real and its on-branch fixes actually address them;
+  weigh anything it chose not to fix), then act: **merge** if it holds, **bounce** if the fixes are
+  thin / a finding was waved off / a risky change was under-reviewed, or **run the code-review skill
+  yourself** only when build's summary is absent or looks unreliable on a risky diff. A real-logic diff
+  (src / script / behavioural config) with **no** review summary → **bounce** (same mechanism as the
+  codex backstop below).
+- Alongside, a **light spot-review** for what any diff-scoped review misses — scope creep, doc-drift,
+  acceptance-criteria adherence — and block merge on real issues.
 Surface findings. Block merge on real issues; relay to the build session.
 - **Tier backstop (codex):** `/build` self-classifies each ticket and skips codex plan-review for
   *trivial* work (docs / config / test-only / one-liner, no src-logic). If the diff touches `src/`

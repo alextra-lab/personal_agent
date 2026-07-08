@@ -84,7 +84,8 @@ Update docs the change touches (skill docs, READMEs, doc-strings).
 `pre-commit run --all-files`.
 
 **Self-review before the PR (shift-left — you fix your own findings so master never has to bounce
-them).** Invoke the **code-review** skill on your branch diff, **effort sized to the diff**: `low`
+them).** Run it **once, at this pre-PR gate — NOT on every implementation turn** (a strategic
+checkpoint, not a per-turn tax). Invoke the **code-review** skill on your branch diff, **effort sized to the diff**: `low`
 for a small/localized change, `high` for src / schema / security / cost / memory. Sizing means
 dialing the level, NOT skipping — any real-logic change (a script, a helper, behavioural config)
 gets at least a `low` pass; only pure docs / config-values / test-only diffs skip it. Invoke
@@ -108,6 +109,10 @@ in the PR's pre-merge checklist:
   (test name + result, probe/query output, or observed behaviour at the criterion's altitude). Without
   it master bounces the PR. *(Standalone bug: the reproducing test / verification stands in for ADR
   provenance.)*
+- **self-review summary** (the executive input for master's gate — master SKILL Step 2): the
+  code-review effort level run **and** the security-review verdict; what they flagged (confirmed
+  findings, most-severe first) and what you fixed on-branch; call out anything you deliberately did
+  NOT fix and why. "No findings" is a valid summary. A real-logic diff with no summary gets bounced.
 - the **post-deploy runbook** (exact ES/Kibana/migration/verification steps, in order);
 - any **safety constraints / gotchas** (e.g. "do NOT back-attach existing indices", "register the
   template before first write", "verify the code is generating the logs");

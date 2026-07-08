@@ -188,6 +188,9 @@ telemetry/evaluation/fre720-insights-separation/
 # FRE-817 corpus A/B run outputs (raw runs never committed; docs/research writeup is)
 telemetry/evaluation/fre817-corpus-ab/
 
+# FRE-778 multipath A/B run outputs (raw runs never committed; docs/research writeup is)
+telemetry/evaluation/fre778-multipath-ab/
+
 # deploy-approval-gate runtime sentinel (never committed)
 .claude/.deploy-approved
 

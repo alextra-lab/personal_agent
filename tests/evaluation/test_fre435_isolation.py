@@ -19,7 +19,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from scripts.eval.fre435_memory_recall import harness
-from scripts.eval.fre435_memory_recall.harness import WIPE_CYPHER, wipe_substrate
+from scripts.eval.fre435_memory_recall.harness import (
+    WIPE_CYPHER,
+    fetch_live_distractors,
+    wipe_substrate,
+)
 from scripts.eval.fre435_memory_recall.report import RunReport, render_json, render_markdown
 
 from personal_agent.config.env_loader import Environment
@@ -110,3 +114,31 @@ def test_run_report_surfaces_isolation_in_markdown() -> None:
     assert "per-case isolation" in render_markdown(_report(wipe=True)).lower()
     warn = render_markdown(_report(wipe=False)).lower()
     assert "no per-case isolation" in warn or "⚠" in warn
+
+
+@pytest.mark.asyncio
+async def test_fetch_live_distractors_refuses_without_explicit_prod_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FRE-778: the live-corpus read must never fall back to the test password.
+
+    Previously this fell back to ``settings.neo4j_password`` (the test-substrate
+    credential) whenever ``AGENT_NEO4J_PASSWORD`` was unset — safe only because
+    the test and prod compose stacks happen to default from the identical
+    ``NEO4J_PASSWORD`` env var today. A dedicated, required
+    ``FRE435_LIVE_NEO4J_PASSWORD`` removes that latent trap.
+    """
+    monkeypatch.delenv("FRE435_LIVE_NEO4J_PASSWORD", raising=False)
+
+    with pytest.raises(RuntimeError, match="FRE435_LIVE_NEO4J_PASSWORD"):
+        await fetch_live_distractors(10)
+
+
+@pytest.mark.asyncio
+async def test_fetch_live_distractors_zero_limit_skips_credential_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ``limit <= 0`` short-circuits before any credential is needed."""
+    monkeypatch.delenv("FRE435_LIVE_NEO4J_PASSWORD", raising=False)
+
+    assert await fetch_live_distractors(0) == []

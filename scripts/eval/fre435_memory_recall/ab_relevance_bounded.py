@@ -18,6 +18,11 @@ Run (test substrate up + embedder reachable):
 
     uv run python scripts/eval/fre435_memory_recall/ab_relevance_bounded.py \
         --run-id ab-$(date +%Y%m%d) --distractor-background 40
+
+``--distractor-background`` (default 40) reads live production Neo4j via
+``harness.fetch_live_distractors``, which requires ``FRE435_LIVE_NEO4J_PASSWORD``
+to be set explicitly (FRE-778 — it must never fall back to the test-substrate
+password). Pass ``--distractor-background 0`` to skip the live-corpus read.
 """
 
 from __future__ import annotations

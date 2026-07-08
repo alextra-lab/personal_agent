@@ -223,6 +223,19 @@ def test_execute_clean_worktree_launches() -> None:
     assert any("new-session" in call for call in runner.calls)
 
 
+def test_execute_kills_existing_slot_before_new_session() -> None:
+    # The persistent tmux slot is torn down before a fresh CLEAR launch, so
+    # `new-session` never collides with a still-existing worker session.
+    runner = _RecordingRunner()  # clean worktree
+    plan = plan_launch("build1", "FRE-786", "opus", context_keep=False)
+    result = execute_plan(plan, runner)
+    assert result.launched is True
+    kill_idx = next(i for i, c in enumerate(runner.calls) if "kill-session" in c)
+    new_idx = next(i for i, c in enumerate(runner.calls) if "new-session" in c)
+    assert kill_idx < new_idx  # torn down before recreated
+    assert any("kill-session" in c and plan.tmux_session in c for c in runner.calls)
+
+
 def test_execute_dirty_worktree_aborts_without_tmux() -> None:
     runner = _RecordingRunner({"status": _FakeRunResult(stdout=" M some_file.py\n")})
     plan = plan_launch("build1", "FRE-786", "opus", context_keep=False)

@@ -1,4 +1,0 @@
-{
-  "title": "Rename is_owner to is_seshat_user for clarity",
-  "description": "The Person.is_owner boolean field is confusingly named now that every authenticated user is a Person node. Propose renaming it to is_seshat_user (or adding a parallel is_user field) across memory/service.py and every Cypher MATCH/CREATE that references it, so the field name matches what it actually flags. This is a net-new naming cleanup that has not been raised before."
-}

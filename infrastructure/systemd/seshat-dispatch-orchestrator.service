@@ -15,6 +15,10 @@ Type=simple
 User=debian
 Group=debian
 WorkingDirectory=/opt/seshat
+# systemd runs with a bare PATH; the launcher shells out to `claude` (Remote
+# Control), which lives under the debian user's ~/.local/bin. Without this the
+# preflight dies with FileNotFoundError: 'claude'. tmux/git/gh are in /usr/bin.
+Environment=PATH=/home/debian/.local/bin:/usr/local/bin:/usr/bin:/bin
 # Fail fast at start if the enable-once preconditions are unmet (Linear API key
 # present, RC endpoint on api.anthropic.com, RC reachable).
 ExecStartPre=/opt/seshat/.venv/bin/python -m scripts.dispatch.orchestrator --preflight

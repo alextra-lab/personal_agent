@@ -55,7 +55,9 @@ ADR*, not merged-and-runs.** A feature / ADR-implementation ticket passes ONLY i
   skill Step 5, a build folds non-ADR supporting fixes and in-PR review fixes into its PR (noted in the
   handoff) instead of spawning tickets — this is a single-developer project. Validate they genuinely
   support the ticket's work; do NOT bounce for "no ticket" or read them as ADR divergence. The failure
-  mode to prevent is over-ticketing, not the extra diff that makes the build correct.
+  mode to prevent is over-ticketing, not the extra diff that makes the build correct. **You keep full
+  review judgment over a fold-in** — bounce one that's risky, unrelated, or scope creep in disguise;
+  you're just not bouncing it *merely* for lacking its own ticket.
 - **Proof, not assertion.** Each named criterion carries evidence it is *delivered end to end*, not
   merely wired — a test asserting the outcome, a probe/query result, or observed behaviour, at the
   altitude of the criterion (the graph holds the right fact · the edge actually evicts · the guard

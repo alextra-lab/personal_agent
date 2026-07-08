@@ -1,6 +1,6 @@
 # ADR-0113: Self-Driving Delivery Loop — Autonomous Actuation, Distributed & Human-Gated Judgment
 
-**Status:** Accepted
+**Status:** Superseded (2026-07-08 — the LLM-review harness / distributed-judgment / autonomous-merge design was tested in use and disproven; see the final Status Update)
 **Date:** 2026-07-07
 **Deciders:** Owner (autonomy posture — merge/deploy gates, send-keys boundary, staged rollout), adr session (Opus, design), Codex (adversarial design review)
 **Tags:** dev-process, orchestration, autonomy, claude-code, dispatch, review-gates, remote-control, FRE-828
@@ -472,6 +472,26 @@ adr session; master verified the artifact (completeness, faithfulness to the rat
 non-negotiables intact) and merged. Accepted = the design is ratified; the ADR reaches Implemented only
 when the assembled loop is demonstrated end-to-end (the FRE-828 seam, still open). Implementation chain
 FRE-829–835 filed under the Build/ADR Dispatch Automation project — Needs Approval.
+
+### 2026-07-08 - Superseded (owner decision)
+**Changed By:** master session + owner
+**Reason:** The distributed-judgment half — the independence-protocol harness and its four LLM specialist
+reviewers (PR-gate reviewer, measurement critic, deploy-verifier, doc-drift reconciler; FRE-830/833/834) —
+was built and then **falsified in use**. The PR-gate reviewer hallucinated a false-positive security
+*blocker* on PR #433 twice, despite the correct ASCII bytes being in its own prompt, because a sealed
+one-shot LLM verdict confabulates and the runner gave it no tools to self-verify. The insight that
+settled it: **master already uses subagents correctly** — fresh context, full tools, verify-first,
+advisory findings it weighs (the #427/#429 general-purpose reviewers) — which is exactly what this ADR
+tried to formalize with sealing / defang / clearance / autonomous-merge. That machinery only subtracted
+from the working behavior and duplicated CI (CodeQL SAST + pytest / mypy / ruff already gate every PR).
+So the harness + specialists are **removed (PR #435)**, **FRE-835 (autonomous-merge) canceled**, and
+**FRE-828 (the umbrella / seam) canceled**. Nothing replaces them: master reviews PRs directly; CI/CodeQL
+own the deterministic gates; a plain tool-equipped subagent handles context-offload on a large diff.
+**Survivor kept:** FRE-832 (prime-master checkpoint-to-durable-state, merged — a genuine improvement
+independent of the harness). **Durable lesson kept as a habit, not code:** spin a fresh-context
+adversarial subagent before a one-way door (re-embed / migration / control-plane change). The
+trigger-ledger + gating-watcher (FRE-829/823/825/845) are dormant — the watcher service was stopped and
+disabled by the owner. Net: the system is simpler and the understanding deeper; a clean null result.
 
 ---
 

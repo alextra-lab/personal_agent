@@ -24,8 +24,15 @@ _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 _LOCAL = _REPO_ROOT / "config" / "models.yaml"
 _CLOUD = _REPO_ROOT / "config" / "models.cloud.yaml"
 
-_FORBIDDEN_ROLES = ("entity_extraction", "captains_log", "insights", "embedding")
-_ALLOWED_ROLES = ("compressor", "reranker")
+_FORBIDDEN_ROLES = (
+    "entity_extraction",
+    "captains_log",
+    "insights",
+    "embedding",
+    "reranker",
+    "reranker_fallback",
+)
+_ALLOWED_ROLES = ("compressor",)
 
 
 @pytest.fixture(autouse=True)

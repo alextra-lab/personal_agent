@@ -231,6 +231,20 @@ models:
 
   # ── Reranker Model (Seshat Memory — ADR-0035) ──────────────────
   reranker:
+    # Voyage rerank-2.5 — managed reranker API (FRE-851). PRIMARY: ~250ms,
+    # quality-equivalent to the Mac 4B (FRE-695 J=0.73 vs 0.747, inside n=54
+    # noise). Falls back to reranker_fallback (Mac-tunnel 4B) on error/timeout,
+    # then to passthrough on total failure (memory/reranker.py).
+    id: "rerank-2.5"
+    provider_type: "cloud"
+    endpoint: "https://api.voyageai.com/v1"
+    context_length: 32000
+    max_concurrency: 5
+    default_timeout: 30
+    supports_function_calling: false
+
+  # ── Reranker Fallback Model (FRE-851) ───────────────────────────
+  reranker_fallback:
     # Qwen3-Reranker-4B mxfp8 on the Mac/laptop GPU via slm.frenchforet.com, MLX runtime
     # (FRE-696). MLX replaces llama.cpp: the llama.cpp causal-rerank path stalled under
     # sustained distinct-candidate load and timed out at the 50-candidate cap (FRE-695/696).
@@ -240,7 +254,8 @@ models:
     # returns real candidate volume (the cap was set when recall was empty — FRE-673).
     # Stateless query-time rescorer: no KG re-embed, embedder unchanged (0.6B/VPS).
     # CF-Access service token injected by memory/reranker.py for slm.frenchforet.com.
-    # Fails safe: rerank() falls back to vector+recency passthrough if unreachable.
+    # Programmatic fallback target (FRE-851): rerank() tries this when the Voyage
+    # primary errors/times out, before degrading to vector+recency passthrough.
     id: "Qwen/Qwen3-Reranker-4B-mxfp8"
     provider_type: "local"
     endpoint: "https://slm.frenchforet.com/v1"

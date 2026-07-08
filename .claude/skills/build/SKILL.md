@@ -69,9 +69,20 @@ test or probe that asserts the *outcome* — the invariant actually holds — no
 wired; this is the proof master's gate reads.** Standards (`.claude/CLAUDE.md`) + ADR-0074 identity
 threading on every new `log.*` / `bus.publish` / Cypher `MERGE|CREATE`.
 
-## 5 — Follow-up tickets
-File any discovered work as new issues — Needs Approval, under a Linear project (default: the
-project of the ticket being worked).
+## 5 — Meet the objective — fold in, don't over-ticket
+A ticket is an **objective** — a user story, usually spawned from an ADR but not uniquely — **not a
+boxed single change with no deviation allowed.** Your job is to **meet the objective**; the supporting
+changes and reasonable deviations you discover while building or in review are *part of meeting it*,
+not separate work. This is a single-developer project — tickets are for **structured sequencing** of
+real / planned / ADR work, not a log of every change; over-ticketing only delays development.
+- **Non-ADR supporting changes needed to make THIS build function** (a helper, a small fix, a config
+  tweak the feature depends on) → **fold them into this PR.** Do NOT file a ticket. Note them in the
+  handoff (Step 9) so master validates them as supporting rather than reading them as scope creep.
+- **Findings from a code review — your self-review (Step 8) or master's gate — that are reasonable
+  changes to THIS build task** → fix them **in this PR.** No multi-ticket paper trail for review fixes.
+- File a **new Needs-Approval ticket ONLY** for genuinely separate, sequenceable work OR anything
+  **ADR-requiring** (a design decision / a new architectural surface). When unsure, **prefer folding
+  in over ticketing** — a ticket explosion buys nothing for one developer.
 
 ## 6 — Documentation
 Update docs the change touches (skill docs, READMEs, doc-strings).

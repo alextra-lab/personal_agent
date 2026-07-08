@@ -51,6 +51,11 @@ ADR*, not merged-and-runs.** A feature / ADR-implementation ticket passes ONLY i
   specified* — no silent divergence from the ADR's design. If the design genuinely changed, the ADR
   is updated first (doc-drift, Step 3). A feature ticket with no backing ADR and no stated criterion
   → **bounce**: there is nothing to verify against.
+- **Folded-in supporting changes are expected — not scope creep, not a missing ticket.** Per build
+  skill Step 5, a build folds non-ADR supporting fixes and in-PR review fixes into its PR (noted in the
+  handoff) instead of spawning tickets — this is a single-developer project. Validate they genuinely
+  support the ticket's work; do NOT bounce for "no ticket" or read them as ADR divergence. The failure
+  mode to prevent is over-ticketing, not the extra diff that makes the build correct.
 - **Proof, not assertion.** Each named criterion carries evidence it is *delivered end to end*, not
   merely wired — a test asserting the outcome, a probe/query result, or observed behaviour, at the
   altitude of the criterion (the graph holds the right fact · the edge actually evicts · the guard

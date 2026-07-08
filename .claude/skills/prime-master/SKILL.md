@@ -51,6 +51,16 @@ If any fails: finish or record it (bump MASTER_PLAN "Last updated") before clear
    FrenchForest — In Review = PRs at the gate; Awaiting Deploy = merged-not-verified (master's
    queue); Verify Failed = open exceptions demanding a decision.
 6. `curl -s http://localhost:9001/health` — live gateway health + note deployed SHA (`git log -1 --oneline`).
+6b. **Actuation-sensor health (live-box probe — NOT reconstructable from durable sources).** The
+   gating watcher's true "am I actuating?" state lives only in machine-local, **gitignored** files +
+   systemd, so a durable/git-based re-prime is structurally blind to it: a manual stop (this has
+   happened — a ~50-min unrestarted window on 2026-07-08) or a dropped-in kill-switch file would both
+   pass silently. Verify **both** on the box: `systemctl is-active seshat-gating-watcher.service` →
+   `active`, **and** the shared kill-switch `telemetry/dispatch.disabled` is **absent** (its presence
+   halts *all* actuation even while systemd still reports `active`). Either failing means the
+   PR→master and bounce→worker legs are silently dead — surface it, never report "board clean" over a
+   dead sensor. (`telemetry/` is gitignored precisely so this is runtime state — hence a live probe,
+   not a durable-source assumption.)
 7. **PR gating is owner-triggered — no polling loop.** Master does **NOT** arm a `/loop` PR-gate cron.
    A 10-minute poll re-read this (large) session's full context past the 5-minute prompt-cache TTL on
    every tick, so each idle "no PRs" poll re-created the whole context as *uncached* input — a large,
@@ -62,9 +72,10 @@ If any fails: finish or record it (bump MASTER_PLAN "Last updated") before clear
 ## Output
 Print the guardian snapshot: current state · next-per-sequence · active pending verification ·
 unconsumed actuation triggers (from the trigger ledger — none, or each entry's ticket/target/state,
-with any `surfaced` entry called out as demanding owner attention) · PR gating owner-triggered (no
-loop; any stale cron deleted) · identity guardrails (never use injected userEmail; use owner test
-email). This is the re-prime block.
+with any `surfaced` entry called out as demanding owner attention) · actuation-sensor health (gating
+watcher `active` **and** kill-switch `telemetry/dispatch.disabled` absent — call out either failure
+loudly) · PR gating owner-triggered (no loop; any stale cron deleted) · identity guardrails (never
+use injected userEmail; use owner test email). This is the re-prime block.
 
 Lead the snapshot by restating the **guardian role & standing attributes** (lifecycle-rules.md
 § Guardian role) in one tight block, so every re-prime re-establishes who you are before what's open.

@@ -15,16 +15,23 @@ constraints, prior-deploy evidence) that the PR body often does NOT restate. Sur
 the comments that bears on correctness / scope / acceptance / how to deploy before merging.
 
 ## 2 — Analyze the diff
-- Correctness: invoke the **code-review** skill on the diff.
-- Security: invoke the **security-review** skill on the diff (the pre-merge security pass).
+- Correctness: invoke the **code-review** skill on the diff (runs as a background workflow).
+  **Size the effort to the diff** — `low` for a small/localized change, `high` for
+  src/schema/security/cost/memory. Sizing means dialing the level, NOT skipping: any change with
+  real logic (a script, a helper, behavioural config) gets at least a `low` pass; only pure
+  docs / config-values / test-only diffs skip it. (FRE-847 lesson: a 146-line "small" script drew
+  three confirmed correctness bugs at `high` — "it's small" is not grounds to skip the review.)
+- Security: invoke the **security-review** skill whenever the diff touches inputs, subprocess,
+  files, auth, secrets, or network; skip only for pure docs/test.
+- **Wait for the results and address confirmed findings BEFORE merge** (fix on the branch or bounce
+  to the build session) — running the skill and merging over its findings defeats the gate.
 Surface findings. Block merge on real issues; relay to the build session.
 - **Tier backstop (codex):** `/build` self-classifies each ticket and skips codex plan-review for
   *trivial* work (docs / config / test-only / one-liner, no src-logic). If the diff touches `src/`
   logic / schema / security / cost / memory (a *Standard/Complex* change) but the PR body / handoff
   comment shows **no codex plan-review**, the build session mis-tiered it — **bounce it back for
-  review; do not merge on a skipped-but-needed review.** (Scale review depth to the diff: a genuinely
-  trivial docs/test PR does not need the full code-review + security pass; reserve that for
-  src/schema/security/cost/memory.)
+  review; do not merge on a skipped-but-needed review.** (Review-effort sizing is per the
+  code-review bullet above — size to the diff; do not skip a real logic change because it is small.)
 
 ## 3 — Doc-drift check
 Does this change require updates to MASTER_PLAN, `CLAUDE.md` "Current status", or an ADR status

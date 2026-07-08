@@ -3,22 +3,27 @@
 
 Lets the gating watcher poll context% + idle without scraping the pane.
 
-Signals emitted (key=value, one line):
+Signals emitted (key=value, one line — the SAME keys on every path):
   session   tmux session asked about
-  jsonl     the transcript file resolved for it (basename)
-  model     model of the last turn
-  ctx       context-window tokens = input + cache_read + cache_creation
-            (the cache-inclusive sum — input_tokens alone is misleading)
+  jsonl     the transcript file resolved for it (basename; NONE if unresolved)
+  model     model of the last main-chain turn
+  ctx       context-window tokens = input + cache_read + cache_creation of the
+            last MAIN-CHAIN usage (sidechain/subagent usage is skipped).
+            The cache-inclusive sum — input_tokens alone is misleading.
   window    the model's context window (per-model map; override with --window)
   pct       ctx / window, 1 decimal
-  idle_s    seconds since the transcript was last written (mtime) — the
-            same-file idle signal
-  state     BUSY if idle_s < --idle-threshold else IDLE
+  idle_s    seconds since the transcript was last written (mtime); -1 if unknown.
+            KNOWN LIMITATION: mtime only advances when a line is appended, so a
+            single long model turn with no interleaved tool/line writes can read
+            IDLE while genuinely BUSY. Treat idle as a hint, not a hard
+            interlock — a consumer gating delivery on it must stay conservative.
+  state     BUSY if idle_s < --idle-threshold, IDLE if >=, UNKNOWN if unresolved
 
 Resolution: the CURRENT transcript is the newest ``*.jsonl`` (by mtime) in the
 project dir for the session's claude-process cwd. Newest-mtime is deliberate —
 the process ``--session-id`` / ``CLAUDE_CODE_SESSION_ID`` stay at the LAUNCH
-session and go stale after ``/clear``. RC-proof; needs no open fd.
+session and go stale after ``/clear``. Assumes claude runs in window 0 / pane 0.
+RC-proof; needs no open fd.
 
 Usage:
   context_probe.py cc-master
@@ -39,11 +44,18 @@ import time
 PROJECTS = os.path.expanduser("~/.claude/projects")
 DEFAULT_WINDOW = 1_000_000
 # The transcript has no window field, so map it from the model (confirmed via
-# /context: opus-4-8 = 1M, haiku-4.5 = 200k). ``--window`` overrides.
+# /context: opus-4-8 = 1M, sonnet-5 = 1M, haiku-4.5 = 200k). ``--window``
+# overrides. An unmapped model falls back to DEFAULT_WINDOW.
 MODEL_WINDOWS = {
     "claude-opus-4-8": 1_000_000,
+    "claude-sonnet-5": 1_000_000,
     "claude-haiku-4-5": 200_000,
 }
+# Read only the transcript tail so a poll is ~O(1) regardless of file size;
+# large enough to contain the last main-chain usage across many recent turns.
+TAIL_BYTES = 512_000
+
+UNKNOWN_LINE = "jsonl=NONE model=? ctx=0 window=0 pct=0.0 idle_s=-1 state=UNKNOWN"
 
 
 def _run(cmd: list[str]) -> str:
@@ -51,6 +63,14 @@ def _run(cmd: list[str]) -> str:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=5).stdout
     except (subprocess.SubprocessError, OSError):
         return ""
+
+
+def _mtime(path: str) -> float:
+    """os.path.getmtime that returns 0.0 if the file vanished (glob/stat race)."""
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0.0
 
 
 def _project_dir_for_cwd(cwd: str) -> str:
@@ -83,28 +103,42 @@ def resolve_jsonl(session: str) -> str | None:
     except OSError:
         return None
     files = glob.glob(os.path.join(_project_dir_for_cwd(cwd), "*.jsonl"))
-    return max(files, key=os.path.getmtime) if files else None
+    return max(files, key=_mtime) if files else None
 
 
 def read_context(jsonl: str) -> tuple[int, str]:
-    """Return (context_tokens, model) from the last usage entry in the transcript."""
+    """Return (context_tokens, model) from the last main-chain usage entry.
+
+    Reads only the transcript tail (TAIL_BYTES) so a poll stays cheap regardless
+    of transcript size. Skips ``isSidechain`` (subagent) entries so a Task
+    subagent's usage is never mistaken for the session's own context.
+    """
+    try:
+        size = os.path.getsize(jsonl)
+        with open(jsonl, "rb") as fh:
+            if size > TAIL_BYTES:
+                fh.seek(size - TAIL_BYTES)
+                fh.readline()  # drop the partial first line
+            raw = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return 0, "?"
+
     last_usage, model = None, "?"
-    with open(jsonl, encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            try:
-                o = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(o, dict):
-                continue
-            msg = o.get("message") or {}
-            if not isinstance(msg, dict):
-                continue
-            if msg.get("model"):
-                model = msg["model"]
-            u = msg.get("usage")
-            if isinstance(u, dict):
-                last_usage = u
+    for line in raw.splitlines():
+        try:
+            o = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(o, dict) or o.get("isSidechain"):
+            continue
+        msg = o.get("message") or {}
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("model"):
+            model = msg["model"]
+        u = msg.get("usage")
+        if isinstance(u, dict):
+            last_usage = u
     if not last_usage:
         return 0, model
     ctx = (
@@ -124,18 +158,23 @@ def main() -> int:
     ap.add_argument("--idle-threshold", type=int, default=180, help="seconds")
     args = ap.parse_args()
 
+    sess = args.session or "-"
     jsonl = args.jsonl or (resolve_jsonl(args.session) if args.session else None)
     if not jsonl or not os.path.exists(jsonl):
-        print(f"session={args.session} jsonl=NONE state=UNKNOWN")
+        print(f"session={sess} {UNKNOWN_LINE}")
         return 1
 
+    mtime = _mtime(jsonl)
+    if not mtime:
+        print(f"session={sess} {UNKNOWN_LINE}")
+        return 1
     ctx, model = read_context(jsonl)
-    window = args.window or MODEL_WINDOWS.get(model, DEFAULT_WINDOW)
-    idle_s = int(time.time() - os.path.getmtime(jsonl))
+    window = args.window if args.window is not None else MODEL_WINDOWS.get(model, DEFAULT_WINDOW)
+    idle_s = int(time.time() - mtime)
     pct = 100 * ctx / window if window else 0
     state = "BUSY" if idle_s < args.idle_threshold else "IDLE"
     print(
-        f"session={args.session or '-'} jsonl={os.path.basename(jsonl)[:8]} "
+        f"session={sess} jsonl={os.path.basename(jsonl)[:8]} "
         f"model={model} ctx={ctx} window={window} pct={pct:.1f} "
         f"idle_s={idle_s} state={state}"
     )

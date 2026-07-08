@@ -63,7 +63,7 @@ models:
     supports_vision: true         # Qwen3.6-35B-A3B vision-capable on the deployed build (ADR-0101)
     tool_calling_strategy: "native"  # Qwen3.5/3.6 chat template supports tools natively
     provider_type: "local"
-    endpoint: "http://localhost:8000/v1"
+    endpoint: "https://slm.frenchforet.com/v1"
 
   # ── Tier 2: Sub-Agent ───────────────────────────────────────────
   sub_agent:
@@ -91,7 +91,7 @@ models:
     supports_vision: true         # Qwen3.6-35B-A3B vision-capable on the deployed build (ADR-0101)
     tool_calling_strategy: "native"  # Qwen3.6 chat template supports tools natively
     provider_type: "local"
-    endpoint: "http://localhost:8000/v1"
+    endpoint: "https://slm.frenchforet.com/v1"
 
   # ── Experimental / A/B Testing ──────────────────────────────────
   reasoning_heavy:
@@ -108,7 +108,7 @@ models:
     thinking_budget_tokens: 3000
     supports_function_calling: true
     provider_type: "local"
-    endpoint: "http://localhost:8000/v1"
+    endpoint: "https://slm.frenchforet.com/v1"
 
   coding_large_context:
     # For large codebase analysis (future evaluation; high-memory MoE model)

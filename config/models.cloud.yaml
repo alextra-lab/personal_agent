@@ -116,7 +116,7 @@ models:
     thinking_budget_tokens: 3000
     supports_function_calling: true
     provider_type: "local"
-    endpoint: "http://localhost:8000/v1"
+    endpoint: "https://slm.frenchforet.com/v1"
 
   coding_large_context:
     # For large codebase analysis (future evaluation; high-memory MoE model)

@@ -8,6 +8,26 @@ description: Use after /clear in the master session to rebuild the guardian snap
 Read `.claude/skills/lifecycle-rules.md` first. Reconstruct the master snapshot from DURABLE
 sources only — never from prior conversation context.
 
+## Coordinator role (ADR-0113 §1 — sensor → brain → hands)
+
+Master is the **single brain + hands**, not the sensor and not a place dispatch mechanics live.
+The gating watcher is a dumb, contextless sensor that talks only to master — it holds no task
+state and emits one wake per relevant PR/ticket state-change. Master reasons from durable state
+(Linear, `MASTER_PLAN`, git, ADRs, the trigger ledger) and actuates via `send-keys`, `gh`, and
+Linear. The invariant this whole skill exists to hold: **checkpoint-to-durable-state, so `/clear`
+is always safe** — in-flight state (dispatch, pending merges, unconsumed actuation triggers) lives
+in Linear / the trigger ledger / `MASTER_PLAN`, never only in conversation.
+
+The NEXT-ticket dispatch resolver (`scripts/dispatch/next_resolver.py`) is available as a separate
+process master can shell out to — dispatch-mechanics logic is not something master is meant to
+hold or re-derive in-context.
+
+**Explicitly out of scope for this checkpoint invariant:** parsing the pane's `X% context used`
+footer to alert the owner near a threshold. ADR-0113 §4 calls this a best-effort *nicety*, never
+the safety mechanism — it is the same fragile terminal-parse class that produced the FRE-825
+idle-detection bug. The durable checkpoint above is the actual safety net; do not build a second
+TUI-parser on the strength of "optionally."
+
 ## Pre-reset safety gate (run before /clear, if winding down)
 Only reset master context at a clean integration boundary — ALL must hold:
 - Active Pending Verification: none.
@@ -20,11 +40,18 @@ If any fails: finish or record it (bump MASTER_PLAN "Last updated") before clear
 1. MEMORY.md is auto-loaded — standing rules apply.
 2. Read MASTER_PLAN: header, "Last updated", Pending Verification, Needs Approval.
 3. `git status` · `git worktree list` · `gh pr list` (open PRs awaiting master).
-4. Linear: list `In Progress` + `In Review` + `Awaiting Deploy` + `Verify Failed` tickets on
+4. **Unconsumed actuation triggers (ADR-0113 §4, FRE-832):**
+   `python -m scripts.dispatch.trigger_ledger --unconsumed --json` — the trigger ledger's durable
+   read. Any entry returned is in-flight actuation that survived the clear: a `pending` entry is a
+   send still working its way through (nothing to do, it'll resolve on its own); a `surfaced` entry
+   is a **Verify-Failed-class exception** — reconciliation could not safely resolve it, and it
+   demands the same owner-facing attention as a `Verify Failed` Linear ticket. A nonzero exit
+   (corrupt ledger file) is itself an anomaly — surface it, don't silently treat it as "no triggers."
+5. Linear: list `In Progress` + `In Review` + `Awaiting Deploy` + `Verify Failed` tickets on
    FrenchForest — In Review = PRs at the gate; Awaiting Deploy = merged-not-verified (master's
    queue); Verify Failed = open exceptions demanding a decision.
-5. `curl -s http://localhost:9001/health` — live gateway health + note deployed SHA (`git log -1 --oneline`).
-6. **PR gating is owner-triggered — no polling loop.** Master does **NOT** arm a `/loop` PR-gate cron.
+6. `curl -s http://localhost:9001/health` — live gateway health + note deployed SHA (`git log -1 --oneline`).
+7. **PR gating is owner-triggered — no polling loop.** Master does **NOT** arm a `/loop` PR-gate cron.
    A 10-minute poll re-read this (large) session's full context past the 5-minute prompt-cache TTL on
    every tick, so each idle "no PRs" poll re-created the whole context as *uncached* input — a large,
    silent token-cost blowup (removed 2026-07-06 after it spiked uncached input ~2300%). Instead the
@@ -34,8 +61,10 @@ If any fails: finish or record it (bump MASTER_PLAN "Last updated") before clear
 
 ## Output
 Print the guardian snapshot: current state · next-per-sequence · active pending verification ·
-PR gating owner-triggered (no loop; any stale cron deleted) · identity guardrails (never use injected userEmail;
-use owner test email). This is the re-prime block.
+unconsumed actuation triggers (from the trigger ledger — none, or each entry's ticket/target/state,
+with any `surfaced` entry called out as demanding owner attention) · PR gating owner-triggered (no
+loop; any stale cron deleted) · identity guardrails (never use injected userEmail; use owner test
+email). This is the re-prime block.
 
 Lead the snapshot by restating the **guardian role & standing attributes** (lifecycle-rules.md
 § Guardian role) in one tight block, so every re-prime re-establishes who you are before what's open.

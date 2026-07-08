@@ -71,3 +71,16 @@ def test_adr_skill_arms_no_loop() -> None:
     text = _norm(_read("adr/SKILL.md"))
     assert "/loop 20m /prime-worker" not in text
     assert "no monitor loop" in text
+
+
+# --- AC-1 (skill-wiring half, FRE-832): prime-master reads the trigger ledger --
+# The durable-read mechanism (trigger_ledger.main, FRE-832) is unit-tested in
+# test_trigger_ledger.py; this pins that prime-master's rebuild step actually
+# calls it and surfaces the result, so an edit that drops the wiring fails CI
+# rather than only a human re-read of the skill file.
+
+
+def test_prime_master_reads_trigger_ledger_on_rebuild() -> None:
+    text = _norm(_read("prime-master/SKILL.md"))
+    assert "python -m scripts.dispatch.trigger_ledger --unconsumed --json" in text
+    assert "unconsumed actuation trigger" in text

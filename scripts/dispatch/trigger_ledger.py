@@ -36,14 +36,20 @@ window too. An *abandoned* consume (``sent_at`` never set — the target was
 busy/absent, not a crash) carries no such window: it is immediately
 re-attemptable, matching the existing watcher's behaviour of retrying a
 busy/absent skip on the very next tick.
+
+Callable by hand::
+
+    python -m scripts.dispatch.trigger_ledger --unconsumed --json
 """
 
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import json
 import os
-from collections.abc import Callable, Collection, Mapping
+import sys
+from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Literal, Protocol
 
@@ -337,3 +343,92 @@ def prune_ledger(
             continue
         kept[event_id] = entry
     return kept
+
+
+def _default_ledger_path() -> Path:
+    """Return the default trigger-ledger path under the repo's telemetry dir."""
+    return Path("telemetry") / "trigger_ledger.json"
+
+
+def _entry_to_json(entry: LedgerEntry) -> dict[str, object]:
+    """Serialize a `LedgerEntry` to a JSON-safe dict."""
+    return {
+        "event_id": entry.event_id,
+        "source": entry.source,
+        "target_pane": entry.target_pane,
+        "ticket": entry.ticket,
+        "command": entry.command,
+        "preconditions": dict(entry.preconditions),
+        "created_at": entry.created_at,
+        "send_started_at": entry.send_started_at,
+        "sent_at": entry.sent_at,
+        "surfaced_at": entry.surfaced_at,
+    }
+
+
+class _CLILogger:
+    """Detects a corrupt-ledger warning for the one-shot CLI read (FRE-832).
+
+    `load_ledger` already logs-and-swallows a corrupt file as `{}` — the
+    right behavior for a long-running caller (the watcher), which must not
+    crash on a bad file. A one-shot CLI read needs to tell "genuinely no
+    triggers" apart from "the file exists but failed to parse" — the two
+    must not both print as an empty/healthy result to a caller (`prime-master`)
+    reconstructing in-flight state from this read.
+    """
+
+    def __init__(self) -> None:
+        self.corrupted = False
+
+    def info(self, event: str, **fields: object) -> None:
+        """Ignore info events — not actionable for a one-shot CLI read."""
+
+    def warning(self, event: str, **fields: object) -> None:
+        """Record a corrupt-ledger warning and echo it to stderr."""
+        if event == "trigger_ledger_corrupt":
+            self.corrupted = True
+        print(f"warning: {event} {fields}", file=sys.stderr)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Entry point. Prints unconsumed ledger entries (the `/clear`-safe read, FRE-832)."""
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--ledger-file", default=str(_default_ledger_path()), help="Path to the trigger ledger."
+    )
+    parser.add_argument(
+        "--unconsumed",
+        action="store_true",
+        help="Print entries not yet fully closed out (pending or surfaced).",
+    )
+    parser.add_argument("--json", action="store_true", help="Emit the result as JSON.")
+    args = parser.parse_args(argv)
+
+    if not args.unconsumed:
+        parser.error("--unconsumed is required (the only supported read today)")
+
+    logger = _CLILogger()
+    ledger = load_ledger(Path(args.ledger_file), logger)
+    if logger.corrupted:
+        print(
+            "error: trigger ledger file is corrupt -- cannot determine in-flight state",
+            file=sys.stderr,
+        )
+        return 1
+    entries = snapshot_unconsumed(ledger)
+
+    if args.json:
+        print(json.dumps([_entry_to_json(entry) for entry in entries], indent=2))
+    elif not entries:
+        print("none")
+    else:
+        for entry in entries:
+            state = "surfaced" if entry.surfaced_at is not None else "pending"
+            print(f"{entry.event_id} [{state}] ticket={entry.ticket} target={entry.target_pane}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

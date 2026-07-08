@@ -150,6 +150,21 @@ def test_build_invocation_quarantines_the_injected_health_response() -> None:
     assert open_at < inject_at < close_at
 
 
+def test_build_invocation_defangs_the_forged_closing_delimiter_in_the_evidence() -> None:
+    # Regression (master gate, PR #433): a forged "===END UNTRUSTED ARTIFACT===" planted in the
+    # health response must not contribute an EXTRA literal match of the real boundary beyond what
+    # the template's own trusted prose already legitimately quotes. Position-only checks (rindex)
+    # cannot prove this -- the genuine closer is always appended last by assemble_invocation
+    # regardless of whether the forged copy survived -- so this counts exact matches instead and
+    # confirms the forged copy was defanged (= -> ═), not merely hidden or stripped.
+    injected = (_FIXTURES / "injected_health_response.txt").read_text(encoding="utf-8")
+    runner = _FakeRunner(injected)
+    inv = build_invocation("gateway_rebuild", runner, repo_root=_REPO_ROOT)
+    baseline = inv.template.body.count(ARTIFACT_CLOSE)  # the template's own documented mentions
+    assert inv.prompt.count(ARTIFACT_CLOSE) == baseline + 1  # + exactly one genuine closer
+    assert ARTIFACT_CLOSE.replace("=", "═") in inv.prompt
+
+
 # --- the verify path: end-to-end gate threading -----------------------------
 
 

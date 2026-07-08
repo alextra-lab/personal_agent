@@ -93,6 +93,20 @@ def test_build_invocation_places_injection_strictly_inside_the_envelope() -> Non
     assert open_at < inject_at < close_at
 
 
+def test_build_invocation_defangs_the_forged_closing_delimiter_in_the_ticket() -> None:
+    # Regression (master gate, PR #433): a forged "===END UNTRUSTED ARTIFACT===" planted in the
+    # ticket body must not contribute an EXTRA literal match of the real boundary beyond what the
+    # template's own trusted prose already legitimately quotes. Position-only checks (rindex) cannot
+    # prove this -- the genuine closer is always appended last by assemble_invocation regardless of
+    # whether the forged copy survived -- so this counts exact matches instead and confirms the
+    # forged copy was defanged (= -> ═), not merely hidden or stripped.
+    ticket = _load("injection_ticket.json")
+    inv = build_invocation(ticket, repo_root=_REPO_ROOT)
+    baseline = inv.template.body.count(ARTIFACT_CLOSE)  # the template's own documented mentions
+    assert inv.prompt.count(ARTIFACT_CLOSE) == baseline + 1  # + exactly one genuine closer
+    assert ARTIFACT_CLOSE.replace("=", "═") in inv.prompt
+
+
 def test_build_invocation_carries_the_adr_index_as_trusted_reference() -> None:
     ticket = _load("novel_ticket.json")
     inv = build_invocation(ticket, repo_root=_REPO_ROOT)

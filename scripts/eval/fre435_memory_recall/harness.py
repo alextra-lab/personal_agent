@@ -239,12 +239,30 @@ async def fetch_live_distractors(limit: int) -> list[dict[str, Any]]:
     Returns:
         Turn dicts with ``turn_id``/``user_message``/``assistant_response``/
         ``key_entities``.
+
+    Raises:
+        RuntimeError: If the neo4j driver is unavailable, or if
+            ``FRE435_LIVE_NEO4J_PASSWORD`` is unset (FRE-778). The latter guards
+            this read (production Neo4j, ``DISTRACTOR_LIVE_NEO4J_URI``, default
+            port 7687), which must never fall back to ``settings.neo4j_password``
+            — the test-substrate credential the rest of this process is pinned
+            to. The two happen to default from the identical ``NEO4J_PASSWORD``
+            compose var today, which is exactly the latent trap this guards
+            against if they ever diverge.
     """
     if limit <= 0:
         return []
     if Neo4jAsyncGraphDatabase is None:
         raise RuntimeError("neo4j driver unavailable for distractor fetch")
-    password = os.environ.get("AGENT_NEO4J_PASSWORD") or settings.neo4j_password
+    password = os.environ.get("FRE435_LIVE_NEO4J_PASSWORD")
+    if not password:
+        raise RuntimeError(
+            "fetch_live_distractors refused: FRE435_LIVE_NEO4J_PASSWORD is not set. "
+            "This read targets production Neo4j and must use a credential explicit "
+            "and separate from the test-substrate password (settings.neo4j_password) "
+            "-- set FRE435_LIVE_NEO4J_PASSWORD to enable it, or pass "
+            "--distractor-background 0 to skip the live-corpus read entirely."
+        )
     driver = Neo4jAsyncGraphDatabase.driver(  # fre-375-allow: READ-ONLY distractor mine (ADR-0087 §D7); separate driver, never writes
         DISTRACTOR_LIVE_NEO4J_URI, auth=(settings.neo4j_user, password)
     )

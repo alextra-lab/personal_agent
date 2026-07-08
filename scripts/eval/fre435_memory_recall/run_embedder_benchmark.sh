@@ -18,6 +18,10 @@
 # Usage:
 #   export AGENT_NEO4J_PASSWORD=<test-stack :7688 password>   # from .env NEO4J_PASSWORD
 #   # for the 4b embedder also: export CF_ACCESS_CLIENT_ID=... CF_ACCESS_CLIENT_SECRET=...
+#   # for 'ab' mode with a non-zero --distractor-background (the default is 40):
+#   #   export FRE435_LIVE_NEO4J_PASSWORD=<PRODUCTION Neo4j password>   # FRE-778 — separate
+#   #   from AGENT_NEO4J_PASSWORD above; never falls back to it. Omit by passing
+#   #   --distractor-background 0 instead.
 #   scripts/eval/fre435_memory_recall/run_embedder_benchmark.sh <0.6b|4b> <calibrate|ab> [extra driver args]
 #
 # Recommended sequence (apples-to-apples, drift-free separation):
@@ -51,6 +55,15 @@ case "$EMBEDDER" in
     : "${CF_ACCESS_CLIENT_SECRET:?$EMBEDDER needs CF_ACCESS_CLIENT_SECRET}"
     ;;
 esac
+# 'ab' mode defaults to --distractor-background 40, which reads production Neo4j
+# and now (FRE-778) requires its own credential, separate from AGENT_NEO4J_PASSWORD
+# above — skip this only if the caller explicitly passed --distractor-background 0.
+if [ "$MODE" = "ab" ]; then
+  case " $* " in
+    *' --distractor-background 0 '*) ;;
+    *) : "${FRE435_LIVE_NEO4J_PASSWORD:?export FRE435_LIVE_NEO4J_PASSWORD (the PRODUCTION Neo4j password -- separate from AGENT_NEO4J_PASSWORD, never falls back to it) first, or pass --distractor-background 0 to skip the live-corpus read}" ;;
+  esac
+fi
 
 # Force-set (NOT setdefault) the TEST substrate so no stray prod value survives.
 export APP_ENV=test

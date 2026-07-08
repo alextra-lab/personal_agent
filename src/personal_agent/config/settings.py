@@ -1569,6 +1569,20 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # Captain's Log reflection cadence (FRE-710)
+    captains_log_reflection_cadence_enabled: bool = Field(
+        default=True,
+        description="FRE-710: gate Captain's Log reflection to a per-session cadence instead of "
+        "every turn. False reverts to unconditional per-turn reflection (pre-FRE-710 behavior).",
+    )
+    captains_log_reflection_min_interval_seconds: float = Field(
+        default=1800.0,
+        ge=0,
+        description="FRE-710: minimum seconds between reflected turns for the same session_id, "
+        "approximating 'once per session' (no durable session-end signal exists to trigger on "
+        "literally). A turn that hits the iteration limit always bypasses this interval.",
+    )
+
     # Captain's Log promotion + Linear feedback loop (ADR-0040)
     promotion_pipeline_enabled: bool = Field(
         default=True,

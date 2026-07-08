@@ -2050,12 +2050,34 @@ async def execute_task(ctx: ExecutionContext, session_manager: SessionManager) -
                         exc_info=True,
                     )
 
-                # Trigger Captain's Log reflection (LLM-based, background)
+                # Trigger Captain's Log reflection (LLM-based, background), gated to a coarser
+                # per-session cadence (FRE-710) rather than every turn. eval_mode turns and the
+                # cadence-disabled kill switch bypass the gate and always reflect; a turn that
+                # hits the iteration limit always bypasses the debounce interval (see
+                # ReflectionCadenceGate).
                 # Run in background to avoid blocking user response
                 # Metrics summary is now available in ctx for reflection enrichment
                 from personal_agent.captains_log.background import run_in_background
+                from personal_agent.captains_log.reflection_cadence import (
+                    get_reflection_cadence_gate,
+                )
 
-                run_in_background(_trigger_captains_log_reflection(ctx))
+                hit_iteration_limit = ctx.tool_iteration_count > _resolve_max_iterations(ctx)
+                should_reflect = (
+                    ctx.eval_mode
+                    or not settings.captains_log_reflection_cadence_enabled
+                    or get_reflection_cadence_gate().should_reflect(
+                        ctx.session_id, hit_iteration_limit=hit_iteration_limit
+                    )
+                )
+                if should_reflect:
+                    run_in_background(_trigger_captains_log_reflection(ctx))
+                else:
+                    log.debug(
+                        "captains_log_reflection_skipped_cadence",
+                        trace_id=ctx.trace_id,
+                        session_id=ctx.session_id,
+                    )
             else:
                 log.warning(
                     TASK_FAILED,

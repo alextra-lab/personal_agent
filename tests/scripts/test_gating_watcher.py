@@ -451,6 +451,25 @@ def test_send_busy_session_skips() -> None:
     assert not any(call[:2] == ("tmux", "send-keys") for call in runner.calls)
 
 
+def test_send_master_injects_regardless_of_busy_pane() -> None:
+    """Master triggers (require_idle=False) send even into a busy pane and never
+    consult capture-pane for an idle check — Claude Code queues the keys.
+    """
+    runner = _RecordingRunner(
+        {
+            ("tmux", "has-session"): _FakeRunResult(returncode=0),
+            ("tmux", "capture-pane"): _FakeRunResult(returncode=0, stdout=_BUSY_PANE),
+        }
+    )
+    assert send_to_session("cc-master", "/master 1", runner, require_idle=False) == "sent"
+    assert not any(call[:2] == ("tmux", "capture-pane") for call in runner.calls)
+    send_keys = [call for call in runner.calls if call[:2] == ("tmux", "send-keys")]
+    assert send_keys == [
+        ("tmux", "send-keys", "-t", "cc-master", "-l", "/master 1"),
+        ("tmux", "send-keys", "-t", "cc-master", "Enter"),
+    ]
+
+
 def test_send_idle_session_injects() -> None:
     runner = _RecordingRunner(
         {
@@ -713,7 +732,10 @@ def test_run_once_ledger_untouched_for_unroutable_worker() -> None:
     assert ledger == {}
 
 
-def test_run_once_ledger_abandoned_on_busy_session() -> None:
+def test_run_once_master_sends_even_on_busy_session() -> None:
+    # Master triggers bypass the idle guard (require_idle=False): the send goes
+    # through even into a busy pane, and Claude Code queues it. (Workers still
+    # abandon-on-busy and retry — send_to_session's require_idle default.)
     runner = _RecordingRunner(
         {
             ("tmux", "has-session"): _FakeRunResult(returncode=0),
@@ -734,8 +756,8 @@ def test_run_once_ledger_abandoned_on_busy_session() -> None:
         ledger_persist=ledger.update,
     )
     entry = ledger["master:412:abc1234def5678"]
-    assert entry.sent_at is None  # never actually sent
-    assert entry.consumed_at is not None  # abandoned -- eligible for a fresh attempt
+    assert entry.sent_at is not None  # sent despite the busy pane
+    assert entry.consumed_at is not None
 
 
 def test_run_once_reconciles_pending_ledger_entry_before_new_decisions() -> None:

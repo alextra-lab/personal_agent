@@ -398,6 +398,96 @@ class TestQualityMonitorScheduling:
             await scheduler._lifecycle_loop()
             mock_quality.assert_awaited_once()
 
+    async def test_lifecycle_loop_triggers_sysgraph_maintenance_daily(self, scheduler):
+        """Lifecycle loop runs sysgraph maintenance once per configured day/hour (ADR-0105 D8).
+
+        Advances _last_sysgraph_maintenance_date when the job reports success.
+        """
+        scheduler.running = True
+        scheduler._last_sysgraph_maintenance_date = None
+        scheduler.sysgraph_maintenance_hour_utc = datetime.now(timezone.utc).hour
+        scheduler._backfill_es_logger = None
+        scheduler._last_disk_check = datetime.now(timezone.utc)
+
+        async def stop_after_first_sleep(_: float) -> None:
+            scheduler.running = False
+
+        with (
+            patch("personal_agent.brainstem.scheduler.asyncio.sleep", new=stop_after_first_sleep),
+            patch("personal_agent.brainstem.scheduler.settings") as mock_settings,
+            patch(
+                "personal_agent.brainstem.jobs.sysgraph_maintenance.run_sysgraph_maintenance",
+                new=AsyncMock(return_value=True),
+            ) as mock_maintenance,
+        ):
+            mock_settings.data_lifecycle_enabled = False
+            mock_settings.insights_enabled = False
+            mock_settings.sysgraph_maintenance_enabled = True
+
+            await scheduler._lifecycle_loop()
+            mock_maintenance.assert_awaited_once()
+            assert scheduler._last_sysgraph_maintenance_date is not None
+
+    async def test_lifecycle_loop_does_not_advance_date_when_maintenance_reports_failure(
+        self, scheduler
+    ):
+        """A failed pass must not be marked done for the day (FRE-718 code review).
+
+        The scheduler previously advanced the date unconditionally, permanently skipping a
+        day's maintenance whenever the job swallowed an internal failure.
+        """
+        scheduler.running = True
+        scheduler._last_sysgraph_maintenance_date = None
+        scheduler.sysgraph_maintenance_hour_utc = datetime.now(timezone.utc).hour
+        scheduler._backfill_es_logger = None
+        scheduler._last_disk_check = datetime.now(timezone.utc)
+
+        async def stop_after_first_sleep(_: float) -> None:
+            scheduler.running = False
+
+        with (
+            patch("personal_agent.brainstem.scheduler.asyncio.sleep", new=stop_after_first_sleep),
+            patch("personal_agent.brainstem.scheduler.settings") as mock_settings,
+            patch(
+                "personal_agent.brainstem.jobs.sysgraph_maintenance.run_sysgraph_maintenance",
+                new=AsyncMock(return_value=False),
+            ) as mock_maintenance,
+        ):
+            mock_settings.data_lifecycle_enabled = False
+            mock_settings.insights_enabled = False
+            mock_settings.sysgraph_maintenance_enabled = True
+
+            await scheduler._lifecycle_loop()
+            mock_maintenance.assert_awaited_once()
+            assert scheduler._last_sysgraph_maintenance_date is None
+
+    async def test_lifecycle_loop_skips_sysgraph_maintenance_outside_its_hour(self, scheduler):
+        """The daily-hour gate does not fire on hours other than the configured one."""
+        scheduler.running = True
+        scheduler._last_sysgraph_maintenance_date = None
+        other_hour = (datetime.now(timezone.utc).hour + 1) % 24
+        scheduler.sysgraph_maintenance_hour_utc = other_hour
+        scheduler._backfill_es_logger = None
+        scheduler._last_disk_check = datetime.now(timezone.utc)
+
+        async def stop_after_first_sleep(_: float) -> None:
+            scheduler.running = False
+
+        with (
+            patch("personal_agent.brainstem.scheduler.asyncio.sleep", new=stop_after_first_sleep),
+            patch("personal_agent.brainstem.scheduler.settings") as mock_settings,
+            patch(
+                "personal_agent.brainstem.jobs.sysgraph_maintenance.run_sysgraph_maintenance",
+                new=AsyncMock(),
+            ) as mock_maintenance,
+        ):
+            mock_settings.data_lifecycle_enabled = False
+            mock_settings.insights_enabled = False
+            mock_settings.sysgraph_maintenance_enabled = True
+
+            await scheduler._lifecycle_loop()
+            mock_maintenance.assert_not_awaited()
+
     async def test_run_quality_monitoring_continues_after_component_failure(self, scheduler):
         """Quality monitor failures are isolated and do not crash scheduler execution."""
         scheduler.quality_monitor.check_entity_extraction_quality = AsyncMock(
@@ -425,19 +515,19 @@ class TestConsolidationCloudPath:
     """
 
     async def test_cloud_consolidates_even_with_active_request(self, scheduler):
-        """gating off + a request in flight + no prior consolidation → True."""
+        """Gating off + a request in flight + no prior consolidation → True."""
         scheduler.resource_gating_enabled = False
         scheduler.notify_request_start()  # count == 1 (the triggering request)
         assert await scheduler._should_consolidate() is True
 
     async def test_cloud_ignores_min_interval(self, scheduler):
-        """gating off → the min-interval throttle does not apply (dropped in cloud)."""
+        """Gating off → the min-interval throttle does not apply (dropped in cloud)."""
         scheduler.resource_gating_enabled = False
         scheduler.last_consolidation = datetime.now(timezone.utc)  # just ran
         assert await scheduler._should_consolidate() is True
 
     async def test_local_still_blocks_on_active_request(self, scheduler):
-        """gating on → active-request guard still defers (local-MLX unchanged)."""
+        """Gating on → active-request guard still defers (local-MLX unchanged)."""
         scheduler.resource_gating_enabled = True
         scheduler.notify_request_start()
         scheduler.last_request_time = datetime.now(timezone.utc) - timedelta(minutes=10)
@@ -460,7 +550,7 @@ class TestConsolidationCloudPath:
         assert scheduler._last_request_captured_at is not None
 
     async def test_should_pause_is_none_in_cloud(self, scheduler):
-        """gating off → consolidator runs with should_pause=None (no GPU to protect)."""
+        """Gating off → consolidator runs with should_pause=None (no GPU to protect)."""
         scheduler.resource_gating_enabled = False
         mock_consolidator = AsyncMock()
         mock_consolidator.consolidate_recent_captures.return_value = {"captures_processed": 1}
@@ -472,7 +562,7 @@ class TestConsolidationCloudPath:
         assert call_kwargs["should_pause"] is None
 
     async def test_should_pause_callable_in_local_reflects_active_count(self, scheduler):
-        """gating on → should_pause is a callable that is True while a request is active."""
+        """Gating on → should_pause is a callable that is True while a request is active."""
         scheduler.resource_gating_enabled = True
         mock_consolidator = AsyncMock()
         mock_consolidator.consolidate_recent_captures.return_value = {"captures_processed": 1}
@@ -480,7 +570,9 @@ class TestConsolidationCloudPath:
 
         await scheduler._trigger_consolidation()
 
-        should_pause = mock_consolidator.consolidate_recent_captures.call_args.kwargs["should_pause"]
+        should_pause = mock_consolidator.consolidate_recent_captures.call_args.kwargs[
+            "should_pause"
+        ]
         assert callable(should_pause)
         assert should_pause() is False
         scheduler.notify_request_start()

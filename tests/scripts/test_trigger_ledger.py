@@ -326,6 +326,41 @@ def test_prune_never_drops_surfaced_entry() -> None:
     assert pruned == ledger
 
 
+# --- FRE-848: non-PR-ticketed entries (e.g. context-pressure) ----------------
+
+
+def _record_non_pr(ledger: dict[str, LedgerEntry], *, now: float = 100.0, ttl_s: float = 600.0):
+    return record_pending(
+        ledger,
+        event_id="ctxpressure:cc-master",
+        source="context-pressure",
+        target_pane="cc-master",
+        ticket="cc-master",  # not a PR number -- session-keyed
+        command="Context at 75% ...",
+        preconditions={},
+        now=now,
+        ttl_s=ttl_s,
+    )
+
+
+def test_prune_keeps_non_pr_ticketed_consumed_entry_within_retention() -> None:
+    # A session-keyed ticket ("cc-master") is never in open_prs (PR numbers) --
+    # must not be evicted by that check alone, only by retention_s.
+    ledger, _ = _record_non_pr({}, now=100.0)
+    ledger = mark_send_started(ledger, "ctxpressure:cc-master", 100.0)
+    ledger = mark_sent(ledger, "ctxpressure:cc-master", 100.0)
+    ledger = mark_consumed(ledger, "ctxpressure:cc-master", 100.0)
+    pruned = prune_ledger(ledger, now=150.0, retention_s=500.0, open_prs=[412])
+    assert "ctxpressure:cc-master" in pruned
+
+
+def test_prune_drops_non_pr_ticketed_entry_past_retention() -> None:
+    ledger, _ = _record_non_pr({}, now=100.0)
+    ledger = mark_consumed(ledger, "ctxpressure:cc-master", 100.0)
+    pruned = prune_ledger(ledger, now=100.0 + 999.0, retention_s=500.0, open_prs=[412])
+    assert pruned == {}
+
+
 # --- FRE-832: CLI read surface `prime-master` shells out to on rebuild --------
 
 

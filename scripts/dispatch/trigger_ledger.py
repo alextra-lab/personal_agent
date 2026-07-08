@@ -322,6 +322,15 @@ def prune_ledger(
     dropped, regardless of age — those are exactly the entries that must not
     silently disappear.
 
+    The closed-PR eviction only applies to a PR-ticketed entry (``ticket`` is
+    numeric, e.g. ``"412"``). A non-PR-ticketed entry (e.g. a session-keyed
+    ``ticket`` like ``"cc-master"`` for a context-pressure nudge, FRE-848) has
+    no PR to close against, so it can never match ``open_prs`` either way —
+    without this guard it would be evicted on the very next prune (often the
+    same tick it was written), defeating the ledger's crash-safety backup for
+    any non-PR-keyed trigger. It ages out by ``retention_s`` alone instead,
+    same as a PR-ticketed entry does once its PR closes.
+
     Args:
         ledger: The current ledger.
         now: Wall-clock epoch seconds.
@@ -339,7 +348,7 @@ def prune_ledger(
             continue
         if now - entry.consumed_at >= retention_s:
             continue
-        if entry.ticket not in open_set:
+        if entry.ticket.isdigit() and entry.ticket not in open_set:
             continue
         kept[event_id] = entry
     return kept

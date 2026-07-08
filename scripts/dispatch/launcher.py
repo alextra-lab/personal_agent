@@ -455,8 +455,12 @@ def execute_plan(plan: LaunchPlan, runner: CommandRunner = subprocess_runner) ->
 
     Manual outcomes (``manual-model-required``/``manual-continuation``) perform
     no side effect. A CLEAR launch/prepare first preflights the worktree
-    (aborting on uncommitted changes) and then starts the tmux session; a tmux
-    failure (including a session that already exists) is reported as
+    (aborting on uncommitted changes), then tears down any existing session for
+    this stream's persistent tmux slot (the busy-guard guarantees the stream is
+    idle here, so the slot holds only a finished dispatch), then starts the
+    fresh session at the ticket's model. Without the teardown, ``tmux
+    new-session -s <slot>`` collides with the persistent worker session and the
+    launch is abandoned. A tmux ``new-session`` failure is reported as
     ``launch-failed``, never a claimed launch.
 
     Args:
@@ -479,13 +483,22 @@ def execute_plan(plan: LaunchPlan, runner: CommandRunner = subprocess_runner) ->
             launched=False,
         )
 
+    # The stream's tmux session is a persistent worker "slot" that outlives a
+    # single dispatch; the busy-guard guarantees the stream is idle here, so a
+    # fresh CLEAR launch must first tear down any existing (finished) session
+    # for this slot — otherwise `tmux new-session -s <slot>` collides and the
+    # launch is abandoned. Best-effort: a non-zero return (no such session) is
+    # the benign first-launch case and is ignored.
+    if plan.command[:2] == ("tmux", "new-session"):
+        runner(["tmux", "kill-session", "-t", plan.tmux_session])
+
     result = runner(plan.command)
     if result.returncode != 0:
         return LaunchResult(
             outcome="launch-failed",
             card=(
                 f"[{plan.stream}] launch-failed → tmux new-session for {plan.tmux_session} "
-                f"failed (the session may already exist); no launch claimed"
+                f"failed; no launch claimed"
             ),
             launched=False,
         )

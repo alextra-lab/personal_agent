@@ -1250,6 +1250,14 @@ class AppConfig(BaseSettings):
         description="OpenAI API key",
         json_schema_extra={"secret": True},
     )
+    voyage_api_key: str | None = Field(
+        default=None,
+        description=(
+            "Voyage AI API key for the reranker role's Voyage rerank-2.5 primary "
+            "target (FRE-851). None degrades that path to the Mac-tunnel fallback."
+        ),
+        json_schema_extra={"secret": True},
+    )
 
     # Linear (native tool — FRE-224)
     linear_api_key: str | None = Field(

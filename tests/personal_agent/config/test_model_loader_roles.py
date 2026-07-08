@@ -40,6 +40,8 @@ class TestForbiddenRolesResolveToTheAllValue:
             ("captains_log", "claude_sonnet"),
             ("insights", "claude_sonnet"),
             ("embedding", "embedding"),
+            ("reranker", "reranker"),
+            ("reranker_fallback", "reranker_fallback"),
         ],
     )
     def test_resolves_same_key_under_both_profiles(self, role: str, expected: str) -> None:
@@ -48,9 +50,9 @@ class TestForbiddenRolesResolveToTheAllValue:
 
 
 class TestAllowedRolesResolvePerProfile:
-    """`compressor`/`reranker` resolve via the matrix too, even though `allowed`."""
+    """`compressor` resolves via the matrix too, even though `allowed`."""
 
-    @pytest.mark.parametrize("role", ["compressor", "reranker"])
+    @pytest.mark.parametrize("role", ["compressor"])
     def test_resolves_under_each_profile(self, role: str) -> None:
         assert resolve_role_model_key(role, config_path=_LOCAL) == role
         assert resolve_role_model_key(role, config_path=_CLOUD) == role

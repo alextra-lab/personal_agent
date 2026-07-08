@@ -39,12 +39,15 @@ active_profiles:
 # resolve_model_key()), a session-scoped runtime choice, not a deployment-
 # config divergence. FRE-650 does not touch that mechanism.
 #
-# `compressor`/`reranker` stay `allowed` (FRE-649 follow-up: owner to decide
-# whether they should become `forbidden` — reranker's 0.6B/4B split looks like
-# a deliberate FRE-696 reliability tradeoff, compressor's nano/mini split looks
-# like uncorrected drift). Both now carry real local/cloud values and resolve
-# through the matrix like every other role — this ticket changes *mechanism*
-# only, not that open divergence-*policy* question.
+# `compressor` stays `allowed` (FRE-649 follow-up: owner to decide whether it
+# should become `forbidden` — its nano/mini split looks like uncorrected
+# drift, unresolved by this ticket). `reranker` moved to `forbidden` (FRE-851):
+# both profiles now point at the same Voyage rerank-2.5 managed endpoint, so
+# there is no per-profile value left to diverge — the local/cloud 0.6B/4B
+# split this role once carried is gone (Voyage is the primary in both files;
+# the retired Mac-tunnel 4B lives on as the `reranker_fallback` role, also
+# `forbidden` for the same reason — one programmatic fallback target, not a
+# per-profile choice).
 roles:
   primary:            { divergence: allowed, local: primary, cloud: primary }
   sub_agent:          { divergence: allowed, local: sub_agent, cloud: sub_agent }
@@ -53,7 +56,8 @@ roles:
   insights:           { divergence: forbidden, all: claude_sonnet }
   embedding:          { divergence: forbidden, all: embedding }
   compressor:         { divergence: allowed, local: compressor, cloud: compressor }
-  reranker:           { divergence: allowed, local: reranker, cloud: reranker }
+  reranker:           { divergence: forbidden, all: reranker }
+  reranker_fallback:  { divergence: forbidden, all: reranker_fallback }
 
 # ── required_secrets ────────────────────────────────────────────────────────
 # Per-profile required AppConfig secret fields (ADR-0099 D4: "required secret

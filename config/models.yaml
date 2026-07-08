@@ -221,11 +221,27 @@ models:
 
   # ── Reranker Model (Seshat Memory — ADR-0035) ──────────────────
   reranker:
-    # Qwen3-Reranker-0.6B via slm_server (llama.cpp GGUF, /v1/rerank)
-    # Cross-attention re-scoring of top-K retrieval candidates
-    id: "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
+    # Voyage rerank-2.5 — managed reranker API (FRE-851). PRIMARY: ~250ms,
+    # quality-equivalent to the Mac 4B (FRE-695 J=0.73 vs 0.747, inside n=54
+    # noise). Falls back to reranker_fallback (Mac-tunnel 4B) on error/timeout,
+    # then to passthrough on total failure (memory/reranker.py).
+    id: "rerank-2.5"
+    provider_type: "cloud"
+    endpoint: "https://api.voyageai.com/v1"
+    context_length: 32000
+    max_concurrency: 5
+    default_timeout: 30
+    supports_function_calling: false
+
+  # ── Reranker Fallback Model (FRE-851) ───────────────────────────
+  reranker_fallback:
+    # Qwen3-Reranker-4B mxfp8 on the Mac/laptop GPU via slm.frenchforet.com,
+    # MLX runtime (FRE-696). Programmatic fallback target when Voyage
+    # (the "reranker" role) errors or times out — memory/reranker.py tries
+    # this before degrading to passthrough.
+    id: "Qwen/Qwen3-Reranker-4B-mxfp8"
     provider_type: "local"
-    endpoint: "http://localhost:8504/v1"
+    endpoint: "https://slm.frenchforet.com/v1"
     context_length: 8192
     max_concurrency: 1
     default_timeout: 120

@@ -7,19 +7,26 @@ Covers the ticket's acceptance-criteria slice:
        exactly one net actuation, never a blind replay
   AC-1 (half) an unconsumed trigger survives a simulated context clear
        (fresh load from disk), sourced from the ledger not conversation
+
+Also covers the FRE-832 CLI read surface `prime-master` shells out to
+(`main`) -- the durable-read mechanism a `/clear`-safe rebuild depends on.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Literal
 
+import pytest
 from scripts.dispatch.trigger_ledger import (
     LedgerEntry,
     load_ledger,
+    main,
     mark_consumed,
     mark_send_started,
     mark_sent,
+    mark_surfaced,
     prune_ledger,
     reconcile,
     record_pending,
@@ -314,8 +321,130 @@ def test_prune_never_drops_unconsumed_entry_regardless_of_age() -> None:
 def test_prune_never_drops_surfaced_entry() -> None:
     ledger, _ = _record({}, now=100.0)
     ledger = mark_send_started(ledger, "master:412:abc123", 100.0)
-    from scripts.dispatch.trigger_ledger import mark_surfaced
-
     ledger = mark_surfaced(ledger, "master:412:abc123", 100.0)
     pruned = prune_ledger(ledger, now=100.0 + 10_000_000.0, retention_s=1.0, open_prs=[])
     assert pruned == ledger
+
+
+# --- FRE-832: CLI read surface `prime-master` shells out to on rebuild --------
+
+
+def test_main_json_includes_seeded_unconsumed_entry(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ledger, _ = _record({}, now=100.0)
+    path = tmp_path / "trigger_ledger.json"
+    save_ledger(path, ledger)
+
+    exit_code = main(["--ledger-file", str(path), "--unconsumed", "--json"])
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert len(payload) == 1
+    assert payload[0]["event_id"] == "master:412:abc123"
+    assert payload[0]["ticket"] == "412"
+
+
+def test_main_json_empty_ledger_emits_empty_list(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "trigger_ledger.json"  # never written -- absent file
+    exit_code = main(["--ledger-file", str(path), "--unconsumed", "--json"])
+    assert exit_code == 0
+    assert json.loads(capsys.readouterr().out) == []
+
+
+def test_main_json_consumed_only_emits_empty_list(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ledger, _ = _record({}, now=100.0)
+    ledger = mark_send_started(ledger, "master:412:abc123", 100.0)
+    ledger = mark_sent(ledger, "master:412:abc123", 100.0)
+    ledger = mark_consumed(ledger, "master:412:abc123", 100.0)
+    path = tmp_path / "trigger_ledger.json"
+    save_ledger(path, ledger)
+
+    exit_code = main(["--ledger-file", str(path), "--unconsumed", "--json"])
+
+    assert exit_code == 0
+    assert json.loads(capsys.readouterr().out) == []
+
+
+def test_main_json_includes_surfaced_entry(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ledger, _ = _record({}, now=100.0)
+    ledger = mark_send_started(ledger, "master:412:abc123", 100.0)
+    ledger = mark_surfaced(ledger, "master:412:abc123", 100.0)
+    path = tmp_path / "trigger_ledger.json"
+    save_ledger(path, ledger)
+
+    exit_code = main(["--ledger-file", str(path), "--unconsumed", "--json"])
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert len(payload) == 1
+    assert payload[0]["surfaced_at"] == 100.0
+
+
+def test_main_json_mixed_ledger_excludes_only_consumed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ledger, _ = _record({}, now=100.0)  # pending: master:412:abc123
+    ledger, _ = record_pending(
+        ledger,
+        event_id="master:413:def456",
+        source="master-ready",
+        target_pane="cc-master",
+        ticket="413",
+        command="/master 413",
+        preconditions={"head_sha": "def456"},
+        now=100.0,
+        ttl_s=600.0,
+    )
+    ledger = mark_send_started(ledger, "master:413:def456", 100.0)
+    ledger = mark_surfaced(ledger, "master:413:def456", 100.0)  # surfaced
+    ledger, _ = record_pending(
+        ledger,
+        event_id="worker:414:ghi789",
+        source="worker-bounce",
+        target_pane="cc-build1",
+        ticket="414",
+        command="/prime-worker",
+        preconditions={},
+        now=100.0,
+        ttl_s=600.0,
+    )
+    ledger = mark_send_started(ledger, "worker:414:ghi789", 100.0)
+    ledger = mark_sent(ledger, "worker:414:ghi789", 100.0)
+    ledger = mark_consumed(ledger, "worker:414:ghi789", 100.0)  # consumed -- must be excluded
+
+    path = tmp_path / "trigger_ledger.json"
+    save_ledger(path, ledger)
+
+    exit_code = main(["--ledger-file", str(path), "--unconsumed", "--json"])
+
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    event_ids = {entry["event_id"] for entry in payload}
+    assert event_ids == {"master:412:abc123", "master:413:def456"}
+
+
+def test_main_corrupt_ledger_exits_nonzero_and_warns(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "trigger_ledger.json"
+    path.write_text("{not valid json")
+
+    exit_code = main(["--ledger-file", str(path), "--unconsumed", "--json"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out == ""
+    assert "corrupt" in captured.err.lower()
+
+
+def test_main_requires_unconsumed_flag(tmp_path: Path) -> None:
+    path = tmp_path / "trigger_ledger.json"
+    with pytest.raises(SystemExit):
+        main(["--ledger-file", str(path), "--json"])

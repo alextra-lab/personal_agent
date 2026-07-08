@@ -83,6 +83,16 @@ Update docs the change touches (skill docs, READMEs, doc-strings).
 `make test` (module then full) · `make mypy` · `make ruff-check` + `make ruff-format` ·
 `pre-commit run --all-files`.
 
+**Self-review before the PR (shift-left — you fix your own findings so master never has to bounce
+them).** Invoke the **code-review** skill on your branch diff, **effort sized to the diff**: `low`
+for a small/localized change, `high` for src / schema / security / cost / memory. Sizing means
+dialing the level, NOT skipping — any real-logic change (a script, a helper, behavioural config)
+gets at least a `low` pass; only pure docs / config-values / test-only diffs skip it. Invoke
+**security-review** too when the diff touches inputs / subprocess / files / auth / secrets / network.
+**Fix every confirmed finding on your branch before opening the PR**, and note in the PR body that
+the review ran and what you addressed. (FRE-847: a `high` review caught 3 confirmed correctness bugs
+in a 146-line script — "it's small" is not grounds to skip.)
+
 ## 9 — PR + final ticket comment for master — then STOP
 **Sync to latest main FIRST** (prevents a stale-base collision / a DIRTY PR at master's gate when a
 sibling PR merged during your session): `git fetch origin && git rebase origin/main` — resolve any

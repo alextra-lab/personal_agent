@@ -15,16 +15,26 @@ constraints, prior-deploy evidence) that the PR body often does NOT restate. Sur
 the comments that bears on correctness / scope / acceptance / how to deploy before merging.
 
 ## 2 — Analyze the diff
-- Correctness: invoke the **code-review** skill on the diff.
-- Security: invoke the **security-review** skill on the diff (the pre-merge security pass).
+- **The code-review + security-review run in the BUILD session before the PR, not here** (shift-left;
+  build fixes its own findings on-branch — see build skill Step 8). Build hands you a **self-review
+  summary** in its handoff comment: the effort level, what the reviews flagged, what it fixed, and
+  anything it left unfixed and why.
+- **You are the executive: take that summary and decide next steps — don't re-run the work.** Validate
+  it (spot-check that the reported findings were real and its on-branch fixes actually address them;
+  weigh anything it chose not to fix), then act: **merge** if it holds, **bounce** if the fixes are
+  thin / a finding was waved off / a risky change was under-reviewed, or **run the code-review skill
+  yourself** only when build's summary is absent or looks unreliable on a risky diff. A real-logic diff
+  (src / script / behavioural config) with **no** review summary → **bounce** (same mechanism as the
+  codex backstop below).
+- Alongside, a **light spot-review** for what any diff-scoped review misses — scope creep, doc-drift,
+  acceptance-criteria adherence — and block merge on real issues.
 Surface findings. Block merge on real issues; relay to the build session.
 - **Tier backstop (codex):** `/build` self-classifies each ticket and skips codex plan-review for
   *trivial* work (docs / config / test-only / one-liner, no src-logic). If the diff touches `src/`
   logic / schema / security / cost / memory (a *Standard/Complex* change) but the PR body / handoff
   comment shows **no codex plan-review**, the build session mis-tiered it — **bounce it back for
-  review; do not merge on a skipped-but-needed review.** (Scale review depth to the diff: a genuinely
-  trivial docs/test PR does not need the full code-review + security pass; reserve that for
-  src/schema/security/cost/memory.)
+  review; do not merge on a skipped-but-needed review.** (Code-review + effort-sizing now live in the
+  build skill Step 8; master confirms they ran — see Step 2 above.)
 
 ## 3 — Doc-drift check
 Does this change require updates to MASTER_PLAN, `CLAUDE.md` "Current status", or an ADR status

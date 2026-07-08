@@ -4,7 +4,8 @@
 # Resource limits are conservative; VPS-3 (24GB RAM, 8 vCPU) provides headroom.
 #
 # Services:
-# - PostgreSQL (pgvector): 512MB RAM, 0.5 CPU
+# - PostgreSQL (pgvector): 512MB RAM, 1.0 CPU (ADR-0105 D8/FRE-718 — raised from 0.5 CPU;
+#   cgroup cpu.stat showed it was the most CPU-throttled container on the host)
 # - Neo4j Community: 1536MB RAM, 1.0 CPU
 # - Elasticsearch: 2048MB RAM, 1.0 CPU
 # - Kibana: 1024MB RAM, 0.5 CPU
@@ -19,7 +20,30 @@
 services:
   # PostgreSQL 17 with pgvector extension
   # Purpose: Sessions, metrics, conversation history, embeddings
-  # Resource limit: 512MB RAM, 0.5 CPU
+  # Resource limit: 512MB RAM, 1.0 CPU
+  #
+  # Tuning (ADR-0105 D8/AC-7, FRE-718) — verified-live against this exact container before
+  # changing anything (mem_limit=512MB confirmed via docker inspect; stock defaults confirmed
+  # via SHOW; CPU throttling confirmed via cgroup cpu.stat: ~6.9% of scheduling periods
+  # throttled, ~19% of used CPU time lost to throttling — the worst of every container on the
+  # host):
+  #   - random_page_cost / effective_io_concurrency / track_io_timing: SSD-appropriate planner
+  #     costs (memory-neutral, correct on the SSD-backed host regardless of container size).
+  #   - max_parallel_workers_per_gather=0: Postgres auto-detects the HOST's 8 CPUs (Docker CPU
+  #     quotas don't hide /proc/cpuinfo without an explicit cpuset) and sizes per-query
+  #     parallelism for cores it never actually gets scheduled on; zeroing it avoids
+  #     context-switch overhead for zero benefit on this shallow-traversal workload.
+  #   - shared_preload_libraries=pg_stat_statements: the standard query-performance-auditing
+  #     extension, not enabled today. Requires a restart to take effect (can't be `-c`'d at
+  #     runtime), so it rides this same restart rather than requiring a second one later. Run
+  #     `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` once after the restart.
+  #   - effective_cache_size=384MB (75% of the real 512MB limit): replaces the stock 4GB
+  #     default, which is 8x the container's entire memory ceiling and skews planner cost
+  #     estimates. shared_buffers stays at 128MB (25% of 512MB) — already correct, made
+  #     explicit rather than an accidental match with the stock default.
+  #   - work_mem is deliberately left at the stock 4MB (no bump): work_mem x max_connections
+  #     (100) could demand up to 800MB in the worst case, 1.5x this container's memory limit —
+  #     an OOM-kill risk on a live shared database not worth the modest recursive-CTE-sort gain.
   postgres:
     image: pgvector/pgvector:pg17
     container_name: cloud-sim-postgres
@@ -27,6 +51,22 @@ services:
       POSTGRES_USER: agent
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required — set in .env}
       POSTGRES_DB: personal_agent
+    command:
+      - postgres
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
+      - -c
+      - track_io_timing=on
+      - -c
+      - max_parallel_workers_per_gather=0
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - effective_cache_size=384MB
     volumes:
       - postgres_data_cloud:/var/lib/postgresql/data
       - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql
@@ -40,7 +80,7 @@ services:
       retries: 5
       start_period: 10s
     mem_limit: 512m
-    cpus: 0.5
+    cpus: 1.0
     networks:
       - cloud-sim
     restart: unless-stopped

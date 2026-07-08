@@ -1681,6 +1681,19 @@ class AppConfig(BaseSettings):
         "suppression in captains_log/suppression.py",
     )
 
+    # Sysgraph operational maintenance (ADR-0105 D8 / FRE-718)
+    sysgraph_maintenance_enabled: bool = Field(
+        default=True,
+        description="Enable daily VACUUM (ANALYZE) of sysgraph tables (ADR-0105 D8/AC-7)",
+    )
+    sysgraph_maintenance_hour_utc: int = Field(
+        default=9,
+        ge=0,
+        le=23,
+        description="UTC hour for the daily sysgraph maintenance sweep (distinct from feedback "
+        "polling's 7, outcome ingestion's 8)",
+    )
+
     # Knowledge Graph Freshness (ADR-0042)
     freshness_enabled: bool = Field(
         default=False,

@@ -8,6 +8,8 @@ of recursive-CTE traversals, not general app ORM traffic.
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Literal
@@ -22,6 +24,16 @@ from personal_agent.llm_client.cost_tracker import _normalize_asyncpg_dsn
 log = structlog.get_logger(__name__)
 
 _SYSGRAPH_ROLE = "sysgraph_role"
+
+# A bare, unquoted-identifier shape only -- VACUUM cannot bind a table name as a query
+# parameter, so this guards the one place a name is interpolated into SQL text. Every caller
+# in practice sources names from list_table_names() (the pg_tables catalog itself), never
+# external input, but this makes that trust boundary an assertion, not an assumption.
+_SAFE_IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+# A maintenance-sized timeout for VACUUM, independent of the pool's command_timeout=10 (which
+# is sized for the fast point queries every other method in this class runs).
+_VACUUM_TIMEOUT_SECONDS = 300.0
 
 # ADR-0105 D7: outcome weights for the realized-value signal.
 _OUTCOME_WEIGHTS: dict[str, float] = {
@@ -242,6 +254,16 @@ WITH RECURSIVE neighbors(node_type, node_id, depth) AS (
 SELECT node_type, node_id, depth FROM neighbors WHERE depth > 0;
 """
 
+# ADR-0105 D8/FRE-718: daily maintenance (VACUUM/ANALYZE + a durable completion marker).
+_LIST_TABLE_NAMES_QUERY = """
+SELECT tablename FROM pg_tables WHERE schemaname = 'sysgraph' ORDER BY tablename;
+"""
+
+_INSERT_MAINTENANCE_STAT = """
+INSERT INTO sysgraph.stat (name, value, metadata)
+VALUES ('sysgraph_maintenance_run', $1, $2::jsonb);
+"""
+
 
 class SysgraphRepository:
     """The only code path permitted to open a connection to the sysgraph schema.
@@ -275,8 +297,18 @@ class SysgraphRepository:
                 privileged role.
         """
         self.pool = await asyncpg.create_pool(self.dsn, min_size=1, max_size=5, command_timeout=10)
-        async with self.pool.acquire() as conn:
-            current_user = await conn.fetchval("SELECT current_user")
+        try:
+            async with self.pool.acquire() as conn:
+                current_user = await conn.fetchval("SELECT current_user")
+        except Exception:
+            # The pool was already created — any failure past this point (not just a
+            # wrong-role result) must still close it, or a caller whose own connect()
+            # try/except doesn't reach disconnect() (there is nothing to disconnect from
+            # its perspective — self.pool was never successfully assigned to it) leaks the
+            # pool's connections (FRE-718 code review).
+            await self.pool.close()
+            self.pool = None
+            raise
         if current_user != _SYSGRAPH_ROLE:
             await self.pool.close()
             self.pool = None
@@ -626,3 +658,85 @@ class SysgraphRepository:
                 proposal.scope,
             )
             return ReadBeforeEmitResult(decision="generate_new", proposal_id=new_id)
+
+    async def list_table_names(self) -> list[str]:
+        """Return every table name in the ``sysgraph`` schema (ADR-0105 D8/FRE-718).
+
+        Queries ``pg_tables`` rather than a hardcoded list, so a future migration adding a
+        table is picked up automatically without this module needing an update.
+
+        Returns:
+            Table names (no schema prefix), sorted.
+        """
+        assert self.pool is not None, "call connect() first"
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(_LIST_TABLE_NAMES_QUERY)
+        return [r["tablename"] for r in rows]
+
+    async def vacuum_analyze_table(self, table_name: str) -> None:
+        """Run ``VACUUM (ANALYZE)`` on one ``sysgraph`` table (ADR-0105 D8/AC-7).
+
+        A plain ``VACUUM`` (no ``FULL``) takes only a ``SHARE UPDATE EXCLUSIVE`` lock, which
+        does not block normal reads/writes on the table. Must not be called inside an
+        explicit asyncpg transaction — ``VACUUM`` cannot run inside a transaction block at
+        all, so this acquires a connection and calls ``execute()`` directly rather than
+        opening ``conn.transaction()``. Passes an explicit ``timeout`` overriding the pool's
+        ``command_timeout=10`` (sized for fast point queries elsewhere in this class, not a
+        maintenance statement) — autovacuum has never run on any sysgraph table yet (see the
+        module docstring), so the first real ``VACUUM`` on a bloated table could easily
+        exceed 10 seconds and would otherwise fail every day, permanently and silently
+        (FRE-718 code review).
+
+        Args:
+            table_name: The table to vacuum, unqualified (no schema prefix).
+
+        Raises:
+            ValueError: ``table_name`` is not a bare SQL identifier — ``VACUUM`` cannot bind
+                a table name as a query parameter, so this guards the one place a name is
+                interpolated into SQL text (see ``_SAFE_IDENTIFIER_RE``).
+        """
+        if not _SAFE_IDENTIFIER_RE.match(table_name):
+            raise ValueError(
+                f"refusing to VACUUM a non-identifier-shaped table name: {table_name!r}"
+            )
+        assert self.pool is not None, "call connect() first"
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                f'VACUUM (ANALYZE) sysgraph."{table_name}"', timeout=_VACUUM_TIMEOUT_SECONDS
+            )
+
+    async def vacuum_analyze_all(self) -> dict[str, str]:
+        """Run :meth:`vacuum_analyze_table` for every ``sysgraph`` table (ADR-0105 D8/AC-7).
+
+        One failing table does not abort the rest — mirrors ``run_outcome_ingestion``'s
+        per-item try/except/continue shape.
+
+        Returns:
+            Mapping of table name to ``"ok"`` on success, or the error string on failure.
+        """
+        results: dict[str, str] = {}
+        for table in await self.list_table_names():
+            try:
+                await self.vacuum_analyze_table(table)
+                results[table] = "ok"
+            except Exception as exc:
+                log.warning("sysgraph_vacuum_table_failed", table=table, error=str(exc))
+                results[table] = str(exc)
+        return results
+
+    async def record_maintenance_run(self, results: dict[str, str]) -> None:
+        """Record a durable, SQL-queryable "last succeeded" marker (ADR-0105 D8/AC-7).
+
+        Inserts a row into ``sysgraph.stat`` (an existing table, unused elsewhere in this
+        module) — master's live verification is one query
+        (``SELECT * FROM sysgraph.stat WHERE name='sysgraph_maintenance_run' ORDER BY
+        observed_at DESC LIMIT 1``), not a log grep.
+
+        Args:
+            results: The :meth:`vacuum_analyze_all` output — per-table ``"ok"``/error strings.
+        """
+        assert self.pool is not None, "call connect() first"
+        successful = sum(1 for status in results.values() if status == "ok")
+        metadata = json.dumps({"results": results, "table_count": len(results)})
+        async with self.pool.acquire() as conn:
+            await conn.execute(_INSERT_MAINTENANCE_STAT, float(successful), metadata)

@@ -127,6 +127,8 @@ class BrainstemScheduler:
         self.feedback_polling_hour_utc = settings.feedback_polling_hour_utc
         self._last_outcome_ingestion_date: date | None = None  # ADR-0105 D7
         self.outcome_ingestion_hour_utc = settings.outcome_ingestion_hour_utc
+        self._last_sysgraph_maintenance_date: date | None = None  # ADR-0105 D8
+        self.sysgraph_maintenance_hour_utc = settings.sysgraph_maintenance_hour_utc
         self.quality_monitor = quality_monitor or ConsolidationQualityMonitor(
             memory_service=memory_service,
             telemetry_queries=TelemetryQueries(
@@ -765,6 +767,34 @@ class BrainstemScheduler:
                         log.warning(
                             "outcome_ingestion_failed",
                             error=str(outcome_err),
+                            exc_info=True,
+                            trace_id=iteration_trace_id,
+                        )
+
+                # Daily sysgraph maintenance -- VACUUM (ANALYZE) (ADR-0105 D8 / FRE-718)
+                if (
+                    getattr(settings, "sysgraph_maintenance_enabled", True)
+                    and now.hour == self.sysgraph_maintenance_hour_utc
+                    and (
+                        self._last_sysgraph_maintenance_date is None
+                        or self._last_sysgraph_maintenance_date != today
+                    )
+                ):
+                    try:
+                        from personal_agent.brainstem.jobs.sysgraph_maintenance import (
+                            run_sysgraph_maintenance,
+                        )
+
+                        # run_sysgraph_maintenance never raises -- its return value, not an
+                        # exception, is how a swallowed internal failure is told apart from a
+                        # completed pass. Only advance the date on success, or a failed run
+                        # gets marked done for the day and never retried (FRE-718 code review).
+                        if await run_sysgraph_maintenance(trace_id=iteration_trace_id):
+                            self._last_sysgraph_maintenance_date = today
+                    except Exception as maintenance_err:
+                        log.warning(
+                            "sysgraph_maintenance_failed",
+                            error=str(maintenance_err),
                             exc_info=True,
                             trace_id=iteration_trace_id,
                         )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from uuid import UUID
 
@@ -266,3 +267,207 @@ async def test_connect_rejects_wrong_role() -> None:
     repo = SysgraphRepository(dsn=wrong_role_dsn)
     with pytest.raises(RuntimeError, match="expected 'sysgraph_role'"):
         await repo.connect()
+
+
+# ---------------------------------------------------------------------------
+# Maintenance (ADR-0105 D8/AC-7, FRE-718)
+# ---------------------------------------------------------------------------
+
+_EXPECTED_SYSGRAPH_TABLES = {
+    "correlates_with",
+    "derives_from",
+    "influence",
+    "outcome",
+    "produced",
+    "promoted_to",
+    "proposal",
+    "signal",
+    "stat",
+    "ticket",
+}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_list_table_names_returns_all_known_sysgraph_tables(
+    sysgraph_repo: SysgraphRepository,
+) -> None:
+    """list_table_names() discovers every table via pg_tables, not a hardcoded list."""
+    assert set(await sysgraph_repo.list_table_names()) == _EXPECTED_SYSGRAPH_TABLES
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_vacuum_analyze_table_succeeds_on_a_real_table(
+    sysgraph_repo: SysgraphRepository,
+) -> None:
+    """VACUUM (ANALYZE) genuinely executes against a real Postgres table."""
+    await sysgraph_repo.vacuum_analyze_table("proposal")  # no exception raised
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_vacuum_analyze_table_rejects_a_non_identifier_name(
+    sysgraph_repo: SysgraphRepository,
+) -> None:
+    """A non-identifier-shaped table name is refused before it reaches SQL text (injection guard)."""
+    with pytest.raises(ValueError, match="non-identifier-shaped"):
+        await sysgraph_repo.vacuum_analyze_table("proposal; DROP TABLE sysgraph.proposal")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_vacuum_analyze_all_reports_ok_for_every_table(
+    sysgraph_repo: SysgraphRepository,
+) -> None:
+    """vacuum_analyze_all() returns {table: "ok"} for every sysgraph table."""
+    results = await sysgraph_repo.vacuum_analyze_all()
+    assert set(results) == _EXPECTED_SYSGRAPH_TABLES
+    assert all(status == "ok" for status in results.values())
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_vacuum_analyze_all_continues_after_one_table_fails(
+    sysgraph_repo: SysgraphRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One failing table is reported as an error string without aborting the rest."""
+    tables = await sysgraph_repo.list_table_names()
+    bad_table = tables[0]
+    original = sysgraph_repo.vacuum_analyze_table
+
+    async def flaky_vacuum(table_name: str) -> None:
+        if table_name == bad_table:
+            raise RuntimeError("simulated vacuum failure")
+        await original(table_name)
+
+    monkeypatch.setattr(sysgraph_repo, "vacuum_analyze_table", flaky_vacuum)
+
+    results = await sysgraph_repo.vacuum_analyze_all()
+
+    assert results[bad_table] == "simulated vacuum failure"
+    assert all(status == "ok" for table, status in results.items() if table != bad_table)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_record_maintenance_run_inserts_a_queryable_stat_row(
+    sysgraph_repo: SysgraphRepository, sysgraph_pool: asyncpg.Pool
+) -> None:
+    """AC-7's "last succeeded" evidence: a durable, SQL-queryable sysgraph.stat row."""
+    try:
+        await sysgraph_repo.record_maintenance_run({"proposal": "ok", "ticket": "ok"})
+
+        async with sysgraph_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT value, metadata FROM sysgraph.stat "
+                "WHERE name = 'sysgraph_maintenance_run' ORDER BY observed_at DESC LIMIT 1"
+            )
+        assert row is not None
+        assert row["value"] == 2.0
+        metadata = json.loads(row["metadata"])
+        assert metadata["table_count"] == 2
+        assert metadata["results"] == {"proposal": "ok", "ticket": "ok"}
+    finally:
+        async with sysgraph_pool.acquire() as conn:
+            await conn.execute("DELETE FROM sysgraph.stat WHERE name = 'sysgraph_maintenance_run'")
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_connect_closes_the_pool_on_any_role_check_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression (FRE-718 code review): a role-check failure must still close the pool.
+
+    Not just a wrong-role result -- a failure during the role-check itself must still close
+    the pool it just created, or a caller whose own connect() try/except has nothing to
+    disconnect (self.pool was never assigned on its side) leaks the pool's connections.
+    """
+    from personal_agent.config import settings
+
+    repo = SysgraphRepository(dsn=settings.sysgraph_database_url)
+
+    class _FailingConn:
+        async def fetchval(self, *_args: object, **_kwargs: object) -> str:
+            raise RuntimeError("simulated role-check failure")
+
+    class _FailingAcquireCtx:
+        async def __aenter__(self) -> _FailingConn:
+            return _FailingConn()
+
+        async def __aexit__(self, *_exc: object) -> bool:
+            return False
+
+    class _FailingPool:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def acquire(self) -> _FailingAcquireCtx:
+            return _FailingAcquireCtx()
+
+        async def close(self) -> None:
+            self.closed = True
+
+    fake_pool = _FailingPool()
+
+    async def fake_create_pool(*_args: object, **_kwargs: object) -> _FailingPool:
+        return fake_pool
+
+    monkeypatch.setattr("personal_agent.sysgraph.repository.asyncpg.create_pool", fake_create_pool)
+
+    with pytest.raises(RuntimeError, match="simulated role-check failure"):
+        await repo.connect()
+
+    assert repo.pool is None
+    assert fake_pool.closed is True
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_vacuum_analyze_table_uses_a_maintenance_sized_timeout(
+    sysgraph_repo: SysgraphRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression (FRE-718 code review): VACUUM must not inherit the point-query timeout.
+
+    The pool's command_timeout=10 is sized for fast point queries -- autovacuum has never run
+    on any sysgraph table, so the first real VACUUM on a bloated table could easily exceed 10
+    seconds and would otherwise fail every day, permanently and silently.
+    """
+    assert sysgraph_repo.pool is not None
+    captured: dict[str, object] = {}
+    real_pool = sysgraph_repo.pool
+
+    class _CapturingConn:
+        def __init__(self, real_conn: object) -> None:
+            self._real_conn = real_conn
+
+        async def execute(self, query: str, *args: object, **kwargs: object) -> object:
+            captured["query"] = query
+            captured["timeout"] = kwargs.get("timeout")
+            return await self._real_conn.execute(query, *args, **kwargs)  # type: ignore[attr-defined]
+
+    class _CapturingAcquireCtx:
+        def __init__(self, real_ctx: object) -> None:
+            self._real_ctx = real_ctx
+
+        async def __aenter__(self) -> _CapturingConn:
+            real_conn = await self._real_ctx.__aenter__()  # type: ignore[attr-defined]
+            return _CapturingConn(real_conn)
+
+        async def __aexit__(self, *exc: object) -> object:
+            return await self._real_ctx.__aexit__(*exc)  # type: ignore[attr-defined]
+
+    # asyncpg.Pool is a C-extension-backed class -- its `acquire` attribute can't be
+    # monkeypatched directly (read-only). Wrap the pool instance instead; `pool` is a plain
+    # attribute on the repository, so replacing it is safe and auto-reverted by monkeypatch.
+    class _CapturingPool:
+        def acquire(self) -> _CapturingAcquireCtx:
+            return _CapturingAcquireCtx(real_pool.acquire())
+
+    monkeypatch.setattr(sysgraph_repo, "pool", _CapturingPool())
+
+    await sysgraph_repo.vacuum_analyze_table("proposal")
+
+    assert captured["timeout"] is not None
+    assert float(captured["timeout"]) > 10.0  # strictly greater than the pool's default

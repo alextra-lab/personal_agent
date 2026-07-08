@@ -35,12 +35,20 @@ suppressed iff ``now - last_sent < ttl(kind)``:
   prime-worker posts are the *primary* idempotency key; this lease only covers
   the send→pre-ack window.
 
-**Injection safety (fail-safe = skip).** A command is sent only into a session
-that exists (``tmux has-session``) AND is idle at a prompt
-(``session_is_idle`` over ``capture-pane``); a busy or absent target is skipped +
-logged, never crashed. The idle check is a best-effort heuristic — the watcher
-only *actuates* the trigger; master's and worker's own gates re-read live state
-and remain authoritative.
+**Injection safety.** A command is never sent into a session that does not exist
+(``tmux has-session``). The **idle** guard, however, is trigger-scoped:
+
+- **worker** triggers require idle (``session_is_idle`` over ``capture-pane``) —
+  a busy worker is mid-build and must not be interrupted; a busy target is
+  skipped + logged, retried next tick.
+- **master** triggers are **unconditional** — idle detection over ``capture-pane``
+  is not reliable enough to gate on (it kept the watcher from ever informing a
+  busy master), so ``/master <id>`` is always sent and Claude Code queues it if
+  master is mid-turn. Master then decides whether to act on it now or after the
+  current task. The dedup store (long master TTL) still prevents re-sends.
+
+The watcher only *actuates* the trigger; master's and worker's own gates re-read
+live state and remain authoritative.
 
 **Kill switch.** Shares the orchestrator's flag (``telemetry/dispatch.disabled``)
 — its presence halts all actuation. The watcher pokes local tmux, so it does not
@@ -683,25 +691,35 @@ def fetch_issue_labels(ticket: str, api_key: str) -> frozenset[str]:
 
 
 def send_to_session(
-    session: str, command: str, runner: CommandRunner
+    session: str, command: str, runner: CommandRunner, require_idle: bool = True
 ) -> Literal["sent", "absent", "busy"]:
-    """Inject ``command`` into ``session`` only if it exists and is idle (AC-5).
+    """Inject ``command`` into ``session`` if it exists (and, when required, idle).
 
     Args:
         session: The target tmux session.
         command: The command line to send (e.g. ``/master 412``).
         runner: The command runner seam (shells ``tmux``).
+        require_idle: When ``True`` (default), inject only into an idle pane — a
+            busy pane returns ``busy`` without sending. Used for **worker**
+            triggers so a build mid-turn is never interrupted. When ``False``,
+            inject regardless of pane state: Claude Code queues the keys if the
+            session is mid-turn. Used for the **master** trigger — idle detection
+            over ``capture-pane`` is not reliable enough to gate on (it kept the
+            watcher from ever informing a busy master), so master is always poked
+            with ``/master <id>`` and the owner/master decides whether to act on
+            it now or after the current task.
 
     Returns:
         ``sent`` when the keys were injected; ``absent`` when the session does
-        not exist; ``busy`` when the pane is not idle — the latter two perform
-        no injection.
+        not exist; ``busy`` when ``require_idle`` and the pane is not idle — the
+        latter two perform no injection.
     """
     if runner(["tmux", "has-session", "-t", session]).returncode != 0:
         return "absent"
-    pane = runner(["tmux", "capture-pane", "-t", session, "-p"])
-    if not session_is_idle(pane.stdout):
-        return "busy"
+    if require_idle:
+        pane = runner(["tmux", "capture-pane", "-t", session, "-p"])
+        if not session_is_idle(pane.stdout):
+            return "busy"
     # Send the literal text, then Enter as a separate key — never let tmux parse
     # the command text as key names.
     runner(["tmux", "send-keys", "-t", session, "-l", command])
@@ -873,7 +891,9 @@ def run_once(
             continue
         ledger = trigger_ledger.mark_send_started(ledger, trigger.dedup_key, now)
         ledger_persist(ledger)
-        outcome = send_to_session(trigger.session, trigger.command, runner)
+        outcome = send_to_session(
+            trigger.session, trigger.command, runner, require_idle=trigger.kind != "master"
+        )
         if outcome == "sent":
             logger.info(
                 "gating_send",

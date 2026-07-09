@@ -8,6 +8,8 @@ description: Use in the master session to integrate a ready PR — analyze (code
 Read `.claude/skills/lifecycle-rules.md` first. Argument: a PR number, or omitted (scan open PRs).
 
 ## 1 — Pick the PR
+When the watcher triggers you (or you're handed a number), **lead your response with `Gating PR #X →`** so
+the owner always sees which PR is at the gate — the watcher's hand-off is otherwise invisible to them.
 `gh pr list` (or use the given number). Read PR body, commits, and the linked ticket —
 **including its comment thread** (`list_comments` on the issue), by default, every time. Comments
 carry the live decision trail (owner steers, scope changes, post-deploy runbooks, "do X not Y"
@@ -71,11 +73,12 @@ ADR*, not merged-and-runs.** A feature / ADR-implementation ticket passes ONLY i
 Missing provenance or proof on a feature ticket → **bounce back to the build session; do not merge on
 an artifact-level "looks done"** (same bounce mechanism as the codex tier backstop, Step 2).
 
-**Bounce channel (so the worker loop can follow it).** Post every actionable bounce as a **PR comment**
-led by the exact marker **`## Master gate — BOUNCE`** — never on the ticket (that's the durable record
-channel; see lifecycle-rules § Comment channels). The worker's loop detects the marker, acks it, and
-self-fixes on its own branch (prime-worker Step 3.2a); keep evidence / AC-proof / decisions on the
-**ticket**.
+**Bounce channel — tell the worker directly.** You are the one rejecting, and you have `send-keys`, so
+inform the worker's `cc-<stream>` seat **directly**: a plain message naming the PR and what to fix (or
+"read the PR comments"). That seat is warm — it built this — and self-completes the fix in-session (build
+skill § responding to a poke), then pushes; CI re-runs. **No `## Master gate — BOUNCE` marker, no monitor
+skill** — the bounce message is transient. Keep evidence / AC-proof / decisions on the **ticket** (the
+durable record channel; see lifecycle-rules § Comment channels).
 
 **Bugs — partially excluded.** A bugfix ticket with no backing ADR is exempt from the *provenance*
 requirement (there is no ADR to trace to) but NOT from *proof*: it still needs a reproducing test or a
@@ -105,10 +108,8 @@ deploy these **without asking**, then verify + report:
 - **Anything touching `cost_gate` / budget / governance** (standing budget rule)
 - Anything you are unsure how to classify → treat as ask.
 
-Either way, write the approval sentinel so the gate allows exactly one deploy:
-`touch .claude/.deploy-approved`. For a standing-class deploy, note in your report that it ran under
-standing approval (which class). For concurrent-session safety, still confirm timing if another session
-is active.
+For a standing-class deploy, note in your report that it ran under standing approval (which class).
+For concurrent-session safety, still confirm timing if another session is active.
 
 ## 7 — Deploy + verify
 - `ENV=cloud make rebuild SERVICE=seshat-gateway` (VPS; `make deploy` is Mac-only).

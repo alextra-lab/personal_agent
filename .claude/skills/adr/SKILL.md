@@ -1,9 +1,9 @@
 ---
 name: adr
-description: Use in the adr session (Opus) to produce a complete ADR — discuss first, write, iterate with codex review, open ADR PR, then file sequenced implementation tickets. Never touches src/ or merges.
+description: Use in the adr session (Opus) to explore an idea with the owner and — if it earns it — produce a complete ADR. Discuss/explore first, write, iterate with codex review, open ADR PR, then file sequenced implementation tickets. An ADR is a possible outcome, not a mandate. Never touches src/ or merges.
 ---
 
-# Author an ADR (adr session — always Opus)
+# ADR session — explore, then (if earned) author (always Opus)
 
 Read `.claude/skills/lifecycle-rules.md` first. Confirm the session model is Opus; if not, STOP
 and tell the owner (ADR authoring is Opus-only).
@@ -35,9 +35,19 @@ overrides the queue. If the queue is empty or ambiguous, STOP and ask master.
    - `git branch -d <merged-adr-branch>`
    - `git push origin --delete <merged-adr-branch>`
 
-## 1 — Discuss FIRST — genuinely, with the owner (hard gate, not a formality)
+## 1 — Discuss / explore FIRST — genuinely, with the owner (hard gate, not a formality)
 
 **This is the load-bearing step. Violating it is the single worst failure of this skill.**
+
+**Two modes — sense which one you're in:**
+- **Assemble** — the decision already lives in the ticket; your job is to piece the ADR together from
+  what's settled. Faster, artifact-first. Discussion is lighter (confirm the shape), but still real.
+- **Explore** — the session opens as a half-formed idea or research thread and develops *— or doesn't —*
+  into an ADR. Here **the ADR is a possible outcome, not the goal.** Your job is to **explore + teach +
+  ideate as a peer AND a tutor**: surface the concepts, weigh alternatives out loud, cite references, go
+  deep. The exploration itself is the value (the owner is "forever the student"). **An ADR · a research
+  note · a parked idea · "not ADR-worthy yet" are ALL valid successes** — never force an artifact the
+  exploration didn't earn. The "explicit go to write" (below) is reached only if a decision crystallizes.
 
 The anti-pattern that is FORBIDDEN (it happened on FRE-809 and the owner rejected the ADR outright):
 *read the ticket → ask 2–3 clarifying questions → immediately write the ADR and open the PR.* That is
@@ -72,11 +82,13 @@ The GitHub integration automates only the PR transitions (PR opened → `In Revi
 `Awaiting Deploy` — retargeted 2026-07-04); the working session owns the In Progress transition,
 master owns Done.
 
-## 1.5 — (no monitor loop)
-Do **not** arm a `/loop` monitor. A 20-minute poll re-read the session context past the 5-minute
-prompt-cache TTL every tick → an uncached-token cost blowup (removed 2026-07-06). This ADR session
-does its work and **stops at PR**. If master bounces the PR or CI goes red, the **owner re-runs
-`/prime-worker` in this session** on demand to self-fix (its Step 3.2).
+## 1.5 — Done = master-ready (responding to a poke)
+**Never arm a `/loop` monitor** — polling re-reads the session context past the prompt-cache TTL every
+tick (an uncached-cost blowup, removed 2026-07-06). You do the work and open the ADR PR, then go idle —
+but you are done only when it is **master-ready** (any bounce resolved; CI is docs-only so red is rare).
+You don't *wait* — you go idle, and something re-engages this warm seat: a **master bounce** (doc-drift, a
+stale Status line) comes **directly from master**; a red docs check comes from the **watcher**. Either
+poke: read it, fix on this branch, push, go idle again. *(This is the old `/prime-worker`, folded in.)*
 
 ## 2 — Write the ADR
 Start from **`docs/architecture_decisions/ADR_TEMPLATE.md`** — the project ADR format (mirrors the

@@ -1,6 +1,6 @@
 ---
 name: build
-description: Use in the build session to ship a Linear FRE ticket from Approved to PR — fresh-start reset, plan with codex review, TDD, follow-up tickets, docs, PR. Stops at PR; never merges or deploys.
+description: Use in the build session to ship a Linear FRE ticket from Approved to a master-ready PR (CI green + any bounce resolved) — fresh-start reset, plan with risk-tiered codex review (reviewer, not co-author), TDD, docs, PR, then self-complete via watcher/master pokes. Never merges or deploys.
 ---
 
 # Build a Linear Ticket (build session)
@@ -34,11 +34,17 @@ automates only the PR transitions (PR opened → `In Review`, PR merged → `Awa
 2026-07-04); the session doing the work owns the In Progress transition; master owns the Done
 transition at the gate.
 
-## 1.5 — (no monitor loop)
-Do **not** arm a `/loop` monitor. A 20-minute poll re-read the session context past the 5-minute
-prompt-cache TTL every tick → an uncached-token cost blowup (removed 2026-07-06). This build session
-just does its work and **stops at PR**. If master bounces the PR or CI goes red, the **owner re-runs
-`/prime-worker` in this session** on demand to self-fix (its Step 3.2).
+## 1.5 — Done = master-ready (responding to a poke)
+**Never arm a `/loop` monitor** — polling re-reads the session context past the prompt-cache TTL every
+tick (an uncached-cost blowup, removed 2026-07-06). You do the work and open the PR, then go idle — but
+**you are not done at the PR; you are done when the PR is master-ready: CI green AND any bounce resolved.**
+You don't *wait* for CI (that's the loop) — you go idle, and something re-engages this warm seat:
+- **CI goes red** → the **watcher** pokes this seat with a plain message.
+- **master bounces** → **master** tells this seat directly.
+
+Either poke: read it, fix on this branch, re-run the Step-8 quality gates, `git push`, go idle again. Your
+context is warm — you built this — so the fix is cheap. *(This is the old `/prime-worker`, folded in; that
+skill is gone.)*
 
 ## 2 — Scope
 Read ticket body + linked ADRs + specs. Summarize scope in 3–5 bullets. **Pull out the acceptance
@@ -58,9 +64,12 @@ Write a plan: atomic steps, exact file paths, exact test commands.
   implementation, or multi-file behavior. → **codex plan-review REQUIRED**: invoke **codex:rescue** on the
   plan (approach second-opinion), revise per findings, and get explicit owner approval before coding.
 
-**When in doubt, treat as Standard and run codex** — bias toward review. The owner/master may override per
-ticket in the dispatch with `[codex: required]` (force it) or `[codex: skip]` (force-skip) when they know
-something the scope doesn't show. Master backstops this at the gate — a mis-tiered Standard change that
+**When in doubt, treat as Standard and run codex** — bias toward review. **Codex is a reviewer here, not a
+co-author:** you own the work and codex gives the independent, adversarial second opinion (adversarial beats
+redundant); reach for codex as a *collaborator* only in Step 7 rescue, when you're genuinely stuck. Lean
+reviewer — that's your judgment to make per plan. The owner/master may override per ticket in the dispatch
+with `[codex: required]` (force it) or `[codex: skip]` (force-skip) when they know something the scope
+doesn't show. Master backstops this at the gate — a mis-tiered Standard change that
 skipped codex gets bounced. (One phase = one PR — see halt conditions.)
 
 ## 4 — TDD implement

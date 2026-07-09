@@ -26,7 +26,10 @@ pytest.importorskip("dspy", reason="dspy not installed")
 
 import dspy  # noqa: E402
 
-from personal_agent.config.model_loader import ModelConfigError  # noqa: E402
+from personal_agent.config.model_loader import (  # noqa: E402
+    ModelConfigError,
+    load_model_config,
+)
 from personal_agent.llm_client import LocalLLMClient, ModelRole  # noqa: E402
 from personal_agent.llm_client.dspy_adapter import (  # noqa: E402
     configure_dspy_lm,
@@ -353,11 +356,12 @@ def test_configure_dspy_lm_local_model_uses_openai_prefix():
 
 
 def test_configure_dspy_lm_local_model_sets_api_base():
-    """Local model sets api_base pointing at localhost in kwargs."""
+    """PRIMARY model sets api_base to its configured endpoint."""
+    expected = load_model_config().models["primary"].endpoint
     lm = configure_dspy_lm(role=ModelRole.PRIMARY)
     api_base = (lm.kwargs or {}).get("api_base")
     assert api_base is not None
-    assert "localhost" in api_base or "127.0.0.1" in api_base
+    assert api_base == expected
 
 
 # ============================================================================

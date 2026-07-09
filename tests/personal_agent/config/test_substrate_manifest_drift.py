@@ -25,3 +25,20 @@ def test_private_profile_store_sources_match_validator_fields() -> None:
     assert private["postgres"]["source"] == "setting:database_url"
     assert private["neo4j"]["source"] == "setting:neo4j_uri"
     assert private["elasticsearch"]["source"] == "setting:elasticsearch_url"
+
+
+def test_dev_test_profile_store_sources_match_validator_fields() -> None:
+    """The dev/test profiles' postgres/neo4j/elasticsearch rows resolve from the
+    exact AppConfig fields the ADR-0112 AC-9 validator
+    (``_validate_dev_test_profile_isolation``, FRE-820) checks directly. That
+    validator checks fields, not ``resolve_substrate()`` output — this test
+    fails loudly the moment the dev/test profile mapping drifts away from
+    those fields, so the shortcut doesn't silently stop matching AC-9's
+    "resolved target" semantics.
+    """
+    manifest = load_substrate_manifest(repo_root())
+    for profile in ("dev", "test"):
+        rows = manifest["profiles"][profile]
+        assert rows["postgres"]["source"] == "setting:database_url"
+        assert rows["neo4j"]["source"] == "setting:neo4j_uri"
+        assert rows["elasticsearch"]["source"] == "setting:elasticsearch_url"

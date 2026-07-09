@@ -1132,9 +1132,10 @@ class AppConfig(BaseSettings):
     allow_test_writes_to_prod_substrate: bool = Field(
         default=False,
         description=(
-            "Emergency escape hatch: allow TEST environment to connect to prod-fingerprint URIs. "
-            "Set AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE=1 only when intentionally running "
-            "tests against a prod-equivalent stack (e.g. acceptance tests on the VPS). "
+            "Emergency escape hatch: allow TEST environment, or a 'dev'/'test' "
+            "substrate_profile (ADR-0112 AC-9, FRE-820), to connect to prod-fingerprint "
+            "URIs. Set AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE=1 only when intentionally "
+            "running tests against a prod-equivalent stack (e.g. acceptance tests on the VPS). "
             "Never set this in CI."
         ),
     )

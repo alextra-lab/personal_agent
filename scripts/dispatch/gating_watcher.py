@@ -10,16 +10,17 @@ context. It pokes the **persistent** master/worker sessions via
 ``tmux send-keys``; it never spawns an ephemeral ``claude -p`` (continuity is
 load-bearing — FRE-822 pinned constraint).
 
-Two triggers, two directions (mutually exclusive per PR per tick — a PR with a
-problem is never master-ready):
+Two triggers (mutually exclusive per PR per tick — a PR with a problem is never
+master-ready):
 
-- **Master ← new PR.** An open PR that is master-ready — CI green, not
-  ``CONFLICTING``, and no unacked ``## Master gate — BOUNCE`` — and not already
-  actuated at its current head SHA → ``/master <PR#>`` to ``cc-master``.
-- **Worker ← bounce / red CI.** A PR carrying an unacked
-  ``## Master gate — BOUNCE`` **or** a failed CI check on its head SHA with no
-  SHA-keyed ack → ``/prime-worker`` to the owning ``cc-<stream>`` session (the
-  worker's ``prime-worker`` skill then acks + self-fixes, unchanged).
+- **Master ← ready PR.** An open PR that is CI-green, not ``CONFLICTING``, and
+  not already actuated at its current head SHA → ``/master <PR#>`` to
+  ``cc-master`` (master leads with "Gating PR #X").
+- **Worker ← red CI.** A PR with a failed CI check on its head SHA (no SHA-keyed
+  ack) → a plain ``PR #N failed CI checks - correct them`` message to the owning
+  ``cc-<stream>`` seat, which self-completes the fix in-session (build skill
+  § responding to a poke). Bounce is **master-direct** now (master send-keys the
+  worker itself), not a watcher leg.
 
 **Dedup — one timestamped store, TTL by kind.** ``tmux send-keys`` is
 *at-least-once* delivery, so a permanent "sent" set would both suppress a needed
@@ -89,11 +90,8 @@ LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
 # launcher topology entry).
 MASTER_SESSION = "cc-master"
 
-# The exact PR-comment markers the master/worker skills use (lifecycle-rules
-# § Comment channels; prime-worker Step 3.2). Kept byte-identical here — the
-# em dash in the bounce marker is load-bearing.
-BOUNCE_MARKER = "## Master gate — BOUNCE"
-BOUNCE_ACK = "Ack: addressing master bounce"
+# The CI-red ack marker a worker may leave on a PR (lifecycle-rules § Comment
+# channels). Bounce is master-direct now, so there is no bounce marker here.
 _CI_ACK_RE = re.compile(r"Ack: addressing red CI at ([0-9a-fA-F]{7,40})")
 
 # PR branch → ticket: worker branches are ``fre-<id>-<slug>``.
@@ -345,30 +343,6 @@ def ci_status(rollup: Sequence[Mapping[str, object]]) -> CiStatus:
     return "success"
 
 
-def latest_bounce_unacked(comment_bodies: Sequence[str]) -> bool:
-    """Return whether the latest master bounce has no worker ack after it.
-
-    The ack *after* the latest bounce marker is the idempotency key
-    (lifecycle-rules § Comment channels). Author-filtering is deliberately not
-    used (master and worker may share a git identity), matching the skills.
-
-    Args:
-        comment_bodies: PR comment bodies in chronological order.
-
-    Returns:
-        ``True`` if a bounce exists and no ``Ack: addressing master bounce``
-        follows the latest one.
-    """
-    last_bounce = -1
-    last_ack = -1
-    for index, body in enumerate(comment_bodies):
-        if BOUNCE_MARKER in body:
-            last_bounce = index
-        if BOUNCE_ACK in body:
-            last_ack = index
-    return last_bounce != -1 and last_ack < last_bounce
-
-
 def has_ci_red_ack(comment_bodies: Sequence[str], head_sha: str) -> bool:
     """Return whether a SHA-keyed red-CI ack exists for ``head_sha``.
 
@@ -501,17 +475,13 @@ def classify_pr(
     Returns:
         The ``Candidate`` to actuate, or ``None`` (no trigger, or suppressed).
     """
-    worker_reason: str | None = None
-    if latest_bounce_unacked(pr.comment_bodies):
-        worker_reason = "worker-bounce"
-    elif pr.ci == "failure" and not has_ci_red_ack(pr.comment_bodies, pr.head_sha):
-        worker_reason = "worker-ci-red"
-
-    if worker_reason is not None:
+    # Bounce is master-direct now (master send-keys the worker itself), so the
+    # only watcher-owned worker trigger is a red CI on the head SHA.
+    if pr.ci == "failure" and not has_ci_red_ack(pr.comment_bodies, pr.head_sha):
         key = f"worker:{pr.number}:{pr.head_sha}"
         if _suppressed(sent, key, now, worker_ttl_s):
             return None
-        return Candidate("worker", worker_reason, key, worker_ttl_s)
+        return Candidate("worker", "worker-ci-red", key, worker_ttl_s)
 
     if pr.ci == "success" and pr.mergeable != "CONFLICTING":
         key = f"master:{pr.number}:{pr.head_sha}"
@@ -560,7 +530,7 @@ def decide(
             command = f"/master {pr.number}"
         else:
             session = session_resolver(parse_ticket_from_branch(pr.head_ref))
-            command = "/prime-worker"
+            command = f"PR #{pr.number} failed CI checks - correct them"
         triggers.append(
             Trigger(
                 kind=candidate.kind,

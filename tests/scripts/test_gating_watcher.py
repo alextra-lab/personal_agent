@@ -38,7 +38,6 @@ from scripts.dispatch.gating_watcher import (
     decide,
     fetch_open_prs,
     has_ci_red_ack,
-    latest_bounce_unacked,
     parse_ticket_from_branch,
     prune_state,
     run_once,
@@ -154,31 +153,6 @@ def test_ci_status_incomplete_is_pending() -> None:
 def test_ci_status_unknown_conclusion_is_pending_not_failure() -> None:
     rollup = [{"__typename": "CheckRun", "status": "COMPLETED", "conclusion": ""}]
     assert ci_status(rollup) == "pending"
-
-
-# --- latest_bounce_unacked -------------------------------------------------
-
-
-def test_bounce_unacked_when_no_ack() -> None:
-    assert latest_bounce_unacked(("## Master gate — BOUNCE\nfix X",)) is True
-
-
-def test_bounce_acked_when_ack_after() -> None:
-    bodies = ("## Master gate — BOUNCE", "Ack: addressing master bounce in next push.")
-    assert latest_bounce_unacked(bodies) is False
-
-
-def test_bounce_unacked_when_newer_bounce_after_ack() -> None:
-    bodies = (
-        "## Master gate — BOUNCE",
-        "Ack: addressing master bounce",
-        "## Master gate — BOUNCE second round",
-    )
-    assert latest_bounce_unacked(bodies) is True
-
-
-def test_no_bounce_is_not_unacked() -> None:
-    assert latest_bounce_unacked(("looks good",)) is False
 
 
 # --- has_ci_red_ack --------------------------------------------------------
@@ -343,17 +317,13 @@ def test_master_new_sha_triggers_again() -> None:
     assert cand is not None and cand.key == "master:412:ff99newsha"
 
 
-# --- classify_pr / decide: AC-2 worker bounce ------------------------------
+# --- classify_pr / decide: worker CI-red -----------------------------------
+# Bounce is master-direct now (master send-keys the worker itself), so a red CI
+# on the head SHA is the only watcher-owned worker trigger.
 
 
-def test_worker_bounce_classifies_worker() -> None:
-    pr = _pr(comment_bodies=("## Master gate — BOUNCE\nfix",))
-    cand = classify_pr(pr, now=100.0, sent={}, master_ttl_s=600, worker_ttl_s=60)
-    assert cand == Candidate("worker", "worker-bounce", "worker:412:abc1234def5678", 60)
-
-
-def test_worker_bounce_routes_to_stream_session() -> None:
-    pr = _pr(comment_bodies=("## Master gate — BOUNCE",))
+def test_worker_ci_red_routes_to_stream_session_with_message() -> None:
+    pr = _pr(ci="failure")
     triggers = decide(
         [pr],
         session_resolver=lambda t: "cc-build2" if t == "FRE-823" else None,
@@ -363,34 +333,7 @@ def test_worker_bounce_routes_to_stream_session() -> None:
         worker_ttl_s=60,
     )
     assert triggers[0].session == "cc-build2"
-    assert triggers[0].command == "/prime-worker"
-
-
-def test_worker_bounce_acked_does_not_trigger() -> None:
-    # ci=pending isolates the ack: no worker trigger, and not yet master-ready.
-    pr = _pr(
-        ci="pending", comment_bodies=("## Master gate — BOUNCE", "Ack: addressing master bounce")
-    )
-    assert classify_pr(pr, now=100.0, sent={}, master_ttl_s=600, worker_ttl_s=60) is None
-
-
-def test_worker_bounce_acked_and_green_re_triggers_master() -> None:
-    # An acked bounce that is now green is master-ready again (re-review the fix).
-    pr = _pr(
-        ci="success", comment_bodies=("## Master gate — BOUNCE", "Ack: addressing master bounce")
-    )
-    cand = classify_pr(pr, now=100.0, sent={}, master_ttl_s=600, worker_ttl_s=60)
-    assert cand is not None and cand.kind == "master"
-
-
-def test_worker_bounce_lease_suppresses_pre_ack_resend() -> None:
-    pr = _pr(comment_bodies=("## Master gate — BOUNCE",))
-    sent = {"worker:412:abc1234def5678": 100.0}
-    # within the lease window → suppressed even though the ack has not landed yet
-    assert classify_pr(pr, now=130.0, sent=sent, master_ttl_s=600, worker_ttl_s=60) is None
-
-
-# --- classify_pr: AC-3 worker CI-red ---------------------------------------
+    assert triggers[0].command == "PR #412 failed CI checks - correct them"
 
 
 def test_worker_ci_red_triggers() -> None:
@@ -410,12 +353,6 @@ def test_worker_ci_red_ack_for_old_sha_still_triggers_new_sha() -> None:
     )
     cand = classify_pr(pr, now=100.0, sent={}, master_ttl_s=600, worker_ttl_s=60)
     assert cand is not None and cand.reason == "worker-ci-red"
-
-
-def test_worker_bounce_takes_precedence_over_ci_red() -> None:
-    pr = _pr(ci="failure", comment_bodies=("## Master gate — BOUNCE",))
-    cand = classify_pr(pr, now=100.0, sent={}, master_ttl_s=600, worker_ttl_s=60)
-    assert cand is not None and cand.reason == "worker-bounce"
 
 
 # --- prune_state -----------------------------------------------------------
@@ -538,7 +475,7 @@ def test_run_once_master_dedup_across_ticks() -> None:
 
 
 def test_run_once_uses_only_tmux_and_gh_never_claude() -> None:
-    pr = _pr(comment_bodies=("## Master gate — BOUNCE",))
+    pr = _pr(ci="failure")
     runner = _idle_runner()
     run_once(
         {},
@@ -574,7 +511,7 @@ def test_run_once_kill_switch_halts_actuation() -> None:
 
 
 def test_run_once_unroutable_worker_skips_without_send() -> None:
-    pr = _pr(comment_bodies=("## Master gate — BOUNCE",))
+    pr = _pr(ci="failure")
     runner = _idle_runner()
     run_once(
         {},
@@ -715,7 +652,7 @@ def test_run_once_ledger_untouched_in_dry_run() -> None:
 
 
 def test_run_once_ledger_untouched_for_unroutable_worker() -> None:
-    pr = _pr(comment_bodies=("## Master gate — BOUNCE",))
+    pr = _pr(ci="failure")
     ledger: dict = {}
     run_once(
         {},

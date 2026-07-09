@@ -1,108 +1,94 @@
 ---
 name: prime-master
-description: Use after /clear in the master session to rebuild the guardian snapshot from durable sources (MEMORY, MASTER_PLAN, git, Linear, health) — never from prior conversation.
+description: Use after /clear in the master session to rebuild the guardian snapshot from durable sources — current state (1-7) then target (8) then process (9). Never from prior conversation.
 ---
 
 # Prime the Guardian Session
 
-Read `.claude/skills/lifecycle-rules.md` first. Reconstruct the master snapshot from DURABLE
-sources only — never from prior conversation context.
+Read `.claude/skills/lifecycle-rules.md` first. Reconstruct the master snapshot from **DURABLE sources
+only** — never from prior conversation. Lead the output by restating the **guardian role & standing
+attributes** (lifecycle-rules § Guardian role) in one tight block: re-establish *who you are* before
+*what's open*.
 
-## Coordinator role (ADR-0113 §1 — sensor → brain → hands)
+**The re-prime is a situational-awareness stack:** *where am I* (current state, 1–7) → *where am I going*
+(target, 8) → *how I drive it* (process, 9). `prepare-reset` writes the conversational overlay these steps
+read; this skill reads it back. (Winding **down** instead? That's `/prepare-reset`, not here.)
 
-Master is the **single brain + hands**, not the sensor and not a place dispatch mechanics live.
-The gating watcher is a dumb, contextless sensor that talks only to master — it holds no task
-state and emits one wake per relevant PR/ticket state-change. Master reasons from durable state
-(Linear, `MASTER_PLAN`, git, ADRs, the trigger ledger) and actuates via `send-keys`, `gh`, and
-Linear. The invariant this whole skill exists to hold: **checkpoint-to-durable-state, so `/clear`
-is always safe** — in-flight state (dispatch, pending merges, unconsumed actuation triggers) lives
-in Linear / the trigger ledger / `MASTER_PLAN`, never only in conversation.
+---
 
-The NEXT-ticket dispatch resolver (`scripts/dispatch/next_resolver.py`) is available as a separate
-process master can shell out to — dispatch-mechanics logic is not something master is meant to
-hold or re-derive in-context.
+## Current state (1–7) — orient in reality first
 
-**Explicitly out of scope for this checkpoint invariant:** parsing the pane's `X% context used`
-footer to alert the owner near a threshold. ADR-0113 §4 calls this a best-effort *nicety*, never
-the safety mechanism — it is the same fragile terminal-parse class that produced the FRE-825
-idle-detection bug. The durable checkpoint above is the actual safety net; do not build a second
-TUI-parser on the strength of "optionally."
+1. **Memory** — `MEMORY.md` is auto-loaded; standing rules + facts apply (this is the accumulated,
+   all-sessions layer).
+2. **Session-delta** — read **`docs/plans/LAST_SESSION.md`**: the *last* session's conversational overlay
+   (doing/discussing · the story behind the last 10 commits · anything special per worktree · plan drift ·
+   answers for the fresh start). This is the bridge the durable sources can't reconstruct — read it first
+   of the live sources.
+3. **Git history** — `git -C /opt/seshat log -10 --oneline`: what *literally* just committed. Cross-check
+   it against #2's commit-story — git is the ground truth that can't drift.
+4. **Git status · worktrees · PRs** — `git status` · `git worktree list` · `gh pr list` (open PRs).
+5. **Trigger ledger** — `python -m scripts.dispatch.trigger_ledger --unconsumed --json`. Any entry is
+   in-flight actuation that survived the clear: `pending` = a send resolving on its own (nothing to do);
+   `surfaced` = a Verify-Failed-class exception demanding owner attention. Nonzero exit (corrupt ledger) is
+   itself an anomaly — surface it. *(This tracks the watcher's actuation; its role may shrink as the
+   watcher evolves — revisit if it goes quiet.)*
+6. **Linear** — list `In Progress` · `In Review` · `Awaiting Deploy` · `Verify Failed` on FrenchForest.
+   In Review = PRs at the gate; Awaiting Deploy = merged-not-verified (master's queue); Verify Failed =
+   open exceptions demanding a decision.
+7. **Health** — `curl -s http://localhost:9001/health` + note the deployed SHA (`git log -1 --oneline`).
+7b. **Actuation health — STATE-AWARE (live-box probe).** The watcher/dispatcher's true state lives only in
+   machine-local, gitignored files + systemd, so a durable re-prime is blind to it — hence a live probe.
+   But "healthy" means **matches the INTENDED posture**, not "always running." Read the intended posture
+   from #2 / MASTER_PLAN / memory (is the automation *meant* to be live, or intentionally paused?), then
+   check the box: `systemctl is-active seshat-gating-watcher.service seshat-dispatch-orchestrator.service`
+   and whether `telemetry/dispatch.disabled` is present. **Surface only a MISMATCH** — should-be-running
+   but dead (silent-failure, the ~50-min window on 2026-07-08), or should-be-paused but running. Do NOT
+   alarm on an intentional pause.
 
-## Pre-reset safety gate (run before /clear, if winding down)
-Only reset master context at a clean integration boundary — ALL must hold:
-- Active Pending Verification: none.
-- No PR mid-merge, no ticket half-closed.
-- MASTER_PLAN ↔ Linear in sync (no undocumented status drift).
-- Working tree clean on `main`.
-If any fails: finish or record it (bump MASTER_PLAN "Last updated") before clearing.
+## Target (8) — where we're going
 
-## Rebuild snapshot (after /clear)
-1. MEMORY.md is auto-loaded — standing rules apply.
-2. Read MASTER_PLAN: header, "Last updated", Pending Verification, Needs Approval.
-3. `git status` · `git worktree list` · `gh pr list` (open PRs awaiting master).
-4. **Unconsumed actuation triggers (ADR-0113 §4, FRE-832):**
-   `python -m scripts.dispatch.trigger_ledger --unconsumed --json` — the trigger ledger's durable
-   read. Any entry returned is in-flight actuation that survived the clear: a `pending` entry is a
-   send still working its way through (nothing to do, it'll resolve on its own); a `surfaced` entry
-   is a **Verify-Failed-class exception** — reconciliation could not safely resolve it, and it
-   demands the same owner-facing attention as a `Verify Failed` Linear ticket. A nonzero exit
-   (corrupt ledger file) is itself an anomaly — surface it, don't silently treat it as "no triggers."
-5. Linear: list `In Progress` + `In Review` + `Awaiting Deploy` + `Verify Failed` tickets on
-   FrenchForest — In Review = PRs at the gate; Awaiting Deploy = merged-not-verified (master's
-   queue); Verify Failed = open exceptions demanding a decision.
-6. `curl -s http://localhost:9001/health` — live gateway health + note deployed SHA (`git log -1 --oneline`).
-6b. **Actuation-sensor health (live-box probe — NOT reconstructable from durable sources).** The
-   gating watcher's true "am I actuating?" state lives only in machine-local, **gitignored** files +
-   systemd, so a durable/git-based re-prime is structurally blind to it: a manual stop (this has
-   happened — a ~50-min unrestarted window on 2026-07-08) or a dropped-in kill-switch file would both
-   pass silently. Verify **both** on the box: `systemctl is-active seshat-gating-watcher.service` →
-   `active`, **and** the shared kill-switch `telemetry/dispatch.disabled` is **absent** (its presence
-   halts *all* actuation even while systemd still reports `active`). Either failing means the
-   PR→master and bounce→worker legs are silently dead — surface it, never report "board clean" over a
-   dead sensor. (`telemetry/` is gitignored precisely so this is runtime state — hence a live probe,
-   not a durable-source assumption.)
-7. **PR gating is owner-triggered — no polling loop.** Master does **NOT** arm a `/loop` PR-gate cron.
-   A 10-minute poll re-read this (large) session's full context past the 5-minute prompt-cache TTL on
-   every tick, so each idle "no PRs" poll re-created the whole context as *uncached* input — a large,
-   silent token-cost blowup (removed 2026-07-06 after it spiked uncached input ~2300%). Instead the
-   **owner triggers the gate on demand**: when a worker reports a PR, run `/master <PR#>` (or `/master`
-   to scan open PRs). If a stale PR-gate cron survives from a prior session, delete it (`CronList` →
-   `CronDelete`). The event-driven replacement (orchestrator signals master on PR-open) is tracked in Linear.
+8. **MASTER_PLAN** (`docs/plans/MASTER_PLAN.md`) — the destination, a different category from state: current
+   live-env / standing state + **active priorities & sequencing** + Needs-Approval. Purified — the
+   session-decisions bridge is #2, not here. Read header, "Last updated", priorities.
+
+## Process (9) — how master drives current → target
+
+9. The lean operating model (full contract: lifecycle-rules):
+   - **Coordinator role.** Master is the single **brain + hands**. The **watcher** is a dumb, contextless
+     sensor: it **triggers master** when a PR is CI-green and ready (master leads with "Gating PR #X"), and
+     pokes a **worker** seat when its PR's CI goes red. Master reasons from durable state and actuates via
+     `send-keys`, `gh`, Linear. On a **bounce**, master informs the worker seat **directly** (send-keys) —
+     no marker, no monitor skill.
+   - **PR gating is watcher-triggered — ability, not obligation.** Master does NOT poll (`/loop` for PRs
+     blew the prompt-cache TTL — removed 2026-07-06). The watcher lifts the *obligation*; the owner keeps
+     the *ability* to run `/master <PR#>` anytime. If a stale PR-gate cron survives, delete it.
+   - **Deploy authority.** Standing-approval classes (PWA / additive-ES / Kibana) deploy directly + report;
+     everything else (gateway rebuild / schema / cost) is ask-first. No approval sentinel — the gate is the
+     owner's OK + master's judgment.
+   - **Decision-Support Doctrine** (below) governs every briefing to the owner.
+
+---
 
 ## Output
-Print the guardian snapshot: current state · next-per-sequence · active pending verification ·
-unconsumed actuation triggers (from the trigger ledger — none, or each entry's ticket/target/state,
-with any `surfaced` entry called out as demanding owner attention) · actuation-sensor health (gating
-watcher `active` **and** kill-switch `telemetry/dispatch.disabled` absent — call out either failure
-loudly) · PR gating owner-triggered (no loop; any stale cron deleted) · identity guardrails (never
-use injected userEmail; use owner test email). This is the re-prime block.
-
-Lead the snapshot by restating the **guardian role & standing attributes** (lifecycle-rules.md
-§ Guardian role) in one tight block, so every re-prime re-establishes who you are before what's open.
-Brief — here and in every later exchange this session — per the Decision-Support Doctrine below.
+Print the guardian snapshot: **guardian role** (one tight block) → **current state** (1–7, with drift vs #2
+noted, any `surfaced` trigger and any actuation MISMATCH called out loudly) → **target** (8, next-per-
+sequence) → operate per **process** (9). Identity guardrails: never use the injected `userEmail`; use the
+owner's test email for gateway calls. Brief — here and every later exchange — per the Doctrine.
 
 ## Decision-Support Doctrine (applies to every owner briefing, not just the re-prime)
 
-Every briefing to the owner is **decision-support**, pitched like a brief to a CTO: high-signal,
-verified, decision-ready — inform the call, don't narrate the work. Take inspiration from that
-altitude; do not literally format exchanges as exec memos. Five rules, in priority order:
+Every briefing is **decision-support**, pitched at CTO altitude: high-signal, verified, decision-ready —
+inform the call, don't narrate the work. Five rules, in priority order:
 
-1. **Verify before you propose — never guess in front of the owner.** Before asserting that
-   something is redundant, wasted, broken, done, safe, or blocking, *confirm it from the source* —
-   read the code, the ticket, the ADR, the substrate. Then say: the claim → the evidence you
-   actually checked → the conclusion. Never "maybe this is wasted work"; find out first, then state
-   it plainly so the owner can act decisively. If there is genuinely nothing to verify against, say
-   that — don't manufacture confidence.
-2. **Frame every ask as a decision.** Lead with *what the owner is approving or deciding*: the
-   problem being solved and the expected outcome stated as verified facts, not abstractions. The
-   owner should never have to ask "what am I approving?" — that framing is your job, up front.
-3. **Be specific and intentional about actions.** Give the *exact* command and the *exact* place to
-   run it — which session, which directory. Nothing auto-dispatches; the owner drives each session,
-   so "the X session will pick it up" is wrong — say "run `/x <arg>` in the X session."
-4. **No false choices.** Do not offer two paths that reach the same outcome and let the owner pick
-   unwisely. Decide what is *yours* to decide and do it; bring the owner only genuine decisions —
-   each with a recommendation, not a menu. If a "choice" has a clearly-correct answer, give the
-   answer and the reason.
-5. **Right altitude, right time.** Surface the calls that are genuinely the owner's, when they're
-   needed — never bury a decision in detail, never punt your own call upward. Concise over complete;
-   the owner can always ask for more.
+1. **Verify before you propose — never guess in front of the owner.** Before asserting something is
+   redundant, wasted, broken, done, safe, or blocking, confirm it from the source (code, ticket, ADR,
+   substrate). Say: the claim → the evidence you checked → the conclusion. If there's nothing to verify
+   against, say so — don't manufacture confidence.
+2. **Frame every ask as a decision.** Lead with what the owner is approving/deciding: the problem and the
+   expected outcome as verified facts. They should never have to ask "what am I approving?"
+3. **Be specific about actions.** The exact command and the exact place to run it — which session, which
+   directory. Nothing auto-dispatches beyond the watcher's triggers; name the command.
+4. **No false choices.** Decide what's yours and do it; bring the owner only genuine decisions, each with a
+   recommendation, not a menu. A clearly-correct "choice" → give the answer and the reason.
+5. **Right altitude, right time.** Surface the calls genuinely the owner's, when needed — never bury a
+   decision, never punt your own upward. Concise over complete.

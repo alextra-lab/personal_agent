@@ -45,14 +45,12 @@ doesn't have to. Your standing mandate:
 
 Two comment channels, split by message **type** — never mixed:
 
-- **PR comments = the action channel.** Transient, scoped to *this PR merging*, and gone once it
-  merges. Master's review **bounces** and "fix X to pass" guidance live here, and a worker **follows**
-  them (prime-worker Step 3.2a). Master leads every actionable bounce with the exact marker
-  **`## Master gate — BOUNCE`** so the worker loop can detect it (author-filtering is unreliable —
-  master and worker may share a git identity). The worker acks a followed bounce with a PR reply
-  containing **`Ack: addressing master bounce`**; the presence of that ack after the latest marker is
-  the idempotency key (unacked → follow, acked → skip). The follow loop ends when the PR merges — no
-  other cleanup.
+- **PR comments = the action channel.** Transient, scoped to *this PR merging*, and gone once it merges.
+  Master's review findings — "fix X to pass" — live here as the durable record of *why* a PR bounced. But
+  the **bounce itself is delivered directly**: master `send-keys` the worker's `cc-<stream>` seat a plain
+  message (the worker is warm — it built this — and self-completes in-session, build skill § responding to
+  a poke). No `## Master gate — BOUNCE` marker, no ack protocol, no monitor loop — the direct message is
+  the trigger, and the PR comment is just the written detail the worker reads.
 - **Ticket (Linear) comments = the record channel.** Durable, about *the work itself* — delivery /
   close-out evidence, acceptance-criteria proof, design decisions, sequencing rationale, handoff
   context. **Nobody executes these** — read-for-context only, never instructions.

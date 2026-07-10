@@ -60,7 +60,8 @@ endif
         mypy ruff-check ruff-format \
         eval-recovery-survey eval-recovery \
         test-infra-up test-infra-down test-infra-reset test-infra-ps \
-        eval-infra-up eval-infra-down
+        eval-infra-up eval-infra-down \
+        study-infra-up study-infra-down study-infra-reset study-infra-ps
 
 help:
 	@echo "Run from project root so uv uses .venv (e.g. cd /path/to/personal_agent)."
@@ -380,3 +381,22 @@ eval-infra-up:          ## Start eval infra (requires eval.yml rewire)
 
 eval-infra-down:        ## Stop eval infra
 	@docker compose -f docker-compose.cloud.yml -f docker-compose.eval.yml down seshat-gateway-control seshat-gateway-treatment
+
+# ─── Study infrastructure (FRE-838, ADR-0114 D1) ─────────────────────────────
+# Isolated Neo4j+GDS sandbox for the decoupled associative-memory research
+# study. Own network (not joined to cloud-sim/prod), own volume, own creds.
+# See docker-compose.study.yml for isolation details.
+
+STUDY_COMPOSE := docker compose -f docker-compose.study.yml
+
+study-infra-up:          ## Start isolated study substrate (Neo4j+GDS :7691)
+	@$(STUDY_COMPOSE) up -d
+
+study-infra-down:        ## Stop study substrate
+	@$(STUDY_COMPOSE) down
+
+study-infra-reset:       ## Stop, remove containers AND volume (full reset)
+	@$(STUDY_COMPOSE) down -v
+
+study-infra-ps:          ## Show study substrate container status
+	@$(STUDY_COMPOSE) ps

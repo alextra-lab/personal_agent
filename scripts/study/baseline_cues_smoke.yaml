@@ -1,0 +1,45 @@
+# ADR-0114 FRE-840 — SMOKE cue set for the baseline harness.
+#
+# This is NOT the AC-4 pre-registered abstract-cue set (>=30 cues across
+# >=4 snapshot domains, frozen before any scoring). That set is FRE-841's
+# deliverable (a separate, concurrently-tracked ticket) and is consumed by
+# FRE-843's v0-synthesis seam. This file exists only to prove the baseline
+# harness + scoring rig run end-to-end and produce a scored table — a
+# mechanism smoke test, not AC-4 evidence.
+#
+# Entities below are drawn from ADR-0114's own forensic-read examples
+# (Context section) of the live prod KG, which the frozen snapshot (FRE-838)
+# is a 1:1 export of.
+cases:
+  - case_id: smoke-health-issues
+    query: "health issues"
+    note: "Abstract cue -- the exact kind prod's single-path recall misses (ADR-0114 Context)."
+    expected:
+      entity_names:
+        - "Arterial calcification"
+        - "Hypertension"
+        - "Halitosis"
+  - case_id: smoke-arterial-calcification
+    query: "arterial calcification"
+    note: "Case-variant self-disagreement example named in the ADR."
+    expected:
+      entity_names:
+        - "Arterial calcification"
+  - case_id: smoke-hypertension
+    query: "hypertension"
+    note: "One end of the flattened hypertension -> arterial-calcification relation."
+    expected:
+      entity_names:
+        - "Hypertension"
+  - case_id: smoke-halitosis
+    query: "halitosis"
+    note: "Case-variant self-disagreement example named in the ADR."
+    expected:
+      entity_names:
+        - "Halitosis"
+  - case_id: smoke-liver-health
+    query: "liver health"
+    note: "D2's worked multi-context example (adverse effect / liver health / health issue)."
+    expected:
+      entity_names:
+        - "Liver dysfunction"

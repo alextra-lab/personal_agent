@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
-from scripts.study.config import StudySettings
+from scripts.study.config import StudySettings, study_substrate_env
 
 
 def test_defaults_point_at_the_study_bolt_port(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -56,3 +56,30 @@ def test_ignores_agent_prefixed_prod_vars(monkeypatch: pytest.MonkeyPatch) -> No
     assert settings.neo4j_uri == "bolt://localhost:7691"
     assert settings.neo4j_password == "study_dev_password"
     assert settings.neo4j_password != "prod_password_should_never_be_read"
+
+
+# ---------------------------------------------------------------------------
+# study_substrate_env (FRE-840) — bridges STUDY_ creds into the AGENT_ env
+# vars personal_agent.config.settings reads. Pure dict-builder: no
+# os.environ mutation, no personal_agent import.
+# ---------------------------------------------------------------------------
+
+
+def test_study_substrate_env_bridges_study_creds_to_agent_vars() -> None:
+    settings = StudySettings(_env_file=None, neo4j_password="study_dev_password")  # type: ignore[call-arg]
+
+    env = study_substrate_env(settings)
+
+    assert env["AGENT_NEO4J_URI"] == "bolt://localhost:7691"
+    assert env["AGENT_NEO4J_USER"] == "neo4j"
+    assert env["AGENT_NEO4J_PASSWORD"] == "study_dev_password"
+    assert env["APP_ENV"] == "test"
+
+
+def test_study_substrate_env_never_carries_a_prod_looking_uri() -> None:
+    settings = StudySettings(_env_file=None, neo4j_password="study_dev_password")  # type: ignore[call-arg]
+
+    env = study_substrate_env(settings)
+
+    assert "7687" not in env["AGENT_NEO4J_URI"]  # prod's bolt port
+    assert env["AGENT_NEO4J_URI"] == settings.neo4j_uri

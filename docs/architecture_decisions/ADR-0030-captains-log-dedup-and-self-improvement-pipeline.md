@@ -312,3 +312,4 @@ Instead of deduping on write, let the weekly InsightsEngine scan all proposals a
 - `docs/architecture/HOMEOSTASIS_MODEL.md` — Section 4.5: Learning & Self-Modification Pace
 - ADR-0014: Structured Metrics in Captain's Log (precedent for adding structured fields)
 - ADR-0010: Structured LLM Outputs via Pydantic (DSPy adoption rationale)
+- **`docs/reference/CAPTAINS_LOG_HUMAN_APPROVAL_INVARIANT.md`** — Human-approval gate enforcement (addendum; governs all promotion pathways)

@@ -29,8 +29,21 @@ services:
       NEO4J_AUTH: neo4j/${STUDY_NEO4J_PASSWORD:?STUDY_NEO4J_PASSWORD required}
       NEO4J_PLUGINS: '["graph-data-science"]'
       NEO4J_dbms_usage__report_enabled: "false"
-      NEO4J_server_memory_heap_max__size: 1g
-      NEO4J_server_memory_pagecache_size: 256m
+      # FRE-838 fix-forward: the real prod corpus (10,290 nodes / 34,301
+      # relationships) memory-killed the study Neo4j at the original 1.5g
+      # mem_limit / 1g heap during master's first live corpus-load attempt
+      # (2026-07-10) — 1g heap plus the GDS plugin left no room to write
+      # that volume (a slow, unindexed relationship-write pattern also
+      # contributed — fixed separately in scripts/study/export_snapshot.py).
+      # Bumped to a 4g ceiling; `free -h` on the box at fix time showed
+      # ~15GB "available" (22GB total) — this container's mem_limit is a
+      # hard cap Docker enforces on demand, not a static reservation, so it
+      # only matters if the container actually approaches that ceiling.
+      # Verified end-to-end against a prod-scale synthetic corpus this
+      # session (tests/scripts/study/test_export_snapshot_scale.py) —
+      # peak usage settled around 2GB, well under the cap.
+      NEO4J_server_memory_heap_max__size: 2g
+      NEO4J_server_memory_pagecache_size: 512m
     volumes:
       - seshat_neo4j_study:/data
     ports:
@@ -42,7 +55,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
-    mem_limit: 1536m
+    mem_limit: 4g
     cpus: 1.0
     networks:
       - study-net

@@ -31,10 +31,21 @@ import sys
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlparse
 
 import structlog
+
+if __package__ in (None, ""):
+    # Direct-path invocation (`python scripts/study/export_snapshot.py`,
+    # as documented in the README) doesn't put the repo root on sys.path —
+    # only `-m scripts.study.export_snapshot` or pytest's rootdir insertion
+    # do — so the deferred `from scripts.study.config import ...` imports
+    # below would fail with ModuleNotFoundError (FRE-838 fix-forward,
+    # 2026-07-10: the documented direct-path runbook command didn't
+    # actually work; only the module form did).
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 log = structlog.get_logger(__name__)
 
@@ -97,15 +108,10 @@ def is_study_target_uri(uri: str) -> bool:
     must *be* the study Bolt port, rather than merely not being the prod
     fingerprint. Rejects prod (7687), internal docker DNS names
     (``bolt://neo4j:7687``), and any other host/port.
-
-    Imports ``scripts.study.config`` locally (not at module level) so this
-    module stays runnable via a direct ``python scripts/study/export_snapshot.py``
-    invocation — no other file under ``scripts/`` imports cross-package at
-    module level, and doing so here broke that (code-review follow-up,
-    FRE-838): direct execution doesn't put the repo root on ``sys.path``,
-    only ``python -m scripts...`` or pytest's rootdir insertion do.
     """
-    from scripts.study.config import STUDY_NEO4J_BOLT_PORT
+    from scripts.study.config import (
+        STUDY_NEO4J_BOLT_PORT,  # noqa: PLC0415 — see module-level sys.path bootstrap
+    )
 
     parsed = urlparse(uri)
     return parsed.hostname in _LOCAL_HOSTS and parsed.port == STUDY_NEO4J_BOLT_PORT
@@ -194,9 +200,19 @@ def compute_content_hash(corpus: SnapshotCorpus) -> str:
 
 
 def build_manifest(
-    corpus: SnapshotCorpus, snapshot_date: datetime, content_hash: str
+    corpus: SnapshotCorpus,
+    snapshot_date: datetime,
+    content_hash: str,
+    skipped_relationships: int = 0,
 ) -> dict[str, Any]:
-    """Build the ``snapshot_manifest.json`` payload for this corpus."""
+    """Build the ``snapshot_manifest.json`` payload for this corpus.
+
+    ``skipped_relationships`` (self-review follow-up, FRE-838): count of
+    relationships whose endpoint wasn't resolvable during the write (see
+    ``write_sandbox_corpus``) — non-zero here means the frozen corpus is
+    missing some edges prod had; a normal, fully-quiesced run should
+    always report 0.
+    """
     return {
         "snapshot_date": snapshot_date.astimezone(timezone.utc).isoformat(),
         "content_hash": content_hash,
@@ -205,6 +221,7 @@ def build_manifest(
         "prod_node_total": len(corpus.nodes),
         "prod_relationship_total": len(corpus.relationships),
         "prod_session_count": len(corpus.sessions),
+        "skipped_relationships": skipped_relationships,
     }
 
 
@@ -218,6 +235,12 @@ def build_node_batch_create_cypher(
     label-set avoids an N+1 round-trip per node on a real prod-sized corpus
     (code-review finding, FRE-838) — one query per distinct label
     combination instead of one per node.
+
+    Returns ``old_id``/``new_id`` pairs (the source element id and the
+    sandbox's freshly-assigned element id) so relationship endpoints can be
+    resolved by a fast, native elementId lookup instead of an unindexed
+    property scan (fix-forward, FRE-838 — see
+    ``build_relationship_batch_create_cypher``).
     """
     for label in labels:
         if label not in PROD_NODE_LABELS:
@@ -226,7 +249,8 @@ def build_node_batch_create_cypher(
     query = (
         "UNWIND $rows AS row "
         f"CREATE (n:{label_clause}) "
-        "SET n = row.properties, n._export_source_element_id = row.source_element_id"
+        "SET n = row.properties, n._export_source_element_id = row.source_element_id "
+        "RETURN row.source_element_id AS old_id, elementId(n) AS new_id"
     )
     rows = [
         {"properties": node.properties, "source_element_id": node.source_element_id}
@@ -236,31 +260,42 @@ def build_node_batch_create_cypher(
 
 
 def build_relationship_batch_create_cypher(
-    rel_type: str, relationships: list[ExportedRelationship]
+    rel_type: str, relationships: list[ExportedRelationship], id_map: dict[str, str]
 ) -> tuple[str, dict[str, Any]]:
     """Build one UNWIND-batched MATCH..CREATE statement for all relationships of *rel_type*.
 
-    Endpoints are resolved via ``_export_source_element_id`` (set by
-    ``build_node_batch_create_cypher`` above), not by re-derived Neo4j
-    element ids — sandbox element ids are assigned fresh on write and are
-    not equal to the prod ids being referenced here.
+    Endpoints are resolved by ``elementId()`` against *id_map* (prod
+    ``source_element_id`` -> the sandbox node's freshly-assigned element
+    id, captured from ``build_node_batch_create_cypher``'s ``RETURN``) —
+    NOT by matching the ``_export_source_element_id`` *property*
+    (fix-forward, FRE-838): a property-based ``MATCH`` with no index on
+    that property is an unindexed full-graph scan per lookup, which is
+    slow and memory-heavy at real corpus volume (34,301 relationships x 2
+    endpoint lookups) and was a real contributor to the original
+    corpus-load failure alongside the memory limit. ``elementId()``
+    lookup is a native, O(1) storage-offset dereference — no index
+    needed.
     """
     if rel_type not in PROD_RELATIONSHIP_TYPES:
         raise ValueError(f"Refusing to export unrecognized relationship type: {rel_type!r}")
+    rows = []
+    for rel in relationships:
+        start_new_id = id_map.get(rel.start_source_element_id)
+        end_new_id = id_map.get(rel.end_source_element_id)
+        if start_new_id is None or end_new_id is None:
+            raise ValueError(
+                f"Missing sandbox node mapping for {rel_type} relationship endpoint "
+                f"({rel.start_source_element_id!r} -> {rel.end_source_element_id!r}) — "
+                "a node this relationship references was not exported."
+            )
+        rows.append(
+            {"start_new_id": start_new_id, "end_new_id": end_new_id, "properties": rel.properties}
+        )
     query = (
         "UNWIND $rows AS row "
-        "MATCH (a {_export_source_element_id: row.start_source_element_id}), "
-        "(b {_export_source_element_id: row.end_source_element_id}) "
+        "MATCH (a), (b) WHERE elementId(a) = row.start_new_id AND elementId(b) = row.end_new_id "
         f"CREATE (a)-[r:{rel_type}]->(b) SET r = row.properties"
     )
-    rows = [
-        {
-            "start_source_element_id": rel.start_source_element_id,
-            "end_source_element_id": rel.end_source_element_id,
-            "properties": rel.properties,
-        }
-        for rel in relationships
-    ]
     return query, {"rows": rows}
 
 
@@ -332,8 +367,11 @@ async def read_prod_corpus(neo4j_driver: Neo4jDriver, pg_dsn: str) -> SnapshotCo
     return SnapshotCorpus(nodes=tuple(nodes), relationships=tuple(relationships), sessions=sessions)
 
 
-async def write_sandbox_corpus(neo4j_driver: Neo4jDriver, corpus: SnapshotCorpus) -> None:
+async def write_sandbox_corpus(neo4j_driver: Neo4jDriver, corpus: SnapshotCorpus) -> int:
     """Write the corpus into the study sandbox.
+
+    Returns the count of relationships skipped because an endpoint was
+    unresolvable (see below).
 
     One UNWIND-batched query per distinct node label-set, one per
     relationship type, then one batched query attaching raw
@@ -342,6 +380,25 @@ async def write_sandbox_corpus(neo4j_driver: Neo4jDriver, corpus: SnapshotCorpus
     real prod-sized corpus turning into thousands of serial Bolt
     round-trips would needlessly extend the quiesced window the AC-5(2)
     zero-delta proof depends on.
+
+    Relationship and session-trace endpoints are resolved via an
+    ``old_id -> new sandbox elementId`` map captured from the node-write
+    results, not by re-``MATCH``ing on the ``_export_source_element_id``
+    *property* (fix-forward, FRE-838: an unindexed property scan across
+    the whole graph, run once per relationship endpoint, was slow and
+    memory-heavy at real corpus volume — a real contributor to the
+    original corpus-load failure alongside the too-small memory limit).
+
+    A relationship whose endpoint isn't in the map (possible if prod
+    wasn't perfectly quiesced between the node-read and relationship-read
+    passes in ``read_prod_corpus``) is **skipped, logged, and counted**
+    rather than raising (self-review follow-up, FRE-838): the prior
+    property-based ``MATCH`` silently produced zero relationships for an
+    unresolvable endpoint, so hard-crashing here — after earlier
+    node/relationship batches are already auto-committed — would be a
+    worse failure mode than what this fix-forward is closing, not a
+    strictly better one. The skip is visible (logged + counted in the
+    manifest) rather than silent.
     """
     nodes_by_labels: dict[tuple[str, ...], list[ExportedNode]] = {}
     for node in corpus.nodes:
@@ -351,13 +408,33 @@ async def write_sandbox_corpus(neo4j_driver: Neo4jDriver, corpus: SnapshotCorpus
     for rel in corpus.relationships:
         rels_by_type.setdefault(rel.rel_type, []).append(rel)
 
+    id_map: dict[str, str] = {}
+    skipped_relationships = 0
+
     async with neo4j_driver.session() as session:
         for labels, nodes in nodes_by_labels.items():
             query, params = build_node_batch_create_cypher(labels, nodes)
-            await session.run(query, params)
+            result = await session.run(query, params)
+            async for record in result:
+                id_map[record["old_id"]] = record["new_id"]
 
         for rel_type, rels in rels_by_type.items():
-            query, params = build_relationship_batch_create_cypher(rel_type, rels)
+            resolvable = [
+                rel
+                for rel in rels
+                if rel.start_source_element_id in id_map and rel.end_source_element_id in id_map
+            ]
+            unresolved = len(rels) - len(resolvable)
+            if unresolved:
+                skipped_relationships += unresolved
+                log.warning(
+                    "study_export_relationship_endpoint_unresolved",
+                    rel_type=rel_type,
+                    unresolved_count=unresolved,
+                )
+            if not resolvable:
+                continue
+            query, params = build_relationship_batch_create_cypher(rel_type, resolvable, id_map)
             await session.run(query, params)
 
         sessions_by_id = {s["session_id"]: s for s in corpus.sessions}
@@ -370,17 +447,19 @@ async def write_sandbox_corpus(neo4j_driver: Neo4jDriver, corpus: SnapshotCorpus
                 continue
             session_trace_rows.append(
                 {
-                    "source_element_id": node.source_element_id,
+                    "new_id": id_map[node.source_element_id],
                     "raw_messages_json": json.dumps(trace["messages"], sort_keys=True, default=str),
                 }
             )
         if session_trace_rows:
             await session.run(
                 "UNWIND $rows AS row "
-                "MATCH (s:Session {_export_source_element_id: row.source_element_id}) "
+                "MATCH (s) WHERE elementId(s) = row.new_id "
                 "SET s.raw_messages_json = row.raw_messages_json",
                 {"rows": session_trace_rows},
             )
+
+    return skipped_relationships
 
 
 async def count_nodes_and_relationships(neo4j_driver: Neo4jDriver) -> tuple[int, int]:
@@ -431,8 +510,6 @@ async def run_export(args: argparse.Namespace) -> dict[str, Any] | None:
         print("Dry run (pass --execute to write). No prod reads or sandbox writes performed.")
         return None
 
-    from pathlib import Path
-
     from personal_agent.config import get_settings
     from scripts.study.config import STUDY_NEO4J_BOLT_PORT, StudySettings
 
@@ -459,14 +536,21 @@ async def run_export(args: argparse.Namespace) -> dict[str, Any] | None:
     )
     try:
         corpus = await read_prod_corpus(source_driver, pg_dsn)
-        await write_sandbox_corpus(target_driver, corpus)
+        skipped_relationships = await write_sandbox_corpus(target_driver, corpus)
     finally:
         await source_driver.close()
         await target_driver.close()
 
     snapshot_date = datetime.now(timezone.utc)
     content_hash = compute_content_hash(corpus)
-    manifest = build_manifest(corpus, snapshot_date, content_hash)
+    manifest = build_manifest(corpus, snapshot_date, content_hash, skipped_relationships)
+    if skipped_relationships:
+        print(
+            f"WARNING: {skipped_relationships} relationship(s) skipped — an endpoint was not "
+            "resolvable (see 'study_export_relationship_endpoint_unresolved' in the logs). "
+            "The frozen corpus is missing those edges.",
+            file=sys.stderr,
+        )
 
     snapshot_dir = Path(args.snapshot_dir)
     snapshot_dir.mkdir(parents=True, exist_ok=True)

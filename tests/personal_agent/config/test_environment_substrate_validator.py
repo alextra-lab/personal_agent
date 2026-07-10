@@ -135,12 +135,23 @@ class TestValidatorBypassFlag:
 
 
 class TestValidatorSilentForNonTestEnv:
-    """Validator does not fire for DEVELOPMENT or PRODUCTION environments."""
+    """Validator does not fire for DEVELOPMENT or PRODUCTION environments.
+
+    ``substrate_profile="private"`` is pinned explicitly here: the ambient
+    test-suite env (``tests/conftest.py``, FRE-375) sets
+    ``AGENT_SUBSTRATE_PROFILE=test`` process-wide, which ``model_validate``
+    inherits for any field not present in the override dict. Left unpinned,
+    these prod-fingerprint URIs would instead trip the profile-gated
+    ADR-0112 AC-9 guard (``_validate_dev_test_profile_isolation``,
+    FRE-820) — a different validator than the environment-gated one
+    (FRE-375) this test class targets.
+    """
 
     def test_no_raise_for_development_env_with_prod_neo4j(self) -> None:
         """No error for DEVELOPMENT environment regardless of URI."""
         cfg = make_config(
             environment=Environment.DEVELOPMENT,
+            substrate_profile="private",
             neo4j_uri="bolt://localhost:7687",  # fre-375-allow: tests the prod-URI guard itself
         )
         assert cfg.environment == Environment.DEVELOPMENT
@@ -149,6 +160,7 @@ class TestValidatorSilentForNonTestEnv:
         """No error for PRODUCTION environment regardless of URI."""
         cfg = make_config(
             environment=Environment.PRODUCTION,
+            substrate_profile="private",
             neo4j_uri="bolt://localhost:7687",  # fre-375-allow: tests the prod-URI guard itself
         )
         assert cfg.environment == Environment.PRODUCTION
@@ -157,6 +169,7 @@ class TestValidatorSilentForNonTestEnv:
         """No error for STAGING environment regardless of URI."""
         cfg = make_config(
             environment=Environment.STAGING,
+            substrate_profile="private",
             neo4j_uri="bolt://localhost:7687",  # fre-375-allow: tests the prod-URI guard itself
         )
         assert cfg.environment == Environment.STAGING

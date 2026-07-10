@@ -9,6 +9,8 @@ escape-hatch branch (runtime adoption is the AC-5/AC-9 tickets).
 
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 import pytest
 
 from personal_agent.config.config_guard import REQUIRED_SUBSTRATE_COMPONENTS
@@ -138,6 +140,39 @@ class TestManagedEmbedderProfile:
     def test_declares_all_d3_components(self, managed_settings: AppConfig) -> None:
         resolution = resolve_substrate("managed_embedder", settings=managed_settings)
         assert set(resolution.backends) >= REQUIRED_SUBSTRATE_COMPONENTS
+
+
+class TestDevTestProfileUnderRealTestEnv:
+    """ADR-0112 AC-9 (FRE-820): end-to-end proof under the real pytest test-substrate env.
+
+    ``tests/conftest.py`` (FRE-375) has already rewritten the live settings
+    singleton's store URIs to the test stack (:7688/:9201/:5433) and set
+    ``AGENT_SUBSTRATE_PROFILE=test`` before this test module even imports. No
+    fixture/mocking here — this exercises the actual wiring an operator gets,
+    proving the resolved targets ARE the FRE-375 test substrate, not a
+    synthetic stand-in for it.
+    """
+
+    @pytest.mark.parametrize("profile", ["dev", "test"])
+    def test_stores_resolve_to_the_fre_375_test_substrate(self, profile: str) -> None:
+        resolution = resolve_substrate(profile)
+
+        postgres = urlparse(resolution.backends["postgres"].target)
+        neo4j = urlparse(resolution.backends["neo4j"].target)
+        elasticsearch = urlparse(resolution.backends["elasticsearch"].target)
+
+        assert postgres.port == 5433
+        assert neo4j.port == 7688
+        assert elasticsearch.port == 9201
+
+    @pytest.mark.parametrize("profile", ["dev", "test"])
+    def test_no_component_resolves_managed_under_dev_test(self, profile: str) -> None:
+        resolution = resolve_substrate(profile)
+        for component, backend in resolution.backends.items():
+            assert backend.kind == "local", (
+                f"{profile} profile component {component!r} resolved kind={backend.kind!r} "
+                "— dev/test must never resolve a paid/managed endpoint (ADR-0112 AC-9)"
+            )
 
 
 class TestSubstrateCli:

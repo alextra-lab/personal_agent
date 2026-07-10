@@ -339,6 +339,62 @@ def check_substrate_manifest(root: Path) -> list[Finding]:
     return findings
 
 
+def check_dev_test_profile_isolation(root: Path) -> list[Finding]:
+    """ADR-0112 AC-9 (FRE-820) — dev/test substrate profiles never resolve managed/paid backends.
+
+    The machine-checkable half of AC-9's "no live paid endpoint call": every
+    component of the ``dev``/``test`` profiles in ``config/substrate.yaml``
+    must declare ``kind: local`` AND must not source a ``managed_*``-prefixed
+    AppConfig field — a row could otherwise "lie" (claim ``kind: local``
+    while a ``setting:managed_*`` source still points at a paid endpoint)
+    and pass a kind-only check.
+
+    A missing manifest, or one declaring neither a ``dev`` nor ``test``
+    profile, yields no findings (a fixture/test root legitimately has
+    neither) — mirroring :func:`check_substrate_manifest`. Malformed rows
+    (non-mapping, unparsable ``source``) are that function's job to report;
+    this check simply skips them rather than duplicating shape validation.
+    """
+    manifest = load_substrate_manifest(root)
+    profiles = manifest.get("profiles")
+    if not isinstance(profiles, dict):
+        return []
+
+    findings: list[Finding] = []
+    for profile_name in ("dev", "test"):
+        rows = profiles.get(profile_name)
+        if not isinstance(rows, dict):
+            continue
+        for component, row in rows.items():
+            if not isinstance(row, dict):
+                continue
+            where = f"substrate profile '{profile_name}' component '{component}'"
+            kind = row.get("kind")
+            if kind != "local":
+                findings.append(
+                    Finding(
+                        "dev_test_profile_not_local",
+                        "policy",
+                        f"{where} has kind={kind!r} — dev/test profiles must be "
+                        "local-only (ADR-0112 AC-9: no live paid endpoint call)",
+                    )
+                )
+            source = row.get("source")
+            if isinstance(source, str) and ":" in source:
+                source_kind, ref = source.split(":", 1)
+                if source_kind == "setting" and ref.startswith("managed_"):
+                    findings.append(
+                        Finding(
+                            "dev_test_profile_managed_source",
+                            "policy",
+                            f"{where} sources AppConfig field {ref!r} — a managed_*-"
+                            "prefixed field under dev/test would still resolve a paid "
+                            "endpoint even with kind: local (ADR-0112 AC-9)",
+                        )
+                    )
+    return findings
+
+
 def model_config_path_for_profile(profile: str, manifest: JSONDict, root: Path) -> Path:
     """Resolve *profile*'s active model-definition file from the deployment manifest.
 
@@ -848,5 +904,6 @@ def run_all_checks(root: Path) -> list[Finding]:
     findings.extend(check_deployment_manifest_internal_consistency(manifest))
     findings.extend(check_deployment_manifest_matches_compose(root, manifest))
     findings.extend(check_substrate_manifest(root))
+    findings.extend(check_dev_test_profile_isolation(root))
     findings.extend(check_embedding_fallback_identity())
     return findings

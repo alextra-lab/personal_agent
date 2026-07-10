@@ -76,6 +76,72 @@ RETURN count(r)` in `cypher-shell`) and confirm they're identical — the read
 performs no writes, so a quiet window (no concurrent live turns) makes the
 before/after counts a clean zero-delta proof.
 
-**If the live export has not been run yet** (e.g. the go-ahead was
-deferred): the study sandbox stands but has no corpus, and FRE-839/840/841
-remain blocked until this command runs against real production data.
+**Status (2026-07-10): the live export has run.** `snapshot_manifest.json`
+records 10,290 nodes / 34,301 relationships / 102 sessions,
+`skipped_relationships: 0` — the complete corpus, including the
+entity-to-entity associative edges (`RELATED_TO`/`USES`/`PART_OF`/
+`SIMILAR_TO`) an earlier hardcoded-allowlist bug had silently dropped
+(fixed in the dynamic label/rel-type discovery above). FRE-839+ are
+unblocked.
+
+## Evidence-layer schema, ingest categorizer, accretion writer (FRE-839)
+
+ADR-0114 D2/D3/D4 — the learn-at-ingest, accrete-not-overwrite half, built
+on the frozen corpus above.
+
+```
+uv run python -m scripts.study.schema           # apply/verify the evidence-layer schema (idempotent)
+uv run python -m scripts.study.run_ingest --limit 5      # small, cheap sample
+uv run python -m scripts.study.run_ingest --execute-full # ALL sessions — real LLM cost, see below
+uv run python -m scripts.study.ac_proof          # AC-1 + mechanism-AC-2 report
+```
+
+**Schema** (`scripts/study/schema.py`): `Concept` hub (preserving the
+ADR-0109 entity `kind` as a control property), `Surface`-`ALIAS_OF`-`Concept`
+alias resolution, the evidence layer (`Episode`/`Mention`/
+`MembershipAssertion`, append-only), the derived layer (`MEMBER_OF`,
+`MENTIONED_IN`). `SUBSUMES` and `RelationAssertion` are schema-only in v0
+(documented in the module, not populated) — v1 (FRE-855) and the relation
+arm (FRE-840+) write to them with no migration needed.
+
+**Ingest categorizer** (`scripts/study/categorizer.py`): an LLM reads the
+full conversation and proposes 1-3 associative categories per concept
+already known to be discussed in it (read off the frozen corpus's
+`Session-[:DISCUSSES]->Entity` edge, not rediscovered). Provenance
+(`model`/`prompt_version`/`seed`) is Python-stamped, never trusted from the
+model. Cost routes through the isolated `study` cost-gate role
+(`config/governance/budget.yaml`, $5/day · $7/week) — separate from
+`entity_extraction`'s cap so a corpus run can never contend with live
+production extraction.
+
+**Accretion writer** (`scripts/study/writer.py`): appends `Mention`s and
+`MembershipAssertion`s (never overwrites); `MEMBER_OF` is recomputed from
+the full backing-assertion set after each conversation, batched (one
+Cypher round-trip per episode, not per concept/membership — the FRE-838
+N+1 lesson applied here too). Alias resolution mirrors
+`memory/dedup.py`'s established algorithm, with one deliberate asymmetry:
+exact case-insensitive matches merge regardless of `kind` (first-write-wins
+on the shared hub — needed to collapse the ADR's own named case-variant
+bug, where prod tagged variants with *different* kinds), while the
+embedding-similarity fallback stays kind-gated (the real homonym-risk
+path). See `writer.py`'s module docstring for the full rationale and the
+one known, deliberately-deferred gap (byte-identical same-case homonyms —
+FRE-841/843's job).
+
+**Runbook — the real `--execute-full` corpus run:** this makes ~102 real,
+paid LLM calls against the real conversation corpus. Preconditions:
+1. `make study-infra-up` running against the real corpus (see above).
+2. The `study` budget role/cap in `config/governance/budget.yaml` reflects
+   an owner-confirmed value (not silently bumped).
+3. An explicit owner go-ahead for the run itself (separate from the code
+   being merged) — per this project's "confirm before consequential/
+   cost-incurring actions" norm.
+
+After it completes, `uv run python -m scripts.study.ac_proof` reads the
+AC-1 (population-scale multi-parent accretion — median `MEMBER_OF` degree
+≥2 **and** ≥60% of the eligible set with ≥2 provenance-distinct
+memberships, the two conditions computed independently, never one
+inferred from the other) and mechanism-AC-2 (alias resolution — the ADR's
+own named case-variant pairs resolving to one `Concept` hub) numbers for
+the final ticket comment. A clean null (the corpus doesn't clear the bar)
+is a valid, budgeted ADR-0114 outcome, reported honestly — not reframed.

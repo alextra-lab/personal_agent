@@ -27,6 +27,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import re
 import sys
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -49,35 +50,62 @@ if __package__ in (None, ""):
 
 log = structlog.get_logger(__name__)
 
-# Node labels / relationship types that exist in the prod schema today
-# (src/personal_agent/memory/service.py). A closed allowlist — both for
-# scoping the export and as a defensive check before interpolating a label
-# or relationship type into Cypher (neither can be parameterized).
-PROD_NODE_LABELS: tuple[str, ...] = (
-    "Turn",
-    "Session",
-    "Entity",
-    "EntityDescriptionVersion",
-    "Person",
-    "Agent",
-    "Claim",
-    "Location",
-)
-
-PROD_RELATIONSHIP_TYPES: tuple[str, ...] = (
-    "PARTICIPATED_IN",
-    "DISCUSSES",
-    "CONTAINS",
-    "NEXT",
-    "HAD_DESCRIPTION",
-    "HAS_STANCE",
-    "HAS_FACT",
-    "OPERATED_BY",
-    "CURRENTLY_AT",
-    "VISITED",
-)
+# Fix-forward, FRE-838 (2026-07-10, second master verification): node
+# labels and relationship types are discovered DYNAMICALLY from prod via
+# `CALL db.labels()` / `CALL db.relationshipTypes()` (see
+# `_discover_node_labels` / `_discover_relationship_types` below) — NOT
+# enumerated from a hardcoded list. A prior version hardcoded
+# PROD_RELATIONSHIP_TYPES as "every prod relationship type" from reading
+# src/personal_agent/memory/service.py; that claim was false — it missed
+# the entity-to-entity edges created by the entity-linking/consolidation
+# path (RELATED_TO, USES, PART_OF, SIMILAR_TO, LOCATED_IN, CREATED_BY,
+# CAUSES), silently dropping 12,480 of 34,301 real prod relationships
+# (36%) — exactly the associative entity-to-entity structure ADR-0114
+# exists to study. A closed list can go stale the moment prod's schema
+# grows; discovery-from-source is complete by construction.
+#
+# `_SAFE_CYPHER_IDENTIFIER_RE` remains as the injection guard: label and
+# relationship-type names cannot be parameterized in Cypher (interpolated
+# into the query text instead), so every discovered name is validated as
+# a bare identifier before use — this is unrelated to whether the name is
+# "expected", only whether it's safe to interpolate.
+_SAFE_CYPHER_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 _LOCAL_HOSTS: frozenset[str] = frozenset({"localhost", "127.0.0.1"})
+
+
+def _validate_cypher_identifier(name: str, kind: str) -> str:
+    """Guard against Cypher injection when interpolating *name*.
+
+    *name* is a node label or relationship type; Cypher can't parameterize
+    either, so it's interpolated into the query string. Raises
+    ``ValueError`` unless *name* is a safe bare identifier — this is an
+    injection guard, not a completeness/allowlist check (fix-forward,
+    FRE-838).
+    """
+    if not _SAFE_CYPHER_IDENTIFIER_RE.match(name):
+        raise ValueError(f"Refusing to export unsafe {kind} name: {name!r}")
+    return name
+
+
+async def _discover_node_labels(session: Neo4jSession) -> list[str]:
+    """Every node label present in the source graph, via ``CALL db.labels()``."""
+    result = await session.run("CALL db.labels() YIELD label RETURN label")
+    return [_validate_cypher_identifier(record["label"], "node label") async for record in result]
+
+
+async def _discover_relationship_types(session: Neo4jSession) -> list[str]:
+    """Every relationship type present in the source graph.
+
+    Via ``CALL db.relationshipTypes()``.
+    """
+    result = await session.run(
+        "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType"
+    )
+    return [
+        _validate_cypher_identifier(record["relationshipType"], "relationship type")
+        async for record in result
+    ]
 
 
 class Neo4jResult(Protocol):
@@ -230,10 +258,12 @@ def build_node_batch_create_cypher(
 ) -> tuple[str, dict[str, Any]]:
     """Build one UNWIND-batched CREATE statement for all nodes sharing *labels*.
 
-    Validates labels against the closed prod allowlist before
-    interpolation (labels cannot be parameterized in Cypher). Batching by
-    label-set avoids an N+1 round-trip per node on a real prod-sized corpus
-    (code-review finding, FRE-838) — one query per distinct label
+    Validates each label is a safe Cypher identifier before interpolation
+    (labels cannot be parameterized in Cypher) — an injection guard, not a
+    completeness check (fix-forward, FRE-838: labels are discovered
+    dynamically from prod, not enumerated from a hardcoded list). Batching
+    by label-set avoids an N+1 round-trip per node on a real prod-sized
+    corpus (code-review finding, FRE-838) — one query per distinct label
     combination instead of one per node.
 
     Returns ``old_id``/``new_id`` pairs (the source element id and the
@@ -243,8 +273,7 @@ def build_node_batch_create_cypher(
     ``build_relationship_batch_create_cypher``).
     """
     for label in labels:
-        if label not in PROD_NODE_LABELS:
-            raise ValueError(f"Refusing to export unrecognized node label: {label!r}")
+        _validate_cypher_identifier(label, "node label")
     label_clause = ":".join(labels)
     query = (
         "UNWIND $rows AS row "
@@ -275,9 +304,13 @@ def build_relationship_batch_create_cypher(
     corpus-load failure alongside the memory limit. ``elementId()``
     lookup is a native, O(1) storage-offset dereference — no index
     needed.
+
+    Validates *rel_type* is a safe Cypher identifier before interpolation
+    — an injection guard, not a completeness check (fix-forward, FRE-838:
+    relationship types are discovered dynamically from prod, not
+    enumerated from a hardcoded list).
     """
-    if rel_type not in PROD_RELATIONSHIP_TYPES:
-        raise ValueError(f"Refusing to export unrecognized relationship type: {rel_type!r}")
+    _validate_cypher_identifier(rel_type, "relationship type")
     rows = []
     for rel in relationships:
         start_new_id = id_map.get(rel.start_source_element_id)
@@ -302,6 +335,13 @@ def build_relationship_batch_create_cypher(
 async def read_prod_corpus(neo4j_driver: Neo4jDriver, pg_dsn: str) -> SnapshotCorpus:
     """Read-only export of the prod graph + conversation traces.
 
+    Node labels and relationship types are discovered dynamically from
+    prod (``CALL db.labels()`` / ``CALL db.relationshipTypes()``), not
+    enumerated from a hardcoded list (fix-forward, FRE-838) — the export
+    is complete by construction regardless of what the prod schema
+    contains, rather than silently dropping anything a stale hardcoded
+    list didn't happen to name.
+
     Args:
         neo4j_driver: connected async Neo4j driver pointed at PROD (read-only
             Cypher issued below; no writes).
@@ -314,23 +354,34 @@ async def read_prod_corpus(neo4j_driver: Neo4jDriver, pg_dsn: str) -> SnapshotCo
 
     nodes: list[ExportedNode] = []
     relationships: list[ExportedRelationship] = []
+    seen_node_ids: set[str] = set()
 
     async with neo4j_driver.session() as session:
-        for label in PROD_NODE_LABELS:
+        for label in await _discover_node_labels(session):
             result = await session.run(
                 f"MATCH (n:{label}) RETURN elementId(n) AS source_element_id, "
                 "labels(n) AS labels, properties(n) AS properties"
             )
             async for record in result:
+                source_element_id = record["source_element_id"]
+                if source_element_id in seen_node_ids:
+                    # A node carrying more than one label is matched once per
+                    # label it has — dedupe so it's exported exactly once,
+                    # with its full label set (defensive, FRE-838: today's
+                    # schema has no multi-labeled nodes, but per-label
+                    # iteration would silently double-export one if that
+                    # ever changes, corrupting id_map in write_sandbox_corpus).
+                    continue
+                seen_node_ids.add(source_element_id)
                 nodes.append(
                     ExportedNode(
-                        source_element_id=record["source_element_id"],
+                        source_element_id=source_element_id,
                         labels=tuple(record["labels"]),
                         properties=dict(record["properties"]),
                     )
                 )
 
-        for rel_type in PROD_RELATIONSHIP_TYPES:
+        for rel_type in await _discover_relationship_types(session):
             result = await session.run(
                 f"MATCH (a)-[r:{rel_type}]->(b) RETURN elementId(a) AS start_id, "
                 "elementId(b) AS end_id, properties(r) AS properties"

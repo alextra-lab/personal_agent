@@ -19,6 +19,9 @@ from scripts.study.export_snapshot import (
     ExportedNode,
     ExportedRelationship,
     SnapshotCorpus,
+    _discover_node_labels,
+    _discover_relationship_types,
+    _validate_cypher_identifier,
     build_manifest,
     build_node_batch_create_cypher,
     build_relationship_batch_create_cypher,
@@ -116,17 +119,39 @@ def test_manifest_schema_has_all_required_fields() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_build_node_batch_create_cypher_rejects_unrecognized_label() -> None:
-    node = ExportedNode("n1", ("SomeUnknownLabel",), {})
-    with pytest.raises(ValueError, match="unrecognized node label"):
-        build_node_batch_create_cypher(("SomeUnknownLabel",), [node])
+def test_build_node_batch_create_cypher_accepts_any_safe_label_not_just_a_known_list() -> None:
+    """FRE-838 fix-forward: labels are discovered dynamically from prod, not
+    checked against a hardcoded list — a label never seen before must still
+    be accepted as long as it's a safe Cypher identifier (this is exactly
+    the defect class that silently dropped 12,480 relationships: a closed
+    allowlist masquerading as a completeness check).
+    """
+    node = ExportedNode("n1", ("SomeLabelNeverSeenBefore",), {})
+    query, params = build_node_batch_create_cypher(("SomeLabelNeverSeenBefore",), [node])
+    assert "SomeLabelNeverSeenBefore" in query
 
 
-def test_build_relationship_batch_create_cypher_rejects_unrecognized_type() -> None:
-    rel = ExportedRelationship("SOME_UNKNOWN_REL", "n1", "n2", {})
-    with pytest.raises(ValueError, match="unrecognized relationship type"):
+def test_build_node_batch_create_cypher_rejects_unsafe_label() -> None:
+    node = ExportedNode("n1", ("Entity) DETACH DELETE (n",), {})
+    with pytest.raises(ValueError, match="unsafe node label"):
+        build_node_batch_create_cypher(("Entity) DETACH DELETE (n",), [node])
+
+
+def test_build_relationship_batch_create_cypher_accepts_any_safe_type_not_just_a_known_list() -> (
+    None
+):
+    rel = ExportedRelationship("RELATED_TO", "n1", "n2", {})
+    query, params = build_relationship_batch_create_cypher(
+        "RELATED_TO", [rel], {"n1": "id1", "n2": "id2"}
+    )
+    assert "RELATED_TO" in query
+
+
+def test_build_relationship_batch_create_cypher_rejects_unsafe_type() -> None:
+    rel = ExportedRelationship("DISCUSSES]->(n) DETACH DELETE (n", "n1", "n2", {})
+    with pytest.raises(ValueError, match="unsafe relationship type"):
         build_relationship_batch_create_cypher(
-            "SOME_UNKNOWN_REL", [rel], {"n1": "id1", "n2": "id2"}
+            "DISCUSSES]->(n) DETACH DELETE (n", [rel], {"n1": "id1", "n2": "id2"}
         )
 
 
@@ -162,10 +187,33 @@ def test_build_relationship_batch_create_cypher_raises_on_missing_mapping() -> N
 
 
 # ---------------------------------------------------------------------------
-# write_sandbox_corpus — relationship endpoint mapping over a small fixture,
-# using a fake driver/session that records every Cypher call instead of a
-# real Neo4j instance.
+# _validate_cypher_identifier / _discover_node_labels / _discover_relationship_types
+# — the FRE-838 fix-forward: discovery replaces a hardcoded enumeration,
+# the regex check is an injection guard only.
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Entity", "RELATED_TO", "SomeCamelCaseLabel", "_leading_underscore", "USEs"],
+)
+def test_validate_cypher_identifier_accepts_safe_names(name: str) -> None:
+    assert _validate_cypher_identifier(name, "node label") == name
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Entity) DETACH DELETE (n",
+        "Entity`; DROP",
+        "has space",
+        "trailing-dash",
+        "",
+    ],
+)
+def test_validate_cypher_identifier_rejects_unsafe_names(name: str) -> None:
+    with pytest.raises(ValueError, match="unsafe"):
+        _validate_cypher_identifier(name, "node label")
 
 
 class _FakeResult:
@@ -178,6 +226,62 @@ class _FakeResult:
     async def _aiter(self) -> AsyncIterator[dict]:
         for record in self._records:
             yield record
+
+
+class _FakeDiscoverySession:
+    """A session whose `run` returns canned db.labels()/db.relationshipTypes() rows."""
+
+    def __init__(self, labels: list[str], rel_types: list[str]) -> None:
+        self._labels = labels
+        self._rel_types = rel_types
+
+    async def run(self, query: str, parameters: dict | None = None) -> _FakeResult:
+        if "db.labels()" in query:
+            return _FakeResult([{"label": label} for label in self._labels])
+        if "db.relationshipTypes()" in query:
+            return _FakeResult([{"relationshipType": t} for t in self._rel_types])
+        raise AssertionError(f"unexpected query: {query}")
+
+
+@pytest.mark.asyncio
+async def test_discover_node_labels_returns_every_label_not_a_fixed_set() -> None:
+    # Deliberately includes labels that never appeared in the old hardcoded
+    # PROD_NODE_LABELS list this fix-forward removed.
+    session = _FakeDiscoverySession(labels=["Entity", "SomeFutureLabel"], rel_types=[])
+    assert await _discover_node_labels(session) == ["Entity", "SomeFutureLabel"]
+
+
+@pytest.mark.asyncio
+async def test_discover_relationship_types_returns_every_type_not_a_fixed_set() -> None:
+    # The exact defect this fix-forward closes: RELATED_TO/USES/etc. were
+    # never in the old hardcoded PROD_RELATIONSHIP_TYPES list, so they were
+    # silently dropped (master's finding, FRE-838, 2026-07-10: 12,480 of
+    # 34,301 real prod relationships lost this way).
+    session = _FakeDiscoverySession(
+        labels=[],
+        rel_types=["DISCUSSES", "RELATED_TO", "USES", "PART_OF", "SIMILAR_TO"],
+    )
+    assert await _discover_relationship_types(session) == [
+        "DISCUSSES",
+        "RELATED_TO",
+        "USES",
+        "PART_OF",
+        "SIMILAR_TO",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_discover_relationship_types_rejects_unsafe_discovered_name() -> None:
+    session = _FakeDiscoverySession(labels=[], rel_types=["FINE", "bad; DROP"])
+    with pytest.raises(ValueError, match="unsafe relationship type"):
+        await _discover_relationship_types(session)
+
+
+# ---------------------------------------------------------------------------
+# write_sandbox_corpus — relationship endpoint mapping over a small fixture,
+# using a fake driver/session that records every Cypher call instead of a
+# real Neo4j instance.
+# ---------------------------------------------------------------------------
 
 
 class _FakeSession:

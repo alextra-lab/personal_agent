@@ -19,7 +19,7 @@
 
 ## Open threads (current)
 
-- **build2:** FRE-820 — ADR-0112 dev/test profile isolation (In Progress).
+- **build2:** dry — ADR-0112 config chain complete (AC-9 / FRE-820 **Done** 2026-07-10; 816/819/821/817 Done, 818 canceled). Only Approved NEXT is **FRE-595** (Low, docs). ADR-0112 assembled-seam assertion (AC-2/3/4/6) is master-owned and still open (AC-3/FRE-818 was canceled — the seam definition needs a look).
 - **build1:** dry — **FRE-739** (ADR-0107 assembled seam: T2 log-propagation + full-AC verification on a live non-owner request) Approved-but-unlabeled; **FRE-807** (behavioral tool-runway floor, Tier-2) parked-unlabeled.
 - **adr:** idle (the automation redesign was the last adr work; ADR-0113 / FRE-828 canceled — see history).
 - **FRE-717 held** at Awaiting Deploy — ADR-0105 T4 code+schema live, but AC-6 outcome-ingestion has zero organic input yet; live proof pends a promoted proposal reaching a terminal state.
@@ -37,7 +37,7 @@ Dispatch lives in **Linear** (process v2 — contract in `.claude/skills/lifecyc
 priority-ordered. This file carries **why the sequence is what it is** — priorities, waves,
 dependency rationale — never per-ticket board state (it drifts).
 
-**Sequencing rationale (current):** build2 = the ADR-0112 config chain (FRE-820). build1 = dry
+**Sequencing rationale (current):** build2 = dry (ADR-0112 config chain complete; only FRE-595 Low docs remains). build1 = dry
 (FRE-739 is the ADR-0107 assembled seam, Approved-but-unlabeled — dispatch when the owner sizes it).
 The ADR-0105 sysgraph self-improvement chain has shipped; FRE-717 alone remains, held at Awaiting
 Deploy for organic outcome input.

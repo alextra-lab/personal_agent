@@ -3238,6 +3238,7 @@ class MemoryService:
             fused-set size, path).
         """
         current_settings = get_settings()
+        started = time.monotonic()
 
         arm_kwargs: dict[str, Any] = {
             "trace_id": trace_id,
@@ -3284,6 +3285,8 @@ class MemoryService:
             query_text, capped, trace_id=trace_id, session_id=session_id
         )
 
+        latency_ms = (time.monotonic() - started) * 1000.0
+
         log.info(
             "multipath_recall",
             path=path,
@@ -3292,6 +3295,7 @@ class MemoryService:
             per_arm_counts=per_arm_counts,
             fused_set_size=len(capped),
             reranked=bool(items) and current_settings.reranker_enabled,
+            latency_ms=latency_ms,
             trace_id=trace_id,
             session_id=session_id,
         )

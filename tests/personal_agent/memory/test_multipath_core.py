@@ -150,6 +150,32 @@ class TestCapAndOperatingPoint:
         assert result.fused_set_size == 0
 
 
+class TestLatencyTelemetry:
+    """FRE-724 AC-6(c) — the multipath_recall event carries a numeric latency_ms.
+
+    The end-to-end recall latency is the durable signal p50/p95 panels read and the
+    standing auto-rollback guard watches, so the emit must always carry it as a float.
+    """
+
+    @pytest.mark.asyncio
+    async def test_latency_ms_emitted_as_float(self, monkeypatch) -> None:
+        _enable(monkeypatch, multiquery=True, lexical=True)
+        service = _service()
+        service.multi_query_recall_arm = AsyncMock(return_value=[RankedResult("e1", 1)])
+        service.lexical_recall_arm = AsyncMock(return_value=[RankedResult("t1", 1, kind="turn")])
+        with patch("personal_agent.memory.service.log") as mock_log:
+            await service._multipath_fused_recall("vision", path="broad", trace_id="t")
+        events = [
+            call
+            for call in mock_log.info.call_args_list
+            if call.args and call.args[0] == "multipath_recall"
+        ]
+        assert events, "multipath_recall event was not emitted"
+        latency = events[0].kwargs["latency_ms"]
+        assert isinstance(latency, float)
+        assert latency >= 0.0
+
+
 class TestRerankNeverGates:
     """AC-5: the reranker reorders the fused set; it never drops it to empty."""
 

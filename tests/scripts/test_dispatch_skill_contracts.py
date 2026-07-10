@@ -10,6 +10,8 @@ They pin the invariants of the automation redesign (process/automation-redesign)
     definition of *done* extends to master-ready (self-complete on a watcher CI
     poke or a direct master bounce).
   - prime-master reads the trigger ledger on rebuild.
+  - build/adr/master resolve dispatch NEXT via the external resolver
+    (`scripts/dispatch/next_resolver.py`, FRE-846), not inline Linear calls.
 """
 
 from __future__ import annotations
@@ -25,6 +27,18 @@ def _read(rel: str) -> str:
 
 def _norm(text: str) -> str:
     return " ".join(text.lower().split())
+
+
+def _section(text: str, start_marker: str, end_marker: str) -> str:
+    """Slice `text` between `start_marker` and the next `end_marker` after it.
+
+    Scopes an assertion to one paragraph/step instead of the whole file, so a
+    stray match elsewhere in the skill can't hide a regression at the actual
+    call site.
+    """
+    start = text.index(start_marker)
+    end = text.index(end_marker, start)
+    return text[start:end]
 
 
 # --- prime-worker retired (folded into the build/adr skills) ----------------
@@ -62,3 +76,32 @@ def test_prime_master_reads_trigger_ledger_on_rebuild() -> None:
     text = _norm(_read("prime-master/SKILL.md"))
     assert "trigger_ledger --unconsumed --json" in text
     assert "in-flight actuation" in text
+
+
+# --- build/adr/master resolve dispatch NEXT via the external resolver (FRE-846)
+#
+# Scoped to the specific paragraph/step being rewritten (not file-wide) so the
+# tests prove the OLD inline busy-guard/priority/blocked-by logic is gone from
+# the actual call site, not merely absent somewhere or present somewhere else.
+
+
+def test_build_skill_uses_external_resolver_for_stream_selector() -> None:
+    section = _norm(_section(_read("build/SKILL.md"), "Argument:", "## Step 0"))
+    assert "next_resolver --stream build" in section
+    assert "list_issues(" not in section
+    assert "includerelations" not in section
+
+
+def test_adr_skill_uses_external_resolver_for_stream_selector() -> None:
+    section = _norm(_section(_read("adr/SKILL.md"), "Argument: none", "## Step 0"))
+    assert "next_resolver --stream adr" in section
+    assert "list_issues(" not in section
+    assert "includerelations" not in section
+
+
+def test_master_skill_uses_external_resolver_for_advance_dispatch() -> None:
+    section = _norm(_section(_read("master/SKILL.md"), "## 8 — Close out", "## Identity"))
+    assert "next_resolver --stream" in section
+    assert "--eligible" in section
+    assert "list_issues(" not in section
+    assert "includerelations" not in section

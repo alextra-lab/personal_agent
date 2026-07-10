@@ -1,0 +1,58 @@
+# FRE-838 — ADR-0114 D1: isolated study substrate for the heterarchical
+# associative-memory research study (decoupled research, NOT a prod change).
+#
+# A separate Neo4j instance (own container, volume, network, credentials)
+# with the Graph Data Science plugin, seeded from a one-time frozen export
+# of the prod KG. Never joined to `cloud-sim` or any prod/test/eval network
+# — containers on `seshat-study-net` cannot resolve prod compose service
+# names and cannot reach the host's prod-published ports (see
+# scripts/study/verify_isolation.py). FRE-375 substrate-isolation line
+# applies unchanged: this stack never touches prod Neo4j/ES/Postgres except
+# as a read-only source for the one-time export script.
+#
+# Usage:
+#
+#   make study-infra-up      # start (Neo4j+GDS on :7691 bolt / :7478 http)
+#   make study-infra-down    # stop
+#   make study-infra-reset   # stop + wipe volume
+#   make study-infra-ps      # status
+#
+# Requires STUDY_NEO4J_PASSWORD in the environment (.env) — distinct from
+# NEO4J_PASSWORD (prod) by design, so the study substrate never shares a
+# credential with prod.
+
+services:
+  neo4j-study:
+    image: neo4j:5.26-community
+    container_name: seshat-neo4j-study
+    environment:
+      NEO4J_AUTH: neo4j/${STUDY_NEO4J_PASSWORD:?STUDY_NEO4J_PASSWORD required}
+      NEO4J_PLUGINS: '["graph-data-science"]'
+      NEO4J_dbms_usage__report_enabled: "false"
+      NEO4J_server_memory_heap_max__size: 1g
+      NEO4J_server_memory_pagecache_size: 256m
+    volumes:
+      - seshat_neo4j_study:/data
+    ports:
+      - "127.0.0.1:7478:7474"  # HTTP Browser (study)
+      - "127.0.0.1:7691:7687"  # Bolt Driver (study)
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    mem_limit: 1536m
+    cpus: 1.0
+    networks:
+      - study-net
+    restart: "no"
+
+networks:
+  study-net:
+    name: seshat-study-net
+    driver: bridge
+
+volumes:
+  seshat_neo4j_study:
+    name: seshat_neo4j_study

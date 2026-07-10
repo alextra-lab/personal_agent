@@ -200,3 +200,6 @@ telemetry/evaluation/fre778-multipath-ab/
 # master deploy snapshots (never commit — large Neo4j dumps)
 .backups/
 telemetry/gating_watcher_state.json
+
+# ADR-0114 study substrate snapshot manifests (FRE-838) — local artifacts
+scripts/study/snapshots/

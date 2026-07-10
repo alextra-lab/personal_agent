@@ -70,11 +70,15 @@ Keep it that way; a purified target is the point of the current-state/target spl
 
 Do:
 - Bump MASTER_PLAN "Last updated" to today; reflect what shipped (one line each) + what's genuinely next.
-- **Compact:** move completed / superseded narrative out of MASTER_PLAN and **append it to
-  MASTER_PLAN_HISTORY** (move, don't delete — it stays grepable).
-- **Judgment guard:** a *deep* restructure is riskiest in exactly the heavy session a reset follows. If
-  unsure what's load-bearing, do the **safe** compaction (append clearly-completed narrative to HISTORY;
-  keep anything you're unsure about) and flag a deep pass as an early-fresh-session task in the verdict.
+- **Compact — required, not optional:** MASTER_PLAN holds **only** current state + priorities +
+  sequencing + Needs-Approval. Move completed / superseded narrative out and **append it to
+  MASTER_PLAN_HISTORY** (move, don't delete — it stays grepable). **A header longer than ~1 screen means
+  shipped-work narrative is still in it — do the move now, don't defer.**
+- **Judgment guard (bounded — the safe pass may not repeat):** a *deep* restructure is riskiest in the
+  heavy session a reset follows, so a **one-time** safe pass (append clearly-completed narrative, keep the
+  unsure) is allowed — **but only if the previous reset did not already defer.** If the header is already
+  over ~1 screen (a prior reset punted), the deep move is **required this reset** regardless of context
+  weight. Never leave the header bloated two resets running.
 - Commit via docs-to-main (`git switch -c docs/<slug-no-fre-token>` → PR → `--auto --squash`).
 - Confirm Linear reflects reality (Done tickets closed with evidence, Awaiting-Deploy queue accurate).
 

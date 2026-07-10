@@ -48,8 +48,11 @@ read; this skill reads it back. (Winding **down** instead? That's `/prepare-rese
 ## Target (8) — where we're going
 
 8. **MASTER_PLAN** (`docs/plans/MASTER_PLAN.md`) — the destination, a different category from state: current
-   live-env / standing state + **active priorities & sequencing** + Needs-Approval. Purified — the
-   session-decisions bridge is #2, not here. Read header, "Last updated", priorities.
+   live-env / standing state + **active priorities & sequencing** + Needs-Approval. **It is UNIQUELY the
+   plan:** completed / superseded narrative belongs in `MASTER_PLAN_HISTORY.md` (grepable, NOT auto-loaded;
+   `/prepare-reset` moves it there), and this session's decisions are #2 (LAST_SESSION.md), not here. If
+   the header carries shipped-work narrative or runs past ~1 screen, that's drift — flag it for the next
+   `/prepare-reset` deep compaction. Read header, "Last updated", priorities.
 
 ## Process (9) — how master drives current → target
 

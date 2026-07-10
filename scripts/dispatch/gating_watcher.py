@@ -814,9 +814,10 @@ def run_once(
     def _retry_pending(entry: trigger_ledger.LedgerEntry) -> trigger_ledger.SendOutcome:
         return send_to_session(entry.target_pane, entry.command, runner)
 
-    ledger = trigger_ledger.reconcile(
-        ledger, now=now, execute_pending=_retry_pending, persist=ledger_persist, logger=logger
-    )
+    if execute:
+        ledger = trigger_ledger.reconcile(
+            ledger, now=now, execute_pending=_retry_pending, persist=ledger_persist, logger=logger
+        )
 
     prs = board_fetcher()
     triggers = decide(

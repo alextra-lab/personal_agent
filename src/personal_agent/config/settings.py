@@ -2436,6 +2436,59 @@ class AppConfig(BaseSettings):
         )
 
     @model_validator(mode="after")
+    def _validate_dev_test_profile_isolation(self) -> "AppConfig":
+        """Refuse to boot when a dev/test substrate profile resolves a prod-fingerprint store.
+
+        ADR-0112 AC-9 (FRE-820): under ``substrate_profile in {"dev", "test"}``,
+        every resolved Postgres/Neo4j/Elasticsearch target must be the FRE-375
+        test substrate (:7688/:9201/:5433), never a prod/dev-default store —
+        independent of ``environment``. This closes the gap ``_validate_
+        substrate_isolation`` above leaves open: that guard only fires when
+        ``environment == Environment.TEST``, so selecting the dev/test
+        substrate PROFILE alone, without also setting ``APP_ENV=test``,
+        previously triggered no isolation check at all.
+
+        Checks the same five fields as the FRE-375 guard, since
+        ``config/substrate.yaml``'s dev/test profiles map their postgres/
+        neo4j/elasticsearch components to exactly those AppConfig fields (see
+        tests/personal_agent/config/test_substrate_manifest_drift.py, which
+        fails loudly if that mapping ever changes).
+
+        Raises:
+            ValueError: When a store resolves to a prod-fingerprint URI.
+        """
+        if self.substrate_profile not in ("dev", "test"):
+            return self
+        if self.allow_test_writes_to_prod_substrate:
+            return self
+
+        offenders: list[str] = []
+        if is_prod_neo4j_uri(self.neo4j_uri):
+            offenders.append(f"neo4j_uri={self.neo4j_uri!r}")
+        if is_prod_elasticsearch_url(self.elasticsearch_url):
+            offenders.append(f"elasticsearch_url={self.elasticsearch_url!r}")
+        if is_prod_postgres_url(self.database_url):
+            offenders.append(f"database_url={self.database_url!r}")
+        if is_prod_postgres_url(self.database_admin_url):
+            offenders.append(f"database_admin_url={self.database_admin_url!r}")
+        if is_prod_postgres_url(self.sysgraph_database_url):
+            offenders.append(f"sysgraph_database_url={self.sysgraph_database_url!r}")
+
+        if not offenders:
+            return self
+
+        raise ValueError(
+            f"substrate_profile={self.substrate_profile!r} but the following stores "
+            f"point at prod/dev defaults (ADR-0112 AC-9): {', '.join(offenders)}. "
+            "Set AGENT_NEO4J_URI=bolt://localhost:7688 (test stack), "
+            "AGENT_ELASTICSEARCH_URL=http://localhost:9201, "
+            "AGENT_DATABASE_URL=<test-db-url>, "
+            "AGENT_DATABASE_ADMIN_URL=<test-db-url>, "
+            "AGENT_SYSGRAPH_DATABASE_URL=<test-db-url>, "
+            "or set AGENT_ALLOW_TEST_WRITES_TO_PROD_SUBSTRATE=1 to bypass (use with care)."
+        )
+
+    @model_validator(mode="after")
     def _validate_config_guard_policy(self) -> "AppConfig":
         """Orphan-``.env`` policy check (ADR-0099 D4, FRE-649).
 

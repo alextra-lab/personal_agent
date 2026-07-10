@@ -572,9 +572,10 @@ class BrainstemScheduler:
                             trace_id=iteration_trace_id,
                         )
 
-                # Hourly: entity embedding backfill (FRE-659) — re-embed entities
-                # whose embedding is missing or zero-vectored (baked during an embedder
-                # outage) once the embedder is reachable. Idempotent and outage-safe.
+                # Hourly: entity + Claim embedding backfill (FRE-659, extended to
+                # Claims by FRE-768) — re-embed entities and Claims whose embedding is
+                # missing or zero-vectored (baked during an embedder outage) once the
+                # embedder is reachable. Idempotent and outage-safe.
                 if (
                     self.memory_service is not None
                     and getattr(settings, "embedding_backfill_enabled", True)

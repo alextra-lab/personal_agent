@@ -1471,33 +1471,57 @@ class MemoryService:
         batch_size: int = 100,
         trace_id: str | None = None,
     ) -> int:
+        """Re-embed Entity/Claim nodes whose embedding is missing or zero-vectored.
+
+        Idempotent, outage-safe remediation for the zero-vector corruption (FRE-659
+        Entity path; FRE-768 extends this to the Claim substrate). ``batch_size`` bounds
+        each substrate independently — one run repairs up to ``batch_size`` entities
+        *and* up to ``batch_size`` Claims, not a combined ``batch_size`` total.
+
+        Args:
+            batch_size: Max nodes repaired per substrate per run (bounds one scheduler
+                tick's cost per substrate).
+            trace_id: System-scoped scheduler trace id for log correlation (ADR-0074 §I3).
+
+        Returns:
+            Total number of nodes (entities + Claims) whose embedding was populated.
+        """
+        if not self.connected or not self.driver:
+            return 0
+
+        entity_filled = await self._backfill_entity_embeddings(
+            batch_size=batch_size, trace_id=trace_id
+        )
+        claim_filled = await self._backfill_claim_embeddings(
+            batch_size=batch_size, trace_id=trace_id
+        )
+        return entity_filled + claim_filled
+
+    async def _backfill_entity_embeddings(
+        self,
+        *,
+        batch_size: int,
+        trace_id: str | None,
+    ) -> int:
         """Re-embed entities whose embedding is missing or zero-vectored (FRE-659).
 
-        Idempotent, outage-safe remediation for the zero-vector corruption. An entity
-        created while the embedder was unreachable is either missing ``e.embedding``
-        (post-guard write path) or carries a baked-in zero vector (pre-guard corruption).
-        This pass finds such entities (bounded to ``batch_size``, deterministic
-        ``ORDER BY e.name`` so successive runs converge rather than re-selecting the same
-        page), batch-regenerates their embeddings in one call, and persists ONLY the
-        non-zero results — so a run during a continuing embedder outage is a safe no-op
-        rather than re-poisoning the index.
+        An entity created while the embedder was unreachable is either missing
+        ``e.embedding`` (post-guard write path) or carries a baked-in zero vector
+        (pre-guard corruption). This pass finds such entities (bounded to
+        ``batch_size``, deterministic ``ORDER BY e.name`` so successive runs converge
+        rather than re-selecting the same page), batch-regenerates their embeddings in
+        one call, and persists ONLY the non-zero results — so a run during a continuing
+        embedder outage is a safe no-op rather than re-poisoning the index.
 
         The write is guarded (``WHERE e.embedding IS NULL OR none(...)``) so it never
         clobbers a fresher non-zero embedding a concurrent :meth:`create_entity` may have
         written between the read and the write.
 
-        Args:
-            batch_size: Max entities repaired per run (bounds one scheduler tick's cost).
-            trace_id: System-scoped scheduler trace id for log correlation (ADR-0074 §I3).
-
         Returns:
             Number of entities whose embedding was populated this run.
         """
-        if not self.connected or not self.driver:
-            return 0
-
         try:
-            async with self.driver.session() as session:
+            async with self.driver.session() as session:  # type: ignore[union-attr]
                 read = await session.run(
                     "MATCH (e:Entity)\n"
                     "WHERE e.description IS NOT NULL AND e.description <> ''\n"
@@ -1546,6 +1570,89 @@ class MemoryService:
         except Exception as exc:
             log.warning(
                 "embedding_backfill_error",
+                error=str(exc),
+                exc_info=True,
+                trace_id=trace_id,
+            )
+            return 0
+
+    async def _backfill_claim_embeddings(
+        self,
+        *,
+        batch_size: int,
+        trace_id: str | None,
+    ) -> int:
+        """Re-embed Claims whose embedding is missing or zero-vectored (FRE-768).
+
+        Claim-substrate twin of :meth:`_backfill_entity_embeddings`. A Claim asserted
+        while the embedder was unreachable is either missing ``cl.embedding`` (post-guard
+        write path in :meth:`assert_claim`) or carries a baked-in zero vector (pre-guard
+        corruption). Re-embeds from ``cl.content`` alone — matching how
+        :meth:`assert_claim` computes the embedding (no name-prefixing, unlike the
+        Entity path) — keyed by ``claim_id`` (a Claim's stable natural key, set once at
+        assertion and never reused, in place of Entity's ``name``).
+
+        Note: this does not re-run supersession adjudication — a Claim repaired here
+        keeps whatever current/superseded state it already had. Two Claims about the
+        same fact-slot that both went "current" during the same outage (because a
+        zero-vector new-claim embedding never matches an existing current Claim by
+        cosine — see ``test_zero_vector_new_claim_never_matches_an_identical_current_claim``)
+        are NOT retroactively collapsed by this backfill; that is a separate, out-of-scope
+        follow-up (outage-mode re-adjudication).
+
+        Returns:
+            Number of Claims whose embedding was populated this run.
+        """
+        try:
+            async with self.driver.session() as session:  # type: ignore[union-attr]
+                read = await session.run(
+                    "MATCH (cl:Claim)\n"
+                    "WHERE cl.content IS NOT NULL AND cl.content <> ''\n"
+                    "  AND (cl.embedding IS NULL OR none(x IN cl.embedding WHERE x <> 0.0))\n"
+                    "RETURN cl.claim_id AS claim_id, cl.content AS content\n"
+                    "ORDER BY cl.claim_id\n"
+                    "LIMIT $batch_size",
+                    batch_size=batch_size,
+                )
+                candidates = await read.data()
+                if not candidates:
+                    return 0
+
+                texts = [c["content"] for c in candidates]
+                embeddings = await generate_embeddings_batch(texts)
+                updates = [
+                    {"claim_id": c["claim_id"], "embedding": emb}
+                    for c, emb in zip(candidates, embeddings, strict=True)
+                    if any(x != 0.0 for x in emb)
+                ]
+                if not updates:
+                    log.info(
+                        "claim_embedding_backfill_skipped_embedder_down",
+                        candidates=len(candidates),
+                        trace_id=trace_id,
+                    )
+                    return 0
+
+                write = await session.run(
+                    "UNWIND $updates AS u\n"
+                    "MATCH (cl:Claim {claim_id: u.claim_id})\n"
+                    "WHERE cl.embedding IS NULL OR none(x IN cl.embedding WHERE x <> 0.0)\n"
+                    "SET cl.embedding = u.embedding\n"
+                    "RETURN count(*) AS filled",
+                    updates=updates,
+                )
+                record = await write.single()
+                filled = int(record["filled"]) if record else 0
+                log.info(
+                    "claim_embedding_backfill_completed",
+                    candidates=len(candidates),
+                    filled=filled,
+                    trace_id=trace_id,
+                )
+                return filled
+        except Exception as exc:
+            log.warning(
+                "claim_embedding_backfill_error",
                 error=str(exc),
                 exc_info=True,
                 trace_id=trace_id,
@@ -1739,7 +1846,7 @@ class MemoryService:
                     new_valid_to = claim.observed_at.isoformat()
                     new_invalid_at = now.isoformat()
 
-                write = await session.run(
+                write_lines = [
                     "MATCH (o:Person {user_id: $user_id})\n"
                     "WITH o\n"
                     "CALL {\n"
@@ -1753,33 +1860,46 @@ class MemoryService:
                     "CREATE (o)-[:HAS_FACT]->(cl:Claim {\n"
                     "    claim_id: $claim_id, content: $content, class: $knowledge_class,\n"
                     "    facet: $facet, update_kind: $update_kind,\n"
-                    "    confidence: $confidence, embedding: $embedding,\n"
+                    "    confidence: $confidence,\n"
                     "    valid_from: $valid_from, valid_to: $new_valid_to, invalid_at: $new_invalid_at,\n"
                     "    superseded_by: null, supersession_reason: null,\n"
                     "    trace_id: $trace_id, session_id: $session_id, source_type: $source_type,\n"
                     "    observed_at: $observed_at, extracted_at: $extracted_at\n"
                     "})\n"
-                    "RETURN cl.claim_id AS claim_id, invalidated",
-                    user_id=user_id_str,
-                    supersede_ids=supersede_ids,
-                    claim_id=claim_id,
-                    content=claim.content,
-                    knowledge_class=claim.knowledge_class,
-                    facet=claim.facet,
-                    update_kind=claim.update_kind,
-                    confidence=claim.confidence,
-                    embedding=embedding,
-                    valid_from=claim.observed_at.isoformat(),
-                    new_valid_to=new_valid_to,
-                    new_invalid_at=new_invalid_at,
-                    now=now.isoformat(),
-                    reason=decision.reason,
-                    trace_id=claim.trace_id or trace_id,
-                    session_id=claim.session_id,
-                    source_type=claim.source_type,
-                    observed_at=claim.observed_at.isoformat(),
-                    extracted_at=claim.extracted_at.isoformat() if claim.extracted_at else None,
-                )
+                ]
+                params: dict[str, Any] = {
+                    "user_id": user_id_str,
+                    "supersede_ids": supersede_ids,
+                    "claim_id": claim_id,
+                    "content": claim.content,
+                    "knowledge_class": claim.knowledge_class,
+                    "facet": claim.facet,
+                    "update_kind": claim.update_kind,
+                    "confidence": claim.confidence,
+                    "valid_from": claim.observed_at.isoformat(),
+                    "new_valid_to": new_valid_to,
+                    "new_invalid_at": new_invalid_at,
+                    "now": now.isoformat(),
+                    "reason": decision.reason,
+                    "trace_id": claim.trace_id or trace_id,
+                    "session_id": claim.session_id,
+                    "source_type": claim.source_type,
+                    "observed_at": claim.observed_at.isoformat(),
+                    "extracted_at": claim.extracted_at.isoformat() if claim.extracted_at else None,
+                }
+
+                # FRE-768 (mirrors FRE-659): never persist a zero-vector embedding. When
+                # the embedder is unreachable ``generate_embedding`` degrades to a zero
+                # vector; writing it bakes an unrecallable Claim into vector recall and
+                # degrades facet-aware dedup matching. Persist only a real vector — a
+                # missing embedding is repaired by the periodic backfill
+                # (``backfill_missing_embeddings``) once the embedder returns.
+                if any(x != 0.0 for x in embedding):
+                    write_lines.append("SET cl.embedding = $embedding\n")
+                    params["embedding"] = embedding
+
+                write_lines.append("RETURN cl.claim_id AS claim_id, invalidated")
+                write = await session.run("".join(write_lines), **params)
                 record = await write.single()
                 if record is None:
                     log.warning(

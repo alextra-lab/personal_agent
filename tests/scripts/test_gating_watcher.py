@@ -1151,3 +1151,46 @@ def test_run_once_kill_switch_skips_ledger_reconcile_too() -> None:
     )
     assert runner.calls == []
     assert ledger["master:999:deadbeef"].consumed_at is None  # untouched -- not reconciled
+
+
+def test_run_once_dry_run_does_not_actuate_pending_ledger_entry() -> None:
+    """FRE-844: a dry-run after a crashed execute tick must not retry pending entries.
+
+    A manual one-shot dry-run after a prior execute-mode tick crashed should be
+    truly inert: no keys sent, no ledger entries actuated. Reconcile must be gated
+    behind the execute flag so that crash-recovery only runs in --execute mode.
+    """
+    from scripts.dispatch.trigger_ledger import record_pending
+
+    # Seed a pending entry (crash right after record_pending, before send).
+    seeded, _ = record_pending(
+        {},
+        event_id="master:999:deadbeef",
+        source="master-ready",
+        target_pane="cc-master",
+        ticket="999",
+        command="/master 999",
+        preconditions={"head_sha": "deadbeef"},
+        now=50.0,
+        ttl_s=600.0,
+    )
+    runner = _idle_runner()
+    ledger = dict(seeded)
+    # Dry-run after the crash: execute=False
+    run_once(
+        {},
+        now=100.0,
+        board_fetcher=lambda: [],  # no new board state
+        session_resolver=_no_session,
+        runner=runner,
+        persist=lambda _s: None,
+        logger=_NullLogger(),
+        execute=False,  # dry-run: must not send anything
+        ledger=ledger,
+        ledger_persist=ledger.update,
+    )
+    # Verify: no send-keys calls at all (reconcile was not executed)
+    assert not any(c[:2] == ("tmux", "send-keys") for c in runner.calls)
+    # Ledger entry untouched: still pending, never consumed
+    assert ledger["master:999:deadbeef"].sent_at is None
+    assert ledger["master:999:deadbeef"].consumed_at is None

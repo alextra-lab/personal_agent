@@ -136,6 +136,32 @@ def _queue_order(issue: IssueSnapshot) -> tuple[int, str]:
     return (_PRIORITY_RANK.get(issue.priority, len(_PRIORITY_RANK)), issue.created_at)
 
 
+def eligible_candidates(issues: Sequence[IssueSnapshot], stream: str) -> list[IssueSnapshot]:
+    """Return every issue eligible to be `stream`'s NEXT, ignoring the busy guard.
+
+    Eligible = carries the stream's label, is ``Approved``, and has no open
+    "blocked by" relation — sorted priority-then-oldest-created, same order
+    as `resolve_next`. Unlike `resolve_next`, this does NOT apply the busy
+    guard and returns the FULL list, not just the head: master's
+    advance-dispatch step needs the whole eligible set to verify the
+    "exactly one Urgent-or-High ticket" invariant, and runs right after the
+    merge that just freed the stream, so the busy guard doesn't apply there.
+
+    Args:
+        issues: All issues visible on the board (any state/label).
+        stream: The dispatch stream, e.g. ``build1``, ``build2``, ``adr``.
+
+    Returns:
+        Eligible issues, sorted priority-then-oldest-created.
+    """
+    label = stream_label(stream)
+    candidates = sorted(
+        (i for i in issues if label in i.labels and i.state.strip().lower() == "approved"),
+        key=_queue_order,
+    )
+    return [issue for issue in candidates if not _has_open_blocker(issue)]
+
+
 def resolve_next(issues: Sequence[IssueSnapshot], stream: str) -> IssueSnapshot | None:
     """Resolve a stream's NEXT ticket from a board snapshot.
 
@@ -154,17 +180,10 @@ def resolve_next(issues: Sequence[IssueSnapshot], stream: str) -> IssueSnapshot 
         The resolved NEXT issue, or None if the stream is occupied or has no
         eligible candidate.
     """
-    label = stream_label(stream)
-    if _is_occupied(issues, label):
+    if _is_occupied(issues, stream_label(stream)):
         return None
-    candidates = sorted(
-        (i for i in issues if label in i.labels and i.state.strip().lower() == "approved"),
-        key=_queue_order,
-    )
-    for issue in candidates:
-        if not _has_open_blocker(issue):
-            return issue
-    return None
+    candidates = eligible_candidates(issues, stream)
+    return candidates[0] if candidates else None
 
 
 def fetch_board(stream: str, api_key: str) -> list[IssueSnapshot]:
@@ -270,6 +289,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--stream", required=True, help="Dispatch stream, e.g. build1, build2, adr."
     )
     parser.add_argument("--json", action="store_true", help="Emit the result as JSON.")
+    parser.add_argument(
+        "--eligible",
+        action="store_true",
+        help=(
+            "List the full eligible set (busy guard ignored) instead of resolving a "
+            "single NEXT ticket."
+        ),
+    )
     args = parser.parse_args(argv)
 
     api_key = load_linear_key()
@@ -278,6 +305,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     issues = fetch_board(args.stream, api_key)
+
+    if args.eligible:
+        candidates = eligible_candidates(issues, args.stream)
+        if args.json:
+            print(json.dumps([_issue_to_json(i) for i in candidates], indent=2))
+        else:
+            print("\n".join(i.identifier for i in candidates) if candidates else "none")
+        return 0
+
     next_issue = resolve_next(issues, args.stream)
 
     if args.json:

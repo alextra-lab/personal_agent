@@ -21,7 +21,9 @@ import pytest
 from scripts.dispatch.next_resolver import (
     Blocker,
     IssueSnapshot,
+    eligible_candidates,
     fetch_board,
+    main,
     resolve_next,
     stream_label,
 )
@@ -271,6 +273,128 @@ def test_cross_stream_blocker_still_blocks_if_open() -> None:
     result = resolve_next([blocked, fallback], "build2")
     assert result is not None
     assert result.identifier == "FRE-16"
+
+
+# --- eligible_candidates (FRE-846: master's advance-dispatch read-half) ----
+#
+# master's Step 8 "re-derive the eligible set" needs the FULL eligible list
+# (to check "exactly one Urgent-or-High ticket"), busy-guard-free (it runs
+# right after the merge that just freed the stream) — a shape `resolve_next`
+# structurally cannot provide since it returns a single winner and applies
+# the busy guard.
+
+
+def test_eligible_candidates_ignores_busy_guard() -> None:
+    label = frozenset({"stream:build2"})
+    occupying = _issue("FRE-20", "In Progress", 2, "2026-01-01T00:00:00Z", label)
+    approved = _issue("FRE-21", "Approved", 3, "2026-01-01T00:00:00Z", label)
+    # resolve_next honors the busy guard: nothing, because FRE-20 occupies the stream.
+    assert resolve_next([occupying, approved], "build2") is None
+    # eligible_candidates ignores it: FRE-21 is Approved + unblocked, so it's eligible.
+    result = eligible_candidates([occupying, approved], "build2")
+    assert [i.identifier for i in result] == ["FRE-21"]
+
+
+def test_eligible_candidates_returns_full_sorted_list() -> None:
+    label = frozenset({"stream:build2"})
+    high = _issue("FRE-22", "Approved", 2, "2026-01-01T00:00:00Z", label)
+    medium = _issue("FRE-23", "Approved", 3, "2026-01-02T00:00:00Z", label)
+    low = _issue("FRE-24", "Approved", 4, "2026-01-03T00:00:00Z", label)
+    result = eligible_candidates([low, high, medium], "build2")
+    # Full list, not just the head — priority order preserved.
+    assert [i.identifier for i in result] == ["FRE-22", "FRE-23", "FRE-24"]
+
+
+def test_eligible_candidates_empty_board() -> None:
+    assert eligible_candidates([], "build2") == []
+
+
+def test_eligible_candidates_skips_blocked() -> None:
+    label = frozenset({"stream:build2"})
+    blocked = _issue(
+        "FRE-25",
+        "Approved",
+        1,
+        "2026-01-01T00:00:00Z",
+        label,
+        blocked_by=(Blocker(identifier="FRE-0", state="In Progress"),),
+    )
+    unblocked = _issue("FRE-26", "Approved", 3, "2026-01-02T00:00:00Z", label)
+    result = eligible_candidates([blocked, unblocked], "build2")
+    assert [i.identifier for i in result] == ["FRE-26"]
+
+
+def test_eligible_candidates_excludes_wrong_stream_and_state() -> None:
+    build2_label = frozenset({"stream:build2"})
+    build1_label = frozenset({"stream:build1"})
+    wrong_stream = _issue("FRE-27", "Approved", 1, "2026-01-01T00:00:00Z", build1_label)
+    wrong_state = _issue("FRE-28", "In Review", 1, "2026-01-01T00:00:00Z", build2_label)
+    right = _issue("FRE-29", "Approved", 3, "2026-01-01T00:00:00Z", build2_label)
+    result = eligible_candidates([wrong_stream, wrong_state, right], "build2")
+    assert [i.identifier for i in result] == ["FRE-29"]
+
+
+def test_resolve_next_still_matches_eligible_candidates_head() -> None:
+    # Pins that refactoring resolve_next to build on eligible_candidates did not
+    # change its behavior on already-covered (unoccupied) fixture boards.
+    label = frozenset({"stream:build2"})
+    boards = [
+        [_issue("FRE-30", "Approved", 2, "2026-01-01T00:00:00Z", label)],
+        [
+            _issue("FRE-31", "Approved", 3, "2026-01-02T00:00:00Z", label),
+            _issue("FRE-32", "Approved", 1, "2026-01-01T00:00:00Z", label),
+        ],
+        [],
+    ]
+    for board in boards:
+        candidates = eligible_candidates(board, "build2")
+        expected = candidates[0] if candidates else None
+        assert resolve_next(board, "build2") == expected
+
+
+# --- CLI --eligible mode (FRE-846) ------------------------------------------
+
+
+def test_cli_eligible_json_lists_full_set(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    label = frozenset({"stream:build2"})
+    board = [
+        _issue("FRE-40", "Approved", 2, "2026-01-01T00:00:00Z", label),
+        _issue("FRE-41", "Approved", 3, "2026-01-02T00:00:00Z", label),
+    ]
+    monkeypatch.setattr("scripts.dispatch.next_resolver.load_linear_key", lambda: "fake-key")
+    monkeypatch.setattr("scripts.dispatch.next_resolver.fetch_board", lambda stream, key: board)
+    exit_code = main(["--stream", "build2", "--eligible", "--json"])
+    assert exit_code == 0
+    output = json.loads(capsys.readouterr().out)
+    assert [entry["identifier"] for entry in output] == ["FRE-40", "FRE-41"]
+
+
+def test_cli_eligible_plain_lists_identifiers(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    label = frozenset({"stream:build2"})
+    board = [_issue("FRE-42", "Approved", 2, "2026-01-01T00:00:00Z", label)]
+    monkeypatch.setattr("scripts.dispatch.next_resolver.load_linear_key", lambda: "fake-key")
+    monkeypatch.setattr("scripts.dispatch.next_resolver.fetch_board", lambda stream, key: board)
+    exit_code = main(["--stream", "build2", "--eligible"])
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == "FRE-42"
+
+
+def test_cli_eligible_empty_prints_none_and_empty_json_list(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("scripts.dispatch.next_resolver.load_linear_key", lambda: "fake-key")
+    monkeypatch.setattr("scripts.dispatch.next_resolver.fetch_board", lambda stream, key: [])
+    exit_code = main(["--stream", "build2", "--eligible"])
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == "none"
+
+    exit_code = main(["--stream", "build2", "--eligible", "--json"])
+    assert exit_code == 0
+    assert json.loads(capsys.readouterr().out) == []
 
 
 # --- fetch_board parsing (FRE-804) ------------------------------------------

@@ -130,8 +130,16 @@ For concurrent-session safety, still confirm timing if another session is active
   the follow-up issue, consider rollback. Verify Failed is the exception flag that demands a decision.
 - **Advance dispatch (replaces advancing the board):** run this at every MERGE, not just at Done —
   the merge is the event that frees the stream and un-blocks chain successors (a blocker is open
-  until it reaches `Awaiting Deploy`; lifecycle-rules § Dispatch). Re-derive the stream's eligible
-  set (`Approved` + `stream:*` label + no open blocked-by). Binding rules:
+  until it reaches `Awaiting Deploy`; lifecycle-rules § Dispatch). **Re-derive the stream's eligible
+  set via the external dispatch resolver, not inline Linear calls** (`scripts/dispatch/next_resolver.py`,
+  FRE-785; ADR-0113 §1 — dispatch mechanics are not logic master holds in context): run
+  `python -m scripts.dispatch.next_resolver --stream <s> --eligible --json`, which lists every
+  `Approved` + `stream:<s>` ticket with no open blocked-by, in priority/oldest-created order (the
+  busy guard doesn't apply here — this step runs right after the merge that just freed the stream,
+  which is why `--eligible` is a distinct CLI mode from the default single-ticket resolve). A
+  nonzero exit, invalid JSON, or a printed error → STOP and surface stderr — never fall back to
+  reconstructing the logic inline. The resolver only reads; master still owns every *mutation*
+  below. Binding rules:
   - **Exactly one intended head, always pinned.** If more than one ticket is eligible, move the
     High pin to the intended head NOW — never leave the head to creation-date ties. Verify after
     every mutation: the eligible set contains exactly one Urgent-or-High ticket.

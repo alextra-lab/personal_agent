@@ -8,15 +8,16 @@ description: Use in the adr session (Opus) to explore an idea with the owner and
 Read `.claude/skills/lifecycle-rules.md` first. Confirm the session model is Opus; if not, STOP
 and tell the owner (ADR authoring is Opus-only).
 
-**Argument: none → resolve NEXT from Linear** (dispatch contract: lifecycle-rules § Dispatch).
-**FIRST `git fetch origin`** (you still need latest main for Step 0). Then: busy guard —
-`list_issues(team="FrenchForest", label="stream:adr")` with `state="In Progress"`, and again with
-`state="In Review"`: either non-empty → STOP (the stream is occupied — building, or a PR at master's
-gate that could bounce back; it frees at `Awaiting Deploy`). Otherwise take the head of
-`list_issues(team="FrenchForest", state="Approved", label="stream:adr")` ordered by priority then
-oldest-created, skipping any issue with an open "blocked by" relation (`get_issue` with
-includeRelations — a blocker is open until its merge lands: any state before
-`Awaiting Deploy`/`Done`/`Canceled`/`Duplicate`). Honor its **context flag** exactly as `/build` does —
+**Argument: none → resolve NEXT via the external dispatch resolver** (`scripts/dispatch/next_resolver.py`,
+FRE-785; the busy guard, priority ordering, and blocked-by skip are NOT logic held in this skill —
+ADR-0113 §1). **FIRST `git fetch origin`** (you still need latest main for Step 0). Then run
+`python -m scripts.dispatch.next_resolver --stream adr --json`. A nonzero exit, invalid JSON, or a
+printed error (e.g. missing `AGENT_LINEAR_API_KEY`) → STOP and surface stderr — never fall back to
+reconstructing the busy-guard/priority/blocked-by logic inline. A `null` result (the stream is
+occupied — building, or a PR at master's gate that could bounce back; it frees at `Awaiting Deploy` —
+OR there is no eligible `Approved` candidate; the resolver conflates both) → STOP. A non-null result
+names the ticket — read its `context:keep` status straight off the JSON's `labels` field. Honor its
+**context flag** exactly as `/build` does —
 **CLEAR** (default, no `context:keep` label): **first check if you are a blank/new session** (freshly
 started or just `/clear`ed, essentially nothing in context but this invocation); if yes, proceed; if no
 (you still carry a previous ADR's work), STOP and tell the owner to `/clear` then re-run `/adr`.

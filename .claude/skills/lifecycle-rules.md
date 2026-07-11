@@ -64,6 +64,24 @@ never puts an actionable instruction on the ticket, nor a durable record on the 
 - master alone merges to main, deploys, runs live verification, closes Linear
   tickets, and updates MASTER_PLAN.
 
+## Explore session (cc-explore)
+
+A fifth seat, `cc-explore`, is the project's **deliberation space** — all of master's vision, none of
+its hands. It primes via `/prime-explore` (situational awareness, observer role) and is **strictly
+read-only on everything operational**: it never merges, deploys, mutates Linear, commits MASTER_PLAN,
+labels dispatch, rebuilds the gateway, or touches `main`. It exists so deep strategy/methodology
+deliberation happens **off master's context**, and so discussion can never accidentally actuate.
+
+**Injection is owner-hubbed, never autonomous** — master and explore coordinate through the durable
+substrate **+ the owner**; they never auto-talk to each other, and a human is always at one end:
+- **master → explore:** when a gate (or any operational moment) raises a judgment-heavy question that
+  is NOT blocking the immediate merge/deploy decision — a methodology call, a strategic "should we", an
+  eval-validity question — master may `send-keys` it to `cc-explore` (tagged `[from master, re …]`)
+  instead of deliberating in-gate. Keeps master lean; the distilled result comes back.
+- **explore → master / adr (owner-gated):** at the owner's request, explore `send-keys` the result to
+  `cc-master` (a decision to execute) or `cc-adrs` (an idea to formalize), tagged `[from explore]`.
+- The watcher/dispatcher never target `cc-explore` (not a worker, not a gate).
+
 ## MASTER_PLAN
 - Committed to `main` only — never a feature branch.
 - "Last updated" line is bumped every time a ticket ships.

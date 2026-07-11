@@ -208,3 +208,138 @@ uv run python -m scripts.study.run_baseline --cues <path-to-frozen-set.yaml> --r
 
 writes `scripts/study/snapshots/baseline-<run-id>.json` (gitignored) and
 prints the scored table to stdout.
+
+## Pre-registered eval artifacts (FRE-841)
+
+`scripts/study/eval_artifacts/` builds the **frozen, pre-registered**
+artifacts AC-2 and AC-4 will later be scored against (the pass rules and
+numeric margins are FRE-843's job — this ticket only builds the ground
+truth, before any scoring code exists). Both are committed JSON
+(`scripts/study/eval_artifacts/frozen/`), timestamped and content-hashed
+(`scripts/study/eval_artifacts/freeze.py`, mirroring `export_snapshot.py`'s
+manifest pattern), and cross-reference the frozen corpus's own
+`snapshot_manifest.json` content hash for traceability.
+
+### AC-2 hard-negative pairs (`ac2_pairs.py` → `frozen/ac2_hard_negative_pairs.json`)
+
+```
+uv run python -m scripts.study.eval_artifacts.ac2_pairs            # dry run — counts only
+uv run python -m scripts.study.eval_artifacts.ac2_pairs --execute  # writes the frozen artifact
+```
+
+**V⁺** (873 real pairs) is mined directly from the frozen `Entity` corpus,
+not hand-built: a case-fold grouping (`corpus_case_variant`, 621 pairs)
+plus a looser, punctuation-normalized grouping additive to it
+(`corpus_near_variant`, 252 pairs — catches ADR AC-2's "near-variant"
+language beyond plain case-folding). The near-variant normalizer is
+deliberately conservative — it strips only low-information cosmetic
+punctuation (hyphens, underscores, apostrophes, parens, colons, periods,
+pipes) and never `+`/`*`/`/`/`&`, because a first live run found those
+characters are load-bearing in this corpus's naming conventions
+(`Security` vs `Security+` is a topic vs. a certification, not a
+formatting variant; `Agent` vs `agent-*` is a concept vs. an index-glob
+pattern) — stripping them produced false-positive "should merge" pairs
+that would have corrupted AC-2's own ground truth.
+
+**V⁻** (12 seeded pairs) cannot be mined from the corpus: a live check of
+known homonym-prone surface forms (`python`, `apple`, `mercury`, `turkey`,
+`amazon`, `mars`, ...) found every one maps to exactly one sense in the
+real data today — the corpus has zero naturally-occurring homonym
+collisions at this scale (matches `writer.py`'s documented gap almost
+verbatim). V⁻ is therefore a hand-authored adversarial set — the ADR's own
+2 named pairs plus 10 more spanning the corpus's real domains — each
+resolved against the live corpus so a side that happens to be
+corpus-attested carries its real `entity_id`/`kind` (`provenance`:
+`corpus_attested_one_side` | `fully_synthetic`). Byte-identical same-case
+pairs (e.g. `Mercury`/`Mercury` as planet vs. software — the hardest
+documented gap) get their own `corpus_attested_same_surface_ambiguous`
+provenance rather than "both sides attested": a name lookup necessarily
+returns the *same* single node for both sides when the surface string is
+identical, so FRE-843 must not score these by comparing `entity_id_a` to
+`entity_id_b` (trivially equal by construction) — each pair's
+`scoring_note` says so explicitly and points to the alternative fixture
+FRE-843 needs (two separate ingest episodes independently asserting each
+sense).
+
+### AC-4 abstract-cue gold (`ac4_cues.py` → `frozen/ac4_abstract_cue_gold.json`)
+
+```
+uv run python -m scripts.study.eval_artifacts.ac4_cues            # dry run — counts only
+uv run python -m scripts.study.eval_artifacts.ac4_cues --execute  # writes the intermediate
+                                                                    # candidate-pool dump
+```
+
+35 abstract cues (module constant `ABSTRACT_CUES`) span 7 domains
+confirmed present in the live snapshot (health, software/infra
+engineering, history & archaeology, cybersecurity, cooking, music,
+travel) — well above AC-4's ≥30 cues / ≥4 domains bar. Cues are abstract
+topic labels only ("health issues", "cryptography and encryption"), never
+a precise-fact query (AC-6's honesty guard).
+
+**Candidate-pool generation is two independent sources, not pure
+embedding-cosine kNN.** A pool built only from embedding similarity to the
+cue text would systematically exclude exactly the category-relevant,
+embedding-distant items the study's categorical-entry recall exists to
+surface — pre-biasing the frozen gold set toward what production's
+embedding-style recall already finds, and pre-deciding the study's own
+falsifiable question (AC-4/D8) before it is asked (a plan-review finding
+from `codex:rescue`, applied here). Source A is embedding cosine top-25
+(`build_embedding_candidates`, reusing
+`personal_agent.memory.embeddings.generate_embedding`/`cosine_similarity`
+against the live managed embedder); Source B is a per-cue keyword list
+substring-matched against every `Entity` name, independent of embedding
+distance (`build_keyword_candidates`). The merged pool (`ac4_cues.py
+--execute` → `frozen/ac4_candidate_pools.json`, an intermediate,
+pre-annotation dump — not itself the frozen artifact) tags every candidate
+`pool_source: embedding | keyword | both` for auditability. A live run
+surfaced real cross-domain ambiguity worth calling out: the "health
+issues" cue's pool is heavily populated by DevOps "system health
+check"/"agent health" entities sharing the word "health" with the medical
+sense — exactly the discrimination the annotation pass exists to make.
+
+**Annotation is two independent Claude-Code `Agent`-tool dispatches — not
+a call this script makes.** Neither the candidate-pool code nor
+`build_ac4_artifact` can invoke the `Agent` tool (it's a build-session
+tool, not a Python API); the build session dispatches one Agent per
+domain per annotator pass (14 dispatches total: 7 domains × 2 annotators),
+each given only the cue text, domain, and a *shuffled* candidate
+name/kind list (no `pool_source`, no similarity/keyword rank) — blind to
+each other's labels and to any recall system's output by construction
+(the candidate pool is pre-computed by the two neutral sources above,
+never run through production-multipath or the study's categorizer).
+Disagreements between the two passes are adjudicated by the build session
+with a recorded rationale (the "second adjudicating disagreements" role
+ADR AC-4 names). `build_ac4_artifact` (pure Python, no LLM) then assembles
+the frozen artifact from the fully-annotated results, keeping the full
+audit trail per cue: the keyword list, both annotators' raw per-candidate
+labels, the disagreement list, and every adjudication rationale — not just
+the final gold/distractor split.
+
+**Scoring contract for FRE-843**: `gold_neighborhood`/`distractors` are
+`Entity._export_source_element_id` values. Scoring the production-multipath
+baseline (arm A) against this gold set is a direct id comparison; scoring
+the study's categorical-entry recall (arm C, which returns `Concept`
+nodes) requires first mapping each returned `Concept` back to its backing
+`Entity` id(s) via the `Surface`/`ALIAS_OF` chain established at ingest —
+comparing `Concept.id` directly against these entity_ids would silently
+fail to credit arm C for correct recalls. Both artifacts' `scoring_note`
+field states this explicitly.
+
+**Status (2026-07-11): the live annotation run has completed.**
+`frozen/ac4_abstract_cue_gold.json` records 35 cues / 618 gold entries /
+642 distractor entries across the 7 domains (1260 total judgments). The
+two annotator passes agreed on 1187/1260 items (94.2%); the 73
+disagreements were adjudicated individually and are recorded per-cue with
+a rationale (`adjudications`). A few adjudication patterns worth noting:
+a bare word can carry a different sense depending on which corpus cluster
+it's embedded in (`"Baroque"` clustered with Venice-architecture entities
+→ distractor for the music-style cue, even though the string alone reads
+musical; a `kind=Organization` entity named `"Renaissance"` → distractor
+for the same reason) — the entity's neighboring context and `kind` field,
+not just its surface name, drove several rulings. One systematic pattern:
+14 of the 30 "regional cuisines" disagreements were annotator 2 accepting
+specific dishes (`"Bouillabaisse"`, `"Couscous"`, ...) as evidence of a
+cuisine, where annotator 1 held a stricter "must be a cuisine label, not
+a dish" line — adjudicated toward annotator 1's reading for all 14, since
+specific dishes are already the concern of the separate "cooking
+techniques and recipes" / "seafood dishes" cues.

@@ -218,12 +218,17 @@ reopens settled decisions.
 - `events/` + `consolidator.py` — the `output_kind` dispatch consumer (per ADR-0106).
 - `sysgraph/` — the `finding` home; `settings.py` — any gating flag.
 
-**Sequence (each independently shippable):**
-1. **Persistence** — Entity write carries P/W/S (unblocks 0104; immediate value).
-2. **Emission** — extractor emits the two-axis contract.
-3. **Dispatch** — `output_kind` consumer routes to Core / ES / sysgraph (de-confounds 0114).
+**Sequence (dependency, not just preference):**
+1. **Emission** — extractor emits the two-axis contract (`output_kind` + P/W/S `class`); System stops
+   being a class value. **Head** — persisting or dispatching on today's conflated 3-value emission
+   would write `System` as a stored class (interim bad data); correcting emission first prevents that.
+2. **Persistence** — Entity write carries P/W/S `class`. Depends on (1).
+3. **Dispatch** — `output_kind` consumer routes to Core / ES / sysgraph, de-confounding 0114. Depends
+   on (1); parallel to (2). *The assembled seam (AC-5) requires both (2) and (3).*
 4. **Recall follow-up** — file a ticket for the recall project to decide a `class` predicate in the
    ADR-0104 arm (unowned today; out of this ADR's scope).
+5. **Backfill** — re-run classification over the existing ~7,992 `class=None` entities (separate
+   ticket, gated on 1 + 2).
 
 **Backfill** of the existing corpus is a **separate ticket**, not part of this seam.
 
@@ -301,9 +306,9 @@ separate ticket, and is **not** part of this ADR's Done.
 **Changed By:** adr session (Opus), owner-driven
 **Reason:** Consolidates the knowledge-class axis smeared across ADR-0097/0098/0106 into one two-axis
 emission contract (subject `class` P/W/S + routing `output_kind`). Owner selected Option B (dispatch,
-isolation-by-absence-of-write) and the fail-open default in session. Persistence-first sequencing;
-class-aware ranking left as **unowned follow-up** (a ticket for the recall project), not handed to an
-existing ADR.
+isolation-by-absence-of-write) and the fail-open default in session. Emission gates persistence and
+dispatch (correcting the axis before writing avoids interim `System`-as-class data); class-aware
+ranking left as **unowned follow-up** (a ticket for the recall project), not handed to an existing ADR.
 
 ---
 

@@ -145,3 +145,66 @@ inferred from the other) and mechanism-AC-2 (alias resolution — the ADR's
 own named case-variant pairs resolving to one `Concept` hub) numbers for
 the final ticket comment. A clean null (the corpus doesn't clear the bar)
 is a valid, budgeted ADR-0114 outcome, reported honestly — not reframed.
+
+## Baseline harness + scoring rig (FRE-840)
+
+ADR-0114 D7/D8 — arm A of the D9 ladder. Reproduces PRODUCTION multipath
+recall (ADR-0104 rank-fusion, as enabled in the owner's live config) against
+the frozen sandbox, and scores it (Recall@20/nDCG@20) via a paired-comparison
+statistical rig FRE-843 will later point at arm C.
+
+```
+make study-infra-up
+docker start cloud-sim-embeddings   # stop again when done -- the live
+                                     # default profile is the managed OVH
+                                     # embedder (README convention above)
+uv run python -m scripts.study.run_baseline
+docker stop cloud-sim-embeddings
+```
+
+**Baseline harness** (`scripts/study/baseline_harness.py`): connects a
+`MemoryService` to the study sandbox (`bolt://localhost:7691`), enables the
+flags ADR-0114 names as live (`multipath_recall_enabled`/
+`lexical_arm_enabled`/`multiquery_arm_enabled`, floor 0.60), pins
+`relevance_bounded_recall_enabled` off (the ADR does not claim ADR-0100 is
+also live), and ensures the `entity_embedding`/`turn_entity_fulltext`
+indexes exist (the study schema only builds the `Concept` vector index).
+Env-pinning (`scripts.study.config.study_substrate_env`) is the CLI
+entrypoint's job, not the harness module's — so the harness is safely
+importable in unit tests without mutating the shared test process's env.
+
+**Fix-forward (2026-07-10, discovered running this harness for real):** the
+frozen corpus's entities all carry FRE-229 `visibility='group'`, which the
+visibility filter only admits for **authenticated** requests. An
+unauthenticated recall query silently sees zero entities on this corpus — a
+false floor that would make any baseline-vs-study comparison meaningless.
+`run_baseline_recall` sets `authenticated=True` to match how every real
+production conversation actually reaches recall.
+
+**Scoring rig** (`scripts/study/scoring_rig.py`): reuses
+`recall_at_k`/`ndcg_at_k` from `scripts/eval/fre435_memory_recall/metrics.py`
+(no reimplementation) and adds the AC-4 paired-comparison layer: a
+percentile bootstrap CI (`paired_bootstrap_ci`) as the effect-size + 95% CI
+primitive — chosen over Wilcoxon signed-rank because the ADR pre-registers
+both as acceptable and `scipy` is not a dependency anywhere in this repo —
+`paired_significance`/`non_inferiority_test`, and `evaluate_ac4`, which
+combines AC-4(i) relative lift ≥1.10×, (ii) absolute floor, (iii)
+significance, and the nDCG non-inferiority check into one verdict. Empty-gold
+cue pairs are excluded from paired diffs (never silently coerced to 0) and
+the excluded count is always reported.
+
+**Scope note.** This ticket builds the reusable mechanism, not the AC-4
+verdict itself: `scripts/study/baseline_cues_smoke.yaml` is a 5-cue
+**smoke** fixture (drawn from the ADR's own named forensic examples) that
+proves the harness+rig run end-to-end and produce a scored table — it is
+**not** the AC-4 pre-registered ≥30-cue/≥4-domain frozen set. That set is
+FRE-841's deliverable (a separate, concurrently-tracked ticket); FRE-843 (v0
+synthesis) is the seam owner that runs `evaluate_ac4` for real once FRE-841's
+frozen set and arm C (FRE-842) both exist.
+
+```
+uv run python -m scripts.study.run_baseline --cues <path-to-frozen-set.yaml> --run-id <id>
+```
+
+writes `scripts/study/snapshots/baseline-<run-id>.json` (gitignored) and
+prints the scored table to stdout.
